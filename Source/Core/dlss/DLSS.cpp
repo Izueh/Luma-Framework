@@ -109,14 +109,14 @@ namespace NGX
 				NVSDK_NGX_DLSS_Feature_Flags_MVLowRes
 				//| NVSDK_NGX_DLSS_Feature_Flags_Reserved_0 // Matches the old NVSDK_NGX_DLSS_Feature_Flags_DepthJittered, which has been removed (should already be on by default now)
 //TODOFT: expose settings per game (there's more around the file), when the need will come
-#if GAME_PREY // DLSS expects the depth to be the device/HW one (1 being near, not 1 being the camera (linear depth)), CryEngine (Prey) and other games use inverted depth because it's better for quality
+#if GAME_PREY || GAME_FF7_REMAKE // DLSS expects the depth to be the device/HW one (1 being near, not 1 being the camera (linear depth)), CryEngine (Prey) and other games use inverted depth because it's better for quality
 				| NVSDK_NGX_DLSS_Feature_Flags_DepthInverted
 #endif
 // We modified Prey to make sure this is the case (see "FORCE_MOTION_VECTORS_JITTERED").
 // Previously (dynamic objects) MVs were half jittered (with the current frame's jitters only), because they are rendered with g-buffers, on projection matrices that have jitters.
 // We could't remove these jitters properly when rendering the final motion vectors for DLSS (we tried...), so neither this flag on or off would have been correct.
 // Even if we managed to generate the final MVs without jitters included, it seemengly doesn't look any better anyway.
-#if 1
+#if 0
 				| NVSDK_NGX_DLSS_Feature_Flags_MVJittered
 #endif
 #if 0
@@ -455,6 +455,11 @@ bool NGX::DLSS::Draw(const DLSSInstanceData* data, ID3D11DeviceContext* commandL
 	evalParams.Feature.pInColor = sourceColor;
 	evalParams.Feature.pInOutput = outputColor; // Needs to be a UAV
 	evalParams.pInExposureTexture = exposure; // Only used in HDR mode. Needs to be a 2D texture.
+	if (!data->dynamicResolution)
+	{
+		evalParams.InRenderSubrectDimensions.Height = data->renderHeight;
+		evalParams.InRenderSubrectDimensions.Width = data->renderWidth;
+	}
 	if (preExposure != 0.f)
 	{
 		evalParams.InPreExposure = preExposure;
@@ -464,17 +469,17 @@ bool NGX::DLSS::Draw(const DLSSInstanceData* data, ID3D11DeviceContext* commandL
 	evalParams.Feature.InSharpness = data->sharpness; // It's likely clamped between 0 and 1 internally, though a value of 0 might fall back to the internal default
 #endif
 #if !GAME_PREY
-	evalParams.InMVScaleX = 1.0;
-	evalParams.InMVScaleY = 1.0;
-#else // Needed in Prey
 	evalParams.InMVScaleX = static_cast<float>(renderWidth);
 	evalParams.InMVScaleY = static_cast<float>(renderHeight);
+#else // Needed in Prey
+	evalParams.InMVScaleX = 1.0;
+	evalParams.InMVScaleY = 1.0;
 #endif
 #if 0
 	evalParams.InJitterOffsetX = jitterX * static_cast<float>(renderWidth);
 	evalParams.InJitterOffsetY = jitterY * static_cast<float>(renderHeight);
-#elif GAME_PREY // This is what's needed by vanilla Prey
-	evalParams.InJitterOffsetX = jitterX * static_cast<float>(renderWidth) * -0.5f;
+#elif GAME_PREY || GAME_FF7_REMAKE // This is what's needed by vanilla Prey
+	evalParams.InJitterOffsetX = jitterX * static_cast<float>(renderWidth) * 0.5f;
 	evalParams.InJitterOffsetY = jitterY * static_cast<float>(renderHeight) * 0.5f;
 #elif GAME_PREY && 0 // This is an alternative version we modified Prey to follow, but it ended up being wrong
 	evalParams.InJitterOffsetX = jitterX * static_cast<float>(data->outputWidth) * -0.5f * (static_cast<float>(data->outputWidth) / static_cast<float>(renderWidth));
