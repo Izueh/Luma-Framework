@@ -34,8 +34,6 @@ void main(
   float4 v2 : SV_Position0,
   out float4 o0 : SV_Target0)
 {
-    // Output the original color from t2 using the first set of texture coordinates
-        // Initialize registers
   float4 r0,r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r13,r14,r15,r16,r17;
   uint4 bitmask, uiDest;
   float4 fDest;
@@ -80,7 +78,7 @@ void main(
   r6.x = max(r0.w, r7.w);
   r0.w = cmp(r5.x < r6.x);
   r7.xyzw = cmp(r6.xxxx == r7.xyzw);
-  r8.xyz = r7.xzy ? float3(-1,-1,-1) : 0;
+  r8.xyz = r7.xzy ? float3(0,0,0) : 0;
   bitmask.x = ((~(-1 << 1)) << 1) & 0xffffffff;  r7.x = (((uint)r7.y << 1) & bitmask.x) | ((uint)0 & ~bitmask.x);
   bitmask.y = ((~(-1 << 1)) << 1) & 0xffffffff;  r7.y = (((uint)r7.w << 1) & bitmask.y) | ((uint)0 & ~bitmask.y);
   bitmask.z = ((~(-1 << 1)) << 1) & 0xffffffff;  r7.z = (((uint)r7.z << 1) & bitmask.z) | ((uint)0 & ~bitmask.z);
@@ -105,17 +103,20 @@ void main(
   r6.xy = min((int2)r5.yz, (int2)r3.xy);
   r6.zw = float2(0,0);
   r5.yz = t4.Load(r6.xyz).xy;
-  o0 = r5.zyzy;
   r0.w = dot(r5.yz, r5.yz);
   r0.w = cmp(0 < r0.w);
+  //   float2 jitterDelta = cb1[118].xy - cb1[118].zw;
+  // r5.xy += cb1[118].xy;
   r5.yz = float2(-0.499992371,-0.499992371) + r5.yz;
   r5.yz = float2(4.00801611,4.00801611) * r5.yz;
   r5.xy = r0.ww ? r5.yz : r5.xw;
-  // o0 = r5.xyxy;
-    // Store modified motion vectors back into output
-  // o1 = r5;
-  o0 = t2.SampleLevel(s0_s, v0.xy, 0);
 
-    // Sample color using original coordinates (keeping original output)
+
+  // o0.xyzw = r5.yzyz;
+
+  
+  o0 = r5;
+  // o0.xyz = max(float3(0,0,0), r0.xyz);
+  // o0.w = (int)r4.x & 0x3f800000;
   return;
 }

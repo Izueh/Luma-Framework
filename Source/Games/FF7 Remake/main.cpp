@@ -28,8 +28,6 @@ struct GameDeviceDataFF7Remake final : public GameDeviceData
 	std::atomic<bool> has_drawn_upscaling = false;
 	std::atomic<bool> found_jitter = true;
 	com_ptr<ID3D11PixelShader> motion_vectors_ps;
-	com_ptr<ID3D11PixelShader> motion_vectors_vs;
-	com_ptr<ID3D11PixelShader> jitter_ps;
 };
 
 namespace
@@ -45,13 +43,15 @@ namespace
 	float2 previous_projection_jitters = { 0, 0 };
 	float2 projection_jitters = { 0, 0 };
 	const uint32_t shader_hash_mvec_pixel = std::stoul("FFFFFFF3", nullptr, 16);
-	const uint32_t shader_hash_mvec_vertex = std::stoul("FFFFFFF4", nullptr, 16);
 	const uint32_t shader_hash_jitter_pixel = std::stoul("FFFFFFF5", nullptr, 16);
 #if DEVELOPMENT
 	std::vector<std::string> cb_per_view_globals_last_drawn_shader; // Not exactly thread safe but it's fine...
 	std::vector<CBPerViewGlobal> cb_per_view_globals;
 	std::vector<CBPerViewGlobal> cb_per_view_globals_previous;
 	float cb1_debug_buffer[140 * 4] = { 0 };
+	std::atomic<bool> save_texture = false;
+	static float mv_scale_x = 1.0f;
+	static float mv_scale_y = 1.0f;
 #endif
 }
 
@@ -68,7 +68,6 @@ public:
 
 	void OnInit(bool async) override
 	{
-		shader_hashes_TAA.vertex_shaders.emplace(std::stoul("6667BA2", nullptr, 16));
 		shader_hashes_TAA.pixel_shaders.emplace(std::stoul("4729683B", nullptr, 16));
 		//shader_hashes_jitter.compute_shaders.emplace(std::stoul("DEAD68E5", nullptr, 16));
 		shader_hashes_jitter.pixel_shaders.emplace(std::stoul("BE8F73B4", nullptr, 16));
@@ -84,87 +83,7 @@ public:
 		auto& game_device_data = GetGameDeviceData(device_data);
 		const bool had_drawn_main_post_processing = device_data.has_drawn_main_post_processing;
 		const bool had_drawn_upscaling = game_device_data.has_drawn_upscaling;
-		//if (!game_device_data.found_jitter && original_shader_hashes.Contains(shader_hashes_jitter))
-		//{
-		//	// create a new render target with format DXGI_FORMAT_R32G32_FLOAT to extract the jitter from the custom shader 0xFFFFFFFF5 from the parameters set for the original shader.
-		//	// This shader is used to generate the jitter for the DLSS SR
-		//	// We need to create a new render target view for the jitter x y values
 
-		//	com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-		//	com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-		//	native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
-
-		//	// create a new render target view of DXGI_FORMAT_R32G32_FLOAT 1x1 to get motion values by reading them in the cpu from the render target
-		//	com_ptr<ID3D11Texture2D> jitter_texture = nullptr;
-		//	D3D11_TEXTURE2D_DESC jitter_texture_desc;
-		//	jitter_texture_desc.Width = 1;
-		//	jitter_texture_desc.Height = 1;
-		//	jitter_texture_desc.MipLevels = 1;
-		//	jitter_texture_desc.ArraySize = 1;
-		//	jitter_texture_desc.Format = DXGI_FORMAT::DXGI_FORMAT_R32G32_FLOAT;
-		//	jitter_texture_desc.SampleDesc.Count = 1;
-		//	jitter_texture_desc.SampleDesc.Quality = 0;
-		//	jitter_texture_desc.Usage = D3D11_USAGE::D3D11_USAGE_DEFAULT;
-		//	jitter_texture_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-		//	jitter_texture_desc.CPUAccessFlags = 0;
-		//	jitter_texture_desc.MiscFlags = 0;
-		//	HRESULT hr = native_device->CreateTexture2D(&jitter_texture_desc, nullptr, &jitter_texture);
-		//	ASSERT_ONCE(SUCCEEDED(hr));
-		//	D3D11_RENDER_TARGET_VIEW_DESC jitter_render_target_view_desc;
-		//	jitter_render_target_view_desc.Format = jitter_texture_desc.Format;
-		//	jitter_render_target_view_desc.ViewDimension = D3D11_RTV_DIMENSION::D3D11_RTV_DIMENSION_TEXTURE2D;
-		//	jitter_render_target_view_desc.Texture2D.MipSlice = 0;
-		//	com_ptr<ID3D11RenderTargetView> jitters_rtv = nullptr;
-		//	hr = native_device->CreateRenderTargetView(jitter_texture.get(), &jitter_render_target_view_desc, &jitters_rtv);
-		//	ASSERT_ONCE(SUCCEEDED(hr));
-		//	// Set the render target view to the current render target
-		//	ID3D11RenderTargetView* const jitters_rtv_const = jitters_rtv.get();
-		//	native_device_context->OMSetRenderTargets(1, &jitters_rtv_const, nullptr);
-		//	// save current shader and set the new one, perform the draw call and set the original shader back
-		//	com_ptr<ID3D11PixelShader> original_ps;
-		//	native_device_context->PSGetShader(&original_ps, nullptr, nullptr);
-		//	native_device_context->PSSetShader(game_device_data.jitter_ps.get(), nullptr, 0);
-		//	// Draw a full screen quad
-		//	native_device_context->DrawIndexed(5100, 5064, 0);
-		//	D3D11_TEXTURE2D_DESC staging_desc = jitter_texture_desc;
-		//	staging_desc.BindFlags = 0;
-		//	staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-		//	staging_desc.Usage = D3D11_USAGE_STAGING;
-		//	staging_desc.MiscFlags = 0;
-		//
-		//	com_ptr<ID3D11Texture2D> staging_texture;
-		//	hr = native_device->CreateTexture2D(&staging_desc, nullptr, &staging_texture);
-		//	ASSERT_ONCE(SUCCEEDED(hr));
-		//
-		//	// 2. Copy the render target to the staging texture
-		//	native_device_context->CopyResource(staging_texture.get(), jitter_texture.get());
-		//
-		//	// 3. Map the staging texture for CPU read
-		//	D3D11_MAPPED_SUBRESOURCE mapped = {};
-		//	hr = native_device_context->Map(staging_texture.get(), 0, D3D11_MAP_READ, 0, &mapped);
-		//	ASSERT_ONCE(SUCCEEDED(hr));
-		//
-		//	// 4. Read the data (assuming DXGI_FORMAT_R32G32_FLOAT, so 2 floats per pixel)
-		//	float* jitter_data = reinterpret_cast<float*>(mapped.pData);
-		//	float jitter_x = jitter_data[0];
-		//	float jitter_y = jitter_data[1];
-		//	//projection_jitters.x = jitter_x;
-		//	//projection_jitters.y = jitter_y;
-		//	// Use jitter_x and jitter_y as needed...
-		//
-		//	// 5. release and unmap
-		//	staging_texture->Release();
-		//	jitter_texture->Release();
-		//	jitters_rtv->Release();
-		//	native_device_context->Unmap(staging_texture.get(), 0);
-		//	native_device_context->PSSetShader(original_ps.get(), nullptr, 0);
-		//	ID3D11RenderTargetView* const* rtvs_const = (ID3D11RenderTargetView**)std::addressof(render_target_views[0]);
-
-		//	native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs_const, depth_stencil_view.get());
-		//	game_device_data.found_jitter = true;
-		//	return true;
-
-		//}
 		if (!game_device_data.has_drawn_upscaling && device_data.dlss_sr && !device_data.dlss_sr_suppressed && is_custom_pass && original_shader_hashes.Contains(shader_hashes_TAA))
 		{
 			game_device_data.has_drawn_upscaling = true;
@@ -194,8 +113,7 @@ public:
 
 				//ASSERT_ONCE(std::lrintf(device_data.output_resolution.x) == output_texture_desc.Width && std::lrintf(device_data.output_resolution.y) == output_texture_desc.Height);
 				std::array<uint32_t, 2> dlss_render_resolution = FindClosestIntegerResolutionForAspectRatio((double)output_texture_desc.Width * (double)device_data.dlss_render_resolution_scale, (double)output_texture_desc.Height * (double)device_data.dlss_render_resolution_scale, (double)output_texture_desc.Width / (double)output_texture_desc.Height);
-				// TODO: Figure this out
-				bool dlss_hdr = false;
+				bool dlss_hdr = true;
 
 				NGX::DLSS::UpdateSettings(device_data.dlss_sr_handle, native_device_context, output_texture_desc.Width, output_texture_desc.Height, dlss_render_resolution[0], dlss_render_resolution[1], dlss_hdr, false); //TODO: figure out dsr later
 				
@@ -322,16 +240,16 @@ public:
 						// Set up for motion vector shader
 						native_device_context->OMSetRenderTargets(1, &dlss_motion_vectors_rtv_const, depth_stencil_view.get());
 						ID3D11PixelShader* prev_shader_px = nullptr;
-						ID3D11VertexShader* prev_shader_vx = nullptr;
+						//ID3D11VertexShader* prev_shader_vx = nullptr;
 
 						native_device_context->PSGetShader(&prev_shader_px, nullptr, nullptr);
-						native_device_context->VSGetShader(&prev_shader_vx, nullptr, nullptr);
+						//native_device_context->VSGetShader(&prev_shader_vx, nullptr, nullptr);
 						native_device_context->PSSetShader(game_device_data.motion_vectors_ps.get(), nullptr, 0);
 						// native_device_context->PSSetShader(game_device_data.motion_vectors_ps.get(), nullptr, 0);
 						native_device_context->DrawIndexed(3, 6, 0);
 						native_device_context->PSSetShader(prev_shader_px, nullptr, 0); // Restore previous shader
-						native_device_context->VSSetShader(prev_shader_vx, nullptr, 0); // Restore previous shader
-
+						// native_device_context->VSSetShader(prev_shader_vx, nullptr, 0); // Restore previous shader
+							
 						// Restore previous state
 					}
 					// Reset the render target, just to make sure there's no conflicts with the same texture being used as RWTexture UAV or Shader Resources
@@ -505,8 +423,6 @@ public:
 	{
 		auto& game_device_data = GetGameDeviceData(device_data);
 		CreateShaderObject(device_data.native_device, shader_hash_mvec_pixel, game_device_data.motion_vectors_ps, shader_hashes_filter);
-		CreateShaderObject(device_data.native_device, shader_hash_mvec_vertex, game_device_data.motion_vectors_vs, shader_hashes_filter);
-		CreateShaderObject(device_data.native_device, shader_hash_jitter_pixel, game_device_data.jitter_ps, shader_hashes_filter);
 
 
 	}
@@ -517,7 +433,7 @@ public:
 		ImGui::NewLine();
 		if (ImGui::Button("Show cb1 buffer (float4[140])"))
 			show_cb1_popup = true;
-	
+
 		if (show_cb1_popup)
 		{
 			ImGui::OpenPopup("cb1_buffer_popup");
