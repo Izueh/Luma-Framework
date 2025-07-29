@@ -49,9 +49,7 @@ namespace
 	std::vector<CBPerViewGlobal> cb_per_view_globals;
 	std::vector<CBPerViewGlobal> cb_per_view_globals_previous;
 	float cb1_debug_buffer[140 * 4] = { 0 };
-	std::atomic<bool> save_texture = false;
-	static float mv_scale_x = 1.0f;
-	static float mv_scale_y = 1.0f;
+
 #endif
 }
 
