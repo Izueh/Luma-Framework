@@ -2,11 +2,11 @@
 
 namespace Shader
 {
-   constexpr uint32_t MAX_SHADER_DEFINES = // Avoid setting this too big as it bloats the ReShade config whether used or not. Don't go beyond 100 (max array index 99) without changing core related to this.
+   constexpr uint32_t MAX_SHADER_DEFINES = // Avoid setting this too big as it bloats the ReShade config whether used or not. Don't go beyond 100 (max array index 99) without changing code related to this.
 #if DEVELOPMENT || TEST
       50;
 #else
-      20;
+      30;
 #endif
    constexpr uint32_t SHADER_DEFINES_MAX_NAME_LENGTH = 50 + 1; // Increase if necessary (+ 1 is for to null terminate the string)
    constexpr uint32_t SHADER_DEFINES_MAX_VALUE_LENGTH = 1 + 1; // 1 character (+ 1 is for to null terminate the string)

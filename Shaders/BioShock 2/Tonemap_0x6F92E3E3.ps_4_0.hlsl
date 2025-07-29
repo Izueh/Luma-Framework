@@ -82,7 +82,7 @@ void main(
   outColor.xyz = pow(abs(r0.xyz), 1.0 / 2.2) * sign(r0.xyz);
 #endif
     
-    const float paperWhite = LumaSettings.GamePaperWhiteNits / ITU_WhiteLevelNits;
-    const float peakWhite = LumaSettings.PeakWhiteNits / ITU_WhiteLevelNits;
+    const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
+    const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
     outColor.rgb = Tonemap_DICE(outColor.rgb * paperWhite, peakWhite) / paperWhite;
 }

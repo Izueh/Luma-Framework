@@ -2,6 +2,7 @@
 #define SRC_TONEMAP_HLSL
 
 #include "Common.hlsl"
+#include "ACES.hlsl"
 #include "DICE.hlsl"
 
 static const float HableShoulderScale = 4.0;
@@ -84,6 +85,12 @@ float3 Tonemap_DICE(float3 color, float peakWhite, float paperWhite = 1.0)
 {
 	DICESettings settings = DefaultDICESettings();
 	return DICETonemap(color * paperWhite, peakWhite, settings);
+}
+
+float3 Tonemap_ACES(float3 color, float peakWhite, float paperWhite = 1.0)
+{
+	ACESSettings settings = DefaultACESSettings();
+	return ACESTonemap(color, paperWhite, peakWhite, settings);
 }
 
 #endif // SRC_TONEMAP_HLSL

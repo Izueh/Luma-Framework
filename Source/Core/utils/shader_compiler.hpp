@@ -310,6 +310,9 @@ namespace Shader
                   preprocessed_code.assign(reinterpret_cast<char*>(preprocessed_blob->GetBufferPointer()));
                   // TODO: there's possibly a more optimized way of finding the blob's hash
                   std::size_t new_preprocessed_hash = std::hash<std::string>{}(preprocessed_code);
+#if _DEBUG // Hacky: in debug mode, always add 1 to the shader hash, so we force it to recompile between Release and Debug builds, given they use different flags (this isn't mandatory, we could rely on devs doing that manually)
+                  new_preprocessed_hash++;
+#endif
                   if (preprocessed_hash == new_preprocessed_hash)
                   {
                      return false;
@@ -395,6 +398,19 @@ namespace Shader
          }
       }
 
+      UINT flags1 = 0;
+      if (shader_target[3] <= '4' || (shader_target[3] == '5' && shader_target[5] == '0'))
+         flags1 |= D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY; // /Gec
+#if _DEBUG
+      flags1 |= D3DCOMPILE_DEBUG; // /Zi
+      flags1 |= D3DCOMPILE_SKIP_OPTIMIZATION; // /Od
+      if ((flags1 & D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY) == 0) // Not mutually compatible
+         flags1 |= D3DCOMPILE_ENABLE_STRICTNESS; // /Ges
+      flags1 |= D3DCOMPILE_IEEE_STRICTNESS; // /Gis
+#else
+      flags1 |= D3DCOMPILE_OPTIMIZATION_LEVEL3; // /O3
+#endif
+
       auto custom_include = FxcD3DInclude(file_read_path);
 
       CComPtr<ID3DBlob> out_blob;
@@ -417,7 +433,7 @@ namespace Shader
             custom_include_handler ? &custom_include : D3D_COMPILE_STANDARD_FILE_INCLUDE,
             func_name,
             shader_target,
-            D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY,
+            flags1,
             0,
             &out_blob,
             &error_blob);
@@ -430,7 +446,7 @@ namespace Shader
             custom_include_handler ? &custom_include : D3D_COMPILE_STANDARD_FILE_INCLUDE,
             func_name,
             shader_target,
-            D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY,
+            flags1,
             0,
             &out_blob,
             &error_blob);

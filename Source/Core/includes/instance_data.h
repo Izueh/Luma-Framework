@@ -7,13 +7,14 @@ struct TraceDrawCallData
 {
    enum TraceDrawCallType
    {
-      // Any type of shader
+      // Any type of shader (including compute)
       Shader,
       // Copy resource and similar function
       CopyResource,
       ClearResource,
       CPUWrite,
       Present,
+		Custom, // Custom draw call for custom passes we added/replaced
    };
 
    TraceDrawCallType type = TraceDrawCallType::Shader;
@@ -43,13 +44,18 @@ struct TraceDrawCallData
    std::string rt_hash[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
    bool rt_is_swapchain[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
    // Shader Resource Views
-   DXGI_FORMAT sr_format[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
-   uint3 sr_size[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {}; // The format of the resource, not the view
+   DXGI_FORMAT sr_format[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {}; // The format of the resource, not the view
+   DXGI_FORMAT srv_format[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {}; // The format of the view
+   uint3 sr_size[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
    std::string sr_hash[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
    // Unordered Access (Resource) Views
-   DXGI_FORMAT uar_format[D3D11_1_UAV_SLOT_COUNT] = {};
-   uint3 uar_size[D3D11_1_UAV_SLOT_COUNT] = {}; // The format of the resource, not the view
+	static_assert(D3D11_1_UAV_SLOT_COUNT >= D3D11_PS_CS_UAV_REGISTER_COUNT);
+   DXGI_FORMAT uar_format[D3D11_1_UAV_SLOT_COUNT] = {}; // The format of the resource, not the view
+   DXGI_FORMAT uarv_format[D3D11_1_UAV_SLOT_COUNT] = {}; // The format of the view
+   uint3 uar_size[D3D11_1_UAV_SLOT_COUNT] = {};
    std::string uar_hash[D3D11_1_UAV_SLOT_COUNT] = {};
+
+   const char* custom_name = "Unknown";
 };
 
 // Applies to command lists and command queque (DirectX 11 command list and deferred or immediate contexts)
@@ -165,7 +171,7 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 
    // Generic states that can be used by multiple games (you don't need to set them if you ignore the whole thing)
 
-   // Whether the "main" post processing pass has drawn (which tells if the scene is being rendered, and whether we expect certain buffers to have been detected etc)
+   // Whether the "main" post processing passes have finished drawing (it also implied we detected scene rendering and some cbuffers etc)
    std::atomic<bool> has_drawn_main_post_processing = false;
    // Useful to know if rendering was skipped in the previous frame (e.g. in case we were in a UI view)
    bool has_drawn_main_post_processing_previous = false;

@@ -79,4 +79,6 @@ public:
       return vanilla_swapchain_was_linear_space ? DXGI_FORMAT_R8G8B8A8_UNORM_SRGB : DXGI_FORMAT_R8G8B8A8_UNORM;
 #endif
    }
+	// Some games use a non linear swapchain, but always write to it through sRGB view, so we should essentially treat it as linear
+   virtual bool ForceVanillaSwapchainLinear() const { return false; }
 };

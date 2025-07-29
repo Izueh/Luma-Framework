@@ -103,6 +103,7 @@ struct GameDeviceDataPrey final : public GameDeviceData
    com_ptr<ID3D11PixelShader> draw_exposure_pixel_shader; // DLSS (doesn't need "ENABLE_NGX)
    com_ptr<ID3D11PixelShader> lens_distortion_pixel_shader;
 
+   // Tells if the scene is still being rendered
    std::atomic<bool> has_drawn_composed_gbuffers = false;
    std::atomic<bool> has_drawn_upscaling = false;
    std::atomic<bool> has_drawn_motion_blur = false;
@@ -322,98 +323,7 @@ public:
 
    void OnInit(bool async) override
    {
-      // Registers 2, 4, 7, 8, 9, 10, 11 and 12 are 100% safe to be used for any post processing or late rendering passes.
-      // Register 2 is never used in the whole Prey code. Register 4, 7 and 8 are also seemingly never actively used by Prey.
-      // Register 3 seems to be used during post processing so it might not be safe.
-      luma_settings_cbuffer_index = 2;
-      luma_data_cbuffer_index = 8;
-      luma_ui_cbuffer_index = 7;
-
-      reprojection_matrix.SetIdentity();
-
-      // Define the pixel shader of some important passes we can use to determine where we are within the rendering pipeline:
-      
-      // TiledShading TiledDeferredShading
-      shader_hashes_TiledShadingTiledDeferredShading.compute_shaders = { std::stoul("1E676CD5", nullptr, 16), std::stoul("80FF9313", nullptr, 16), std::stoul("571D5EAE", nullptr, 16), std::stoul("6710AFD5", nullptr, 16), std::stoul("54147C78", nullptr, 16), std::stoul("BCD5A089", nullptr, 16), std::stoul("C2FC1948", nullptr, 16), std::stoul("E3EF3C20", nullptr, 16), std::stoul("F8633A07", nullptr, 16), std::stoul("7AB62E81", nullptr, 16) };
-      // DeferredShading SSR_Raytrace 
-      shader_hash_DeferredShadingSSRRaytrace = std::stoul("AED014D7", nullptr, 16);
-      // DeferredShading - SSReflection_Comp
-      shader_hash_DeferredShadingSSReflectionComp = std::stoul("F355426A", nullptr, 16);
-      // PostEffects GaussBlurBilinear
-      shader_hash_PostEffectsGaussBlurBilinear = std::stoul("8B135192", nullptr, 16);
-      // PostEffects TextureToTextureResampled
-      shader_hash_PostEffectsTextureToTextureResampled = std::stoul("B969DC27", nullptr, 16); // One of the many
-      // MotionBlur MotionBlur
-      shader_hashes_MotionBlur.pixel_shaders = { std::stoul("D0C2257A", nullptr, 16), std::stoul("76B51523", nullptr, 16), std::stoul("6DCC9E5D", nullptr, 16) };
-      // HDRPostProcess HDRFinalScene (vanilla HDR->SDR tonemapping)
-      shader_hashes_HDRPostProcessHDRFinalScene.pixel_shaders = { std::stoul("B5DC761A", nullptr, 16), std::stoul("17272B5B", nullptr, 16), std::stoul("F87B4963", nullptr, 16), std::stoul("81CE942F", nullptr, 16), std::stoul("83557B79", nullptr, 16), std::stoul("37ACE8EF", nullptr, 16), std::stoul("66FD11D0", nullptr, 16) };
-      // Same as "shader_hashes_HDRPostProcessHDRFinalScene" but it includes ones with sunshafts only
-      shader_hashes_HDRPostProcessHDRFinalScene_Sunshafts.pixel_shaders = { std::stoul("81CE942F", nullptr, 16), std::stoul("37ACE8EF", nullptr, 16), std::stoul("66FD11D0", nullptr, 16) };
-      // PostAA PostAA
-      // The "FXAA" and "SMAA 1TX" passes don't have any projection jitters (unless maybe "SMAA 1TX" could have them if we forced them through config), so we can't replace them with DLSS SR.
-      // SMAA (without TX) is completely missing from here as it doesn't have a composition pass we could replace (well we could replace, "NeighborhoodBlendingSMAA" (hash "2E9A5D4C"), but we couldn't be certain that then the TAA pass would run too after).
-      shader_hashes_PostAA.pixel_shaders.emplace(std::stoul("D8072D98", nullptr, 16)); // FXAA
-      shader_hashes_PostAA.pixel_shaders.emplace(std::stoul("E9D92B11", nullptr, 16)); // SMAA 1TX
-      shader_hashes_PostAA.pixel_shaders.emplace(std::stoul("BF813081", nullptr, 16)); // SMAA 2TX and TAA
-      shader_hashes_PostAA_TAA.pixel_shaders.emplace(std::stoul("BF813081", nullptr, 16)); // SMAA 2TX and TAA
-      // PostAA lendWeightSMAA + PostAA LumaEdgeDetectionSMAA
-      shader_hashes_SMAA_EdgeDetection.pixel_shaders = { std::stoul("5636A813", nullptr, 16), std::stoul("47B723BD", nullptr, 16) };
-
-      // PostAA PostAAComposites
-      shader_hashes_PostAAComposites.pixel_shaders.emplace(std::stoul("83AE9250", nullptr, 16));
-      shader_hashes_PostAAComposites.pixel_shaders.emplace(std::stoul("496492FE", nullptr, 16));
-      shader_hashes_PostAAComposites.pixel_shaders.emplace(std::stoul("ED6287FE", nullptr, 16));
-      shader_hashes_PostAAComposites.pixel_shaders.emplace(std::stoul("FAEE5EE9", nullptr, 16));
-      shader_hash_PostAAUpscaleImage = std::stoul("C2F1D3F6", nullptr, 16); // Upscaling pixel shader (post TAA, only when in frames where DRS engage)
-      shader_hashes_LensOptics.pixel_shaders = { std::stoul("4435D741", nullptr, 16), std::stoul("C54F3986", nullptr, 16), std::stoul("DAA20F29", nullptr, 16), std::stoul("047AB485", nullptr, 16), std::stoul("9D7A97B8", nullptr, 16), std::stoul("9B2630A0", nullptr, 16), std::stoul("51F2811A", nullptr, 16), std::stoul("9391298E", nullptr, 16), std::stoul("ED01E418", nullptr, 16), std::stoul("53529823", nullptr, 16), std::stoul("DDDE2220", nullptr, 16) };
-      // DeferredShading DirOccPass
-      shader_hashes_DirOccPass.pixel_shaders = { std::stoul("944B65F0", nullptr, 16), std::stoul("DB98D83F", nullptr, 16) };
-      // ShadowBlur - SSDO Blur
-      shader_hashes_SSDO_Blur.pixel_shaders.emplace(std::stoul("1023CD1B", nullptr, 16));
-      //TODOFT: once we have collected 100% of the game shaders, update these hashes lists, and make global functions to convert hashes between string and int
-
-      std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"TONEMAP_TYPE", '1', false, false, "0 - Vanilla SDR\n1 - Luma HDR (Vanilla+)\n2 - Raw HDR (Untonemapped)\nThe HDR tonemapper works for SDR too\nThis games uses a filmic tonemapper, which slightly crushes blacks"},
-         {"SUNSHAFTS_LOOK_TYPE", '2', false, false, "0 - Raw Vanilla\n1 - Vanilla+\n2 - Luma HDR (Suggested)\nThis influences both HDR and SDR, all options work in both"},
-         {"ENABLE_LENS_OPTICS_HDR", '1', false, false, "Makes the lens effects (e.g. lens flare) slightly HDR"},
-         {"AUTO_HDR_VIDEOS", '1', false, false, "(HDR only) Generates some HDR highlights from SDR videos, for consistency\nThis is pretty lightweight so it won't really affect the artistic intent"},
-         {"EXPAND_COLOR_GAMUT", '1', false, false, "Makes the original tonemapper work in a wider color gamut (HDR BT.2020), resulting in more saturated colors.\nDisable for a more vanilla like experience"},
-         {"ENABLE_LUT_EXTRAPOLATION", '1', false, false, "LUT Extrapolation should be the best looking and most accurate SDR to HDR LUT adaptation mode,\nbut you can always turn it off for the its simpler fallback"},
-     #if DEVELOPMENT || TEST
-         {"DLSS_RELATIVE_PRE_EXPOSURE", '1', true, false },
-         {"ENABLE_LINEAR_COLOR_GRADING_LUT", '1', false, false, "Whether (SDR) LUTs are stored in linear or gamma space"},
-         {"FORCE_NEUTRAL_COLOR_GRADING_LUT_TYPE", '0', false, false, "Can force a neutral LUT in different ways (color grading is still applied)"},
-         {"DRAW_LUT", '0', false, (DEVELOPMENT || TEST) ? false : true},
-     #endif
-         {"SSAO_TYPE", '1', false, false, "Screen Space Ambient Occlusion\n0 - Vanilla\n1 - Luma GTAO\nIn case GTAO is too performance intensive, lower the \"SSAO_QUALITY\" or go into the official game graphics settings and set \"Screen Space Directional Occlusion\" to half resolution\nDLSS is suggested to help with denoising AO"},
-         {"SSAO_QUALITY", '1', false, false, "0 - Vanilla\n1 - High\n2 - Extreme (slow)"},
-     #if DEVELOPMENT || TEST // For now we don't want to give users this customization, the default value should be good for most users and most cases
-         {"SSAO_RADIUS", '1', false, false, "0 - Small\n1 - Vanilla/Standard (suggested)\n2 - Large\nSmaller radiuses can look more stable but don't do as much\nLarger radiuses can look more realistic, but also over darkening and bring out screen space limitations more often (e.g. stuff de-occluding around the edges when turning the camera)\nOnly applies to GTAO"},
-     #endif
-         {"ENABLE_SSAO_TEMPORAL", '1', false, false, "Disable if you don't use TAA to avoid seeing noise in Ambient Occlusion (though it won't have the same quality)\nYou can disable it for you use TAA too but it's not suggested"},
-         {"BLOOM_QUALITY", '1', false, false, "0 - Vanilla\n1 - High"},
-         {"MOTION_BLUR_QUALITY", '0', false, false, "0 - Vanilla (user graphics setting based)\n1 - Ultra"},
-         {"SSR_QUALITY", '1', false, false, "Screen Space Reflections\n0 - Vanilla\n1 - High\n2 - Ultra\n3 - Extreme (slow)\nThis can be fairly expensive so lower it if you are having performance issues"},
-     #if DEVELOPMENT || TEST
-         {"FORCE_MOTION_VECTORS_JITTERED", force_motion_vectors_jittered ? '1' : '0', false, false, "Forces Motion Vectors generation to include the jitters from the previous frame too, as DLSS needs\nEnabling this forces the native TAA to work as when we have DLSS enabled, making it look a little bit better (less shimmery)"},
-     #endif
-         {"ENABLE_POST_PROCESS", '1', false, false, "Allows you to disable all Post Processing (at once)"},
-         {"ENABLE_CAMERA_MOTION_BLUR", '0', false, false, "Camera Motion Blur can look pretty botched in Prey, and can mess with DLSS/TAA, it's turned off by default in Luma (in the config files)"},
-         {"ENABLE_COLOR_GRADING_LUT", '1', false, false, "Allows you to disable Color Grading\nDon't disable it unless you know what you are doing"},
-         {"POST_TAA_SHARPENING_TYPE", '2', false, false, "0 - None (disabled, soft)\n1 - Vanilla (basic sharpening)\n2 - RCAS (AMD improved sharpening, default preset)\n3 - RCAS (AMD improved sharpening, strong preset)"},
-         {"ENABLE_VIGNETTE", '1', false, false, "Allows you to disable Vignette\nIt's not that prominent in Prey, it's only used in certain cases to convey gameplay information,\nso don't disable it unless you know what you are doing"},
-     #if DEVELOPMENT || TEST // Disabled these final users because these require the "DEVELOPMENT" flag to be used and we don't want users to mess around with them (it's not what the mod wants to achieve)
-         {"ENABLE_SHARPENING", '1', false, false, "Allows you to disable Sharpening globally\nDisabling it is not suggested, especially if you use TAA (you can use \"POST_TAA_SHARPENING_TYPE\" for that anyway)"},
-         {"ENABLE_FILM_GRAIN", '1', false, false, "Allows you to disable Film Grain\nIt's not that prominent in Prey, it's only used in certain cases to convey gameplay information,\nso don't disable it unless you know what you are doing"},
-     #endif
-         {"CORRECT_CRT_INTERLACING_SIZE", '1', false, false, "Disable to keep the vanilla behaviour of CRT like emulated effects becoming near imperceptible at higher resolutions (which defeats their purpose)\nThese are occasionally used in Prey as a fullscreen screen overlay"},
-         {"ALLOW_LENS_DISTORTION_BLACK_BORDERS", '1', false, false, "Disable to force lens distortion to crop all black borders (further increasing FOV is suggested if you turn this off)"},
-         {"ENABLE_DITHERING", '0', false, false, "Temporal Dithering control\nIt doesn't seem to be needed in this game so Luma disabled it by default"},
-         {"DITHERING_BIT_DEPTH", '9', false, false, "Dithering quantization (values between 7 and 9 should be best)"},
-      };
-      shader_defines_data.append_range(game_shader_defines_data);
-      assert(shader_defines_data.size() < MAX_SHADER_DEFINES); // Make sure there's room for at least one extra custom define
-
+      // These need to be here as they might not exist before this yet (it's not fully clear why)
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetTooltip("0 - SDR Gamma space\n1 - Linear space\n2 - Linear space until UI (then gamma space)\n\nSelect \"2\" if you want the UI to look exactly like it did in Vanilla\nSelect \"1\" for the highest possible quality (e.g. color accuracy, banding, DLSS)");
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetValueFixed(false);
@@ -700,6 +610,19 @@ public:
             ID3D11RenderTargetView* render_target_view_const = game_device_data.exposure_buffer_rtv.get();
             native_device_context->OMSetRenderTargets(1, &render_target_view_const, nullptr);
             native_device_context->Draw(3, 0);
+
+#if DEVELOPMENT
+            const std::shared_lock lock_trace(s_mutex_trace);
+            if (trace_running)
+            {
+               CommandListData& cmd_list_data = *global_cmd_list->get_private_data<CommandListData>();
+               const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+               TraceDrawCallData trace_draw_call_data;
+               trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+               trace_draw_call_data.custom_name = "DLSS Draw Exposure";
+               cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
+            }
+#endif
 
             // Copy it back as CPU buffer and read+store it
             native_device_context->CopyResource(game_device_data.exposure_buffers_cpu[game_device_data.exposure_buffers_cpu_index].get(), game_device_data.exposure_buffer_gpu.get());
@@ -1504,6 +1427,19 @@ public:
                if (NGX::DLSS::Draw(device_data.dlss_sr_handle, native_device_context, device_data.dlss_output_color.get(), source_color.get(), game_device_data.dlss_motion_vectors.get(), depth_buffer.get(), device_data.dlss_exposure.get(), dlss_pre_exposure, projection_jitters.x, projection_jitters.y, reset_dlss, render_width_dlss, render_height_dlss))
                {
                   device_data.has_drawn_dlss_sr = true;
+
+#if DEVELOPMENT
+                  const std::shared_lock lock_trace(s_mutex_trace);
+                  if (trace_running)
+                  {
+                     CommandListData& cmd_list_data = *global_cmd_list->get_private_data<CommandListData>();
+                     const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+                     TraceDrawCallData trace_draw_call_data;
+                     trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+                     trace_draw_call_data.custom_name = "DLSS";
+                     cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
+                  }
+#endif
                }
 
                // Fully reset the state of the RTs given that CryEngine is very delicate with it and uses some push and pop technique (simply resetting caching and resetting the first RT seemed fine for DLSS in case optimization is needed).
@@ -2359,7 +2295,7 @@ public:
       static const std::string social_link = std::string("Join our \"HDR Den\" Discord ") + std::string(ICON_FK_SEARCH);
       if (ImGui::Button(social_link.c_str()))
       {
-         // Unique link for Prey Luma (to track the origin of people joining), do not share for other purposes
+         // Unique link for Luma by Pumbo (to track the origin of people joining), do not share for other purposes
          static const std::string obfuscated_link = std::string("start https://discord.gg/J9fM") + std::string("3EVuEZ");
          system(obfuscated_link.c_str());
       }
@@ -2450,6 +2386,100 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       Globals::DESCRIPTION = "Prey (2017) Luma mod";
       Globals::WEBSITE = "https://www.nexusmods.com/prey2017/mods/149";
       Globals::VERSION = 5;
+
+      // Registers 2, 4, 7, 8, 9, 10, 11 and 12 are 100% safe to be used for any post processing or late rendering passes.
+      // Register 2 is never used in the whole Prey code. Register 4, 7 and 8 are also seemingly never actively used by Prey.
+      // Register 3 seems to be used during post processing so it might not be safe.
+      luma_settings_cbuffer_index = 2;
+      luma_data_cbuffer_index = 8;
+      luma_ui_cbuffer_index = 7;
+
+      reprojection_matrix.SetIdentity();
+
+      // Define the pixel shader of some important passes we can use to determine where we are within the rendering pipeline:
+      
+      // TiledShading TiledDeferredShading
+      shader_hashes_TiledShadingTiledDeferredShading.compute_shaders = { std::stoul("1E676CD5", nullptr, 16), std::stoul("80FF9313", nullptr, 16), std::stoul("571D5EAE", nullptr, 16), std::stoul("6710AFD5", nullptr, 16), std::stoul("54147C78", nullptr, 16), std::stoul("BCD5A089", nullptr, 16), std::stoul("C2FC1948", nullptr, 16), std::stoul("E3EF3C20", nullptr, 16), std::stoul("F8633A07", nullptr, 16), std::stoul("7AB62E81", nullptr, 16) };
+      // DeferredShading SSR_Raytrace 
+      shader_hash_DeferredShadingSSRRaytrace = std::stoul("AED014D7", nullptr, 16);
+      // DeferredShading - SSReflection_Comp
+      shader_hash_DeferredShadingSSReflectionComp = std::stoul("F355426A", nullptr, 16);
+      // PostEffects GaussBlurBilinear
+      shader_hash_PostEffectsGaussBlurBilinear = std::stoul("8B135192", nullptr, 16);
+      // PostEffects TextureToTextureResampled
+      shader_hash_PostEffectsTextureToTextureResampled = std::stoul("B969DC27", nullptr, 16); // One of the many
+      // MotionBlur MotionBlur
+      shader_hashes_MotionBlur.pixel_shaders = { std::stoul("D0C2257A", nullptr, 16), std::stoul("76B51523", nullptr, 16), std::stoul("6DCC9E5D", nullptr, 16) };
+      // HDRPostProcess HDRFinalScene (vanilla HDR->SDR tonemapping)
+      shader_hashes_HDRPostProcessHDRFinalScene.pixel_shaders = { std::stoul("B5DC761A", nullptr, 16), std::stoul("17272B5B", nullptr, 16), std::stoul("F87B4963", nullptr, 16), std::stoul("81CE942F", nullptr, 16), std::stoul("83557B79", nullptr, 16), std::stoul("37ACE8EF", nullptr, 16), std::stoul("66FD11D0", nullptr, 16) };
+      // Same as "shader_hashes_HDRPostProcessHDRFinalScene" but it includes ones with sunshafts only
+      shader_hashes_HDRPostProcessHDRFinalScene_Sunshafts.pixel_shaders = { std::stoul("81CE942F", nullptr, 16), std::stoul("37ACE8EF", nullptr, 16), std::stoul("66FD11D0", nullptr, 16) };
+      // PostAA PostAA
+      // The "FXAA" and "SMAA 1TX" passes don't have any projection jitters (unless maybe "SMAA 1TX" could have them if we forced them through config), so we can't replace them with DLSS SR.
+      // SMAA (without TX) is completely missing from here as it doesn't have a composition pass we could replace (well we could replace, "NeighborhoodBlendingSMAA" (hash "2E9A5D4C"), but we couldn't be certain that then the TAA pass would run too after).
+      shader_hashes_PostAA.pixel_shaders.emplace(std::stoul("D8072D98", nullptr, 16)); // FXAA
+      shader_hashes_PostAA.pixel_shaders.emplace(std::stoul("E9D92B11", nullptr, 16)); // SMAA 1TX
+      shader_hashes_PostAA.pixel_shaders.emplace(std::stoul("BF813081", nullptr, 16)); // SMAA 2TX and TAA
+      shader_hashes_PostAA_TAA.pixel_shaders.emplace(std::stoul("BF813081", nullptr, 16)); // SMAA 2TX and TAA
+      // PostAA lendWeightSMAA + PostAA LumaEdgeDetectionSMAA
+      shader_hashes_SMAA_EdgeDetection.pixel_shaders = { std::stoul("5636A813", nullptr, 16), std::stoul("47B723BD", nullptr, 16) };
+
+      // PostAA PostAAComposites
+      shader_hashes_PostAAComposites.pixel_shaders.emplace(std::stoul("83AE9250", nullptr, 16));
+      shader_hashes_PostAAComposites.pixel_shaders.emplace(std::stoul("496492FE", nullptr, 16));
+      shader_hashes_PostAAComposites.pixel_shaders.emplace(std::stoul("ED6287FE", nullptr, 16));
+      shader_hashes_PostAAComposites.pixel_shaders.emplace(std::stoul("FAEE5EE9", nullptr, 16));
+      shader_hash_PostAAUpscaleImage = std::stoul("C2F1D3F6", nullptr, 16); // Upscaling pixel shader (post TAA, only when in frames where DRS engage)
+      shader_hashes_LensOptics.pixel_shaders = { std::stoul("4435D741", nullptr, 16), std::stoul("C54F3986", nullptr, 16), std::stoul("DAA20F29", nullptr, 16), std::stoul("047AB485", nullptr, 16), std::stoul("9D7A97B8", nullptr, 16), std::stoul("9B2630A0", nullptr, 16), std::stoul("51F2811A", nullptr, 16), std::stoul("9391298E", nullptr, 16), std::stoul("ED01E418", nullptr, 16), std::stoul("53529823", nullptr, 16), std::stoul("DDDE2220", nullptr, 16) };
+      // DeferredShading DirOccPass
+      shader_hashes_DirOccPass.pixel_shaders = { std::stoul("944B65F0", nullptr, 16), std::stoul("DB98D83F", nullptr, 16) };
+      // ShadowBlur - SSDO Blur
+      shader_hashes_SSDO_Blur.pixel_shaders.emplace(std::stoul("1023CD1B", nullptr, 16));
+      //TODOFT: check all the Prey scaleform hashes for new unknown blend types, we need to set the cbuffers even for UI passes that render at the beginning of the frame, because they will draw in world UI (e.g. computers)
+      //TODOFT: once we have collected 100% of the game shaders, update these hashes lists, and make global functions to convert hashes between string and int
+      //TODOFT4: try to add lens distortion to psy-ops screen space effects (e.g. blue ring) so they aren't cropped with it?
+
+      std::vector<ShaderDefineData> game_shader_defines_data = {
+         {"TONEMAP_TYPE", '1', false, false, "0 - Vanilla SDR\n1 - Luma HDR (Vanilla+)\n2 - Raw HDR (Untonemapped)\nThe HDR tonemapper works for SDR too\nThis games uses a filmic tonemapper, which slightly crushes blacks"},
+         {"SUNSHAFTS_LOOK_TYPE", '2', false, false, "0 - Raw Vanilla\n1 - Vanilla+\n2 - Luma HDR (Suggested)\nThis influences both HDR and SDR, all options work in both"},
+         {"ENABLE_LENS_OPTICS_HDR", '1', false, false, "Makes the lens effects (e.g. lens flare) slightly HDR"},
+         {"AUTO_HDR_VIDEOS", '1', false, false, "(HDR only) Generates some HDR highlights from SDR videos, for consistency\nThis is pretty lightweight so it won't really affect the artistic intent"},
+         {"EXPAND_COLOR_GAMUT", '1', false, false, "Makes the original tonemapper work in a wider color gamut (HDR BT.2020), resulting in more saturated colors.\nDisable for a more vanilla like experience"},
+         {"ENABLE_LUT_EXTRAPOLATION", '1', false, false, "LUT Extrapolation should be the best looking and most accurate SDR to HDR LUT adaptation mode,\nbut you can always turn it off for the its simpler fallback"},
+     #if DEVELOPMENT || TEST
+         {"DLSS_RELATIVE_PRE_EXPOSURE", '1', true, false },
+         {"ENABLE_LINEAR_COLOR_GRADING_LUT", '1', false, false, "Whether (SDR) LUTs are stored in linear or gamma space"},
+         {"FORCE_NEUTRAL_COLOR_GRADING_LUT_TYPE", '0', false, false, "Can force a neutral LUT in different ways (color grading is still applied)"},
+         {"DRAW_LUT", '0', false, (DEVELOPMENT || TEST) ? false : true},
+     #endif
+         {"SSAO_TYPE", '1', false, false, "Screen Space Ambient Occlusion\n0 - Vanilla\n1 - Luma GTAO\nIn case GTAO is too performance intensive, lower the \"SSAO_QUALITY\" or go into the official game graphics settings and set \"Screen Space Directional Occlusion\" to half resolution\nDLSS is suggested to help with denoising AO"},
+         {"SSAO_QUALITY", '1', false, false, "0 - Vanilla\n1 - High\n2 - Extreme (slow)"},
+     #if DEVELOPMENT || TEST // For now we don't want to give users this customization, the default value should be good for most users and most cases
+         {"SSAO_RADIUS", '1', false, false, "0 - Small\n1 - Vanilla/Standard (suggested)\n2 - Large\nSmaller radiuses can look more stable but don't do as much\nLarger radiuses can look more realistic, but also over darkening and bring out screen space limitations more often (e.g. stuff de-occluding around the edges when turning the camera)\nOnly applies to GTAO"},
+     #endif
+         {"ENABLE_SSAO_TEMPORAL", '1', false, false, "Disable if you don't use TAA to avoid seeing noise in Ambient Occlusion (though it won't have the same quality)\nYou can disable it for you use TAA too but it's not suggested"},
+         {"BLOOM_QUALITY", '1', false, false, "0 - Vanilla\n1 - High"},
+         {"MOTION_BLUR_QUALITY", '0', false, false, "0 - Vanilla (user graphics setting based)\n1 - Ultra"},
+         {"SSR_QUALITY", '1', false, false, "Screen Space Reflections\n0 - Vanilla\n1 - High\n2 - Ultra\n3 - Extreme (slow)\nThis can be fairly expensive so lower it if you are having performance issues"},
+     #if DEVELOPMENT || TEST
+         {"FORCE_MOTION_VECTORS_JITTERED", force_motion_vectors_jittered ? '1' : '0', false, false, "Forces Motion Vectors generation to include the jitters from the previous frame too, as DLSS needs\nEnabling this forces the native TAA to work as when we have DLSS enabled, making it look a little bit better (less shimmery)"},
+     #endif
+         {"ENABLE_POST_PROCESS", '1', false, false, "Allows you to disable all Post Processing (at once)"},
+         {"ENABLE_CAMERA_MOTION_BLUR", '0', false, false, "Camera Motion Blur can look pretty botched in Prey, and can mess with DLSS/TAA, it's turned off by default in Luma (in the config files)"},
+         {"ENABLE_COLOR_GRADING_LUT", '1', false, false, "Allows you to disable Color Grading\nDon't disable it unless you know what you are doing"},
+         {"POST_TAA_SHARPENING_TYPE", '2', false, false, "0 - None (disabled, soft)\n1 - Vanilla (basic sharpening)\n2 - RCAS (AMD improved sharpening, default preset)\n3 - RCAS (AMD improved sharpening, strong preset)"},
+         {"ENABLE_VIGNETTE", '1', false, false, "Allows you to disable Vignette\nIt's not that prominent in Prey, it's only used in certain cases to convey gameplay information,\nso don't disable it unless you know what you are doing"},
+     #if DEVELOPMENT || TEST // Disabled these final users because these require the "DEVELOPMENT" flag to be used and we don't want users to mess around with them (it's not what the mod wants to achieve)
+         {"ENABLE_SHARPENING", '1', false, false, "Allows you to disable Sharpening globally\nDisabling it is not suggested, especially if you use TAA (you can use \"POST_TAA_SHARPENING_TYPE\" for that anyway)"},
+         {"ENABLE_FILM_GRAIN", '1', false, false, "Allows you to disable Film Grain\nIt's not that prominent in Prey, it's only used in certain cases to convey gameplay information,\nso don't disable it unless you know what you are doing"},
+     #endif
+         {"CORRECT_CRT_INTERLACING_SIZE", '1', false, false, "Disable to keep the vanilla behaviour of CRT like emulated effects becoming near imperceptible at higher resolutions (which defeats their purpose)\nThese are occasionally used in Prey as a fullscreen screen overlay"},
+         {"ALLOW_LENS_DISTORTION_BLACK_BORDERS", '1', false, false, "Disable to force lens distortion to crop all black borders (further increasing FOV is suggested if you turn this off)"},
+         {"ENABLE_DITHERING", '0', false, false, "Temporal Dithering control\nIt doesn't seem to be needed in this game so Luma disabled it by default"},
+         {"DITHERING_BIT_DEPTH", '9', false, false, "Dithering quantization (values between 7 and 9 should be best)"},
+      };
+      shader_defines_data.append_range(game_shader_defines_data);
+      assert(shader_defines_data.size() < MAX_SHADER_DEFINES);
 
       game = new Prey();
    }

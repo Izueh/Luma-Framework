@@ -17,9 +17,30 @@ namespace Shader
       reshade::api::pipeline pipeline_clone;
       // Original shaders hash (there should only be one)
       std::vector<uint32_t> shader_hashes;
+
 #if DEVELOPMENT
-      // If true, this pipeline is going to skip drawing
+      // If true, this pipeline is going to skip drawing (this might draw black or leave the previous target textures value persisting)
       bool skip = false;
+
+      struct RedirectData
+      {
+			enum class RedirectSourceType : uint8_t
+         {
+            None = 0,
+            SRV = 1,
+            UAV = 2,
+         };
+         RedirectSourceType source_type = RedirectSourceType::None;
+         int source_index = 0;
+         enum class RedirectTargetType : uint8_t
+         {
+            None = 0,
+            RTV = 1,
+            UAV = 2,
+         };
+         RedirectTargetType target_type = RedirectTargetType::None;
+         int target_index = 0;
+      } redirect_data;
 #endif
 
       bool HasGeometryShader() const
@@ -172,9 +193,9 @@ namespace Shader
 #endif
       if (hex_prefix)
       {
-         return std::format("{}{:X}", "0x", hash); // Somehow formatting "0x{:X}" directly removes the first zero from the hash string
+         return std::format("{}{:08X}", "0x", hash); // Somehow formatting "0x{:08X}" directly removes the first zero from the hash string
       }
-      return std::format("{:X}", hash); // big "X" to return capital letters
+      return std::format("{:08X}", hash); // big "X" to return capital letters
    }
 
    // TODO: add this around the code instead of uint32_t

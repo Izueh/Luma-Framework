@@ -35,7 +35,9 @@
 // Note that these match "GAMMA_CORRECTION_TYPE" and "VANILLA_ENCODING_TYPE" for now.
 #define LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB 0
 #define LUT_EXTRAPOLATION_TRANSFER_FUNCTION_GAMMA_2_2 1
-#define LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_LUMINANCE 2
+#define LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_BY_CHANNEL_CORRECTION_LUMINANCE 2
+#define LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_BY_LUMINANCE_CORRECTION_LUMINANCE 3
+#define LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_BY_LUMINANCE_CORRECTION_LUMINANCE_AND_GAMMA_2_2_BY_CHANNEL_CORRECTION_CHROMA 4
 #define DEFAULT_LUT_EXTRAPOLATION_TRANSFER_FUNCTION LUT_EXTRAPOLATION_TRANSFER_FUNCTION_GAMMA_2_2
 
 #if LUT_3D
@@ -173,6 +175,30 @@ float3 RestoreHue(float3 targetColor, float3 sourceColor, float strength = 0.5, 
 
   return colorSpace == CS_BT2020 ? oklch_to_linear_bt2020(correctedTargetOklch) : oklch_to_linear_srgb(correctedTargetOklch);
 #endif
+}
+
+float3 RestoreChrominance(float3 targetColor, float3 sourceColor, float strength = 1.0, uint colorSpace = CS_DEFAULT)
+{
+  if (strength == 0.f) // Static optimization (useful if the param is const)
+    return targetColor;
+  
+  float3 sourceOklab = colorSpace == CS_BT2020 ? linear_bt2020_to_oklab(sourceColor) : linear_srgb_to_oklab(sourceColor);
+  float3 targetOklab = colorSpace == CS_BT2020 ? linear_bt2020_to_oklab(sourceColor) : linear_srgb_to_oklab(targetColor);
+  
+  // Compute chrominance (magnitude of the a–b vector)
+  float sourceChrominance = length(sourceOklab.yz);
+  float targetChrominance = length(targetOklab.yz);
+
+  // Scale original chroma vector from 1.0 to ratio of target to new chroma
+  // Note that this might reduce or increase the chroma.
+  float chrominanceRatio = safeDivision(sourceChrominance, targetChrominance, 1);
+#if 0 // Optional safe boundaries
+  chrominanceRatio = min(chrominanceRatio, 1.333f);
+#endif
+  float chrominanceScale = lerp(1.f, chrominanceRatio, strength); //TODOFT: Unity games
+  targetOklab.yz *= chrominanceScale;
+
+	return colorSpace == CS_BT2020 ? oklab_to_linear_bt2020(targetOklab) : oklab_to_linear_srgb(targetOklab);
 }
 
 // Not 100% hue conservering but better than just max(color, 0.f), this maps the color on the closest humanly visible xy location on th CIE graph.
@@ -329,6 +355,7 @@ float4 PerceptualLerp(float4 colorA, float4 colorB, float alpha)
 	return colorLerped;
 }
 
+//TODOFT: move these to generic places
 // Encode.
 // Set "mirrored" to true in case the input can have negative values,
 // otherwise we run the non mirrored version that is more optimized but might have worse or broken results.
@@ -342,26 +369,47 @@ float3 ColorGradingLUTTransferFunctionIn(float3 col, uint transferFunction, bool
   {
     return linear_to_gamma(col, mirrored ? GCT_MIRROR : GCT_NONE);
   }
-  else // LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_LUMINANCE
+  // Note that this isn't completely mirrored with "ColorGradingLUTTransferFunctionOut" and thus is "lossy"
+  else if (transferFunction == LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_BY_CHANNEL_CORRECTION_LUMINANCE)
   {
     float3 gammaCorrectedColor = gamma_sRGB_to_linear(linear_to_gamma(col, mirrored ? GCT_MIRROR : GCT_NONE), mirrored ? GCT_MIRROR : GCT_NONE);
     return linear_to_sRGB_gamma(RestoreLuminance(col, gammaCorrectedColor), mirrored ? GCT_MIRROR : GCT_NONE);
+  }
+  else if (transferFunction == LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_BY_LUMINANCE_CORRECTION_LUMINANCE)
+  {
+    return float3(0.5, 0, 0.5); // Unsupported (return purple)
+  }
+  else //if (transferFunction == LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_BY_LUMINANCE_CORRECTION_LUMINANCE_AND_GAMMA_2_2_BY_CHANNEL_CORRECTION_CHROMA)
+  {
+    return float3(0.5, 0, 0.5); // Unsupported (return purple)
   }
 }
 // Decode.
 float3 ColorGradingLUTTransferFunctionOut(float3 col, uint transferFunction, bool mirrored = true)
 {
+	float3 rawColor = gamma_sRGB_to_linear(col, mirrored ? GCT_MIRROR : GCT_NONE); // sRGB color (not necessarily "raw")
+	float3 colorGammaCorrectedByChannel = gamma_to_linear(col, mirrored ? GCT_MIRROR : GCT_NONE); // 2.2 color (not necessarily "gamma corrected")
+	float luminanceGammaCorrected = gamma_to_linear(linear_to_sRGB_gamma(GetLuminance(rawColor), GCT_POSITIVE).x, GCT_POSITIVE).x;
+	float3 colorGammaCorrectedByLuminance = RestoreLuminance(rawColor, luminanceGammaCorrected);
   if (transferFunction == LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB)
   {
-    return gamma_sRGB_to_linear(col, mirrored ? GCT_MIRROR : GCT_NONE);
+    return rawColor;
   }
   else if (transferFunction == LUT_EXTRAPOLATION_TRANSFER_FUNCTION_GAMMA_2_2)
   {
-    return gamma_to_linear(col, mirrored ? GCT_MIRROR : GCT_NONE);
+    return colorGammaCorrectedByChannel;
   }
-  else // LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_LUMINANCE
+  else if (transferFunction == LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_BY_CHANNEL_CORRECTION_LUMINANCE)
   {
-    return RestoreLuminance(gamma_sRGB_to_linear(col, mirrored ? GCT_MIRROR : GCT_NONE), gamma_to_linear(col, mirrored ? GCT_MIRROR : GCT_NONE));
+    return RestoreLuminance(rawColor, colorGammaCorrectedByChannel);
+  }
+  else if (transferFunction == LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_BY_LUMINANCE_CORRECTION_LUMINANCE)
+  {
+    return colorGammaCorrectedByLuminance;
+  }
+  else //if (transferFunction == LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_BY_LUMINANCE_CORRECTION_LUMINANCE_AND_GAMMA_2_2_BY_CHANNEL_CORRECTION_CHROMA)
+  {
+    return RestoreChrominance(colorGammaCorrectedByLuminance, colorGammaCorrectedByChannel);
   }
 }
 

@@ -3,41 +3,44 @@
 
 #include "Common.hlsl"
 
-// Applies exponential ("Photographic") luminance/luma compression.
-// The pow can modulate the curve without changing the values around the edges.
-// The max is the max possible range to compress from, to not lose any output range if the input range was limited.
-float rangeCompress(float X, float Max = FLT_MAX)
+namespace DICE
 {
-  // Branches are for static parameters optimizations
-  if (Max == FLT_MAX) {
-    // This does e^X. We expect X to be between 0 and 1.
-    return 1.f - exp(-X);
-  }
-  const float lostRange = exp(-Max);
-  const float restoreRangeScale = 1.f / (1.f - lostRange);
-  return (1.f - exp(-X)) * restoreRangeScale;
+   // Applies exponential ("Photographic") luminance/luma compression.
+   // The max is the max possible range to compress from, to not lose any output range if the input range was limited.
+   float rangeCompress(float X, float Max = FLT_MAX)
+   {
+     // Branches are for static parameters optimizations
+     if (Max == FLT_MAX) {
+       // This does e^X. We expect X to be between 0 and 1.
+       return 1.f - exp(-X);
+     }
+     const float lostRange = exp(-Max);
+     const float restoreRangeScale = 1.f / (1.f - lostRange);
+     return (1.f - exp(-X)) * restoreRangeScale;
+   }
+
+   // Refurbished DICE HDR tonemapper (per channel or luminance).
+   // Expects "InValue" to be >= "ShoulderStart" and "OutMaxValue" to be > "ShoulderStart".
+   float luminanceCompress(
+     float InValue,
+     float OutMaxValue,
+     float ShoulderStart = 0.f,
+     bool ConsiderMaxValue = false,
+     float InMaxValue = FLT_MAX)
+   {
+     const float compressableValue = InValue - ShoulderStart;
+     const float compressableRange = InMaxValue - ShoulderStart;
+     const float compressedRange = OutMaxValue - ShoulderStart;
+     const float possibleOutValue = ShoulderStart + compressedRange * rangeCompress(compressableValue / compressedRange, ConsiderMaxValue ? (compressableRange / compressedRange) : FLT_MAX);
+   #if 1
+     return possibleOutValue;
+   #else // Enable this branch if "InValue" can be smaller than "ShoulderStart"
+     return (InValue <= ShoulderStart) ? InValue : possibleOutValue;
+   #endif
+   }
 }
 
-// Refurbished DICE HDR tonemapper (per channel or luminance).
-// Expects "InValue" to be >= "ShoulderStart" and "OutMaxValue" to be > "ShoulderStart".
-float luminanceCompress(
-  float InValue,
-  float OutMaxValue,
-  float ShoulderStart = 0.f,
-  bool ConsiderMaxValue = false,
-  float InMaxValue = FLT_MAX)
-{
-  const float compressableValue = InValue - ShoulderStart;
-  const float compressableRange = InMaxValue - ShoulderStart;
-  const float compressedRange = OutMaxValue - ShoulderStart;
-  const float possibleOutValue = ShoulderStart + compressedRange * rangeCompress(compressableValue / compressedRange, ConsiderMaxValue ? (compressableRange / compressedRange) : FLT_MAX);
-#if 1
-  return possibleOutValue;
-#else // Enable this branch if "InValue" can be smaller than "ShoulderStart"
-  return (InValue <= ShoulderStart) ? InValue : possibleOutValue;
-#endif
-}
-
+// Compresses by luminance in rgb linear space
 #define DICE_TYPE_BY_LUMINANCE_RGB 0
 // Doing the DICE compression in PQ (either on luminance or each color channel) produces a curve that is closer to our "perception" and leaves more detail highlights without overly compressing them
 #define DICE_TYPE_BY_LUMINANCE_PQ 1
@@ -97,29 +100,29 @@ float3 DICETonemap(
     if (Settings.Type == DICE_TYPE_BY_LUMINANCE_PQ || Settings.Type == DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE)
     {
       const float sourceLuminanceNormalized = sourceLuminance / HDR10_MaxWhite;
-      const float sourceLuminancePQ = Linear_to_PQ(sourceLuminanceNormalized, 1).x;
+      const float sourceLuminancePQ = Linear_to_PQ(sourceLuminanceNormalized, GCT_POSITIVE).x;
 
       if (sourceLuminancePQ > shoulderStartPQ) // Luminance below the shoulder (or below zero) don't need to be adjusted
       {
         const float peakWhitePQ = Linear_to_PQ(PeakWhite / HDR10_MaxWhite).x;
 
-        const float compressedLuminancePQ = luminanceCompress(sourceLuminancePQ, peakWhitePQ, shoulderStartPQ);
+        const float compressedLuminancePQ = DICE::luminanceCompress(sourceLuminancePQ, peakWhitePQ, shoulderStartPQ);
         const float compressedLuminanceNormalized = PQ_to_Linear(compressedLuminancePQ).x;
         Color *= compressedLuminanceNormalized / sourceLuminanceNormalized;
 
         if (Settings.Type == DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE)
         {
-          float3 Color_BT2020 = BT709_To_BT2020(Color);
-          if (any(Color_BT2020 > PeakWhite)) // Optional "optimization" branch
+          float3 colorBT2020 = BT709_To_BT2020(Color);
+          if (any(colorBT2020 > PeakWhite)) // Optional "optimization" branch
           {
             float colorLuminance = GetLuminance(Color);
             float colorLuminanceInExcess = colorLuminance - PeakWhite;
-            float maxColorInExcess = max3(Color_BT2020) - PeakWhite; // This is guaranteed to be >= "colorLuminanceInExcess"
-            float brightnessReduction = saturate(safeDivision(PeakWhite, max3(Color_BT2020), 1)); // Fall back to one in case of division by zero
+            float maxColorInExcess = max3(colorBT2020) - PeakWhite; // This is guaranteed to be >= "colorLuminanceInExcess"
+            float brightnessReduction = saturate(safeDivision(PeakWhite, max3(colorBT2020), 1)); // Fall back to one in case of division by zero
             float desaturateAlpha = saturate(safeDivision(maxColorInExcess, maxColorInExcess - colorLuminanceInExcess, 0)); // Fall back to zero in case of division by zero
-            Color_BT2020 = lerp(Color_BT2020, colorLuminance, desaturateAlpha * Settings.DesaturationAmount);
-            Color_BT2020 = lerp(Color_BT2020, Color_BT2020 * brightnessReduction, Settings.DarkeningAmount); // Also reduce the brightness to partially maintain the hue, at the cost of brightness
-            Color = BT2020_To_BT709(Color_BT2020);
+            colorBT2020 = lerp(colorBT2020, colorLuminance, desaturateAlpha * Settings.DesaturationAmount);
+            colorBT2020 = lerp(colorBT2020, colorBT2020 * brightnessReduction, Settings.DarkeningAmount); // Also reduce the brightness to partially maintain the hue, at the cost of brightness
+            Color = BT2020_To_BT709(colorBT2020);
           }
         }
       }
@@ -129,27 +132,30 @@ float3 DICETonemap(
       const float peakWhitePQ = Linear_to_PQ(PeakWhite / HDR10_MaxWhite).x;
 
       // Tonemap in BT.2020 to more closely match the primaries of modern displays
-      const float3 sourceColorNormalized = BT709_To_BT2020(Color) / HDR10_MaxWhite;
-      const float3 sourceColorPQ = Linear_to_PQ(sourceColorNormalized, 1);
+      Color = BT709_To_BT2020(Color);
+      const float3 sourceColorNormalized = Color / HDR10_MaxWhite;
+      const float3 sourceColorPQ = Linear_to_PQ(sourceColorNormalized, GCT_POSITIVE);
 
       [unroll]
       for (uint i = 0; i < 3; i++) //TODO LUMA: optimize? will the shader compile already convert this to float3? Or should we already make a version with no branches that works in float3?
       {
         if (sourceColorPQ[i] > shoulderStartPQ) // Colors below the shoulder (or below zero) don't need to be adjusted
         {
-          const float compressedColorPQ = luminanceCompress(sourceColorPQ[i], peakWhitePQ, shoulderStartPQ);
+          const float compressedColorPQ = DICE::luminanceCompress(sourceColorPQ[i], peakWhitePQ, shoulderStartPQ);
           const float compressedColorNormalized = PQ_to_Linear(compressedColorPQ).x;
-          Color[i] = BT2020_To_BT709(Color[i] * (compressedColorNormalized / sourceColorNormalized[i])).x;
+          Color[i] *= compressedColorNormalized / sourceColorNormalized[i];
         }
       }
+      
+      Color = BT2020_To_BT709(Color);
     }
   }
   else // DICE_TYPE_BY_LUMINANCE_RGB
   {
-    const float shoulderStart = PeakWhite * Settings.ShoulderStart; // From alpha to linear range
+    const float shoulderStart = Settings.ShoulderStart * PeakWhite; // From alpha to linear range
     if (sourceLuminance > shoulderStart) // Luminances below the shoulder (or below zero) don't need to be adjusted
     {
-      const float compressedLuminance = luminanceCompress(sourceLuminance, PeakWhite, shoulderStart);
+      const float compressedLuminance = DICE::luminanceCompress(sourceLuminance, PeakWhite, shoulderStart);
       Color *= compressedLuminance / sourceLuminance;
     }
   }

@@ -222,8 +222,8 @@ void main(
   outColor.rgb = Saturation(outColor.rgb, pow(saturate(1.0 / finalLuminance), LumaSettings.DevSetting01 * 3));
 #endif
 
-  const float paperWhite = LumaSettings.GamePaperWhiteNits / ITU_WhiteLevelNits;
-  const float peakWhite = LumaSettings.PeakWhiteNits / ITU_WhiteLevelNits;
+  const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
+  const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
 	DICESettings settings = DefaultDICESettings();
 #if 1
   settings.Type = DICE_TYPE_BY_LUMINANCE_RGB;
@@ -273,8 +273,8 @@ void main(
 #endif // ENABLE_LUT_NORMALIZATION_TYPE
 
 #if 0 // Awful in this game
-  const float paperWhite = LumaSettings.GamePaperWhiteNits / ITU_WhiteLevelNits;
-  const float peakWhite = LumaSettings.PeakWhiteNits / ITU_WhiteLevelNits;
+  const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
+  const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
   outColor.rgb = linear_to_gamma(PumboAutoHDR(gamma_to_linear(outColor.rgb), peakWhite, paperWhite, 6.667));
 #endif
 

@@ -24,7 +24,7 @@ cbuffer cb0 : register(b0)
 
 #define cmp -
 
-[numthreads(8, 8, 4)]
+[numthreads(8, 8, 1)]
 void main(uint3 vThreadID : SV_DispatchThreadID)
 {
   float4 r0,r1,r2,r3,r4,r5,r6,r7;

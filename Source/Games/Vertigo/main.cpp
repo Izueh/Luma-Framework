@@ -1,8 +1,5 @@
 #define GAME_VERTIGO 1
 
-#define UPGRADE_SWAPCHAIN_TYPE 1
-#define UPGRADE_RESOURCES_8UNORM 1
-#define UPGRADE_RESOURCES_11FLOAT 1
 #define UPGRADE_SAMPLERS 0
 
 #include "..\..\Core\core.hpp"
@@ -10,6 +7,20 @@
 class Vertigo final : public Game
 {
 public:
+   void OnInit(bool async) override
+   {
+      std::vector<ShaderDefineData> game_shader_defines_data = {
+         {"TONEMAP_TYPE", '1', false, false, "0 - SDR: Vanilla (ACES)\n1 - HDR: HDR ACES (recommended)\n2 - HDR: Vanilla+ (DICE+Oklab) (SDR hue conserving)\n3 - HDR: Vanilla+ (DICE) (vibrant)\n4 - HDR: Vanilla+ (DICE+desaturation)\n5 - HDR: Untonemapped (test only)"},
+      };
+      shader_defines_data.append_range(game_shader_defines_data);
+      GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');
+      GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('1');
+      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('0'); //TODOFT: PoP 1
+   }
+
+   // Needed by "Shadows of Doubt" given it used sRGB views (it should work on other Unity games too)
+   bool ForceVanillaSwapchainLinear() const override { return true; }
+
    void PrintImGuiAbout() override
    {
       ImGui::Text("Luma for \"Vertigo\" is developed by Pumbo and is open source and free.\nIf you enjoy it, consider donating.", "");
@@ -32,7 +43,7 @@ public:
       ImGui::PushStyleColor(ImGuiCol_Button, button_color);
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, button_hovered_color);
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, button_active_color);
-#if 0 //TODOFT: add nexus link here and below
+#if 0 //TODOFT: add nexus link here and below and in all other mods
       static const std::string mod_link = std::string("Nexus Mods Page ") + std::string(ICON_FK_SEARCH);
       if (ImGui::Button(mod_link.c_str()))
       {
@@ -42,7 +53,7 @@ public:
       static const std::string social_link = std::string("Join our \"HDR Den\" Discord ") + std::string(ICON_FK_SEARCH);
       if (ImGui::Button(social_link.c_str()))
       {
-         // Unique link for Vertigo Luma (to track the origin of people joining), do not share for other purposes
+         // Unique link for Luma by Pumbo (to track the origin of people joining), do not share for other purposes
          static const std::string obfuscated_link = std::string("start https://discord.gg/J9fM") + std::string("3EVuEZ");
          system(obfuscated_link.c_str());
       }
@@ -64,6 +75,7 @@ public:
          "\nRenoDX"
          "\n3Dmigoto"
          "\nOklab"
+         "\nACES"
          "\nDICE (HDR tonemapper)"
          , "");
    }
@@ -81,13 +93,18 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12;
 
-      std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"TONEMAP_TYPE", '2', false, false, "0 - SDR: Vanilla (ACES)\n1 - HDR: Pumbo Advanced AutoHDR\n2 - HDR: Oklab (suggested)\n3 - HDR: Vanilla+"},
+      enable_swapchain_upgrade = true;
+      swapchain_upgrade_type = 1;
+      enable_texture_format_upgrades = true;
+      //TODOFT: Prince of Persia only requires r8g8b8a8_typeless
+      texture_upgrade_formats = {
+            reshade::api::format::r8g8b8a8_unorm,
+            reshade::api::format::r8g8b8a8_unorm_srgb,
+            reshade::api::format::r8g8b8a8_typeless,
+            reshade::api::format::r11g11b10_float,
       };
-      shader_defines_data.append_range(game_shader_defines_data);
-      GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');
-      GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('1');
-      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('0');
+      texture_format_upgrades_lut_size = 32;
+      texture_format_upgrades_lut_dimensions = LUTDimensions::_3D;
 
       game = new Vertigo();
    }

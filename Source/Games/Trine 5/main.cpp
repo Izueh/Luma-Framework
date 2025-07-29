@@ -1,12 +1,5 @@
 #define GAME_TRINE_5 1
 
-// Upgrading any types of textures outside of the swapchain causes the game to crash when changing TAA settings or on boot
-// For now upgrading R8G8B8A8 textures is disabled because the game creates typeless ones which are then used as RTV or SRV of different types (e.g. unsigned/signed int, etc), so we'd need to add handling it.
-// Upgrading R8G8B8A8 allows the game's unfinished DLSS implementation to work, but it still has multiple problems, because DLSS runs in sRGB (linear) color space, thus it clips all colors beyond sRGB.
-// In the vanilla game DLSS was hidden, possibly because it was untested and also it had wrong gamma, given it was run instead of the TAA/sharpening pass which took gamma 2.0 and spit out gamma sRGB,
-// DLSS wouldn't have done that gamma correction (it misses it, so it outputs gamma 2.0). It also probably misses the "HDR" flag and thus would interpret colors as sRGB gamma space, which is not what LUMA does.
-// That said, if DLSS ever was upgraded to support negative scRGB colors without clipping them, we could use "DLSSTweaks" to force the HDR flag on and run it in HDR (we could even force DLAA).
-#define UPGRADE_SWAPCHAIN_TYPE 1
 #define UPGRADE_SAMPLERS 0
 
 #define LUMA_GAME_SETTING_01 float HDRHighlights
@@ -48,6 +41,19 @@ class Trine5 final : public Game
    }
 
 public:
+   void OnInit(bool async) override
+   {
+      std::vector<ShaderDefineData> game_shader_defines_data = {
+         {"TONEMAP_TYPE", '1', false, false, "0 - SDR: Vanilla\n1 - HDR: Vanilla+ (native method)\n2 - HDR: Vanilla+ (inverse method)\n3 - HDR: Untonemapped"},
+         {"ENABLE_VIGNETTE", '1', false, false, "Set to 0 to disable vanilla vignette"},
+      };
+      shader_defines_data.append_range(game_shader_defines_data);
+      GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('0');
+      GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0');
+      GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('1');
+      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('0');
+   }
+
    void LoadConfigs() override
    {
       reshade::api::effect_runtime* runtime = nullptr;
@@ -145,7 +151,7 @@ public:
       ImGui::PushStyleColor(ImGuiCol_Button, button_color);
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, button_hovered_color);
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, button_active_color);
-#if 0 //TODOFT: add nexus link here and below
+#if 0
       static const std::string mod_link = std::string("Nexus Mods Page ") + std::string(ICON_FK_SEARCH);
       if (ImGui::Button(mod_link.c_str()))
       {
@@ -155,7 +161,7 @@ public:
       static const std::string social_link = std::string("Join our \"HDR Den\" Discord ") + std::string(ICON_FK_SEARCH);
       if (ImGui::Button(social_link.c_str()))
       {
-         // Unique link for Vertigo Luma (to track the origin of people joining), do not share for other purposes
+         // Unique link for Luma by Pumbo (to track the origin of people joining), do not share for other purposes
          static const std::string obfuscated_link = std::string("start https://discord.gg/J9fM") + std::string("3EVuEZ");
          system(obfuscated_link.c_str());
       }
@@ -202,30 +208,31 @@ public:
       {
          game_device_data.drew_tonemap = true;
 
-// If we upgrade all R10G10B10A2 textures, there's no need to do this live texture format swap
-#if UPGRADE_RESOURCES_10UNORM == 0 && UPGRADE_SWAPCHAIN_TYPE == 1
-         // We manually upgrade the R10G10B10A2 texture that is used as tonemapper output and sharpening input (after which the game uses the swapchain as RT).
-         // If we upgrade all R10G10B10A2 the game can crash.
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
-         ASSERT_ONCE(rtv);
-         if (rtv && is_custom_pass)
+         // If we upgrade all R10G10B10A2 textures, there's no need to do this live texture format swap
+         if (enable_swapchain_upgrade && swapchain_upgrade_type == 1 && (!enable_texture_format_upgrades || !texture_upgrade_formats.contains(reshade::api::format::r10g10b10a2_unorm)))
          {
-            com_ptr<ID3D11Resource> target_resource;
-            rtv->GetResource(&target_resource);
-            if (!AreResourcesEqual(game_device_data_prev.upgraded_post_process_texture.get(), target_resource.get(), false))
+            // We manually upgrade the R10G10B10A2 texture that is used as tonemapper output and sharpening input (after which the game uses the swapchain as RT).
+            // If we upgrade all R10G10B10A2 the game can crash.
+            com_ptr<ID3D11RenderTargetView> rtv;
+            native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+            ASSERT_ONCE(rtv);
+            if (rtv && is_custom_pass)
             {
-               game_device_data.upgraded_post_process_texture = nullptr;
-               game_device_data.upgraded_post_process_srv = nullptr;
-               game_device_data.upgraded_post_process_rtv = nullptr;
+               com_ptr<ID3D11Resource> target_resource;
+               rtv->GetResource(&target_resource);
+               if (!AreResourcesEqual(game_device_data_prev.upgraded_post_process_texture.get(), target_resource.get(), false))
+               {
+                  game_device_data.upgraded_post_process_texture = nullptr;
+                  game_device_data.upgraded_post_process_srv = nullptr;
+                  game_device_data.upgraded_post_process_rtv = nullptr;
 
-               game_device_data.upgraded_post_process_texture = CloneTexture2D(native_device, target_resource.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, false, false, nullptr);
-               ASSERT_ONCE(game_device_data.upgraded_post_process_texture);
-               native_device->CreateShaderResourceView(game_device_data.upgraded_post_process_texture.get(), nullptr, &game_device_data.upgraded_post_process_srv);
-               native_device->CreateRenderTargetView(game_device_data.upgraded_post_process_texture.get(), nullptr, &game_device_data.upgraded_post_process_rtv);
+                  game_device_data.upgraded_post_process_texture = CloneTexture2D(native_device, target_resource.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, false, false, nullptr);
+                  ASSERT_ONCE(game_device_data.upgraded_post_process_texture);
+                  native_device->CreateShaderResourceView(game_device_data.upgraded_post_process_texture.get(), nullptr, &game_device_data.upgraded_post_process_srv);
+                  native_device->CreateRenderTargetView(game_device_data.upgraded_post_process_texture.get(), nullptr, &game_device_data.upgraded_post_process_rtv);
+               }
             }
          }
-#endif
          // Restoring the state isn't necessary in this game
          if (game_device_data.upgraded_post_process_rtv)
          {
@@ -354,6 +361,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12;
 
+      // Upgrading any types of textures outside of the swapchain causes the game to crash when changing TAA settings or on boot
+      // For now upgrading R8G8B8A8 textures is disabled because the game creates typeless ones which are then used as RTV or SRV of different types (e.g. unsigned/signed int, etc), so we'd need to add handling it.
+      // Upgrading R8G8B8A8 allows the game's unfinished DLSS implementation to work, but it still has multiple problems, because DLSS runs in sRGB (linear) color space, thus it clips all colors beyond sRGB.
+      // In the vanilla game DLSS was hidden, possibly because it was untested and also it had wrong gamma, given it was run instead of the TAA/sharpening pass which took gamma 2.0 and spit out gamma sRGB,
+      // DLSS wouldn't have done that gamma correction (it misses it, so it outputs gamma 2.0). It also probably misses the "HDR" flag and thus would interpret colors as sRGB gamma space, which is not what LUMA does.
+      // That said, if DLSS ever was upgraded to support negative scRGB colors without clipping them, we could use "DLSSTweaks" to force the HDR flag on and run it in HDR (we could even force DLAA).
+      enable_swapchain_upgrade = true;
+      swapchain_upgrade_type = 1;
+
       cb_luma_frame_settings.HDRHighlights = default_hdr_highlights;
       cb_luma_frame_settings.HDRDesaturation = default_hdr_desaturation;
 
@@ -361,16 +377,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 		pixel_shader_hashes_Sharpen.compute_shaders = { Shader::Hash_StrToNum("78D8400E"), Shader::Hash_StrToNum("C0EF3F88"), Shader::Hash_StrToNum("AA97F987"), Shader::Hash_StrToNum("0910AE0F") }; // The last one is for DLSS (which doesn't do sharpening), the others are for sharpening and some for TAA too
       pixel_shader_hashes_TAA.compute_shaders = { Shader::Hash_StrToNum("78D8400E"), Shader::Hash_StrToNum("C0EF3F88"), Shader::Hash_StrToNum("0910AE0F") };
       pixel_shader_hashes_Tonemap.pixel_shaders = { Shader::Hash_StrToNum("2B825C00"), Shader::Hash_StrToNum("480558AD"), Shader::Hash_StrToNum("AEDB562C") };
-
-      std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"TONEMAP_TYPE", '1', false, false, "0 - SDR: Vanilla\n1 - HDR: Vanilla+ (native method)\n2 - HDR: Vanilla+ (inverse method)\n3 - HDR: Untonemapped"},
-         {"ENABLE_VIGNETTE", '1', false, false, "Set to 0 to disable vanilla vignette"},
-      };
-      shader_defines_data.append_range(game_shader_defines_data);
-      GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('0');
-      GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0');
-      GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('1');
-      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('0');
 
       game = new Trine5();
    }

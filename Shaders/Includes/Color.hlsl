@@ -1,6 +1,8 @@
 #ifndef SRC_COLOR_HLSL
 #define SRC_COLOR_HLSL
 
+#include "Math.hlsl"
+
 // Needed by "linearToLog()" and "logToLinear()"
 #pragma warning( disable : 4122 )
 
@@ -53,6 +55,15 @@ float GetSaturation(float3 color)
     float maxVal = max(color.r, max(color.g, color.b));
     float minVal = min(color.r, min(color.g, color.b));
     return (maxVal == 0.0) ? 0.0 : saturate((maxVal - minVal) / maxVal);
+}
+
+float3 RestoreSaturation(float3 color, float targetSaturation)
+{
+    float maxVal = max(color.r, max(color.g, color.b));
+    float minVal = min(color.r, min(color.g, color.b));
+    float3 gray = float3(maxVal, maxVal, maxVal); // value-preserving grayscale
+    float saturation = (maxVal == 0.0) ? 0.0 : saturate((maxVal - minVal) / maxVal);
+    return lerp(gray, color, (saturation > 0.0) ? targetSaturation / saturation : 1.0);
 }
 
 float3 Saturation(float3 color, float saturation, uint colorSpace = CS_DEFAULT)

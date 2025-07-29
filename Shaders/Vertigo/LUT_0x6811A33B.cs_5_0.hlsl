@@ -1,4 +1,5 @@
 #include "../Includes/Common.hlsl"
+#include "../Includes/ACES.hlsl"
 #include "../Includes/DICE.hlsl"
 //#include "../Includes/Oklab.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl"
@@ -95,7 +96,7 @@ float rgb_2_saturation(float3 rgb)
   return (max(ma, TINY) - max(mi, TINY)) / max(ma, 1e-2);
 }
 
-float3 ACES(float3 input)
+float3 Unity_ACES(float3 input)
 {
 #if 0 // WIP original code (functions are missing)
     float3 aces = ACEScg_to_ACES(input);
@@ -123,7 +124,7 @@ float3 ACES(float3 input)
 
     // --- Global desaturation --- //
     //acescg = mul(RRT_SAT_MAT, acescg);
-    acescg = lerp(dot(acescg, AP1_RGB2Y).xxx, acescg, RRT_SAT_FACTOR.xxx);
+    acescg = lerp(dot(acescg, AP1_RGB2Y).xxx, acescg, RRT_SAT_FACTOR);
 
     // Apply RRT and ODT
     // https://github.com/TheRealMJP/BakingLab/blob/master/BakingLab/ACES.hlsl
@@ -147,11 +148,12 @@ float3 ACES(float3 input)
     // float3 linearCV = Y_2_linCV(rgbPost, CINEMA_WHITE, CINEMA_BLACK);
 
     // Apply gamma adjustment to compensate for dim surround
-    float3 linearCV = darkSurround_to_dimSurround(half3(rgbPost));
+    // Unity does this after their approximate ODT curve fit, but it should be done before anything else.
+    float3 linearCV = darkSurround_to_dimSurround(rgbPost);
 
     // Apply desaturation to compensate for luminance difference
     //linearCV = mul(ODT_SAT_MAT, color);
-    linearCV = lerp(dot(linearCV, AP1_RGB2Y).xxx, linearCV, ODT_SAT_FACTOR.xxx);
+    linearCV = lerp(dot(linearCV, AP1_RGB2Y).xxx, linearCV, ODT_SAT_FACTOR);
 
     // Convert to display primary encoding
     // Rendering space RGB to XYZ
@@ -261,9 +263,7 @@ float3 ACES(float3 input)
 #if 0
   r0.xyz = max(float3(0,0,0), r0.xyz);
 #endif
-  r0.w = dot(r0.xyz, float3(0.272228986,0.674081981,0.0536894985));
-  r0.xyz = r0.xyz + -r0.www;
-  r0.xyz = r0.xyz * float3(0.96,0.96,0.96) + r0.www;
+  r0.xyz = lerp(dot(r0.xyz, float3(0.212672904,0.715152204,0.0721750036)), r0.xyz, 0.96);
   r1.xyz = r0.xyz * float3(2.78508496,2.78508496,2.78508496) + float3(0.107772,0.107772,0.107772);
   r1.xyz = r1.xyz * r0.xyz;
   r2.xyz = r0.xyz * float3(2.93604493,2.93604493,2.93604493) + float3(0.887121975,0.887121975,0.887121975);
@@ -274,11 +274,11 @@ float3 ACES(float3 input)
   r1.z = dot(float3(-0.00557464967,0.0040607336,1.01033914), r0.xyz);
   r0.x = dot(r1.xyz, float3(1,1,1));
   r0.x = max(9.99999975e-005, r0.x);
-  r0.xy = r1.xy / r0.xx;
+  r0.xy = r1.xy / r0.x;
 #if 0
   r1.y = clamp(r1.y, 0.0, HALF_MAX);
   r1.y = pow(r1.y, DIM_SURROUND_GAMMA);
-#else
+#else // Not really needed as this is luminance?
   r1.y = pow(abs(r1.y), DIM_SURROUND_GAMMA) * sign(r1.y);
 #endif
 #if 0
@@ -287,15 +287,13 @@ float3 ACES(float3 input)
   r0.w = r0.y;
 #endif
   r0.w = r1.y / r0.w;
-  r1.w = 1 + -r0.x;
-  r0.z = r1.w + -r0.y;
-  r1.xz = r0.xz * r0.ww;
+  r1.w = 1 - r0.x;
+  r0.z = r1.w - r0.y;
+  r1.xz = r0.xz * r0.w;
   r0.x = dot(float3(1.6410234,-0.324803293,-0.236424699), r1.xyz);
   r0.y = dot(float3(-0.663662851,1.61533165,0.0167563483), r1.xyz);
   r0.z = dot(float3(0.0117218941,-0.00828444213,0.988394856), r1.xyz);
-  r0.w = dot(r0.xyz, float3(0.272228986,0.674081981,0.0536894985));
-  r0.xyz = r0.xyz + -r0.www;
-  r0.xyz = r0.xyz * float3(0.93, 0.93, 0.93) + r0.www;
+  r0.xyz = lerp(dot(r0.xyz, float3(0.212672904,0.715152204,0.0721750036)), r0.xyz, 0.93);
   r1.x = dot(float3(0.662454188,0.134004205,0.156187683), r0.xyz);
   r1.y = dot(float3(0.272228718,0.674081743,0.0536895171), r0.xyz);
   r1.z = dot(float3(-0.00557464967,0.0040607336,1.01033914), r0.xyz);
@@ -335,8 +333,10 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
     r1.x = dot(float3(0.439700991,0.382977992,0.177334994), r2.xyz);
     r1.y = dot(float3(0.0897922963,0.813422978,0.0967615992), r2.xyz);
     r1.z = dot(float3(0.0175439995,0.111543998,0.870703995), r2.xyz);
-    r1.xyz = max(float3(0,0,0), r1.xyz);
+  #if 0
+    r1.xyz = max(0, r1.xyz);
     r1.xyz = min(float3(65504,65504,65504), r1.xyz);
+  #endif
     r2.xyz = cmp(r1.xyz < float3(3.05175708e-005,3.05175708e-005,3.05175708e-005));
     r3.xyz = r1.xyz * float3(0.5,0.5,0.5) + float3(1.525878e-005,1.525878e-005,1.525878e-005);
     r3.xyz = log2(r3.xyz);
@@ -367,7 +367,7 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
     r1.xyz = float3(0.454545468,0.454545468,0.454545468) * r1.xyz;
     r1.xyz = exp2(r1.xyz);
     r2.xyz = min(float3(1,1,1), r1.xyz);
-    r0.w = dot(r2.xyz, float3(0.272228986,0.674081981,0.0536894985));
+    r0.w = dot(r2.xyz, float3(0.212672904,0.715152204,0.0721750036));
     r0.w = saturate(_SplitShadows.w + r0.w);
     r1.w = 1 + -r0.w;
     r2.xyz = float3(-0.5,-0.5,-0.5) + _SplitShadows.xyz;
@@ -408,7 +408,7 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
     r2.x = dot(r1.xyz, _ChannelMixerRed.xyz);
     r2.y = dot(r1.xyz, _ChannelMixerGreen.xyz);
     r2.z = dot(r1.xyz, _ChannelMixerBlue.xyz);
-    r0.w = dot(r2.xyz, float3(0.272228986,0.674081981,0.0536894985));
+    r0.w = dot(r2.xyz, float3(0.212672904,0.715152204,0.0721750036));
     r1.xy = _ShaHiLimits.yw + -_ShaHiLimits.xz;
     r1.zw = -_ShaHiLimits.xz + r0.ww;
     r1.xy = float2(1,1) / r1.xy;
@@ -480,7 +480,7 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
     r1.yzw = float3(-1,-1,-1) + r1.yzw;
     r1.yzw = r2.zzz * r1.yzw + float3(1,1,1);
     r2.xyz = r1.xxx * r1.yzw;
-    r2.x = dot(r2.xyz, float3(0.272228986,0.674081981,0.0536894985));
+    r2.x = dot(r2.xyz, float3(0.212672904,0.715152204,0.0721750036));
     r0.w = _HueSatCon.y * r0.w;
     r1.xyz = r1.xxx * r1.yzw + -r2.xxx;
     r1.xyz = r0.www * r1.xyz + r2.xxx;
@@ -512,6 +512,7 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
     r0.xyz = exp2(r0.xyz);
     r0.xyz = float3(-0.0479959995,-0.0479959995,-0.0479959995) + r0.xyz;
     r0.xyz = float3(0.179999992,0.179999992,0.179999992) * r0.xyz;
+    
     r2.x = dot(float3(0.439700991,0.382977992,0.177334994), r0.xyz);
     r2.y = dot(float3(0.0897922963,0.813422978,0.0967615992), r0.xyz);
     r2.z = dot(float3(0.0175439995,0.111543998,0.870703995), r0.xyz);
@@ -520,95 +521,109 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
     r1.z = dot(float3(0.00831614807,-0.00603244966,0.997716308), r2.xyz);
   }
 
-  const float paperWhite = LumaSettings.GamePaperWhiteNits / ITU_WhiteLevelNits;
-  const float peakWhite = LumaSettings.PeakWhiteNits / ITU_WhiteLevelNits;
+  const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
+  const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
 
-  float3 vanillaTM = ACES(r1.rgb);
+  float3 untonemapped = r1.rgb; // In AP1
+  float3 vanillaTM = Unity_ACES(untonemapped); // Outputs Rec.709
+  float3 tonemapped = vanillaTM;
 
-#if TONEMAP_TYPE <= 1
-  r1.rgb = vanillaTM;
-#else // TONEMAP_TYPE >= 2
+#if TONEMAP_TYPE == 1 // Proper ACES
 
-  float3 XYZ = mul(AP1_2_XYZ_MAT, r1.rgb);
+  ACESSettings acesSettings = DefaultACESSettings();
+  acesSettings.mid_grey = MidGray;
+  acesSettings.dark_to_dim = true;
+  acesSettings.input_to_ap1_matrix = IdentityMatrix;
+  tonemapped = ACESTonemap(untonemapped, paperWhite, peakWhite, acesSettings); // Outputs Rec.709
+
+#elif TONEMAP_TYPE >= 2
+
+  // Convert from AP1 to Rec.709
+  float3 XYZ = mul(AP1_2_XYZ_MAT, untonemapped);
   XYZ = mul(D60_2_D65_CAT, XYZ);
-  r1.rgb = mul(XYZ_2_REC709_MAT, XYZ);
+  untonemapped = mul(XYZ_2_REC709_MAT, XYZ);
 
 #if 0
-  // ACES returns mid gray (18% (0.18) of SDR) for the manually found value of 0.259 (there's no dynamic parameters for it so the value is constant)
-  float3 ACES_MidGray_Out = ACES(0.259); // Result is 0.18
+  // Unity ACES returns mid gray (18% (0.18) of SDR) for the manually found value of 0.259 (there's no dynamic parameters for it so the value is constant)
+  float3 ACES_MidGray_Out = Unity_ACES(0.259); // Result is 0.18
 #endif
-  r1.rgb *= 0.18 / 0.259;
-
-	DICESettings settings = DefaultDICESettings();
-
+  untonemapped *= 0.18 / 0.259;
+  
+	DICESettings diceSettings = DefaultDICESettings();
 #if TONEMAP_TYPE == 2
+
 #if 1
 	// Restore SDR TM below mid gray and restore hue/chroma of SDR at a fixed percentage to retain the features of the SDR tonemapper (e.g. desaturation etc)
-	r1.xyz = linear_srgb_to_oklch(r1.rgb);
+	float3 oklch = linear_srgb_to_oklch(untonemapped);
 	float3 vanillaTMOklab = linear_srgb_to_oklch(vanillaTM);
-	r1[0] = lerp(vanillaTMOklab[0], r1[0], saturate(pow(vanillaTMOklab[0], 3.0) * 2.0)); // We get raised blacks without this
-	r1[1] = lerp(r1[1], vanillaTMOklab[1], 0.75);
-	if (abs(vanillaTMOklab[2] - r1[2]) > PI)
+	oklch[0] = lerp(vanillaTMOklab[0], oklch[0], saturate(pow(vanillaTMOklab[0], 3.0) * 2.0)); // We get raised blacks without this
+	oklch[1] = lerp(oklch[1], vanillaTMOklab[1], 0.75);
+	if (abs(vanillaTMOklab[2] - oklch[2]) > PI)
 	{
-		if (r1[2] <= vanillaTMOklab[2])
+		if (oklch[2] <= vanillaTMOklab[2])
 		{
-			r1[2] += PI * 2.0;
+			oklch[2] += PI * 2.0;
 		}
 		else
 		{
 			vanillaTMOklab[2] += PI * 2.0;
 		}
 	}
-	r1[2] = lerp(r1[2], vanillaTMOklab[2], pow(saturate(vanillaTMOklab[0]), 0.75) * 0.667); // This restores the hue distortion from the vanilla tonemapper
+	oklch[2] = lerp(oklch[2], vanillaTMOklab[2], pow(saturate(vanillaTMOklab[0]), 0.75) * 0.667); // This restores the hue distortion from the vanilla tonemapper
 	// Reapply some pure saturation (chroma) after desaturating
-	r1[1] = lerp(r1[1], max(r1[1], 1.0), saturate((vanillaTMOklab[0] * 2.0) - 1.0) * 0.0275);
-	r1.rgb = oklch_to_linear_srgb(r1.xyz);
-#else 
+	oklch[1] = lerp(oklch[1], max(oklch[1], 1.0), saturate((vanillaTMOklab[0] * 2.0) - 1.0) * 0.0275);
+	untonemapped = oklch_to_linear_srgb(oklch);
+#else
   bool restoreBrightness = true; // We get raised blacks without this
-	r1.rgb = RestoreHue(r1.rgb, saturate(vanillaTM), 0.75, restoreBrightness);
+	untonemapped = RestoreHue(untonemapped, saturate(vanillaTM), 0.75, restoreBrightness);
 #endif
-//TODOFT: do it with new oklab method and test skies being blue... then fix invalid colors
-  
-  settings.Type = DICE_TYPE_BY_LUMINANCE_PQ;
+   // TODO: do it with new oklab method and test skies being blue... then fix invalid colors (Note: this probably doesn't apply anymore)
 
-#elif TONEMAP_TYPE == 3
+#elif TONEMAP_TYPE == 3 || TONEMAP_TYPE == 4
 
   // Restore SDR TM below mid gray. This can have some nice colors and good saturation, but shows some random colors that would have completely clipped in SDR so they can be out of place
-#if 0
-  r1.rgb = lerp(vanillaTM, r1.rgb, saturate(pow(vanillaTM / MidGray, 2.0)));
+#if 0 // By channel preserves shadow saturation more accurately
+  untonemapped = lerp(vanillaTM, untonemapped, saturate(pow(vanillaTM / MidGray, 2.0)));
 #elif 0 // This method reduces saturation too much
-  r1.rgb = lerp(RestoreLuminance(r1.rgb, vanillaTM), r1.rgb, saturate(pow(vanillaTM / MidGray, 2.0)));
+  untonemapped = lerp(RestoreLuminance(untonemapped, vanillaTM), untonemapped, saturate(pow(vanillaTM / MidGray, 2.0)));
 #else // A mix of the two above
-  r1.rgb = lerp(lerp(vanillaTM, r1.rgb, saturate(pow(vanillaTM / MidGray, 2.0))), lerp(RestoreLuminance(r1.rgb, vanillaTM), r1.rgb, saturate(pow(vanillaTM / MidGray, 2.0))), 0.666);
+  untonemapped = lerp(lerp(vanillaTM, untonemapped, saturate(pow(vanillaTM / MidGray, 2.0))), lerp(RestoreLuminance(untonemapped, vanillaTM), untonemapped, saturate(pow(vanillaTM / MidGray, 2.0))), 0.666);
 #endif
 
+#endif // TONEMAP_TYPE == 2 || TONEMAP_TYPE == 3 || TONEMAP_TYPE == 4
+
+	FixColorGradingLUTNegativeLuminance(untonemapped);
+
+#if TONEMAP_TYPE <= 4
+#if TONEMAP_TYPE == 3
   // This helps bringing the saturation down a bit
-  settings.Type = DICE_TYPE_BY_CHANNEL_PQ;
+  diceSettings.Type = DICE_TYPE_BY_CHANNEL_PQ;
+#else // TONEMAP_TYPE != 3
+  diceSettings.Type = DICE_TYPE_BY_LUMINANCE_PQ;
+#endif // TONEMAP_TYPE == 3
 
-#endif
-   
-	FixColorGradingLUTNegativeLuminance(r1.rgb);
+  //diceSettings.ShoulderStart = paperWhite * MidGray / peakWhite; // This is already set to a >0 value
+	tonemapped = DICETonemap(untonemapped * paperWhite, peakWhite, diceSettings) / paperWhite;
 
-#if TONEMAP_TYPE <= 3
-  //settings.ShoulderStart = paperWhite * MidGray / peakWhite;
-	r1.rgb = DICETonemap(r1.rgb * paperWhite, peakWhite, settings) / paperWhite;
-#endif
+#if TONEMAP_TYPE == 4
+  // Do a second DICE pass by PQ channel and then restore that chrominance, to smoothly desaturate highlights
+  diceSettings.Type = DICE_TYPE_BY_CHANNEL_PQ;
+	float3 tonemappedAlt = DICETonemap(untonemapped * paperWhite, peakWhite, diceSettings) / paperWhite;
+	tonemapped = RestoreChrominance(tonemapped, tonemappedAlt);
+#endif // TONEMAP_TYPE == 4
+
+#else // TONEMAP_TYPE > 4
+  tonemapped = untonemapped;
+#endif // TONEMAP_TYPE <= 4
    
-	//r1 = saturate(r1);
-	if (any(isnan(r1)))
-		r1 = 0;
+	if (any(isnan(tonemapped)))
+		tonemapped = 0;
   
-#endif // TONEMAP_TYPE
+#endif // TONEMAP_TYPE >= 2
 
-#if 1
-  r1.xyz = r1.xyz;
-#else
-  r1.xyz = max(float3(0,0,0), r1.xyz);
+#if 0 // This allows gamut to go beyond Rec.709
+  tonemapped = max(tonemapped, 0.0);
 #endif
 
-#if TONEMAP_TYPE == 1 // Alternative basic HDR upgrade implementation
-  r1.rgb = PumboAutoHDR(r1.rgb, peakWhite, paperWhite, 3.333);
-#endif
-
-  _OutputTexture[vThreadID.xyz] = float4(r1.xyz, 1.0);
+  _OutputTexture[vThreadID.xyz] = float4(tonemapped, 1.0);
 }

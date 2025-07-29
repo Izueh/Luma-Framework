@@ -126,7 +126,9 @@ typedef struct NVSDK_NGX_D3D11_DLSSD_Eval_Params
     ID3D11Resource*                     pInRoughness;
 
     ID3D11Resource*                     pInColor;
+    ID3D11Resource*                     pInAlpha;
     ID3D11Resource*                     pInOutput;
+    ID3D11Resource*                     pInOutputAlpha;
     ID3D11Resource*                     pInDepth;
     ID3D11Resource*                     pInMotionVectors;
     float                               InJitterOffsetX;     /* Jitter offset must be in input/render pixel space */
@@ -139,6 +141,8 @@ typedef struct NVSDK_NGX_D3D11_DLSSD_Eval_Params
     ID3D11Resource*                     pInTransparencyMask; /* Unused/Reserved for future use */
     ID3D11Resource*                     pInExposureTexture;
     ID3D11Resource*                     pInBiasCurrentColorMask;
+    NVSDK_NGX_Coordinates               InAlphaSubrectBase;
+    NVSDK_NGX_Coordinates               InOutputAlphaSubrectBase;
     NVSDK_NGX_Coordinates               InDiffuseAlbedoSubrectBase;
     NVSDK_NGX_Coordinates               InSpecularAlbedoSubrectBase;
     NVSDK_NGX_Coordinates               InNormalsSubrectBase;
@@ -315,6 +319,8 @@ static inline NVSDK_NGX_Result NGX_D3D11_EVALUATE_DLSSD_EXT(
     NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSS_Input_Roughness_Subrect_Base_Y, pInDlssDEvalParams->InRoughnessSubrectBase.Y);
     NVSDK_NGX_Parameter_SetD3d11Resource(pInParams, NVSDK_NGX_Parameter_GBuffer_Emissive, pInDlssDEvalParams->GBufferSurface.pInAttrib[NVSDK_NGX_GBUFFER_EMISSIVE]);
 
+    NVSDK_NGX_Parameter_SetD3d11Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_Alpha, pInDlssDEvalParams->pInAlpha);
+    NVSDK_NGX_Parameter_SetD3d11Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_OutputAlpha, pInDlssDEvalParams->pInOutputAlpha);
     NVSDK_NGX_Parameter_SetD3d11Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_ReflectedAlbedo, pInDlssDEvalParams->pInReflectedAlbedo);
     NVSDK_NGX_Parameter_SetD3d11Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_ColorBeforeParticles, pInDlssDEvalParams->pInColorBeforeParticles);
     NVSDK_NGX_Parameter_SetD3d11Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_ColorAfterParticles, pInDlssDEvalParams->pInColorAfterParticles);
@@ -337,6 +343,10 @@ static inline NVSDK_NGX_Result NGX_D3D11_EVALUATE_DLSSD_EXT(
     NVSDK_NGX_Parameter_SetD3d11Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_SpecularRayDirection, pInDlssDEvalParams->pInSpecularRayDirection);
     NVSDK_NGX_Parameter_SetD3d11Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_DiffuseRayDirectionHitDistance, pInDlssDEvalParams->pInDiffuseRayDirectionHitDistance);
     NVSDK_NGX_Parameter_SetD3d11Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_SpecularRayDirectionHitDistance, pInDlssDEvalParams->pInSpecularRayDirectionHitDistance);
+    NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_Alpha_Subrect_Base_X, pInDlssDEvalParams->InAlphaSubrectBase.X);
+    NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_Alpha_Subrect_Base_Y, pInDlssDEvalParams->InAlphaSubrectBase.Y);
+    NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_OutputAlpha_Subrect_Base_X, pInDlssDEvalParams->InOutputAlphaSubrectBase.X);
+    NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_OutputAlpha_Subrect_Base_Y, pInDlssDEvalParams->InOutputAlphaSubrectBase.Y);
     NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_ReflectedAlbedo_Subrect_Base_X, pInDlssDEvalParams->InReflectedAlbedoSubrectBase.X);
     NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_ReflectedAlbedo_Subrect_Base_Y, pInDlssDEvalParams->InReflectedAlbedoSubrectBase.Y);
     NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_ColorAfterParticles_Subrect_Base_X, pInDlssDEvalParams->InColorAfterParticlesSubrectBase.X);
@@ -412,7 +422,9 @@ typedef struct NVSDK_NGX_D3D12_DLSSD_Eval_Params
     ID3D12Resource*                     pInRoughness;
 
     ID3D12Resource*                     pInColor;
+    ID3D12Resource*                     pInAlpha;
     ID3D12Resource*                     pInOutput;
+    ID3D12Resource*                     pInOutputAlpha;
     ID3D12Resource*                     pInDepth;
     ID3D12Resource*                     pInMotionVectors;
     float                               InJitterOffsetX;     /* Jitter offset must be in input/render pixel space */
@@ -425,6 +437,8 @@ typedef struct NVSDK_NGX_D3D12_DLSSD_Eval_Params
     ID3D12Resource*                     pInTransparencyMask; /* Unused/Reserved for future use */
     ID3D12Resource*                     pInExposureTexture;
     ID3D12Resource*                     pInBiasCurrentColorMask;
+    NVSDK_NGX_Coordinates               InAlphaSubrectBase;
+    NVSDK_NGX_Coordinates               InOutputAlphaSubrectBase;
     NVSDK_NGX_Coordinates               InDiffuseAlbedoSubrectBase;
     NVSDK_NGX_Coordinates               InSpecularAlbedoSubrectBase;
     NVSDK_NGX_Coordinates               InNormalsSubrectBase;
@@ -608,6 +622,8 @@ static inline NVSDK_NGX_Result NGX_D3D12_EVALUATE_DLSSD_EXT(
     NVSDK_NGX_Parameter_SetD3d12Resource(pInParams, NVSDK_NGX_Parameter_GBuffer_Normals, pInDlssDEvalParams->pInNormals);
     NVSDK_NGX_Parameter_SetD3d12Resource(pInParams, NVSDK_NGX_Parameter_GBuffer_Roughness, pInDlssDEvalParams->pInRoughness);
 
+    NVSDK_NGX_Parameter_SetD3d12Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_Alpha, pInDlssDEvalParams->pInAlpha);
+    NVSDK_NGX_Parameter_SetD3d12Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_OutputAlpha, pInDlssDEvalParams->pInOutputAlpha);
     NVSDK_NGX_Parameter_SetD3d12Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_ReflectedAlbedo, pInDlssDEvalParams->pInReflectedAlbedo);
     NVSDK_NGX_Parameter_SetD3d12Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_ColorBeforeParticles, pInDlssDEvalParams->pInColorBeforeParticles);
     NVSDK_NGX_Parameter_SetD3d12Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_ColorAfterParticles, pInDlssDEvalParams->pInColorAfterParticles);
@@ -630,6 +646,10 @@ static inline NVSDK_NGX_Result NGX_D3D12_EVALUATE_DLSSD_EXT(
     NVSDK_NGX_Parameter_SetD3d12Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_SpecularRayDirection, pInDlssDEvalParams->pInSpecularRayDirection);
     NVSDK_NGX_Parameter_SetD3d12Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_DiffuseRayDirectionHitDistance, pInDlssDEvalParams->pInDiffuseRayDirectionHitDistance);
     NVSDK_NGX_Parameter_SetD3d12Resource(pInParams, NVSDK_NGX_Parameter_DLSSD_SpecularRayDirectionHitDistance, pInDlssDEvalParams->pInSpecularRayDirectionHitDistance);
+    NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_Alpha_Subrect_Base_X, pInDlssDEvalParams->InAlphaSubrectBase.X);
+    NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_Alpha_Subrect_Base_Y, pInDlssDEvalParams->InAlphaSubrectBase.Y);
+    NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_OutputAlpha_Subrect_Base_X, pInDlssDEvalParams->InOutputAlphaSubrectBase.X);
+    NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_OutputAlpha_Subrect_Base_Y, pInDlssDEvalParams->InOutputAlphaSubrectBase.Y);
     NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_ReflectedAlbedo_Subrect_Base_X, pInDlssDEvalParams->InReflectedAlbedoSubrectBase.X);
     NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_ReflectedAlbedo_Subrect_Base_Y, pInDlssDEvalParams->InReflectedAlbedoSubrectBase.Y);
     NVSDK_NGX_Parameter_SetUI(pInParams, NVSDK_NGX_Parameter_DLSSD_ColorAfterParticles_Subrect_Base_X, pInDlssDEvalParams->InColorAfterParticlesSubrectBase.X);

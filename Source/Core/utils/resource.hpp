@@ -213,6 +213,7 @@ enum class DebugDrawTextureOptionsMask : uint32_t
    LinearToGamma = 1 << 5,
    GammaToLinear = 1 << 6,
    FlipY = 1 << 7,
+   Saturate = 1 << 8,
 };
 // If true we are drawing the render target texture, otherwise the shader resource texture
 enum class DebugDrawMode : uint32_t

@@ -12,6 +12,11 @@
 #define PI_X2 (PI * 2.0)
 #define PI_X4 (PI_X4 * 4.0)
 
+static const float3x3 IdentityMatrix = float3x3(
+    1.0f, 0.0f, 0.0f,
+    0.0f, 1.0f, 0.0f,
+    0.0f, 0.0f, 1.0f);
+
 float average(float3 color)
 {
 	return (color.x + color.y + color.z) / 3.f;

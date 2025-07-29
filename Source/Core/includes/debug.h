@@ -1,10 +1,13 @@
 #pragma once
 
+#define _STRINGIZE(x) _STRINGIZE2(x)
+#define _STRINGIZE2(x) #x
+
 #if defined(NDEBUG) && DEVELOPMENT
 #undef assert
 #define assert(expression) ((void)(                                                       \
             (!!(expression)) ||                                                               \
-            (MessageBoxA(NULL, #expression, Globals::MOD_NAME, MB_SETFOREGROUND | MB_OK))) \
+            (MessageBoxA(NULL, "Assertion failed: " #expression "\nFile: " __FILE__ "\nLine: " _STRINGIZE(__LINE__), Globals::MOD_NAME, MB_SETFOREGROUND | MB_OK))) \
         )
 #endif
 
@@ -52,7 +55,7 @@ namespace
 #if 1
 		// Note: the process ID is unique within a session, but not across sessions so it could repeat itself (though unlikely), we currently have no better solution to have a unique identifier unique across dll loads and process runs
 		DWORD hProcessId = unique_random_handle != 0 ? unique_random_handle : GetCurrentProcessId();
-      std::ifstream fileRead("Luma-Debug");
+      std::ifstream fileRead("Luma-Debug"); // Implies "Globals::MOD_NAME"
       if (fileRead)
       {
          DWORD hProcessIdRead;
@@ -75,7 +78,7 @@ namespace
          // Write a file on disk so we can avoid re-opening the debugger dialog (which can be annoying) if a program loaded and unloaded multiple times in a row (it can happen on boot)
          else if (ret == IDNO)
          {
-            std::ofstream fileWrite("Luma-Debug");
+            std::ofstream fileWrite("Luma-Debug"); // Implies "Globals::MOD_NAME"
             if (fileWrite)
             {
                fileWrite << hProcessId;
