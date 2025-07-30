@@ -4,12 +4,20 @@
     <PreferredToolArchitecture>x64</PreferredToolArchitecture>
   </PropertyGroup>
   <ItemGroup Label="ProjectConfigurations">
-    <ProjectConfiguration Include="Debug|Win32">
-      <Configuration>Debug</Configuration>
+    <ProjectConfiguration Include="Development-Debug|Win32">
+      <Configuration>Development-Debug</Configuration>
       <Platform>Win32</Platform>
     </ProjectConfiguration>
-    <ProjectConfiguration Include="Release|Win32">
-      <Configuration>Release</Configuration>
+    <ProjectConfiguration Include="Development-Release|Win32">
+      <Configuration>Development-Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Publishing-Release|Win32">
+      <Configuration>Publishing-Release</Configuration>
+      <Platform>Win32</Platform>
+    </ProjectConfiguration>
+    <ProjectConfiguration Include="Test-Release|Win32">
+      <Configuration>Test-Release</Configuration>
       <Platform>Win32</Platform>
     </ProjectConfiguration>
   </ItemGroup>
@@ -17,18 +25,28 @@
     <ProjectGuid>{2D83616E-813C-DB05-0623-2E25145C8CCF}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
-    <Platform>x86</Platform>
+    <Platform>Win32</Platform>
     <ProjectName>BioShock 2</ProjectName>
     <VCProjectUpgraderObjectName>NoUpgrade</VCProjectUpgraderObjectName>
     <VcpkgTriplet Condition="'$(Platform)'=='Win32'">x86-windows</VcpkgTriplet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <CharacterSet>Unicode</CharacterSet>
     <PlatformToolset>v143</PlatformToolset>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|Win32'" Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+    <CharacterSet>Unicode</CharacterSet>
+    <PlatformToolset>v143</PlatformToolset>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Debug|Win32'" Label="Configuration">
     <ConfigurationType>DynamicLibrary</ConfigurationType>
     <CharacterSet>Unicode</CharacterSet>
     <PlatformToolset>v143</PlatformToolset>
@@ -42,20 +60,36 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
     <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(SolutionName)-$(ProjectName)</TargetName>
-    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">.addon</TargetExt>
-    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</LinkIncremental>
-    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">true</GenerateManifest>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(SolutionName)-$(ProjectName)</TargetName>
-    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">.addon</TargetExt>
-    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">false</LinkIncremental>
-    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">true</GenerateManifest>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Development-Debug|Win32'">$(SolutionName)-$(ProjectName)</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Development-Debug|Win32'">.addon</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Development-Debug|Win32'">true</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Development-Debug|Win32'">true</GenerateManifest>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|Win32'">$(SolutionName)-$(ProjectName)</TargetName>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Test-Release|Win32'">$(SolutionName)-$(ProjectName)</TargetName>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Development-Release|Win32'">$(SolutionName)-$(ProjectName)</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|Win32'">.addon</TargetExt>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Test-Release|Win32'">.addon</TargetExt>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Development-Release|Win32'">.addon</TargetExt>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|Win32'">false</LinkIncremental>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Test-Release|Win32'">false</LinkIncremental>
+    <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Development-Release|Win32'">false</LinkIncremental>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|Win32'">true</GenerateManifest>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Test-Release|Win32'">true</GenerateManifest>
+    <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Development-Release|Win32'">true</GenerateManifest>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Debug|Win32'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|Win32'">
+    <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
+    <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|Win32'">
+    <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
+    <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|Win32'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
   </PropertyGroup>
@@ -63,9 +97,11 @@
     <VcpkgEnableManifest>false</VcpkgEnableManifest>
     <VcpkgEnabled>false</VcpkgEnabled>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Vcpkg" />
-  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Vcpkg" />
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Debug|Win32'" Label="Vcpkg" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|Win32'" Label="Vcpkg" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|Win32'" Label="Vcpkg" />
+  <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|Win32'" Label="Vcpkg" />
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-Debug|Win32'">
     <ClCompile>
       <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
@@ -76,7 +112,7 @@
       <Optimization>Disabled</Optimization>
       <RuntimeLibrary>MultiThreadedDebugDLL</RuntimeLibrary>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
-      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";WIN32;_WINDOWS;</PreprocessorDefinitions>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";WIN32;_WINDOWS;DEVELOPMENT;</PreprocessorDefinitions>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <AdditionalOptions>%(AdditionalOptions) /utf-8 /Zc:strictStrings /Zc:threadSafeInit</AdditionalOptions>
       <FunctionLevelLinking>
@@ -117,7 +153,7 @@
       <Command>xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_BIOSHOCK_2_BIN_PATH%"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
-  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|Win32'">
     <ClCompile>
       <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
@@ -165,11 +201,106 @@
       <Command>xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_BIOSHOCK_2_BIN_PATH%"</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|Win32'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>Default</InlineFunctionExpansion>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <Optimization>MaxSpeed</Optimization>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";WIN32;_WINDOWS;NDEBUG;TEST;</PreprocessorDefinitions>
+      <UseStandardPreprocessor>true</UseStandardPreprocessor>
+      <AdditionalOptions>%(AdditionalOptions) /utf-8 /Zc:strictStrings /Zc:threadSafeInit</AdditionalOptions>
+      <FunctionLevelLinking>
+      </FunctionLevelLinking>
+      <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <LanguageStandard_C>stdclatest</LanguageStandard_C>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>.\.\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>.\.\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>
+      </AdditionalDependencies>
+      <AdditionalLibraryDirectories>
+      </AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x86</AdditionalOptions>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <ImportLibrary>
+      </ImportLibrary>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>
+      </LinkLibraryDependencies>
+    </ProjectReference>
+    <PostBuildEvent>
+      <Command>xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_BIOSHOCK_2_BIN_PATH%"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
+  <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|Win32'">
+    <ClCompile>
+      <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ExceptionHandling>Sync</ExceptionHandling>
+      <InlineFunctionExpansion>Default</InlineFunctionExpansion>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <Optimization>MaxSpeed</Optimization>
+      <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeTypeInfo>true</RuntimeTypeInfo>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);SOLUTION_DIR=R"($(SolutionDir))";PROJECT_NAME="$(ProjectName)";WIN32;_WINDOWS;NDEBUG;DEVELOPMENT;</PreprocessorDefinitions>
+      <UseStandardPreprocessor>true</UseStandardPreprocessor>
+      <AdditionalOptions>%(AdditionalOptions) /utf-8 /Zc:strictStrings /Zc:threadSafeInit</AdditionalOptions>
+      <FunctionLevelLinking>
+      </FunctionLevelLinking>
+      <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <LanguageStandard_C>stdclatest</LanguageStandard_C>
+    </ClCompile>
+    <ResourceCompile>
+      <PreprocessorDefinitions>%(PreprocessorDefinitions);WIN32;_WINDOWS;NDEBUG</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>.\.\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
+    <Midl>
+      <AdditionalIncludeDirectories>.\.\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <OutputDirectory>$(ProjectDir)/$(IntDir)</OutputDirectory>
+      <HeaderFileName>%(Filename).h</HeaderFileName>
+      <TypeLibraryName>%(Filename).tlb</TypeLibraryName>
+      <InterfaceIdentifierFileName>%(Filename)_i.c</InterfaceIdentifierFileName>
+      <ProxyFileName>%(Filename)_p.c</ProxyFileName>
+    </Midl>
+    <Link>
+      <AdditionalDependencies>
+      </AdditionalDependencies>
+      <AdditionalLibraryDirectories>
+      </AdditionalLibraryDirectories>
+      <AdditionalOptions>%(AdditionalOptions) /machine:x86</AdditionalOptions>
+      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <ImportLibrary>
+      </ImportLibrary>
+    </Link>
+    <ProjectReference>
+      <LinkLibraryDependencies>
+      </LinkLibraryDependencies>
+    </ProjectReference>
+    <PostBuildEvent>
+      <Command>xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_BIOSHOCK_2_BIN_PATH%"</Command>
+    </PostBuildEvent>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
-  <Import Condition="Exists('$(SolutionDir)\Source\Core\configuration_defines.props')" Project="$(SolutionDir)\Source\Core\configuration_defines.props" />
 </Project>

@@ -36,7 +36,7 @@ extern "C" __declspec(dllexport) void AddonUninit(HMODULE addon_module, HMODULE 
 // Instead of "manually" including the "core" library, we simply include its main code file (which is a header).
 // The library in itself is standalone, as in, it compiles fine and could directly be used as a template addon etc if built as dll but,
 // there's a major limitation in how libraries dependencies work by nature, and that is that you can only make
-// one version of them for all other projects to use. For performance and tidiness reasons, we are interestested in
+// one version of them for all other projects to use. For performance and tidiness reasons, we are interested in
 // having global defines that can be turned on and off per game, as opposed to runtime (static) parameters.
 // Hence why we specify the global defines before including the core Luma file (where near all of the generic Luma implementation is).
 // If we wanted to use a library, we'd also need to add a core "main" definition in a cpp file, to link it properly.
@@ -151,7 +151,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 		}
       
       // Setup the globals (e.g. name etc). It's good to do this stuff before registering the ReShade addon, to make sure the names are up to date.
-      Globals::GAME_NAME = use_generic_name ? file_name.c_str() : PROJECT_NAME; // Can include spaces!
+      const char* project_name = PROJECT_NAME;
+      const char* cleared_project_name = (project_name[0] == '_') ? (project_name + 1) : project_name; // Remove the potential "_" at the beginning
+      Globals::GAME_NAME = use_generic_name ? file_name.c_str() : cleared_project_name; // Can include spaces!
       Globals::DESCRIPTION = use_generic_name ? "Generic Luma mod" : "Template Luma mod";
       Globals::WEBSITE = ""; // E.g. Nexus link
       Globals::VERSION = 1; // Increase this to reset the game settings and shader binaries after making large changes to your mod

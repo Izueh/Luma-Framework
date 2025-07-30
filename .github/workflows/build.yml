@@ -1,0 +1,31 @@
+name: Build Luma Mods
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Setup MSBuild
+      uses: microsoft/setup-msbuild@v1.3.1
+
+    - name: Build Luma.sln (Development-Release|x64)
+      run: msbuild Luma.sln /p:Configuration=Publishing-Release /p:Platform=x64
+
+    - name: Upload all EXEs and DLLs from Release folders
+      uses: actions/upload-artifact@v4
+      with:
+        name: All-Binaries
+        path: |
+          **/x64/Publishing-Release/*.addon
+          **/x64/Publishing-Release/*.exe
+          **/x64/Publishing-Release/*.dll
+          **/x64/Publishing-Release/*.pdb
