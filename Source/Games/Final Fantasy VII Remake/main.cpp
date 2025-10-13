@@ -97,7 +97,7 @@ namespace
 					.type = Luma::Settings::SettingValueType::FLOAT,
 					.default_value = 50.f,
 					.can_reset = true,
-					.label = "Sharpeness",
+					.label = "Sharpness",
 					.tooltip = "RCAS strength multiplier. Default is 50, for Vanilla look set to 0.",
 					.min = 0.f,
 					.max = 100.f,
