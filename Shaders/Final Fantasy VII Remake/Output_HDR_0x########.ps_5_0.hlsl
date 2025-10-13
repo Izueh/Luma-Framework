@@ -226,7 +226,7 @@ float3 SampleVideoTexture(float2 pos, float2 v0) {
     // r3.yzw = exp2(r3.yzw);
     // r3.yzw = float3(10000,10000,10000) * r3.yzw;
     r5.xyz = r4.xyz * float3(100,100,100) + -r3.yzw;
-    r3.yzw = cb0[26].zzz * r5.xyz + r3.yzw;
+    r3.yzw = 1.0f * r5.xyz + r3.yzw;
   } else {
     r5.xyz = cmp(r4.xyz < float3(0.00313080009,0.00313080009,0.00313080009));
     r6.xyz = float3(12.9200001,12.9200001,12.9200001) * r4.xyz;
@@ -466,10 +466,10 @@ void main(
 
   if ((cb0[34].x < v0.x && v0.x < cb0[34].z)
       && (cb0[34].y < v0.y && v0.y < cb0[34].w)) {
-    int2 v0xy = int2(v0.xy);
-    int2 cb034xy = asint(cb0[34].xy);
+    int2 v0xy = (int2)v0.xy;
+    int2 cb034xy = (int2)cb0[34].xy;
     r0.xy = (int2)v0.xy;
-    r1.xy = asint(cb0[34].xy);
+    r1.xy = (int2)cb0[34].xy;
 
     r1.xy = int2(v0.xy - cb034xy) + float2(0.5, 0.5);
     r1.zw = cb0[35].zw * r1.xy;
@@ -531,7 +531,7 @@ void main(
     float3 lut1OutputLinear = LUT_PQ_to_Linear(lut1Output) - r3.xyz;
     r2.xyz = lut1OutputLinear;
 
-    r2.xyz = cb0[26].zzz * lut1OutputLinear + lut3Linear; // blend LUT3 vs pre-LUT3
+    r2.xyz = 1.0f * lut1OutputLinear + lut3Linear; // blend LUT3 vs pre-LUT3
     
     r1.zw = cb0[21].xy * r1.xy;
     r1.zw = max(cb0[22].xy, r1.zw);
@@ -612,7 +612,7 @@ void main(
     float3 lut1Linear = LUT_PQ_to_Linear(lut1Output);
     r2.xyz = lut1Linear;
 
-    r2.xyz = cb0[26].zzz * lut1Linear + lut2Linear;
+    r2.xyz = 1.0f * lut1Linear + lut2Linear;
 
   #if _5CD12E67
     r2.xyz = ApplyOverlay(r2.xyz, fogTex, fogSampler, pixelPos.xy);
@@ -663,10 +663,10 @@ void main(
     // r2.w = dot(r3.xyz, float3(0.262699991,0.677999973,0.0593000017));
     r2.xyz = r2.xyz * r0.www + -r2.www;
     r2.xyz = cb0[25].xxx * r2.xyz + r2.www;
-    r3.xyz = cb0[26].www * r2.xyz;
+    r3.xyz = 1.0f * r2.xyz;
     r3.xyz = cmp(float3(0,0,0) < r3.xyz);
-    r3.xyz = r3.xyz ? cb0[26].xxx : 0;
-    r2.xyz = r2.xyz * cb0[26].www + r3.xyz;
+    r3.xyz = r3.xyz ? 0 : 0;
+    r2.xyz = r2.xyz * 1.0f + r3.xyz;
     r0.w = cb0[25].y * r1.w;
     // r1.w = rcp(cb0[26].y);
     r1.w = rcp(LumaSettings.UIPaperWhiteNits); // use UI paper white instead of cb0[26].y

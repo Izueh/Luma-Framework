@@ -30,6 +30,7 @@ namespace
 	ShaderHashesList shader_hashes_Velocity_Flatten;
 	ShaderHashesList shader_hashes_Velocity_Gather;
 	const uint32_t CBPerViewGlobal_buffer_size = 4096;
+    std::atomic<bool> can_sharpen = true;
 	float enabled_custom_exposure = 1.f;
 	float enabled_dithering_fix = 1.f;
 	float sr_custom_pre_exposure = 0.f; // Ignored at 0
@@ -100,6 +101,7 @@ namespace
 					.tooltip = "RCAS strength multiplier. Default is 50, for Vanilla look set to 0.",
 					.min = 0.f,
 					.max = 100.f,
+					.is_enabled = []() { return (sr_user_type != SR::UserType::None) && can_sharpen; },
 					.is_visible = []() { return sr_user_type != SR::UserType::None; },
 					.parse = [](float value) { return value * 0.01f; }
 				},
@@ -1014,6 +1016,8 @@ public:
 		data.GameData.ResolutionScale = { game_device_data.resolution_scale, 1.0f / game_device_data.resolution_scale};
 		data.GameData.DrewUpscaling = device_data.has_drawn_sr ? 1 : 0;
 		data.GameData.ViewportRect = game_device_data.viewport_rect;
+		can_sharpen = device_data.output_resolution.x == game_device_data.upscaled_render_resolution.x && device_data.output_resolution.y == game_device_data.upscaled_render_resolution.y;
+        cb_luma_global_settings.GameSettings.custom_sharpness_strength = can_sharpen ? cb_luma_global_settings.GameSettings.custom_sharpness_strength : 0.0f;
 	}
 
 	static void UpdateLODBias(reshade::api::device *device)

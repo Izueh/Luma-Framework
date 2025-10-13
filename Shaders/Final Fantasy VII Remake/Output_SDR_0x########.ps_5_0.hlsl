@@ -323,10 +323,10 @@ void main(
   r0.x = r0.y ? r0.x : 0;
   if ((cb0[34].x < v0.x && v0.x < cb0[34].z)
       && (cb0[34].y < v0.y && v0.y < cb0[34].w)) {
-    int2 v0xy = asint(v0.xy);
-    int2 cb034xy = asint(cb0[34].xy);
+    int2 v0xy = (int2)v0.xy;
+    int2 cb034xy = (int2)cb0[34].xy;
     r0.xy = (int2)v0.xy;
-    r1.xy = asint(cb0[34].xy);
+    r1.xy = (int2)cb0[34].xy;
     // r1.xy = (int2)(r0.xy) + -r1.xy;
     // r1.xy = (int2)r1.xy;
     r1.xy = float2(0.5, 0.5) + int2(v0.xy - cb034xy);
