@@ -1,3 +1,6 @@
+#include "Includes/Common.hlsl"
+#include "../Includes/ColorGradingLUT.hlsl"
+
 cbuffer DrawableBuffer : register(b1)
 {
   float4 FogColor : packoffset(c0);
@@ -20,7 +23,22 @@ void main(
   out float4 o0 : SV_Target0)
 {
   float4 r0;
-  r0.xyzw = p_default_Material_00DD4274319654666_Param_texture.Sample(p_default_Material_00DD4274319654666_Param_sampler_s, v1.xy).xyzw;
+  
+#if ENABLE_AUTO_HDR && 0 // This plays the intro boot videos and the loading screen videos/images
+  uint2 size;
+  p_default_Material_00DD4274319654666_Param_texture.GetDimensions(size.x, size.y);
+  if (size.x == 1280 && size.y == 720)
+  {
+    r0.xyzw = p_default_Material_00DD4274319654666_Param_texture.Sample(p_default_Material_00DD4274319654666_Param_sampler_s, saturate(v1.xy)).xyzw;
+    r0.rgb = gamma_to_linear(r0.rgb);
+    r0.rgb = PumboAutoHDR(r0.rgb, lerp(sRGB_WhiteLevelNits, 250.0, LumaSettings.GameSettings.HDRBoostIntensity), LumaSettings.GamePaperWhiteNits);
+    r0.rgb = linear_to_gamma(r0.rgb);
+  }
+  else
+#endif // ENABLE_AUTO_HDR
+  {
+    r0.xyzw = p_default_Material_00DD4274319654666_Param_texture.Sample(p_default_Material_00DD4274319654666_Param_sampler_s, v1.xy).xyzw;
+  }
   r0.xyzw = InstanceParams[4].xyzw * r0.xyzw;
   r0.xyzw = r0.xyzw * InstanceParams[5].xyzw + InstanceParams[6].xyzw;
   o0.w = MaterialOpacity * r0.w;

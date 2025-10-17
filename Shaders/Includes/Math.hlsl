@@ -69,9 +69,11 @@ bool IsNaN_Strict(float x)
 {
 #if 0 // float!=float is only true if the number is NaN. This doesn't always work, it's probably optimized away!
   return x.x != x.x;
-#else // This will cover all the possible nan cases
+#elif 1 // This will cover all the possible nan cases
   uint bits = asuint(x);
-  return ((bits & 0x7F800000u) == 0x7F800000u) && ((bits & 0x007FFFFFu) != 0);
+  return ((bits & 0x7F800000) == 0x7F800000) && ((bits & 0x007FFFFF) != 0);
+#else // Dunno if this one is good
+  return (asuint(x) & 0x7FFFFFFF) > 0x7F800000;
 #endif
 }
 bool2 IsNaN_Strict(float2 x)
@@ -108,7 +110,7 @@ bool3 IsInfinite_Strict(float3 x)
     return abs(x) > FLT_MAX;
 }
 
-float inverseLerp(float a, float b, float value)
+float InverseLerp(float a, float b, float value)
 {
   // Avoid division by zero
   if (a == b) {
@@ -137,6 +139,62 @@ float min3(float3 _a) { return min(_a.x, min(_a.y, _a.z)); }
 float3 max3(float3 _a, float3 _b, float3 _c) { return max(_a, max(_b, _c)); }
 float max3(float _a, float _b, float _c) { return max(_a, max(_b, _c)); }
 float max3(float3 _a) { return max(_a.x, max(_a.y, _a.z)); }
+
+// Returns the median value of 3 channels
+float GetMidValue(float3 x)
+{
+    return x.x + x.y + x.z - (min3(x) + max3(x));
+}
+
+// Returns the first channel if they are all the same
+uint GetMaxIndex(float3 x)
+{
+  uint maxIndex = 0;
+  if (x.g > x[maxIndex]) maxIndex = 1;
+  if (x.b > x[maxIndex]) maxIndex = 2;
+  return maxIndex;
+}
+uint GetMaxIndex(int3 x)
+{
+  uint maxIndex = 0;
+  if (x.g > x[maxIndex]) maxIndex = 1;
+  if (x.b > x[maxIndex]) maxIndex = 2;
+  return maxIndex;
+}
+uint GetMinIndex(float3 x)
+{
+  uint minIndex = 0;
+  if (x.g < x[minIndex]) minIndex = 1;
+  if (x.b < x[minIndex]) minIndex = 2;
+  return minIndex;
+}
+uint GetMinIndex(int3 x)
+{
+  uint minIndex = 0;
+  if (x.g < x[minIndex]) minIndex = 1;
+  if (x.b < x[minIndex]) minIndex = 2;
+  return minIndex;
+}
+// Returns the index that isn't either min nor max
+uint GetMidIndex(float3 x)
+{
+  uint minIndex = GetMinIndex(x);
+  uint maxIndex = GetMaxIndex(x);
+  return (minIndex == maxIndex) ? 0 : (3 - (minIndex + maxIndex));
+}
+uint GetMidIndex(int3 x)
+{
+  uint minIndex = GetMinIndex(x);
+  uint maxIndex = GetMaxIndex(x);
+  return (minIndex == maxIndex) ? 0 : (3 - (minIndex + maxIndex));
+}
+
+void SetIndexValue(inout float3 x, uint index, float value)
+{
+    if (index == 0) x.x = value;
+    else if (index == 1) x.y = value;
+    else x.z = value;
+}
 
 // Returns a random value betweed 0 and 1
 // "seed" can be in any space (e.g. pixel or uv or whatever else)

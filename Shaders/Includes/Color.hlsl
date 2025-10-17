@@ -88,16 +88,32 @@ float3 RestoreLuminance(float3 targetColor, float3 sourceColor, bool safe = fals
   return RestoreLuminance(targetColor, GetLuminance(sourceColor, colorSpace), safe, colorSpace);
 }
 
- // Note: the result might depend on the color space
+// Returns the mathematical chrominance (it's more like saturation, not necessarily perceptual)
+// Note: the result might depend on the color space
 float GetChrominance(float3 color)
 {
-    float maxVal = max(color.r, max(color.g, color.b));
-    float minVal = min(color.r, min(color.g, color.b));
-    return (maxVal == 0.0) ? 0.0 : saturate((maxVal - minVal) / maxVal);
+    float maxVal = max3(color);
+    float minVal = min3(color);
+    // If the minimum value was out of gamut, chrominance would be bigger than 1.
+    // If the color rgb ratio was invalid (negative luminance, all negative channels etc),
+    // the chrominance would be found to be around 1 anyway, which is fine, unless we wanted to force it to 0.
+    float chrominance = (maxVal - minVal) / maxVal;
+    return (maxVal == 0.0) ? 0.0 : chrominance;
+}
+
+// Note: this changes the luminance of a color, possibly increasing it by a good amount
+// Note: the result might depend on the color space
+float3 SetChrominance(float3 color, float chrominance)
+{
+    float maxVal = max3(color);
+    float minVal = min3(color);
+	// The actual color that wasn't either the min nor max doesn't matter, what matter is the mid point of min/max
+    float midVal = lerp(minVal, maxVal, 0.5);
+    return lerp(midVal, color, chrominance);
 }
 
 // Returns 1 if the color is a greyscale, more otherwise
- // Note: the result of this depends on the color space
+// Note: the result of this depends on the color space
 float GetSaturation(float3 color, uint colorSpace = CS_DEFAULT)
 {
 	float luminance = GetLuminance(color, colorSpace);
@@ -118,21 +134,54 @@ float3 RestoreSaturation(float3 sourceColor, float3 targetColor, uint colorSpace
 	return Saturation(targetColor, saturationRatio, colorSpace);
 }
 
- // Note: the result of this depends on the color space
+// Note: the result of this depends on the color space
 float3 RestoreChrominance(float3 sourceColor, float3 targetColor, uint colorSpace = CS_DEFAULT)
 {
 	float sourceChrominance = GetChrominance(sourceColor);
 	float targetChrominance = GetChrominance(targetColor);
 	float chrominanceRatio = safeDivision(sourceChrominance, targetChrominance, 1);
-	// We can't simply change the min, max or mid colors independently to change chrominance, or we'd heavily shift the luminance,
-	// so we use the saturation formula.
-	return Saturation(targetColor, chrominanceRatio, colorSpace);
+	return SetChrominance(targetColor, chrominanceRatio);
+}
+
+// TODO: move to a global color tonemapping/grading file?
+// Emulates the highlights desaturation from a per channel tonemapper (a generic one, the math here isn't specific), up to a certain peak brightness (it doesn't need to match your display, it can be picked for consistent results independently of the user calibration).
+// This doesn't perfectly match the hue shifts from games that purely lacked tonemapping and simply clipped to 0-1, but it might help with them too.
+// This can also be used to increase highlights saturation ("desaturationExponent" < 1), in a way that would have matched a per channel tonemaper desaturation, in an "AutoHDR" inverse tonemapping fashion.
+// Note: the result of this depends on the color space, and that is intentional as it wants to keep within the target gamut.
+float3 CorrectPerChannelTonemapHiglightsDesaturation(float3 color, float peakBrightness, float desaturationExponent = 2.0, uint colorSpace = CS_DEFAULT)
+{
+    float sourceChrominance = GetChrominance(color);
+
+    float maxBrightness = max3(color); // Do it by rgb max as opposed to by luminance (or average), otherwise blue would get almost no influence, this is a mathematical formula, not strictly perceptual
+	float midBrightness = GetMidValue(color);
+	float minBrightness = min3(color);
+	float brightnessRatio = saturate(maxBrightness / peakBrightness);
+	// Desaturate more if the mid brightness was close to the max brightness, as that's how per channel tonemappers work too.
+	// Do a sqrt on the brightness ratio to get closer to perception (pow 1/3 might be even better but whatever, we can expose it if necessary).
+	// Note that we could go even more aggressive here than a sqrt.
+	brightnessRatio = lerp(brightnessRatio, sqrt(brightnessRatio), sqrt(InverseLerp(minBrightness, maxBrightness, midBrightness)));
+
+    // Use pow to modulate chrominance, because if it was ~1, we need to keep it intact, given that per channel tonemapping wouldn't affect it.
+    // We only desaturate highlights, to keep mid tones punchy.
+	// Beyond 1 we flip the direction, otherwise the math would boost chrominance.
+	// Chrominance can't be below 0 so we don't consider that case.
+	float chrominancePow = lerp(1.0, 1.0 / desaturationExponent, brightnessRatio);
+    float targetChrominance = sourceChrominance > 1.0 ? pow(sourceChrominance, chrominancePow) : (1.0 - pow(1.0 - sourceChrominance, chrominancePow));
+    float chrominanceRatio = safeDivision(targetChrominance, sourceChrominance, 1);
+#if 1 // Keeping the original luminance just looks better compared to not doing it
+    return RestoreLuminance(SetChrominance(color, chrominanceRatio), color, true, colorSpace);
+#elif 1
+    return SetChrominance(color, chrominanceRatio);
+#else
+    // We can't simply change the min, max or mid colors independently to change chrominance, or we'd heavily shift the luminance, so we use the saturation formula.
+    return Saturation(color, chrominanceRatio, colorSpace);
+#endif
 }
 
 // This basically does gamut mapping, however it's not focused on gamut as primaries, but on peak white.
 // The color is expected to be in the specified color space and in linear.
 // 
-// The sum of "DesaturationAmount" and "DarkeningAmount" needs to be <= 1, both within 0 and 1.
+// The sum of "DesaturationAmount" and "DarkeningAmount" needs to be <= 1, both within 0 and 1. They only apply to "FixPositives".
 // The closer the sum is to 1, the more each color channel will be containted within its peak range.
 float3 CorrectOutOfRangeColor(float3 Color, bool FixNegatives = true, bool FixPositives = true, float DesaturationAmount = 0.5, float DarkeningAmount = 0.5, float Peak = 1.0, uint ColorSpace = CS_DEFAULT)
 {
@@ -147,19 +196,10 @@ float3 CorrectOutOfRangeColor(float3 Color, bool FixNegatives = true, bool FixPo
 	// Desaturate until we are not out of gamut anymore
 	if (colorLuminance > FLT_MIN)
 	{
-#if 0
-	  float negativePositiveLuminanceRatio = -negativeLuminance / positiveLuminance;
-	  float3 positiveColorRestoredLuminance = RestoreLuminance(positiveColor, colorLuminance, true, ColorSpace);
-	  Color = lerp(lerp(Color, positiveColorRestoredLuminance, sqrt(DesaturationAmount)), colorLuminance, negativePositiveLuminanceRatio * sqrt(DesaturationAmount));
-#else // This should look better and be faster
-	  const float3 luminanceRatio = (ColorSpace == CS_BT2020) ? Rec2020_Luminance : ((ColorSpace == CS_AP1) ? AP1_Luminance : Rec709_Luminance);
-	  float3 negativePositiveLuminanceRatio = -(negativeColor / luminanceRatio) / (positiveLuminance / luminanceRatio);
-	  Color = lerp(Color, colorLuminance, negativePositiveLuminanceRatio * DesaturationAmount);
-#endif
-	  // TODO: "DarkeningAmount" isn't normalized with "DesaturationAmount", so setting both to 50% won't perfectly stop gamut clip
-      positiveColor = max(Color.xyz, 0.0);
-	  negativeColor = min(Color.xyz, 0.0);
-	  Color = positiveColor + (negativeColor * (1.0 - DarkeningAmount)); // It's not darkening but brightening in this case
+	  // Desaturate (move towards luminance/grayscale) until no channel is below 0
+	  float minChannel = min3(Color);
+	  float desaturateAlpha = safeDivision(minChannel, minChannel - colorLuminance, 0); // Both division elements are meant to be negative so the ratio resolves to a positive value
+	  Color = lerp(Color, colorLuminance, desaturateAlpha);
 	}
 	// Increase luminance until it's 0 if we were below 0 (it will clip out the negative gamut)
 	else if (colorLuminance < -FLT_MIN)
@@ -543,10 +583,10 @@ float3 HSV_To_RGB(float3 HSV)
     return float3(rgb.x + m, rgb.y + m, rgb.z + m);
 }
 // Works in every color space
-float3 HueToRGB(float h, bool hideWhite = false)
+float3 HueToRGB(float h, bool hideWhite = false, float inverseChrominance = 0.0)
 {
-    const int raw_N = 7;
-    int N = raw_N;
+    const uint raw_N = 7;
+    uint N = raw_N;
 	if (hideWhite) N--;
     float interval = 1.0 / N;
 
@@ -559,16 +599,16 @@ float3 HueToRGB(float h, bool hideWhite = false)
 	// From left to right (smaller "h" to bigger "h")
     float3 combos[raw_N] = {
         float3(1,0,0), // R: Red
-        float3(1,1,0), // R+G: Yellow
+        float3(1,1,inverseChrominance), // R+G: Yellow
         float3(0,1,0), // G: Green
-        float3(0,1,1), // G+B: Cyan
+        float3(inverseChrominance,1,1), // G+B: Cyan
         float3(0,0,1), // B: Blue
-        float3(1,0,1), // R+B: Magenta
+        float3(1,inverseChrominance,1), // R+B: Magenta
         float3(1,1,1)  // R+G+B: White (optional)
     };
     
-    int i = min(int(t / interval), N-1);
-    int next = (i + 1) % N;
+    uint i = min(uint(t / interval), N-1);
+    uint next = (i + 1) % N;
     
     float localT = (t - i * interval) / interval;
 	

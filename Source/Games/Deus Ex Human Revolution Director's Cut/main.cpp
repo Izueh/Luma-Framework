@@ -18,25 +18,40 @@ namespace
 
    ShaderHashesList pixel_shader_hashes_ColorGrading;
    ShaderHashesList pixel_shader_hashes_SupportedAA;
+   ShaderHashesList pixel_shader_hashes_BloomGeneration1;
    ShaderHashesList pixel_shader_hashes_BloomComposition;
    ShaderHashesList pixel_shader_hashes_UI;
    ShaderHashesList pixel_shader_hashes_Lighting;
    ShaderHashesList pixel_shader_hashes_SSAOGeneration;
 
-   // From "rrika"
-   const std::vector<uint8_t> pattern_1 = {
+   // From "rrika9"
+   const std::vector<uint8_t> pattern_ui_scale_1 = {
       0x81, 0xFF, 0x00, 0x05, 0x00, 0x00, 0x7C, 0x05,
       0xBF, 0x00, 0x05, 0x00, 0x00, 0xDB, 0x44, 0x24
    };
-   const std::vector<uint8_t> pattern_2 = {
+   const std::vector<uint8_t> pattern_ui_scale_2 = {
       0x81, 0xFE, 0x00, 0x05, 0x00, 0x00, 0x7D, 0x08,
       0x8B, 0xCE, 0x89, 0x74, 0x24, 0x20, 0xEB, 0x09,
       0xB9, 0x00, 0x05, 0x00, 0x00, 0x89, 0x4C, 0x24,
       0x20
    };
 
-   std::vector<std::byte*> pattern_1_addresses;
-   std::vector<std::byte*> pattern_2_addresses;
+   // From "rrika9". Restore the original color filter (e.g. gold/piss)
+   // and bloom, instead of using the DC ones.
+   // This should be laying at virtual memory address "07260E4" (at least on Steam, and maybe on GOG).
+   const std::vector<uint8_t> pattern_og_post_process = {
+      0x83, 0x7E, 0x28, 0x00, 0x75, 0x07, 0xC7, 0x46,
+      0x28, 0xFF, 0xFF, 0xFF, 0xFF
+   };
+   const std::vector<uint8_t> patch_og_post_process = {
+      0x80, 0x66, 0x28, 0xF7, 0x81, 0x4E, 0x28, 0x04,
+      0x01, 0x00, 0x00, 0x90, 0x90
+   };
+
+   std::vector<std::byte*> pattern_ui_scale_1_addresses;
+   std::vector<std::byte*> pattern_ui_scale_2_addresses;
+
+   std::vector<std::byte*> pattern_og_post_process_addresses;
 
    constexpr bool allow_lighting_modulation = true;
 
@@ -78,14 +93,39 @@ namespace
    };
    static_assert(game_scene_buffer_size >= sizeof(GameSceneBuffer));
 
+   bool force_og_post_process = true; // Enabled by default because why shouldn't it be, the game is made for the gold filter to be enabled
    float ui_scale = 1.f;
+
+   bool warned_gold_filter_restoration_mod = false;
+
+   // Toggles the behaviour between the OG Bloom and Color Grading filter in the DC edition
+   void PatchPostProcess(bool true_og_false_dc)
+   {
+      ASSERT_ONCE(!is_dc || pattern_og_post_process_addresses.size() == 1);
+      ASSERT_ONCE(pattern_og_post_process.size() || patch_og_post_process.size());
+      if (pattern_og_post_process_addresses.size() == 1)
+      {
+         DWORD old_protect;
+         BOOL success = VirtualProtect(pattern_og_post_process_addresses[0], patch_og_post_process.size(), PAGE_EXECUTE_READWRITE, &old_protect);
+         if (success)
+         {
+            // TODO: do this with a jump because this forces the color grading filter and the og bloom to always apply,
+            // even if the bloom was not meant to apply in a scene (unlikely there's any scene with bloom disabled, but who knows).
+            // When doing so, also get rid of "are_bloom_and_color_grading_forced_on_ui" and all the related code in c++ and shaders.
+            std::memcpy(pattern_og_post_process_addresses[0], true_og_false_dc ? patch_og_post_process.data() : pattern_og_post_process.data(), patch_og_post_process.size());
+
+            DWORD temp_protect;
+            VirtualProtect(pattern_og_post_process_addresses[0], patch_og_post_process.size(), old_protect, &temp_protect);
+         }
+      }
+   }
 
    void PatchUIScale(float scale = 1.f)
    {
       // The game's UI became tiny beyond 1280 horizontal resolutions, as the auto scaling,
       // (which would make it appear of the same size on the display) was limited to that, for some reason.
       // Skip this if the user already modded the executable.
-      if (pattern_1_addresses.size() == 1 && pattern_2_addresses.size() == 1)
+      if (pattern_ui_scale_1_addresses.size() == 1 && pattern_ui_scale_2_addresses.size() == 1)
       {
          int screen_width = GetSystemMetrics(SM_CXSCREEN);
          int screen_height = GetSystemMetrics(SM_CYSCREEN);
@@ -104,28 +144,28 @@ namespace
 
          // Replace the pattern with your own horizontal resolution.
          // As long as we are in 16:9, we could go as high as we want and it'd scale correctly, but in UW we need to set the right value or the UI will get huge.
-         std::vector<uint8_t> pattern_1_patch = pattern_1;
-         std::vector<uint8_t> pattern_2_patch = pattern_2;
+         std::vector<uint8_t> pattern_1_patch = pattern_ui_scale_1;
+         std::vector<uint8_t> pattern_2_patch = pattern_ui_scale_2;
          std::memcpy(&pattern_1_patch[2], &screen_width, sizeof(screen_width));
          std::memcpy(&pattern_1_patch[9], &screen_width, sizeof(screen_width));
          std::memcpy(&pattern_2_patch[2], &screen_width, sizeof(screen_width));
          std::memcpy(&pattern_2_patch[17], &screen_width, sizeof(screen_width));
 
          DWORD old_protect;
-         BOOL success = VirtualProtect(pattern_1_addresses[0], pattern_1_patch.size(), PAGE_EXECUTE_READWRITE, &old_protect);
+         BOOL success = VirtualProtect(pattern_ui_scale_1_addresses[0], pattern_1_patch.size(), PAGE_EXECUTE_READWRITE, &old_protect);
          if (success)
          {
-            std::memcpy(pattern_1_addresses[0], pattern_1_patch.data(), pattern_1_patch.size());
+            std::memcpy(pattern_ui_scale_1_addresses[0], pattern_1_patch.data(), pattern_1_patch.size());
 
             DWORD temp_protect;
-            VirtualProtect(pattern_1_addresses[0], pattern_1_patch.size(), old_protect, &temp_protect);
+            VirtualProtect(pattern_ui_scale_1_addresses[0], pattern_1_patch.size(), old_protect, &temp_protect);
 
-            success = VirtualProtect(pattern_2_addresses[0], pattern_2_patch.size(), PAGE_EXECUTE_READWRITE, &old_protect);
+            success = VirtualProtect(pattern_ui_scale_2_addresses[0], pattern_2_patch.size(), PAGE_EXECUTE_READWRITE, &old_protect);
             if (success)
             {
-               std::memcpy(pattern_2_addresses[0], pattern_2_patch.data(), pattern_2_patch.size());
+               std::memcpy(pattern_ui_scale_2_addresses[0], pattern_2_patch.data(), pattern_2_patch.size());
 
-               VirtualProtect(pattern_2_addresses[0], pattern_2_patch.size(), old_protect, &temp_protect);
+               VirtualProtect(pattern_ui_scale_2_addresses[0], pattern_2_patch.size(), old_protect, &temp_protect);
             }
          }
          ASSERT_ONCE(success);
@@ -135,6 +175,7 @@ namespace
 
 struct GameDeviceDataDeusExHumanRevolutionDC final : public GameDeviceData
 {
+   bool has_drawn_any_shader = false;
    bool has_drawn_gold_filter = false;
    bool has_drawn_custom_gold_filter = false;
    bool has_drawn_supported_aa = false;
@@ -142,6 +183,8 @@ struct GameDeviceDataDeusExHumanRevolutionDC final : public GameDeviceData
    bool has_drawn_ssao = false;
 
    SanitizeNaNsData sanitize_nans_data;
+
+   bool are_bloom_and_color_grading_forced_on_ui = false;
 
    bool has_found_lighting_cbuffer = false;
    bool has_found_lighting_buffer = false;
@@ -211,6 +254,10 @@ public:
       forced_shader_names.emplace(Shader::Hash_StrToNum("6B0219A1"), "MLAA Mask 1 Gen");
       forced_shader_names.emplace(Shader::Hash_StrToNum("1DA1E46E"), "MLAA Mask 2 Gen");
       forced_shader_names.emplace(Shader::Hash_StrToNum("51BBB596"), "MLAA Composition");
+      forced_shader_names.emplace(Shader::Hash_StrToNum("7080AB20"), "Gen Bloom 2");
+      forced_shader_names.emplace(Shader::Hash_StrToNum("305A6A46"), "Gen Bloom 3");
+      forced_shader_names.emplace(Shader::Hash_StrToNum("807FB946"), "Gen Bloom 2");
+      forced_shader_names.emplace(Shader::Hash_StrToNum("EA5892CE"), "Gen Bloom 3");
 #endif
 
       native_shaders_definitions.emplace(CompileTimeStringHash("Modulate Lighting"), ShaderDefinition{ "Luma_ModulateLighting", reshade::api::pipeline_subobject_type::pixel_shader });
@@ -227,7 +274,6 @@ public:
             reshade::register_event<reshade::addon_event::unmap_buffer_region>(GameDeusExHumanRevolutionDC::OnUnmapBufferRegion);
          }
 
-         // TODO: make the mod pick the right (original) color filter preset by level/scene, given that they used to change by level in the og game
          if (GetModuleHandle(TEXT("DXHRDC-GFX.asi")) != NULL)
          {
             has_gold_filter_restoration_mod = true;
@@ -251,9 +297,15 @@ public:
          std::byte* base = reinterpret_cast<std::byte*>(module_handle);
          std::size_t section_size = nt_headers->OptionalHeader.SizeOfImage;
 
-         pattern_1_addresses = System::ScanMemoryForPattern(base, section_size, pattern_1);
-         pattern_2_addresses = System::ScanMemoryForPattern(base, section_size, pattern_2);
+         pattern_ui_scale_1_addresses = System::ScanMemoryForPattern(base, section_size, pattern_ui_scale_1);
+         pattern_ui_scale_2_addresses = System::ScanMemoryForPattern(base, section_size, pattern_ui_scale_2);
 
+         if (is_dc)
+         {
+            pattern_og_post_process_addresses = System::ScanMemoryForPattern(base, section_size, pattern_og_post_process);
+         }
+
+         // Auto patch as early as possible. This will possibly undo a previously applied custom scale because ReShade addons might be loaded and unload multiple times (they are in DEXHR)
          PatchUIScale(ui_scale);
       }
    }
@@ -470,6 +522,20 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
+      if (!game_device_data.has_drawn_any_shader)
+      {
+         game_device_data.has_drawn_any_shader = true;
+
+         // If bloom (and color grading) are running as first draw calls,
+         // it means we are are forcing the original post process branches to always run, even there's no scene but UI only.
+         // This causes some glitches in the UI due to its background not being clear (both grading and UI draw directly on the swapchain).
+         // Detecting this case allows us to clear the background and fix glitches.
+         if (force_og_post_process && original_shader_hashes.Contains(pixel_shader_hashes_BloomGeneration1))
+         {
+            game_device_data.are_bloom_and_color_grading_forced_on_ui = true;
+         }
+      }
+
       if (!game_device_data.has_drawn_gold_filter)
       {
          if (allow_lighting_modulation && !game_device_data.has_found_lighting_buffer && original_shader_hashes.Contains(pixel_shader_hashes_Lighting))
@@ -495,7 +561,7 @@ public:
                {
                   game_device_data.swapchain_rtv->GetResource(&rt_resource);
                }
-               ASSERT_ONCE(device_data.back_buffers.contains((uint64_t)rt_resource.get()));
+               ASSERT_ONCE(device_data.back_buffers.contains((uint64_t)rt_resource.get())); // Note: this might trigger for one frame after loading
             }
 #endif
          }
@@ -505,6 +571,14 @@ public:
             if (is_custom_pass)
             {
                game_device_data.has_drawn_custom_gold_filter = true;
+            }
+
+            if (game_device_data.are_bloom_and_color_grading_forced_on_ui) // Default is already 0 for data so we can skip setting it
+            {
+               uint32_t custom_data_1 = game_device_data.are_bloom_and_color_grading_forced_on_ui ? 1 : 0;
+               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
+               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData, custom_data_1);
+               updated_cbuffers = true;
             }
          }
          // This will always run
@@ -911,6 +985,7 @@ public:
       }
 
       device_data.has_drawn_main_post_processing = false;
+      game_device_data.has_drawn_any_shader = false;
       game_device_data.has_drawn_ssao = false;
       game_device_data.has_found_lighting_buffer = false;
       game_device_data.has_found_lighting_cbuffer = false;
@@ -919,6 +994,8 @@ public:
       game_device_data.has_drawn_supported_aa = false;
       game_device_data.has_drawn_opaque_geometry = false;
       game_device_data.has_modulated_lighting = false;
+
+      game_device_data.are_bloom_and_color_grading_forced_on_ui = false;
    }
 
    void LoadConfigs() override
@@ -928,21 +1005,35 @@ public:
       reshade::get_config_value(runtime, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
       reshade::get_config_value(runtime, NAME, "EmissiveIntensity", cb_luma_global_settings.GameSettings.EmissiveIntensity);
       reshade::get_config_value(runtime, NAME, "FogIntensity", cb_luma_global_settings.GameSettings.FogIntensity);
+      reshade::get_config_value(runtime, NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
       reshade::get_config_value(runtime, NAME, "DesaturationIntensity", cb_luma_global_settings.GameSettings.DesaturationIntensity);
       reshade::get_config_value(runtime, NAME, "AmbientLightingIntensity", cb_luma_global_settings.GameSettings.AmbientLightingIntensity);
       reshade::get_config_value(runtime, NAME, "HDRBoostIntensity", cb_luma_global_settings.GameSettings.HDRBoostIntensity);
       // "device_data.cb_luma_global_settings_dirty" should already be true at this point
+
+      reshade::get_config_value(runtime, NAME, "ForceOriginalPostProcess", force_og_post_process);
+      if (!pattern_og_post_process_addresses.empty() && force_og_post_process)
+      {
+         PatchPostProcess(force_og_post_process);
+      }
 
       reshade::get_config_value(runtime, NAME, "UIScale", ui_scale);
       if (ui_scale != 1.f)
       {
          PatchUIScale(ui_scale);
       }
+
+      reshade::get_config_value(runtime, NAME, "WarnedGoldFilterRestorationMod", warned_gold_filter_restoration_mod);
+      if (has_gold_filter_restoration_mod && !warned_gold_filter_restoration_mod && MessageBoxA(NULL, "The \"Gold Filer Restoration\" mod was found (\"DXHRDC-GFX.asi\"), that is largely redundant with Luma and can be removed, however it's fully compatible if you wished to use it.", "Redundant mod detected", MB_OK | MB_SETFOREGROUND) == IDOK)
+      {
+         warned_gold_filter_restoration_mod = true;
+         reshade::set_config_value(runtime, NAME, "WarnedGoldFilterRestorationMod", warned_gold_filter_restoration_mod);
+      }
    }
 
    void OnDisplayModeChanged() override
    {
-      // TODO: consider lowering "cb_luma_global_settings.GameSettings.EmissiveIntensity" depending on the "cb_luma_global_settings.DisplayMode" being HDR or not
+      // TODO: consider lowering "cb_luma_global_settings.GameSettings.EmissiveIntensity" depending on the "cb_luma_global_settings.DisplayMode" being HDR or not. Users can still do it manually but the defaults are made for HDR.
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
@@ -950,6 +1041,30 @@ public:
       reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
+
+      // DC Only path
+      if (!pattern_og_post_process_addresses.empty())
+      {
+         if (ImGui::Checkbox("Enable Original Post Process", &force_og_post_process))
+         {
+            reshade::set_config_value(runtime, NAME, "ForceOriginalPostProcess", force_og_post_process);
+            PatchPostProcess(force_og_post_process);
+         }
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         {
+            ImGui::SetTooltip("Allows restoring the original Color Grading (e.g. Gold Filter) and Bloom in the DC version of the game");
+         }
+         DrawResetButton(force_og_post_process, true, "ForceOriginalPostProcess", runtime);
+
+         if (force_og_post_process)
+         {
+            has_gold_filter = true;
+         }
+         else
+         {
+            has_gold_filter = has_gold_filter_restoration_mod;
+         }
+      }
 
       if (has_supported_aa_count <= 0)
       {
@@ -999,6 +1114,12 @@ public:
       // It won't do anything if the gold filter isn't enabled
       if (has_gold_filter)
       {
+         if (ImGui::SliderFloat("Color Grading Intensity", &cb_luma_global_settings.GameSettings.ColorGradingIntensity, 0.0f, 1.f))
+         {
+            reshade::set_config_value(runtime, NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
+         }
+         DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingIntensity, default_luma_global_game_settings.ColorGradingIntensity, "ColorGradingIntensity", runtime);
+
          if (ImGui::SliderFloat("Desaturation Intensity", &cb_luma_global_settings.GameSettings.DesaturationIntensity, 0.0f, 1.f))
          {
             reshade::set_config_value(runtime, NAME, "DesaturationIntensity", cb_luma_global_settings.GameSettings.DesaturationIntensity);
@@ -1086,11 +1207,13 @@ public:
 
    void PrintImGuiAbout() override
    {
-      ImGui::Text("Luma for \"Deus Ex: Human Revolution - Director's Cut\" is developed by Pumbo and is open source and free.\nIf you enjoy it, consider donating.\n"
-         "The mod is made to be used with the \"Gold Filter Restoration\" mod from \"CookiePLMonster\" (https://github.com/CookiePLMonster/DXHRDC-GFX/releases/), however it will work without it too.\n"
-         "The mod also fixes the UI being tiny at horizontal resolutions beyond 1280, and dynamically calculates the best UI size for Ultrawide displays.\n"
-         "The mod improves support for high resolutions and Ultrawide, as some effects (e.g. objects highlights grid) because tiny at 4k, and some bloom sprites would be stretched in Ultrawide.\n"
-         "The mod also works on the non \"Director's Cut\" version of the game.", "");
+      ImGui::Text("Luma for \"Deus Ex: Human Revolution - Director's Cut\"/\"Deus Ex: Human Revolution\" is developed by Pumbo and is open source and free.\nIf you enjoy it, consider donating.\n"
+         "The mod adds HDR rendering to the game, and additionally restores the full color grading from the original release,\n"
+         "superseding the \"Gold Filter Restoration\" mod from \"CookiePLMonster\" given that Luma natively re-enables the original color filter of each game's scene, instead of forcing a fixed preset.\n"
+         "The mod has some additional fixes like:"
+         "-fixes the UI being tiny at horizontal resolutions beyond 1280, and dynamically calculates the best UI size for Ultrawide displays.\n"
+         "-improves support for high resolutions and Ultrawide, as some effects (e.g. objects highlights grid) became tiny at 4k, and some lens effects would be stretched in Ultrawide.\n"
+         "-fixes bullet decals being black.", "");
 
       const auto button_color = ImGui::GetStyleColorVec4(ImGuiCol_Button);
       const auto button_hovered_color = ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
@@ -1141,13 +1264,16 @@ public:
          "\n\nMain:"
          "\nPumbo"
 
+         "\n\nHonorable Mention:"
+         "\nrrika9"
+         "\nCookiePLMonster"
+
          "\n\nThird Party:"
          "\nReShade"
          "\nImGui"
          "\nRenoDX"
          "\n3Dmigoto"
          "\nDXVK"
-         "\nCookiePLMonster"
          "\nDICE (HDR tonemapper)"
          , "");
    }
@@ -1172,7 +1298,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             reshade::api::format::b8g8r8x8_unorm,
             //reshade::api::format::b8g8r8x8_typeless,
 
-				// Used by lighting buffers
+				// Used by lighting buffers (10 bit is enough but they clip to 1 in UNORM)
             reshade::api::format::r10g10b10a2_unorm,
 
             // Probably unused, but won't hurt
@@ -1183,20 +1309,23 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // TODO: figure out why the game hangs after alt tabbing back in, or changing FSE resolution. It seems to happen without mods too sometimes though, the game is very crash prone. It also hangs on exit.
       prevent_fullscreen_state = false; // Fixes hangs when alt tabbing out of the game
 
-      // TODO: figure out how the game does gamma adjustments fullscreen (they only work in FSE and apply to ReShade too, but they don't seem to be the typical ones)
-      //allow_disabling_gamma_ramp = true; // Game uses Windows gamma functions to adjust brightness, but it defaults to a neutral one!
+#if DEVELOPMENT // TODO: figure out how the game does gamma adjustments fullscreen (they only work in FSE and apply to ReShade too, but they don't seem to be the typical ones)
+      allow_disabling_gamma_ramp = true; // Game uses Windows gamma functions to adjust brightness, but it defaults to a neutral one!
+#endif
 
       // TODO: add button to hide the UI (and gameplay overlay HUD)
 
-      pixel_shader_hashes_ColorGrading.pixel_shaders = { Shader::Hash_StrToNum("BFF40A4D") }; // Only one ever
+      pixel_shader_hashes_ColorGrading.pixel_shaders = { Shader::Hash_StrToNum("BFF40A4D"), Shader::Hash_StrToNum("9D02077A") }; // Only one ever
       pixel_shader_hashes_SupportedAA.pixel_shaders = { Shader::Hash_StrToNum("51BBB596"), Shader::Hash_StrToNum("FF6E347A") }; // MLAA and FXAA High (in any order)
-      pixel_shader_hashes_BloomComposition.pixel_shaders = { Shader::Hash_StrToNum("29E509CF"), Shader::Hash_StrToNum("24314FFA") };
+      pixel_shader_hashes_BloomGeneration1.pixel_shaders = { Shader::Hash_StrToNum("612D5E25"), Shader::Hash_StrToNum("B357A376"), Shader::Hash_StrToNum("F4422C0D") };
+      pixel_shader_hashes_BloomComposition.pixel_shaders = { Shader::Hash_StrToNum("29E509CF"), Shader::Hash_StrToNum("24314FFA"), Shader::Hash_StrToNum("AAB155FF") };
       pixel_shader_hashes_SSAOGeneration.pixel_shaders = { Shader::Hash_StrToNum("D44718C4"), Shader::Hash_StrToNum("7A054979") }; // DC and OG
       pixel_shader_hashes_UI.pixel_shaders = { Shader::Hash_StrToNum("E5757FCE"), Shader::Hash_StrToNum("D07AC030"), Shader::Hash_StrToNum("B8813A2F"), Shader::Hash_StrToNum("3773AC30"), Shader::Hash_StrToNum("9CB44B83"), Shader::Hash_StrToNum("6BAF4A32") };
       pixel_shader_hashes_Lighting.pixel_shaders = { Shader::Hash_StrToNum("5EF35A1E"), Shader::Hash_StrToNum("C7F2C455"), Shader::Hash_StrToNum("EBE2567F"), Shader::Hash_StrToNum("0AB7755C"), Shader::Hash_StrToNum("7E526193"), Shader::Hash_StrToNum("C7B58EF0") };
 
       default_luma_global_game_settings.BloomIntensity = 0.8f; // Not vanilla like!
       default_luma_global_game_settings.FogIntensity = is_dc ? 0.f : 0.f; // Not vanilla like!
+      default_luma_global_game_settings.ColorGradingIntensity = 1.f;
       default_luma_global_game_settings.DesaturationIntensity = 0.333f; // Not vanilla like!
       default_luma_global_game_settings.AmbientLightingIntensity = 0.8f; // Not vanilla like! 0.75 is generally better but breaks in day time scenes, ideally we'd detect the scene and set it accordingly
       default_luma_global_game_settings.EmissiveIntensity = 0.667f; // Not vanilla like!
@@ -1209,12 +1338,23 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 #if !DEVELOPMENT
       old_shader_file_names.emplace("UI_0xB8813A2F.ps_5_0.hlsl");
       old_shader_file_names.emplace("UI_0x9CB44B83.ps_5_0.hlsl");
+      old_shader_file_names.emplace("BloomBlur_0x81EC9518.ps_5_0.hlsl");
+      old_shader_file_names.emplace("GenBloom1_Original_0xB357A376.ps_5_0.hlsl");
+      old_shader_file_names.emplace("BloomComposition_Original_0x24314FFA.ps_5_0.hlsl");
+      old_shader_file_names.emplace("ColorGrading_0xBFF40A4D.ps_5_0.hlsl");
 #endif
 
       game = new GameDeusExHumanRevolutionDC();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
+      // Restore any customized code so if the dll gets reloaded later, we can find the patterns again
+      if (force_og_post_process)
+      {
+         PatchPostProcess(false);
+      }
+      PatchUIScale(ui_scale);
+
       if (allow_lighting_modulation)
       {
          reshade::unregister_event<reshade::addon_event::map_buffer_region>(GameDeusExHumanRevolutionDC::OnMapBufferRegion);

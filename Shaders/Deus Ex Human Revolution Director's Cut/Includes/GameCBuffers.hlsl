@@ -12,12 +12,13 @@ namespace CB
 		float2 InvOutputRes;
 		float BloomIntensity; // Neutral/Vanilla at 1
 		float FogIntensity; // Neutral/Vanilla at 1
+		float ColorGradingIntensity; // Neutral/Vanilla at 1
 		float DesaturationIntensity; // Neutral/Vanilla at 1
 		float AmbientLightingIntensity; // Neutral/Vanilla at 1
 		float EmissiveIntensity; // Neutral/Vanilla at 0
 		float HDRBoostIntensity; // Neutral/Vanilla at 0
 		uint HasColorGradingPass; // Whether the "gold filter" is enabled
-		float3 Padding1; // Align to 16 bytes (somehow needed...)
+		float2 Padding1; // Align to 16 bytes (somehow needed...)
 		// Make these float4 for padding simplicity
 		float4 AmbientLightColor; // Neutral/Vanilla at 1 1 1
 		float4 LightingColor; // Neutral/Vanilla at 1 1 1

@@ -1,5 +1,4 @@
 #include "../Includes/Common.hlsl"
-#include "../Includes/DICE.hlsl"
 
 Texture2D<float4> t0 : register(t0); // Scene
 Texture2D<float4> t1 : register(t1); // ?
@@ -17,7 +16,6 @@ cbuffer cb2 : register(b2)
   float4 cb2[3];
 }
 
-// TODO: use "= dot\(.*float3\(0\.298999995,0\.587000012,0\.114\)\)" to find all permutations!
 void main(
   float4 v0 : TEXCOORD0,
   float3 v1 : TEXCOORD1,
@@ -57,17 +55,4 @@ void main(
   r2.xyz = r1.xyz * r0.xyz;
   r0.xyz = -r1.xyz * r0.xyz + cb0[9].xyz;
   o0.xyz = cb0[9].w * r0.xyz + r2.xyz;
-
-  // TODO: add SDR branches
-#if ENABLE_FAKE_HDR // The game doesn't have many bright highlights, the dynamic range is relatively low, this helps alleviate that
-  float normalizationPoint = 0.025; // Found empyrically
-  float fakeHDRIntensity = 0.4;
-  float saturationBoost = 0.666;
-  o0.xyz = FakeHDR(o0.xyz, normalizationPoint, fakeHDRIntensity, saturationBoost);
-#endif
-
-  const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
-  const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
-	DICESettings settings = DefaultDICESettings();
-	o0.xyz = DICETonemap(o0.xyz * paperWhite, peakWhite, settings) / paperWhite;
 }

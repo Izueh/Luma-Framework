@@ -1,13 +1,9 @@
 Texture2D<float4> t2 : register(t2);
-
 Texture2D<float4> t1 : register(t1);
-
 Texture2D<float4> t0 : register(t0);
 
 SamplerState s2_s : register(s2);
-
 SamplerState s1_s : register(s1);
-
 SamplerState s0_s : register(s0);
 
 cbuffer cb2 : register(b2)
@@ -20,13 +16,12 @@ cbuffer cb0 : register(b0)
   float4 cb0[23];
 }
 
-// TODO: verify signature
 void main(
   float4 v0 : TEXCOORD4,
   float v1 : TEXCOORD1,
   float2 w1 : TEXCOORD9,
   float4 v2 : TEXCOORD2,
-  float4 v3 : TEXCOORD6,
+  float3 v3 : TEXCOORD6,
   float4 v4 : TEXCOORD7,
   float4 v5 : TEXCOORD10,
   float4 v6 : TEXCOORD8,

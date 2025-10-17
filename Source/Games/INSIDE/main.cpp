@@ -1,6 +1,10 @@
 #define GAME_INSIDE 1
 
+#define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
+
 #include "..\..\Core\core.hpp"
+
+#include "..\..\Core\includes\shader_patching.h"
 
 namespace
 {
@@ -14,6 +18,7 @@ namespace
    std::vector<std::byte*> aspect_ratio_pattern_addresses;
    constexpr float default_aspect_ratio = 16.f / 9.f;
    float max_aspect_ratio = -1.f;
+   bool disable_dither = true; // Probably not necessary with 16bit rendering and output?
 
    void PatchAspectRatio(float target_aspect_ratio = default_aspect_ratio)
    {
@@ -70,22 +75,6 @@ public:
 
    void OnInit(bool async) override
    {
-      // The entire game rendering pipeline was SDR
-      // It goes like this:
-      // -Render flipped world reflections with simple geometry (when there's a water body in view eg)
-      // -Render normal maps
-      //  Render some kind of low res depth map
-      // -Render lighting (R10G10B10A2) (flipped, 1 is full shadow, without manual clamping shadow can go beyond 1 if render targets are float)
-      // -Render color scene (material albedo * lighting, pretty much)
-      // -Render additive lights
-      // -Draw motion vectors for dynamic objects (rest is calculated from the camera I think)
-      // -TAA
-      // -Bloom and emissive color
-      // -Tonemap
-      // -Swapchain output (possibly draws black bars)
-      texture_upgrade_formats.emplace(reshade::api::format::r10g10b10a2_typeless);
-      texture_upgrade_formats.emplace(reshade::api::format::r10g10b10a2_unorm);
-
       shader_hashes_TAA.pixel_shaders.emplace(Shader::Hash_StrToNum("A141EA3E"));
       shader_hashes_TAA.pixel_shaders.emplace(Shader::Hash_StrToNum("DEBF1AC4"));
 
@@ -260,6 +249,7 @@ public:
          {"ENABLE_BLACK_FLOOR_TWEAKS_TYPE", '1', false, false, "Allows customizing how the game handles the black floor. Set to 0 for the vanilla look. Set to 3 for increased visibility."},
 #if DEVELOPMENT || TEST
          {"ENABLE_FAKE_HDR", '0', false, false, "Enable a \"Fake\" HDR boosting effect (not usually necessary as the game's tonemapper can already extract highlights)"},
+         {"ENABLE_DITHER", disable_dither ? '0' : '1', false, false, ""},
 #endif
       };
       shader_defines_data.append_range(game_shader_defines_data);
@@ -292,6 +282,128 @@ public:
       }
    }
 
+   std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
+   {
+      if (type != reshade::api::pipeline_subobject_type::pixel_shader) return nullptr;
+
+      std::unique_ptr<std::byte[]> new_code = nullptr;
+
+      // float4(95.4307022, 97.5901031, 93.8368988, 91.6931)
+      // This pattern is always present when dithering is present. Maybe not all but 99% of them, the rest shouldn't matter or even be detrimental (e.g. blue noise).
+      // Used as (e.g.):
+      // float4 ditheredColor = color.rgba + (frac(float4(95.4307022, 97.5901031, 93.8368988, 91.6931) * ditherSourceValue.x) * 0.00392156886);
+      // Optionally followed by the second pattern below, applied to another variable.
+      // One of the "scaling" patterns is always (almost always?) present too.
+      // Only the first 3 elements matter, the 4th float is only used sometimes (the same applied to the other patterns below).
+      const std::vector<uint8_t> pattern_dither_rand_1 = { 0x85, 0xDC, 0xBE, 0x42, 0x22, 0x2E, 0xC3, 0x42, 0x7E, 0xAC, 0xBB, 0x42, 0xDE, 0x62, 0xB7, 0x42 };
+      // float4(75.0490875, 75.0495682, 75.0496063, 75.0496674)
+      const std::vector<uint8_t> pattern_dither_rand_2 = { 0x22, 0x19, 0x96, 0x42, 0x61, 0x19, 0x96, 0x42, 0x66, 0x19, 0x96, 0x42, 0x6E, 0x19, 0x96, 0x42 };
+      // float(0.00392156886)
+      // Dither scales (mul) can be float(1), float3 or float4 (essentially repeated 1x, 3x or 4x times in a row). This is all we need to patch to disable dither.
+      // The first 4 bytes are to highlights it's a literal single value.
+      const std::vector<uint8_t> pattern_dither_scale_1_1c = { 0x01, 0x40, 0x00, 0x00, 0x81, 0x80, 0x80, 0x3B };
+      // The first 4 bytes are to highlights it's a literal vector value.
+      const std::vector<uint8_t> pattern_dither_scale_1_3c = { 0x02, 0x40, 0x00, 0x00, 0x81, 0x80, 0x80, 0x3B, 0x81, 0x80, 0x80, 0x3B, 0x81, 0x80, 0x80, 0x3B };
+      const std::vector<uint8_t> pattern_dither_scale_1_4c = { 0x02, 0x40, 0x00, 0x00, 0x81, 0x80, 0x80, 0x3B, 0x81, 0x80, 0x80, 0x3B, 0x81, 0x80, 0x80, 0x3B, 0x81, 0x80, 0x80, 0x3B };
+      // float(0.00196078443)
+      const std::vector<uint8_t> pattern_dither_scale_2_3c = { 0x02, 0x40, 0x00, 0x00, 0x81, 0x80, 0x00, 0x3B, 0x81, 0x80, 0x00, 0x3B, 0x81, 0x80, 0x00, 0x3B };
+      const std::vector<uint8_t> pattern_dither_scale_2_4c = { 0x02, 0x40, 0x00, 0x00, 0x81, 0x80, 0x00, 0x3B, 0x81, 0x80, 0x00, 0x3B, 0x81, 0x80, 0x00, 0x3B, 0x81, 0x80, 0x00, 0x3B };
+      // float(0.000977517106)
+      const std::vector<uint8_t> pattern_dither_scale_3_3c = { 0x02, 0x40, 0x00, 0x00, 0x08, 0x20, 0x80, 0x3A, 0x08, 0x20, 0x80, 0x3A, 0x08, 0x20, 0x80, 0x3A };
+      const std::vector<uint8_t> pattern_dither_scale_3_4c = { 0x02, 0x40, 0x00, 0x00, 0x08, 0x20, 0x80, 0x3A, 0x08, 0x20, 0x80, 0x3A, 0x08, 0x20, 0x80, 0x3A, 0x08, 0x20, 0x80, 0x3A };
+      constexpr size_t float_pattern_channels = 3; // Scan for float3, not float4
+
+      // Almost all material and lights shaders have dithering, so we can use this pattern to add a saturate on alpha and max(0, rgb) on color. The ones that don't are manually patched (at least the relevant ones we caught that showed issues)
+      std::vector<std::byte*> matches_dither_rand_1 = System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(code), size, reinterpret_cast<const std::byte*>(pattern_dither_rand_1.data()), pattern_dither_rand_1.size() / 4 * float_pattern_channels);
+      if (!matches_dither_rand_1.empty())
+      {
+         std::vector<uint8_t> appended_patch;
+
+         constexpr bool enable_unorm_emulation = true;
+         if (enable_unorm_emulation)
+         {
+            std::vector<uint32_t> mov_sat_o0w_o0w = ShaderPatching::GetMovInstruction(D3D10_SB_OPERAND_TYPE_OUTPUT, 0, D3D10_SB_OPERAND_TYPE_OUTPUT, 0, true);
+            appended_patch.insert(appended_patch.end(), reinterpret_cast<uint8_t*>(mov_sat_o0w_o0w.data()), reinterpret_cast<uint8_t*>(mov_sat_o0w_o0w.data()) + mov_sat_o0w_o0w.size() * sizeof(uint32_t));
+            std::vector<uint32_t> max_o0xyz_o0xyz_0 = ShaderPatching::GetMaxInstruction(D3D10_SB_OPERAND_TYPE_OUTPUT, 0, D3D10_SB_OPERAND_TYPE_OUTPUT, 0);
+            appended_patch.insert(appended_patch.end(), reinterpret_cast<uint8_t*>(max_o0xyz_o0xyz_0.data()), reinterpret_cast<uint8_t*>(max_o0xyz_o0xyz_0.data()) + max_o0xyz_o0xyz_0.size() * sizeof(uint32_t));
+         }
+
+         // Allocate new buffer and copy original shader code, then append the new code to fix UNORM to FLOAT texture upgrades
+         // This emulates UNORM render target behaviour on FLOAT render targets (from texture upgrades), without limiting the rgb color range.
+         // o0.rgb = max(o0.rgb, 0); // max is 0x34
+         // o0.w = saturate(o0.w); // mov is 0x36
+         new_code = std::make_unique<std::byte[]>(size + appended_patch.size());
+
+         // Pattern to search for: 3E 00 00 01 (the last byte is the size, and the minimum is 1 (the unit is 4 bytes), given it also counts for the opcode and it's own size byte
+         const std::vector<std::byte> return_pattern = { std::byte{0x3E}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01} };
+
+         // Append before the ret instruction if there's one at the end (there might not be?)
+         // Our patch shouldn't pre-include a ret value (though it'd probably work anyway)!
+         // Note that we could also just remove the return instruction and the shader would compile fine anyway? Unless the shader had any branches (if we added one, we should force add return!)
+         if (!appended_patch.empty() && code[size - return_pattern.size()] == return_pattern[0] && code[size - return_pattern.size() + 1] == return_pattern[1] && code[size - return_pattern.size() + 2] == return_pattern[2] && code[size - return_pattern.size() + 3] == return_pattern[3])
+         {
+            size_t insert_pos = size - return_pattern.size();
+            // Copy everything before pattern
+            std::memcpy(new_code.get(), code, insert_pos);
+            // Insert the patch
+            std::memcpy(new_code.get() + insert_pos, appended_patch.data(), appended_patch.size());
+            // Copy the rest (including the return instruction)
+            std::memcpy(new_code.get() + insert_pos + appended_patch.size(), code + insert_pos, size - insert_pos);
+         }
+         // Append patch at the end
+         else
+         {
+            std::memcpy(new_code.get(), code, size);
+            std::memcpy(new_code.get() + size, appended_patch.data(), appended_patch.size());
+         }
+
+         if (disable_dither)
+         {
+            auto PatchDitherScale = [&](std::byte* start, size_t max_size, const std::vector<uint8_t>& pattern) -> bool {
+               auto matches = System::ScanMemoryForPattern(start, max_size, reinterpret_cast<const std::byte*>(pattern.data()), pattern.size());
+               for (std::byte* match : matches) {
+                  size_t offset = match - code;
+                  // Zero out all bytes after the first 4 bytes
+                  std::memset(new_code.get() + offset + 4, 0, pattern.size() - 4);
+               }
+               return !matches.empty();
+               };
+
+            bool pattern_dither_scale_found = false;
+            const size_t size_offset = matches_dither_rand_1[0] - code; // They are always after that pattern
+            pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_1_1c);
+            pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_1_4c); // Replace the larger channel patters before otherwise it could prevent follow up channel patterns ones from being found
+            pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_1_3c);
+
+            // The other patterns are usually mutually exclusive
+            if (!pattern_dither_scale_found)
+            {
+               pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_2_4c);
+               pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_2_3c);
+               if (!pattern_dither_scale_found)
+               {
+                  pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_3_4c);
+                  pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_3_3c);
+               }
+            }
+         }
+
+         size += appended_patch.size();
+      }
+
+      return new_code;
+   }
+
+   // The entire game rendering pipeline was SDR
+   // It goes like this:
+   // -Render flipped world reflections with simple geometry (when there's a water body in view eg)
+   // -Render normal maps
+   //  Render some kind of low res depth map
+   // -Render lighting (R10G10B10A2) (flipped, 1 is full shadow, without manual clamping shadow can
+   // go beyond 1 if render targets are float) -Render color scene (material albedo * lighting,
+   // pretty much) -Render additive lights -Draw motion vectors for dynamic objects (rest is
+   // calculated from the camera I think) -TAA -Bloom and emissive color -Tonemap -Swapchain output
+   // (possibly draws black bars)
    bool OnDrawCustom(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers) override
    {
       auto& game_device_data = *static_cast<GameDeviceDataINSIDE*>(device_data.game);
@@ -316,7 +428,7 @@ public:
 
       if (original_shader_hashes.Contains(shader_hashes_LightingBufferEnd))
       {
-         ASSERT_ONCE(game_device_data.lighting_buffer_rtv.get());
+         ASSERT_ONCE(game_device_data.lighting_buffer_rtv.get()); // Can happen on boot when first loading
          game_device_data.is_drawing_materials = true;
 
          // Sanitize the lighting buffer, if it had values beyond 1 (which happens), it'd mean lighting would go subtractive/negative (it was stored with flipped values)
@@ -397,7 +509,6 @@ public:
          }
 #endif
       }
-      // TODO: use live patching to add a saturate on the alpha output of materials, and max(0, color) on the rgb of materials (we already do it manually for a billion shaders, possibly a few are still missing as they can be hard to notice), we could also remove part of the dithering (blue noise?)
       else if (original_shader_hashes.Contains(shader_hashes_MaterialsEnd) && game_device_data.is_drawing_materials)
       {
          ASSERT_ONCE(game_device_data.scene_color_rtv.get());
@@ -506,7 +617,7 @@ public:
 
       if (original_shader_hashes.Contains(shader_hashes_TAA))
       {
-         ASSERT_ONCE(!game_device_data.is_drawing_materials);
+         ASSERT_ONCE(!game_device_data.is_drawing_materials); // Can happen on boot when first loading
          game_device_data.is_drawing_materials = false;
          device_data.has_drawn_main_post_processing = true;
 
@@ -569,6 +680,8 @@ public:
       {
          PatchAspectRatio(max_aspect_ratio);
       }
+
+      reshade::get_config_value(runtime, NAME, "DisableDither", disable_dither);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
@@ -616,7 +729,7 @@ public:
          {
             ImGui::SetTooltip("Luma automatically unlocks the aspect ratio for the game from 16:9 on boot,"
                "\nhowever the game was designed for 16:9, and some objects might be missing from the edges on wider aspect ratios, other might end up being visible before they were meant to,"
-               " this allows you to customize it.\nFor the change to apply, it's necessary to change the resolution or fullscreen state in the graphics settings menu.\nIf HDR seems disabled after changing the aspect ratio, restart the game"); // TODO: needs texture cloning as RTs are resized before the swapchain when we change resolution (aspect ratio)
+               " this allows you to customize it.\nFor the change to apply, it's necessary to change the resolution or fullscreen state in the graphics settings menu.\nIf HDR seems disabled after changing the aspect ratio, restart the game"); // TODO: needs texture cloning as RTs are resized before the swapchain when we change resolution (aspect ratio) (maybe)
          }
 
          if (custom_aspect_ratio_enabled)
@@ -633,6 +746,22 @@ public:
                reshade::set_config_value(runtime, NAME, "CustomAspectRatio", max_aspect_ratio);
                PatchAspectRatio(max_aspect_ratio);
             }
+         }
+
+         ImGui::NewLine();
+         if (ImGui::Checkbox("Disable Dithering", &disable_dither))
+         {
+            reshade::set_config_value(runtime, NAME, "DisableDither", disable_dither);
+
+            const std::shared_lock lock(s_mutex_shader_defines);
+            GetShaderDefineData(char_ptr_crc32("ENABLE_DITHER")).SetDefaultValue(disable_dither ? '0' : '1');
+            GetShaderDefineData(char_ptr_crc32("ENABLE_DITHER")).SetValue(disable_dither ? '0' : '1');
+            defines_need_recompilation = true;
+            ShaderDefineData::Save(shader_defines_data, NAME_ADVANCED_SETTINGS);
+         }
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         {
+            ImGui::SetTooltip("Disables dithering on almost all shaders of this game. Might introduce banding and break the TAA reconstruction. Requires restart");
          }
 
          ImGui::TreePop();
@@ -727,6 +856,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             reshade::api::format::r8g8b8a8_typeless,
             // Likely unnecessary but won't hurt
             reshade::api::format::r11g11b10_float,
+
+            // These are used by lighting, which wouldn't really need to be upgraded as it 10bit in log space are already plenty, and possibly even better than FP16,
+            // however, they are also used by bloom so we need to upgrade them (until we find a way to selectively upgrade textures)
+            reshade::api::format::r10g10b10a2_typeless,
+            reshade::api::format::r10g10b10a2_unorm,
       };
 
       // There's many...

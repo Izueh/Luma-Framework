@@ -258,7 +258,7 @@ jobs:
             - Customize the settings if you'd like, the defaults are already good and pick up on your display calibration
 
             Note that not all mods here are playable, some are work in progress. Consult the wiki mod list for their state, or ask in "HDR Den" discord for more information.
-            Note that some mods here might not be complete, like "Prey", which misses (optional) data for the rest of the mod.
+            Note that some mods here might not be complete, like "Prey", which misses (optional) data for the rest of the mod, these should be downloaded from Nexus.
             "Test" mods are made to be tested and have tools to investigate what's going on, and help the developers gather information.
             Proton should be fully compatible out of the box.
 

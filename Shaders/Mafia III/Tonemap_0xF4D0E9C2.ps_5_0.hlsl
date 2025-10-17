@@ -383,7 +383,7 @@ void main(
     float2 maxUV = position + scaledSize;
     if (all(UV >= minUV && UV <= maxUV))
     {
-      float2 remappedUV = float2(inverseLerp(minUV.x, maxUV.x, UV.x), inverseLerp(minUV.y, maxUV.y, UV.y));
+      float2 remappedUV = float2(InverseLerp(minUV.x, maxUV.x, UV.x), InverseLerp(minUV.y, maxUV.y, UV.y));
       //remappedUV.y = 1.0 - remappedUV.y; // Flip Y to make it grow towards the top of the screen if you need
 
       float inBrightnessScale = DVS3 == 0.0 ? 1.0 : (DVS3 * 100.0); // Note: link this to "paperWhite" instead?

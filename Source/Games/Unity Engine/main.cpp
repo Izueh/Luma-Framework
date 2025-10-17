@@ -151,6 +151,13 @@ public:
          }
       }
 
+      if (game_id == GAME_POPTLC)
+      {
+         // Needed by bloom and FXAA (at least the typeless one)
+         texture_upgrade_formats.emplace(reshade::api::format::r10g10b10a2_typeless);
+         texture_upgrade_formats.emplace(reshade::api::format::r10g10b10a2_unorm);
+      }
+
       if (game_id == GAME_HOLLOW_KNIGHT_SILKSONG)
       {
          texture_format_upgrades_2d_size_filters |= (uint32_t)TextureFormatUpgrades2DSizeFilters::CustomAspectRatio;
@@ -558,7 +565,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution;
-      // PoPTLC only requires r8g8b8a8_typeless but will work with others regardless
+      // PoPTLC only requires r8g8b8a8_typeless (and "r10g10b10a2_typeless" with FXAA) but will work with others regardless
       texture_upgrade_formats = {
             reshade::api::format::r8g8b8a8_unorm,
             reshade::api::format::r8g8b8a8_unorm_srgb,

@@ -77,6 +77,9 @@ void main(
   r2.xyz = r2.xyz * float3(2,2,2) + float3(-1,-1,-1);
   r2.xyz = cb0[8].zzz * r2.xyz;
   r2.xyz = float3(0.5,0.5,0.5) * r2.xyz;
+#if !ENABLE_DITHER
+  r2.xyz = 0;
+#endif
   r1.xyz = -cb0[7].www + r1.xyz;
   r1.xyz = max(float3(0,0,0), r1.xyz);
   r1.xyz = r1.xyz * r0.xxx;

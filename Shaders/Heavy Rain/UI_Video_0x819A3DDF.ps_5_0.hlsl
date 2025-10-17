@@ -37,6 +37,7 @@ void main(
   }
   else
   {
+    uv = saturate(uv); // Be extra sure of not wrapping around as the sampler seems to be wrap, drawing the last line with half of the value from the other edge
     videoColor = texture0.Sample(sampler0_s, uv).rgba;
     videoColor.rgb = pow(abs(videoColor.rgb), register0.xyz) * sign(videoColor.rgb); // Luma: fixed pow going NaN if videos were stored in float textures with negative values
   }

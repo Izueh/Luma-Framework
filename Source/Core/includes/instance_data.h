@@ -250,6 +250,9 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
       return native_swapchain3;
    }
 
+   // Lock when removing a pipeline from "pipeline_cache_by_pipeline_handle" (and thus "pipeline_cache_by_pipeline_clone_handle", "pipeline_caches_by_shader_hash").
+   // Only needs to also be locked if you don't already lock "s_mutex_generic" in other places, to make sure the pipelines you are reading aren't getting destroyed during read.
+   std::shared_mutex pipeline_cache_destruction_mutex;
    // Pipelines by handle. Multiple pipelines can target the same shader, and even have multiple shaders within themselves.
    // This contains all pipelines (from the game) that we can replace shaders of (e.g. pixel shaders, vertex shaders, ...).
    // It's basically data we append (link) to pipelines, done manually because we have no other way.
@@ -261,8 +264,6 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 
    std::unordered_set<uint64_t> pipelines_to_reload;
    static_assert(sizeof(reshade::api::pipeline::handle) == sizeof(uint64_t));
-   // Map of "reshade::api::pipeline::handle"
-   std::unordered_map<uint64_t, reshade::api::device*> pipelines_to_destroy;
 
    // Custom samplers mapped to original ones by texture LOD bias
    std::unordered_map<uint64_t, std::unordered_map<float, com_ptr<ID3D11SamplerState>>> custom_sampler_by_original_sampler;

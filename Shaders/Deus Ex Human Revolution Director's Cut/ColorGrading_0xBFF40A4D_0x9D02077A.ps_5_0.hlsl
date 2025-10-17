@@ -43,6 +43,7 @@ cbuffer SceneBuffer : register(b2)
   float4 PSSMToMap3Const : packoffset(c51);
   float4 PSSMDistances : packoffset(c52);
   row_major float4x4 WorldToPSSM0 : packoffset(c53);
+  float StereoOffset : packoffset(c25.w);
 }
 
 cbuffer InstanceBuffer : register(b5)
@@ -63,7 +64,8 @@ Texture2D<float4> p_default_Material_0C25AF6416088781_Param_texture : register(t
 #define ENABLE_COLOR_GRADING_DESATURATION 1
 #endif
 
-// This is from the original game, or the golder filter restoration mod. The DC edition doesn't run it be default.
+// This is from the original game, or the golder filter restoration mod. The DC edition doesn't run it be default, without memory edits.
+// This shader has two hashes because one is for the original game and one for the original color grading in the DC
 void main(
   float4 v0 : SV_POSITION0,
   out float4 o0 : SV_Target0)
@@ -137,12 +139,15 @@ void main(
   // "pow(pow(x, gamma) * pow(y, gamma), 1.0 / gamma)" is equal to "x * y", so we should only do it if we want to preserve the exact original behaviour
   finalFilter = gamma_to_linear(finalFilter);
   
-  // Do the main color filter in BT.2020 to generate more HDR colors
+  // Do the main color filter in BT.2020 to generate more HDR colors.
+  // The filter isn't exactly a color but a multiplier, however this overall works out.
   if (LumaSettings.DisplayMode == 1 && !forceSDR)
   {
     finalFilter = BT709_To_BT2020(finalFilter);
     color = BT709_To_BT2020(color);
   }
+
+  finalFilter = lerp(1.0, finalFilter, LumaSettings.GameSettings.ColorGradingIntensity); // Lerp it to white/neutral (in linear space to hue shift the least)
 
   color = (color >= 0.0 || abs(finalFilter) <= FLT_EPSILON) ? (color * finalFilter) : (color / finalFilter); // Scale negative colors with the inverse value
 
@@ -152,6 +157,8 @@ void main(
   }
 
 #else // !ENABLE_IMPROVED_COLOR_GRADING
+  finalFilter = lerp(1.0, finalFilter, LumaSettings.GameSettings.ColorGradingIntensity);
+
   color *= finalFilter;
 #endif // ENABLE_IMPROVED_COLOR_GRADING
 
@@ -176,11 +183,17 @@ void main(
   }
 
 #if ENABLE_HIGHLIGHTS_DESATURATION_TYPE >= 2 // Theoretically it's another setting, but whatever // Disabled for now as it just doesn't look right, the game relies on saturated highlights for many things
-  // Desaturate bright highlights as they can get ridiculously high and still be very saturated in this game, while in SDR it would have all clipped at 1
-  // TODO: try with oklab or something else, and maybe restore the vanilla hue, however it's very much lost at this point as many saturates were skipped
+  // Desaturate bright highlights as they can get ridiculously high and still be very saturated in this game, while in SDR it would have all clipped at 1.
+  // We don't do the same exact desaturation as SDR would have had, as it doesn't seem like this game's art relied on it.
   if (!forceSDR)
   {
+#if 1 // Looks better as it doesn't desaturate pure colors
+    float desaturationPeakBrightness = ITU_WhiteLevelNits / sRGB_WhiteLevelNits; // A random value, but it looks good
+    float desaturationExponent = 2.0;
+    o0.rgb = CorrectPerChannelTonemapHiglightsDesaturation(o0.rgb, desaturationPeakBrightness, desaturationExponent);
+#else // Found Empyrically
     o0.rgb = Saturation(o0.rgb, lerp(1.0, 0.5, pow(saturate((average(o0.rgb) - MidGray) / 20.0), 0.5)));
+#endif
   }
 #endif
   
@@ -193,6 +206,7 @@ void main(
     // look best with the per channel tonemapper desaturation (hue shifts) are fire (because the textures are literally pinks),
     // but the rest desaturates too much with per channel, so in HDR we default to luminance.
     // The game simply clipped all values beyond 1, many times across rendering, but anyway it doesn't seem to rely on hue shifts that much beside fire.
+    // Note that tonemapping by channel can't be reliably be expected to desaturate as it will do it more intensively at lower peak brigthness, and will basically look like TM by luminance beyond a certain peak.
     bool tonemapPerChannel = LumaSettings.DisplayMode != 1;
 #if ENABLE_HIGHLIGHTS_DESATURATION_TYPE == 1 || ENABLE_HIGHLIGHTS_DESATURATION_TYPE >= 3
     tonemapPerChannel = true;
@@ -227,4 +241,12 @@ void main(
 
   o0.rgb = linear_to_gamma(o0.rgb, GCT_MIRROR);
 #endif
+
+  // See "are_bloom_and_color_grading_forced_on_ui" in c++
+  if (LumaData.CustomData1)
+  {
+    o0.rgb = 0.0;
+    o0.a = 1.0;
+    discard; // Better, the game didn't have a clear on the swapchain and wanted to go for a trailing effect when changing from one menu to another (not sure if it's intentional, but looks decent)
+  }
 }

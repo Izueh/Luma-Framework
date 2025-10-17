@@ -335,6 +335,7 @@ float4 main(float4 pos : SV_Position0) : SV_Target0
 		}
 		
 #if 0 // AntiBloom AutoHDR
+		// TODO: add an "unclipping" mode that tries to detect the channel value before it clipped to 1 by querying smaller mips until one isn't 1, and then tries to increase the value in the center of the clipped highlight blob. Also try "CorrectPerChannelTonemapDesaturation" to resaturate per channel tonemaped highlights.
 		float shoulderPow = 2.75f; // Default value, can be changed in the settings
 		float maxShoulderPow = lerp(shoulderPow, 1.f, LumaSettings.DevSetting01); // Default value, can be changed in the settings
 		float mipRatio1 = GetLuminance(mipColor1.rgb) / GetLuminance(color.rgb);

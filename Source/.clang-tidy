@@ -20,14 +20,15 @@ Checks:
   - -readability-uppercase-literal-suffix
   - -readability-identifier-length
 CheckOptions:
+# TODO: make consts/statics/globals/contexprs UPPER_CASE?
   readability-braces-around-statements.ShortStatementLines: 1
   readability-identifier-naming.ClassCase: CamelCase
-  readability-identifier-naming.ClassConstantCase: UPPER_CASE
+  readability-identifier-naming.ClassConstantCase: lower_case
   readability-identifier-naming.ClassMemberCase: lower_case
   readability-identifier-naming.ClassMemberSuffix: _
   readability-identifier-naming.ClassMethodCase: CamelCase
-  readability-identifier-naming.ConstantCase: UPPER_CASE
-  readability-identifier-naming.ConstantMemberCase: UPPER_CASE
+  readability-identifier-naming.ConstantCase: lower_case
+  readability-identifier-naming.ConstantMemberCase: lower_case
   readability-identifier-naming.ConstantParameterCase: lower_case
   readability-identifier-naming.EnumCase: CamelCase
   readability-identifier-naming.FunctionCase: CamelCase
@@ -38,7 +39,7 @@ CheckOptions:
   readability-identifier-naming.MemberCase: lower_case
   readability-identifier-naming.NamespaceCase: CamelCase
   readability-identifier-naming.ParameterCase: lower_case
-  readability-identifier-naming.StaticConstantCase: UPPER_CASE
+  readability-identifier-naming.StaticConstantCase: lower_case
   readability-identifier-naming.StructCase: CamelCase
   readability-identifier-naming.VariableCase: lower_case
 

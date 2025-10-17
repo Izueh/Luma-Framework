@@ -26,8 +26,9 @@ SamplerState AmbientShadowBuffer_s : register(s1);
 Texture2D<float4> AmbientShadowBuffer : register(t0);
 Texture2D<float4> SceneDepthTexture : register(t1);
 
-#define cmp -
+#define cmp
 
+// TODO: port fog fix from BS2
 void main(
   float2 v0 : TEXCOORD0,
   float2 w0 : TEXCOORD1,

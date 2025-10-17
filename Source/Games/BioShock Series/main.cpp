@@ -602,7 +602,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             reshade::api::format::b8g8r8x8_unorm_srgb,
             reshade::api::format::b8g8r8x8_typeless,
 
-            reshade::api::format::r11g11b10_float, // Used by Bloom
+            reshade::api::format::r11g11b10_float, // Used by Bloom and maybe lens flare stuff
+
+            reshade::api::format::r32g32b32a32_float, // BSI uses 32bpc render targets for the scene and it's insane! So we restore them to 16bpc // TODO: verify it's not due to config edits
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
       enable_upgraded_texture_resource_copy_redirection = true; // TODO: investigate more if it happens (thus disabled in dev mode)
@@ -610,7 +612,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // The game does very funky stuff when trying to go FSE, even if we block it (it re-creates a lot of shaders and textures)
       force_borderless = true;
 
-      allow_disabling_gamma_ramp = true; // For Bioshock 2 // TODO: call this every frame or anyway when alt tabbing in, as the game constantly resets it. Or when we get window focus, or go FSE. Or just patch the function out...
+      allow_disabling_gamma_ramp = true; // For Bioshock 2 // TODO: call this every frame or anyway when alt tabbing in, as the game constantly resets it. Or when we get window focus, or go FSE. Or just patch the function out... Or ask users to force reference mode.
 
       // Default values
       default_luma_global_game_settings.FogCorrectionIntensity = 1.f; // 0 is vanilla. Values between 0.75 and 1 as great defaults.

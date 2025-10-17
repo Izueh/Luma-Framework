@@ -706,21 +706,12 @@ struct LUTExtrapolationSettings
   // given that the transfer function mismatch in out of range values can go wild, and also because in the vanilla version the would have been clipped anyway
   // (this behaviour assumes both input and output were in the 0-1 range, which might not be true depending on the LUT transfer functions, but it's true in the ones we support).
   uint transferFunctionOut;
+  // TODO: add LUT color space param
   // 0 Basic sampling
   // 1 Linear corrected sampling (if "lutOutputLinear" is false this is equal to "0", but if true, the LUT input coordinates need to be adjusted with the inverse of the transfer function, otherwise even a neutral LUT would shift colors that didn't fall precisely on a LUT texel)
   // 2 Linear corrected sampling + tetrahedral interpolation (it won't necessarily look better, especially with LUTs close to neutral)
   uint samplingQuality;
-  // Basically an inverse LUT intensity setting.
-  // How much we blend back towards the "neutral" LUT color (the unclamped source color (e.g. HDR)).
-  // This has the same limitations of "inputTonemapToPeakWhiteNits" and should be used and not used in the same cases.
-  // It's generally not suggested to use it as basically it undoes the LUT extrapolation, but if you have LUTs not far from being neutral,
-  // you might set this to a smallish value and get better results (e.g. better hues).
-  float neutralLUTRestorationAmount;
-  // How much we blend back towards the vanilla LUT color (or hue/chrominance).
-  // It can be used to restore some of the vanilla hues or chrominance on bright (or not bright) colors (they would likely have desaturated on highlights).
-  // This adds one sample per pixel.
-  float vanillaLUTRestorationAmount;
-
+  
   // Enable or disable LUT extrapolation.
   // Use "neutralLUTRestorationAmount" to control the extrapolation intensity
   // (it wouldn't make sense to only partially extrapolate without scaling back the color intensity, otherwise LUT extrapolation would have an output range smaller than its input range).
@@ -735,11 +726,20 @@ struct LUTExtrapolationSettings
   // The smaller this value, the more "accurate" extrapolation will be, respecting more lawfully the way the LUT changed around its edges (as long as it ends up mapped beyond the center of the first and second texels).
   // The higher the value, the "smoother" the extrapolation will be, with gradients possibly looking nicer.
   float backwardsAmount;
+  // When the extrapolated rgb flip in "hue", as in, the biggest rgb channel value at the edge of the LUT is exceeded by another channel value that was accelerating faster towards the edge of the LUT.
+  // This is only really needed if the extrapolation is done per channel and not through perceptual color representations.
+  // Enable this if you see weird hue shifts in highlights, especially useful with strong LUTs that shift colors a lot.
+  // Note that this might desaturate highlights a lot, and removes wider color gamut!
+  bool clipExtrapolationToWhite;
+  // LUT extrapolation can generate invalid colors (colors with a negative luminance) if the input color had values below 0,
+  // this fixes them in the best possible way without altering their hue wherever possible.
+  bool fixExtrapolationInvalidColors;
   // What white level does the LUT have for its input coordinates (e.g. what's the expected brightness of an input color of 1 1 1?).
   // This value doesn't directly scale the brightness of the output but affects the logic of some internal math (e.g. tonemapping and transfer functions).
   // Ideally it would be set to the same brightness the developers of the LUTs had their screen set to, some good values for SDR LUTs are 80, 100 or 203.
   // Given that this is used as a scaler for PQ, using the Rec.709 white level of 100 nits is a good start, as that maps to ~50% of the PQ range.
   float whiteLevelNits;
+  
   // If our input color was too high (and thus out of range, (e.g. beyond 0-1)), we can temporarily tonemap it to avoid the LUT extrapolation math going wild (e.g. too saturated, or hue shifted, or generating too strong highlights),
   // this is especially useful in the following conditions:
   //  -With LUTs that change colors a lot in brightness, especially towards the edges
@@ -752,13 +752,20 @@ struct LUTExtrapolationSettings
   // This is relative to the "whiteLevelNits" and needs to be greater than it.
   // Tonemapping is disabled if this is <= 0.
   float inputTonemapToPeakWhiteNits;
+  // Basically an inverse LUT intensity setting.
+  // How much we blend back towards the "neutral" LUT color (the unclamped source color (e.g. HDR)).
+  // This has the same limitations of "inputTonemapToPeakWhiteNits" and should be used and not used in the same cases.
+  // It's generally not suggested to use it as basically it undoes the LUT extrapolation, but if you have LUTs not far from being neutral,
+  // you might set this to a smallish value and get better results (e.g. better hues).
+  float neutralLUTRestorationAmount;
+  // How much we blend back towards the vanilla LUT color (or hue/chrominance).
+  // It can be used to restore some of the vanilla hues or chrominance on bright (or not bright) colors (they would likely have desaturated on highlights).
+  // This adds one sample per pixel.
+  float vanillaLUTRestorationAmount;
   // How much we blend back towards the "clipped" LUT color.
   // This is different from the vanilla color, as it's sourced from the new (e.g. HDR) input color, but clipped the the LUT input coordinates range (0-1).
   // It can be used to hide some of the weird hues generated from too aggressive extrapolation (e.g. for overly bright input colors, or for the lower "extrapolationQuality" modes).
   float clampedLUTRestorationAmount;
-  // LUT extrapolation can generate invalid colors (colors with a negative luminance) if the input color had values below 0,
-  // this fixes them in the best possible way without altering their hue wherever possible.
-  bool fixExtrapolationInvalidColors;
 };
 
 LUTExtrapolationData DefaultLUTExtrapolationData()
@@ -784,6 +791,7 @@ LUTExtrapolationSettings DefaultLUTExtrapolationSettings()
   settings.enableExtrapolation = true;
   settings.extrapolationQuality = 1;
   settings.backwardsAmount = 0.5;
+  settings.clipExtrapolationToWhite = false;
   settings.whiteLevelNits = Rec709_WhiteLevelNits;
   settings.inputTonemapToPeakWhiteNits = 0;
   settings.clampedLUTRestorationAmount = 0;
@@ -808,7 +816,6 @@ float3 SampleLUT(LUT_TEXTURE_TYPE lut, SamplerState samplerState, float3 encoded
 
 //TODOFT: store the acceleration around the lut's last texel in the alpha channel?
 //TODOFT: lower lut extrapolation intensity on brighter colors?
-//TODOFT: as we approach white and beyond (roughly the greyscale, direction of white, but beyond 1 1 1), we should not extrapolate as much, at least if the OG LUT mapped white to white, otherwise we'd hue shift white to other colors and fail to properly desaturate. Maybe add an "SDR" color param for this.
 
 // LUT sample that allows to go beyond the 0-1 coordinates range through extrapolation.
 // It finds the rate of change (acceleration) of the LUT color around the requested clamped coordinates, and guesses what color the sampling would have with the out of range coordinates.
@@ -1321,40 +1328,74 @@ float3 SampleLUTWithExtrapolation(LUT_TEXTURE_TYPE lut, SamplerState samplerStat
 		}
 #pragma warning( disable : 4000 )
 
-#if 0 // This is bad, ultimately each channel needs to work individually and if we prevent hue from flipping, we end up generating broke gradients. There's possibly a lighter version of this idea that might work and help prevent hue shifts in strong highlights, but let's see...
-    // Prevent hue rgb values flipping when extrapolating too much (like if green grows bigger than blue, we want to stop at white, e.g. from 0.9 0.9 1 to 1 1 1 shouldn't then go to 1.1 1.1 1 when we further extrapolate).
-    bool rMax = clampedSample.r > clampedSample.g && clampedSample.r > clampedSample.b;
-    bool gMax = clampedSample.g > clampedSample.r && clampedSample.g > clampedSample.b;
-    bool bMax = clampedSample.b > clampedSample.r && clampedSample.b > clampedSample.g;
-    if (rMax || gMax || bMax)
+    if (settings.clipExtrapolationToWhite)
     {
-      float3 preHueClampingExtrapolatedSample = extrapolatedSample;
-      
-      // Clamp to the max color
-      int maxChannel = (int)rMax * 0 + (int)gMax * 1 + (int)bMax * 2;
-      extrapolatedSample[0] = min(extrapolatedSample[0], max(extrapolatedSample[maxChannel], clampedSample[maxChannel]));
-      extrapolatedSample[1] = min(extrapolatedSample[1], max(extrapolatedSample[maxChannel], clampedSample[maxChannel]));
-      extrapolatedSample[2] = min(extrapolatedSample[2], max(extrapolatedSample[maxChannel], clampedSample[maxChannel]));
-      
-      // Clamp to the second max color
-      bool rMid = (clampedSample.r > clampedSample.g && clampedSample.r < clampedSample.b) || (clampedSample.r < clampedSample.g && clampedSample.r > clampedSample.b);
-      bool gMid = (clampedSample.g > clampedSample.r && clampedSample.g < clampedSample.b) || (clampedSample.g < clampedSample.r && clampedSample.g > clampedSample.b);
-      bool bMid = (clampedSample.b > clampedSample.r && clampedSample.b < clampedSample.g) || (clampedSample.b < clampedSample.r && clampedSample.b > clampedSample.g);
-      if (rMid || gMid || bMid)
-      {
-        int minChannel = (int)rMid * 0 + (int)gMid * 1 + (int)bMid * 2;
-        if (0 != minChannel && 0 != maxChannel)
-          extrapolatedSample[0] = min(extrapolatedSample[0], max(extrapolatedSample[minChannel], clampedSample[minChannel]));
-        if (1 != minChannel && 1 != maxChannel)
-          extrapolatedSample[1] = min(extrapolatedSample[1], max(extrapolatedSample[minChannel], clampedSample[minChannel]));
-        if (2 != minChannel && 2 != maxChannel)
-          extrapolatedSample[2] = min(extrapolatedSample[2], max(extrapolatedSample[minChannel], clampedSample[minChannel]));
-      }
+//TODOFT: as we approach white and beyond (roughly the greyscale, direction of white, but beyond 1 1 1), we should not extrapolate as much, at least if the OG LUT mapped white to white, otherwise we'd hue shift white to other colors and fail to properly desaturate.
+//Maybe add an "SDR" color param for this (as in, base it on the vanilla TM sampled LUT instead of the clipped HDR sampled LUT).
+//Maybe add this as a percentage instead of a toggle.
+#if 1
+      float3 extrapolatedClampedSample = RestoreLuminance(clampedSample, extrapolatedSample, true);
+      float3 whiteClippedExtrapolatedSample = extrapolatedSample;
 
-      // Restore the pre-clamp brightness
-      extrapolatedSample = RestoreLuminance(extrapolatedSample, preHueClampingExtrapolatedSample);
-    }
+      uint maxIndexExtrapolated = GetMaxIndex(extrapolatedSample);
+      uint midIndexExtrapolated = GetMidIndex(extrapolatedSample);
+      uint minIndexExtrapolated = GetMinIndex(extrapolatedSample);
+
+      // - Clamp the new max channel to the original max channel
+      // - Clamp the new mid channel to the new max channel
+      // - Clamp the new min channel to the new mid channel
+      SetIndexValue(whiteClippedExtrapolatedSample, maxIndexExtrapolated, min(max3(extrapolatedClampedSample), whiteClippedExtrapolatedSample[maxIndexExtrapolated]));
+      SetIndexValue(whiteClippedExtrapolatedSample, midIndexExtrapolated, min(whiteClippedExtrapolatedSample[maxIndexExtrapolated], whiteClippedExtrapolatedSample[midIndexExtrapolated]));
+      SetIndexValue(whiteClippedExtrapolatedSample, minIndexExtrapolated, min(whiteClippedExtrapolatedSample[midIndexExtrapolated], whiteClippedExtrapolatedSample[minIndexExtrapolated]));
+      // - Clamp the new min channel to the original min channel
+      // - Clamp the new mid channel to the new min channel
+      // - Clamp the new max channel to the new mid channel
+      SetIndexValue(whiteClippedExtrapolatedSample, minIndexExtrapolated, max(min3(extrapolatedClampedSample), whiteClippedExtrapolatedSample[minIndexExtrapolated]));
+      SetIndexValue(whiteClippedExtrapolatedSample, midIndexExtrapolated, max(whiteClippedExtrapolatedSample[minIndexExtrapolated], whiteClippedExtrapolatedSample[midIndexExtrapolated]));
+      SetIndexValue(whiteClippedExtrapolatedSample, maxIndexExtrapolated, max(whiteClippedExtrapolatedSample[midIndexExtrapolated], whiteClippedExtrapolatedSample[maxIndexExtrapolated]));
+
+#if 0 // Restore the original chrominance, assuming there was any (it wasn't pure white). Disabled as it creates visible steps in the image.
+      float extrapolatedChrominance = GetChrominance(extrapolatedSample);
+      whiteClippedExtrapolatedSample = SetChrominance(whiteClippedExtrapolatedSample, extrapolatedChrominance);
 #endif
+
+      // Restore the original extrapolated luminance, just because it's likely to be more accurate and holds more detail/nuance
+      extrapolatedSample = RestoreLuminance(whiteClippedExtrapolatedSample, extrapolatedSample, true);
+#else // This is bad, ultimately each channel needs to work individually and if we prevent hue from flipping, we end up generating broke gradients. There's possibly a lighter version of this idea that might work and help prevent hue shifts in strong highlights, but let's see... // TODO: this version is broken. Delete it?
+      // Prevent hue rgb values flipping when extrapolating too much (like if green grows bigger than blue, we want to stop at white, e.g. from 0.9 0.9 1 to 1 1 1 shouldn't then go to 1.1 1.1 1 when we further extrapolate).
+      bool rMax = clampedSample.r > clampedSample.g && clampedSample.r > clampedSample.b;
+      bool gMax = clampedSample.g > clampedSample.r && clampedSample.g > clampedSample.b;
+      bool bMax = clampedSample.b > clampedSample.r && clampedSample.b > clampedSample.g;
+      if (rMax || gMax || bMax)
+      {
+        float3 preHueClampingExtrapolatedSample = extrapolatedSample;
+        
+        // Clamp to the max color
+        int maxChannel = (int)rMax * 0 + (int)gMax * 1 + (int)bMax * 2;
+        extrapolatedSample[0] = min(extrapolatedSample[0], max(extrapolatedSample[maxChannel], clampedSample[maxChannel]));
+        extrapolatedSample[1] = min(extrapolatedSample[1], max(extrapolatedSample[maxChannel], clampedSample[maxChannel]));
+        extrapolatedSample[2] = min(extrapolatedSample[2], max(extrapolatedSample[maxChannel], clampedSample[maxChannel]));
+        
+        // Clamp to the second max color
+        bool rMid = (clampedSample.r > clampedSample.g && clampedSample.r < clampedSample.b) || (clampedSample.r < clampedSample.g && clampedSample.r > clampedSample.b);
+        bool gMid = (clampedSample.g > clampedSample.r && clampedSample.g < clampedSample.b) || (clampedSample.g < clampedSample.r && clampedSample.g > clampedSample.b);
+        bool bMid = (clampedSample.b > clampedSample.r && clampedSample.b < clampedSample.g) || (clampedSample.b < clampedSample.r && clampedSample.b > clampedSample.g);
+        if (rMid || gMid || bMid)
+        {
+          int minChannel = (int)rMid * 0 + (int)gMid * 1 + (int)bMid * 2;
+          if (0 != minChannel && 0 != maxChannel)
+            extrapolatedSample[0] = min(extrapolatedSample[0], max(extrapolatedSample[minChannel], clampedSample[minChannel]));
+          if (1 != minChannel && 1 != maxChannel)
+            extrapolatedSample[1] = min(extrapolatedSample[1], max(extrapolatedSample[minChannel], clampedSample[minChannel]));
+          if (2 != minChannel && 2 != maxChannel)
+            extrapolatedSample[2] = min(extrapolatedSample[2], max(extrapolatedSample[minChannel], clampedSample[minChannel]));
+        }
+
+        // Restore the pre-clamp brightness
+        extrapolatedSample = RestoreLuminance(extrapolatedSample, preHueClampingExtrapolatedSample);
+      }
+#endif
+    }
 
     // Apply the inverse of the original tonemap ratio on the new out of range values (this time they are not necessary out the values beyond 0-1, but the values beyond the clamped/vanilla sample).
     // We don't directly apply the inverse tonemapper formula here as that would make no sense.
@@ -1403,8 +1444,9 @@ float3 SampleLUTWithExtrapolation(LUT_TEXTURE_TYPE lut, SamplerState samplerStat
 			extrapolatedSample = lerp(extrapolatedSample, extrapolatedClampedSample, settings.clampedLUTRestorationAmount);
 		}
 
-		// We can optionally leave or fix negative luminances colors here in case they were generated by the extrapolation, everything works by channel in most games (e.g. Prey), not much is done by luminance, so this isn't needed until proven otherwise
-		if (settings.fixExtrapolationInvalidColors) //TODOFT4: test more: does this reduce HDR colors!? It seems fine?
+		// We can optionally leave or fix negative luminances colors here in case they were generated by the extrapolation, everything works by channel in most games (e.g. Prey), not much is done by luminance, so this isn't needed until proven otherwise.
+    // Do done that this might slightly change the "on screen" hue that would have been clipped to >= 0 channels, but in most cases it'd be better anyway
+		if (settings.fixExtrapolationInvalidColors)
 		{
 			FixColorGradingLUTNegativeLuminance(extrapolatedSample);
 		}

@@ -1,3 +1,5 @@
+#include "Includes/Common.hlsl"
+
 Texture2D<float4> t2 : register(t2);
 Texture2D<float4> t1 : register(t1);
 Texture2D<float4> t0 : register(t0);
@@ -89,7 +91,10 @@ void main(
     r0.x = r1.x / r1.y;
   }
   r0.yzw = float3(0.00392156886, 0.00392156886, 0.00392156886) * r0.yzw;
-  o0.xyz = r0.x * cb0[12].xyz + -r0.yzw;
+#if !ENABLE_DITHER
+  r0.yzw = 0.0;
+#endif
+  o0.xyz = r0.x * cb0[12].xyz - r0.yzw;
   o0.w = 1;
   
   // Luma: typical UNORM like clamping

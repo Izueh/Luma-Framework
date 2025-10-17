@@ -1,3 +1,5 @@
+#include "Includes/Common.hlsl"
+
 Texture2D<float4> t3 : register(t3);
 Texture2D<float4> t2 : register(t2);
 Texture2D<float4> t1 : register(t1);
@@ -67,10 +69,16 @@ void main(
   r0.yzw = float3(95.4307022,97.5901031,93.8368988) * r0.yyy;
   r0.yzw = frac(r0.yzw);
   r0.yzw = cb0[7].yyy * r0.yzw;
-  o0.xyz = v4.xyz * r0.x + -r0.yzw;
+#if !ENABLE_DITHER
+  r0.yzw = 0.0;
+#endif
+  o0.xyz = v4.xyz * r0.x - r0.yzw;
   o0.w = 1;
   
-  // Luma: typical UNORM like clamping, needed due to the weird blending types this uses, that end up creating steps in lightings
+  // Luma: typical UNORM like clamping, needed due to the weird blending types this uses, that end up creating steps in lightings.
+  // Note that this shader would already be live patched, but we add the dither branch to this as we can't patch dithering out easily otherwise.
+  // Lighting might have been able to go negative as it's flipped log space, representing even brighter values,
+  // but the peak doesn't seem to ever be reached, and there's enough range for HDR anyway.
+  // If we wanted, we could detect the lighting shaders by the lack of the "75.0490875" pattern for their dithering, and possibly this pattern "cb1[7].z * r?.x + cb1[7].w"
   o0.rgb = max(o0.rgb, 0.0);
-  o0.a = saturate(o0.a);
 }

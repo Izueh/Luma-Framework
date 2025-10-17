@@ -92,5 +92,9 @@ void main(
   r2.xyzw = frac(r2.xyzw);
   r1.xyzw = r2.xyzw + r1.xyzw;
   r1.xyzw = float4(-1,-1,-1,-1) + r1.xyzw;
+#if ENABLE_DITHER
   o0.xyzw = r1.xyzw * float4(0.00392156886,0.00392156886,0.00392156886,0.00392156886) + r0.xyzw;
+#else
+  o0.xyzw = r0.xyzw;
+#endif
 }

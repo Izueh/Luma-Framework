@@ -1,3 +1,6 @@
+#include "../Includes/Common.hlsl"
+#include "../Includes/DICE.hlsl"
+
 Texture2D<float4> t0 : register(t0);
 
 SamplerState s0_s : register(s0);
@@ -358,5 +361,26 @@ void main(
   o0.w = saturate(o0.w);
 #elif 1
   o0.w = 1.f;
+#endif
+
+  bool forceVanillaSDR = ShouldForceSDR(v0.xy, true);
+
+#if ENABLE_FAKE_HDR // The game doesn't have many bright highlights, the dynamic range is relatively low, this helps alleviate that. Ideally it'd be better to do this before FXAA, to anti alias it better, but whatever
+  if (LumaSettings.DisplayMode == 1 && !forceVanillaSDR)
+  {
+    float normalizationPoint = 0.025; // Found empyrically
+    float fakeHDRIntensity = 0.4;
+    float saturationBoost = 0.666;
+    o0.xyz = FakeHDR(o0.xyz, normalizationPoint, fakeHDRIntensity, saturationBoost);
+  }
+#endif
+
+  const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
+  const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
+	DICESettings settings = DefaultDICESettings();
+	o0.xyz = DICETonemap(o0.xyz * paperWhite, peakWhite, settings) / paperWhite;
+
+#if POST_PROCESS_SPACE_TYPE == 0 // TODO: handle all post process after this one to make it work in gamma space! Also make FXAA mandatory?
+  o0.rgb = linear_to_sRGB_gamma(o0.rgb);
 #endif
 }

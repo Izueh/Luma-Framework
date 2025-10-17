@@ -67,6 +67,7 @@ Texture2D<float4> p_default_Material_0B33AFF46643651_Param_texture : register(t0
 Texture2D<float4> p_default_Material_0B33AF346638807_Param_texture : register(t1); // Scene
 Texture2D<float4> depth_texture : register(t3); // Depth
 
+// This shader has two hashes because one is for the original game and one for the original bloom in the DC
 void main(
   float4 v0 : SV_POSITION0,
   out float4 o0 : SV_Target0)
@@ -138,7 +139,11 @@ void main(
 
   bloomedColor *= forceSDR ? 1.f : LumaSettings.GameSettings.BloomIntensity; // Luma: scale bloom
 
+#if 1
   o0.xyz = bloomedColor.xyz * MaterialParams[0].x + foggedColor.xyz;
+#else // The version of the original bloom in the DC edition. It seems like this would draw bloom ignoring fog, so it's probably not good for our case (it indeed seems to be very broken)
+  o0.xyz = lerp(foggedColor.xyz, bloomedColor.xyz, MaterialParams[0].x * saturate(bloomedColor.xyz)); // Luma: added saturate on alpha factor
+#endif
   o0.w = MaterialOpacity;
   
   // Luma

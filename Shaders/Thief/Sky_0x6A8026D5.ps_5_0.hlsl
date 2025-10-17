@@ -11,12 +11,19 @@ cbuffer cb0 : register(b0)
   float4 cb0[34];
 }
 
+// Luma
+cbuffer cb2 : register(b2)
+{
+  float4 cb2[4];
+}
+
 void main(
   float4 v0 : COLOR0,
   float3 v1 : TEXCOORD0,
   float4 v2 : TEXCOORD1,
   float4 v3 : TEXCOORD8,
   float2 v4 : TEXCOORD9,
+  float4 pixelPos : SV_POSITION0,
   uint v5 : SV_IsFrontFace0,
   out float4 o0 : SV_Target0,
   out float4 o1 : SV_Target1,
@@ -70,9 +77,14 @@ void main(
   o3.xyzw = float4(0,0,0,0);
 
 #if ENABLE_FAKE_HDR // The game doesn't have many bright highlights, the dynamic range is relatively low, this helps alleviate that
-  float normalizationPoint = 0.025; // Found empyrically
-  float fakeHDRIntensity = 0.25;
-  float saturationBoost = 0.75;
-  o0.xyz = FakeHDR(o0.xyz, normalizationPoint, fakeHDRIntensity, saturationBoost);
+  int superSampling = 2; // TODO: figure out this scale, and also make sure this looks good
+  bool forceVanillaSDR = ShouldForceSDR(pixelPos.xy / (cb2[3].xy * superSampling), true);
+  if (LumaSettings.DisplayMode == 1 && !forceVanillaSDR)
+  {
+    float normalizationPoint = 0.025; // Found empyrically
+    float fakeHDRIntensity = 0.25;
+    float saturationBoost = 0.75;
+    o0.xyz = FakeHDR(o0.xyz, normalizationPoint, fakeHDRIntensity, saturationBoost);
+  }
 #endif
 }

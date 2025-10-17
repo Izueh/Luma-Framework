@@ -26,7 +26,6 @@ void main(
   float4 r0,r1,r2;
   r0.xyz = v1.xyz;
   r1.w = 1;
-  r2.xyzw = p_default_Material_051164A4424935531_Param_texture.Sample(p_default_Material_051164A4424935531_Param_sampler_s, v2.xy).xyzw;
   
 #if ENABLE_AUTO_HDR
   uint2 size;
@@ -35,6 +34,7 @@ void main(
   // Do AutoHDR before any color filter
   if (size.x == 1280 && size.y == 720)
   {
+    r2.xyzw = p_default_Material_051164A4424935531_Param_texture.Sample(p_default_Material_051164A4424935531_Param_sampler_s, saturate(v2.xy)).xyzw; // Avoid the sampler wrapping around in case it was wrap (common videos playback bug)
     r2.rgb = gamma_to_linear(r2.rgb);
     r2.rgb = PumboAutoHDR(r2.rgb, lerp(sRGB_WhiteLevelNits, 250.0, LumaSettings.GameSettings.HDRBoostIntensity), LumaSettings.GamePaperWhiteNits); // The videos were in low quality and have compression artifacts in highlights, so avoid going too high
 #if UI_DRAW_TYPE == 2 // This is drawn in the UI phase but it's not UI (it's a video), so make sure it scales with the game brightness instead
@@ -44,7 +44,11 @@ void main(
 #endif
     r2.rgb = linear_to_gamma(r2.rgb);
   }
-#endif
+  else
+#endif // ENABLE_AUTO_HDR
+  {
+    r2.xyzw = p_default_Material_051164A4424935531_Param_texture.Sample(p_default_Material_051164A4424935531_Param_sampler_s, v2.xy).xyzw;
+  }
 
   r0.w = v1.w * r2.w;
   r1.xyz = r2.xyz;

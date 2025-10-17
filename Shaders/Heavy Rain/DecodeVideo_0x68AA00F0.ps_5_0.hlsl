@@ -47,6 +47,7 @@ float3 YUVtoRGB(float Y, float Cr, float Cb, uint type = 0)
   return color;
 }
 
+// Input and output at video resolution
 void main(
   float4 v0 : SV_POSITION0,
   float2 v1 : TEXCOORD0,
@@ -54,6 +55,7 @@ void main(
 {
   outColor.w = 1;
 
+  v1 = saturate(v1); // Be extra sure of not wrapping around as the sampler seems to be wrap
   float Y = texture0.Sample(sampler0_s, v1.xy).x;
   float Cr = texture1.Sample(sampler1_s, v1.xy).x;
   float Cb = texture2.Sample(sampler2_s, v1.xy).x;

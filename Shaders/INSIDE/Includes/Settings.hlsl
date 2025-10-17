@@ -32,4 +32,8 @@
 #define ENABLE_BLACK_FLOOR_TWEAKS_TYPE 1
 #endif
 
+#if !defined(ENABLE_DITHER)
+#define ENABLE_DITHER 1
+#endif
+
 #endif // SRC_GAME_SETTINGS_HLSL

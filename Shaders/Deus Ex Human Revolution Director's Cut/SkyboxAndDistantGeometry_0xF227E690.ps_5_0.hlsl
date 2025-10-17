@@ -74,7 +74,7 @@ void main(
   uint width, height, mipCount;
   p_default_Material_0B390A243201500_0851E8642221812_Texture_texture.GetDimensions(0, width, height, mipCount);
   bool skyboxType1 = width == 1024 && height == 1024;
-  bool skyboxType2 = width == 2048 && height == 2048 && mipCount == 12; // TODO: improve this test...
+  bool skyboxType2 = width == 2048 && height == 2048 && mipCount == 12; // TODO: improve this test... Maybe make them optional too
   if (skyboxType1 || skyboxType2) // Skybox properties (of seemengly all levels)
   {
     // Skyboxes have black edges and only draw a circle in the middle

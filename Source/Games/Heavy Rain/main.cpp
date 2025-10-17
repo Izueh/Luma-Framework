@@ -5,6 +5,8 @@
 
 #include "..\..\Core\core.hpp"
 
+#include "..\..\Core\includes\shader_patching.h"
+
 #include "patches/Patches.h"
 
 namespace
@@ -105,40 +107,120 @@ public:
       game_device_data.sanitize_nans_data = {};
    }
 
-   // Add a saturate on transparent materials
+   // Add a saturate on opaque/transparent materials
    // Without this, some materials output alphas beyond 0-1, messing up the results if the render target is FLOAT (as opposed to the original UNORM)
    std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
    {
       if (type != reshade::api::pipeline_subobject_type::pixel_shader) return nullptr;
 
-      // The bytes after specify the register and the channel (e.g. r3.x), but they are always different depending on the shader.
-      // This hardcodes the output register in its pattern so it will only be matching for render target 0 output writes!
-      // The first byte is the instruction code, and the second byte holds the saturate flag (0x00 without and 0x20 with).
-      const std::vector<std::byte> pattern_mov = { std::byte{0x36}, std::byte{0x00}, std::byte{0x00}, std::byte{0x05}, std::byte{0x82}, std::byte{0x20}, std::byte{0x10}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00} }; // mov
-
-      // All transparent materials have a CBuffer variable by this name
-      const char str_to_find[] = "ALPHA_TEST_PARAM";
-      const std::vector<std::byte> pattern_safety_check(reinterpret_cast<const std::byte*>(str_to_find), reinterpret_cast<const std::byte*>(str_to_find) + strlen(str_to_find));
-
-      if (shader_object)
-      {
-         if (System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(shader_object), shader_object_size, pattern_safety_check).empty())
-            return nullptr;
-      }
-
       std::unique_ptr<std::byte[]> new_code = nullptr;
 
-      // Note: a few shaders end up not being found by this as they writing to the output with a mad instruction
-      std::vector<std::byte*> matches_mov = System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(code), size, pattern_mov);
-      if (!matches_mov.empty())
-      {
-         // Allocate new buffer and copy original shader code
-         new_code = std::make_unique<std::byte[]>(size);
-         std::memcpy(new_code.get(), code, size);
+#if 1
+      // All shaders that write on the scene color buffer have these ops at the beginning
+      // dcl_output o0.xyzw
+      // dcl_output o1.xyzw
+      // dcl_output o2.x
+      // Note that the last one is float4 in the input signature but only x is used in the shader code
+      uint8_t found_dcl_outputs = 0;
 
-         // Add the 0x20 saturate flag in the second byte, replacing the 0x00
-         size_t offset = matches_mov.back() - code;
-         new_code[offset + 1] = std::byte{ 0x20 };
+      size_t size_u32 = size / sizeof(uint32_t);
+      const uint32_t* code_u32 = reinterpret_cast<const uint32_t*>(code);
+      size_t i = 0;
+      bool found_first_dcl = false;
+      while (i < size_u32)
+      {
+         uint32_t opcode_token = code_u32[i];
+         D3D10_SB_OPCODE_TYPE opcode_type = DECODE_D3D10_SB_OPCODE_TYPE(opcode_token);
+
+         // Stop scanning the DCL opcodes, they are all declared at the beginning
+         if (ShaderPatching::opcodes_dcl.contains(opcode_type))
+            found_first_dcl = true;
+         else if (found_first_dcl) // Extra safety in case there were instructions before DCL ones
+            break;
+         
+         uint8_t instruction_size = DECODE_D3D10_SB_TOKENIZED_INSTRUCTION_LENGTH(opcode_token); // Includes itself
+
+         if (opcode_type == D3D10_SB_OPCODE_DCL_OUTPUT)
+         {
+            assert(instruction_size == 2);
+            uint32_t operand_token = code_u32[i + 1];
+            bool four_channels = true;
+            if (found_dcl_outputs == 2)
+            {
+               four_channels = false;
+            }
+            uint32_t test_operand_token =
+                ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
+                ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_MASK_MODE) |
+                ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(D3D10_SB_OPERAND_4_COMPONENT_MASK_X) |
+                ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(four_channels ? D3D10_SB_OPERAND_4_COMPONENT_MASK_Y : D3D10_SB_OPERAND_4_COMPONENT_MASK_X) |
+                ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(four_channels ? D3D10_SB_OPERAND_4_COMPONENT_MASK_Z : D3D10_SB_OPERAND_4_COMPONENT_MASK_X) |
+                ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(four_channels ? D3D10_SB_OPERAND_4_COMPONENT_MASK_W : D3D10_SB_OPERAND_4_COMPONENT_MASK_X) |
+                ENCODE_D3D10_SB_OPERAND_TYPE(D3D10_SB_OPERAND_TYPE_OUTPUT) |
+                ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
+                ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(found_dcl_outputs, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
+            if (operand_token == test_operand_token)
+            {
+               found_dcl_outputs++;
+            }
+         }
+
+         i += instruction_size;
+         if (instruction_size == 0)
+            break;
+      }
+
+      bool pattern_found = found_dcl_outputs == 3;
+#else // This one misses some shaders, seemengly a few ones in the transparency/additive phase
+      // All opaque and transparent materials have a CBuffer variable by this name
+      const char str_to_find[] = "ALPHA_TEST_PARAM";
+      const std::vector<std::byte> pattern_safety_check(reinterpret_cast<const std::byte*>(str_to_find), reinterpret_cast<const std::byte*>(str_to_find) + strlen(str_to_find));
+      bool pattern_found = !System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(shader_object), shader_object_size, pattern_safety_check).empty();
+#endif
+
+      if (pattern_found)
+      {
+         std::vector<uint8_t> appended_patch;
+
+         constexpr bool enable_unorm_emulation = true;
+         if (enable_unorm_emulation)
+         {
+            std::vector<uint32_t> mov_sat_o0w_o0w = ShaderPatching::GetMovInstruction(D3D10_SB_OPERAND_TYPE_OUTPUT, 0, D3D10_SB_OPERAND_TYPE_OUTPUT, 0, true);
+            appended_patch.insert(appended_patch.end(), reinterpret_cast<uint8_t*>(mov_sat_o0w_o0w.data()), reinterpret_cast<uint8_t*>(mov_sat_o0w_o0w.data()) + mov_sat_o0w_o0w.size() * sizeof(uint32_t));
+            std::vector<uint32_t> max_o0xyz_o0xyz_0 = ShaderPatching::GetMaxInstruction(D3D10_SB_OPERAND_TYPE_OUTPUT, 0, D3D10_SB_OPERAND_TYPE_OUTPUT, 0);
+            appended_patch.insert(appended_patch.end(), reinterpret_cast<uint8_t*>(max_o0xyz_o0xyz_0.data()), reinterpret_cast<uint8_t*>(max_o0xyz_o0xyz_0.data()) + max_o0xyz_o0xyz_0.size() * sizeof(uint32_t));
+         }
+
+         // Allocate new buffer and copy original shader code, then append the new code to fix UNORM to FLOAT texture upgrades
+         // This emulates UNORM render target behaviour on FLOAT render targets (from texture upgrades), without limiting the rgb color range.
+         // o0.rgb = max(o0.rgb, 0); // max is 0x34
+         // o0.w = saturate(o0.w); // mov is 0x36
+         new_code = std::make_unique<std::byte[]>(size + appended_patch.size());
+
+         // Pattern to search for: 3E 00 00 01 (the last byte is the size, and the minimum is 1 (the unit is 4 bytes), given it also counts for the opcode and it's own size byte
+         const std::vector<std::byte> return_pattern = { std::byte{0x3E}, std::byte{0x00}, std::byte{0x00}, std::byte{0x01} };
+
+         // Append before the ret instruction if there's one at the end (there might not be?)
+         // Our patch shouldn't pre-include a ret value (though it'd probably work anyway)!
+         // Note that we could also just remove the return instruction and the shader would compile fine anyway? Unless the shader had any branches (if we added one, we should force add return!)
+         if (!appended_patch.empty() && code[size - return_pattern.size()] == return_pattern[0] && code[size - return_pattern.size() + 1] == return_pattern[1] && code[size - return_pattern.size() + 2] == return_pattern[2] && code[size - return_pattern.size() + 3] == return_pattern[3])
+         {
+            size_t insert_pos = size - return_pattern.size();
+            // Copy everything before pattern
+            std::memcpy(new_code.get(), code, insert_pos);
+            // Insert the patch
+            std::memcpy(new_code.get() + insert_pos, appended_patch.data(), appended_patch.size());
+            // Copy the rest (including the return instruction)
+            std::memcpy(new_code.get() + insert_pos + appended_patch.size(), code + insert_pos, size - insert_pos);
+         }
+         // Append patch at the end
+         else
+         {
+            std::memcpy(new_code.get(), code, size);
+            std::memcpy(new_code.get() + size, appended_patch.data(), appended_patch.size());
+         }
+
+         size += appended_patch.size();
       }
 
       return new_code;
@@ -453,6 +535,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(std::stoul("51EC238A", nullptr, 16), "Depth of Field Composition");
       forced_shader_names.emplace(std::stoul("DA234666", nullptr, 16), "Depth of Field Composition 2 (?)");
       forced_shader_names.emplace(std::stoul("D8CA0E64", nullptr, 16), "Clear");
+      forced_shader_names.emplace(std::stoul("842BBE45", nullptr, 16), "Custom Copy");
+      forced_shader_names.emplace(std::stoul("EB0884FA", nullptr, 16), "Custom Copy");
       forced_shader_names.emplace(std::stoul("73ED3069", nullptr, 16), "3D UI");
       forced_shader_names.emplace(std::stoul("87DD1D36", nullptr, 16), "Noise");
       forced_shader_names.emplace(std::stoul("5CA62BE2", nullptr, 16), "Some Post Process");

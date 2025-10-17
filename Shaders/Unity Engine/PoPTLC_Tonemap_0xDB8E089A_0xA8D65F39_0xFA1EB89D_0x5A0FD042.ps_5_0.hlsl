@@ -8,6 +8,10 @@ Texture2D<float4> InternalGradingLUT : register(t1);
 #elif _A8D65F39 // Bloom
 Texture2D<float4> BloomTexture : register(t1);
 Texture2D<float4> InternalGradingLUT : register(t2);
+#elif _5A0FD042 // Bloom + FXAA
+Texture2D<float4> BloomTexture : register(t1);
+Texture2D<float4> InternalGradingLUT : register(t2);
+Texture2D<float4> HalfResSourceTexture : register(t3);
 #elif _DB8E089A // Bloom + Vignette
 Texture2D<float4> BloomTexture : register(t1);
 Texture2D<float4> VignetteTexture : register(t2);
@@ -15,28 +19,120 @@ Texture2D<float4> InternalGradingLUT : register(t3);
 #endif
 SamplerState sampler0 : register(s0);  // Bilinear
 
-// The base params are the same, Bloom and Vignette shaders just add more on top
-#if _FA1EB89D
-cbuffer cb0 : register(b0)
-{
-  float4 cb0[131];
-}
-#elif _A8D65F39
-cbuffer cb0 : register(b0)
-{
-  float4 cb0[143];
-}
-#elif _DB8E089A
-cbuffer cb0 : register(b0)
-{
-  float4 cb0[145];
-}
+// TODO: find the other 2 FXAA shaders (matching the non FXAA versions of "FA1EB89D" and "DB8E089A")
+#if _5A0FD042
+#define FXAA 1
+#else
+#define FXAA 0
 #endif
+
+// The base params are the same, Bloom and Vignette shaders just add more on top
+cbuffer cb0 : register(b0)
+{
+  float4 cb0[150];
+}
 
 float3 GetSceneColor(float2 inCoords, Texture2D<float4> _texture, SamplerState _sampler)
 {
   const float sampleBias = cb0[21].x; // Expected to be zero, though it could be used by the game to do a very ugly game blur effect
-  return _texture.SampleBias(_sampler, inCoords.xy, sampleBias).rgb;
+  float3 sceneColor = _texture.SampleBias(_sampler, inCoords.xy, sampleBias).rgb;
+#if FXAA
+  float3 halfResSceneColor = HalfResSourceTexture.SampleBias(_sampler, inCoords.xy, sampleBias).rgb; // This was R10G10B10A2_UNORM stored in linear space // Note: hardcoded the texture...
+  if (abs(GetLuminance(sceneColor) - GetLuminance(halfResSceneColor)) > 0.02) // Luma: some optimization branch they do to skip FXAA if the full res and half res colors were close enough (it might help preserve texture detail too)
+  {
+    float4 r0,r1,r2,r3,r4,r5;
+    int4 r1i, r2i, r3i, r4i;
+    r0.xyz = sceneColor;
+    r1.xyzw = cb0[149].xyxy * inCoords.xyxy;
+    r1i.xyzw = (int4)r1.xyzw;
+    r2i.xyzw = r1i.zwzw + int4(-1,-1,1,-1);
+    r2.xyzw = (float4)r2i.xyzw;
+    r3.xyzw = float4(-1,-1,-1,-1) + cb0[149].xyxy;
+    r2.xyzw = max(float4(0,0,0,0), r2.xyzw);
+    r2.xyzw = min(r2.xyzw, r3.xyzw);
+    r2i.xyzw = (int4)r2.zwxy;
+    r4i.xy = r2i.zw;
+    r4i.zw = 0;
+    r4.w = 0;
+    r4.xyz = _texture.Load(r4i.xyz).xyz;
+    r2i.zw = 0;
+    r2.w = 0;
+    r2.xyz = _texture.Load(r2i.xyz).xyz;
+    r1i.xyzw = r1i.xyzw + int4(-1,1,1,1);
+    r1.xyzw = (float4)r1i.xyzw;
+    r1.xyzw = max(float4(0,0,0,0), r1.xyzw);
+    r1.xyzw = min(r1.xyzw, r3.xyzw);
+    r1i.xyzw = (int4)r1.zwxy;
+    r3i.xy = r1i.zw;
+    r3i.zw = 0;
+    r3.w = 0;
+    r3.xyz = _texture.Load(r3i.xyz).xyz;
+    r1i.zw = 0;
+    r1.w = 0;
+    r1.xyz = _texture.Load(r1i.xyz).xyz;
+#if 0 // Luma: removed saturates
+    r4.xyz = saturate(r4.xyz);
+    r2.xyz = saturate(r2.xyz);
+    r3.xyz = saturate(r3.xyz);
+    r1.xyz = saturate(r1.xyz);
+    r0.xyz = saturate(r0.xyz);
+#endif
+    r0.w = GetLuminance(r4.xyz);
+    r1.w = GetLuminance(r2.xyz);
+    r2.x = GetLuminance(r3.xyz);
+    r1.x = GetLuminance(r1.xyz);
+    r1.y = GetLuminance(r0.xyz);
+    r1.z = r1.w + r0.w;
+    r2.y = r2.x + r1.x;
+    r2.y = -r2.y + r1.z;
+    r3.xz = -r2.yy;
+    r2.z = r2.x + r0.w;
+    r2.w = r1.w + r1.x;
+    r3.yw = r2.zz + -r2.ww;
+    r1.z = r1.z + r2.x;
+    r1.z = r1.z + r1.x;
+    r1.z = 0.125 * r1.z;
+    r1.z = max(0.0078125, r1.z);
+    r2.y = min(abs(r3.w), abs(r2.y));
+    r1.z = r2.y + r1.z;
+    r1.z = rcp(r1.z);
+    r3.xyzw = r3.xyzw * r1.zzzz;
+    r3.xyzw = max(float4(-8,-8,-8,-8), r3.xyzw);
+    r3.xyzw = min(float4(8,8,8,8), r3.xyzw);
+    r3.xyzw = cb0[149].zwzw * r3.xyzw;
+    r4.xyzw = r3.zwzw * float4(-0.5,-0.5,-0.166666672,-0.166666672) + inCoords.xyxy;
+    r2.yzw = _texture.SampleBias(_sampler, r4.xy, cb0[21].x).xyz;
+    r4.xyz = _texture.SampleBias(_sampler, r4.zw, cb0[21].x).xyz;
+    r3.xyzw = r3.xyzw * float4(0.166666672,0.166666672,0.5,0.5) + inCoords.xyxy;
+    r5.xyz = _texture.SampleBias(_sampler, r3.xy, cb0[21].x).xyz;
+    r3.xyz = _texture.SampleBias(_sampler, r3.zw, cb0[21].x).xyz;
+#if 0 // Luma: removed saturates
+    r2.yzw = saturate(r2.yzw);
+    r4.xyz = saturate(r4.xyz);
+    r5.xyz = saturate(r5.xyz);
+    r3.xyz = saturate(r3.xyz);
+#endif
+    r4.xyz = r5.xyz + r4.xyz;
+    r5.xyz = float3(0.5,0.5,0.5) * r4.xyz;
+    r2.yzw = r3.xyz + r2.yzw;
+    r2.yzw = float3(0.25,0.25,0.25) * r2.yzw;
+    r2.yzw = r4.xyz * float3(0.25,0.25,0.25) + r2.yzw;
+    r1.z = GetLuminance(r2.yzw);
+    r3.x = min(r2.x, r1.w);
+    r3.x = min(r3.x, r1.x);
+    r3.y = min(r1.y, r0.w);
+    r3.x = min(r3.y, r3.x);
+    r1.w = max(r2.x, r1.w);
+    r1.x = max(r1.w, r1.x);
+    r0.w = max(r1.y, r0.w);
+    r0.w = max(r0.w, r1.x);
+    r1.x = (r1.z < r3.x);
+    r0.w = (r0.w < r1.z);
+    r0.w = asfloat(asint(r0.w) | asint(r1.x));
+    sceneColor = r0.w ? r5.xyz : r2.yzw;
+  }
+#endif // FXAA
+  return sceneColor;
 }
 
 float3 ApplyBloom(float2 inCoords, float3 color, Texture2D<float4> _texture, SamplerState _sampler)
@@ -76,10 +172,15 @@ float3 ApplyLUT(float3 color, Texture2D<float4> _texture, SamplerState _sampler)
     // Empirically found value for Prey. This helps to desaturate extrapolated colors more towards their Vanilla (HDR tonemapper but clipped) counterpart, often resulting in a more pleasing and consistent look.
     // This can sometimes look worse, but this value is balanced to avoid hue shifts.
     //extrapolationSettings.clampedLUTRestorationAmount = 1.0 / 4.0; // NOT NEEDED UNTIL PROVEN OTHERWISE
+    // The LUT was R11G11B10_FLOAT, which is pretty weird
     extrapolationSettings.inputLinear = true;
     extrapolationSettings.lutInputLinear = true;
     extrapolationSettings.lutOutputLinear = true;
     extrapolationSettings.outputLinear = true;
+#if 1 // High quality. Not particularly needed in this game as most LUTs are neutral, but it won't hurt.
+    extrapolationSettings.samplingQuality = 2;
+    extrapolationSettings.extrapolationQuality = 2;
+#endif
   
     postLutColor = SampleLUTWithExtrapolation(_texture, _sampler, extrapolationData, extrapolationSettings);
   }
@@ -147,7 +248,7 @@ void main(
 
   float3 color;
   color = GetSceneColor(inCoords, SourceTexture, sampler0);
-#if _A8D65F39 || _DB8E089A
+#if _A8D65F39 || _DB8E089A || _5A0FD042
   color = ApplyBloom(inCoords, color, BloomTexture, sampler0);
 #endif
   color = ApplyExposure(color);

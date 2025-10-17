@@ -158,7 +158,7 @@ void main(
   r2.xyz = t6.Sample(s5_s, r2.xy).xyz;
   r3.xyz = cb0[30].www * cb0[30].xyz;
   r2.xyz = r3.xyz * r2.xyz;
-  r1.xyz = saturate(r2.xyz * r1.xyz); // TODO: remove saturate?
+  r1.xyz = (r2.xyz * r1.xyz); // Luma: removed saturate
   r0.xyz = cb0[25].xyz + r0.xyz;
   o0.xyz = r0.xyz + r1.xyz;
   o0.w = 1;

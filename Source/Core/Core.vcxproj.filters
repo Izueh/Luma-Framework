@@ -93,5 +93,8 @@
     <ClInclude Include="includes\super_resolution.h">
       <Filter>Includes</Filter>
     </ClInclude>
+    <ClInclude Include="includes\shader_patching.h">
+      <Filter>Includes</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

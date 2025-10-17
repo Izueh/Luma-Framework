@@ -439,6 +439,7 @@ void HDRFinalScenePS(float4 WPos, float4 baseTC, out float4 outColor)
   //extrapolationSettings.inputTonemapToPeakWhiteNits = 0; 
   extrapolationSettings.backwardsAmount = 0.75;
 #endif
+  extrapolationSettings.clipExtrapolationToWhite = false; // TODO: mess around with it
 
 #if ENABLE_LUT_EXTRAPOLATION
   outColor.rgb = SampleLUTWithExtrapolation(colorChartTex, ssHdrLinearClamp, extrapolationData, extrapolationSettings); // LUMA FT: replaced from "TexColorChart2D()"

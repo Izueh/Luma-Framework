@@ -182,7 +182,7 @@ void main(
   r4.xyz = r4.xyz * r5.xyz + -r3.xyz;
   r3.xyz = r0.www * r4.xyz + r3.xyz;
   r2.xyz = r3.xyz * r2.xyz;
-  r1.xyz = saturate(r2.xyz * r1.xyz); // TODO: remove saturate?
+  r1.xyz = (r2.xyz * r1.xyz); // Luma: removed saturate
   r2.xy = v3.xy * cb0[33].xy + cb0[33].zw;
   r2.xyz = t9.Sample(s8_s, r2.xy).xyz;
   r3.xyz = cb0[34].www * cb0[34].xyz;
