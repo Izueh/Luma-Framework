@@ -13,9 +13,12 @@ namespace CB
 	};
 
 	struct LumaGameData
-	{
+    {
+        float4x4 ClipToPrevClip;
         float4 RenderResolution;
-		float4 ViewportRect;
+        float4 ViewportRect;
+		float2 JitterOffset;
+		int ClipToPrevClipIndex;
 	};
 }
 

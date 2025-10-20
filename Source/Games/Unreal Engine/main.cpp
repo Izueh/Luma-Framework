@@ -1,5 +1,6 @@
 #define GAME_UNREAL_ENGINE 1
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
+#define UPGRADE_SAMPLERS 1
 #define ENABLE_NGX 1
 
 #include "..\..\Core\core.hpp"
@@ -7,9 +8,70 @@
 
 namespace
 {
+   static inline bool UE4_NearZero(float v, float eps)
+   {
+      return std::fabs(v) <= eps;
+   }
+
+   // Row-major projection shape check; falls back to transpose if needed
+   static inline bool MatrixLikeProjection(const Math::Matrix44F& m, float eps = 1e-3f)
+   {
+      auto check = [&](const Math::Matrix44F& p) -> bool
+      {
+         // Rows 0–1 off-diagonals ~ 0
+         if (!UE4_NearZero(p.m01, eps) || !UE4_NearZero(p.m02, eps) || !UE4_NearZero(p.m03, eps))
+            return false;
+         if (!UE4_NearZero(p.m10, eps) || !UE4_NearZero(p.m12, eps) || !UE4_NearZero(p.m13, eps))
+            return false;
+
+         // Perspective term and last row
+         if (std::fabs(p.m23) < 0.95f)
+            return false; // m23 ≈ ±1
+         if (!UE4_NearZero(p.m30, eps) || !UE4_NearZero(p.m31, eps) || !UE4_NearZero(p.m33, eps))
+            return false;
+
+         // Depth terms (normal/reversed/infinite)
+         if (UE4_NearZero(p.m22, eps) && UE4_NearZero(p.m32, eps))
+            return false;
+
+         return true;
+      };
+
+      if (check(m))
+         return true;
+      return false;
+   }
+
+   static inline bool ProjectionHasJitter(const Math::Matrix44F& m, float2 max_jitter, float eps = 1e-3f)
+   {
+      if ((m.m20 == 0.0f && m.m21 == 0.0f) || std::fabs(m.m20) > max_jitter.x || std::fabs(m.m21) > max_jitter.y)
+      {
+         return false;
+      }
+      return true;
+   }
+
+   static inline bool IsViewSizeInvSize(const float4& v, float aspect_ratio, float eps = 1e-3f)
+   {
+      if (v.x > 0.0f && v.y > 0.0f &&
+          v.z > 0.0f && v.w > 0.0f)
+      {
+         const float inv_w = 1.0f / v.x;
+         const float inv_h = 1.0f / v.y;
+         if (std::fabs(v.z - inv_w) < FLT_EPSILON &&
+             std::fabs(v.w - inv_h) < FLT_EPSILON)
+         {
+            if (std::fabs((v.x / v.y) - aspect_ratio) < eps)
+            {
+               return true;
+            }
+         }
+      }
+      return false;
+   }
+
    ShaderHashesList shader_hashes_TAA;
    ShaderHashesList shader_hashes_TAA_Candidates;
-   ShaderHashesList shader_hashes_TAA_Rejected_Candidates;
    GlobalCBInfo     global_cb_info;
 } // namespace
 
@@ -26,8 +88,11 @@ struct GameDeviceDataUnrealEngine final : public GameDeviceData
    std::atomic<int32_t>            taa_source_color_texture_srv_index  = -1;
    std::atomic<bool>               found_per_view_globals              = false;
 #endif // ENABLE_SR
-   float4 render_resolution = {0.0f, 0.0f, 0.0f, 0.0f};
-   float4 viewport_rect     = {0.0f, 0.0f, 0.0f, 0.0f};
+   float4    render_resolution = {0.0f, 0.0f, 0.0f, 0.0f};
+   float4    viewport_rect     = {0.0f, 0.0f, 0.0f, 0.0f};
+   float2    jitter            = {0.0f, 0.0f};
+   Matrix44F view_to_clip_matrix;
+   Matrix44F clip_to_prev_clip_matrix;
 };
 
 class UnrealEngine final : public Game // ### Rename this to your game's name ###
@@ -50,6 +115,8 @@ public:
    {
       // ### Update these (find the right values) ###
       // ### See the "GameCBuffers.hlsl" in the shader directory to expand settings ###
+      GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');
+      GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('1');
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", reshade::api::pipeline_subobject_type::pixel_shader});
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index     = 12;
@@ -59,6 +126,8 @@ public:
    {
       device_data.game       = new GameDeviceDataUnrealEngine;
       auto& game_device_data = GetGameDeviceData(device_data);
+      game_device_data.view_to_clip_matrix.SetIdentity();
+      game_device_data.clip_to_prev_clip_matrix.SetIdentity();
    }
 
    void OnInitSwapchain(reshade::api::swapchain* swapchain) override
@@ -69,29 +138,29 @@ public:
       // Start from here, we then update it later in case the game rendered with black bars due to forcing a different aspect ratio from the swapchain buffer
       game_device_data.render_resolution = {device_data.render_resolution.x, device_data.render_resolution.y, 1.0f / device_data.render_resolution.x, 1.0f / device_data.render_resolution.y};
       game_device_data.viewport_rect     = {0.0f, 0.0f, device_data.render_resolution.x, device_data.render_resolution.y};
-      // game_device_data.taa_source_color_texture_srv_index = -1;
-      // game_device_data.taa_depth_texture_srv_index = -1;
-      // game_device_data.taa_motion_vector_texture_srv_index = -1;
    }
 
 #if ENABLE_SR
    std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) override
    {
       // TAA was already detected
+      if (type != reshade::api::pipeline_subobject_type::pixel_shader && type != reshade::api::pipeline_subobject_type::compute_shader)
+         return nullptr;
       if (!shader_hashes_TAA.Empty())
          return nullptr;
-      bool is_taa_candidate = shader_hashes_TAA.Empty() && IsUE4TAACandidate(code, size);
+      bool is_taa_candidate = IsUE4TAACandidate(code, size);
       if (is_taa_candidate)
       {
          reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 TAA shader. Hash: {:016X}", shader_hash).c_str());
-         shader_hashes_TAA_Candidates.pixel_shaders.emplace(static_cast<unsigned long>(shader_hash));
+         if (type == reshade::api::pipeline_subobject_type::pixel_shader)
+            shader_hashes_TAA_Candidates.pixel_shaders.emplace(static_cast<unsigned long>(shader_hash));
+         else if (type == reshade::api::pipeline_subobject_type::compute_shader)
+            shader_hashes_TAA_Candidates.compute_shaders.emplace(static_cast<unsigned long>(shader_hash));
+
          if (global_cb_info.clip_to_prev_clip_start_index == -1)
             FindGlobalCBInfo(code, size, global_cb_info);
          return nullptr;
       }
-      if (global_cb_info.jitter_index == -1)
-         FindJitterFromMVWrite(code, size, global_cb_info);
-      return nullptr;
       return nullptr; // Return nullptr to use the original shader
    }
 #endif // ENABLE_SR
@@ -100,24 +169,30 @@ public:
    {
       GameDeviceDataUnrealEngine& game_device_data = GetGameDeviceData(device_data);
       bool                        is_taa           = original_shader_hashes.Contains(shader_hashes_TAA);
-      bool                        is_taa_candidate = !is_taa && original_shader_hashes.Contains(shader_hashes_TAA_Candidates) && !original_shader_hashes.Contains(shader_hashes_TAA_Rejected_Candidates);
+      bool                        is_taa_candidate = !is_taa && original_shader_hashes.Contains(shader_hashes_TAA_Candidates);
       // this is the first time we detected this shader as TAA, we should verify it's really TAA
 #if ENABLE_SR
       if (is_taa_candidate)
       {
          // verify it's really TAA by checking the SRV signatures, there should be 2 color textures, a depth texture(R32G8X24 or other depth stencil formats) and a velocity texture(unorm RG)
          // we can also check the sampler states, there should be point and linear filtering samplers (we can do this later)
-         com_ptr<ID3D11ShaderResourceView> ps_shader_resources[16];
-         native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), &ps_shader_resources[0]);
+
+         com_ptr<ID3D11ShaderResourceView> shader_resources[16];
+         ASSERT_ONCE(shader_hashes_TAA_Candidates.pixel_shaders.empty() != shader_hashes_TAA_Candidates.compute_shaders.empty());
+         bool is_compute_shader = shader_hashes_TAA_Candidates.compute_shaders.empty() ? false : true;
+         if (is_compute_shader)
+            native_device_context->CSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
+         else
+            native_device_context->PSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
          size_t color_texture_count    = 0;
          size_t depth_texture_count    = 0;
          size_t velocity_texture_count = 0;
-         for (size_t i = 0; i < ARRAYSIZE(ps_shader_resources); i++)
+         for (size_t i = 0; i < ARRAYSIZE(shader_resources); i++)
          {
-            if (ps_shader_resources[i] == nullptr)
+            if (shader_resources[i] == nullptr)
                continue;
             com_ptr<ID3D11Resource> resource;
-            ps_shader_resources[i]->GetResource(&resource);
+            shader_resources[i]->GetResource(&resource);
             if (resource == nullptr)
                continue;
             D3D11_RESOURCE_DIMENSION res_type;
@@ -135,6 +210,7 @@ public:
             case DXGI_FORMAT_B8G8R8A8_UNORM:
             case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
             case DXGI_FORMAT_R10G10B10A2_UNORM:
+            case DXGI_FORMAT_R11G11B10_FLOAT:
             case DXGI_FORMAT_R16G16B16A16_FLOAT:
             case DXGI_FORMAT_R32G32B32A32_FLOAT:
                color_texture_count++;
@@ -144,14 +220,14 @@ public:
                break;
             case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
             case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
+            case DXGI_FORMAT_R24G8_TYPELESS:
             case DXGI_FORMAT_R32G8X24_TYPELESS:
             case DXGI_FORMAT_D24_UNORM_S8_UINT:
             case DXGI_FORMAT_D16_UNORM:
                depth_texture_count++;
-               game_device_data.taa_depth_texture_srv_index = (uint32_t)i;
+               if (game_device_data.taa_depth_texture_srv_index == -1)
+                  game_device_data.taa_depth_texture_srv_index = (uint32_t)i;
                break;
-            case DXGI_FORMAT_R16G16_FLOAT:
-            case DXGI_FORMAT_R32G32_FLOAT:
             case DXGI_FORMAT_R16G16_UNORM:
                velocity_texture_count++;
                game_device_data.taa_motion_vector_texture_srv_index = (uint32_t)i;
@@ -165,16 +241,20 @@ public:
          {
             is_taa = true;
             // add to the confirmed TAA shaders
-            for (unsigned long shader_hash : original_shader_hashes.pixel_shaders)
-               shader_hashes_TAA.pixel_shaders.emplace(shader_hash);
+            if (is_compute_shader)
+               shader_hashes_TAA.compute_shaders.emplace(static_cast<unsigned long>(*original_shader_hashes.compute_shaders.begin()));
+            else
+               shader_hashes_TAA.pixel_shaders.emplace(static_cast<unsigned long>(*original_shader_hashes.pixel_shaders.begin()));
          }
          else
          {
             game_device_data.taa_source_color_texture_srv_index  = -1;
             game_device_data.taa_depth_texture_srv_index         = -1;
             game_device_data.taa_motion_vector_texture_srv_index = -1;
-            for (unsigned long shader_hash : original_shader_hashes.pixel_shaders)
-               shader_hashes_TAA_Candidates.pixel_shaders.erase(shader_hash);
+            if (is_compute_shader)
+               shader_hashes_TAA_Candidates.compute_shaders.erase(static_cast<unsigned long>(*original_shader_hashes.compute_shaders.begin()));
+            else
+               shader_hashes_TAA_Candidates.pixel_shaders.erase(static_cast<unsigned long>(*original_shader_hashes.pixel_shaders.begin()));
             ASSERT_ONCE(!(shader_hashes_TAA_Candidates.Empty() && shader_hashes_TAA.Empty()));
             // shader_hashes_TAA_Rejected_Candidates.pixel_shaders.insert(original_shader_hashes.pixel_shaders.begin(), original_shader_hashes.pixel_shaders.end());
          }
@@ -183,11 +263,20 @@ public:
       // if we already drew SR this frame, copy dlss output to shader output (some games run different quality settings in the same frame?)
       if (is_taa && device_data.has_drawn_sr)
       {
-         com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
+         ASSERT_ONCE(shader_hashes_TAA.pixel_shaders.empty() != shader_hashes_TAA.compute_shaders.empty());
+         bool                               is_compute_shader = shader_hashes_TAA.compute_shaders.empty() ? false : true;
+         com_ptr<ID3D11RenderTargetView>    render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
+         com_ptr<ID3D11DepthStencilView>    depth_stencil_view;
+         com_ptr<ID3D11UnorderedAccessView> unordered_access_views[D3D11_PS_CS_UAV_REGISTER_COUNT];
          native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
+         native_device_context->CSGetUnorderedAccessViews(0, ARRAYSIZE(unordered_access_views), &unordered_access_views[0]);
          com_ptr<ID3D11Resource> output_color_resource;
-         render_target_views[0]->GetResource(&output_color_resource);
+
+         if (is_compute_shader)
+            unordered_access_views[0]->GetResource(&output_color_resource);
+         else
+            render_target_views[0]->GetResource(&output_color_resource);
+
          com_ptr<ID3D11Texture2D> output_color;
          HRESULT                  hr = output_color_resource->QueryInterface(&output_color);
          ASSERT_ONCE(SUCCEEDED(hr));
@@ -205,35 +294,51 @@ public:
             device_data.force_reset_sr = true;
             return false;
          }
-         com_ptr<ID3D11ShaderResourceView> ps_shader_resources[16];
-         native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), &ps_shader_resources[0]);
+         ASSERT_ONCE(shader_hashes_TAA.pixel_shaders.empty() != shader_hashes_TAA.compute_shaders.empty());
+         bool                              is_compute_shader = shader_hashes_TAA_Candidates.compute_shaders.empty() ? false : true;
+         com_ptr<ID3D11ShaderResourceView> shader_resources[16];
 
-         com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
+         if (is_compute_shader)
+            native_device_context->CSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
+         else
+            native_device_context->PSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
+
+         com_ptr<ID3D11RenderTargetView>    render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
+         com_ptr<ID3D11DepthStencilView>    depth_stencil_view;
+         com_ptr<ID3D11UnorderedAccessView> unordered_access_views[D3D11_PS_CS_UAV_REGISTER_COUNT];
          native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
+         native_device_context->CSGetUnorderedAccessViews(0, ARRAYSIZE(unordered_access_views), &unordered_access_views[0]);
 
          if (global_cb_info.size == 0)
          {
             // The first time we run TAA, we can get the global cbuffer size now
             // we can then use this to detect the cbuffer in the CPU during OnMapBufferRegion and OnUnmapBufferRegion hooks
             com_ptr<ID3D11Buffer> global_cbuffer;
-            native_device_context->PSGetConstantBuffers(global_cb_info.register_index, 1, &global_cbuffer);
+            if (is_compute_shader)
+               native_device_context->CSGetConstantBuffers(global_cb_info.register_index, 1, &global_cbuffer);
+            else
+               native_device_context->PSGetConstantBuffers(global_cb_info.register_index, 1, &global_cbuffer);
             ASSERT_ONCE(global_cbuffer != nullptr);
             D3D11_BUFFER_DESC global_cbuffer_desc;
             global_cbuffer->GetDesc(&global_cbuffer_desc);
             global_cb_info.size = global_cbuffer_desc.ByteWidth;
 
-            return false; // Skip this draw call, we will run DLSS next frame
+            return false; // Skip this draw call, we will run DLSS next frame after we detected the global cbuffer on the CPU
          }
-         const bool dlss_inputs_valid = ps_shader_resources[game_device_data.taa_source_color_texture_srv_index].get() != nullptr && ps_shader_resources[game_device_data.taa_depth_texture_srv_index].get() != nullptr && ps_shader_resources[game_device_data.taa_motion_vector_texture_srv_index].get() != nullptr && render_target_views[0].get() != nullptr;
+         const bool dlss_inputs_valid = shader_resources[game_device_data.taa_source_color_texture_srv_index].get() != nullptr && shader_resources[game_device_data.taa_depth_texture_srv_index].get() != nullptr && shader_resources[game_device_data.taa_motion_vector_texture_srv_index].get() != nullptr && (render_target_views[0].get() != nullptr || unordered_access_views[0].get() != nullptr);
          ASSERT_ONCE(dlss_inputs_valid);
          if (dlss_inputs_valid)
          {
+            if (game_device_data.found_per_view_globals.load() == false || global_cb_info.clip_to_prev_clip_start_index == -1)
+               return false;
             auto* sr_instance_data = device_data.GetSRInstanceData();
             ASSERT_ONCE(sr_instance_data);
 
             com_ptr<ID3D11Resource> output_color_resource;
-            render_target_views[0]->GetResource(&output_color_resource);
+            if (is_compute_shader)
+               unordered_access_views[0]->GetResource(&output_color_resource);
+            else
+               render_target_views[0]->GetResource(&output_color_resource);
             com_ptr<ID3D11Texture2D> output_color;
             HRESULT                  hr = output_color_resource->QueryInterface(&output_color);
             ASSERT_ONCE(SUCCEEDED(hr));
@@ -241,11 +346,14 @@ public:
             D3D11_TEXTURE2D_DESC taa_output_texture_desc;
             output_color->GetDesc(&taa_output_texture_desc);
 
+            if (taa_output_texture_desc.Width != device_data.render_resolution.x || taa_output_texture_desc.Height != device_data.render_resolution.y)
+               return false;
+
             D3D11_VIEWPORT viewport;
             uint32_t       num_viewports = 1;
             native_device_context->RSGetViewports(&num_viewports, &viewport);
-            game_device_data.viewport_rect         = {viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height};
-            game_device_data.render_resolution     = {(float)taa_output_texture_desc.Width, (float)taa_output_texture_desc.Height, 1.0f / (float)taa_output_texture_desc.Width, 1.0f / (float)taa_output_texture_desc.Height};
+            // game_device_data.viewport_rect         = {viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height};
+            // game_device_data.render_resolution     = {(float)taa_output_texture_desc.Width, (float)taa_output_texture_desc.Height, 1.0f / (float)taa_output_texture_desc.Width, 1.0f / (float)taa_output_texture_desc.Height};
             device_data.sr_render_resolution_scale = 1.0f; // DLLA only
 
             SR::SettingsData settings_data;
@@ -300,11 +408,11 @@ public:
             if (!skip_dlss)
             {
                game_device_data.sr_source_color = nullptr;
-               ps_shader_resources[game_device_data.taa_source_color_texture_srv_index.load()]->GetResource(&game_device_data.sr_source_color);
+               shader_resources[game_device_data.taa_source_color_texture_srv_index.load()]->GetResource(&game_device_data.sr_source_color);
                game_device_data.depth_buffer = nullptr;
-               ps_shader_resources[game_device_data.taa_depth_texture_srv_index.load()]->GetResource(&game_device_data.depth_buffer);
+               shader_resources[game_device_data.taa_depth_texture_srv_index.load()]->GetResource(&game_device_data.depth_buffer);
                com_ptr<ID3D11Resource> object_velocity;
-               ps_shader_resources[game_device_data.taa_motion_vector_texture_srv_index.load()]->GetResource(&object_velocity);
+               shader_resources[game_device_data.taa_motion_vector_texture_srv_index.load()]->GetResource(&object_velocity);
                {
                   if (!AreResourcesEqual(object_velocity.get(), game_device_data.sr_motion_vectors.get(), false /*check_format*/))
                   {
@@ -332,10 +440,12 @@ public:
                      }
                   }
 
-                  com_ptr<ID3D11VertexShader> prev_shader_vx;
-                  com_ptr<ID3D11PixelShader>  prev_shader_px;
+                  com_ptr<ID3D11VertexShader>  prev_shader_vx;
+                  com_ptr<ID3D11PixelShader>   prev_shader_px;
+                  com_ptr<ID3D11ComputeShader> prev_shader_cs;
                   native_device_context->VSGetShader(&prev_shader_vx, nullptr, nullptr);
                   native_device_context->PSGetShader(&prev_shader_px, nullptr, nullptr);
+                  native_device_context->CSGetShader(&prev_shader_cs, nullptr, nullptr);
                   D3D11_PRIMITIVE_TOPOLOGY primitive_topology;
                   native_device_context->IAGetPrimitiveTopology(&primitive_topology);
 
@@ -346,11 +456,48 @@ public:
                   // We only need to swap the pixel/vertex shaders, depth and blend were already in the right state
                   native_device_context->VSSetShader(device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(), nullptr, 0);
                   native_device_context->PSSetShader(device_data.native_pixel_shaders[CompileTimeStringHash("Decode MVs")].get(), nullptr, 0);
+                  native_device_context->CSSetShader(nullptr, nullptr, 0);
 
                   // We could probably keep the original vertex shader too, but whatever
                   native_device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
                   // native_device_context->IASetInputLayout(nullptr); // Seemengly not needed
                   // native_device_context->RSSetState(nullptr); // Seemengly not needed
+
+                  // If TAA is a compute shader we need to copy the relevant SRVs to the pixel shader stage
+                  com_ptr<ID3D11ShaderResourceView> srv_copy_0                 = nullptr;
+                  com_ptr<ID3D11ShaderResourceView> srv_copy_1                 = nullptr;
+                  com_ptr<ID3D11SamplerState>       sampler_state              = nullptr;
+                  com_ptr<ID3D11Buffer>             prev_cbuffer               = nullptr;
+                  com_ptr<ID3D11Buffer>             prev_luma_settings_cbuffer = nullptr;
+                  com_ptr<ID3D11Buffer>             prev_luma_data_cbuffer     = nullptr;
+                  com_ptr<ID3D11Buffer>             global_cbuffer;
+
+                  if (is_compute_shader)
+                     native_device_context->CSGetConstantBuffers(global_cb_info.register_index, 1, &global_cbuffer);
+                  else
+                     native_device_context->PSGetConstantBuffers(global_cb_info.register_index, 1, &global_cbuffer);
+                  native_device_context->PSGetShaderResources(0, 1, &srv_copy_0);
+                  native_device_context->PSGetShaderResources(1, 1, &srv_copy_1);
+                  ID3D11ShaderResourceView* const depth_srv = shader_resources[game_device_data.taa_depth_texture_srv_index.load()].get();
+                  native_device_context->PSSetShaderResources(0, 1, &depth_srv);
+                  ID3D11ShaderResourceView* const motion_vector_srv = shader_resources[game_device_data.taa_motion_vector_texture_srv_index.load()].get();
+                  native_device_context->PSSetShaderResources(1, 1, &motion_vector_srv);
+
+                  native_device_context->PSGetSamplers(0, 1, &sampler_state);
+                  // point sampler from core.hpp
+                  ID3D11SamplerState* const sampler_state_point = device_data.sampler_state_point.get();
+                  native_device_context->PSSetSamplers(0, 1, &sampler_state_point);
+
+                  native_device_context->PSGetConstantBuffers(1, 1, &prev_cbuffer);
+                  native_device_context->PSGetConstantBuffers(luma_settings_cbuffer_index, 1, &prev_luma_settings_cbuffer);
+                  native_device_context->PSGetConstantBuffers(luma_data_cbuffer_index, 1, &prev_luma_data_cbuffer);
+                  ID3D11Buffer* const cb1             = global_cbuffer.get();
+                  ID3D11Buffer* const settings_buffer = device_data.luma_global_settings.get();
+                  ID3D11Buffer* const data_buffer     = device_data.luma_instance_data.get();
+
+                  native_device_context->PSSetConstantBuffers(1, 1, &cb1);
+                  native_device_context->PSSetConstantBuffers(luma_settings_cbuffer_index, 1, &settings_buffer);
+                  native_device_context->PSSetConstantBuffers(luma_data_cbuffer_index, 1, &data_buffer);
 
                   // Finally draw:
                   native_device_context->Draw(4, 0);
@@ -374,6 +521,23 @@ public:
                   // Restore the state
                   native_device_context->VSSetShader(prev_shader_vx.get(), nullptr, 0);
                   native_device_context->PSSetShader(prev_shader_px.get(), nullptr, 0);
+                  native_device_context->CSSetShader(prev_shader_cs.get(), nullptr, 0);
+
+                  // Restore SRVs
+                  ID3D11ShaderResourceView* const copy0 = srv_copy_0.get();
+                  native_device_context->PSSetShaderResources(0, 1, &copy0);
+                  ID3D11ShaderResourceView* const copy1 = srv_copy_1.get();
+                  native_device_context->PSSetShaderResources(1, 1, &copy1);
+                  // Restore sampler
+                  ID3D11SamplerState* const sampler_state_ptr = sampler_state.get();
+                  native_device_context->PSSetSamplers(0, 1, &sampler_state_ptr);
+                  // Restore cbuffer
+                  ID3D11Buffer* const prev_cbuffer_ptr = prev_cbuffer.get();
+                  native_device_context->PSSetConstantBuffers(1, 1, &prev_cbuffer_ptr);
+                  ID3D11Buffer* const prev_luma_settings_cbuffer_ptr = prev_luma_settings_cbuffer.get();
+                  native_device_context->PSSetConstantBuffers(luma_settings_cbuffer_index, 1, &prev_luma_settings_cbuffer_ptr);
+                  ID3D11Buffer* const prev_luma_data_cbuffer_ptr = prev_luma_data_cbuffer.get();
+                  native_device_context->PSSetConstantBuffers(luma_data_cbuffer_index, 1, &prev_luma_data_cbuffer_ptr);
 
                   native_device_context->IASetPrimitiveTopology(primitive_topology);
                }
@@ -387,8 +551,8 @@ public:
                draw_data.motion_vectors = game_device_data.sr_motion_vectors.get();
                draw_data.depth_buffer   = game_device_data.depth_buffer.get();
                draw_data.pre_exposure   = 0.0f; // automatic exposure
-               draw_data.jitter_x       = global_cb_info.jitter.x * game_device_data.render_resolution.x * 0.5f;
-               draw_data.jitter_y       = global_cb_info.jitter.y * game_device_data.render_resolution.y * -0.5f;
+               draw_data.jitter_x       = game_device_data.jitter.x * game_device_data.render_resolution.x * 0.5f;
+               draw_data.jitter_y       = game_device_data.jitter.y * game_device_data.render_resolution.y * -0.5f;
                draw_data.reset          = reset_sr;
                draw_data.render_width   = game_device_data.render_resolution.x;
                draw_data.render_height  = game_device_data.render_resolution.y;
@@ -457,14 +621,18 @@ public:
       auto& game_device_data                  = GetGameDeviceData(device_data);
       game_device_data.found_per_view_globals = false;
       device_data.has_drawn_sr                = false;
-      global_cb_info.jitter                   = {0.0f, 0.0f};
+      game_device_data.jitter                 = {0.0f, 0.0f};
    }
 
    void UpdateLumaInstanceDataCB(CB::LumaInstanceDataPadded& data, CommandListData& cmd_list_data, DeviceData& device_data) override
    {
-      auto& game_device_data         = GetGameDeviceData(device_data);
-      data.GameData.ViewportRect     = game_device_data.viewport_rect;
-      data.GameData.RenderResolution = game_device_data.render_resolution;
+      auto& game_device_data            = GetGameDeviceData(device_data);
+      data.GameData.ViewportRect        = game_device_data.viewport_rect;
+      data.GameData.RenderResolution    = game_device_data.render_resolution;
+      data.GameData.ClipToPrevClip      = game_device_data.clip_to_prev_clip_matrix;
+      data.GameData.JitterOffset.x      = game_device_data.jitter.x;
+      data.GameData.JitterOffset.y      = game_device_data.jitter.y;
+      data.GameData.ClipToPrevClipIndex = global_cb_info.clip_to_prev_clip_start_index;
    }
 
    void PrintImGuiAbout() override
@@ -527,114 +695,117 @@ public:
       const size_t size_float = static_cast<size_t>(global_cb_info.size) / sizeof(float4);
 
       const bool have_offsets =
-         (global_cb_info.view_to_clip_start_index >= 0 &&
-          global_cb_info.view_size_and_inv_size_index >= 0);
+         (global_cb_info.view_to_clip_start_index >= 0 && global_cb_info.view_size_and_inv_size_index >= 0);
 
       // If offsets are known, never rescan; just validate and return.
       if (have_offsets)
       {
-         float4 vsize_and_inv_size = float_data[global_cb_info.view_size_and_inv_size_index];
-         if (vsize_and_inv_size.x > 0.0f && vsize_and_inv_size.y > 0.0f &&
-             vsize_and_inv_size.z > 0.0f && vsize_and_inv_size.w > 0.0f)
-         {
-            const float inv_w = 1.0f / vsize_and_inv_size.x;
-            const float inv_h = 1.0f / vsize_and_inv_size.y;
-            if (std::abs(vsize_and_inv_size.z - inv_w) >= FLT_EPSILON ||
-                std::abs(vsize_and_inv_size.w - inv_h) >= FLT_EPSILON)
-            {
-               // Not the right cbuffer
-               device_data.cb_per_view_global_buffer_map_data = nullptr;
-               device_data.cb_per_view_global_buffer          = nullptr;
-               return;
-            }
-         }
-
+         float4    vsize_and_inv_size = float_data[global_cb_info.view_size_and_inv_size_index];
          Matrix44F matrix_a;
-         matrix_a = {
-            float_data[global_cb_info.view_to_clip_start_index + 0].x, float_data[global_cb_info.view_to_clip_start_index + 0].y, float_data[global_cb_info.view_to_clip_start_index + 0].z, float_data[global_cb_info.view_to_clip_start_index + 0].w,
-            float_data[global_cb_info.view_to_clip_start_index + 1].x, float_data[global_cb_info.view_to_clip_start_index + 1].y, float_data[global_cb_info.view_to_clip_start_index + 1].z, float_data[global_cb_info.view_to_clip_start_index + 1].w,
-            float_data[global_cb_info.view_to_clip_start_index + 2].x, float_data[global_cb_info.view_to_clip_start_index + 2].y, float_data[global_cb_info.view_to_clip_start_index + 2].z, float_data[global_cb_info.view_to_clip_start_index + 2].w,
-            float_data[global_cb_info.view_to_clip_start_index + 3].x, float_data[global_cb_info.view_to_clip_start_index + 3].y, float_data[global_cb_info.view_to_clip_start_index + 3].z, float_data[global_cb_info.view_to_clip_start_index + 3].w};
-         bool is_projection = MatrixIsProjection(matrix_a);
-         if (is_projection)
+         std::memcpy(&matrix_a, &float_data[global_cb_info.view_to_clip_start_index], sizeof(Matrix44F));
+         bool is_global_cb = IsViewSizeInvSize(vsize_and_inv_size, device_data.render_resolution.x / device_data.render_resolution.y) && MatrixLikeProjection(matrix_a) && ProjectionHasJitter(matrix_a, {vsize_and_inv_size.z, vsize_and_inv_size.w});
+         if (is_global_cb)
          {
-            // Still valid
-            // get jitter from [2][0] and [2][1] of view to clip matrix
-            if (matrix_a.m20 == 0.0f && matrix_a.m21 == 0.0f)
-            {
-               // No jitter, probably not TAA
-               device_data.cb_per_view_global_buffer_map_data = nullptr;
-               device_data.cb_per_view_global_buffer          = nullptr;
-               return;
-            }
-            global_cb_info.jitter.x                 = matrix_a.m20;
-            global_cb_info.jitter.y                 = matrix_a.m21;
+            game_device_data.jitter.x               = matrix_a.m20;
+            game_device_data.jitter.y               = matrix_a.m21;
+            device_data.render_resolution.x         = vsize_and_inv_size.x;
+            device_data.render_resolution.y         = vsize_and_inv_size.y;
             game_device_data.found_per_view_globals = true;
          }
-         device_data.cb_per_view_global_buffer_map_data = nullptr;
-         device_data.cb_per_view_global_buffer          = nullptr;
-         return;
       }
-
-      // iterate over float4 and look for viewsize/invsize should be a float4 with [W,H,1/W,1/H] so let's look for that pattern
-      for (size_t i = 0; i + 1 < size_float; ++i)
+      else
       {
-         const float4 vsize_and_inv_size = float_data[i];
-         if (vsize_and_inv_size.x > 0.0f && vsize_and_inv_size.y > 0.0f &&
-             vsize_and_inv_size.z > 0.0f && vsize_and_inv_size.w > 0.0f)
+         global_cb_info.view_size_and_inv_size_index = -1;
+         global_cb_info.view_to_clip_start_index     = -1;
+
+         for (size_t i = 0; i + 1 < size_float; ++i)
          {
-            const float inv_w = 1.0f / vsize_and_inv_size.x;
-            const float inv_h = 1.0f / vsize_and_inv_size.y;
-            if (std::abs(vsize_and_inv_size.z - inv_w) < FLT_EPSILON &&
-                std::abs(vsize_and_inv_size.w - inv_h) < FLT_EPSILON)
+            const float4 vsize_and_inv_size = float_data[i];
+            bool         is_vsize_inv_size  = IsViewSizeInvSize(vsize_and_inv_size, device_data.render_resolution.x / device_data.render_resolution.y);
+            if (is_vsize_inv_size)
             {
-               // Found a candidate
                global_cb_info.view_size_and_inv_size_index = static_cast<int>(i);
                break;
             }
          }
-      }
 
-      if (global_cb_info.view_size_and_inv_size_index < 0)
-      {
-         device_data.cb_per_view_global_buffer_map_data = nullptr;
-         device_data.cb_per_view_global_buffer          = nullptr;
-         return;
-      }
-
-      // Now scan for adjacent matrix pairs that look like ViewToClip / ClipToView
-      // Should be before the view size index so we can stop then, specially because previous matrices are sometimes towards the end.
-      Matrix44F matrix_a;
-      Matrix44F matrix_b;
-      size_t    stopping_index = static_cast<size_t>(global_cb_info.view_size_and_inv_size_index);
-      for (size_t i = 0; i + 4 <= stopping_index; ++i)
-      {
-         // matrix_a = {
-         //    float_data[i + 0].x, float_data[i + 0].y, float_data[i + 0].z, float_data[i + 0].w,
-         //    float_data[i + 1].x, float_data[i + 1].y, float_data[i + 1].z, float_data[i + 1].w,
-         //    float_data[i + 2].x, float_data[i + 2].y, float_data[i + 2].z, float_data[i + 2].w,
-         //    float_data[i + 3].x, float_data[i + 3].y, float_data[i + 3].z, float_data[i + 3].w
-         // };
-         std::memcpy(&matrix_a, &float_data[i], sizeof(Matrix44F));
-         // bool is_projection = MatrixIsIdentity(matrix_a * matrix_b) && MatrixIsProjection(matrix_b);
-         bool is_projection = MatrixIsProjection(matrix_a);
-         if (is_projection)
+         if (global_cb_info.view_size_and_inv_size_index < 0)
          {
-            if ((matrix_a.m20 == 0.0f || matrix_a.m21 == 0.0f) || std::abs(matrix_a.m20) > 0.5f || std::abs(matrix_a.m21) > 0.5f)
+            device_data.cb_per_view_global_buffer_map_data = nullptr;
+            device_data.cb_per_view_global_buffer          = nullptr;
+            return;
+         }
+
+         // Now scan for adjacent matrix pairs that look like ViewToClip / ClipToView
+         // Should be before the view size index so we can stop then, specially because previous matrices are sometimes towards the end.
+         Matrix44F matrix_a;
+         size_t    stopping_index     = static_cast<size_t>(global_cb_info.view_size_and_inv_size_index);
+         float4    vsize_and_inv_size = float_data[global_cb_info.view_size_and_inv_size_index];
+         for (size_t i = 0; i + 4 <= stopping_index; ++i)
+         {
+            std::memcpy(&matrix_a, &float_data[i], sizeof(Matrix44F));
+            bool is_projection = MatrixLikeProjection(matrix_a) && ProjectionHasJitter(matrix_a, {vsize_and_inv_size.z, vsize_and_inv_size.w});
+            if (is_projection)
             {
-               // No jitter, probably not right cbuffer
-               continue;
+               game_device_data.jitter.x               = matrix_a.m20;
+               game_device_data.jitter.y               = matrix_a.m21;
+               global_cb_info.view_to_clip_start_index = static_cast<int>(i);
+               device_data.render_resolution.x         = vsize_and_inv_size.x;
+               device_data.render_resolution.y         = vsize_and_inv_size.y;
+               game_device_data.found_per_view_globals = true;
+               break;
             }
-            global_cb_info.jitter.x                 = matrix_a.m20;
-            global_cb_info.jitter.y                 = matrix_a.m21;
-            global_cb_info.view_to_clip_start_index = static_cast<int>(i);
-            // global_cb_info.clip_to_view_start_index = static_cast<int>(i + 4);
-            game_device_data.found_per_view_globals = true;
-            break;
          }
       }
+      UpdateLODBias(device);
       device_data.cb_per_view_global_buffer_map_data = nullptr;
       device_data.cb_per_view_global_buffer          = nullptr;
+   }
+
+   static void UpdateLODBias(reshade::api::device* device)
+   {
+      DeviceData& device_data = *device->get_private_data<DeviceData>();
+      {
+         std::shared_lock shared_lock_samplers(s_mutex_samplers);
+
+         const auto prev_texture_mip_lod_bias_offset = device_data.texture_mip_lod_bias_offset;
+         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.taa_detected && device_data.cloned_pipeline_count != 0)
+         {
+            device_data.texture_mip_lod_bias_offset = std::log2(device_data.render_resolution.y / device_data.output_resolution.y) - 1.f; // This results in -1 at output res
+         }
+         else
+         {
+            // Reset to best fallback value.
+            // This bias offset replaces the value from the game (see "samplers_upgrade_mode" 5), which was based on the "r_AntialiasingTSAAMipBias" cvar for most textures (it doesn't apply to all the ones that would benefit from it, and still applies to ones that exhibit moire patterns),
+            // but only if TAA was engaged (not SMAA or SMAA+TAA) (it might persist on SMAA after once using TAA, due to a bug).
+            // Prey defaults that to 0 but Luma's configs set it to -1.
+            device_data.texture_mip_lod_bias_offset = device_data.taa_detected ? -1.f : 0.f;
+         }
+         const auto new_texture_mip_lod_bias_offset = device_data.texture_mip_lod_bias_offset;
+
+         bool texture_mip_lod_bias_offset_changed = prev_texture_mip_lod_bias_offset != new_texture_mip_lod_bias_offset;
+         // Re-create all samplers immediately here instead of doing it at the end of the frame.
+         // This allows us to avoid possible (but very unlikely) hitches that could happen if we re-created a new sampler for a new resolution later on when samplers descriptors are set.
+         // It also allows us to use the right samplers for this frame's resolution.
+         if (texture_mip_lod_bias_offset_changed)
+         {
+            ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
+            for (auto& samplers_handle : device_data.custom_sampler_by_original_sampler)
+            {
+               if (samplers_handle.second.contains(new_texture_mip_lod_bias_offset))
+                  continue; // Skip "resolutions" that already got their custom samplers created
+               ID3D11SamplerState* native_sampler = reinterpret_cast<ID3D11SamplerState*>(samplers_handle.first);
+               D3D11_SAMPLER_DESC  native_desc;
+               native_sampler->GetDesc(&native_desc);
+               shared_lock_samplers.unlock(); // This is fine!
+               {
+                  std::unique_lock unique_lock_samplers(s_mutex_samplers);
+                  samplers_handle.second[new_texture_mip_lod_bias_offset] = CreateCustomSampler(device_data, native_device, native_desc);
+               }
+               shared_lock_samplers.lock();
+            }
+         }
+      }
    }
 };
 

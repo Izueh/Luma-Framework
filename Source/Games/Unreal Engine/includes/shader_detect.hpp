@@ -15,12 +15,10 @@ struct GlobalCBInfo
    int32_t register_index                = -1; // register index that the global cbuffer is bound to during TAA draw call
    size_t  size                          = 0;  // size of the global cbuffer
    size_t  declared_size                 = 0;  // declared size of the global cbuffer in TAA shader
-   int32_t clip_to_prev_clip_start_index = -1; // start index of the clip to prev clip matrix in the global cbuffer
-   int32_t jitter_index                  = -1; // index of the jitter vector in the global cbuffer
-   int32_t clip_to_view_start_index      = -1; // start index of the clip to view matrix in the global cbuffer
-   int32_t view_to_clip_start_index      = -1; // start index of the view to clip matrix in the global cbuffer
+   int32_t clip_to_prev_clip_start_index = -1; // start index of the clip to prev clip matrix in the global cbuffer (this is unreliable since not all UE4 versions have it)
+   int32_t jitter_index                  = -1; // index of the jitter vector in the global cbuffer (this is unreliable since not all UE4 versions have it)
+   int32_t view_to_clip_start_index      = -1; // start index of the clip to view matrix in the global cbuffer
    int32_t view_size_and_inv_size_index  = -1; // index of the view size and inverse size vector in the global cbuffer
-   float2  jitter                        = {0.0f, 0.0f};
 };
 
 static uint32_t* FindLargestCBufferDeclaration(const uint32_t* code_u32, const size_t size_u32)
@@ -84,7 +82,7 @@ static bool IsUE4TAACandidate(const std::byte* code, size_t size)
    size_t          instruction_count               = 0;
    while (offset < size_u32)
    {
-      if (instruction_count > 10)
+      if (instruction_count > 16)
          return false; // bail out if we reached too far without finding any texture declarations
       const uint32_t token  = code_u32[offset];
       const uint32_t opcode = DECODE_D3D10_SB_OPCODE_TYPE(token);
@@ -168,10 +166,8 @@ static bool IsUE4TAACandidate(const std::byte* code, size_t size)
    word_t mul_2;
    mul_2.f                                        = 0.000000f;
    const std::vector<std::byte> mul_pattern_bytes = {
-      std::byte{mul_2.b[0]}, std::byte{mul_2.b[1]}, std::byte{mul_2.b[2]}, std::byte{mul_2.b[3]},
       std::byte{mul_1.b[0]}, std::byte{mul_1.b[1]}, std::byte{mul_1.b[2]}, std::byte{mul_1.b[3]},
-      std::byte{mul_1.b[0]}, std::byte{mul_1.b[1]}, std::byte{mul_1.b[2]}, std::byte{mul_1.b[3]},
-      std::byte{mul_2.b[0]}, std::byte{mul_2.b[1]}, std::byte{mul_2.b[2]}, std::byte{mul_2.b[3]}};
+      std::byte{mul_1.b[0]}, std::byte{mul_1.b[1]}, std::byte{mul_1.b[2]}, std::byte{mul_1.b[3]}};
    std::vector<std::byte*> mul_hits = System::ScanMemoryForPattern(code, size, mul_pattern_bytes);
    if (mul_hits.empty())
       return false;
@@ -301,9 +297,7 @@ static void FindJitterFromMVWrite(const std::byte* code, size_t size, GlobalCBIn
    mul_2.f                                              = 0.f;
    std::vector<std::byte> encode_velocity_pattern_bytes = {
       std::byte{mul_1.b[0]}, std::byte{mul_1.b[1]}, std::byte{mul_1.b[2]}, std::byte{mul_1.b[3]},
-      std::byte{mul_1.b[0]}, std::byte{mul_1.b[1]}, std::byte{mul_1.b[2]}, std::byte{mul_1.b[3]},
-      std::byte{mul_2.b[0]}, std::byte{mul_2.b[1]}, std::byte{mul_2.b[2]}, std::byte{mul_2.b[3]},
-      std::byte{mul_2.b[0]}, std::byte{mul_2.b[1]}, std::byte{mul_2.b[2]}, std::byte{mul_2.b[3]}};
+      std::byte{mul_1.b[0]}, std::byte{mul_1.b[1]}, std::byte{mul_1.b[2]}, std::byte{mul_1.b[3]}};
    std::vector<std::byte*> encode_velocity_hits = System::ScanMemoryForPattern(code, size, encode_velocity_pattern_bytes);
    if (encode_velocity_hits.empty())
       return; // no hits found
