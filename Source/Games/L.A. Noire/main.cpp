@@ -1,7 +1,5 @@
 #define GAME_LA_NOIRE 1
 
-#define UPGRADE_SAMPLERS 1
-
 #include "..\..\Core\core.hpp"
 
 struct GameDeviceDataTemplate final : public GameDeviceData
@@ -19,7 +17,7 @@ public:
    void OnInit(bool async) override
    {
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"TONEMAP_TYPE", '1', false, false, "0 - Vanilla SDR\n1 - Luma HDR (Vanilla+)"},
+         {"TONEMAP_TYPE", '1', true, false, "0 - Vanilla SDR\n1 - Luma HDR (Vanilla+)"},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       assert(shader_defines_data.size() < MAX_SHADER_DEFINES);
@@ -83,6 +81,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             //reshade::api::format::b8g8r8x8_typeless,
             //reshade::api::format::r11g11b10_float,
       };
+
+      enable_samplers_upgrade = true;
 
       game = new GameTemplate();
    }

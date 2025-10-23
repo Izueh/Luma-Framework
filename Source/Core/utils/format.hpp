@@ -538,6 +538,155 @@ namespace
       return false;
    }
 
+   bool IsTypelessFormat(DXGI_FORMAT format)
+   {
+      switch (format)
+      {
+      case DXGI_FORMAT_R32G32B32A32_TYPELESS:
+      case DXGI_FORMAT_R32G32B32_TYPELESS:
+      case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+      case DXGI_FORMAT_R32G32_TYPELESS:
+      case DXGI_FORMAT_R32G8X24_TYPELESS:
+      case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+      case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+      case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+      case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+      case DXGI_FORMAT_R16G16_TYPELESS:
+      case DXGI_FORMAT_R32_TYPELESS:
+      case DXGI_FORMAT_R24G8_TYPELESS:
+      case DXGI_FORMAT_R8G8_TYPELESS:
+      case DXGI_FORMAT_R16_TYPELESS:
+      case DXGI_FORMAT_R8_TYPELESS:
+      case DXGI_FORMAT_BC1_TYPELESS:
+      case DXGI_FORMAT_BC2_TYPELESS:
+      case DXGI_FORMAT_BC3_TYPELESS:
+      case DXGI_FORMAT_BC4_TYPELESS:
+      case DXGI_FORMAT_BC5_TYPELESS:
+      case DXGI_FORMAT_BC6H_TYPELESS:
+      case DXGI_FORMAT_BC7_TYPELESS:
+         return true;
+      // Partially typeless formats aren't really typeless, they are just allowing views to access part of a resource while ignoring another part, so ignore them
+      case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
+      case DXGI_FORMAT_X32_TYPELESS_G8X24_UINT:
+      case DXGI_FORMAT_R24_UNORM_X8_TYPELESS:
+      case DXGI_FORMAT_X24_TYPELESS_G8_UINT:
+         return false;
+      }
+      return false;
+   }
+
+   DXGI_FORMAT GetTypelessFormat(DXGI_FORMAT format)
+   {
+      switch (format)
+      {
+      case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+      case DXGI_FORMAT_R16G16B16A16_FLOAT:
+      case DXGI_FORMAT_R16G16B16A16_UNORM:
+      case DXGI_FORMAT_R16G16B16A16_SNORM:
+      case DXGI_FORMAT_R16G16B16A16_UINT:
+      case DXGI_FORMAT_R16G16B16A16_SINT:
+         return DXGI_FORMAT_R16G16B16A16_TYPELESS;
+      case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+      case DXGI_FORMAT_R8G8B8A8_UNORM:
+      case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+      case DXGI_FORMAT_R8G8B8A8_SNORM:
+      case DXGI_FORMAT_R8G8B8A8_UINT:
+      case DXGI_FORMAT_R8G8B8A8_SINT:
+         return DXGI_FORMAT_R8G8B8A8_TYPELESS;
+      case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+      case DXGI_FORMAT_B8G8R8A8_UNORM:
+      case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+         return DXGI_FORMAT_B8G8R8A8_TYPELESS;
+      case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+      case DXGI_FORMAT_B8G8R8X8_UNORM:
+      case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+         return DXGI_FORMAT_B8G8R8X8_TYPELESS;
+      case DXGI_FORMAT_R32G32B32A32_TYPELESS:
+      case DXGI_FORMAT_R32G32B32A32_FLOAT:
+      case DXGI_FORMAT_R32G32B32A32_UINT:
+      case DXGI_FORMAT_R32G32B32A32_SINT:
+         return DXGI_FORMAT_R32G32B32A32_TYPELESS;
+      case DXGI_FORMAT_R32G32B32_TYPELESS:
+      case DXGI_FORMAT_R32G32B32_FLOAT:
+      case DXGI_FORMAT_R32G32B32_UINT:
+      case DXGI_FORMAT_R32G32B32_SINT:
+         return DXGI_FORMAT_R32G32B32_TYPELESS;
+      case DXGI_FORMAT_R32G32_TYPELESS:
+      case DXGI_FORMAT_R32G32_FLOAT:
+      case DXGI_FORMAT_R32G32_UINT:
+      case DXGI_FORMAT_R32G32_SINT:
+         return DXGI_FORMAT_R32G32_TYPELESS;
+      case DXGI_FORMAT_R16G16_TYPELESS:
+      case DXGI_FORMAT_R16G16_FLOAT:
+      case DXGI_FORMAT_R16G16_UNORM:
+      case DXGI_FORMAT_R16G16_SNORM:
+      case DXGI_FORMAT_R16G16_UINT:
+      case DXGI_FORMAT_R16G16_SINT:
+         return DXGI_FORMAT_R16G16_TYPELESS;
+      case DXGI_FORMAT_R8G8_TYPELESS:
+      case DXGI_FORMAT_R8G8_UNORM:
+      case DXGI_FORMAT_R8G8_SNORM:
+      case DXGI_FORMAT_R8G8_UINT:
+      case DXGI_FORMAT_R8G8_SINT:
+         return DXGI_FORMAT_R8G8_TYPELESS;
+      case DXGI_FORMAT_R32_TYPELESS:
+      case DXGI_FORMAT_R32_FLOAT:
+      case DXGI_FORMAT_R32_UINT:
+      case DXGI_FORMAT_R32_SINT:
+      case DXGI_FORMAT_D32_FLOAT:
+         return DXGI_FORMAT_R32_TYPELESS;
+      case DXGI_FORMAT_R16_TYPELESS:
+      case DXGI_FORMAT_R16_FLOAT:
+      case DXGI_FORMAT_R16_UNORM:
+      case DXGI_FORMAT_R16_SNORM:
+      case DXGI_FORMAT_R16_UINT:
+      case DXGI_FORMAT_R16_SINT:
+      case DXGI_FORMAT_D16_UNORM:
+         return DXGI_FORMAT_R16_TYPELESS;
+      case DXGI_FORMAT_R8_TYPELESS:
+      case DXGI_FORMAT_A8_UNORM:
+      case DXGI_FORMAT_R8_UNORM:
+      case DXGI_FORMAT_R8_SNORM:
+      case DXGI_FORMAT_R8_UINT:
+      case DXGI_FORMAT_R8_SINT:
+         return DXGI_FORMAT_R8_TYPELESS;
+      case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+      case DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM:
+      case DXGI_FORMAT_R10G10B10A2_UNORM:
+      case DXGI_FORMAT_R10G10B10A2_UINT:
+         return DXGI_FORMAT_R10G10B10A2_TYPELESS;
+      case DXGI_FORMAT_R1_UNORM:
+      case DXGI_FORMAT_R8G8_B8G8_UNORM:
+      case DXGI_FORMAT_G8R8_G8B8_UNORM:
+      case DXGI_FORMAT_R9G9B9E5_SHAREDEXP:
+      case DXGI_FORMAT_R11G11B10_FLOAT:
+         return DXGI_FORMAT_UNKNOWN; // These formats don't have a TYPELESS version (usually because they are encoded or unique), so return an invalid format to highlight that. There's a few more not included here.
+      }
+      return DXGI_FORMAT_UNKNOWN;
+   }
+
+   // TODO: add a strict flag to avoid copying between e.g. UNORM and FLOAT
+   bool AreFormatsCopyCompatible(DXGI_FORMAT format_a, DXGI_FORMAT format_b)
+   {
+      auto Is32Bit4ChannelTypeless = [](DXGI_FORMAT format)
+      {
+         switch (format)
+         {
+         case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+         case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+         case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+            return true;
+         }
+         return false;
+      };
+
+      format_a = GetTypelessFormat(format_a);
+      format_b = GetTypelessFormat(format_b);
+      if (format_a == format_b || (Is32Bit4ChannelTypeless(format_a) && Is32Bit4ChannelTypeless(format_b)))
+         return true;
+      return false;
+   }
+
    // If channels have a different bit size, it returns the overall one.
    bool GetFormatSizeInfo(DXGI_FORMAT format, uint8_t& channels, uint8_t& bits_per_channel)
    {
@@ -618,12 +767,12 @@ namespace
       case DXGI_FORMAT_D16_UNORM:
          channels = 1; bits_per_channel = 16; break;
       // Single channel, 8-bit
-      case DXGI_FORMAT_A8_UNORM:
       case DXGI_FORMAT_R8_TYPELESS:
       case DXGI_FORMAT_R8_UNORM:
       case DXGI_FORMAT_R8_SNORM:
       case DXGI_FORMAT_R8_UINT:
       case DXGI_FORMAT_R8_SINT:
+      case DXGI_FORMAT_A8_UNORM:
          channels = 1; bits_per_channel = 8; break;
       // 8-bit/channel, 4-channel - These are edge cases as the channels size isn't even
       case DXGI_FORMAT_R9G9B9E5_SHAREDEXP:

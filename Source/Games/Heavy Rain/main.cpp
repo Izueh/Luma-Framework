@@ -50,11 +50,11 @@ public:
    void OnInit(bool async) override
    {
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"ENABLE_LUMA", '1', false, false, "Allow disabling the mod's improvements to the game's look"},
-         {"ENABLE_FILM_GRAIN", '1', false, false, "Allows disabling the game's Film Grain effect, which Luma already improves by default"},
-         {"ENABLE_FAKE_HDR", '1', false, false, "Enable a \"Fake\" HDR boosting effect, as the game's dynamic range was fairly limited to begin with"},
-         {"ENABLE_COLOR_GRADING", '1', false, false, "Allows disabling the color grading LUT (some other color filters might still get applied)"},
-         {"ENABLE_POST_PROCESS_EFFECTS", '1', false, false, "Allows disabling all post process effects light Bloom, Lens Flare etc"},
+         {"ENABLE_LUMA", '1', true, false, "Allow disabling the mod's improvements to the game's look", 1},
+         {"ENABLE_FILM_GRAIN", '1', true, false, "Allows disabling the game's Film Grain effect, which Luma already improves by default", 1},
+         {"ENABLE_FAKE_HDR", '1', true, false, "Enable a \"Fake\" HDR boosting effect, as the game's dynamic range was fairly limited to begin with", 1},
+         {"ENABLE_COLOR_GRADING", '1', true, false, "Allows disabling the color grading LUT (some other color filters might still get applied)", 1},
+         {"ENABLE_POST_PROCESS_EFFECTS", '1', true, false, "Allows disabling all post process effects light Bloom, Lens Flare etc", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
 
@@ -258,8 +258,9 @@ public:
          }
 
          // Avoids nans spreading over the transparency phase and TAA etc (character shaders occasionally spit out some)
-         if (test_index != 18) // TODO: delete
-         SanitizeNaNs(native_device, native_device_context, game_device_data.scene_color_rtv.get(), device_data, game_device_data.sanitize_nans_data, true);
+         // Note: this is likely not needed anymore given we patch (almost) all shaders that draw on the scene buffer to avoid nans.
+         if (test_index != 18)
+            SanitizeNaNs(native_device, native_device_context, game_device_data.scene_color_rtv.get(), device_data, game_device_data.sanitize_nans_data, true);
 
 #if DEVELOPMENT
          const std::shared_lock lock_trace(s_mutex_trace);
@@ -378,9 +379,9 @@ public:
       {
          reshade::set_config_value(runtime, NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
       }
-      DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingIntensity, 1.f, "ColorGradingIntensity", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingIntensity, 0.8f, "ColorGradingIntensity", runtime);
 
-      if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
+      if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR && GetShaderDefineCompiledNumericalValue(char_ptr_crc32("ENABLE_FAKE_HDR")) > 0)
       {
          if (ImGui::SliderFloat("HDR Boost", &cb_luma_global_settings.GameSettings.HDRBoostAmount, 0.f, 1.f))
          {
@@ -493,6 +494,7 @@ public:
    }
 };
 
+// TODO: fix crash on swapchain present!
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
 {
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
@@ -544,7 +546,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
       // Defaults are hardcoded in ImGUI too
       cb_luma_global_settings.GameSettings.BloomAndLensFlareIntensity = 1.f;
-      cb_luma_global_settings.GameSettings.ColorGradingIntensity = 1.f;
+      cb_luma_global_settings.GameSettings.ColorGradingIntensity = 0.8f; // Don't default to 1 (vanilla) because it's too desaturated and distorted for HDR. 0.5 to 0.667 would be even nicer but would shift too much from the og look.
       cb_luma_global_settings.GameSettings.HDRBoostAmount = 0.5f;
       // TODO: use "default_luma_global_game_settings"
 

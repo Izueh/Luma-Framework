@@ -242,14 +242,14 @@ public:
       PatchAspectRatio(screen_aspect_ratio);
 
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"ENABLE_LUMA", '1', false, false, "Enables all Luma's post processing modifications, to improve the image and output HDR"},
-         {"ENABLE_FILM_GRAIN", '1', false, false, "Allow disabling the game's film grain effect"},
-         {"ENABLE_LENS_DISTORTION", '1', false, false, "Allow disabling the game's lens distortion effect"},
-         {"ENABLE_CHROMATIC_ABERRATION", '1', false, false, "Allow disabling the game's chromatic aberration effect"},
-         {"ENABLE_BLACK_FLOOR_TWEAKS_TYPE", '1', false, false, "Allows customizing how the game handles the black floor. Set to 0 for the vanilla look. Set to 3 for increased visibility."},
+         {"ENABLE_LUMA", '1', true, false, "Enables all Luma's post processing modifications, to improve the image and output HDR", 1},
+         {"ENABLE_FILM_GRAIN", '1', true, false, "Allow disabling the game's film grain effect", 1},
+         {"ENABLE_LENS_DISTORTION", '1', true, false, "Allow disabling the game's lens distortion effect", 1},
+         {"ENABLE_CHROMATIC_ABERRATION", '1', true, false, "Allow disabling the game's chromatic aberration effect", 1},
+         {"ENABLE_BLACK_FLOOR_TWEAKS_TYPE", '1', true, false, "Allows customizing how the game handles the black floor. Set to 0 for the vanilla look. Set to 3 for increased visibility.", 3},
 #if DEVELOPMENT || TEST
-         {"ENABLE_FAKE_HDR", '0', false, false, "Enable a \"Fake\" HDR boosting effect (not usually necessary as the game's tonemapper can already extract highlights)"},
-         {"ENABLE_DITHER", disable_dither ? '0' : '1', false, false, ""},
+         {"ENABLE_FAKE_HDR", '0', true, false, "Enable a \"Fake\" HDR boosting effect (not usually necessary as the game's tonemapper can already extract highlights)", 1},
+         {"ENABLE_DITHER", disable_dither ? '0' : '1', true, false, "", 1},
 #endif
       };
       shader_defines_data.append_range(game_shader_defines_data);
@@ -284,6 +284,8 @@ public:
 
    std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
    {
+      using namespace System;
+
       if (type != reshade::api::pipeline_subobject_type::pixel_shader) return nullptr;
 
       std::unique_ptr<std::byte[]> new_code = nullptr;
@@ -305,17 +307,137 @@ public:
       // The first 4 bytes are to highlights it's a literal vector value.
       const std::vector<uint8_t> pattern_dither_scale_1_3c = { 0x02, 0x40, 0x00, 0x00, 0x81, 0x80, 0x80, 0x3B, 0x81, 0x80, 0x80, 0x3B, 0x81, 0x80, 0x80, 0x3B };
       const std::vector<uint8_t> pattern_dither_scale_1_4c = { 0x02, 0x40, 0x00, 0x00, 0x81, 0x80, 0x80, 0x3B, 0x81, 0x80, 0x80, 0x3B, 0x81, 0x80, 0x80, 0x3B, 0x81, 0x80, 0x80, 0x3B };
+      const std::vector<uint8_t> pattern_dither_scale_1_4c_alt = { 0x02, 0x40, 0x00, 0x00, 0x81, 0x80, 0x80, 0x3B, 0x81, 0x80, 0x80, 0x3B, 0x81, 0x80, 0x80, 0x3B, 0x89, 0x88, 0x88, 0x3D }; // 4th literal is float(0.0666666701)
       // float(0.00196078443)
       const std::vector<uint8_t> pattern_dither_scale_2_3c = { 0x02, 0x40, 0x00, 0x00, 0x81, 0x80, 0x00, 0x3B, 0x81, 0x80, 0x00, 0x3B, 0x81, 0x80, 0x00, 0x3B };
       const std::vector<uint8_t> pattern_dither_scale_2_4c = { 0x02, 0x40, 0x00, 0x00, 0x81, 0x80, 0x00, 0x3B, 0x81, 0x80, 0x00, 0x3B, 0x81, 0x80, 0x00, 0x3B, 0x81, 0x80, 0x00, 0x3B };
       // float(0.000977517106)
       const std::vector<uint8_t> pattern_dither_scale_3_3c = { 0x02, 0x40, 0x00, 0x00, 0x08, 0x20, 0x80, 0x3A, 0x08, 0x20, 0x80, 0x3A, 0x08, 0x20, 0x80, 0x3A };
       const std::vector<uint8_t> pattern_dither_scale_3_4c = { 0x02, 0x40, 0x00, 0x00, 0x08, 0x20, 0x80, 0x3A, 0x08, 0x20, 0x80, 0x3A, 0x08, 0x20, 0x80, 0x3A, 0x08, 0x20, 0x80, 0x3A };
+      // float(0.0666666701)
+      const std::vector<uint8_t> pattern_dither_scale_4_3c = { 0x02, 0x40, 0x00, 0x00, 0x89, 0x88, 0x88, 0x3D, 0x89, 0x88, 0x88, 0x3D, 0x89, 0x88, 0x88, 0x3D };
+      const std::vector<uint8_t> pattern_dither_scale_4_3c_alt = { 0x02, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x89, 0x88, 0x88, 0x3D, 0x89, 0x88, 0x88, 0x3D, 0x89, 0x88, 0x88, 0x3D };
       constexpr size_t float_pattern_channels = 3; // Scan for float3, not float4
 
+      // Character material shaders don't have dither but instead have some other clearly recognizable geometry pattern (the registers change but the literals stay):
+      // mad r2.x, r1.w, l(0.020835), l(-0.085133) // Hex: 01 40 00 00 5F AE AA 3C 01 40 00 00 36 5A AE BD
+      // mad r2.x, r1.w, r2.x, l(0.180141) // Hex: 01 40 00 00 E2 76 38 3E
+      // mad r2.x, r1.w, r2.x, l(-0.330299) // Hex: 01 40 00 00 04 1D A9 BE
+      // mad r1.w, r1.w, r2.x, l(0.999866) // Hex: 01 40 00 00 38 F7 7F 3F
+      // mul r2.x, r1.w, r1.z
+      // mad r2.x, r2.x, l(-2.000000), l(1.570796) // 01 40 00 00 00 00 00 C0 01 40 00 00 DB 0F C9 3F
+      // lt r2.y, |r1.y|, |r1.x|
+      // and r2.x, r2.y, r2.x
+      // mad r1.z, r1.z, r1.w, r2.x
+      // lt r1.w, r1.y, -r1.y
+      // and r1.w, r1.w, l(0xc0490fdb) // 01 40 00 00 DB 0F 49 C0
+      // e.g. shader hashes D2E14BDB, 1AE7664E, FFF4B712 etc
+      // This huge wildcard pattern is a bit unnecessary but whatever, it's very reliable as the compiler is deterministic and this was likely a function.
+      static const std::vector<System::BytePattern> pattern_character_geometry = {
+         0x01, 0x40, 0x00, 0x00, 0x5F, 0xAE, 0xAA, 0x3C, 0x01, 0x40, 0x00, 0x00, 0x36, 0x5A, 0xAE, 0xBD,
+         // D2E14BDB: 32 00 00 09 12 00 10 00 02 00 00 00 3A 00 10 00 01 00 00 00 0A 00 10 00 02 00 00 00
+         // 1AE7664E: 32 00 00 09 22 00 10 00 01 00 00 00 0A 00 10 00 01 00 00 00 1A 00 10 00 01 00 00 00
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         0x01, 0x40, 0x00, 0x00, 0xE2, 0x76, 0x38, 0x3E,
+         // D2E14BDB: 32 00 00 09 12 00 10 00 02 00 00 00 3A 00 10 00 01 00 00 00 0A 00 10 00 02 00 00 00
+         // 1AE7664E: 32 00 00 09 22 00 10 00 01 00 00 00 0A 00 10 00 01 00 00 00 1A 00 10 00 01 00 00 00
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         0x01, 0x40, 0x00, 0x00, 0x04, 0x1D, 0xA9, 0xBE,
+         // D2E14BDB: 32 00 00 09 82 00 10 00 01 00 00 00 3A 00 10 00 01 00 00 00 0A 00 10 00 02 00 00 00
+         // 1AE7664E: 32 00 00 09 12 00 10 00 01 00 00 00 0A 00 10 00 01 00 00 00 1A 00 10 00 01 00 00 00
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         0x01, 0x40, 0x00, 0x00, 0x38, 0xF7, 0x7F, 0x3F,
+         // D2E14BDB: 38 00 00 07 12 00 10 00 02 00 00 00 3A 00 10 00 01 00 00 00 2A 00 10 00 01 00 00 00 32 00 00 09 12 00 10 00 02 00 00 00 0A 00 10 00 02 00 00 00
+         // 1AE7664E: 38 00 00 07 22 00 10 00 01 00 00 00 3A 00 10 00 00 00 00 00 0A 00 10 00 01 00 00 00 32 00 00 09 22 00 10 00 01 00 00 00 1A 00 10 00 01 00 00 00
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         0x01, 0x40, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0,
+         0x01, 0x40, 0x00, 0x00, 0xDB, 0x0F, 0xC9, 0x3F,
+         // D2E14BDB: 31 00 00 09 22 00 10 00 02 00 00 00 1A 00 10 80 81 00 00 00 01 00 00 00 0A 00 10 80 81 00 00 00 01 00 00 00 01 00 00 07 12 00 10 00 02 00 00 00 1A 00 10 00 02 00 00 00 0A 00 10 00 02 00 00 00 32 00 00 09 42 00 10 00 01 00 00 00 2A 00 10 00 01 00 00 00 3A 00 10 00 01 00 00 00 0A 00 10 00 02 00 00 00 31 00 00 08 82 00 10 00 01 00 00 00 1A 00 10 00 01 00 00 00 1A 00 10 80 41 00 00 00 01 00 00 00 01 00 00 07 82 00 10 00 01 00 00 00 3A 00 10 00 01 00 00 00
+         // 1AE7664E: 31 00 00 09 42 00 10 00 01 00 00 00 2A 00 10 80 81 00 00 00 00 00 00 00 1A 00 10 80 81 00 00 00 00 00 00 00 01 00 00 07 22 00 10 00 01 00 00 00 2A 00 10 00 01 00 00 00 1A 00 10 00 01 00 00 00 32 00 00 09 82 00 10 00 00 00 00 00 3A 00 10 00 00 00 00 00 0A 00 10 00 01 00 00 00 1A 00 10 00 01 00 00 00 31 00 00 08 12 00 10 00 01 00 00 00 2A 00 10 00 00 00 00 00 2A 00 10 80 41 00 00 00 00 00 00 00 01 00 00 07 12 00 10 00 01 00 00 00 0A 00 10 00 01 00 00 00
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         ANY, ANY, ANY, ANY,
+         0x01, 0x40, 0x00, 0x00, 0xDB, 0x0F, 0x49, 0xC0
+      };
+
       // Almost all material and lights shaders have dithering, so we can use this pattern to add a saturate on alpha and max(0, rgb) on color. The ones that don't are manually patched (at least the relevant ones we caught that showed issues)
-      std::vector<std::byte*> matches_dither_rand_1 = System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(code), size, reinterpret_cast<const std::byte*>(pattern_dither_rand_1.data()), pattern_dither_rand_1.size() / 4 * float_pattern_channels);
-      if (!matches_dither_rand_1.empty())
+      std::vector<std::byte*> matches_dither_rand_1 = System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(code), size, reinterpret_cast<const std::byte*>(pattern_dither_rand_1.data()), pattern_dither_rand_1.size() / 4 * float_pattern_channels, true);
+
+      std::vector<std::byte*> matches_characters_geometry_1;
+      // No need to bother if we already found other matches, we won't do anything with these matches
+      if (matches_dither_rand_1.empty())
+      {
+         matches_characters_geometry_1 = System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(code), size, pattern_character_geometry, true);
+      }
+
+      if (!matches_dither_rand_1.empty() || !matches_characters_geometry_1.empty())
       {
          std::vector<uint8_t> appended_patch;
 
@@ -357,7 +479,7 @@ public:
             std::memcpy(new_code.get() + size, appended_patch.data(), appended_patch.size());
          }
 
-         if (disable_dither)
+         if (disable_dither && !matches_dither_rand_1.empty())
          {
             auto PatchDitherScale = [&](std::byte* start, size_t max_size, const std::vector<uint8_t>& pattern) -> bool {
                auto matches = System::ScanMemoryForPattern(start, max_size, reinterpret_cast<const std::byte*>(pattern.data()), pattern.size());
@@ -373,6 +495,7 @@ public:
             const size_t size_offset = matches_dither_rand_1[0] - code; // They are always after that pattern
             pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_1_1c);
             pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_1_4c); // Replace the larger channel patters before otherwise it could prevent follow up channel patterns ones from being found
+            pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_1_4c_alt);
             pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_1_3c);
 
             // The other patterns are usually mutually exclusive
@@ -384,6 +507,11 @@ public:
                {
                   pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_3_4c);
                   pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_3_3c);
+                  if (!pattern_dither_scale_found)
+                  {
+                     pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_4_3c_alt);
+                     pattern_dither_scale_found |= PatchDitherScale(matches_dither_rand_1[0], size - size_offset, pattern_dither_scale_4_3c);
+                  }
                }
             }
          }
@@ -469,16 +597,17 @@ public:
                game_device_data.lighting_buffer_rtv->GetResource(&rtv_resource);
                native_device_context->CopyResource(game_device_data.lighting_buffer_texture.get(), rtv_resource.get());
 
-               if (test_index != 19) // TODO: delete
-               DrawCustomPixelShader(native_device_context,
-                  device_data.default_depth_stencil_state.get(),
-                  device_data.default_blend_state.get(),
-                  nullptr,
-                  device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(),
-                  device_data.native_pixel_shaders[CompileTimeStringHash("Sanitize Lighting")].get(),
-                  game_device_data.lighting_buffer_srv.get(),
-                  game_device_data.lighting_buffer_rtv.get(),
-                  game_device_data.lighting_buffer_width, game_device_data.lighting_buffer_height);
+               // Note: this is possibly not needed anymore given we patch some shaders that draw on the lighting buffer to avoid nans (we could patch even more).
+               if (test_index != 19)
+                  DrawCustomPixelShader(native_device_context,
+                     device_data.default_depth_stencil_state.get(),
+                     device_data.default_blend_state.get(),
+                     nullptr,
+                     device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(),
+                     device_data.native_pixel_shaders[CompileTimeStringHash("Sanitize Lighting")].get(),
+                     game_device_data.lighting_buffer_srv.get(),
+                     game_device_data.lighting_buffer_rtv.get(),
+                     game_device_data.lighting_buffer_width, game_device_data.lighting_buffer_height);
 
 #if DEVELOPMENT
                const std::shared_lock lock_trace(s_mutex_trace);
@@ -520,8 +649,9 @@ public:
          compute_state_stack.Cache(native_device_context, device_data.uav_max_count);
 
          // Avoids nans spreading over the transparency phase and TAA etc (character shaders occasionally spit out some)
-         if (test_index != 18) // TODO: delete
-         SanitizeNaNs(native_device, native_device_context, game_device_data.scene_color_rtv.get(), device_data, game_device_data.sanitize_nans_data, true);
+         // Note: this is likely not needed anymore given we patch (almost) all shaders that draw on the scene buffer to avoid nans.
+         if (test_index != 18)
+            SanitizeNaNs(native_device, native_device_context, game_device_data.scene_color_rtv.get(), device_data, game_device_data.sanitize_nans_data, true);
 
 #if DEVELOPMENT
          const std::shared_lock lock_trace(s_mutex_trace);
@@ -729,7 +859,7 @@ public:
          {
             ImGui::SetTooltip("Luma automatically unlocks the aspect ratio for the game from 16:9 on boot,"
                "\nhowever the game was designed for 16:9, and some objects might be missing from the edges on wider aspect ratios, other might end up being visible before they were meant to,"
-               " this allows you to customize it.\nFor the change to apply, it's necessary to change the resolution or fullscreen state in the graphics settings menu.\nIf HDR seems disabled after changing the aspect ratio, restart the game"); // TODO: needs texture cloning as RTs are resized before the swapchain when we change resolution (aspect ratio) (maybe)
+               " this allows you to customize it.\nFor the change to apply, it's necessary to change the resolution or fullscreen state in the graphics settings menu.\nIf HDR seems disabled after changing the aspect ratio, restart the game"); // TODO: needs "enable_indirect_texture_format_upgrades" as RTs are resized before the swapchain when we change resolution (aspect ratio) (maybe)
          }
 
          if (custom_aspect_ratio_enabled)

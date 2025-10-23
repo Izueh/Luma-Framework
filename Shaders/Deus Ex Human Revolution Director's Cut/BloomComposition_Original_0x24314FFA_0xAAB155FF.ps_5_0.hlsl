@@ -84,7 +84,7 @@ void main(
   sceneColor.xyz = min(sceneColor.xyz, 5.0); // Bloom was already clamped before
 #endif
 
-  bool forceSDR = ShouldForceSDR(r0.xy, true);
+  bool forceSDR = ShouldForceSDR(r0.xy);
 
 #if ENABLE_FAKE_HDR // The game doesn't have many bright highlights, the dynamic range is relatively low, this helps alleviate that. Do it before bloom to avoid bloom going crazy too
   if (LumaSettings.DisplayMode == 1 && !forceSDR)

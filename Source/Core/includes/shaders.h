@@ -21,7 +21,7 @@ namespace Shader
       // Original pipeline (in DX9/10/11 it's just a ptr to a shader object, in DX12 to a PSO). Lifetime not handled by us.
       reshade::api::pipeline pipeline;
       // Cached device (makes it easier to access, even if there's usually only a global one in games (e.g. Prey))
-      reshade::api::device* device;
+      reshade::api::device* device; // TODO: delete, this isn't necessary, they are cached by device
       reshade::api::pipeline_layout layout; // DX12 stuff
       // Cloned subojects from the original pipeline (e.g. for shaders, this is their code/blob). Need to be destroyed when the original pipeline is.
       reshade::api::pipeline_subobject* subobjects_cache;

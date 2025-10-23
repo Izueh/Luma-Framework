@@ -1,6 +1,8 @@
 #define GAME_DXHRDC 1
 
+// Note: if we dropped support for the Gold Filter Restoration mod, we could remove this too
 #define ENABLE_GAME_PIPELINE_STATE_READBACK 1
+
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
 
 #include "..\..\Core\core.hpp"
@@ -229,10 +231,10 @@ public:
       luma_data_cbuffer_index = 12;
 
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"ENABLE_LUMA", '1', false, false, "Allows disabling some of the Luma's post processing modifications to improve the image and output HDR"},
-         {"ENABLE_IMPROVED_BLOOM", '1', false, false, "The bloom radius was calibrated for 720p/1080p and looked too small at higher resolutions"},
-         {"ENABLE_IMPROVED_COLOR_GRADING", '1', false, false, "Allow running a new, modernized, version of the color grading pass (e.g. the gold filter)"},
-         {"ENABLE_HIGHLIGHTS_DESATURATION_TYPE", '0', false, false, "If you found highlights to be too saturated, try different values for this (0-3)"},
+         {"ENABLE_LUMA", '1', true, false, "Allows disabling some of the Luma's post processing modifications to improve the image and output HDR", 1},
+         {"ENABLE_IMPROVED_BLOOM", '1', true, false, "The bloom radius was calibrated for 720p/1080p and looked too small at higher resolutions", 1},
+         {"ENABLE_IMPROVED_COLOR_GRADING", '1', true, false, "Allow running a new, modernized, version of the color grading pass (e.g. the gold filter)", 1},
+         {"ENABLE_HIGHLIGHTS_DESATURATION_TYPE", '0', true, false, "If you found highlights to be too saturated, try different values for this (0-3)", 3},
       };
       shader_defines_data.append_range(game_shader_defines_data);
 
@@ -665,9 +667,16 @@ public:
                         D3D11_TEXTURE2D_DESC texture_2d_desc;
                         depth_buffer_texture_2d->GetDesc(&texture_2d_desc);
 
-                        ASSERT_ONCE(texture_2d_desc.Format == DXGI_FORMAT_R24G8_TYPELESS);
                         D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-                        srv_desc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+                        if (!texture_depth_upgrade_formats.contains(reshade::api::format(DXGI_FORMAT_R24G8_TYPELESS)))
+                        {
+                           ASSERT_ONCE(texture_2d_desc.Format == DXGI_FORMAT_R24G8_TYPELESS);
+                           srv_desc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+                        }
+                        else
+                        {
+                           srv_desc.Format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
+                        }
                         srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
                         srv_desc.Texture2D.MostDetailedMip = 0;
                         srv_desc.Texture2D.MipLevels = 1;
@@ -1069,7 +1078,7 @@ public:
       if (has_supported_aa_count <= 0)
       {
          ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(255, 200, 0, 255)); // yellow/orange
-         ImGui::TextUnformatted("Warning: for the mod to apply tonemapping properly, FXAA High or MLAA need to be selected as Anti Aliasing modes.\nThis message might accidentally apply in menus.");
+         ImGui::TextUnformatted("Warning: for the mod to apply tonemapping properly, FXAA High or MLAA need to be selected as Anti Aliasing modes.\nEdge Anti Aliasing is also not tested with this mod and might not work (due to it using a higher quality depth buffer).\nNote that this message might accidentally show in menus.");
          ImGui::PopStyleColor();
       }
 
@@ -1298,11 +1307,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             reshade::api::format::b8g8r8x8_unorm,
             //reshade::api::format::b8g8r8x8_typeless,
 
-				// Used by lighting buffers (10 bit is enough but they clip to 1 in UNORM)
+            // Used by lighting buffers (10 bit is enough but they clip to 1 in UNORM)
             reshade::api::format::r10g10b10a2_unorm,
 
             // Probably unused, but won't hurt
             reshade::api::format::r11g11b10_float,
+      };
+      // Depth in DE HR was 24 bits but exhibited some z-fighting, the stencil was only ever used by "Edge Anti Aliasing", which looks bad anyway and won't work properly with Luma,
+      // so just upgrade the depth!
+      texture_depth_upgrade_formats = {
+            reshade::api::format(DXGI_FORMAT_R24G8_TYPELESS),
+            reshade::api::format(DXGI_FORMAT_D24_UNORM_S8_UINT),
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
 
@@ -1321,7 +1336,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       pixel_shader_hashes_BloomComposition.pixel_shaders = { Shader::Hash_StrToNum("29E509CF"), Shader::Hash_StrToNum("24314FFA"), Shader::Hash_StrToNum("AAB155FF") };
       pixel_shader_hashes_SSAOGeneration.pixel_shaders = { Shader::Hash_StrToNum("D44718C4"), Shader::Hash_StrToNum("7A054979") }; // DC and OG
       pixel_shader_hashes_UI.pixel_shaders = { Shader::Hash_StrToNum("E5757FCE"), Shader::Hash_StrToNum("D07AC030"), Shader::Hash_StrToNum("B8813A2F"), Shader::Hash_StrToNum("3773AC30"), Shader::Hash_StrToNum("9CB44B83"), Shader::Hash_StrToNum("6BAF4A32") };
-      pixel_shader_hashes_Lighting.pixel_shaders = { Shader::Hash_StrToNum("5EF35A1E"), Shader::Hash_StrToNum("C7F2C455"), Shader::Hash_StrToNum("EBE2567F"), Shader::Hash_StrToNum("0AB7755C"), Shader::Hash_StrToNum("7E526193"), Shader::Hash_StrToNum("C7B58EF0") };
+      pixel_shader_hashes_Lighting.pixel_shaders = { Shader::Hash_StrToNum("944C549D"), Shader::Hash_StrToNum("4C48AF67"), Shader::Hash_StrToNum("D6937DB8"), Shader::Hash_StrToNum("0B16DD34"), Shader::Hash_StrToNum("2175B8F6"), Shader::Hash_StrToNum("00C1331B"), Shader::Hash_StrToNum("5EF35A1E"), Shader::Hash_StrToNum("C7F2C455"), Shader::Hash_StrToNum("EBE2567F"), Shader::Hash_StrToNum("0AB7755C"), Shader::Hash_StrToNum("7E526193"), Shader::Hash_StrToNum("C7B58EF0") }; // Some from OG, some from DC
 
       default_luma_global_game_settings.BloomIntensity = 0.8f; // Not vanilla like!
       default_luma_global_game_settings.FogIntensity = is_dc ? 0.f : 0.f; // Not vanilla like!

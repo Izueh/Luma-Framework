@@ -3,7 +3,6 @@
 #define ENABLE_NGX 1
 #define ENABLE_NVAPI 0
 #define ENABLE_FIDELITY_SK 1
-#define UPGRADE_SAMPLERS 1
 
 #include "..\..\Core\core.hpp"
 
@@ -1914,12 +1913,13 @@ public:
                {
                   if (samplers_handle.second.contains(new_texture_mip_lod_bias_offset)) continue; // Skip "resolutions" that already got their custom samplers created
                   ID3D11SamplerState* native_sampler = reinterpret_cast<ID3D11SamplerState*>(samplers_handle.first);
-                  D3D11_SAMPLER_DESC native_desc;
-                  native_sampler->GetDesc(&native_desc);
                   shared_lock_samplers.unlock(); // This is fine!
                   {
-                     std::unique_lock unique_lock_samplers(s_mutex_samplers);
-                     samplers_handle.second[new_texture_mip_lod_bias_offset] = CreateCustomSampler(device_data, native_device, native_desc);
+                     D3D11_SAMPLER_DESC native_desc;
+                     native_sampler->GetDesc(&native_desc);
+                     com_ptr<ID3D11SamplerState> custom_sampler = CreateCustomSampler(device_data, native_device, native_desc);
+                     const std::unique_lock unique_lock_samplers(s_mutex_samplers);
+                     samplers_handle.second[new_texture_mip_lod_bias_offset] = custom_sampler;
                   }
                   shared_lock_samplers.lock();
                }
@@ -2436,43 +2436,43 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       //TODOFT4: try to add lens distortion to psy-ops screen space effects (e.g. blue ring) so they aren't cropped with it?
 
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"TONEMAP_TYPE", '1', false, false, "0 - Vanilla SDR\n1 - Luma HDR (Vanilla+)\n2 - Raw HDR (Untonemapped)\nThe HDR tonemapper works for SDR too\nThis games uses a filmic tonemapper, which slightly crushes blacks"},
-         {"SUNSHAFTS_LOOK_TYPE", '2', false, false, "0 - Raw Vanilla\n1 - Vanilla+\n2 - Luma HDR (Suggested)\nThis influences both HDR and SDR, all options work in both"},
-         {"ENABLE_LENS_OPTICS_HDR", '1', false, false, "Makes the lens effects (e.g. lens flare) slightly HDR"},
-         {"AUTO_HDR_VIDEOS", '1', false, false, "(HDR only) Generates some HDR highlights from SDR videos, for consistency\nThis is pretty lightweight so it won't really affect the artistic intent"},
-         {"EXPAND_COLOR_GAMUT", '1', false, false, "Makes the original tonemapper work in a wider color gamut (HDR BT.2020), resulting in more saturated colors.\nDisable for a more vanilla like experience"},
-         {"ENABLE_LUT_EXTRAPOLATION", '1', false, false, "LUT Extrapolation should be the best looking and most accurate SDR to HDR LUT adaptation mode,\nbut you can always turn it off for the its simpler fallback"},
+         {"TONEMAP_TYPE", '1', true, false, "0 - Vanilla SDR\n1 - Luma HDR (Vanilla+)\n2 - Raw HDR (Untonemapped)\nThe HDR tonemapper works for SDR too\nThis games uses a filmic tonemapper, which slightly crushes blacks"},
+         {"SUNSHAFTS_LOOK_TYPE", '2', true, false, "0 - Raw Vanilla\n1 - Vanilla+\n2 - Luma HDR (Suggested)\nThis influences both HDR and SDR, all options work in both"},
+         {"ENABLE_LENS_OPTICS_HDR", '1', true, false, "Makes the lens effects (e.g. lens flare) slightly HDR", 1},
+         {"AUTO_HDR_VIDEOS", '1', true, false, "(HDR only) Generates some HDR highlights from SDR videos, for consistency\nThis is pretty lightweight so it won't really affect the artistic intent", 1},
+         {"EXPAND_COLOR_GAMUT", '1', true, false, "Makes the original tonemapper work in a wider color gamut (HDR BT.2020), resulting in more saturated colors.\nDisable for a more vanilla like experience", 1},
+         {"ENABLE_LUT_EXTRAPOLATION", '1', true, false, "LUT Extrapolation should be the best looking and most accurate SDR to HDR LUT adaptation mode,\nbut you can always turn it off for the its simpler fallback", 1},
      #if DEVELOPMENT || TEST
-         {"SR_RELATIVE_PRE_EXPOSURE", '1', true, false },
-         {"ENABLE_LINEAR_COLOR_GRADING_LUT", '1', false, false, "Whether (SDR) LUTs are stored in linear or gamma space"},
-         {"FORCE_NEUTRAL_COLOR_GRADING_LUT_TYPE", '0', false, false, "Can force a neutral LUT in different ways (color grading is still applied)"},
-         {"DRAW_LUT", '0', false, (DEVELOPMENT || TEST) ? false : true},
+         {"SR_RELATIVE_PRE_EXPOSURE", '1', true, false},
+         {"ENABLE_LINEAR_COLOR_GRADING_LUT", '1', true, false, "Whether (SDR) LUTs are stored in linear or gamma space"},
+         {"FORCE_NEUTRAL_COLOR_GRADING_LUT_TYPE", '0', true, false, "Can force a neutral LUT in different ways (color grading is still applied)"},
+         {"DRAW_LUT", '0', true, (DEVELOPMENT || TEST) ? false : true},
      #endif
-         {"SSAO_TYPE", '1', false, false, "Screen Space Ambient Occlusion\n0 - Vanilla\n1 - Luma GTAO\nIn case GTAO is too performance intensive, lower the \"SSAO_QUALITY\" or go into the official game graphics settings and set \"Screen Space Directional Occlusion\" to half resolution\nDLSS is suggested to help with denoising AO"},
-         {"SSAO_QUALITY", '1', false, false, "0 - Vanilla\n1 - High\n2 - Extreme (slow)"},
+         {"SSAO_TYPE", '1', true, false, "Screen Space Ambient Occlusion\n0 - Vanilla\n1 - Luma GTAO\nIn case GTAO is too performance intensive, lower the \"SSAO_QUALITY\" or go into the official game graphics settings and set \"Screen Space Directional Occlusion\" to half resolution\nDLSS is suggested to help with denoising AO"},
+         {"SSAO_QUALITY", '1', true, false, "0 - Vanilla\n1 - High\n2 - Extreme (slow)"},
      #if DEVELOPMENT || TEST // For now we don't want to give users this customization, the default value should be good for most users and most cases
-         {"SSAO_RADIUS", '1', false, false, "0 - Small\n1 - Vanilla/Standard (suggested)\n2 - Large\nSmaller radiuses can look more stable but don't do as much\nLarger radiuses can look more realistic, but also over darkening and bring out screen space limitations more often (e.g. stuff de-occluding around the edges when turning the camera)\nOnly applies to GTAO"},
+         {"SSAO_RADIUS", '1', true, false, "0 - Small\n1 - Vanilla/Standard (suggested)\n2 - Large\nSmaller radiuses can look more stable but don't do as much\nLarger radiuses can look more realistic, but also over darkening and bring out screen space limitations more often (e.g. stuff de-occluding around the edges when turning the camera)\nOnly applies to GTAO"},
      #endif
-         {"ENABLE_SSAO_TEMPORAL", '1', false, false, "Disable if you don't use TAA to avoid seeing noise in Ambient Occlusion (though it won't have the same quality)\nYou can disable it for you use TAA too but it's not suggested"},
-         {"BLOOM_QUALITY", '1', false, false, "0 - Vanilla\n1 - High"},
-         {"MOTION_BLUR_QUALITY", '0', false, false, "0 - Vanilla (user graphics setting based)\n1 - Ultra"},
-         {"SSR_QUALITY", '1', false, false, "Screen Space Reflections\n0 - Vanilla\n1 - High\n2 - Ultra\n3 - Extreme (slow)\nThis can be fairly expensive so lower it if you are having performance issues"},
+         {"ENABLE_SSAO_TEMPORAL", '1', true, false, "Disable if you don't use TAA to avoid seeing noise in Ambient Occlusion (though it won't have the same quality)\nYou can disable it for you use TAA too but it's not suggested", 1},
+         {"BLOOM_QUALITY", '1', true, false, "0 - Vanilla\n1 - High"},
+         {"MOTION_BLUR_QUALITY", '0', true, false, "0 - Vanilla (user graphics setting based)\n1 - Ultra"},
+         {"SSR_QUALITY", '1', true, false, "Screen Space Reflections\n0 - Vanilla\n1 - High\n2 - Ultra\n3 - Extreme (slow)\nThis can be fairly expensive so lower it if you are having performance issues"},
      #if DEVELOPMENT || TEST
-         {"FORCE_MOTION_VECTORS_JITTERED", force_motion_vectors_jittered ? '1' : '0', false, false, "Forces Motion Vectors generation to include the jitters from the previous frame too, as DLSS needs\nEnabling this forces the native TAA to work as when we have DLSS enabled, making it look a little bit better (less shimmery)"},
+         {"FORCE_MOTION_VECTORS_JITTERED", force_motion_vectors_jittered ? '1' : '0', true, false, "Forces Motion Vectors generation to include the jitters from the previous frame too, as DLSS needs\nEnabling this forces the native TAA to work as when we have DLSS enabled, making it look a little bit better (less shimmery)", 1},
      #endif
-         {"ENABLE_POST_PROCESS", '1', false, false, "Allows you to disable all Post Processing (at once)"},
-         {"ENABLE_CAMERA_MOTION_BLUR", '0', false, false, "Camera Motion Blur can look pretty botched in Prey, and can mess with DLSS/TAA, it's turned off by default in Luma (in the config files)"},
-         {"ENABLE_COLOR_GRADING_LUT", '1', false, false, "Allows you to disable Color Grading\nDon't disable it unless you know what you are doing"},
-         {"POST_TAA_SHARPENING_TYPE", '2', false, false, "0 - None (disabled, soft)\n1 - Vanilla (basic sharpening)\n2 - RCAS (AMD improved sharpening, default preset)\n3 - RCAS (AMD improved sharpening, strong preset)"},
-         {"ENABLE_VIGNETTE", '1', false, false, "Allows you to disable Vignette\nIt's not that prominent in Prey, it's only used in certain cases to convey gameplay information,\nso don't disable it unless you know what you are doing"},
+         {"ENABLE_POST_PROCESS", '1', true, false, "Allows you to disable all Post Processing (at once)", 1},
+         {"ENABLE_CAMERA_MOTION_BLUR", '0', true, false, "Camera Motion Blur can look pretty botched in Prey, and can mess with DLSS/TAA, it's turned off by default in Luma (in the config files)", 1},
+         {"ENABLE_COLOR_GRADING_LUT", '1', true, false, "Allows you to disable Color Grading\nDon't disable it unless you know what you are doing", 1},
+         {"POST_TAA_SHARPENING_TYPE", '2', true, false, "0 - None (disabled, soft)\n1 - Vanilla (basic sharpening)\n2 - RCAS (AMD improved sharpening, default preset)\n3 - RCAS (AMD improved sharpening, strong preset)"},
+         {"ENABLE_VIGNETTE", '1', true, false, "Allows you to disable Vignette\nIt's not that prominent in Prey, it's only used in certain cases to convey gameplay information,\nso don't disable it unless you know what you are doing", 1},
      #if DEVELOPMENT || TEST // Disabled these final users because these require the "DEVELOPMENT" flag to be used and we don't want users to mess around with them (it's not what the mod wants to achieve)
-         {"ENABLE_SHARPENING", '1', false, false, "Allows you to disable Sharpening globally\nDisabling it is not suggested, especially if you use TAA (you can use \"POST_TAA_SHARPENING_TYPE\" for that anyway)"},
-         {"ENABLE_FILM_GRAIN", '1', false, false, "Allows you to disable Film Grain\nIt's not that prominent in Prey, it's only used in certain cases to convey gameplay information,\nso don't disable it unless you know what you are doing"},
+         {"ENABLE_SHARPENING", '1', true, false, "Allows you to disable Sharpening globally\nDisabling it is not suggested, especially if you use TAA (you can use \"POST_TAA_SHARPENING_TYPE\" for that anyway)", 1},
+         {"ENABLE_FILM_GRAIN", '1', true, false, "Allows you to disable Film Grain\nIt's not that prominent in Prey, it's only used in certain cases to convey gameplay information,\nso don't disable it unless you know what you are doing", 1},
      #endif
-         {"CORRECT_CRT_INTERLACING_SIZE", '1', false, false, "Disable to keep the vanilla behaviour of CRT like emulated effects becoming near imperceptible at higher resolutions (which defeats their purpose)\nThese are occasionally used in Prey as a fullscreen screen overlay"},
-         {"ALLOW_LENS_DISTORTION_BLACK_BORDERS", '1', false, false, "Disable to force lens distortion to crop all black borders (further increasing FOV is suggested if you turn this off)"},
-         {"ENABLE_DITHERING", '0', false, false, "Temporal Dithering control\nIt doesn't seem to be needed in this game so Luma disabled it by default"},
-         {"DITHERING_BIT_DEPTH", '9', false, false, "Dithering quantization (values between 7 and 9 should be best)"},
+         {"CORRECT_CRT_INTERLACING_SIZE", '1', true, false, "Disable to keep the vanilla behaviour of CRT like emulated effects becoming near imperceptible at higher resolutions (which defeats their purpose)\nThese are occasionally used in Prey as a fullscreen screen overlay", 1},
+         {"ALLOW_LENS_DISTORTION_BLACK_BORDERS", '1', true, false, "Disable to force lens distortion to crop all black borders (further increasing FOV is suggested if you turn this off)", 1},
+         {"ENABLE_DITHERING", '0', true, false, "Temporal Dithering control\nIt doesn't seem to be needed in this game so Luma disabled it by default", 1},
+         {"DITHERING_BIT_DEPTH", '9', true, false, "Dithering quantization (values between 7 and 9 should be best)"},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       assert(shader_defines_data.size() < MAX_SHADER_DEFINES);
@@ -2512,6 +2512,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // Prey upgrades resources with native hooks, there's no incompatibilies left
       enable_upgraded_texture_resource_copy_redirection = false;
 #endif
+
+      enable_samplers_upgrade = true;
+      samplers_upgrade_mode = 5; // Without bruteforcing the offset, many textures (e.g. decals) stay blurry in Prey
 
       game = new Prey();
    }

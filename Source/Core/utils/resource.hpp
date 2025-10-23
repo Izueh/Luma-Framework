@@ -127,6 +127,22 @@ UINT GetUAVMipLevel(const D3D11_UNORDERED_ACCESS_VIEW_DESC& desc)
    }
 }
 
+bool IsMipOf(uint32_t base_w, uint32_t base_h, uint32_t w, uint32_t h)
+{
+   if (w == 0 || h == 0 || base_w == 0 || base_h == 0)
+      return false;
+
+   // Check if w and h are powers-of-two divisions of base
+   if (base_w < w || base_h < h)
+      return false;
+
+   // Check that downscaling factor is exact power of two
+   bool valid_w = (base_w >> (std::countr_zero(base_w) - std::countr_zero(w))) == w;
+   bool valid_h = (base_h >> (std::countr_zero(base_h) - std::countr_zero(h))) == h;
+
+   return valid_w && valid_h;
+}
+
 void GetResourceInfo(ID3D11Resource* resource, uint4& size, DXGI_FORMAT& format, std::string* type_name = nullptr, std::string* hash = nullptr, std::string* debug_name = nullptr, bool* render_target_flag = nullptr, bool* unordered_access_flag = nullptr)
 {
    size = { };
@@ -464,6 +480,59 @@ com_ptr<T> CloneTexture(ID3D11Device* native_device, ID3D11Resource* texture_res
       }
    }
    return cloned_resource;
+}
+
+// Define source pixel structure (8-bit per channel)
+struct R8G8B8A8_UNORM
+{
+   uint8_t r, g, b, a;
+};
+struct B8G8R8A8_UNORM
+{
+   uint8_t b, g, r, a;
+};
+struct R16G16B16A16_FLOAT
+{
+   uint16_t r, g, b, a;
+};
+
+inline uint16_t ConvertFloatToHalf(float value)
+{
+   // XMConvertFloatToHalf converts a float to a half, returning the 16-bit unsigned short representation.
+   return DirectX::PackedVector::XMConvertFloatToHalf(value);
+}
+   
+template<typename T>
+void ConvertR8G8B8A8toR16G16B16A16(
+   const T* src_data,
+   R16G16B16A16_FLOAT* dst_data,
+   size_t width,
+   size_t height,
+   size_t depth = 1)
+{
+   size_t slice_size = width * height;
+
+   for (size_t z = 0; z < depth; ++z)
+   {
+      size_t slice_offset = slice_size * z;
+
+      for (size_t i = 0; i < slice_size; i++)
+      {
+         const T& pixel = src_data[slice_offset + i];
+
+         // Read each channel and normalize from 0-255 to 0.0-1.0.
+         float r = pixel.r / 255.0f;
+         float g = pixel.g / 255.0f;
+         float b = pixel.b / 255.0f;
+         float a = pixel.a / 255.0f;
+
+         // Convert normalized floats to half-floats.
+         dst_data[i].r = ConvertFloatToHalf(r);
+         dst_data[i].g = ConvertFloatToHalf(g);
+         dst_data[i].b = ConvertFloatToHalf(b);
+         dst_data[i].a = ConvertFloatToHalf(a);
+      }
+   }
 }
 
 #if DEVELOPMENT

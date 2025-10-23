@@ -94,7 +94,7 @@ void main(
     if (skyboxType2 || (all(samples[0].rgb <= threshold) && all(samples[1].rgb <= threshold) && all(samples[2].rgb <= threshold) && all(samples[3].rgb <= threshold) && all(samples[4].rgb > average * 2.0)))
     {
       float2 sceneUV = v0.xy * ScreenExtents.zw + ScreenExtents.xy;
-      bool forceSDR = ShouldForceSDR(sceneUV.xy, true);
+      bool forceSDR = ShouldForceSDR(sceneUV.xy);
 
       // Make sky more HDR (barely does anything if it's not day)
       if (LumaSettings.DisplayMode == 1 && !forceSDR)

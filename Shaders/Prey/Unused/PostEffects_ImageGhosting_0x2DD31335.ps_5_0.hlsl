@@ -20,5 +20,4 @@ void main(
   o0.w = saturate(-r0.x * 4.125 + 1);
   r0.xyz = _tex0.Sample(_tex0_s, v1.xy).xyz;
   o0.xyz = r0.xyz;
-  return;
 }

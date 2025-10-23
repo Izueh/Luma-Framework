@@ -363,7 +363,7 @@ void main(
   o0.w = 1.f;
 #endif
 
-  bool forceVanillaSDR = ShouldForceSDR(v0.xy, true);
+  bool forceVanillaSDR = ShouldForceSDR(v0.xy);
 
 #if ENABLE_FAKE_HDR // The game doesn't have many bright highlights, the dynamic range is relatively low, this helps alleviate that. Ideally it'd be better to do this before FXAA, to anti alias it better, but whatever
   if (LumaSettings.DisplayMode == 1 && !forceVanillaSDR)

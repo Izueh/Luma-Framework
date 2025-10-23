@@ -83,7 +83,7 @@ void main(
   sceneColor.xyz = min(sceneColor.xyz, 5.0); // Bloom was already clamped before
 #endif
 
-  bool forceSDR = ShouldForceSDR(r0.xy, true);
+  bool forceSDR = ShouldForceSDR(r0.xy);
 
   // Extra safety to guarantee the vanilla look
   if (forceSDR)

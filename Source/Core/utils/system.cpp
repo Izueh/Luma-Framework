@@ -128,7 +128,54 @@ namespace System
 #endif
    }
 
-   std::vector<std::byte*> ScanMemoryForPattern(const std::byte* base, size_t size, const std::byte* pattern, size_t pattern_size)
+   bool CanAllocate(size_t bytes)
+   {
+      SYSTEM_INFO sysInfo;
+      GetSystemInfo(&sysInfo);
+
+      MEMORY_BASIC_INFORMATION mbi = {};
+      BYTE* addr = (BYTE*)sysInfo.lpMinimumApplicationAddress;
+      BYTE* max_addr = (BYTE*)sysInfo.lpMaximumApplicationAddress;
+
+      while (addr < max_addr)
+      {
+         if (VirtualQuery(addr, &mbi, sizeof(mbi)) == 0)
+            break;
+
+         if (mbi.State == MEM_FREE && mbi.RegionSize >= bytes)
+            return true;
+
+         addr += mbi.RegionSize;
+      }
+      return false;
+   }
+
+   std::vector<std::byte*> ScanMemoryForPattern(const std::byte* base, size_t size, const std::vector<BytePattern>& pattern, bool stop_at_first)
+   {
+      if (base == nullptr || pattern.size() == 0 || pattern.size() > size)
+         return {};
+
+      std::vector<std::byte*> matches;
+      for (size_t i = 0; i <= size - pattern.size(); ++i)
+      {
+         bool found = true;
+         for (size_t j = 0; j < pattern.size(); ++j)
+         {
+            if (!pattern[j].wildcard && base[i + j] != pattern[j].value)
+            {
+               found = false;
+               break;
+            }
+         }
+         if (found)
+         {
+            matches.push_back(const_cast<std::byte*>(base + i));
+            if (stop_at_first) break;
+         }
+      }
+      return matches;
+   }
+   std::vector<std::byte*> ScanMemoryForPattern(const std::byte* base, size_t size, const std::byte* pattern, size_t pattern_size, bool stop_at_first)
    {
       if (pattern == nullptr || base == nullptr || pattern_size == 0 || pattern_size > size)
          return {};
@@ -137,17 +184,18 @@ namespace System
       for (size_t i = 0; i <= size - pattern_size; ++i) {
          if (std::memcmp(base + i, pattern, pattern_size) == 0) {
             matches.push_back(const_cast<std::byte*>(base + i));
+            if (stop_at_first) break;
          }
       }
       return matches;
    }
-   std::vector<std::byte*> ScanMemoryForPattern(const std::byte* base, size_t size, const std::vector<std::byte>& pattern)
+   std::vector<std::byte*> ScanMemoryForPattern(const std::byte* base, size_t size, const std::vector<std::byte>& pattern, bool stop_at_first)
    {
-      return ScanMemoryForPattern(base, size, pattern.data(), pattern.size());
+      return ScanMemoryForPattern(base, size, pattern.data(), pattern.size(), stop_at_first);
    }
-   std::vector<std::byte*> ScanMemoryForPattern(const std::byte* base, size_t size, const std::vector<uint8_t>& pattern)
+   std::vector<std::byte*> ScanMemoryForPattern(const std::byte* base, size_t size, const std::vector<uint8_t>& pattern, bool stop_at_first)
    {
-      return ScanMemoryForPattern(base, size, reinterpret_cast<const std::byte*>(pattern.data()), pattern.size());
+      return ScanMemoryForPattern(base, size, reinterpret_cast<const std::byte*>(pattern.data()), pattern.size(), stop_at_first);
    }
 
    void* VirtualAllocNear(void* target, size_t size, DWORD protect)

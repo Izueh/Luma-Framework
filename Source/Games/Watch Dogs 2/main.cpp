@@ -9,7 +9,7 @@ public:
    {
       // TODO
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"TONEMAP_TYPE", '1', false, false, "0 - SDR: Vanilla (ACES)\n1 - HDR: HDR ACES (recommended)\n2 - HDR: Vanilla+ (DICE+Oklab) (SDR hue conserving)\n3 - HDR: Vanilla+ (DICE) (vibrant)\n4 - HDR: Vanilla+ (DICE+desaturation)\n5 - HDR: Untonemapped (test only)"},
+         {"TONEMAP_TYPE", '1', true, false, "0 - SDR: Vanilla (ACES)\n1 - HDR: HDR ACES (recommended)\n2 - HDR: Vanilla+ (DICE+Oklab) (SDR hue conserving)\n3 - HDR: Vanilla+ (DICE) (vibrant)\n4 - HDR: Vanilla+ (DICE+desaturation)\n5 - HDR: Untonemapped (test only)"},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');

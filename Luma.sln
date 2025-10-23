@@ -53,6 +53,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Dying Light 2", "Source\Gam
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Unreal Engine", "Source\Games\Unreal Engine\Unreal Engine.vcxproj", "{9DD802E8-588E-4955-9FF8-21A0F5B06F48}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Beyond Two Souls", "Source\Games\Beyond Two Souls\Beyond Two Souls.vcxproj", "{AAC35900-B655-4C8F-A622-CA47604EDC77}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Development-Debug|Win32 = Development-Debug|Win32
@@ -377,6 +379,18 @@ Global
 		{9DD802E8-588E-4955-9FF8-21A0F5B06F48}.Test-Release|Win32.Build.0 = Test-Release|x64
 		{9DD802E8-588E-4955-9FF8-21A0F5B06F48}.Test-Release|x64.ActiveCfg = Test-Release|x64
 		{9DD802E8-588E-4955-9FF8-21A0F5B06F48}.Test-Release|x64.Build.0 = Test-Release|x64
+		{AAC35900-B655-4C8F-A622-CA47604EDC77}.Development-Debug|Win32.ActiveCfg = Development-Debug|x64
+		{AAC35900-B655-4C8F-A622-CA47604EDC77}.Development-Debug|x64.ActiveCfg = Development-Debug|x64
+		{AAC35900-B655-4C8F-A622-CA47604EDC77}.Development-Debug|x64.Build.0 = Development-Debug|x64
+		{AAC35900-B655-4C8F-A622-CA47604EDC77}.Development-Release|Win32.ActiveCfg = Development-Release|x64
+		{AAC35900-B655-4C8F-A622-CA47604EDC77}.Development-Release|x64.ActiveCfg = Development-Release|x64
+		{AAC35900-B655-4C8F-A622-CA47604EDC77}.Development-Release|x64.Build.0 = Development-Release|x64
+		{AAC35900-B655-4C8F-A622-CA47604EDC77}.Publishing-Release|Win32.ActiveCfg = Publishing-Release|x64
+		{AAC35900-B655-4C8F-A622-CA47604EDC77}.Publishing-Release|x64.ActiveCfg = Publishing-Release|x64
+		{AAC35900-B655-4C8F-A622-CA47604EDC77}.Publishing-Release|x64.Build.0 = Publishing-Release|x64
+		{AAC35900-B655-4C8F-A622-CA47604EDC77}.Test-Release|Win32.ActiveCfg = Test-Release|x64
+		{AAC35900-B655-4C8F-A622-CA47604EDC77}.Test-Release|x64.ActiveCfg = Test-Release|x64
+		{AAC35900-B655-4C8F-A622-CA47604EDC77}.Test-Release|x64.Build.0 = Test-Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -404,6 +418,7 @@ Global
 		{12A5D475-264C-35B7-7C7F-EA9C310C41BB} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{F4605338-43D9-473F-AD3E-A95380C8AD56} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{9DD802E8-588E-4955-9FF8-21A0F5B06F48} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{AAC35900-B655-4C8F-A622-CA47604EDC77} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {8B799422-BA66-3174-B21F-B9FA07C4B2E3}

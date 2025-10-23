@@ -77,7 +77,7 @@ void main(
   color = gamma_to_linear(color, GCT_MIRROR);
   isLinear = true;
 #endif
-  bool forceSDR = ShouldForceSDR(uv, true);
+  bool forceSDR = ShouldForceSDR(uv);
 
   float saturationAmount = InstanceParams[0].y; // <1 is desaturation, >1 is saturation
   if (!forceSDR)

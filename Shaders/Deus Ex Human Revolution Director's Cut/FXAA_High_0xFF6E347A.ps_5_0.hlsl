@@ -226,7 +226,7 @@ void main(
   o0.w = 1;
   
   float2 uv = v0.xy * ScreenExtents.zw + ScreenExtents.xy;
-  bool forceSDR = ShouldForceSDR(uv, true);
+  bool forceSDR = ShouldForceSDR(uv);
   if (!LumaSettings.GameSettings.HasColorGradingPass && !forceSDR) // Luma
   {
     o0.rgb = gamma_to_linear(o0.rgb, GCT_MIRROR);

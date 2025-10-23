@@ -559,8 +559,14 @@ namespace Hooks
 				colorSpace = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
 			}
 
-			swapChain3->SetColorSpace1(colorSpace);
-			swapChain3->Release();
+			HRESULT hr = swapChain3->SetColorSpace1(colorSpace);
+         if (SUCCEEDED(hr))
+         {
+            // SpecialK and ReShade use this private data GUID to track the current swap chain color space, so just do the same
+            constexpr GUID SKID_SwapChainColorSpace = {0x18b57e4, 0x1493, 0x4953, {0xad, 0xf2, 0xde, 0x6d, 0x99, 0xcc, 0x5, 0xe5}}; // {018B57E4-1493-4953-ADF2-DE6D99CC05E5}
+            swapChain3->SetPrivateData(SKID_SwapChainColorSpace, sizeof(colorSpace), &colorSpace);
+         }
+         swapChain3->Release();
 		}
 
 		using OriginalFunction = void(*)();

@@ -176,12 +176,12 @@ public:
          texture_format_upgrades_2d_aspect_ratio_pixel_threshold = 4; // Needed for videos... somehow they have border scaling
 
          std::vector<ShaderDefineData> game_shader_defines_data = {
-            {"ENABLE_LUMA", '1', false, false, "Enables all Luma's post processing modifications, to improve the image and output HDR."},
-            {"ENABLE_CHARACTER_LIGHT", '1', false, false, "Allow disabling the character/hero/player light that the game uses to give visibility around the character."},
-            {"ENABLE_VIGNETTE", '1', false, false, "Allows disabling the vignette effect. Luma already fixes it for ultrawide given it was too strong out of the box."},
-            {"ENABLE_DARKNESS_EFFECT", '1', false, false, "Allows disabling the darkness effect. The game draws a veil of darkness at the edges of the screen, especially on top."},
-            {"ENABLE_DITHERING", '1', false, false, "Adds a pass of dithering on the HDR output, to fight off banding due to the game excessive usage of low quality textures.\nLuma already fixes most of the banding to begin with, so this is optional."},
-            {"ENABLE_COLOR_GRADING", '1', false, false, "Disables the game's color grading LUT. The game won't look as intended without it, so just use this if you are curious."},
+            {"ENABLE_LUMA", '1', true, false, "Enables all Luma's post processing modifications, to improve the image and output HDR.", 1},
+            {"ENABLE_CHARACTER_LIGHT", '1', true, false, "Allow disabling the character/hero/player light that the game uses to give visibility around the character.", 1},
+            {"ENABLE_VIGNETTE", '1', true, false, "Allows disabling the vignette effect. Luma already fixes it for ultrawide given it was too strong out of the box.", 1},
+            {"ENABLE_DARKNESS_EFFECT", '1', true, false, "Allows disabling the darkness effect. The game draws a veil of darkness at the edges of the screen, especially on top.", 1},
+            {"ENABLE_DITHERING", '1', true, false, "Adds a pass of dithering on the HDR output, to fight off banding due to the game excessive usage of low quality textures.\nLuma already fixes most of the banding to begin with, so this is optional.", 1},
+            {"ENABLE_COLOR_GRADING", '1', true, false, "Disables the game's color grading LUT. The game won't look as intended without it, so just use this if you are curious.", 1},
          };
          shader_defines_data.append_range(game_shader_defines_data);
 
@@ -204,14 +204,14 @@ public:
          texture_format_upgrades_lut_dimensions = LUTDimensions::_3D;
 
          std::vector<ShaderDefineData> game_shader_defines_data = {
-            {"TONEMAP_TYPE", '1', false, false, "0 - SDR: Vanilla (ACES)\n1 - HDR: HDR ACES (recommended)\n2 - HDR: Vanilla+ (DICE+Oklab) (SDR hue conserving)\n3 - HDR: Vanilla+ (DICE) (vibrant)\n4 - HDR: Vanilla+ (DICE+desaturation)\n5 - HDR: Untonemapped (test only)"},
+            {"TONEMAP_TYPE", '1', true, false, "0 - SDR: Vanilla (ACES)\n1 - HDR: HDR ACES (recommended)\n2 - HDR: Vanilla+ (DICE+Oklab) (SDR hue conserving)\n3 - HDR: Vanilla+ (DICE) (vibrant)\n4 - HDR: Vanilla+ (DICE+desaturation)\n5 - HDR: Untonemapped (test only)", 5},
          };
          shader_defines_data.append_range(game_shader_defines_data);
       }
       if (game_id == GAME_COCOON)
       {
          std::vector<ShaderDefineData> game_shader_defines_data = {
-            {"ENABLE_FILM_GRAIN", '1', false, false, "Allow disabling the game's faint film grain effect"},
+            {"ENABLE_FILM_GRAIN", '1', true, false, "Allow disabling the game's faint film grain effect", 1},
          };
 
          shader_defines_data.append_range(game_shader_defines_data);

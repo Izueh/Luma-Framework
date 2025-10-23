@@ -22,7 +22,7 @@ void main(
   o0.xyz = r0.xyz;
 
 #if ENABLE_AUTO_HDR
-  o0.rgb = gamma_to_linear(o0.rgb);
+  o0.rgb = gamma_to_linear(o0.rgb); // Support for negative values is likely not needed
   o0.rgb = PumboAutoHDR(o0.rgb, 250.0, LumaSettings.GamePaperWhiteNits, 2.25);
   o0.rgb = linear_to_gamma(o0.rgb);
 #endif

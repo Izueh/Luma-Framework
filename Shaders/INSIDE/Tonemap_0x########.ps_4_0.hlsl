@@ -270,6 +270,7 @@ void main(
   const float2 noiseTextureInvSize = cb0[8].xy; // 256x256
   float2 noiseUV = v0.xy + noiseRandomOffset; // This is per pixel and is properly scaled by screen aspect ratio
   noiseUV *= noiseTextureInvSize;
+  // TODO: is this actually intended to be film grain or is it noise/dither? In that case, we should use "ENABLE_DITHER" instead, and possibly not scale it by resolution
 #if ENABLE_LUMA // Fix grain being near invisible at 4k, set it to 1080, the most common resolution of when the game shipped
   noiseUV *= 1080.0 / screenHeight;
 #endif // ENABLE_LUMA

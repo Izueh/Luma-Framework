@@ -79,7 +79,7 @@ void main(
   r0.xyz = MaterialParams[0].xyz * r0.xyz;
   r0.xyz = MaterialParams[2].xxx * r0.xyz;
   r1.xy = v0.xy * ScreenExtents.zw + ScreenExtents.xy;
-  bool forceSDR = ShouldForceSDR(r1.xy, true);
+  bool forceSDR = ShouldForceSDR(r1.xy);
   r0.w = p_default_Material_0A2F31A42976409_05142B6415252097_DepthBufferTexture_texture.Sample(p_default_Material_0A2F31A42976409_05142B6415252097_DepthBufferTexture_sampler_s, r1.xy).x;
   r0.w = r0.w * DepthToW.x + DepthToW.y;
   r0.w = max(9.99999997e-007, r0.w);

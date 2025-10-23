@@ -86,7 +86,7 @@ void main(
   r1.xy = MaterialParams[0].ww * ScreenExtents.zw;
   r1.zw = -r1.xy;
   float2 centralUV = v0.xy * ScreenExtents.zw + ScreenExtents.xy;
-  bool forceSDR = ShouldForceSDR(centralUV.xy, true);
+  bool forceSDR = ShouldForceSDR(centralUV.xy);
   r1.xyzw = centralUV.xxyy + r1.xzyw;
   scale = 1.0 / scale;
   r0.w = p_default_Material_25C00A2410422479_DeferredBufferTexture_texture.Sample(p_default_Material_25C00A2410422479_DeferredBufferTexture_sampler_s, lerp(centralUV, r1.xw, scale)).w;

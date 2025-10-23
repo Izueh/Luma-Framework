@@ -1,6 +1,5 @@
 #define GAME_FINALFANTASYXV 1
 
-#define UPGRADE_SAMPLERS 0
 #define GEOMETRY_SHADER_SUPPORT 0
 #define ALLOW_SHADERS_DUMPING 0
 #define ENABLE_NGX 1
@@ -322,7 +321,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
 
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"TONEMAP_TYPE", '1', false, false, "0 - Vanilla SDR\n1 - Luma HDR (Vanilla+)\n2 - Raw HDR (Untonemapped)\nThe HDR tonemapper works for SDR too\nThis games uses a filmic tonemapper, which slightly crushes blacks"},
+         {"TONEMAP_TYPE", '1', true, false, "0 - Vanilla SDR\n1 - Luma HDR (Vanilla+)\n2 - Raw HDR (Untonemapped)\nThe HDR tonemapper works for SDR too\nThis games uses a filmic tonemapper, which slightly crushes blacks"},
       };
 
       shader_defines_data.append_range(game_shader_defines_data);

@@ -39,8 +39,8 @@ public:
    void OnInit(bool async) override
    {
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"TONEMAP_TYPE", '1', false, false, "0 - SDR: Vanilla\n1 - HDR: Vanilla+ (native method)\n2 - HDR: Vanilla+ (inverse method)\n3 - HDR: Untonemapped"},
-         {"ENABLE_VIGNETTE", '1', false, false, "Set to 0 to disable vanilla vignette"},
+         {"TONEMAP_TYPE", '1', true, false, "0 - SDR: Vanilla\n1 - HDR: Vanilla+ (native method)\n2 - HDR: Vanilla+ (inverse method)\n3 - HDR: Untonemapped", 3},
+         {"ENABLE_VIGNETTE", '1', true, false, "Set to 0 to disable vanilla vignette", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');

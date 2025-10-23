@@ -94,7 +94,7 @@ void main(
   r0.rgb *= highlightsByLuminanceScale;
 #else // Mixed (looks best on highlights)
   r0.rgb *= lerp(highlightsPerChannelScale, highlightsByLuminanceScale, 0.75);
-#endif // LUT_SAMPLING_ERROR_EMULATION_MODE == 1
+#endif
 #endif // LUT_SAMPLING_ERROR_EMULATION_MODE != 3
 #endif // ENABLE_LUMA && LUT_SAMPLING_ERROR_EMULATION_MODE > 0
 

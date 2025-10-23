@@ -21,7 +21,7 @@ public:
    void OnInit(bool async) override
    {
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"ENABLE_FAKE_HDR", '1', false, false, "Enable a \"Fake\" HDR boosting effect, as the game's dynamic range was very limited to begin with"},
+         {"ENABLE_FAKE_HDR", '1', true, false, "Enable a \"Fake\" HDR boosting effect, as the game's dynamic range was very limited to begin with", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       // The game was SDR all along, but it was all linear space (sRGB textures), it never directly applied gamma, it relied on sRGB and not views for conversions (UI is in gamma space)

@@ -122,41 +122,53 @@ struct TraceDrawCallData
    D3D11_TEXTURE_ADDRESS_MODE samplers_address_u[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
    D3D11_TEXTURE_ADDRESS_MODE samplers_address_v[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
    D3D11_TEXTURE_ADDRESS_MODE samplers_address_w[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
+   float samplers_mip_lod_bias[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
 
    // Render Target (Resource+Views)
-   const ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {}; // TODO.. find a better way, this is very hacky (though safe, as long as we read/compare it)
-   DXGI_FORMAT rt_format[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {}; // The format of the resource
-   DXGI_FORMAT rtv_format[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {}; // The format of the view
-   uint4 rt_size[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {}; // 3th and 4th channels are Array, MS and Mips
-   uint3 rtv_size[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-   UINT rtv_mip[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-   std::string rt_type_name[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-   std::string rt_hash[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {}; // Ptr hash (not content hash)
-   std::string rt_debug_name[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {}; // Debug name of the texture or the view
-   bool rt_is_swapchain[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+   static constexpr size_t rtvs_size = D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; // Max size (we can lower it if needed) // TODO: allocate these as a vector of structs
+   const ID3D11RenderTargetView* rtvs[rtvs_size] = {};                  // TODO.. find a better way, this is very hacky (though safe, as long as we read/compare it)
+   DXGI_FORMAT rt_format[rtvs_size] = {};                               // The format of the resource
+   DXGI_FORMAT rtv_format[rtvs_size] = {};                              // The format of the view
+   uint4 rt_size[rtvs_size] = {};                                       // 3th and 4th channels are Array, MS and Mips
+   uint3 rtv_size[rtvs_size] = {};
+   UINT rtv_mip[rtvs_size] = {};
+   std::string rt_type_name[rtvs_size] = {};
+   std::string rt_hash[rtvs_size] = {};                                    // Ptr hash (not content hash)
+   std::string rt_debug_name[rtvs_size] = {}; // Debug name of the texture or the view
+   bool rt_is_swapchain[rtvs_size] = {};
    // Shader Resource (Resource+Views)
-   const ID3D11ShaderResourceView* srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
-   DXGI_FORMAT srv_format[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {}; // The format of the view
-   DXGI_FORMAT sr_format[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {}; // The format of the resource
-   uint4 sr_size[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {}; // 3th and 4th channels are Array, MS and Mips
-   uint3 srv_size[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
-   UINT srv_mip[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
-   std::string sr_type_name[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
-   std::string sr_hash[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {}; // Ptr hash (not content hash)
-   std::string sr_debug_name[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {}; // Debug name of the texture or the view
-   bool sr_is_rt[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
-   bool sr_is_ua[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
+#if GAME_BURNOUT_PARADISE // TODO: remove these hacks... Burnout Paradise crashes due to too big allocations
+   static constexpr size_t srvs_size = 16;
+#else
+   static constexpr size_t srvs_size = D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT;
+#endif
+   const ID3D11ShaderResourceView* srvs[srvs_size] = {};
+   DXGI_FORMAT srv_format[srvs_size] = {};                                   // The format of the view
+   DXGI_FORMAT sr_format[srvs_size] = {};                            // The format of the resource
+   uint4 sr_size[srvs_size] = {};                                            // 3th and 4th channels are Array, MS and Mips
+   uint3 srv_size[srvs_size] = {};
+   UINT srv_mip[srvs_size] = {};
+   std::string sr_type_name[srvs_size] = {};
+   std::string sr_hash[srvs_size] = {};                                          // Ptr hash (not content hash)
+   std::string sr_debug_name[srvs_size] = {}; // Debug name of the texture or the view
+   bool sr_is_rt[srvs_size] = {};
+   bool sr_is_ua[srvs_size] = {};
    // Unordered Access (Resource+Views)
-   const ID3D11UnorderedAccessView* uavs[D3D11_1_UAV_SLOT_COUNT] = {};
-   DXGI_FORMAT ua_format[D3D11_1_UAV_SLOT_COUNT] = {}; // The format of the resource
-   DXGI_FORMAT uav_format[D3D11_1_UAV_SLOT_COUNT] = {}; // The format of the view
-   uint4 ua_size[D3D11_1_UAV_SLOT_COUNT] = {}; // 3th and 4th channels are Array, MS and Mips
-   uint3 uav_size[D3D11_1_UAV_SLOT_COUNT] = {};
-   UINT uav_mip[D3D11_1_UAV_SLOT_COUNT] = {};
-   std::string ua_type_name[D3D11_1_UAV_SLOT_COUNT] = {};
-   std::string ua_hash[D3D11_1_UAV_SLOT_COUNT] = {}; // Ptr hash (not content hash)
-   std::string ua_debug_name[D3D11_1_UAV_SLOT_COUNT] = {}; // Debug name of the texture or the view
-   bool ua_is_rt[D3D11_1_UAV_SLOT_COUNT] = {};
+#if GAME_BURNOUT_PARADISE
+   static constexpr size_t uavs_size = 16;
+#else
+   static constexpr size_t uavs_size = D3D11_1_UAV_SLOT_COUNT;
+#endif
+   const ID3D11UnorderedAccessView* uavs[uavs_size] = {};
+   DXGI_FORMAT ua_format[uavs_size] = {};               // The format of the resource
+   DXGI_FORMAT uav_format[uavs_size] = {};     // The format of the view
+   uint4 ua_size[uavs_size] = {};                       // 3th and 4th channels are Array, MS and Mips
+   uint3 uav_size[uavs_size] = {};
+   UINT uav_mip[uavs_size] = {};
+   std::string ua_type_name[uavs_size] = {};
+   std::string ua_hash[uavs_size] = {};                    // Ptr hash (not content hash)
+   std::string ua_debug_name[uavs_size] = {}; // Debug name of the texture or the view
+   bool ua_is_rt[uavs_size] = {};
    // Depth Stencil (Resource+View)
    DXGI_FORMAT ds_format = {}; // The format of the resource
    DXGI_FORMAT dsv_format = {}; // The format of the view
@@ -217,11 +229,13 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    std::thread thread_auto_loading;
    std::atomic<bool> thread_auto_loading_running = false;
 
-   std::unordered_set<uint64_t> upgraded_resources; // All the upgraded resources, excluding the swapchains backbuffers, as they are created internally by DX
+   std::unordered_set<uint64_t> upgraded_resources; // All the directly upgraded resources, excluding the swapchains backbuffers, as they are created internally by DX
 #if DEVELOPMENT
    std::unordered_map<uint64_t, reshade::api::format> original_upgraded_resources_formats; // These include the swapchain buffers too!
    std::unordered_map<uint64_t, std::pair<uint64_t, reshade::api::format>> original_upgraded_resource_views_formats; // All the views for upgraded resources, with the resource and the original resource view format
 #endif
+   std::unordered_map<uint64_t, uint64_t> original_resources_to_mirrored_upgraded_resources; // TODO: convert/copy the initial/current data from the source texture when created
+   std::unordered_map<uint64_t, uint64_t> original_resource_views_to_mirrored_upgraded_resource_views;
 
 #if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
    // Edited shaders byte code + size + MD5 hash by (original) shader hash.
@@ -256,6 +270,7 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    // Pipelines by handle. Multiple pipelines can target the same shader, and even have multiple shaders within themselves.
    // This contains all pipelines (from the game) that we can replace shaders of (e.g. pixel shaders, vertex shaders, ...).
    // It's basically data we append (link) to pipelines, done manually because we have no other way.
+   // The data here is allocated by itself. // TODO: make this a unique pointer for easier handling.
    std::unordered_map<uint64_t, Shader::CachedPipeline*> pipeline_cache_by_pipeline_handle;
    // Same as "pipeline_cache_by_pipeline_handle" but mapped to cloned (custom) pipeline handles.
    std::unordered_map<uint64_t, Shader::CachedPipeline*> pipeline_cache_by_pipeline_clone_handle;

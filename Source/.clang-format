@@ -8,20 +8,21 @@ AllowShortIfStatementsOnASingleLine: false
 AllowShortLoopsOnASingleLine: false
 ColumnLimit: 0
 AlwaysBreakTemplateDeclarations: Yes
+SpacesInContainerLiterals: true
 SpaceBeforeParens: ControlStatements
 SpacesInParentheses: false
 SpacesInSquareBrackets: false
 SpaceInEmptyParentheses: false
 SpacesBeforeTrailingComments: 1
 PointerAlignment: Left
-AlignAfterOpenBracket: Align
-AlignConsecutiveAssignments: true
-AlignConsecutiveDeclarations: true
+AlignAfterOpenBracket: DontAlign
+ContinuationIndentWidth: 3
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
 AlignOperands: true
 SortIncludes: false
 NamespaceIndentation: All
 AccessModifierOffset: -3
-ContinuationIndentWidth: 3
 ReflowComments: true
 AlignTrailingComments: true
 

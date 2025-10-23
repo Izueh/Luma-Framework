@@ -292,7 +292,7 @@ float4 main(float4 gl_FragCoord : SV_Position) : SV_Target0
     }
     
   float2 uv = gl_FragCoord.xy * ScreenExtents.zw + ScreenExtents.xy;
-  bool forceSDR = ShouldForceSDR(uv, true);
+  bool forceSDR = ShouldForceSDR(uv);
   if (!LumaSettings.GameSettings.HasColorGradingPass && !forceSDR) // Luma
   {
     outColor.rgb = gamma_to_linear(outColor.rgb, GCT_MIRROR);

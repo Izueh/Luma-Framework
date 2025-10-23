@@ -43,6 +43,8 @@ Texture2D<float4> texture3 : register(t3);
 #define COMPOSE_EFFECTS 1
 #endif
 
+// Permutation 7DF19F48 has no features enabled!
+
 // Default "ALPHA_OUT_TYPE" was 2, so only changes for the hashes that need it
 // 0 and 1 types are for UI sprites (it's not exactly the same shader, but it was similar enough that we merged them)!
 #if _B8164665
@@ -120,8 +122,8 @@ void main(
 
 #if FILM_GRAIN
 #if ENABLE_LUMA // Boost film grain in highlights and remove it from mid tones
-  float highlightsScale = 1.0; // 2 looks good as well, but makes film grain too strong on highlights
-  grain *= linear_to_gamma1(max(GetLuminance(gamma_to_linear(sceneColor.rgb, GCT_MIRROR) * highlightsScale), 0.0));
+  float highlightsScale = 2.5; // > 1 looks good, but makes film grain very strong on highlights
+  grain *= linear_to_gamma1(max(GetLuminance(gamma_to_linear(sceneColor.rgb, GCT_MIRROR) * highlightsScale), 0.0)); // Note: try with a pow on "grain" instead?
 #endif // ENABLE_LUMA
   const float4 postProcessedColor = float4(sceneColor.rgb + grain * register4.z, 1.0);
 #else
@@ -158,10 +160,11 @@ void main(
 #elif 0 // Alterantive version that clips after, might look different from Vanilla, but maybe better
   const float postProcessedColorAverage = saturate(dot(postProcessedColor.rgb, 1.0 / 3.0));
 #else // Leave it as it was given it wasn't clamped in vanilla
-  const float postProcessedColorAverage = dot(postProcessedColor.rgb, 1.0 / 3.0);
+  const float postProcessedColorAverage = dot(postProcessedColor.rgb, 1.0 / 3.0); // rgb average
 #endif
-  // Usually this is a grey scale
-  float3 shadowTint = saturate(postProcessedColorAverage * register6.xyz + register7.xyz); // Leave this saturate in as it's just a multiplier
+  // If "register7" is 1 and "register6" is 0, there's no tint. This doesn't seem to be used that aggressively nor often (?).
+  // It's similar to levels.
+  float3 shadowTint = saturate(postProcessedColorAverage * register6.xyz + register7.xyz); // Leave this saturate in as it's just a multiplier (it actually acts as an additive offset as it's applied to inverted shadow), without it, in at least one direction it will generate broken colors
 
   // This will generate colors beyond Rec.709 in the shadow
 #if ENABLE_LUMA
@@ -173,7 +176,11 @@ void main(
   gradedSceneColor.rgb = (gradedSceneColor.rgb > 0.0) ? (1.0 - (shadowTint.rgb * (1.0 - gradedSceneColor.rgb))) : gradedSceneColor.rgb;
   gradedSceneColor.rgb *= maxGradedSceneColor;
 #elif 1
-  gradedSceneColor.rgb = (gradedSceneColor.rgb > 0.0 && gradedSceneColor.rgb < 1.0) ? (1.0 - (shadowTint.rgb * (1.0 - gradedSceneColor.rgb))) : gradedSceneColor.rgb;
+  // If our source color went beyond 0-1 (either because of the filter above (unlikely), or because of prior wide gamut rendering or image modulation), emulate the filter at the closest 0 or 1 edge after the edge too
+  float3 clippedGradedSceneColor = 1.0 - (shadowTint.rgb * (1.0 - saturate(gradedSceneColor.rgb)));
+  gradedSceneColor.rgb += clippedGradedSceneColor - saturate(gradedSceneColor.rgb);
+#elif 1
+  gradedSceneColor.rgb = (gradedSceneColor.rgb >= 0.0 && gradedSceneColor.rgb < 1.0) ? (1.0 - (shadowTint.rgb * (1.0 - gradedSceneColor.rgb))) : gradedSceneColor.rgb;
 #else
   // If we have negative colors, flip the filter direction of the filter otherwise they'd shift towards the opposite direction.
   // Attempted idea to add negative scRGB values support, but I don't think it's needed (applying the filter through oklab might be better)
@@ -206,7 +213,7 @@ void main(
 #if ENABLE_LUMA && ALPHA_OUT_TYPE >= 2 // Luma: scRGB support
   gradedSceneColor.rgb = pow(abs(gradedSceneColor.rgb), gamma.xyz * DefaultGamma) * sign(gradedSceneColor.rgb); // Concatenate linearization for tonemapping
 #else
-  gradedSceneColor.rgb = pow(gradedSceneColor.rgb, gamma.xyz);
+  gradedSceneColor.rgb = pow(gradedSceneColor.rgb, gamma.xyz); // No need for abs() probably, it wasn't there to begin with
 #endif // ENABLE_LUMA && ALPHA_OUT_TYPE >= 2
 
 #if ENABLE_LUMA && ALPHA_OUT_TYPE >= 2 // Skip tonemapping on world space UI

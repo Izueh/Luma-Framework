@@ -1,7 +1,6 @@
 #define GAME_FF7_REMAKE 1
 
 #define ENABLE_NGX 1
-#define UPGRADE_SAMPLERS 1
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
 #ifdef NDEBUG
 #define ALLOW_SHADERS_DUMPING 1
@@ -1054,12 +1053,13 @@ public:
                {
                   if (samplers_handle.second.contains(new_texture_mip_lod_bias_offset)) continue; // Skip "resolutions" that already got their custom samplers created
                   ID3D11SamplerState* native_sampler = reinterpret_cast<ID3D11SamplerState*>(samplers_handle.first);
-                  D3D11_SAMPLER_DESC native_desc;
-                  native_sampler->GetDesc(&native_desc);
                   shared_lock_samplers.unlock(); // This is fine!
                   {
-                     std::unique_lock unique_lock_samplers(s_mutex_samplers);
-                     samplers_handle.second[new_texture_mip_lod_bias_offset] = CreateCustomSampler(device_data, native_device, native_desc);
+                     D3D11_SAMPLER_DESC native_desc;
+                     native_sampler->GetDesc(&native_desc);
+                     com_ptr<ID3D11SamplerState> custom_sampler = CreateCustomSampler(device_data, native_device, native_desc);
+                     const std::unique_lock unique_lock_samplers(s_mutex_samplers);
+                     samplers_handle.second[new_texture_mip_lod_bias_offset] = custom_sampler;
                   }
                   shared_lock_samplers.lock();
                }
@@ -1302,8 +1302,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 		// LUT is 3D 32x
 		texture_format_upgrades_lut_size = 32;
 		texture_format_upgrades_lut_dimensions = LUTDimensions::_3D;
+
+      enable_samplers_upgrade = true;
+
 		redirected_shader_hashes["Output_HDR"] = {"A8EB118F", "922A71D1", "3A4D858E", "D950DA01", "5CD12E67", "3B489929", "8D04181D", "6846FF90"};
 		redirected_shader_hashes["Output_SDR"] = {"506D5998", "F68D39B5", "BBB9CE42", "51E2B894", "803889E8", "D96EF76D", "5C2D3A71", "66162229"};
+
 		Luma::Settings::Initialize(&settings);
 
 		game = new FF7Remake();

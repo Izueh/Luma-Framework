@@ -8,14 +8,16 @@
 // DEFINE_VALUE_AS_STRING
 #define _STRINGIZE2(x) #x
 
-// TODO: why don't these run in some debug builds???
 // In non debug builds, replace asserts with a message box
 #if defined(NDEBUG) && (DEVELOPMENT || TEST)
-#undef assert
-#define assert(expression) ((void)(                                                       \
-            (!!(expression)) ||                                                               \
+#define ASSERT(expression) ((void)(                                                       \
+            (!!(expression)) ||                                                           \
             (MessageBoxA(NULL, "Assertion failed: " #expression "\nFile: " __FILE__ "\nLine: " _STRINGIZE(__LINE__), Globals::MOD_NAME, MB_SETFOREGROUND | MB_OK))) \
         )
+#undef assert
+#define assert(expression) ASSERT(expression)
+#else
+#define ASSERT(expression) assert(expression)
 #endif
 
 #if DEVELOPMENT || TEST || _DEBUG
@@ -40,14 +42,14 @@
         }                                                               \
     } while (false)
 #define ASSERT_ONCE(expression) do { { static bool asserted_once = false; \
-if (!asserted_once && !(expression)) { assert(expression); asserted_once = true; } } } while (false)
+if (!asserted_once && !(expression)) { ASSERT(expression); asserted_once = true; } } } while (false)
 #define ASSERT_ONCE_MSG(expression, msg) do { { static bool asserted_once = false; \
 if (!asserted_once && !(expression)) { ASSERT_MSG(expression, msg); asserted_once = true; } } } while (false)
 
 #else
-#define ASSERT_MSG(expression, msg)
-#define ASSERT_ONCE(expression)
-#define ASSERT_ONCE_MSG(expression, msg)
+#define ASSERT_MSG(expression, msg) ((void)0)
+#define ASSERT_ONCE(expression) ((void)0)
+#define ASSERT_ONCE_MSG(expression, msg) ((void)0)
 #endif
 
 namespace

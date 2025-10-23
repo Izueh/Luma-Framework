@@ -78,7 +78,7 @@ void main(
 
 #if ENABLE_FAKE_HDR // The game doesn't have many bright highlights, the dynamic range is relatively low, this helps alleviate that
   int superSampling = 2; // TODO: figure out this scale, and also make sure this looks good
-  bool forceVanillaSDR = ShouldForceSDR(pixelPos.xy / (cb2[3].xy * superSampling), true);
+  bool forceVanillaSDR = ShouldForceSDR(pixelPos.xy / (cb2[3].xy * superSampling));
   if (LumaSettings.DisplayMode == 1 && !forceVanillaSDR)
   {
     float normalizationPoint = 0.025; // Found empyrically

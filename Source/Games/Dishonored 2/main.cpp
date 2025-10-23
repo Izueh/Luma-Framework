@@ -1,6 +1,5 @@
 #define GAME_DISHONORED_2 1
 
-#define UPGRADE_SAMPLERS 0
 #define ENABLE_NGX 1
 // Hangs on boot
 #define DISABLE_AUTO_DEBUGGER
@@ -348,12 +347,13 @@ public:
                {
                   if (samplers_handle.second.contains(new_texture_mip_lod_bias_offset)) continue; // Skip "resolutions" that already got their custom samplers created
                   ID3D11SamplerState* native_sampler = reinterpret_cast<ID3D11SamplerState*>(samplers_handle.first);
-                  D3D11_SAMPLER_DESC native_desc;
-                  native_sampler->GetDesc(&native_desc);
                   shared_lock_samplers.unlock(); // This is fine!
                   {
-                     std::unique_lock unique_lock_samplers(s_mutex_samplers);
-                     samplers_handle.second[new_texture_mip_lod_bias_offset] = CreateCustomSampler(device_data, native_device, native_desc);
+                     D3D11_SAMPLER_DESC native_desc;
+                     native_sampler->GetDesc(&native_desc);
+                     com_ptr<ID3D11SamplerState> custom_sampler = CreateCustomSampler(device_data, native_device, native_desc);
+                     const std::unique_lock unique_lock_samplers(s_mutex_samplers);
+                     samplers_handle.second[new_texture_mip_lod_bias_offset] = custom_sampler;
                   }
                   shared_lock_samplers.lock();
                }
@@ -1068,6 +1068,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       };
       texture_format_upgrades_lut_size = 32;
       texture_format_upgrades_lut_dimensions = LUTDimensions::_3D;
+
+      enable_samplers_upgrade = true;
 
       enable_ui_separation = true;
       ui_separation_format = DXGI_FORMAT_R16G16B16A16_FLOAT; // TODO: pick the best format, it's probably DXGI_FORMAT_R16G16B16A16_UNORM or DXGI_FORMAT_R8G8B8A8_UNORM.

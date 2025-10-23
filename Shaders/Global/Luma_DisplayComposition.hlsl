@@ -18,16 +18,9 @@ Texture1DArray<float4> debugTexture1DArray : register(t8);
 // Note: this might not always be set, only use in known cases
 SamplerState linearSampler : register(s0);
 
-// Custom Luma shader to apply the display (or output) transfer function from a linear input (or apply custom gamma correction)
-float4 main(float4 pos : SV_Position0) : SV_Target0
-{
-	// Game scene paper white and Generic paper white for when we can't account for the UI paper white.
-	// If "POST_PROCESS_SPACE_TYPE" or "EARLY_DISPLAY_ENCODING" are 1, this might have already been applied in.
-	// This essentially means that the SDR range we receive at this point is 0-1 in the buffers, with 1 matching "sRGB_WhiteLevelNits" as opposued to "ITU_WhiteLevelNits".
-    const float gamePaperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
-    const float UIPaperWhite = LumaSettings.UIPaperWhiteNits / sRGB_WhiteLevelNits;
-
 #if DEVELOPMENT
+bool DrawDebugTexture(float3 pos, inout float4 outColor, float gamePaperWhite, float UIPaperWhite)
+{
 	bool _texture2D = (LumaData.CustomData2 & (1 << 13)) != 0; // "_" as the name is seemengly taken in hlsl
 	bool _texture3D = (LumaData.CustomData2 & (1 << 14)) != 0;
 	bool _texture1D = !_texture2D && !_texture3D; // We don't have a flag for "no texture", we simply unbind all of them
@@ -234,9 +227,72 @@ float4 main(float4 pos : SV_Position0) : SV_Target0
 		}
 		if (validTexel || !backgroundPassthrough)
 		{
-			return color * gamePaperWhite; // Scale by user paper white brightness just to make it more visible
+			outColor = color * gamePaperWhite; // Scale by user paper white brightness just to make it more visible
+			return true;
 		}
     }
+	return false;
+}
+#endif
+
+float3 ComposeUI(float3 pos, float3 color, float gamePaperWhite, float UIPaperWhite)
+{
+#if 1
+	float3 sceneColorGamma = linear_to_sRGB_gamma(color.rgb, GCT_MIRROR);
+	float3 UIRelativeColor = color.rgb * (gamePaperWhite / UIPaperWhite);
+    float3 sceneColorGammaTonemapped = linear_to_sRGB_gamma((UIRelativeColor / (UIRelativeColor + 1.f)) / (gamePaperWhite / UIPaperWhite), GCT_MIRROR); // Tonemap the UI background based on the UI intensity to avoid bright backgrounds (e.g. sun) burning through the UI
+	float3 UIInverseInfluence = 1.0;
+	float4 UIColor = uiTexture.Load((int3)pos.xyz);
+    float UIIntensity = saturate(UIColor.a);
+	sceneColorGamma *= pow(gamePaperWhite, 1.0 / DefaultGamma);
+	sceneColorGammaTonemapped *= pow(gamePaperWhite, 1.0 / DefaultGamma);
+	UIColor.rgb *= pow(UIPaperWhite, 1.0 / DefaultGamma);
+	// Darken the scene background based on the UI intensity
+	float3 composedColor = lerp(sceneColorGamma, sceneColorGammaTonemapped, UIIntensity) * (1.0 - UIIntensity);
+    // Calculate how much the additive UI influenced the darkened scene color, so we can determine the intensity to blend the composed color with the scene paper white (it's better to calculate this in gamma space)
+	UIInverseInfluence = safeDivision(composedColor, composedColor + UIColor.rgb, 1); //TODO: handle negative colors?
+	// Add pre-multiplied UI
+	composedColor += UIColor.rgb;
+	
+	float3 compositionPaperWhite = lerp(pow(UIPaperWhite, 1.0 / DefaultGamma), pow(gamePaperWhite, 1.0 / DefaultGamma), UIInverseInfluence);
+	composedColor /= compositionPaperWhite;
+
+  	color.rgb = gamma_to_linear(composedColor, GCT_MIRROR) * pow(compositionPaperWhite, DefaultGamma);
+#else
+	color.rgb /= UIPaperWhite;
+	float3 sceneColorGamma = linear_to_sRGB_gamma(color.rgb, GCT_MIRROR);
+    float3 sceneColorGammaTonemapped = linear_to_sRGB_gamma(color.rgb / (color.rgb + 1.f), GCT_MIRROR); // Tonemap the UI background based on the UI intensity to avoid bright backgrounds (e.g. sun) burning through the UI
+	float3 UIInverseInfluence = 1.0;
+	float4 UIColor = uiTexture.Load((int3)pos.xyz);
+    float UIIntensity = saturate(UIColor.a);
+	// Darken the scene background based on the UI intensity
+	float3 composedColor = lerp(sceneColorGamma, sceneColorGammaTonemapped, UIIntensity) * (1.0 - UIIntensity);
+    // Calculate how much the additive UI influenced the darkened scene color, so we can determine the intensity to blend the composed color with the scene paper white (it's better to calculate this in gamma space)
+	UIInverseInfluence = safeDivision(composedColor, composedColor + UIColor.rgb, 1);
+	// Add pre-multiplied UI
+	composedColor += UIColor.rgb;
+  	color.rgb = gamma_to_linear(composedColor, GCT_MIRROR);
+	color.rgb *= UIPaperWhite;
+	color.rgb *= lerp(1.0, gamePaperWhite, saturate(UIInverseInfluence));
+#endif
+	return color;
+}
+
+// Custom Luma shader to apply the display (or output) transfer function from a linear input (or apply custom gamma correction)
+float4 main(float4 pos : SV_Position0) : SV_Target0
+{
+	// Game scene paper white and Generic paper white for when we can't account for the UI paper white.
+	// If "POST_PROCESS_SPACE_TYPE" or "EARLY_DISPLAY_ENCODING" are 1, this might have already been applied in.
+	// This essentially means that the SDR range we receive at this point is 0-1 in the buffers, with 1 matching "sRGB_WhiteLevelNits" as opposued to "ITU_WhiteLevelNits".
+    const float gamePaperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
+    const float UIPaperWhite = LumaSettings.UIPaperWhiteNits / sRGB_WhiteLevelNits;
+
+#if DEVELOPMENT
+	float4 debugTextureColor = 0.0;
+	if (DrawDebugTexture(pos.xyz, debugTextureColor, gamePaperWhite, UIPaperWhite))
+	{
+		return debugTextureColor;
+	}
 #endif
 
 	float sourceWidth;
@@ -259,9 +315,11 @@ float4 main(float4 pos : SV_Position0) : SV_Target0
 	float mipLevel1 = log2(sourceHeight / targetHeight1);
 	float mipLevel2 = log2(sourceHeight / targetHeight2);
 	float4 color = sourceTexture.Load((int3)pos.xyz);
-	float4 mipColor1 = sourceTexture.SampleLevel(linearSampler, uv, mipLevel1);
-	float4 mipColor2 = sourceTexture.SampleLevel(linearSampler, uv, mipLevel2);
+	float4 mipColor1 = 0.0;
+	float4 mipColor2 = 0.0;
 #if 0
+	mipColor1 = sourceTexture.SampleLevel(linearSampler, uv, mipLevel1);
+	mipColor2 = sourceTexture.SampleLevel(linearSampler, uv, mipLevel2);
 	int offset = 5;
 	mipColor1 = sourceTexture.Load((int3)pos.xyz + int3( offset, -offset, 0)) +
 				sourceTexture.Load((int3)pos.xyz + int3(-offset,  offset, 0)) +
@@ -278,6 +336,7 @@ float4 main(float4 pos : SV_Position0) : SV_Target0
 	mipColor2 /= 5.0;
 #endif
 	//return mipColor2; //TODOFT
+
 	// This case means the game currently doesn't have Luma custom shaders built in (fallback in case of problems), or has manually unloaded them, so the value of some macro defines do not matter
 	const bool modActive = LumaData.CustomData1 == 0;
 	if (!modActive)
@@ -388,44 +447,7 @@ float4 main(float4 pos : SV_Position0) : SV_Target0
 
 #elif UI_DRAW_TYPE == 3 // Compose UI on top of "scene" and tonemap the scene background //TODOFT6: finish one (then clean up all the defines that we don't need anymore)
 
-#if 1
-	float3 sceneColorGamma = linear_to_sRGB_gamma(color.rgb, GCT_MIRROR);
-	float3 UIRelativeColor = color.rgb * (gamePaperWhite / UIPaperWhite);
-    float3 sceneColorGammaTonemapped = linear_to_sRGB_gamma((UIRelativeColor / (UIRelativeColor + 1.f)) / (gamePaperWhite / UIPaperWhite), GCT_MIRROR); // Tonemap the UI background based on the UI intensity to avoid bright backgrounds (e.g. sun) burning through the UI
-	float3 UIInverseInfluence = 1.0;
-	float4 UIColor = uiTexture.Load((int3)pos.xyz);
-    float UIIntensity = saturate(UIColor.a);
-	sceneColorGamma *= pow(gamePaperWhite, 1.0 / DefaultGamma);
-	sceneColorGammaTonemapped *= pow(gamePaperWhite, 1.0 / DefaultGamma);
-	UIColor.rgb *= pow(UIPaperWhite, 1.0 / DefaultGamma);
-	// Darken the scene background based on the UI intensity
-	float3 composedColor = lerp(sceneColorGamma, sceneColorGammaTonemapped, UIIntensity) * (1.0 - UIIntensity);
-    // Calculate how much the additive UI influenced the darkened scene color, so we can determine the intensity to blend the composed color with the scene paper white (it's better to calculate this in gamma space)
-	UIInverseInfluence = safeDivision(composedColor, composedColor + UIColor.rgb, 1); //TODO: handle negative colors?
-	// Add pre-multiplied UI
-	composedColor += UIColor.rgb;
-	
-	float3 compositionPaperWhite = lerp(pow(UIPaperWhite, 1.0 / DefaultGamma), pow(gamePaperWhite, 1.0 / DefaultGamma), UIInverseInfluence);
-	composedColor /= compositionPaperWhite;
-
-  	color.rgb = gamma_to_linear(composedColor, GCT_MIRROR) * pow(compositionPaperWhite, DefaultGamma);
-#else
-	color.rgb /= UIPaperWhite;
-	float3 sceneColorGamma = linear_to_sRGB_gamma(color.rgb, GCT_MIRROR);
-    float3 sceneColorGammaTonemapped = linear_to_sRGB_gamma(color.rgb / (color.rgb + 1.f), GCT_MIRROR); // Tonemap the UI background based on the UI intensity to avoid bright backgrounds (e.g. sun) burning through the UI
-	float3 UIInverseInfluence = 1.0;
-	float4 UIColor = uiTexture.Load((int3)pos.xyz);
-    float UIIntensity = saturate(UIColor.a);
-	// Darken the scene background based on the UI intensity
-	float3 composedColor = lerp(sceneColorGamma, sceneColorGammaTonemapped, UIIntensity) * (1.0 - UIIntensity);
-    // Calculate how much the additive UI influenced the darkened scene color, so we can determine the intensity to blend the composed color with the scene paper white (it's better to calculate this in gamma space)
-	UIInverseInfluence = safeDivision(composedColor, composedColor + UIColor.rgb, 1);
-	// Add pre-multiplied UI
-	composedColor += UIColor.rgb;
-  	color.rgb = gamma_to_linear(composedColor, GCT_MIRROR);
-	color.rgb *= UIPaperWhite;
-	color.rgb *= lerp(1.0, gamePaperWhite, saturate(UIInverseInfluence));
-#endif
+	color.rgb = ComposeUI(pos.xyz, color.rgb, gamePaperWhite, UIPaperWhite);
 
 #endif // UI_DRAW_TYPE != 0
 

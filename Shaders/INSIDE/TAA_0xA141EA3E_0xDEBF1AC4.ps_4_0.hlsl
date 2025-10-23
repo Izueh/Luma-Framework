@@ -264,8 +264,8 @@ void main(
   r0 = lerp(blurredColor, r2, r1.x); // Blur percentage (flipped)
   noise = (noise * 2.0) - 1.0; // From 0|1 to -1|1
   noise /= 255.0; // Turn to 8 bit dithering, the game's rendering was all SDR and mostly 8 bit (with some 10 bit passes) so it'd band a lot
-#if !ENABLE_FILM_GRAIN // This isn't film grain but it's not far from it either
-  noise = 0.0; //TODOFT: add a toggle for dithering! However, it's baked in almost every single shader of the game so we couldn't actually remove it without changing all shaders
+#if !ENABLE_DITHER
+  noise = 0.0;
 #endif
 
   // Output two similar colors, index 0 is the history (only read again the next frame, by this very shader) (hence it's not blurred at the end), index 1 is the actual output that continues to be used for this frame's post processing

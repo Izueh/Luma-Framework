@@ -8,8 +8,6 @@
 // Enable these to be able to use DLSS's or FSR's code
 #define ENABLE_NGX 0
 #define ENABLE_FIDELITY_SK 0
-// Update samples to override the bias, based on the rendering resolution etc
-#define UPGRADE_SAMPLERS 0
 #define GEOMETRY_SHADER_SUPPORT 0
 
 // Instead of "manually" including the "core" library, we simply include its main code file (which is a header).
@@ -47,7 +45,7 @@ public:
 		// These will be defined in the shaders, so they can be used to do static branches in them.
       // Ideally they should also be defined in the game's Settings.hlsl file.
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"TONEMAP_TYPE", '1', false, false, "0 - Vanilla SDR\n1 - Luma HDR (Vanilla+)"},
+         {"TONEMAP_TYPE", /*default value*/ '1', true, false, /*tooltip*/ "0 - Vanilla SDR\n1 - Luma HDR (Vanilla+)", /*max value*/ 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
       assert(shader_defines_data.size() < MAX_SHADER_DEFINES); // Make sure there's room for at least one extra custom define to add for development (this isn't really relevant outside of development)
@@ -156,6 +154,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_lut_dimensions = LUTDimensions::_2D;
 		// In case the textures failed to upgrade, tweak the filtering conditions to be more lenient (e.g. aspect ratio checks etc).
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
+
+      // Update samples to override the bias, based on the rendering resolution etc
+      enable_samplers_upgrade = false;
 
 #if DEVELOPMENT // If you want to track any shader names over time, you can hardcode them here by hash (they can be a useful reference in the pipeline)
       forced_shader_names.emplace(std::stoul("FD2925B4", nullptr, 16), "Tracked Shader Name");

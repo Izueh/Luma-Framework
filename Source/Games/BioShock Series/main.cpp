@@ -1,8 +1,5 @@
 #define GAME_BIOSHOCK_SERIES 1
 
-// TODO: is this even needed? Probably not?
-#define UPGRADE_SAMPLERS 0
-
 #include "..\..\Core\core.hpp"
 
 #include "BS2_CrashFix\BS2_CrashFix.h"
@@ -143,25 +140,25 @@ public:
    void OnInit(bool async) override
    {
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"TONEMAP_TYPE", '1', false, false, "0 - SDR: Vanilla\n2 - SDR/HDR: Vanilla+\n3 - HDR: Untonemapped"},
-         {"ALLOW_AA", '1', false, false, "Allows disabling the game's FXAA implementation"},
-         {"ENABLE_LUMA", '1', false, false, "Allow disabling the mod's improvements to the game's look"},
-         {"ENABLE_IMPROVED_BLOOM", '1', false, false, "Reduces the excessive bloom's pixelation due to usage of nearest neighbor texture sampling in the original shaders"},
-         {"ENABLE_LUT_EXTRAPOLATION", '1', false, false, "Use Luma's signature technique for expanding Color Grading LUTs from SDR to HDR"},
-         {"ENABLE_COLOR_GRADING", '1', false, false, "Allows disabling the color grading LUT (some other color filters might still get applied)"},
-         {"DISABLE_BLACK_BARS", '0', false, false,
-         "Disable broken black bars in UltraWide, given that they only cover an horizontal part of the screen, leaving the vertical view visible.\nThis will remove them from 16:9 too"}, // TODO: WIP
-         {"LUT_SAMPLING_ERROR_EMULATION_MODE", '1', false, false,
+         {"TONEMAP_TYPE", '1', true, false, "0 - SDR: Vanilla\n2 - SDR/HDR: Vanilla+\n3 - HDR: Untonemapped"},
+         {"ALLOW_AA", '1', true, false, "Allows disabling the game's FXAA implementation", 1},
+         {"ENABLE_LUMA", '1', true, false, "Allow disabling the mod's improvements to the game's look", 1},
+         {"ENABLE_IMPROVED_BLOOM", '1', true, false, "Reduces the excessive bloom's pixelation due to usage of nearest neighbor texture sampling in the original shaders", 1},
+         {"ENABLE_LUT_EXTRAPOLATION", '1', true, false, "Use Luma's signature technique for expanding Color Grading LUTs from SDR to HDR", 1},
+         {"ENABLE_COLOR_GRADING", '1', true, false, "Allows disabling the color grading LUT (some other color filters might still get applied)", 1},
+         {"DISABLE_BLACK_BARS", '0', true, false,
+         "Disable broken black bars in UltraWide, given that they only cover an horizontal part of the screen, leaving the vertical view visible.\nThis will remove them from 16:9 too", 1}, // TODO: WIP
+         {"LUT_SAMPLING_ERROR_EMULATION_MODE", '1', true, false,
          "BioShock 2 Remastered had a bug in the color grading shader that accidentally boosted contrast and clipped both shadow and highlight."
          "\nLuma fixes that, however without the bug shadows are fairly raised, so this attempts to emulate the error without clipping detail."
-         "\nMode 2 and 3 are alternative looks, use them if you prefer."},
-         {"DEFAULT_GAMMA_RAMP_EMULATION_MODE", '0', false, false,
+         "\nMode 2 and 3 are alternative looks, use them if you prefer.", 3},
+         {"DEFAULT_GAMMA_RAMP_EMULATION_MODE", '0', true, false,
          "BioShock 2 Remastered used a deprecated Windows XP API to change the display brightness, Luma disables that as it doesn't work in HDR,"
          "\nhowever the default brightness value was not neutral but was a gamma power of 1.2, and thus made everything brighter."
          "\nThe calibration menu looked calibrated with gamma set to ~1, and the mod does that by default,"
          "\nhowever it's arguable whether the default value or the calibrated value is the most accurate one, so pick what you want."
          "\nWe are only applying this correction to the game scene and not the UI, as it doesn't seem necessary there."
-         "\nMode 1 and 2 are different ways or applying the gamma correction, so pick what you prefer."},
+         "\nMode 1 and 2 are different ways or applying the gamma correction, so pick what you prefer.", 2},
       };
       shader_defines_data.append_range(game_shader_defines_data);
 
@@ -606,6 +603,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
             reshade::api::format::r32g32b32a32_float, // BSI uses 32bpc render targets for the scene and it's insane! So we restore them to 16bpc // TODO: verify it's not due to config edits
       };
+      if (bioshock_game == BioShockGame::BioShock_Infinite)
+      {
+         enable_indirect_texture_format_upgrades = true; // TODO: try
+         enable_automatic_indirect_texture_format_upgrades = true;
+      }
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
       enable_upgraded_texture_resource_copy_redirection = true; // TODO: investigate more if it happens (thus disabled in dev mode)
 

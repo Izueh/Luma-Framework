@@ -2,8 +2,6 @@
 
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
-// Needed for DLSS mips in case there's jitters
-#define UPGRADE_SAMPLERS 1
 
 #include "..\..\Core\core.hpp"
 
@@ -325,20 +323,20 @@ public:
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
 
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"ENABLE_LUMA", '1', false, false, "Allow disabling the mod's improvements to the game's look"},
-         {"ENABLE_CHROMATIC_ABERRATION", '1', false, false, "Allow disabling the game's chromatic aberration"},
-         {"ENABLE_FILM_GRAIN", '1', false, false, "Allow disabling the game's film grain effect (it's not always present)"},
-         {"ENABLE_DITHERING", '1', false, false, "Allow disabling the game's dithering (it isn't particularly useful in HDR, but it can help with banding in the sky)"},
-         {"ALLOW_AA", '1', false, false, "The game uses FXAA at the end, which wasn't really a good combination with TAA\nIf Luma's Super Resolution is used, this is already skipped\nThis is better off if sharpening is used"},
+         {"ENABLE_LUMA", '1', true, false, "Allow disabling the mod's improvements to the game's look", 1},
+         {"ENABLE_CHROMATIC_ABERRATION", '1', true, false, "Allow disabling the game's chromatic aberration", 1},
+         {"ENABLE_FILM_GRAIN", '1', true, false, "Allow disabling the game's film grain effect (it's not always present)", 1},
+         {"ENABLE_DITHERING", '1', true, false, "Allow disabling the game's dithering (it isn't particularly useful in HDR, but it can help with banding in the sky)", 1},
+         {"ALLOW_AA", '1', true, false, "The game uses FXAA at the end, which wasn't really a good combination with TAA\nIf Luma's Super Resolution is used, this is already skipped\nThis is better off if sharpening is used", 1},
 #if DEVELOPMENT || TEST
-         {"STRETCH_ORIGINAL_TONEMAPPER", '0', false, false, "An alternative HDR implementation that doesn't look good"},
+         {"STRETCH_ORIGINAL_TONEMAPPER", '0', true, false, "An alternative HDR implementation that doesn't look good", 1},
 #endif
-         {"ENABLE_SHARPENING", '1', false, false, "Native sharpening to combat the game's blurriness"},
-         {"ENABLE_AUTO_HDR", '1', false, false, "Enables an SDR to HDR conversion for Videos and car's Rear View Mirror (HUD)"},
-         {"FIX_VIDEOS_COLOR_SPACE", '1', false, false, "Videos were incorrectly decoded as BT.601 instead of BT.709, making them more red than intended"},
-         {"ENABLE_CITY_LIGHTS_BOOST", '1', false, false, "Boost up all the transparent lights like lamp posts and car highlights etc, they look nicer in HDR"},
-         {"ENABLE_LUT_EXTRAPOLATION", '1', false, false, "Use Luma's signature technique for expanding Color Grading LUTs from SDR to HDR,\nthis might better represent the look the game devs wanted to go for, and have a nice highlights rolloff"},
-         {"EXPAND_COLOR_GAMUT", '1', false, false, "Do tonemapping in a wider color gamut, to minimize hue shifts and get more saturated shadow, though this can change the look of the game a bit"},
+         {"ENABLE_SHARPENING", '1', true, false, "Native sharpening to combat the game's blurriness", 1},
+         {"ENABLE_AUTO_HDR", '1', true, false, "Enables an SDR to HDR conversion for Videos and car's Rear View Mirror (HUD)", 1},
+         {"FIX_VIDEOS_COLOR_SPACE", '1', true, false, "Videos were incorrectly decoded as BT.601 instead of BT.709, making them more red than intended", 1},
+         {"ENABLE_CITY_LIGHTS_BOOST", '1', true, false, "Boost up all the transparent lights like lamp posts and car highlights etc, they look nicer in HDR", 1},
+         {"ENABLE_LUT_EXTRAPOLATION", '1', true, false, "Use Luma's signature technique for expanding Color Grading LUTs from SDR to HDR,\nthis might better represent the look the game devs wanted to go for, and have a nice highlights rolloff", 1},
+         {"EXPAND_COLOR_GAMUT", '1', true, false, "Do tonemapping in a wider color gamut, to minimize hue shifts and get more saturated shadow, though this can change the look of the game a bit", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
 
@@ -2103,9 +2101,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_lut_size = 32;
       texture_format_upgrades_lut_dimensions = LUTDimensions::_3D;
 
-#if DEVELOPMENT && UPGRADE_SAMPLERS
-      // Keeps the original bias offset and adds our own on top of it
-      samplers_upgrade_mode = 4; // TODO: put this feature release too. But, they currently break some metal shiny stuff (e.g. truck in the opening scene)
+#if DEVELOPMENT // TODO: put this feature release too. But, they currently break some metal shiny stuff (e.g. truck in the opening scene)
+      // Needed for DLSS mips in case there's jitters
+      enable_samplers_upgrade = true;
 #endif
 
       game = new MafiaIII();

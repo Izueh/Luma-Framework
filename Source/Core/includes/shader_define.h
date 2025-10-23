@@ -111,7 +111,7 @@ namespace Shader
 
    struct ShaderDefineData
    {
-      ShaderDefineData(const char* name = "", char value = '\0', bool _fixed_name = false, bool _fixed_value = false, const char* _tooltip = nullptr) :
+      ShaderDefineData(const char* name = "", char value = '\0', bool _fixed_name = false, bool _fixed_value = false, const char* _tooltip = nullptr, uint8_t _max_value = 0) :
          name_hint("Define " + std::to_string(defines_count) + " Name"),
          value_hint("Define " + std::to_string(defines_count) + " Value"),
          fixed_name(_fixed_name),
@@ -121,6 +121,11 @@ namespace Shader
       {
          defines_count++;
          editable_data = default_data;
+         // Ignore the max value if this define is editable/custom
+         if (fixed_name)
+         {
+            max_value = _max_value;
+         }
       }
 
       // The default label/hint (auto generated)
@@ -143,6 +148,9 @@ namespace Shader
       ShaderDefine default_data;
       // The last name and value that got compiled into shaders
       ShaderDefine compiled_data;
+
+      // Ignored if 0
+      uint8_t max_value = 0;
 
       bool IsNameEditable() const
       {

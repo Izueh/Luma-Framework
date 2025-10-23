@@ -64,7 +64,7 @@ void main(
 {
   float4 r0,r1;
   r0.xy = v0.xy * ScreenExtents.zw + ScreenExtents.xy;
-  bool forceSDR = ShouldForceSDR(r0.xy, true);
+  bool forceSDR = ShouldForceSDR(r0.xy);
   r0.x = p_default_Material_05A07024649625_05142B6415252097_DepthBufferTexture_texture.Sample(p_default_Material_05A07024649625_05142B6415252097_DepthBufferTexture_sampler_s, r0.xy).x;
   r0.x = r0.x * DepthToW.x + DepthToW.y;
   r0.x = max(9.99999997e-007, r0.x);
