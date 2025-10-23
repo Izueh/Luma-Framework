@@ -1,7 +1,11 @@
 #include "includes/Common.hlsl"
 
-Texture2D<float4> VelocityTexture : register(t1); // Velocity texture
 Texture2D<float4> DepthTexture : register(t0);    // Depth buffer
+Texture2D<float4> VelocityTexture : register(t1); // Velocity texture
+
+#if CS
+RWTexture2D<float2> OutVelocityCombinedTexture;
+#endif
 
 SamplerState s0_s : register(s0);
 
@@ -53,29 +57,37 @@ float4 SvPositionToScreenPosition(float4 SvPosition)
    // SvPosition.w: so .w has the SceneDepth, some mobile code and the DepthFade material expression wants that
    return float4(NDCPos.xyz, 1) * SvPosition.w;
 }
-
-float2 main(float4 pos: SV_Position0) : SV_Target0
+#if CS
+[numthreads(8, 8, 1)]
+void main(uint2 GroupId: SV_GroupID, uint2 DispatchThreadId: SV_DispatchThreadID, uint2 GroupThreadId: SV_GroupThreadID,
+          uint GroupIndex: SV_GroupIndex)
+#else
+void main(float4 pos: SV_Position0, out float2 OutVelocityCombinedTexture: SV_Target0)
+#endif
 {
+
    // Extract viewport parameters from constant buffer
-   float2 Velocity_ViewportMin = float2(LumaData.GameData.ViewportRect.xy);
-   float2 Velocity_ViewportMax = float2(LumaData.GameData.ViewportRect.xy) + LumaData.GameData.RenderResolution.xy;
+   uint2 Velocity_ViewportMin = (uint2)LumaData.GameData.ViewportRect.xy;
+   uint2 Velocity_ViewportMax = (uint2)LumaData.GameData.ViewportRect.xy + (uint2)LumaData.GameData.RenderResolution.xy;
    float2 Velocity_ViewportSize = LumaData.GameData.RenderResolution.xy;
    float2 Velocity_ViewportSizeInverse = LumaData.GameData.RenderResolution.zw;
    float2 Velocity_ExtentInverse = LumaData.GameData.RenderResolution.zw;
-   float2 CombinedVelocity_ViewportMin = float2(LumaData.GameData.ViewportRect.xy);
+   uint2 CombinedVelocity_ViewportMin = (uint2)LumaData.GameData.ViewportRect.xy;
    float2 CombinedVelocity_ViewportSize = LumaData.GameData.RenderResolution.xy;
    float2 CombinedVelocity_ViewportSizeInverse = LumaData.GameData.RenderResolution.zw;
    float2 TemporalJitterPixels =
       LumaData.GameData.JitterOffset.xy * LumaData.GameData.RenderResolution.xy * float2(0.5, -0.5);
    // Get current pixel position
-   uint2 DispatchThreadId = (uint2)pos.xy;
-   uint2 PixelPos = min(DispatchThreadId + Velocity_ViewportMin, Velocity_ViewportMax - 1);
-   uint2 OutputPixelPos = CombinedVelocity_ViewportMin + DispatchThreadId;
 
+#if !CS
+   uint2 DispatchThreadId = (uint2)pos.xy;
+#endif
+
+   uint2 PixelPos = min(DispatchThreadId + Velocity_ViewportMin, Velocity_ViewportMax - 1);
+   uint2 OutputPixelPos = (uint2)CombinedVelocity_ViewportMin + DispatchThreadId;
    // Check viewport bounds
    const bool bInsideViewport = all(PixelPos.xy < Velocity_ViewportMax);
-   if (!bInsideViewport) return float2(0, 0);
-
+   if (!bInsideViewport) return;
 #if DILATE_MOTION_VECTORS
    // Screen position of minimum depth for motion vector dilation
    float2 VelocityOffset = float2(0.0, 0.0);
@@ -157,7 +169,11 @@ float2 main(float4 pos: SV_Position0) : SV_Target0
    BackTemp = BackN * CombinedVelocity_ViewportSize;
 
    // Output motion vector for DLSS
-   return -BackTemp * float2(0.5, -0.5);
+#if CS
+   OutVelocityCombinedTexture[OutputPixelPos].xy = -BackTemp * float2(0.5, -0.5);
+#else
+   OutVelocityCombinedTexture.xy = -BackTemp * float2(0.5, -0.5);
+#endif
 
 #else // !DILATE_MOTION_VECTORS
 
@@ -199,7 +215,11 @@ float2 main(float4 pos: SV_Position0) : SV_Target0
       Velocity * float2(0.5, -0.5) * LumaData.GameData.RenderResolution.xy; // View.ViewSizeAndInvSize.xy
 
    // Output motion vector for DLSS
-   return -OutVelocity;
+#if CS
+   OutVelocityCombinedTexture[OutputPixelPos].xy = -OutVelocity;
+#else
+   OutVelocityCombinedTexture.xy = -OutVelocity;
+#endif
 
 #endif // DILATE_MOTION_VECTORS
 }

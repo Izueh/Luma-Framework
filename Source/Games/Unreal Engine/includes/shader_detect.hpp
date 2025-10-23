@@ -164,15 +164,32 @@ static bool IsUE4TAACandidate(const std::byte* code, size_t size)
    word_t mul_1;
    mul_1.f = 4.00801611f;
    word_t mul_2;
-   mul_2.f                                        = 0.000000f;
-   const std::vector<std::byte> mul_pattern_bytes = {
+   mul_2.f                                  = 0.000000f;
+   std::vector<std::byte> mul_pattern_bytes = {
       std::byte{mul_1.b[0]}, std::byte{mul_1.b[1]}, std::byte{mul_1.b[2]}, std::byte{mul_1.b[3]},
       std::byte{mul_1.b[0]}, std::byte{mul_1.b[1]}, std::byte{mul_1.b[2]}, std::byte{mul_1.b[3]}};
    std::vector<std::byte*> mul_hits = System::ScanMemoryForPattern(code, size, mul_pattern_bytes);
-   if (mul_hits.empty())
-      return false;
+   if (!mul_hits.empty())
+      return true;
 
-   return true;
+   mul_pattern_bytes = {
+      std::byte{mul_1.b[0]}, std::byte{mul_1.b[1]}, std::byte{mul_1.b[2]}, std::byte{mul_1.b[3]},
+      std::byte{mul_2.b[0]}, std::byte{mul_2.b[1]}, std::byte{mul_2.b[2]}, std::byte{mul_2.b[3]},
+      std::byte{mul_1.b[0]}, std::byte{mul_1.b[1]}, std::byte{mul_1.b[2]}, std::byte{mul_1.b[3]}};
+   mul_hits = System::ScanMemoryForPattern(code, size, mul_pattern_bytes);
+   if (!mul_hits.empty())
+      return true;
+
+   mul_pattern_bytes = {
+      std::byte{mul_1.b[0]}, std::byte{mul_1.b[1]}, std::byte{mul_1.b[2]}, std::byte{mul_1.b[3]},
+      std::byte{mul_2.b[0]}, std::byte{mul_2.b[1]}, std::byte{mul_2.b[2]}, std::byte{mul_2.b[3]},
+      std::byte{mul_2.b[0]}, std::byte{mul_2.b[1]}, std::byte{mul_2.b[2]}, std::byte{mul_2.b[3]},
+      std::byte{mul_1.b[0]}, std::byte{mul_1.b[1]}, std::byte{mul_1.b[2]}, std::byte{mul_1.b[3]}};
+   mul_hits = System::ScanMemoryForPattern(code, size, mul_pattern_bytes);
+   if (!mul_hits.empty())
+      return true;
+
+   return false;
 }
 
 static void FindGlobalCBInfo(const std::byte* code, size_t size, GlobalCBInfo& global_cb_info)

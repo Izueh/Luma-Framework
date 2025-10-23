@@ -190,7 +190,8 @@ jobs:
               -or $projectName -like '*Dishonored 2*' `
               -or $projectName -like '*Final Fantasy VII Remake*' `
               -or $projectName -like '*Final Fantasy XV*' `
-              -or $projectName -like '*Trine 5*' ) {
+              -or $projectName -like '*Trine 5*' `
+              -or $projectName -like '*Unreal Engine') {
             # Source path for NGX DLSS DLL
             
             if (("${{ matrix.config }}" -eq "Development-Debug") -or ("${{ matrix.config }}" -eq "Development-Release")) {
