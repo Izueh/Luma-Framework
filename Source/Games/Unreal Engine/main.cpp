@@ -331,15 +331,10 @@ public:
          return nullptr;
       if (!shader_hashes_TAA.Empty())
          return nullptr;
-      // don't bother checking pixel shaders if we found compute shader TAA
-      if (!shader_hashes_TAA_Candidates.compute_shaders.empty() && type == reshade::api::pipeline_subobject_type::pixel_shader)
-         return nullptr;
-      if (!shader_hashes_TAA_Candidates.compute_shaders.empty() && !shader_hashes_TAA_Candidates.pixel_shaders.empty())
-         shader_hashes_TAA_Candidates.pixel_shaders.clear();
       bool is_taa_candidate = IsUE4TAACandidate(code, size);
       if (is_taa_candidate)
       {
-         reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 TAA shader. Hash: {:016X}", shader_hash).c_str());
+         reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 TAA shader Candidate. Hash: 0x{:08X}", shader_hash).c_str());
          if (type == reshade::api::pipeline_subobject_type::pixel_shader)
             shader_hashes_TAA_Candidates.pixel_shaders.emplace(static_cast<unsigned long>(shader_hash));
          else if (type == reshade::api::pipeline_subobject_type::compute_shader)
@@ -365,7 +360,7 @@ public:
          // we can also check the sampler states, there should be point and linear filtering samplers (we can do this later)
 
          com_ptr<ID3D11ShaderResourceView> shader_resources[16];
-         ASSERT_ONCE(shader_hashes_TAA_Candidates.pixel_shaders.empty() != shader_hashes_TAA_Candidates.compute_shaders.empty());
+         // ASSERT_ONCE(shader_hashes_TAA_Candidates.pixel_shaders.empty() != shader_hashes_TAA_Candidates.compute_shaders.empty());
          bool is_compute_shader = stages == reshade::api::shader_stage::all_compute;
          if (is_compute_shader)
             native_device_context->CSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
@@ -390,6 +385,8 @@ public:
             D3D11_TEXTURE2D_DESC     desc;
             texture2d->GetDesc(&desc);
             // check format
+            if (desc.Width != device_data.render_resolution.x || desc.Height != device_data.render_resolution.y)
+               continue;
             switch (desc.Format)
             {
             case DXGI_FORMAT_R8G8B8A8_UNORM:
@@ -416,8 +413,10 @@ public:
                   game_device_data.taa_depth_texture_srv_index = (uint32_t)i;
                break;
             case DXGI_FORMAT_R16G16_UNORM:
+            case DXGI_FORMAT_R16G16B16A16_UNORM:
                velocity_texture_count++;
-               game_device_data.taa_motion_vector_texture_srv_index = (uint32_t)i;
+               if (game_device_data.taa_motion_vector_texture_srv_index == -1)
+                    game_device_data.taa_motion_vector_texture_srv_index = (uint32_t)i;
                break;
             default:
                break;
@@ -428,21 +427,26 @@ public:
          {
             is_taa = true;
             // add to the confirmed TAA shaders
-            if (is_compute_shader)
+            if (is_compute_shader){
+               reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 TAA compute shader. Hash: 0x{:08X}", original_shader_hashes.compute_shaders[0]).c_str());
                shader_hashes_TAA.compute_shaders.emplace(static_cast<unsigned long>(*original_shader_hashes.compute_shaders.begin()));
+            }
             else
+            {
+               reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 TAA pixel shader. Hash: 0x{:08X}", original_shader_hashes.pixel_shaders[0]).c_str());
                shader_hashes_TAA.pixel_shaders.emplace(static_cast<unsigned long>(*original_shader_hashes.pixel_shaders.begin()));
+            }
          }
          else
          {
             game_device_data.taa_source_color_texture_srv_index  = -1;
             game_device_data.taa_depth_texture_srv_index         = -1;
             game_device_data.taa_motion_vector_texture_srv_index = -1;
-            if (is_compute_shader)
-               shader_hashes_TAA_Candidates.compute_shaders.erase(static_cast<unsigned long>(*original_shader_hashes.compute_shaders.begin()));
-            else
-               shader_hashes_TAA_Candidates.pixel_shaders.erase(static_cast<unsigned long>(*original_shader_hashes.pixel_shaders.begin()));
-            ASSERT_ONCE(!(shader_hashes_TAA_Candidates.Empty() && shader_hashes_TAA.Empty()));
+            //if (is_compute_shader)
+            //   shader_hashes_TAA_Candidates.compute_shaders.erase(static_cast<unsigned long>(*original_shader_hashes.compute_shaders.begin()));
+            //else
+            //   shader_hashes_TAA_Candidates.pixel_shaders.erase(static_cast<unsigned long>(*original_shader_hashes.pixel_shaders.begin()));
+            // ASSERT_ONCE(!(shader_hashes_TAA_Candidates.Empty() && shader_hashes_TAA.Empty()));
             // shader_hashes_TAA_Rejected_Candidates.pixel_shaders.insert(original_shader_hashes.pixel_shaders.begin(), original_shader_hashes.pixel_shaders.end());
          }
       }
