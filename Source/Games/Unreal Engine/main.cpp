@@ -11,6 +11,8 @@ namespace
    ShaderHashesList shader_hashes_TAA;
    ShaderHashesList shader_hashes_TAA_Candidates;
    GlobalCBInfo     global_cb_info;
+   std::shared_mutex taa_mutex;
+   std::unordered_map<uint64_t, TAAShaderInfo> taa_shader_candidate_info;
 
    static inline bool NearZero(float v, float eps)
    {
@@ -78,9 +80,6 @@ struct GameDeviceDataUnrealEngine final : public GameDeviceData
    com_ptr<ID3D11Resource>            depth_buffer;
    com_ptr<ID3D11RenderTargetView>    sr_motion_vectors_rtv;
    com_ptr<ID3D11UnorderedAccessView> sr_motion_vectors_uav;
-   std::atomic<int32_t>               taa_motion_vector_texture_srv_index = -1;
-   std::atomic<int32_t>               taa_depth_texture_srv_index         = -1;
-   std::atomic<int32_t>               taa_source_color_texture_srv_index  = -1;
    std::atomic<bool>                  found_per_view_globals              = false;
 #endif // ENABLE_SR
    float4    render_resolution = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -97,7 +96,7 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
       return *static_cast<GameDeviceDataUnrealEngine*>(device_data.game);
    }
 
-   static void DecodeMotionVectorsPS(ID3D11DeviceContext* native_device_context, DeviceData& device_data)
+   static void DecodeMotionVectorsPS(ID3D11DeviceContext* native_device_context, DeviceData& device_data, TAAShaderInfo& taa_shader_info)
    {
       auto&                             game_device_data = GetGameDeviceData(device_data);
       com_ptr<ID3D11VertexShader>       prev_shader_vx;
@@ -123,23 +122,22 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
       native_device_context->PSGetConstantBuffers(luma_settings_cbuffer_index, 1, &prev_luma_settings_cbuffer);
       native_device_context->PSGetConstantBuffers(luma_data_cbuffer_index, 1, &prev_luma_data_cbuffer);
       native_device_context->OMGetRenderTargets(1, &prev_rtv, nullptr);
-      if (game_device_data.taa_depth_texture_srv_index.load() != 0)
+      if (taa_shader_info.depth_texture_register != 0)
       {
          native_device_context->PSGetShaderResources(0, 1, &srv_copy_0);
-         native_device_context->PSGetShaderResources(game_device_data.taa_depth_texture_srv_index.load(), 1, &depth_texture_srv);
          ID3D11ShaderResourceView* const depth_srv = depth_texture_srv.get();
          native_device_context->PSSetShaderResources(0, 1, &depth_srv);
       }
-      if (game_device_data.taa_motion_vector_texture_srv_index.load() != 1)
+      if (taa_shader_info.velocity_texture_register != 1)
       {
          native_device_context->PSGetShaderResources(1, 1, &srv_copy_1);
-         native_device_context->PSGetShaderResources(game_device_data.taa_motion_vector_texture_srv_index.load(), 1, &mv_texture_srv);
+         native_device_context->PSGetShaderResources(taa_shader_info.velocity_texture_register, 1, &mv_texture_srv);
          ID3D11ShaderResourceView* const motion_vector_srv = mv_texture_srv.get();
          native_device_context->PSSetShaderResources(1, 1, &motion_vector_srv);
       }
-      if (global_cb_info.register_index != 1)
+      if (taa_shader_info.global_buffer_register_index != 1)
       {
-         native_device_context->PSGetConstantBuffers(global_cb_info.register_index, 1, &global_cbuffer);
+         native_device_context->PSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, &global_cbuffer);
          ID3D11Buffer* const cb1 = global_cbuffer.get();
          native_device_context->PSSetConstantBuffers(1, 1, &cb1);
       }
@@ -183,13 +181,13 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
       if (global_cbuffer.get() != nullptr)
       {
          ID3D11Buffer* const global_cb = global_cbuffer.get();
-         native_device_context->PSSetConstantBuffers(global_cb_info.register_index, 1, &global_cb);
+         native_device_context->PSSetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, &global_cb);
       }
       ID3D11RenderTargetView* const prev_rtv_ptr = prev_rtv.get();
       native_device_context->OMSetRenderTargets(1, &prev_rtv_ptr, nullptr);
    }
 
-   static void DecodeMotionVectorsCS(ID3D11DeviceContext* context, DeviceData& device_data)
+   static void DecodeMotionVectorsCS(ID3D11DeviceContext* context, DeviceData& device_data, TAAShaderInfo& taa_shader_info)
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -210,24 +208,24 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
       context->CSGetUnorderedAccessViews(0, 1, &prev_uav);
       context->CSGetConstantBuffers(luma_settings_cbuffer_index, 1, &prev_luma_settings_cbuffer);
       context->CSGetConstantBuffers(luma_data_cbuffer_index, 1, &prev_luma_data_cbuffer);
-      if (game_device_data.taa_depth_texture_srv_index.load() != 0)
+      if (taa_shader_info.depth_texture_register != 0)
       {
          context->CSGetShaderResources(0, 1, &srv_copy_0);
          ID3D11ShaderResourceView* depth_srv;
-         context->CSGetShaderResources(game_device_data.taa_depth_texture_srv_index.load(), 1, &depth_srv);
+         context->CSGetShaderResources(taa_shader_info.depth_texture_register, 1, &depth_srv);
          context->CSSetShaderResources(0, 1, &depth_srv);
       }
-      if (game_device_data.taa_motion_vector_texture_srv_index.load() != 1)
+      if (taa_shader_info.velocity_texture_register != 1)
       {
          context->CSGetShaderResources(1, 1, &srv_copy_1);
          ID3D11ShaderResourceView* motion_vector_srv;
-         context->CSGetShaderResources(game_device_data.taa_motion_vector_texture_srv_index.load(), 1, &motion_vector_srv);
+         context->CSGetShaderResources(taa_shader_info.velocity_texture_register, 1, &motion_vector_srv);
          context->CSSetShaderResources(1, 1, &motion_vector_srv);
       }
-      if (global_cb_info.register_index != 1)
+      if (taa_shader_info.global_buffer_register_index != 1)
       {
          context->CSGetConstantBuffers(1, 1, &prev_cbuffer);
-         context->CSGetConstantBuffers(global_cb_info.register_index, 1, &global_cbuffer);
+         context->CSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, &global_cbuffer);
          ID3D11Buffer* const cb1 = global_cbuffer.get();
          context->CSSetConstantBuffers(1, 1, &cb1);
       }
@@ -276,12 +274,12 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
       context->CSSetUnorderedAccessViews(0, 1, &prev_uav_ptr, nullptr);
    }
 
-   static void DecodeMotionVectors(bool is_compute_shader, ID3D11DeviceContext* context, DeviceData& device_data)
+   static void DecodeMotionVectors(bool is_compute_shader, ID3D11DeviceContext* context, DeviceData& device_data, TAAShaderInfo& taa_shader_info)
    {
       if (is_compute_shader)
-         DecodeMotionVectorsCS(context, device_data);
+         DecodeMotionVectorsCS(context, device_data, taa_shader_info);
       else
-         DecodeMotionVectorsPS(context, device_data);
+         DecodeMotionVectorsPS(context, device_data, taa_shader_info);
    }
 
 public:
@@ -331,7 +329,8 @@ public:
          return nullptr;
       if (!shader_hashes_TAA.Empty())
          return nullptr;
-      bool is_taa_candidate = IsUE4TAACandidate(code, size);
+      TAAShaderInfo taa_shader_info = {};
+      bool is_taa_candidate = IsUE4TAACandidate(code, size, taa_shader_info) && FindShaderInfo(code, size, taa_shader_info);
       if (is_taa_candidate)
       {
          reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 TAA shader Candidate. Hash: 0x{:08X}", shader_hash).c_str());
@@ -339,9 +338,12 @@ public:
             shader_hashes_TAA_Candidates.pixel_shaders.emplace(static_cast<unsigned long>(shader_hash));
          else if (type == reshade::api::pipeline_subobject_type::compute_shader)
             shader_hashes_TAA_Candidates.compute_shaders.emplace(static_cast<unsigned long>(shader_hash));
-
          if (global_cb_info.clip_to_prev_clip_start_index == -1)
-            FindGlobalCBInfo(code, size, global_cb_info);
+            global_cb_info.clip_to_prev_clip_start_index = taa_shader_info.clip_to_prev_clip_start_index;
+         ASSERT_ONCE(global_cb_info.clip_to_prev_clip_start_index == taa_shader_info.clip_to_prev_clip_start_index); // Check if there is any mismatch, if it happens we should probably keep highest index.
+         global_cb_info.clip_to_prev_clip_start_index = taa_shader_info.clip_to_prev_clip_start_index;
+         const std::unique_lock taa_lock(taa_mutex);
+         taa_shader_candidate_info.emplace(shader_hash, taa_shader_info);
       }
       return nullptr; // Return nullptr to use the original shader
    }
@@ -352,16 +354,23 @@ public:
       GameDeviceDataUnrealEngine& game_device_data = GetGameDeviceData(device_data);
       bool                        is_taa           = original_shader_hashes.Contains(shader_hashes_TAA);
       bool                        is_taa_candidate = !is_taa && original_shader_hashes.Contains(shader_hashes_TAA_Candidates);
-      // this is the first time we detected this shader as TAA, we should verify it's really TAA
+      if (!is_taa && !is_taa_candidate)
+         return false;
+
+      bool is_compute_shader = stages == reshade::api::shader_stage::all_compute;
+      uint64_t shader_hash   = is_compute_shader ? original_shader_hashes.compute_shaders[0] : original_shader_hashes.pixel_shaders[0];
+      TAAShaderInfo taa_shader_info;
+      {
+         std::shared_lock taa_lock(taa_mutex);
+         taa_shader_info = taa_shader_candidate_info[shader_hash];
+      }
+
 #if ENABLE_SR
-      if (is_taa_candidate)
+      if (is_taa_candidate && !taa_shader_info.found_all)
       {
          // verify it's really TAA by checking the SRV signatures, there should be 2 color textures, a depth texture(R32G8X24 or other depth stencil formats) and a velocity texture(unorm RG)
          // we can also check the sampler states, there should be point and linear filtering samplers (we can do this later)
-
          com_ptr<ID3D11ShaderResourceView> shader_resources[16];
-         // ASSERT_ONCE(shader_hashes_TAA_Candidates.pixel_shaders.empty() != shader_hashes_TAA_Candidates.compute_shaders.empty());
-         bool is_compute_shader = stages == reshade::api::shader_stage::all_compute;
          if (is_compute_shader)
             native_device_context->CSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
          else
@@ -389,18 +398,12 @@ public:
                continue;
             switch (desc.Format)
             {
-            case DXGI_FORMAT_R8G8B8A8_UNORM:
-            case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
-            case DXGI_FORMAT_B8G8R8A8_UNORM:
-            case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
-            case DXGI_FORMAT_R10G10B10A2_UNORM:
             case DXGI_FORMAT_R11G11B10_FLOAT:
             case DXGI_FORMAT_R16G16B16A16_FLOAT:
-            case DXGI_FORMAT_R32G32B32A32_FLOAT:
                color_texture_count++;
                // assume lowest index is the main color texture
-               if (game_device_data.taa_source_color_texture_srv_index == -1)
-                  game_device_data.taa_source_color_texture_srv_index = (uint32_t)i;
+               if (taa_shader_info.source_texture_register == -1)
+                  taa_shader_info.source_texture_register = (uint32_t)i;
                break;
             case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
             case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
@@ -409,14 +412,14 @@ public:
             case DXGI_FORMAT_D24_UNORM_S8_UINT:
             case DXGI_FORMAT_D16_UNORM:
                depth_texture_count++;
-               if (game_device_data.taa_depth_texture_srv_index == -1)
-                  game_device_data.taa_depth_texture_srv_index = (uint32_t)i;
+               if (taa_shader_info.depth_texture_register == -1)
+                  taa_shader_info.depth_texture_register = (uint32_t)i;
                break;
             case DXGI_FORMAT_R16G16_UNORM:
             case DXGI_FORMAT_R16G16B16A16_UNORM:
                velocity_texture_count++;
-               if (game_device_data.taa_motion_vector_texture_srv_index == -1)
-                    game_device_data.taa_motion_vector_texture_srv_index = (uint32_t)i;
+               if (taa_shader_info.velocity_texture_register == -1)
+                  taa_shader_info.velocity_texture_register = (uint32_t)i;
                break;
             default:
                break;
@@ -426,41 +429,30 @@ public:
          if (color_texture_count >= 2 && depth_texture_count >= 1 && velocity_texture_count >= 1)
          {
             is_taa = true;
-            // add to the confirmed TAA shaders
-            if (is_compute_shader){
-               reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 TAA compute shader. Hash: 0x{:08X}", original_shader_hashes.compute_shaders[0]).c_str());
-               shader_hashes_TAA.compute_shaders.emplace(static_cast<unsigned long>(*original_shader_hashes.compute_shaders.begin()));
-            }
-            else
+            taa_shader_info.found_all = true;
             {
-               reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 TAA pixel shader. Hash: 0x{:08X}", original_shader_hashes.pixel_shaders[0]).c_str());
-               shader_hashes_TAA.pixel_shaders.emplace(static_cast<unsigned long>(*original_shader_hashes.pixel_shaders.begin()));
+               const std::unique_lock taa_lock(taa_mutex);
+               taa_shader_candidate_info[shader_hash] = taa_shader_info;
             }
-         }
-         else
-         {
-            game_device_data.taa_source_color_texture_srv_index  = -1;
-            game_device_data.taa_depth_texture_srv_index         = -1;
-            game_device_data.taa_motion_vector_texture_srv_index = -1;
-            //if (is_compute_shader)
-            //   shader_hashes_TAA_Candidates.compute_shaders.erase(static_cast<unsigned long>(*original_shader_hashes.compute_shaders.begin()));
-            //else
-            //   shader_hashes_TAA_Candidates.pixel_shaders.erase(static_cast<unsigned long>(*original_shader_hashes.pixel_shaders.begin()));
-            // ASSERT_ONCE(!(shader_hashes_TAA_Candidates.Empty() && shader_hashes_TAA.Empty()));
-            // shader_hashes_TAA_Rejected_Candidates.pixel_shaders.insert(original_shader_hashes.pixel_shaders.begin(), original_shader_hashes.pixel_shaders.end());
+            reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 TAA. Hash: 0x{:08X}", shader_hash).c_str());
+            if (is_compute_shader)
+               shader_hashes_TAA.compute_shaders.emplace(static_cast<unsigned long>(shader_hash));
+            else
+               shader_hashes_TAA.pixel_shaders.emplace(static_cast<unsigned long>(shader_hash));
          }
       }
 
       // if we already drew SR this frame, copy dlss output to shader output (some games run different quality settings in the same frame?)
       if (is_taa && device_data.has_drawn_sr)
       {
-         ASSERT_ONCE(shader_hashes_TAA.pixel_shaders.empty() != shader_hashes_TAA.compute_shaders.empty());
-         bool                               is_compute_shader = stages == reshade::api::shader_stage::all_compute;
          com_ptr<ID3D11RenderTargetView>    render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
          com_ptr<ID3D11DepthStencilView>    depth_stencil_view;
          com_ptr<ID3D11UnorderedAccessView> unordered_access_views[D3D11_PS_CS_UAV_REGISTER_COUNT];
-         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
-         native_device_context->CSGetUnorderedAccessViews(0, ARRAYSIZE(unordered_access_views), &unordered_access_views[0]);
+         if (is_compute_shader)
+            native_device_context->CSGetUnorderedAccessViews(0, ARRAYSIZE(unordered_access_views), &unordered_access_views[0]);
+         else
+            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
+
          com_ptr<ID3D11Resource> output_color_resource;
 
          if (is_compute_shader)
@@ -481,9 +473,6 @@ public:
       if (is_taa && device_data.sr_type != SR::Type::None && !device_data.sr_suppressed)
       {
 
-         ASSERT_ONCE(shader_hashes_TAA.pixel_shaders.empty() != shader_hashes_TAA.compute_shaders.empty());
-         bool is_compute_shader = stages == reshade::api::shader_stage::all_compute;
-
          if ((is_compute_shader && device_data.native_compute_shaders[CompileTimeStringHash("Decode MVs CS")].get() == nullptr) ||
              (!is_compute_shader && device_data.native_pixel_shaders[CompileTimeStringHash("Decode MVs PS")].get() == nullptr))
          {
@@ -500,18 +489,19 @@ public:
          com_ptr<ID3D11RenderTargetView>    render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
          com_ptr<ID3D11DepthStencilView>    depth_stencil_view;
          com_ptr<ID3D11UnorderedAccessView> unordered_access_views[D3D11_PS_CS_UAV_REGISTER_COUNT];
-         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
-         native_device_context->CSGetUnorderedAccessViews(0, ARRAYSIZE(unordered_access_views), &unordered_access_views[0]);
-
+         if (is_compute_shader)
+            native_device_context->CSGetUnorderedAccessViews(0, ARRAYSIZE(unordered_access_views), &unordered_access_views[0]);
+         else
+            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
          if (global_cb_info.size == 0)
          {
             // The first time we run TAA, we can get the global cbuffer size now
             // we can then use this to detect the cbuffer in the CPU during OnMapBufferRegion and OnUnmapBufferRegion hooks
             com_ptr<ID3D11Buffer> global_cbuffer;
             if (is_compute_shader)
-               native_device_context->CSGetConstantBuffers(global_cb_info.register_index, 1, &global_cbuffer);
+               native_device_context->CSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, &global_cbuffer);
             else
-               native_device_context->PSGetConstantBuffers(global_cb_info.register_index, 1, &global_cbuffer);
+               native_device_context->PSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, &global_cbuffer);
             ASSERT_ONCE(global_cbuffer != nullptr);
             D3D11_BUFFER_DESC global_cbuffer_desc;
             global_cbuffer->GetDesc(&global_cbuffer_desc);
@@ -519,11 +509,11 @@ public:
 
             return false; // Skip this draw call, we will run DLSS next frame after we detected the global cbuffer on the CPU
          }
-         const bool dlss_inputs_valid = shader_resources[game_device_data.taa_source_color_texture_srv_index].get() != nullptr && shader_resources[game_device_data.taa_depth_texture_srv_index].get() != nullptr && shader_resources[game_device_data.taa_motion_vector_texture_srv_index].get() != nullptr && (render_target_views[0].get() != nullptr || unordered_access_views[0].get() != nullptr);
+         const bool dlss_inputs_valid = shader_resources[taa_shader_info.source_texture_register].get() != nullptr && shader_resources[taa_shader_info.depth_texture_register].get() != nullptr && shader_resources[taa_shader_info.velocity_texture_register].get() != nullptr && (render_target_views[0].get() != nullptr || unordered_access_views[0].get() != nullptr);
          ASSERT_ONCE(dlss_inputs_valid);
          if (dlss_inputs_valid)
          {
-            if (game_device_data.found_per_view_globals.load() == false || global_cb_info.clip_to_prev_clip_start_index == -1)
+            if (game_device_data.found_per_view_globals.load() == false)
                return false;
             auto* sr_instance_data = device_data.GetSRInstanceData();
             ASSERT_ONCE(sr_instance_data);
@@ -602,11 +592,11 @@ public:
             if (!skip_dlss)
             {
                game_device_data.sr_source_color = nullptr;
-               shader_resources[game_device_data.taa_source_color_texture_srv_index.load()]->GetResource(&game_device_data.sr_source_color);
+               shader_resources[taa_shader_info.source_texture_register]->GetResource(&game_device_data.sr_source_color);
                game_device_data.depth_buffer = nullptr;
-               shader_resources[game_device_data.taa_depth_texture_srv_index.load()]->GetResource(&game_device_data.depth_buffer);
+               shader_resources[taa_shader_info.depth_texture_register]->GetResource(&game_device_data.depth_buffer);
                com_ptr<ID3D11Resource> object_velocity;
-               shader_resources[game_device_data.taa_motion_vector_texture_srv_index.load()]->GetResource(&object_velocity);
+               shader_resources[taa_shader_info.velocity_texture_register]->GetResource(&object_velocity);
 
                {
                   if (!AreResourcesEqual(object_velocity.get(), game_device_data.sr_motion_vectors.get(), false /*check_format*/))
@@ -650,7 +640,7 @@ public:
                      }
                   }
                }
-               DecodeMotionVectors(is_compute_shader, native_device_context, device_data);
+               DecodeMotionVectors(is_compute_shader, native_device_context, device_data, taa_shader_info);
 #if DEVELOPMENT
                const std::shared_lock lock_trace(s_mutex_trace);
                if (trace_running)

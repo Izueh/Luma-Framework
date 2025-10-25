@@ -12,13 +12,23 @@ union word_t
 
 struct GlobalCBInfo
 {
-   int32_t register_index                = -1; // register index that the global cbuffer is bound to during TAA draw call
    size_t  size                          = 0;  // size of the global cbuffer
-   size_t  declared_size                 = 0;  // declared size of the global cbuffer in TAA shader
-   int32_t clip_to_prev_clip_start_index = -1; // start index of the clip to prev clip matrix in the global cbuffer (this is unreliable since not all UE4 versions have it)
    int32_t jitter_index                  = -1; // index of the jitter vector in the global cbuffer (this is unreliable since not all UE4 versions have it)
    int32_t view_to_clip_start_index      = -1; // start index of the clip to view matrix in the global cbuffer
    int32_t view_size_and_inv_size_index  = -1; // index of the view size and inverse size vector in the global cbuffer
+   int32_t clip_to_prev_clip_start_index = -1;
+};
+
+struct TAAShaderInfo
+{
+   size_t declared_cbuffer_size;
+   size_t max_texture_register = 16;
+   int32_t global_buffer_register_index = -1;
+   int32_t clip_to_prev_clip_start_index = -1;
+   int32_t source_texture_register       = -1;
+   int32_t depth_texture_register       = -1;
+   int32_t velocity_texture_register    = -1;
+   bool found_all = false;
 };
 
 static uint32_t* FindLargestCBufferDeclaration(const uint32_t* code_u32, const size_t size_u32)
@@ -60,7 +70,7 @@ static uint32_t* FindLargestCBufferDeclaration(const uint32_t* code_u32, const s
    return max_cbuffer_declaration;
 }
 
-static bool IsUE4TAACandidate(const std::byte* code, size_t size)
+static bool IsUE4TAACandidate(const std::byte* code, size_t size, TAAShaderInfo& taa_shader_info)
 {
    // detects if the shader is a UE4 TAA Pixel Shader
    // first we should check resource declarations for textures:
@@ -80,6 +90,7 @@ static bool IsUE4TAACandidate(const std::byte* code, size_t size)
    size_t          detected_2d_texture_float_count = 0;
    size_t          detected_3d_texture_float_count = 0; // can be dithering texture, should hopefully always be just one or none
    size_t          instruction_count               = 0;
+   int32_t         max_texture_register            = -1;
    while (offset < size_u32)
    {
       if (instruction_count > 16)
@@ -115,12 +126,14 @@ static bool IsUE4TAACandidate(const std::byte* code, size_t size)
       {
          // check resource type and return type
          const uint32_t resource_return_type_token = code_u32[offset + 3];
+         const uint32_t register_index = code_u32[offset + 2]; //asume immediate32
          bool           all_float_return =
             DECODE_D3D10_SB_RESOURCE_RETURN_TYPE(resource_return_type_token, D3D10_SB_4_COMPONENT_X) == D3D10_SB_RETURN_TYPE_FLOAT &&
             DECODE_D3D10_SB_RESOURCE_RETURN_TYPE(resource_return_type_token, D3D10_SB_4_COMPONENT_Y) == D3D10_SB_RETURN_TYPE_FLOAT &&
             DECODE_D3D10_SB_RESOURCE_RETURN_TYPE(resource_return_type_token, D3D10_SB_4_COMPONENT_Z) == D3D10_SB_RETURN_TYPE_FLOAT &&
             DECODE_D3D10_SB_RESOURCE_RETURN_TYPE(resource_return_type_token, D3D10_SB_4_COMPONENT_W) == D3D10_SB_RETURN_TYPE_FLOAT;
 
+         max_texture_register = std::max<int32_t>(max_texture_register, static_cast<int32_t>(register_index));
          // velocity texture is usually a 2D texture with unorm RG return type
          if (resource_type == D3D10_SB_RESOURCE_DIMENSION_TEXTURE2D && all_float_return)
          {
@@ -141,6 +154,7 @@ static bool IsUE4TAACandidate(const std::byte* code, size_t size)
    if (detected_2d_texture_float_count < 4 || detected_3d_texture_float_count > 1)
       return false;
 
+   taa_shader_info.max_texture_register       = static_cast<int32_t>(max_texture_register);
    // now look for velocity decode instructions
    // usually velocity is decoded with a sequence like:
    // float2 DecodeVelocityFromTexture(float2 In)
@@ -192,7 +206,7 @@ static bool IsUE4TAACandidate(const std::byte* code, size_t size)
    return false;
 }
 
-static void FindGlobalCBInfo(const std::byte* code, size_t size, GlobalCBInfo& global_cb_info)
+static bool FindShaderInfo(const std::byte* code, size_t size, TAAShaderInfo& taa_shader_info)
 {
    // The strategy here is to identify the largest cbuffer (likely global cbuffer) and look for 4 consecutive float4 loads from it
    // with indices that make a range of a 4x4 matrix (the mask xywx can be a hint too)
@@ -210,7 +224,7 @@ static void FindGlobalCBInfo(const std::byte* code, size_t size, GlobalCBInfo& g
    uint32_t*       max_cbuffer_declaration = FindLargestCBufferDeclaration(code_u32, size_u32);
 
    if (max_cbuffer_declaration == nullptr)
-      return;
+      return false;
    // cb1[121].xywx
    word_t cbuffer_operand_pattern_tok;
    cbuffer_operand_pattern_tok.u =
@@ -225,7 +239,7 @@ static void FindGlobalCBInfo(const std::byte* code, size_t size, GlobalCBInfo& g
    word_t cbuffer_operand_register;
    cbuffer_operand_register.u = max_cbuffer_declaration[2];
 
-   const std::vector<std::byte> cbuffer_operand_pattern = {
+   std::vector<std::byte> cbuffer_operand_pattern = {
       std::byte{cbuffer_operand_pattern_tok.b[0]},
       std::byte{cbuffer_operand_pattern_tok.b[1]},
       std::byte{cbuffer_operand_pattern_tok.b[2]},
@@ -237,8 +251,24 @@ static void FindGlobalCBInfo(const std::byte* code, size_t size, GlobalCBInfo& g
    };
 
    std::vector<std::byte*> cbuffer_operand_hits = System::ScanMemoryForPattern(code, size, cbuffer_operand_pattern);
-   if (cbuffer_operand_hits.size() < 4)
-      return; // not enough hits
+   if (cbuffer_operand_hits.size() < 4) // try xxyw instead of xywx
+   {
+      cbuffer_operand_pattern_tok.u =
+         ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
+         ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_SWIZZLE_MODE) |
+         ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SWIZZLE(0, 0, 1, 3) |
+         ENCODE_D3D10_SB_OPERAND_TYPE(D3D10_SB_OPERAND_TYPE_CONSTANT_BUFFER) |
+         ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_2D) |
+         ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32) |
+         ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(1, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
+      cbuffer_operand_pattern[0] = std::byte{cbuffer_operand_pattern_tok.b[0]};
+      cbuffer_operand_pattern[1] = std::byte{cbuffer_operand_pattern_tok.b[1]};
+      cbuffer_operand_pattern[2] = std::byte{cbuffer_operand_pattern_tok.b[2]};
+      cbuffer_operand_pattern[3] = std::byte{cbuffer_operand_pattern_tok.b[3]};
+      cbuffer_operand_hits = System::ScanMemoryForPattern(code, size, cbuffer_operand_pattern);
+      if (cbuffer_operand_hits.size() < 4)
+         return false; // not enough hits
+   }
 
    // iterate over hits and store the index (word after the register) and the instruction offset (to group by proximity)
 
@@ -254,7 +284,7 @@ static void FindGlobalCBInfo(const std::byte* code, size_t size, GlobalCBInfo& g
    }
 
    if (indices.size() < 4)
-      return; // not enough unique indices
+      return false; // not enough unique indices
 
    // copy to array and look for 4 consecutive indices
    std::vector<uint32_t> index_array(indices.begin(), indices.end());
@@ -275,11 +305,11 @@ static void FindGlobalCBInfo(const std::byte* code, size_t size, GlobalCBInfo& g
       }
    }
 
-   global_cb_info.clip_to_prev_clip_start_index = best_start;
-   global_cb_info.register_index                = cbuffer_operand_register.u;
-   global_cb_info.declared_size                 = max_cbuffer_declaration[3];
-
-   return;
+   taa_shader_info.clip_to_prev_clip_start_index = best_start;
+   taa_shader_info.global_buffer_register_index   = cbuffer_operand_register.u;
+   taa_shader_info.declared_cbuffer_size          = max_cbuffer_declaration[3];
+   
+   return true;
 }
 
 static void FindJitterFromMVWrite(const std::byte* code, size_t size, GlobalCBInfo& global_cb_info)
