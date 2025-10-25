@@ -287,6 +287,64 @@ namespace Shader
                ;
          }
       }
+      bool HasAny(reshade::api::shader_stage shader_stage) const
+      {
+         if ((shader_stage & reshade::api::shader_stage::pixel) != 0)
+         {
+            if constexpr (SingleShaderHashes)
+            {
+               if (pixel_shaders[0] != UINT64_MAX)
+                  return true;
+            }
+            else
+            {
+               if (!pixel_shaders.empty())
+                  return true;
+            }
+         }
+         if ((shader_stage & reshade::api::shader_stage::vertex) != 0)
+         {
+            if constexpr (SingleShaderHashes)
+            {
+               if (vertex_shaders[0] != UINT64_MAX)
+                  return true;
+            }
+            else
+            {
+               if (!vertex_shaders.empty())
+                  return true;
+            }
+         }
+#if GEOMETRY_SHADER_SUPPORT
+         if ((shader_stage & reshade::api::shader_stage::geometry) != 0)
+         {
+            if constexpr (SingleShaderHashes)
+            {
+               if (geometry_shaders[0] != UINT64_MAX)
+                  return true;
+            }
+            else
+            {
+               if (!geometry_shaders.empty())
+                  return true;
+            }
+         }
+#endif
+         if ((shader_stage & reshade::api::shader_stage::compute) != 0)
+         {
+            if constexpr (SingleShaderHashes)
+            {
+               if (compute_shaders[0] != UINT64_MAX)
+                  return true;
+            }
+            else
+            {
+               if (!compute_shaders.empty())
+                  return true;
+            }
+         }
+         return false;
+      }
       void Clear()
       {
          if constexpr (SingleShaderHashes)

@@ -344,6 +344,7 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 #endif
    void* cb_per_view_global_buffer_map_data = nullptr;
 #if DEVELOPMENT
+   std::shared_ptr<void> debug_draw_frozen_draw_state_stack;
    com_ptr<ID3D11Resource> debug_draw_texture;
    DXGI_FORMAT debug_draw_texture_format = DXGI_FORMAT_UNKNOWN; // The view format, not the texture format
    uint4 debug_draw_texture_size = {}; // 3rd and 4th channels are Array/MS/Mips
@@ -396,6 +397,18 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 
    // Per game custom data
    GameDeviceData* game = nullptr;
+
+   std::vector<ID3D11Buffer*> GetLumaCBuffers() const
+   {
+      std::vector<ID3D11Buffer*> buffers;
+      if (luma_global_settings)
+         buffers.push_back(luma_global_settings.get());
+      if (luma_instance_data)
+         buffers.push_back(luma_instance_data.get());
+      if (luma_ui_data)
+         buffers.push_back(luma_ui_data.get());
+      return buffers;
+   }
 };
 
 struct __declspec(uuid("c5805458-2c02-4ebf-b139-38b85118d971")) SwapchainData

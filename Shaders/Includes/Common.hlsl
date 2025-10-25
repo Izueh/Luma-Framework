@@ -112,14 +112,33 @@ float3 PumboAutoHDR(float3 SDRColor, float MaxPeakWhiteNits, float _PaperWhiteNi
 
 // Takes an SDR/HDR linear color (that doesn't have that much dynamic range) and expands the high midtones and highlights.
 // Note: this allows "FakeHDRIntensity" to be < 0 in case you wanted to undo the effect (approximately).
+// "NormalizationPoint" needs to be > 0.
 float3 FakeHDR(float3 Color, float NormalizationPoint = 0.02, float FakeHDRIntensity = 0.5, float SaturationExpansionIntensity = 0.0, uint Method = 0, uint ColorSpace = CS_DEFAULT)
 {
+  // Used to create a smoother curve around where the pow modifier kicks in, otherwise, unless it's near shadow, there would be a visible step in gradients
+  // This is in normalized range, not the raw one.
+  // Hardcoded to be double of the normalization point, expose if ever necessary.
+  // If 1, we'll smooth in the highlights boost from "Color==NormalizationPoint" to "Color==NormalizationPoint*2".
+  float SmoothInRange = 1.0;
+  
   if (Method == 0) // Per channel (and optionally restores the luminance of the per channel boosted, given that this naturally expands saturation)
   {
+#if 1
+    // Note that doing a saturate here keeps most of the range of the results looking identical as to not having this smooth blend,
+    // however, it also leaves a tiny step for when the smooth blend ends, though it shouldn't be visible.
+    float3 blendIntensity = SmoothInRange != 0.0 ? saturate((Color - NormalizationPoint) / (NormalizationPoint * SmoothInRange)) : 1.0;
+    //blendIntensity = sqr(blendIntensity); // Optionally square the result to obtain an even smoother result (this can make the blend a bit too aggressive)
+#else
+    float blendRange = NormalizationPoint * (SmoothInRange + 1.0);
+    float3 blendIntensity = Color / ((Color / blendRange) + 1); // This, without saturate, would create a weaker, but smoother, highlights boost
+#endif
+
     float3 normalizedColor = Color / NormalizationPoint;
     // Expand highlights with a power curve
+    // Branching or Max would be faster depending on how many pixels pass the test. We don't really even need to anymore with "blendIntensity".
     normalizedColor = normalizedColor > 1.0 ? pow(normalizedColor, 1.0 + FakeHDRIntensity) : normalizedColor;
-    Color = lerp(RestoreLuminance(Color, normalizedColor * NormalizationPoint, ColorSpace), normalizedColor * NormalizationPoint, SaturationExpansionIntensity);
+    float3 alteredColor = lerp(Color, normalizedColor * NormalizationPoint, blendIntensity);
+    Color = lerp(RestoreLuminance(Color, alteredColor, ColorSpace), alteredColor, SaturationExpansionIntensity);
   }
   else if (Method == 1 || Method == 2)
   {
@@ -128,9 +147,14 @@ float3 FakeHDR(float3 Color, float NormalizationPoint = 0.02, float FakeHDRInten
       colorValue = max3(Color);
     else if (Method == 2) // By luminance (will mostly ignore blues)
       colorValue = GetLuminance(Color, ColorSpace);
+
+    float blendIntensity = SmoothInRange != 0.0 ? saturate((colorValue - NormalizationPoint) / (NormalizationPoint * SmoothInRange)) : 1.0;
+
     float normalizedColorValue = colorValue / NormalizationPoint;
     normalizedColorValue = normalizedColorValue > 1.0 ? pow(normalizedColorValue, 1.0 + FakeHDRIntensity) : normalizedColorValue;
-    float expansionRatio = safeDivision(normalizedColorValue * NormalizationPoint, colorValue, 1); // Fallback to 1
+
+    float alteredColorValue = lerp(colorValue, normalizedColorValue * NormalizationPoint, blendIntensity);
+    float expansionRatio = safeDivision(alteredColorValue, colorValue, 1); // Fallback to 1
     Color *= expansionRatio;
     
     // Expand saturation as well, on highlights only. This won't look nice!

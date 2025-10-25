@@ -502,6 +502,68 @@ namespace
       return false;
    }
 
+   // Returns true if a format has RGB channels, and optional A too (in any order).
+   // Can be used to determine if a texture is meant to be storing a RGB color or not.
+   bool IsRGBAFormat(DXGI_FORMAT format, bool ignore_alpha = false)
+   {
+      switch (format)
+      {
+      case DXGI_FORMAT_B4G4R4A4_UNORM:
+      case DXGI_FORMAT_A4B4G4R4_UNORM:
+      case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+      case DXGI_FORMAT_B8G8R8A8_UNORM:
+      case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+      case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+      case DXGI_FORMAT_R8G8B8A8_UNORM:
+      case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+      case DXGI_FORMAT_R8G8B8A8_UINT:
+      case DXGI_FORMAT_R8G8B8A8_SNORM:
+      case DXGI_FORMAT_R8G8B8A8_SINT:
+      case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+      case DXGI_FORMAT_R16G16B16A16_FLOAT:
+      case DXGI_FORMAT_R16G16B16A16_UNORM:
+      case DXGI_FORMAT_R32G32B32A32_TYPELESS:
+      case DXGI_FORMAT_R32G32B32A32_FLOAT:
+      case DXGI_FORMAT_R32G32B32A32_UINT:
+      case DXGI_FORMAT_R32G32B32A32_SINT:
+      case DXGI_FORMAT_BC2_TYPELESS:
+      case DXGI_FORMAT_BC2_UNORM:
+      case DXGI_FORMAT_BC2_UNORM_SRGB:
+      case DXGI_FORMAT_BC3_TYPELESS:
+      case DXGI_FORMAT_BC3_UNORM:
+      case DXGI_FORMAT_BC3_UNORM_SRGB:
+      case DXGI_FORMAT_BC7_TYPELESS:
+      case DXGI_FORMAT_BC7_UNORM:
+      case DXGI_FORMAT_BC7_UNORM_SRGB:
+         return true;
+
+      // Alpha not present or not used:
+      case DXGI_FORMAT_B5G6R5_UNORM:
+      case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+      case DXGI_FORMAT_B8G8R8X8_UNORM:
+      case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+      case DXGI_FORMAT_R32G32B32_TYPELESS:
+      case DXGI_FORMAT_R32G32B32_FLOAT:
+      case DXGI_FORMAT_R32G32B32_UINT:
+      case DXGI_FORMAT_R32G32B32_SINT:
+      case DXGI_FORMAT_R9G9B9E5_SHAREDEXP:
+      case DXGI_FORMAT_R11G11B10_FLOAT:
+         return ignore_alpha;
+
+      // Limited alpha cases:
+      case DXGI_FORMAT_B5G5R5A1_UNORM:
+      case DXGI_FORMAT_R10G10B10_XR_BIAS_A2_UNORM:
+      case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+      case DXGI_FORMAT_R10G10B10A2_UNORM:
+      case DXGI_FORMAT_R10G10B10A2_UINT:
+      case DXGI_FORMAT_BC1_TYPELESS:
+      case DXGI_FORMAT_BC1_UNORM:
+      case DXGI_FORMAT_BC1_UNORM_SRGB:
+         return true;
+      }
+      return false;
+   }
+
    // If true, the format is "HDR" and can go beyond 1. Depth formats are ignored.
    bool IsFloatFormat(DXGI_FORMAT format)
    {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include <windows.h>
+#include <Windows.h>
 #include <shlobj.h>
 #include <string>
 #include <filesystem>

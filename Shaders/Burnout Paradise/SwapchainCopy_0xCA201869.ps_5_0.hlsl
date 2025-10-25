@@ -1,3 +1,6 @@
+#include "Includes/Common.hlsl"
+#include "../Includes/Reinhard.hlsl"
+
 cbuffer _Globals : register(b0)
 {
   float4 gv4GammaValues : packoffset(c0);
@@ -15,4 +18,18 @@ void main(
   o0.xyzw = SceneTexture.Sample(Scene_s, v1.xy).xyzw;
   // Applies the user gamma brightness value, defaults at 1
   o0.xyz = pow(abs(o0.xyz), gv4GammaValues.x) * sign(o0.xyz); // Luma: fixed support for negative values
+
+  // Luma: tonemap the UI beyond to fix the boost fire looking weird (hue shifted and clipped) (this probably doesn't fully fix it bu whatever)
+  if (o0.a > 0.0)
+  {
+    float3 prevOutColor = o0.rgb;
+
+    const float paperWhite = LumaSettings.UIPaperWhiteNits / sRGB_WhiteLevelNits;
+    const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
+    o0.xyz = gamma_to_linear(o0.xyz, GCT_MIRROR);
+    o0.xyz = Reinhard::ReinhardRange(o0.xyz, MidGray, -1.0, peakWhite / paperWhite, false);
+    o0.xyz = linear_to_gamma(o0.xyz, GCT_MIRROR);
+
+    o0.xyz = lerp(prevOutColor, o0.xyz, sqrt(o0.a)); // We risk tonemapping the scene again if we don't do this
+  }
 }

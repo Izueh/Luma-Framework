@@ -182,6 +182,7 @@ void GetResourceInfo(ID3D11Resource* resource, uint4& size, DXGI_FORMAT& format,
 #endif
 
    // Go in order of popularity
+   // Note: it's possible to use "ID3D11Resource::GetType()" instead of this
    com_ptr<ID3D11Texture2D> texture_2d;
    HRESULT hr = resource->QueryInterface(&texture_2d);
    if (SUCCEEDED(hr) && texture_2d)
@@ -335,7 +336,88 @@ bool AreResourcesEqual(ID3D11Resource* resource1, ID3D11Resource* resource2, boo
 }
 
 template<typename T>
-using D3D11_RESOURCE_DESC = std::conditional_t<typeid(T) == typeid(ID3D11Texture2D), D3D11_TEXTURE2D_DESC, std::conditional_t<typeid(T) == typeid(ID3D11Texture3D), D3D11_TEXTURE3D_DESC, D3D11_TEXTURE1D_DESC>>;
+using D3D11_RESOURCE_DESC = std::conditional_t<typeid(T) == typeid(ID3D11Texture2D), D3D11_TEXTURE2D_DESC, std::conditional_t<typeid(T) == typeid(ID3D11Texture3D), D3D11_TEXTURE3D_DESC, std::conditional_t<typeid(T) == typeid(ID3D11Texture1D), D3D11_TEXTURE1D_DESC, D3D11_BUFFER_DESC>>>;
+
+template <typename T>
+using D3D11_RESOURCE_VIEW_DESC = std::conditional_t<typeid(T) == typeid(ID3D11ShaderResourceView), D3D11_SHADER_RESOURCE_VIEW_DESC, std::conditional_t<typeid(T) == typeid(ID3D11RenderTargetView), D3D11_RENDER_TARGET_VIEW_DESC, std::conditional_t<typeid(T) == typeid(ID3D11UnorderedAccessView), D3D11_UNORDERED_ACCESS_VIEW_DESC, D3D11_DEPTH_STENCIL_VIEW_DESC>>>;
+
+// TODO: rename to "Generic"
+template <typename T = ID3D11Resource>
+com_ptr<T> CloneResourceTyped(ID3D11Device* device, ID3D11DeviceContext* device_context, T* source)
+{
+   if (!source) return nullptr;
+
+   com_ptr<T> cloned_resource;
+
+   // Note: some misc flags like "D3D11_RESOURCE_MISC_SHARED" or "D3D11_RESOURCE_MISC_GUARDED" might theoretically be better removed, but there's no need to until we found a use case.
+   // We could also optionally remove the "CPUAccessFlags" given we likely won't need them, but that should be optional if so.
+   D3D11_RESOURCE_DESC<T> desc;
+   source->GetDesc(&desc);
+
+   // Arguable, but return the same resource if it's immutable, we don't really need to clone it and it'd fail if we didn't provide the initial data,
+   // which would require mapping the source resource to be retrieved, and it's just unnecessary.
+   if (desc.Usage == D3D11_USAGE_IMMUTABLE)
+   {
+      return source;
+   }
+
+   HRESULT hr = E_FAIL;
+   if constexpr (std::is_same_v<T, ID3D11Buffer>)
+   {
+      hr = device->CreateBuffer(&desc, nullptr, &cloned_resource);
+   }
+   else if constexpr (std::is_same_v<T, ID3D11Texture2D>)
+   {
+      hr = device->CreateTexture2D(&desc, nullptr, &cloned_resource);
+   }
+   else if constexpr (std::is_same_v<T, ID3D11Texture3D>)
+   {
+      hr = device->CreateTexture3D(&desc, nullptr, &cloned_resource);
+   }
+   else if constexpr (std::is_same_v<T, ID3D11Texture1D>)
+   {
+      hr = device->CreateTexture1D(&desc, nullptr, &cloned_resource);
+   }
+   ASSERT_ONCE(SUCCEEDED(hr));
+
+   if (SUCCEEDED(hr))
+   {
+      device_context->CopyResource(cloned_resource.get(), source);
+   }
+
+   return cloned_resource;
+}
+
+com_ptr<ID3D11Resource> CloneResource(ID3D11Device* device, ID3D11DeviceContext* device_context, ID3D11Resource* source)
+{
+   if (!device || !device_context || !source)
+      return nullptr;
+
+   D3D11_RESOURCE_DIMENSION type;
+   source->GetType(&type);
+
+   switch (type)
+   {
+   case D3D11_RESOURCE_DIMENSION_BUFFER:
+   {
+      return (com_ptr<ID3D11Resource>&&)(CloneResourceTyped<ID3D11Buffer>(device, device_context, static_cast<ID3D11Buffer*>(source)));
+   }
+   case D3D11_RESOURCE_DIMENSION_TEXTURE1D:
+   {
+      return (com_ptr<ID3D11Resource>&&)CloneResourceTyped<ID3D11Texture1D>(device, device_context, static_cast<ID3D11Texture1D*>(source));
+   }
+   case D3D11_RESOURCE_DIMENSION_TEXTURE2D:
+   {
+      return (com_ptr<ID3D11Resource>&&)CloneResourceTyped<ID3D11Texture2D>(device, device_context, static_cast<ID3D11Texture2D*>(source));
+   }
+   case D3D11_RESOURCE_DIMENSION_TEXTURE3D:
+   {
+      return (com_ptr<ID3D11Resource>&&)CloneResourceTyped<ID3D11Texture3D>(device, device_context, static_cast<ID3D11Texture3D*>(source));
+   }
+   }
+
+   return nullptr;
+}
 
 template<typename T = ID3D11Resource>
 com_ptr<T> CloneTexture(ID3D11Device* native_device, ID3D11Resource* texture_resource, DXGI_FORMAT overridden_format = DXGI_FORMAT_UNKNOWN, UINT add_bind_flags = (D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET), UINT remove_bind_flags = 0, bool black_initial_data = false, bool copy_data = true, ID3D11DeviceContext* native_device_context = nullptr, UINT overridden_mip_levels = -1, UINT overridden_samples_count = -1)
@@ -453,6 +535,7 @@ com_ptr<T> CloneTexture(ID3D11Device* native_device, ID3D11Resource* texture_res
             }
          }
 
+         // TODO: use "CloneResourceTyped()" now that we have it
          if constexpr (std::is_same_v<T, ID3D11Texture2D>)
          {
             hr = native_device->CreateTexture2D(&texture_desc, black_initial_data ? &initial_data : nullptr, &cloned_resource);
@@ -480,6 +563,44 @@ com_ptr<T> CloneTexture(ID3D11Device* native_device, ID3D11Resource* texture_res
       }
    }
    return cloned_resource;
+}
+
+// Makes a clone of a resource view and the underlying resource, and returns the reference to the cloned view (the cloned resource isn't directly return, but will be kept alive, and is accessible, through the view)
+template <typename T = ID3D11View>
+com_ptr<T> CloneResourceAndView(ID3D11Device* device, ID3D11DeviceContext* device_context, T* source_view)
+{
+   if (!source_view)
+      return nullptr;
+
+   com_ptr<ID3D11Resource> source_resource;
+   source_view->GetResource(&source_resource);
+   com_ptr<ID3D11Resource> cloned_resource = CloneResource(device, device_context, source_resource.get());
+
+   D3D11_RESOURCE_VIEW_DESC<T> desc;
+   source_view->GetDesc(&desc);
+
+   com_ptr<T> cloned_resource_view;
+
+   HRESULT hr = E_FAIL;
+   if constexpr (std::is_same_v<T, ID3D11ShaderResourceView>)
+   {
+      hr = device->CreateShaderResourceView(cloned_resource.get(), &desc, &cloned_resource_view);
+   }
+   else if constexpr (std::is_same_v<T, ID3D11RenderTargetView>)
+   {
+      hr = device->CreateRenderTargetView(cloned_resource.get(), &desc, &cloned_resource_view);
+   }
+   else if constexpr (std::is_same_v<T, ID3D11UnorderedAccessView>)
+   {
+      hr = device->CreateUnorderedAccessView(cloned_resource.get(), &desc, &cloned_resource_view);
+   }
+   else if constexpr (std::is_same_v<T, ID3D11DepthStencilView>)
+   {
+      hr = device->CreateDepthStencilView(cloned_resource.get(), &desc, &cloned_resource_view);
+   }
+   ASSERT_ONCE(SUCCEEDED(hr));
+
+   return cloned_resource_view;
 }
 
 // Define source pixel structure (8-bit per channel)
@@ -693,6 +814,7 @@ bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view
    device_data.debug_draw_texture = nullptr; // Always clear it, even if the new creation failed
    if (texture_resource)
    {
+      // Note: it's possible to use "ID3D11Resource::GetType()" instead of this
       com_ptr<ID3D11Texture2D> texture_2d;
       texture_resource->QueryInterface(&texture_2d);
       com_ptr<ID3D11Texture3D> texture_3d;

@@ -638,19 +638,20 @@ namespace
    {
       uint32_t debug_draw_shader_hash = 0;
       char debug_draw_shader_hash_string[HASH_CHARACTERS_LENGTH + 1] = {};
-      uint64_t debug_draw_pipeline = 0;
+      uint64_t debug_draw_pipeline = 0; // In DX11 shaders and pipelines are the same thing so this is kinda useless (excluding the rare case where multiple pipelines (compiled shader objects) were based on the same shader, and hence had the same hash)
       int32_t debug_draw_pipeline_target_instance = -1;
       std::thread::id debug_draw_pipeline_target_thread = std::thread::id(); // Filter target instances by thread, which would hopefully reliably match the command lists, over multiple frames
 
       std::atomic<int32_t> debug_draw_pipeline_instance = 0; // Theoretically should be within "CommandListData" but this should work for most cases
 
       DebugDrawMode debug_draw_mode = DebugDrawMode::Custom;
+      bool debug_draw_freeze_inputs = false; // Allows freezing the inputs/state of this pass, allowing you to edit the shader and seeing the results live. This is bundled with the textures debug draw feature because generally you don't need to freeze the inputs of any prior pass if not the very same one you are analyzing (or iterating upon). If the game stopped drawing the shader, debugging would also stop.
       int32_t debug_draw_view_index = 0;
       uint32_t debug_draw_options = (uint32_t)DebugDrawTextureOptionsMask::Fullscreen | (uint32_t)DebugDrawTextureOptionsMask::BackgroundPassthrough | (uint32_t)DebugDrawTextureOptionsMask::Tonemap;
       int32_t debug_draw_mip = 0;
       bool debug_draw_pipeline_instance_filter_by_thread = false; // Not true by default as it seems like quite a few games set up multiple render threads, so this conflicts between frames
       bool debug_draw_auto_clear_texture = false;
-      bool debug_draw_replaced_pass = false; // Whether we print the debugging of the original or replaced pass (the resources bindings etc might be different, though this won't forcefully run the original pass if it was skipped by the game's mod custom code)
+      bool debug_draw_replaced_pass = false; // Whether we print the debugging of the original or replaced pass (the resources bindings etc might be different, though this won't forcefully run the original pass if it was skipped by the game's mod custom code, so this isn't fully reliable)
       bool debug_draw_auto_gamma = true;
    }
 
@@ -671,7 +672,8 @@ namespace
       CB::LumaDevSettings cb_luma_dev_settings_min_value(0.f);
       CB::LumaDevSettings cb_luma_dev_settings_max_value(1.f);
       std::array<std::string, CB::LumaDevSettings::SettingsNum> cb_luma_dev_settings_names;
-      bool cb_luma_dev_settings_set_from_code = false;
+      bool cb_luma_dev_settings_set_from_code = false; // Set this to true to disable dev settings reflections from shaders
+      bool cb_luma_dev_settings_edit_mode = false;
    }
 #endif // DEVELOPMENT
 
@@ -1224,7 +1226,7 @@ namespace
                      // Reflections on dev settings.
                      // They can have a comment like "// Default, Min, Max, Name" next to them (e.g. "// 0.5, 0, 1.3, Custom Name").
                      const auto dev_setting_pos = str_view.find("float DevSetting");
-                     if (is_global_settings && dev_setting_pos != std::string::npos)
+                     if (!cb_luma_dev_settings_set_from_code && is_global_settings && dev_setting_pos != std::string::npos)
                      {
                         if (settings_count >= CB::LumaDevSettings::SettingsNum) continue;
                         settings_count++;
@@ -1247,12 +1249,9 @@ namespace
                         // Float heading spaces are automatically ignored.
                         while (!reached_end && ss.peek() >= '0' && ss.peek() <= '9' && ss >> str_float)
                         {
-                           if (!cb_luma_dev_settings_set_from_code)
-                           {
-                              if (settings_float_count == 0) cb_luma_dev_settings_default_value[settings_count - 1] = str_float;
-                              else if (settings_float_count == 1) cb_luma_dev_settings_min_value[settings_count - 1] = str_float;
-                              else if (settings_float_count == 2) cb_luma_dev_settings_max_value[settings_count - 1] = str_float;
-                           }
+                           if (settings_float_count == 0) cb_luma_dev_settings_default_value[settings_count - 1] = str_float;
+                           else if (settings_float_count == 1) cb_luma_dev_settings_min_value[settings_count - 1] = str_float;
+                           else if (settings_float_count == 2) cb_luma_dev_settings_max_value[settings_count - 1] = str_float;
                            settings_float_count++;
                            if (!ss.good()) { reached_end = true; break; };
                            // Remove known (supported) characters to ignore (spaces are already ignored above anyway)
@@ -1266,7 +1265,7 @@ namespace
                         std::string str;
                         auto ss_pos = ss.tellg();
                         // If we found a string, read the whole remaining stream buffer, otherwise the "str" string would end at the first space
-                        if (!reached_end && ss >> str && !cb_luma_dev_settings_set_from_code)
+                        if (!reached_end && ss >> str)
                         {
                            cb_luma_dev_settings_names[settings_count - 1] = ss.str();
                            cb_luma_dev_settings_names[settings_count - 1] = cb_luma_dev_settings_names[settings_count - 1].substr(ss_pos, cb_luma_dev_settings_names[settings_count - 1].length() - ss_pos);
@@ -4624,6 +4623,7 @@ namespace
             {
                // We might not be able to rely on SRVs automatic generation (by passing a nullptr desc), because depth resources take a custom view format etc
 
+               // Note: it's possible to use "ID3D11Resource::GetType()" instead of this
                com_ptr<ID3D11Texture2D> debug_draw_texture_2d;
                device_data.debug_draw_texture->QueryInterface(&debug_draw_texture_2d);
                com_ptr<ID3D11Texture3D> debug_draw_texture_3d;
@@ -4735,7 +4735,7 @@ namespace
 
                if (debug_draw_auto_gamma)
                {
-                  // TODO: if this is depth and depth is inverted (or not), should we flip the gamma direction?
+                  // TODO: if this is depth and depth is inverted (or not), should we flip the gamma direction? Gamma to linear looks good on direct/linear depth
                   if (!IsLinearFormat(device_data.debug_draw_texture_format)) // We don't use the view format as we create a new view with the native format
                   {
                      debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::GammaToLinear;
@@ -4744,6 +4744,11 @@ namespace
                   {
                      debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::LinearToGamma;
                      debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::GammaToLinear;
+                     // If the game rendering or post processing was in gamma space, automatically linearize color textures (just a guess, it's usually right)
+                     if (IsRGBAFormat(device_data.debug_draw_texture_format, false) && GetShaderDefineCompiledNumericalValue(POST_PROCESS_SPACE_TYPE_HASH) == 0)
+                     {
+                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::GammaToLinear;
+                     }
                   }
                }
 
@@ -5028,7 +5033,7 @@ namespace
       if (is_dispatch)
       {
          is_custom_pass = cmd_list_data.pipeline_state_has_custom_compute_shader;
-         if (!original_shader_hashes.compute_shaders.empty())
+         if (original_shader_hashes.HasAny(reshade::api::shader_stage::compute))
          {
             stages = reshade::api::shader_stage::compute;
          }
@@ -5036,11 +5041,11 @@ namespace
       else
       {
          is_custom_pass = cmd_list_data.pipeline_state_has_custom_graphics_shader;
-         if (!original_shader_hashes.vertex_shaders.empty())
+         if (original_shader_hashes.HasAny(reshade::api::shader_stage::vertex))
          {
             stages = reshade::api::shader_stage::vertex;
          }
-         if (!original_shader_hashes.pixel_shaders.empty())
+         if (original_shader_hashes.HasAny(reshade::api::shader_stage::pixel))
          {
             stages |= reshade::api::shader_stage::pixel;
          }
@@ -5055,7 +5060,7 @@ namespace
          {
             if (!cmd_list_data.any_dispatch_done)
             {
-               ASSERT_ONCE_MSG(!cmd_list_data.pipeline_state_original_compute_shader_hashes.compute_shaders.empty(),
+               ASSERT_ONCE_MSG(cmd_list_data.pipeline_state_original_compute_shader_hashes.HasAny(reshade::api::shader_stage::compute),
                   "A dispatch was triggered on a fresh deferred device context without previously setting a compute shader, it could be that the engine relies on whatever pipeline state will be set on the immediate device context at the time of joining the deferred context");
 
                bool any_uav = false;
@@ -5076,7 +5081,7 @@ namespace
          {
             if (!cmd_list_data.any_dispatch_done)
             {
-               ASSERT_ONCE_MSG(!cmd_list_data.pipeline_state_original_graphics_shader_hashes.pixel_shaders.empty() || !cmd_list_data.pipeline_state_original_graphics_shader_hashes.vertex_shaders.empty(),
+               ASSERT_ONCE_MSG(cmd_list_data.pipeline_state_original_graphics_shader_hashes.HasAny(reshade::api::shader_stage::pixel) || cmd_list_data.pipeline_state_original_graphics_shader_hashes.HasAny(reshade::api::shader_stage::vertex),
                   "A draw was triggered on a fresh deferred device context without previously setting a vertex/pixel shader, it could be that the engine relies on whatever pipeline state will be set on the immediate device context at the time of joining the deferred context");
 
                bool any_rtv_or_dsv_or_uav = false;
@@ -5111,12 +5116,12 @@ namespace
 
       if (is_dispatch)
       {
-         last_drawn_shader = cmd_list_data.pipeline_state_original_compute_shader_hashes.compute_shaders.empty() ? "" : Shader::Hash_NumToStr(*cmd_list_data.pipeline_state_original_compute_shader_hashes.compute_shaders.begin()); // String hash to int
+         last_drawn_shader = cmd_list_data.pipeline_state_original_compute_shader_hashes.HasAny(reshade::api::shader_stage::compute) ? Shader::Hash_NumToStr(*cmd_list_data.pipeline_state_original_compute_shader_hashes.compute_shaders.begin()) : ""; // String hash to int
          cmd_list_data.any_dispatch_done = true;
       }
       else
       {
-         last_drawn_shader = cmd_list_data.pipeline_state_original_graphics_shader_hashes.pixel_shaders.empty() ? "" : Shader::Hash_NumToStr(*cmd_list_data.pipeline_state_original_graphics_shader_hashes.pixel_shaders.begin()); // String hash to int
+         last_drawn_shader = cmd_list_data.pipeline_state_original_graphics_shader_hashes.HasAny(reshade::api::shader_stage::pixel) ? Shader::Hash_NumToStr(*cmd_list_data.pipeline_state_original_graphics_shader_hashes.pixel_shaders.begin()) : ""; // String hash to int
          cmd_list_data.any_draw_done = true;
       }
       thread_local_cmd_list = cmd_list;
@@ -5547,7 +5552,8 @@ namespace
       DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
 
       bool wants_debug_draw = debug_draw_shader_hash != 0 || debug_draw_pipeline != 0;
-		wants_debug_draw &= (debug_draw_pipeline == 0 || debug_draw_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle);
+      wants_debug_draw &= (debug_draw_pipeline == 0 || debug_draw_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle);
+      wants_debug_draw &= (debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_graphics_shader_hashes.Contains(debug_draw_shader_hash, reshade::api::shader_stage::pixel)) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id());
 
       com_ptr<ID3D11DepthStencilState> original_depth_stencil_state;
       UINT original_stencil_ref = 0;
@@ -5562,6 +5568,22 @@ namespace
       DrawStateStack pre_draw_state_stack;
       if (wants_debug_draw)
       {
+         if (debug_draw_freeze_inputs)
+         {
+            // The cached (frozen) state is empty, cache it, and then duplicate the resources
+            if (!device_data.debug_draw_frozen_draw_state_stack)
+            {
+               device_data.debug_draw_frozen_draw_state_stack = std::make_shared<DrawStateStack<DrawStateStackType::FullGraphics>>();
+               // TODO: do this properly... we had header include problems. Also this needs to be swapped to the compute type of compute shaders, and graphics for pixel (we need to refresh it if the type was wrong).
+               ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Cache(native_device_context, device_data.uav_max_count);
+               ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Clone(native_device_context, device_data.GetLumaCBuffers());
+            }
+            // Restore the new or cached cloned state
+            // We keep the original RTVs, UAVs and shaders otherwise live editing of custom shaders won't work.
+            // Making the draw on a non frozen UAV could cause iterative passes to not 100% freeze, but if ever needed, we could add a flag for that too (and e.g. copy back their value from the cached clone).
+            ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Restore(native_device_context, false, false);
+         }
+
          pre_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
       }
 
@@ -5604,7 +5626,7 @@ namespace
 #endif
 
       // First run the draw call (don't delegate it to ReShade) and then copy its output
-      if (wants_debug_draw && (debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_graphics_shader_hashes.Contains(debug_draw_shader_hash, reshade::api::shader_stage::pixel)) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id()))
+      if (wants_debug_draw)
       {
          auto local_debug_draw_pipeline_instance = debug_draw_pipeline_instance.fetch_add(1);
          if (debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == debug_draw_pipeline_target_instance)
@@ -5691,6 +5713,7 @@ namespace
 
       bool wants_debug_draw = debug_draw_shader_hash != 0 || debug_draw_pipeline != 0;
       wants_debug_draw &= (debug_draw_pipeline == 0 || debug_draw_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle);
+      wants_debug_draw &= (debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_graphics_shader_hashes.Contains(debug_draw_shader_hash, reshade::api::shader_stage::pixel)) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id());
 
       com_ptr<ID3D11DepthStencilState> original_depth_stencil_state;
       UINT original_stencil_ref = 0;
@@ -5704,6 +5727,17 @@ namespace
       DrawStateStack pre_draw_state_stack;
       if (wants_debug_draw)
       {
+         if (debug_draw_freeze_inputs)
+         {
+            if (!device_data.debug_draw_frozen_draw_state_stack)
+            {
+               device_data.debug_draw_frozen_draw_state_stack = std::make_shared<DrawStateStack<DrawStateStackType::FullGraphics>>();
+               ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Cache(native_device_context, device_data.uav_max_count);
+               ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Clone(native_device_context, device_data.GetLumaCBuffers());
+            }
+            ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Restore(native_device_context, false, false);
+         }
+
          pre_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
       }
 
@@ -5733,7 +5767,7 @@ namespace
       bool cancelled_or_replaced = OnDraw_Custom(cmd_list, false);
 #if DEVELOPMENT
       // First run the draw call (don't delegate it to ReShade) and then copy its output
-      if (wants_debug_draw && (debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_graphics_shader_hashes.Contains(debug_draw_shader_hash, reshade::api::shader_stage::pixel)) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id()))
+      if (wants_debug_draw)
       {
          auto local_debug_draw_pipeline_instance = debug_draw_pipeline_instance.fetch_add(1);
          if (debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == debug_draw_pipeline_target_instance)
@@ -5813,10 +5847,22 @@ namespace
 
       bool wants_debug_draw = debug_draw_shader_hash != 0 || debug_draw_pipeline != 0;
       wants_debug_draw &= (debug_draw_pipeline == 0 || debug_draw_pipeline == cmd_list_data.pipeline_state_original_compute_shader.handle);
+      wants_debug_draw &= (debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_compute_shader_hashes.Contains(debug_draw_shader_hash, reshade::api::shader_stage::compute)) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id());
 
       DrawStateStack<DrawStateStackType::Compute> pre_draw_state_stack;
       if (wants_debug_draw)
       {
+         if (debug_draw_freeze_inputs)
+         {
+            if (!device_data.debug_draw_frozen_draw_state_stack)
+            {
+               device_data.debug_draw_frozen_draw_state_stack = std::make_shared<DrawStateStack<DrawStateStackType::Compute>>();
+               ((DrawStateStack<DrawStateStackType::Compute>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Cache(native_device_context, device_data.uav_max_count);
+               ((DrawStateStack<DrawStateStackType::Compute>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Clone(native_device_context, device_data.GetLumaCBuffers());
+            }
+            ((DrawStateStack<DrawStateStackType::Compute>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Restore(native_device_context, false, false);
+         }
+
          pre_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
       }
 
@@ -5831,7 +5877,7 @@ namespace
       bool cancelled_or_replaced = OnDraw_Custom(cmd_list, true);
 #if DEVELOPMENT
       // First run the draw call (don't delegate it to ReShade) and then copy its output
-      if (wants_debug_draw && (debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_compute_shader_hashes.Contains(debug_draw_shader_hash, reshade::api::shader_stage::compute)) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id()))
+      if (wants_debug_draw)
       {
          auto local_debug_draw_pipeline_instance = debug_draw_pipeline_instance.fetch_add(1);
          if (debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == debug_draw_pipeline_target_instance)
@@ -5903,8 +5949,11 @@ namespace
       ID3D11DeviceContext* native_device_context = (ID3D11DeviceContext*)(cmd_list->get_native());
       DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
 
+      const auto& original_shader_hashes = is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader_hashes : cmd_list_data.pipeline_state_original_graphics_shader_hashes;
+
       bool wants_debug_draw = debug_draw_shader_hash != 0 || debug_draw_pipeline != 0;
       wants_debug_draw &= debug_draw_pipeline == 0 || debug_draw_pipeline == (is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader.handle : cmd_list_data.pipeline_state_original_pixel_shader.handle);
+      wants_debug_draw &= (debug_draw_shader_hash == 0 || original_shader_hashes.Contains(debug_draw_shader_hash, is_dispatch ? reshade::api::shader_stage::compute : reshade::api::shader_stage::pixel)) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id());
 
       com_ptr<ID3D11DepthStencilState> original_depth_stencil_state;
       UINT original_stencil_ref = 0;
@@ -5919,6 +5968,31 @@ namespace
       DrawStateStack<DrawStateStackType::Compute> pre_draw_state_stack_compute;
       if (wants_debug_draw)
       {
+         if (debug_draw_freeze_inputs)
+         {
+            if (!is_dispatch)
+            {
+
+               if (!device_data.debug_draw_frozen_draw_state_stack)
+               {
+                  device_data.debug_draw_frozen_draw_state_stack = std::make_shared<DrawStateStack<DrawStateStackType::FullGraphics>>();
+                  ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Cache(native_device_context, device_data.uav_max_count);
+                  ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Clone(native_device_context, device_data.GetLumaCBuffers());
+               }
+               ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Restore(native_device_context, false, false);
+            }
+            else
+            {
+               if (!device_data.debug_draw_frozen_draw_state_stack)
+               {
+                  device_data.debug_draw_frozen_draw_state_stack = std::make_shared<DrawStateStack<DrawStateStackType::Compute>>();
+                  ((DrawStateStack<DrawStateStackType::Compute>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Cache(native_device_context, device_data.uav_max_count);
+                  ((DrawStateStack<DrawStateStackType::Compute>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Clone(native_device_context, device_data.GetLumaCBuffers());
+               }
+               ((DrawStateStack<DrawStateStackType::Compute>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Restore(native_device_context, false, false);
+            }
+         }
+
          if (is_dispatch)
             pre_draw_state_stack_compute.Cache(native_device_context, device_data.uav_max_count);
          else
@@ -5955,8 +6029,7 @@ namespace
 #endif
       bool cancelled_or_replaced = OnDraw_Custom(cmd_list, is_dispatch);
 #if DEVELOPMENT
-      const auto& original_shader_hashes = is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader_hashes : cmd_list_data.pipeline_state_original_graphics_shader_hashes;
-      if (wants_debug_draw && (debug_draw_shader_hash == 0 || original_shader_hashes.Contains(debug_draw_shader_hash, is_dispatch ? reshade::api::shader_stage::compute : reshade::api::shader_stage::pixel)) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id()))
+      if (wants_debug_draw)
       {
          auto local_debug_draw_pipeline_instance = debug_draw_pipeline_instance.fetch_add(1);
          if (debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == debug_draw_pipeline_target_instance)
@@ -6833,6 +6906,7 @@ namespace
          ID3D11Texture2D* texture_2d = nullptr;
          ID3D11Texture3D* texture_3d = nullptr;
          ID3D11Texture1D* texture_1d = nullptr;
+         // Note: it's possible to use "ID3D11Resource::GetType()" instead of this
          HRESULT hr_2d = native_resource->QueryInterface(__uuidof(ID3D11Texture2D), (void**)&texture_2d);
          HRESULT hr_3d = native_resource->QueryInterface(__uuidof(ID3D11Texture3D), (void**)&texture_3d);
          HRESULT hr_1d = native_resource->QueryInterface(__uuidof(ID3D11Texture1D), (void**)&texture_1d);
@@ -8559,6 +8633,7 @@ namespace
                   debug_draw_pipeline_target_instance = -1;
                   debug_draw_pipeline_target_thread = std::thread::id();
 
+                  device_data.debug_draw_frozen_draw_state_stack.reset();
                   device_data.debug_draw_texture = nullptr;
                   device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
                   device_data.debug_draw_texture_size = {};
@@ -9048,6 +9123,7 @@ namespace
                                  strcpy(&debug_draw_shader_hash_string[0], new_debug_draw_shader_hash_string.c_str());
                               else
                                  debug_draw_shader_hash_string[0] = 0;
+                              device_data.debug_draw_frozen_draw_state_stack.reset();
                               device_data.debug_draw_texture = nullptr;
                               device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
                               device_data.debug_draw_texture_size = {};
@@ -9073,6 +9149,7 @@ namespace
                                  debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::RedOnly;
                                  debug_draw_mip = 0;
                               }
+                              debug_draw_freeze_inputs = false; // Optional, but also unfreeze inputs automatically every time we swap the target pass here
                            }
                         }
                         ImGui::PopID();
@@ -9293,6 +9370,7 @@ namespace
                                              debug_draw_shader_hash_string[0] = 0;
                                           debug_draw_shader_just_enabled = true;
                                        }
+                                       device_data.debug_draw_frozen_draw_state_stack.reset(); // We need to force reset this anyway otherwise it might store a pointer to a "DrawStateStack<DrawStateStackType::Compute>" or a "DrawStateStack<DrawStateStackType::FullGraphcis>" and we wouldn't know about
                                        device_data.debug_draw_texture = nullptr;
                                        device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
                                        device_data.debug_draw_texture_size = {};
@@ -9357,6 +9435,14 @@ namespace
                                        ImGui::SameLine();
                                        ImGui::SmallButton(ICON_FK_WARNING);
                                        ImGui::EndDisabled();
+                                    }
+                                    if (has_any_resources)
+                                    {
+                                       ImGui::SameLine();
+                                       if (ImGui::Checkbox("Freeze Inputs", &debug_draw_freeze_inputs) && !debug_draw_freeze_inputs)
+                                       {
+                                          device_data.debug_draw_frozen_draw_state_stack.reset();
+                                       }
                                     }
 
                                     bool track_buffer_enabled = track_buffer_pipeline != 0 && track_buffer_pipeline == pipeline_pair->first;
@@ -11032,6 +11118,7 @@ namespace
 
                   ImGui::Text("Reference Count: %lu", selected_resource.ref_count() - (unsigned long)(extra_refs));
 
+                  // Note: it's possible to use "ID3D11Resource::GetType()" instead of this
                   com_ptr<ID3D11Texture2D> selected_texture_2d;
                   selected_resource->QueryInterface(&selected_texture_2d);
                   com_ptr<ID3D11Texture3D> selected_texture_3d;
@@ -11093,7 +11180,7 @@ namespace
                      ASSERT_ONCE(GetShaderDefineCompiledNumericalValue(DEVELOPMENT_HASH) >= 1); // Development flag is needed in shaders for this to output correctly
                      ASSERT_ONCE(device_data.native_pixel_shaders[CompileTimeStringHash("Display Composition")]); // This shader is necessary to draw this debug stuff
 
-                     if (!debug_draw_resource_enabled)
+                     if (!debug_draw_resource_enabled) // Enabled
                      {
                         // Reset all the settings we don't need anymore, as they were for a different debug draw mode
                         debug_draw_pipeline = 0;
@@ -11106,17 +11193,19 @@ namespace
                            debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
                         }
                         debug_draw_mode = DebugDrawMode::Custom;
+                        debug_draw_freeze_inputs = false;
                         debug_draw_view_index = 0;
                         debug_draw_mip = 0;
 
                         // TODO: fix. As of now this is needed or the texture would be cleared every frame and then set again. We'd need to add a separate (temporary) non clear texture mode for it
                         debug_draw_auto_clear_texture = false;
 
+                        device_data.debug_draw_frozen_draw_state_stack.reset();
                         device_data.debug_draw_texture = selected_resource.get();
                         device_data.debug_draw_texture_format = selected_texture_format;
                         device_data.debug_draw_texture_size = selected_texture_size;
                      }
-                     else
+                     else // Disabled
                      {
                         device_data.debug_draw_texture = nullptr;
                         device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
@@ -11761,22 +11850,24 @@ namespace
                   {
                      DevSettingsNames[i] = "Developer Setting " + std::to_string(i + 1);
                   }
+                  ImGui::PushID(DevSettingsNames[i].c_str());
                   float& value = cb_luma_global_settings.DevSettings[i];
                   float& min_value = cb_luma_dev_settings_min_value[i];
                   float& max_value = cb_luma_dev_settings_max_value[i];
                   float& default_value = cb_luma_dev_settings_default_value[i];
-                  // Note: this will "fail" if we named two devs settings with the same name!
-                  ImGui::SliderFloat(cb_luma_dev_settings_names[i].empty() ? DevSettingsNames[i].c_str() : cb_luma_dev_settings_names[i].c_str(), &value, min_value, max_value);
+                  if (cb_luma_dev_settings_edit_mode) // Reduce it to make space for others
+                  {
+                     ImGui::SetNextItemWidth(ImGui::CalcTextSize("1.1111111111").x);
+                  }
+                  ImGui::SliderFloat((cb_luma_dev_settings_edit_mode || cb_luma_dev_settings_names[i].empty()) ? DevSettingsNames[i].c_str() : cb_luma_dev_settings_names[i].c_str(), &value, min_value, max_value);
                   ImGui::SameLine();
                   if (value != default_value)
                   {
                      any_dev_setting_non_default = true;
-                     ImGui::PushID(DevSettingsNames[i].c_str());
                      if (ImGui::SmallButton(ICON_FK_UNDO))
                      {
                         value = default_value;
                      }
-                     ImGui::PopID();
                   }
                   else
                   {
@@ -11786,12 +11877,68 @@ namespace
                      size.y += style.FramePadding.y;
                      ImGui::InvisibleButton("", ImVec2(size.x, size.y));
                   }
+                  // TODO: serialize these on ReShade so we can get rid of the code to reflect these from shaders?
+                  if (cb_luma_dev_settings_edit_mode)
+                  {
+                     ImGui::SameLine();
+                     ImGui::SetNextItemWidth(ImGui::CalcTextSize("1.11111").x);
+                     if (ImGui::InputFloat("Default", &default_value, 0.f, 0.f, "%.4f", ImGuiInputTextFlags_CharsScientific))
+                        cb_luma_dev_settings_set_from_code = true;
+                     ImGui::SameLine();
+                     ImGui::SetNextItemWidth(ImGui::CalcTextSize("1.11111").x);
+                     if (ImGui::InputFloat("Min", &min_value, 0.f, 0.f, "%.4f", ImGuiInputTextFlags_CharsScientific))
+                        cb_luma_dev_settings_set_from_code = true;
+                     ImGui::SameLine();
+                     ImGui::SetNextItemWidth(ImGui::CalcTextSize("1.11111").x);
+                     if (ImGui::InputFloat("Max", &max_value, 0.f, 0.f, "%.4f", ImGuiInputTextFlags_CharsScientific))
+                        cb_luma_dev_settings_set_from_code = true;
+                     {
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(ImGui::CalcTextSize("     CUSTOM NAME TEST     ").x);
+
+                        // Ensure the string has enough capacity for editing
+                        if (cb_luma_dev_settings_names[i].capacity() < 64)
+                           cb_luma_dev_settings_names[i].resize(64);
+
+                        // ImGui::InputText modifies the buffer in-place
+                        if (ImGui::InputText("Name", cb_luma_dev_settings_names[i].data(), cb_luma_dev_settings_names[i].capacity()))
+                        {
+                           cb_luma_dev_settings_names[i].resize(strlen(cb_luma_dev_settings_names[i].c_str())); // Optional
+                           cb_luma_dev_settings_set_from_code = true;
+                        }
+                     }
+                  }
+                  ImGui::PopID();
                }
-               if (any_dev_setting_non_default && ImGui::Button("Reset All Developer Settings"))
+               if ((any_dev_setting_non_default || cb_luma_dev_settings_edit_mode) && ImGui::Button("Reset All Developer Settings"))
                {
+                  // Reset all settings if we are in edit mode!
+                  if (cb_luma_dev_settings_edit_mode)
+                  {
+                     cb_luma_dev_settings_default_value = CB::LumaDevSettings(0.f);
+                     cb_luma_dev_settings_min_value = CB::LumaDevSettings(0.f);
+                     cb_luma_dev_settings_max_value = CB::LumaDevSettings(1.f);
+                     cb_luma_dev_settings_names = {};
+                  }
+
                   for (size_t i = 0; i < CB::LumaDevSettings::SettingsNum; i++)
                   {
                      cb_luma_global_settings.DevSettings[i] = cb_luma_dev_settings_default_value[i];
+                  }
+
+                  // cb_luma_dev_settings_set_from_code = false; // We could do this too but it's optional
+               }
+               if (ImGui::Checkbox("Developer Settings: Edit Mode", &cb_luma_dev_settings_edit_mode))
+               {
+                  // Clear strings that had empty reserved characters for ImGUI editing
+                  if (!cb_luma_dev_settings_edit_mode)
+                  {
+                     for (size_t i = 0; i < CB::LumaDevSettings::SettingsNum; i++)
+                     {
+                        bool is_effectively_empty = cb_luma_dev_settings_names[i].find_first_not_of(" \t\n\r") == std::string::npos;
+                        if (is_effectively_empty)
+                           cb_luma_dev_settings_names[i].clear(); // TODO: this doesn't work!!!
+                     }
                   }
                }
 
@@ -11829,6 +11976,7 @@ namespace
                      debug_draw_pipeline = 0;
                   }
 
+                  device_data.debug_draw_frozen_draw_state_stack.reset();
                   device_data.debug_draw_texture = nullptr;
                   device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
                   device_data.debug_draw_texture_size = {};
@@ -11846,6 +11994,7 @@ namespace
                      debug_draw_shader_hash = 0;
                      debug_draw_pipeline = 0;
 
+                     device_data.debug_draw_frozen_draw_state_stack.reset();
                      device_data.debug_draw_texture = nullptr;
                      device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
                      device_data.debug_draw_texture_size = {};
@@ -11879,6 +12028,10 @@ namespace
                         {
                            debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
                         }
+                     }
+                     if (ImGui::Checkbox("Debug Draw: Freeze Inputs", &debug_draw_freeze_inputs))
+                     {
+                        device_data.debug_draw_frozen_draw_state_stack.reset();
                      }
                   }
                   if (debug_draw_mode == DebugDrawMode::RenderTarget)

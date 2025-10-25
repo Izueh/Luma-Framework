@@ -61,14 +61,17 @@ void main(
   // It's better to do it here so bloom is consequently affected too, and we can apply a bigger saturation boost to the sky boxes.
   // The alternative would be to do it in the tonemapper and flag the sky pixels differently, based on stencil or depth or some alpha channel,
   // but that information doesn't seem to be safely retrievable anymore there.
-  // TODO: test more...
   if (LumaSettings.DisplayMode == 1 && !forceVanillaSDR)
   {
     float normalizationPoint = 0.025; // Found empyrically
-    float fakeHDRIntensity = 0.25 * LumaSettings.GameSettings.HDRBoostIntensity;
-    float saturationBoost = 0.75;
+    float fakeHDRIntensity = 0.15 * LumaSettings.GameSettings.HDRBoostIntensity;
+    float fakeHDRSaturation = 0.4; // Boosting saturation in the sky just looks nice!
     o0.xyz = gamma_to_linear(o0.xyz, GCT_MIRROR);
-    o0.xyz = FakeHDR(o0.xyz, normalizationPoint, fakeHDRIntensity, saturationBoost);
+    o0.xyz = FakeHDR(o0.xyz, normalizationPoint, fakeHDRIntensity, fakeHDRSaturation);
     o0.xyz = linear_to_gamma(o0.xyz, GCT_MIRROR);
+    
+#if 0 // As much as it'd be nice to do this here, we'd need to either undo it for the final fullscreen HDR boost pass, or either way skip it for these pixels, and that doesn't seem to work reliably, given it creates steps on the image. So for now we just do the HDR boost twice for the sky pixels.
+    o0.w = 2; // Set alpha to 2 to easily identify it and avoid applying the HDR boost to it!
+#endif
   }
 }

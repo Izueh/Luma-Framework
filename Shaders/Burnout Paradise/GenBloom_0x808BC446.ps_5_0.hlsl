@@ -20,6 +20,7 @@ float3 BloomSample(float2 uv, bool improvedBloom = false, bool forceVanilla = fa
   float4 r0;
   float3 sceneColor = SamplerSourceTexture.Sample(SamplerSource_s, uv).xyz;
   sceneColor = max(sceneColor, -FLT16_MAX); // Luma: strip away nans (probably not necessary as they'd get clipped later)
+  sceneColor = IsInfinite_Strict(sceneColor) ? 1.0 : sceneColor; // Luma: clamp infinite (we can't have -INF as we previous clip all negative values from materials rendering) (this seems to fix white dots that become white blobs for one pixel sometimes, likely due to bloom)
   if (improvedBloom && !forceVanilla) // Luma: better bloom
   {
     float3 normalizedSceneColor = sceneColor / max(max3(sceneColor), 1.0);

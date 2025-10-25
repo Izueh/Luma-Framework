@@ -48,7 +48,7 @@ namespace Patches
       std::size_t section_size = nt_headers->OptionalHeader.SizeOfImage;
 
       std::vector<std::byte> pattern;
-      
+
       // There seems to be only one of these
       // This seems to be in the "rdata" section
       pattern = { std::byte{0x38}, std::byte{0x8E}, std::byte{0xE3}, std::byte{0x3F} }; // Just 16.f/9.f in memory

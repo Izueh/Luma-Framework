@@ -45,10 +45,10 @@ jobs:
       run: .\vcpkg\vcpkg integrate install
 
     # This requires the git directory to be added to the PATH Windows environment variables, to properly set up versioning information
-    - name: Build ReShade.sln Release
-      run: |
-        msbuild "Source\External\reshade\ReShade.sln" /p:Configuration="Release" /p:Platform="64-bit"
-        msbuild "Source\External\reshade\ReShade.sln" /p:Configuration="Release" /p:Platform="32-bit"
+    #- name: Build ReShade.sln Release
+    #  run: |
+    #    msbuild "Source\External\reshade\ReShade.sln" /p:Configuration="Release" /p:Platform="64-bit"
+    #    msbuild "Source\External\reshade\ReShade.sln" /p:Configuration="Release" /p:Platform="32-bit"
 
     - name: Build Luma.sln ${{ matrix.config }}-${{ matrix.platform }}
       run: msbuild Luma.sln /p:Configuration=${{ matrix.config }} /p:Platform=${{ matrix.platform }} /p:DefineConstants="REMOTE_BUILD=1"
@@ -174,19 +174,19 @@ jobs:
 
           # Bundle in ReShade files (assuming DX10/11/12), for simplicity (to avoid users from having to download it separately, and being able to distribute the right version for luma, possibly even a custom one) (ReShade should automatically generate configs, or re-use the ones that were there)
           # Note: these might be submitted to the repository directly, manually, to avoid re-building them every time on the build machine, wasting time and power.
-          if ("${{ matrix.platform }}" -eq "Win32") {
-            $rsSrc = "Source/External/reshade/bin/Win32/Release/ReShade32.dll"
-          } else {
-            $rsSrc = "Source/External/reshade/bin/x64/Release/ReShade64.dll"
-          }
+          #if ("${{ matrix.platform }}" -eq "Win32") {
+          #  $rsSrc = "Source/External/reshade/bin/Win32/Release/ReShade32.dll"
+          #} else {
+          #  $rsSrc = "Source/External/reshade/bin/x64/Release/ReShade64.dll"
+          #}
 
-          if (Test-Path $rsSrc) {
-            $rsDst = Join-Path $tempDir "dxgi.dll"
-            Copy-Item -Path $rsSrc -Destination $rsDst -Force
-            Write-Host "Copied ReShade to $rsDst"
-          } else {
-            Write-Host "ReShade file not found at $rsSrc — skipping"
-          }
+          #if (Test-Path $rsSrc) {
+          #  $rsDst = Join-Path $tempDir "dxgi.dll"
+          #  Copy-Item -Path $rsSrc -Destination $rsDst -Force
+          #  Write-Host "Copied ReShade to $rsDst"
+          #} else {
+          #  Write-Host "ReShade file not found at $rsSrc — skipping"
+          #}
 
           # Add DLSS for the projects that need it (ideally we'd have a binary dependencies folder with all the dependencies needed by each project, but git would duplicate the files and that's a shame, so we do it manually)
           if (

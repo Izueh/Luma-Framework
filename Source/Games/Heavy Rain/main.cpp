@@ -494,7 +494,7 @@ public:
    }
 };
 
-// TODO: fix crash on swapchain present!
+// TODO: fix crash on swapchain present, and the very rare black screen after loading into a chapter.
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
 {
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)

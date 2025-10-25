@@ -14,10 +14,17 @@ void main(
   out float4 o0 : SV_Target0)
 {
   float4 r0;
-  r0.x = dot(v1.xy, v1.xy); // Note: this is probably not particularly UW friendly
+#if 1 // Luma: fix sun being stretched in UW (it was only drawn round or so at 16:9)
+  float targetAspectRatio = LumaSettings.GameSettings.InvRenderRes.y / LumaSettings.GameSettings.InvRenderRes.x;
+  v1.x *= max(targetAspectRatio / (16.0 / 9.0), 1.0);
+#endif
+  r0.x = dot(v1.xy, v1.xy);
   r0.x = 1 - r0.x;
   r0.x = max(0, r0.x);
   r0.x = r0.x * r0.x;
   o0.xyz = kColourAndPower.xyz * r0.x;
-  o0.w = OcclusionSourceTexture.Sample(OcclusionSource_s, float2(0,0)).x * LumaSettings.GameSettings.BloomIntensity; // Intensity based on how occluded the sun was
+  o0.w = OcclusionSourceTexture.Sample(OcclusionSource_s, float2(0,0)).x * LumaSettings.GameSettings.BloomIntensity * 2.0; // Intensity based on how occluded the sun was
+#if 1 // Bloom in the mod defaults to 50% (given it's too strong for a modern HDR look), but the sun bloom we want it at the original intensity (or actually, more), so link it with the HDR boost intensity too, which defaults to 1
+  o0.xyz *= 1.0 + LumaSettings.GameSettings.HDRBoostIntensity * 1.0;
+#endif
 }
