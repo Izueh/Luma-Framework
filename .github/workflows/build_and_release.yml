@@ -20,11 +20,6 @@ jobs:
         submodules: recursive
         fetch-depth: 0
 
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.x'
-
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1.2
 
