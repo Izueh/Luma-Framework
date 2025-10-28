@@ -700,6 +700,9 @@ namespace
    // Returns true if any shader or pipeline has been replaced, meaning that the mod will at least do something (this is representative of how most, but not necessarily all, mods work)
    bool IsModActive(const DeviceData& device_data)
    {
+   #if GAME_UNREAL_ENGINE
+      return true;
+   #endif
       // Note: we don't check "custom_shaders_enabled" here because we want to simulate the mod still being treated as active in that case
       return device_data.cloned_pipeline_count != 0;
    }
@@ -4629,13 +4632,17 @@ namespace
       bool ui_needs_composition = mod_active && GetShaderDefineCompiledNumericalValue(UI_DRAW_TYPE_HASH) >= 3 && device_data.ui_texture.get();
       bool needs_gamut_mapping = mod_active && GetShaderDefineCompiledNumericalValue(GAMUT_MAPPING_TYPE_HASH) != 0;
       // TODO: add "TEST_SDR_HDR_SPLIT_VIEW_MODE" and "TEST_2X_ZOOM" as drawing conditions etc
+      bool force_disable_display_composition = false;
 
 #if DEVELOPMENT
       bool needs_debug_draw_texture = device_data.debug_draw_texture.get() != nullptr; // Note that this might look wrong if "output_linear" is false
 #else
       constexpr bool needs_debug_draw_texture = false;
+#if DISABLE_DISPLAY_COMPOSITION
+      force_disable_display_composition = true;
 #endif
-      if (needs_debug_draw_texture || needs_reencoding || needs_gamma_correction || ui_needs_scaling || ui_needs_composition || needs_gamut_mapping)
+#endif
+      if (!force_disable_display_composition && (needs_debug_draw_texture || needs_reencoding || needs_gamma_correction || ui_needs_scaling || ui_needs_composition || needs_gamut_mapping))
       {
          const std::shared_lock lock_shader_objects(s_mutex_shader_objects);
          if (device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")] && device_data.native_pixel_shaders[CompileTimeStringHash("Display Composition")])
@@ -11669,6 +11676,7 @@ namespace
                display_mode_max++; // Add "SDR in HDR for HDR" mode
 #endif
             }
+#if !HIDE_DISPLAY_MODE && !DISABLE_DISPLAY_COMPOSITION
             ImGui::BeginDisabled(!hdr_supported_display);
             if (ImGui::SliderInt("Display Mode", reinterpret_cast<int*>(&display_mode), 0, display_mode_max, display_mode_preset_strings[(size_t)display_mode], ImGuiSliderFlags_NoInput))
             {
@@ -11699,9 +11707,10 @@ namespace
                size.y += style.FramePadding.y;
                ImGui::InvisibleButton("", ImVec2(size.x, size.y));
             }
-
+#endif // !HIDE_DISPLAY_MODE || DISABLE_DISPLAY_COMPOSITION
             const bool mod_active = IsModActive(device_data);
             const bool has_separate_ui_paper_white = GetShaderDefineCompiledNumericalValue(UI_DRAW_TYPE_HASH) >= 1;
+#if !DISABLE_DISPLAY_COMPOSITION
             if (display_mode == DisplayModeType::HDR)
             {
                ImGui::BeginDisabled(!mod_active);
@@ -11790,7 +11799,7 @@ namespace
                cb_luma_global_settings.UIPaperWhite = cb_luma_global_settings.ScenePaperWhite;
                cb_luma_global_settings.ScenePeakWhite = cb_luma_global_settings.ScenePaperWhite;
             }
-
+#endif // !DISABLE_DISPLAY_COMPOSITION
 #if DEVELOPMENT
             // Print warnings if the OS gamma wasn't neutral (we don't want that in HDR!). This is extremely slow in some games (e.g. Lego City Undercover) (probably because they set a value, even if neutral) so it's behind a toggle.
             static bool check_gamma_ramp = false;

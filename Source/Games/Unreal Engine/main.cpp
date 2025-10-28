@@ -1,7 +1,8 @@
 #define GAME_UNREAL_ENGINE 1
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
-#define UPGRADE_SAMPLERS 1
 #define ENABLE_NGX 1
+#define DISABLE_DISPLAY_COMPOSITION 1
+#define HIDE_DISPLAY_MODE 0
 
 #include "..\..\Core\core.hpp"
 #include "includes\shader_detect.hpp"
@@ -99,38 +100,18 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
    static void DecodeMotionVectorsPS(ID3D11DeviceContext* native_device_context, DeviceData& device_data, TAAShaderInfo& taa_shader_info)
    {
       auto&                             game_device_data = GetGameDeviceData(device_data);
-      com_ptr<ID3D11VertexShader>       prev_shader_vx;
-      com_ptr<ID3D11PixelShader>        prev_shader_px;
-      com_ptr<ID3D11ComputeShader>      prev_shader_cs;
-      D3D11_PRIMITIVE_TOPOLOGY          primitive_topology;
-      com_ptr<ID3D11ShaderResourceView> srv_copy_0;
-      com_ptr<ID3D11ShaderResourceView> srv_copy_1;
       com_ptr<ID3D11ShaderResourceView> depth_texture_srv;
       com_ptr<ID3D11ShaderResourceView> mv_texture_srv;
-      com_ptr<ID3D11SamplerState>       prev_sampler_state;
-      com_ptr<ID3D11Buffer>             prev_cbuffer;
-      com_ptr<ID3D11Buffer>             prev_luma_settings_cbuffer;
-      com_ptr<ID3D11Buffer>             prev_luma_data_cbuffer;
       com_ptr<ID3D11Buffer>             global_cbuffer;
-      com_ptr<ID3D11RenderTargetView>   prev_rtv;
 
-      native_device_context->VSGetShader(&prev_shader_vx, nullptr, nullptr);
-      native_device_context->PSGetShader(&prev_shader_px, nullptr, nullptr);
-      native_device_context->CSGetShader(&prev_shader_cs, nullptr, nullptr);
-      native_device_context->IAGetPrimitiveTopology(&primitive_topology);
-      native_device_context->PSGetSamplers(0, 1, &prev_sampler_state);
-      native_device_context->PSGetConstantBuffers(luma_settings_cbuffer_index, 1, &prev_luma_settings_cbuffer);
-      native_device_context->PSGetConstantBuffers(luma_data_cbuffer_index, 1, &prev_luma_data_cbuffer);
-      native_device_context->OMGetRenderTargets(1, &prev_rtv, nullptr);
       if (taa_shader_info.depth_texture_register != 0)
       {
-         native_device_context->PSGetShaderResources(0, 1, &srv_copy_0);
+         native_device_context->PSGetShaderResources(taa_shader_info.depth_texture_register, 1, &depth_texture_srv);
          ID3D11ShaderResourceView* const depth_srv = depth_texture_srv.get();
          native_device_context->PSSetShaderResources(0, 1, &depth_srv);
       }
       if (taa_shader_info.velocity_texture_register != 1)
       {
-         native_device_context->PSGetShaderResources(1, 1, &srv_copy_1);
          native_device_context->PSGetShaderResources(taa_shader_info.velocity_texture_register, 1, &mv_texture_srv);
          ID3D11ShaderResourceView* const motion_vector_srv = mv_texture_srv.get();
          native_device_context->PSSetShaderResources(1, 1, &motion_vector_srv);
@@ -141,13 +122,8 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
          ID3D11Buffer* const cb1 = global_cbuffer.get();
          native_device_context->PSSetConstantBuffers(1, 1, &cb1);
       }
-
-      ID3D11Buffer* const settings_buffer = device_data.luma_global_settings.get();
-      ID3D11Buffer* const data_buffer     = device_data.luma_instance_data.get();
-
-      native_device_context->PSSetConstantBuffers(luma_settings_cbuffer_index, 1, &settings_buffer);
-      native_device_context->PSSetConstantBuffers(luma_data_cbuffer_index, 1, &data_buffer);
       ID3D11RenderTargetView* const dlss_motion_vectors_rtv_const = game_device_data.sr_motion_vectors_rtv.get();
+
       native_device_context->VSSetShader(device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(), nullptr, 0);
       native_device_context->PSSetShader(device_data.native_pixel_shaders[CompileTimeStringHash("Decode MVs PS")].get(), nullptr, 0);
       native_device_context->CSSetShader(nullptr, nullptr, 0);
@@ -156,83 +132,32 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
       native_device_context->PSSetSamplers(0, 1, &sampler_state_point);
       native_device_context->OMSetRenderTargets(1, &dlss_motion_vectors_rtv_const, nullptr);
       native_device_context->Draw(4, 0);
-
-      // Restore previous state
-      native_device_context->VSSetShader(prev_shader_vx.get(), nullptr, 0);
-      native_device_context->PSSetShader(prev_shader_px.get(), nullptr, 0);
-      native_device_context->CSSetShader(prev_shader_cs.get(), nullptr, 0);
-      native_device_context->IASetPrimitiveTopology(primitive_topology);
-      ID3D11SamplerState* const sampler_state = prev_sampler_state.get();
-      native_device_context->PSSetSamplers(0, 1, &sampler_state);
-      ID3D11Buffer* const luma_settings_cb = prev_luma_settings_cbuffer.get();
-      ID3D11Buffer* const luma_data_cb     = prev_luma_data_cbuffer.get();
-      native_device_context->PSSetConstantBuffers(luma_settings_cbuffer_index, 1, &luma_settings_cb);
-      native_device_context->PSSetConstantBuffers(luma_data_cbuffer_index, 1, &luma_data_cb);
-      if (srv_copy_0.get() != nullptr)
-      {
-         ID3D11ShaderResourceView* const srv0 = srv_copy_0.get();
-         native_device_context->PSSetShaderResources(0, 1, &srv0);
-      }
-      if (srv_copy_1.get() != nullptr)
-      {
-         ID3D11ShaderResourceView* const srv1 = srv_copy_1.get();
-         native_device_context->PSSetShaderResources(1, 1, &srv1);
-      }
-      if (global_cbuffer.get() != nullptr)
-      {
-         ID3D11Buffer* const global_cb = global_cbuffer.get();
-         native_device_context->PSSetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, &global_cb);
-      }
-      ID3D11RenderTargetView* const prev_rtv_ptr = prev_rtv.get();
-      native_device_context->OMSetRenderTargets(1, &prev_rtv_ptr, nullptr);
    }
 
    static void DecodeMotionVectorsCS(ID3D11DeviceContext* context, DeviceData& device_data, TAAShaderInfo& taa_shader_info)
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      com_ptr<ID3D11VertexShader>        prev_shader_vx;
-      com_ptr<ID3D11PixelShader>         prev_shader_px;
-      com_ptr<ID3D11ComputeShader>       prev_shader_cs;
-      com_ptr<ID3D11ShaderResourceView>  srv_copy_0;
-      com_ptr<ID3D11ShaderResourceView>  srv_copy_1;
-      com_ptr<ID3D11Buffer>              prev_cbuffer;
-      com_ptr<ID3D11Buffer>              prev_luma_settings_cbuffer;
-      com_ptr<ID3D11Buffer>              prev_luma_data_cbuffer;
       com_ptr<ID3D11Buffer>              global_cbuffer;
-      com_ptr<ID3D11UnorderedAccessView> prev_uav;
 
-      context->VSGetShader(&prev_shader_vx, nullptr, nullptr);
-      context->PSGetShader(&prev_shader_px, nullptr, nullptr);
-      context->CSGetShader(&prev_shader_cs, nullptr, nullptr);
-      context->CSGetUnorderedAccessViews(0, 1, &prev_uav);
-      context->CSGetConstantBuffers(luma_settings_cbuffer_index, 1, &prev_luma_settings_cbuffer);
-      context->CSGetConstantBuffers(luma_data_cbuffer_index, 1, &prev_luma_data_cbuffer);
       if (taa_shader_info.depth_texture_register != 0)
       {
-         context->CSGetShaderResources(0, 1, &srv_copy_0);
          ID3D11ShaderResourceView* depth_srv;
          context->CSGetShaderResources(taa_shader_info.depth_texture_register, 1, &depth_srv);
          context->CSSetShaderResources(0, 1, &depth_srv);
       }
       if (taa_shader_info.velocity_texture_register != 1)
       {
-         context->CSGetShaderResources(1, 1, &srv_copy_1);
          ID3D11ShaderResourceView* motion_vector_srv;
          context->CSGetShaderResources(taa_shader_info.velocity_texture_register, 1, &motion_vector_srv);
          context->CSSetShaderResources(1, 1, &motion_vector_srv);
       }
       if (taa_shader_info.global_buffer_register_index != 1)
       {
-         context->CSGetConstantBuffers(1, 1, &prev_cbuffer);
          context->CSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, &global_cbuffer);
          ID3D11Buffer* const cb1 = global_cbuffer.get();
          context->CSSetConstantBuffers(1, 1, &cb1);
       }
-      ID3D11Buffer* const settings_buffer = device_data.luma_global_settings.get();
-      ID3D11Buffer* const data_buffer     = device_data.luma_instance_data.get();
-      context->CSSetConstantBuffers(luma_settings_cbuffer_index, 1, &settings_buffer);
-      context->CSSetConstantBuffers(luma_data_cbuffer_index, 1, &data_buffer);
       ID3D11UnorderedAccessView* const dlss_motion_vectors_uav_const = game_device_data.sr_motion_vectors_uav.get();
 
       context->VSSetShader(nullptr, nullptr, 0);
@@ -247,31 +172,6 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
          groupsX,
          groupsY,
          1);
-      // Restore previous state
-      context->VSSetShader(prev_shader_vx.get(), nullptr, 0);
-      context->PSSetShader(prev_shader_px.get(), nullptr, 0);
-      context->CSSetShader(prev_shader_cs.get(), nullptr, 0);
-      ID3D11Buffer* const luma_settings_cb = prev_luma_settings_cbuffer.get();
-      ID3D11Buffer* const luma_data_cb     = prev_luma_data_cbuffer.get();
-      context->CSSetConstantBuffers(luma_settings_cbuffer_index, 1, &luma_settings_cb);
-      context->CSSetConstantBuffers(luma_data_cbuffer_index, 1, &luma_data_cb);
-      if (srv_copy_0.get() != nullptr)
-      {
-         ID3D11ShaderResourceView* const srv0 = srv_copy_0.get();
-         context->CSSetShaderResources(0, 1, &srv0);
-      }
-      if (srv_copy_1.get() != nullptr)
-      {
-         ID3D11ShaderResourceView* const srv1 = srv_copy_1.get();
-         context->CSSetShaderResources(1, 1, &srv1);
-      }
-      if (prev_cbuffer.get() != nullptr)
-      {
-         ID3D11Buffer* const prev_cb = prev_cbuffer.get();
-         context->CSSetConstantBuffers(1, 1, &prev_cb);
-      }
-      ID3D11UnorderedAccessView* const prev_uav_ptr = prev_uav.get();
-      context->CSSetUnorderedAccessViews(0, 1, &prev_uav_ptr, nullptr);
    }
 
    static void DecodeMotionVectors(bool is_compute_shader, ID3D11DeviceContext* context, DeviceData& device_data, TAAShaderInfo& taa_shader_info)
@@ -296,7 +196,7 @@ public:
       // ### Update these (find the right values) ###
       // ### See the "GameCBuffers.hlsl" in the shader directory to expand settings ###
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');
-      GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('1');
+      GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('0');
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs PS"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", reshade::api::pipeline_subobject_type::pixel_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs CS"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", reshade::api::pipeline_subobject_type::compute_shader});
       luma_settings_cbuffer_index = 13;
@@ -550,7 +450,7 @@ public:
             settings_data.hdr                       = true; // Unreal Engine does DLSS before tonemapping, in HDR linear space
             settings_data.inverted_depth            = true;
             settings_data.mvs_jittered              = false;
-            settings_data.auto_exposure             = true; // Unreal Engine does TAA before tonemapping
+            settings_data.auto_exposure             = false; // Unreal Engine does TAA before tonemapping
             settings_data.use_experimental_features = sr_user_type == SR::UserType::DLSS_TRANSFORMER;
             sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
 
@@ -642,14 +542,17 @@ public:
                   }
                }
 
-               // We don't actually replace the shaders with the classic luma shader swapping feature, so we need to set the CBs manually
                if (!updated_cbuffers)
                {
                   SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
                   SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData);
                   updated_cbuffers = true;
                }
+               DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
+               // We don't actually replace the shaders with the classic luma shader swapping feature, so we need to set the CBs manually
+               draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
                DecodeMotionVectors(is_compute_shader, native_device_context, device_data, taa_shader_info);
+               draw_state_stack.Restore(native_device_context);
 #if DEVELOPMENT
                const std::shared_lock lock_trace(s_mutex_trace);
                if (trace_running)
@@ -662,17 +565,6 @@ public:
                   // Re-use the RTV data for simplicity
                   GetResourceInfo(game_device_data.sr_motion_vectors.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
                   cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
-               }
-#endif
-
-               // ID3D11RenderTargetView* const* rtvs_const = (ID3D11RenderTargetView**)std::addressof(render_target_views[0]);
-               // native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs_const, depth_stencil_view.get());
-#if DEVELOPMENT
-               if (test_index == 1)
-               {
-                  // copy the generated motion vectors to the output for debugging
-                  native_device_context->CopyResource(output_color.get(), game_device_data.sr_motion_vectors.get());
-                  return DrawOrDispatchOverrideType::Skip;
                }
 #endif
 
@@ -1037,6 +929,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // };
       // ### Check these if textures are not upgraded ###
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
+      enable_samplers_upgrade = true;
 
       game = new UnrealEngine();
    }
