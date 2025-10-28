@@ -2,7 +2,6 @@
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
 #define ENABLE_NGX 1
 #define DISABLE_DISPLAY_COMPOSITION 1
-#define HIDE_DISPLAY_MODE 0
 
 #include "..\..\Core\core.hpp"
 #include "includes\shader_detect.hpp"
@@ -372,6 +371,7 @@ public:
 
       if (is_taa && device_data.sr_type != SR::Type::None && !device_data.sr_suppressed)
       {
+         device_data.taa_detected = true;
          if ((is_compute_shader && device_data.native_compute_shaders[CompileTimeStringHash("Decode MVs CS")].get() == nullptr) ||
              (!is_compute_shader && device_data.native_pixel_shaders[CompileTimeStringHash("Decode MVs PS")].get() == nullptr))
          {
@@ -857,11 +857,14 @@ public:
    static void UpdateLODBias(reshade::api::device* device)
    {
       DeviceData& device_data = *device->get_private_data<DeviceData>();
+#if DEVELOPMENT
+      if (!custom_texture_mip_lod_bias_offset)
+#endif
       {
          std::shared_lock shared_lock_samplers(s_mutex_samplers);
 
          const auto prev_texture_mip_lod_bias_offset = device_data.texture_mip_lod_bias_offset;
-         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.taa_detected && device_data.cloned_pipeline_count != 0)
+         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.taa_detected)
          {
             device_data.texture_mip_lod_bias_offset = std::log2(device_data.render_resolution.y / device_data.output_resolution.y) - 1.f; // This results in -1 at output res
          }
