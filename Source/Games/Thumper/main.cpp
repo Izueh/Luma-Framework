@@ -45,7 +45,7 @@ public:
       std::vector<ShaderDefineData> game_shader_defines_data = {
          {"ENABLE_VIGNETTE", '1', true, false, "Allows disabling the game's vignette effect", 1},
          {"DISABLE_DISTORTION_TYPE", '0', true, false, "The game applies a strong distortion filter, disable it if you like\n0 - Enabled\n1 - Disabled\n2 - Disabled + Stretched", 2},
-         {"HDR_LOOK", '0', true, false, "Makes the look more HDR, but less accurate to the source", 1},
+         {"HDR_LOOK_TYPE", '1', true, false, "Makes the look more HDR, but less accurate to the source\n0-2, from most to least vanilla like", 2},
          {"VANILLA_LOOK_TYPE", '0', true, false, "If you prefer to have a look closer to the vanilla one, enable this (the HDR won't be as impactful)\n0-3, from least to most vanilla like", 3},
          {"BLACK_AND_WHITE", '0', true, false, "", 1},
       };

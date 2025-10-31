@@ -14,8 +14,8 @@
 #ifndef DISABLE_DISTORTION_TYPE
 #define DISABLE_DISTORTION_TYPE 0
 #endif
-#ifndef HDR_LOOK
-#define HDR_LOOK 0
+#ifndef HDR_LOOK_TYPE
+#define HDR_LOOK_TYPE 1
 #endif
 #ifndef VANILLA_LOOK_TYPE
 #define VANILLA_LOOK_TYPE 0
@@ -313,7 +313,8 @@ void main(
 #elif DISABLE_DISTORTION_TYPE == 2 // Stretch the pillarboxed and letterboxed image to cover the whole screen
 
 #if 1 // Looks good. Ideally we'd just find the original rendering area size but this works too
-  ndc *= abs(gCubicDistortion + gDistortion); // Approximate distortion reverse formula
+  if ((gCubicDistortion + gDistortion) != 0.0)
+    ndc *= abs(gCubicDistortion + gDistortion); // Approximate distortion reverse formula
 #else // Doesn't look right, probably the math is borked
   ndc /= ReverseDistortion(1.0, 10); // Statically compiled
 #endif
@@ -368,8 +369,10 @@ void main(
 #if VANILLA_LOOK_TYPE >= 2
   useLumaSaturation = false;
 #endif
-#if HDR_LOOK // 1 to 2 look good (?)
-  saturation *= 1.333;
+#if HDR_LOOK_TYPE >= 2
+  saturation *= forceVanilla ? 1.0 : 1.8;
+#elif HDR_LOOK_TYPE >= 1
+  saturation *= forceVanilla ? 1.0 : 1.666;
 #endif
 #if BLACK_AND_WHITE
   saturation = 0.0;
@@ -420,7 +423,7 @@ void main(
 
 #if OUTPUT_RANGE
   float3 vanillaRangedColor = tonemappedColor * gOutputRanges.xyz + gOutputBlacks.xyz;
-#if HDR_LOOK // This doesn't really always look good so it's behind a flag
+#if HDR_LOOK_TYPE >= 2 // This doesn't really always look good so it's behind a flag
   if (!forceVanilla)
   {
     float3 preJab = JzAzBz::rgbToJzazbz(tonemappedColor);
@@ -429,7 +432,7 @@ void main(
     // Retain the chrominance and hue of the ranged color (which might have raised blacks),
     // but restore part of the original luminance (if it's lower)
     float3 mixedJab;
-    mixedJab.x = min(rangedJAB.x, lerp(preJab.x, rangedJAB.x, 0.5));
+    mixedJab.x = min(rangedJAB.x, lerp(preJab.x, rangedJAB.x, 0.667));
     mixedJab.yz = rangedJAB.yz;
     tonemappedColor = JzAzBz::jzazbzToRgb(mixedJab);
   }
@@ -549,40 +552,48 @@ void main(
 #endif // SCENE || BLUR || BLOOM
 #endif // VIGNETTE && ENABLE_VIGNETTE
 
+
+  if (forceVanilla)
+  {
+    tonemappedColor = max(tonemappedColor, 0.0);
+  }
+  else
+  {
 #if VANILLA_LOOK_TYPE >= 3
 
-  tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
-  // Crop out all non supported sRGB colors (<0), emulating UNORM, very much emulating the original color
-  tonemappedColor = max(tonemappedColor, 0.0);
-  // Desaturate highlights as in vanilla (or well, similar to it)
-  tonemappedColor = RestoreLuminance(tonemappedColor, CorrectOutOfRangeColor(tonemappedColor, false, true, 1.0, 0.0));
-  tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
+    tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
+    // Crop out all non supported sRGB colors (<0), emulating UNORM, very much emulating the original color
+    tonemappedColor = max(tonemappedColor, 0.0);
+    // Desaturate highlights as in vanilla (or well, similar to it)
+    tonemappedColor = RestoreLuminance(tonemappedColor, CorrectOutOfRangeColor(tonemappedColor, false, true, 1.0, 0.0));
+    tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
 
 #elif VANILLA_LOOK_TYPE >= 1
 
-  tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
-  // Desaturate all non supported sRGB colors (<0) // TODO: to try this more, it might look better to just do "max 0"
-  tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, false);
-  tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
+    tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
+    // Desaturate all non supported sRGB colors (<0) // TODO: to try this more, it might look better to just do "max 0"
+    tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, false);
+    tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
 
-#elif 0 // This doesn't look good in HDR somehow, even if theoretically vanilla would be matched by doing max 0
+#elif !HDR_LOOK // This doesn't look good in HDR somehow, even if theoretically vanilla would be matched by doing max 0 (it might do now, I tested it without correcting for gamma space first)
 
-  // At the end of every tonemap pass, clamp to BT.2020/AP0 (given there's subtractions etc), then after tonemapping, desaturate to BT.2020 if out of range
+    // At the end of every tonemap pass, clamp to BT.2020/AP0 (given there's subtractions etc), then after tonemapping, desaturate to BT.2020 if out of range
 #if (SCENE || BLUR || BLOOM) && VIGNETTE
-  tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
-  tonemappedColor = BT709_To_BT2020(tonemappedColor);
-  tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, false, 0.5, 0.5, 1.0, CS_BT2020);
-  tonemappedColor = BT2020_To_BT709(tonemappedColor);
-  tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
+    tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
+    tonemappedColor = BT709_To_BT2020(tonemappedColor);
+    tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, false, 0.5, 0.5, 1.0, CS_BT2020);
+    tonemappedColor = BT2020_To_BT709(tonemappedColor);
+    tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
 #else
-  tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
-  tonemappedColor = BT709_To_BT2020(tonemappedColor);
-  tonemappedColor = max(tonemappedColor, 0.0);
-  tonemappedColor = BT2020_To_BT709(tonemappedColor); // Note: DO AP0 D65 instead
-  tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
+    tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
+    tonemappedColor = BT709_To_BT2020(tonemappedColor);
+    tonemappedColor = max(tonemappedColor, 0.0);
+    tonemappedColor = BT2020_To_BT709(tonemappedColor); // Note: DO AP0 D65 instead
+    tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
 #endif
 
 #endif
+  }
 
   outColor.rgb = tonemappedColor;
 }
