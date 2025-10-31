@@ -2,7 +2,7 @@
 
 #include "../includes/super_resolution.h"
 
-#if defined(_WIN64) && __has_include("../FidelityFX/FidelityFX/host/ffx_fsr3.h")
+#if defined(_WIN64) && __has_include("FidelityFX/host/ffx_fsr3.h")
 #ifndef ENABLE_FIDELITY_SK
 #define ENABLE_FIDELITY_SK 1
 #endif // ENABLE_FIDELITY_SK
