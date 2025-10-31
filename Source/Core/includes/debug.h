@@ -1,7 +1,10 @@
 #pragma once
 
+#include "globals.h"
+
 #include <Windows.h>
 #include <string>
+#include <fstream>
 
 // DEFINE_NAME_AS_STRING
 #define _STRINGIZE(x) _STRINGIZE2(x)

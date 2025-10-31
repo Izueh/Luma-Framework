@@ -85,13 +85,13 @@ void main(
   // Restore the original luminance near the camera, to fog can only make the scene brighter further in the distance
 #if 1
   float3 prevSceneWithFog = sceneWithFog.rgb;
-  float3 backgroundOklab = linear_srgb_to_oklab(backgroundColor.rgb);
-  float3 sceneWithFogOklab = linear_srgb_to_oklab(sceneWithFog.rgb);
-  //float3 fogOklab = linear_srgb_to_oklab(additiveFog.rgb);
+  float3 backgroundOklab = Oklab::linear_srgb_to_oklab(backgroundColor.rgb);
+  float3 sceneWithFogOklab = Oklab::linear_srgb_to_oklab(sceneWithFog.rgb);
+  //float3 fogOklab = Oklab::linear_srgb_to_oklab(additiveFog.rgb);
 
   // Start from the non fogged scene background and restore some of the fogged scene brightness in the distance (not close to the camera, to avoid raised blacks)
   backgroundOklab.x = lerp(backgroundOklab.x, sceneWithFogOklab.x, pow(saturate(depth), 33.333)); // Heuristically found value (hopefully the depth far plane is consistent through the game)
-  float3 backgroundColorWithFogBrightness = oklab_to_linear_srgb(backgroundOklab);
+  float3 backgroundColorWithFogBrightness = Oklab::oklab_to_linear_srgb(backgroundOklab);
   
   // Restore the fog hue and chrominance, to indeed have it look similar to vanilla
   const float fogSaturation = 1.0; // Values beyond 0.7 and 0.9 make the fog look a bit closer to vanilla, without raising blacks, but it looks nicer with extra saturation and goes into BT.2020

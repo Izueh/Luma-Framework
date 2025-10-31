@@ -14,8 +14,14 @@
 #ifndef DISABLE_DISTORTION_TYPE
 #define DISABLE_DISTORTION_TYPE 0
 #endif
-#ifndef VANILLA_LOOK
-#define VANILLA_LOOK 0
+#ifndef HDR_LOOK
+#define HDR_LOOK 0
+#endif
+#ifndef VANILLA_LOOK_TYPE
+#define VANILLA_LOOK_TYPE 0
+#endif
+#ifndef BLACK_AND_WHITE
+#define BLACK_AND_WHITE 0
 #endif
 
 // Offset and distortion seemengly only apply to bloom (which is actually the scene color?)
@@ -358,25 +364,33 @@ void main(
 #if BLOOM_SCENE_SATURATION
   // Bloom saturation is actually applied on the scene texture (but only in case there's bloom!)
   bool useLumaSaturation = !forceVanilla;
-#if VANILLA_LOOK
+  float saturation = gBloomSaturation_Scene_Bloom.x;
+#if VANILLA_LOOK_TYPE >= 2
   useLumaSaturation = false;
+#endif
+#if HDR_LOOK // 1 to 2 look good (?)
+  saturation *= 1.333;
+#endif
+#if BLACK_AND_WHITE
+  saturation = 0.0;
 #endif
   if (!useLumaSaturation)
   {
-    tonemappedColor = lerp(GetLuminance_Custom(tonemappedColor, forceVanilla), tonemappedColor, gBloomSaturation_Scene_Bloom.x); // Luma: fixed wrong luminance formula (it possibly changes the look a bit, but it should be for the best)
+    tonemappedColor = lerp(GetLuminance_Custom(tonemappedColor, forceVanilla), tonemappedColor, saturation); // Luma: fixed wrong luminance formula (it possibly changes the look a bit, but it should be for the best)
   }
   else // Luma: fixed saturation being done in gamma space
   {
     tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
-    if (false) // Looks worse
+    if (true) // UCS Looks better!!! Purple/blue look off otherwise
     {
-      tonemappedColor = linear_srgb_to_oklab(tonemappedColor);
-      tonemappedColor.yz *= gBloomSaturation_Scene_Bloom.x;
-      tonemappedColor = oklab_to_linear_srgb(tonemappedColor);
+        tonemappedColor = JzAzBz::rgbToJzazbz(tonemappedColor); // TODO: try the hellwig/fairchild new UCS
+        tonemappedColor.yz *= saturation;
+        tonemappedColor = JzAzBz::jzazbzToRgb(tonemappedColor);
     }
-    else
+    else // Linear
     {
-      tonemappedColor = Saturation(tonemappedColor, sqrt(gBloomSaturation_Scene_Bloom.x)); // Empyrically found sqrt gives a closer match to vanilla, maybe slightly more saturated but it still looks good and better than vanilla
+      // Empyrically found sqrt gives a closer match to vanilla (not always, and not necessarily), maybe slightly more saturated but it still looks good and better than vanilla
+      tonemappedColor = Saturation(tonemappedColor, sqrt(saturation));
     }
     tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
   }
@@ -405,7 +419,25 @@ void main(
 #endif // GAMMA
 
 #if OUTPUT_RANGE
-  tonemappedColor = tonemappedColor * gOutputRanges.xyz + gOutputBlacks.xyz;
+  float3 vanillaRangedColor = tonemappedColor * gOutputRanges.xyz + gOutputBlacks.xyz;
+#if HDR_LOOK // This doesn't really always look good so it's behind a flag
+  if (!forceVanilla)
+  {
+    float3 preJab = JzAzBz::rgbToJzazbz(tonemappedColor);
+    float3 rangedJAB = JzAzBz::rgbToJzazbz(vanillaRangedColor);
+
+    // Retain the chrominance and hue of the ranged color (which might have raised blacks),
+    // but restore part of the original luminance (if it's lower)
+    float3 mixedJab;
+    mixedJab.x = min(rangedJAB.x, lerp(preJab.x, rangedJAB.x, 0.5));
+    mixedJab.yz = rangedJAB.yz;
+    tonemappedColor = JzAzBz::jzazbzToRgb(mixedJab);
+  }
+  else
+#endif
+  {
+    tonemappedColor = vanillaRangedColor;
+  }
 #endif // OUTPUT_RANGE
 
 #if BLACK_GAMMA_XY
@@ -447,7 +479,7 @@ void main(
     
     const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
     const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
-#if VANILLA_LOOK
+#if VANILLA_LOOK_TYPE >= 1
     bool tonemapPerChannel = true;
 #else
     bool tonemapPerChannel = LumaSettings.DisplayMode != 1; // SDR looks only good by channel. HDR looks good with both, and by luminance clearly shows some hues that weren't intended, however... overall it looks good, we could restore some vanilla hue if ever needed
@@ -457,7 +489,7 @@ void main(
       DICESettings settings = DefaultDICESettings(tonemapPerChannel ? DICE_TYPE_BY_CHANNEL_PQ : DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE);
       tonemappedColor = DICETonemap(tonemappedColor * paperWhite, peakWhite, settings) / paperWhite;
     }
-    else if (DVS2)
+    else
     {
 #if 0 // Nice but changes SDR too much
       tonemappedColor *= 0.75; // Slightly reduce the brightness to give it more range in SDR
@@ -507,8 +539,8 @@ void main(
   r0.xyz = lerp(gCenterColor_RadiusV.xyz, gOuterColor_Aspect.xyz, vignette);
   r1.xyz = 1.0 - r0.xyz;
 
-  r1.xyz = -((1.0 - tonemappedColor) * 2.0) * r1.xyz + 1.0;
   r0.xyz *= tonemappedColor * 2.0;
+  r1.xyz = -((1.0 - tonemappedColor) * 2.0) * r1.xyz + 1.0; // Note: even it might look like, a saturate on the color inversion isn't needed!
   r1.xyz -= r0.xyz;
   r0.xyz += r1.xyz * ((tonemappedColor >= 0.5) ? 1.0 : 0);
   tonemappedColor = gMaxOutputColor.xyz * r0.xyz;
@@ -516,6 +548,41 @@ void main(
   tonemappedColor = vignette;
 #endif // SCENE || BLUR || BLOOM
 #endif // VIGNETTE && ENABLE_VIGNETTE
+
+#if VANILLA_LOOK_TYPE >= 3
+
+  tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
+  // Crop out all non supported sRGB colors (<0), emulating UNORM, very much emulating the original color
+  tonemappedColor = max(tonemappedColor, 0.0);
+  // Desaturate highlights as in vanilla (or well, similar to it)
+  tonemappedColor = RestoreLuminance(tonemappedColor, CorrectOutOfRangeColor(tonemappedColor, false, true, 1.0, 0.0));
+  tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
+
+#elif VANILLA_LOOK_TYPE >= 1
+
+  tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
+  // Desaturate all non supported sRGB colors (<0) // TODO: to try this more, it might look better to just do "max 0"
+  tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, false);
+  tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
+
+#elif 0 // This doesn't look good in HDR somehow, even if theoretically vanilla would be matched by doing max 0
+
+  // At the end of every tonemap pass, clamp to BT.2020/AP0 (given there's subtractions etc), then after tonemapping, desaturate to BT.2020 if out of range
+#if (SCENE || BLUR || BLOOM) && VIGNETTE
+  tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
+  tonemappedColor = BT709_To_BT2020(tonemappedColor);
+  tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, false, 0.5, 0.5, 1.0, CS_BT2020);
+  tonemappedColor = BT2020_To_BT709(tonemappedColor);
+  tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
+#else
+  tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
+  tonemappedColor = BT709_To_BT2020(tonemappedColor);
+  tonemappedColor = max(tonemappedColor, 0.0);
+  tonemappedColor = BT2020_To_BT709(tonemappedColor); // Note: DO AP0 D65 instead
+  tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
+#endif
+
+#endif
 
   outColor.rgb = tonemappedColor;
 }

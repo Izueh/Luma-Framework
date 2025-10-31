@@ -21,5 +21,5 @@ void main(
   r0.x = r0.x * r0.x;
   r2.w = r0.y * r0.x;
   r2.z = -1 + cb0[11].w;
-  o0.xyzw = cb0[11].xxxx * r2.xyzw + float4(1,0,1,0);
+  o0.xyzw = cb0[11].x * r2.xyzw + float4(1,0,1,0);
 }

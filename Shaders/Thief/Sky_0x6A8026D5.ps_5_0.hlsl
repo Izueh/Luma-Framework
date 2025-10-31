@@ -82,7 +82,7 @@ void main(
   if (LumaSettings.DisplayMode == 1 && !forceVanillaSDR)
   {
     float normalizationPoint = 0.025; // Found empyrically
-    float fakeHDRIntensity = 0.25;
+    float fakeHDRIntensity = 0.225;
     float saturationBoost = 0.75;
     o0.xyz = FakeHDR(o0.xyz, normalizationPoint, fakeHDRIntensity, saturationBoost);
   }

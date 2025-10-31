@@ -93,8 +93,8 @@ float3 CustomUpgradeToneMapPerChannel(float3 untonemapped, float3 graded) {
       graded,
       1.f);
 
-  float3 upgradedPerCh_okLCH = linear_srgb_to_oklch(upgradedPerCh);
-  float3 graded_okLCH = linear_srgb_to_oklch(graded);
+  float3 upgradedPerCh_okLCH = Oklab::linear_srgb_to_oklch(upgradedPerCh);
+  float3 graded_okLCH = Oklab::linear_srgb_to_oklch(graded);
 
   // heavy hue correction with graded hue
   upgradedPerCh_okLCH = CorrectHuePolar(upgradedPerCh_okLCH, graded_okLCH, saturate(pow(graded_okLCH.y, hueCorrection)));
@@ -102,7 +102,7 @@ float3 CustomUpgradeToneMapPerChannel(float3 untonemapped, float3 graded) {
   // desaturate highlights based on graded chrominance
   upgradedPerCh_okLCH.y = lerp(graded_okLCH.y, upgradedPerCh_okLCH.y, saturate(pow(graded_okLCH.y, satStrength)));
 
-  upgradedPerCh = oklch_to_linear_srgb(upgradedPerCh_okLCH);
+  upgradedPerCh = Oklab::oklch_to_linear_srgb(upgradedPerCh_okLCH);
 
   upgradedPerCh = max(-10000000000000000000000000000000000000.f, upgradedPerCh);  // bandaid for NaNs
 

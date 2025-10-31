@@ -268,7 +268,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
    {
       Globals::SetGlobals(PROJECT_NAME, "Lego City Undercover Luma mod");
-      Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::NonFunctional;
       Globals::VERSION = 1;
 
       swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
@@ -292,7 +291,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
             reshade::api::format::r11g11b10_float,
       };
-#if DEVELOPMENT // Seemengly not needed in this game but makes development easier
+#if DEVELOPMENT // Seemingly not needed in this game but makes development easier
       enable_indirect_texture_format_upgrades = true;
 #endif
       enable_automatic_indirect_texture_format_upgrades = true;

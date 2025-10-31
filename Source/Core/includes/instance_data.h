@@ -241,7 +241,7 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    std::unordered_map<uint64_t, reshade::api::format> original_upgraded_resources_formats; // These include the swapchain buffers too!
    std::unordered_map<uint64_t, std::pair<uint64_t, reshade::api::format>> original_upgraded_resource_views_formats; // All the views for upgraded resources, with the resource and the original resource view format
 #endif
-   std::unordered_map<uint64_t, uint64_t> original_resources_to_mirrored_upgraded_resources; // TODO: convert/copy the initial/current data from the source texture when created
+   std::unordered_map<uint64_t, uint64_t> original_resources_to_mirrored_upgraded_resources; // TODO: convert/copy the initial/current data from the source texture when created. Also rename to "indirect_upgraded"
    std::unordered_map<uint64_t, uint64_t> original_resource_views_to_mirrored_upgraded_resource_views;
 
 #if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
@@ -334,6 +334,8 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    com_ptr<ID3D11Texture2D> ui_texture;
    com_ptr<ID3D11RenderTargetView> ui_texture_rtv;
    com_ptr<ID3D11ShaderResourceView> ui_texture_srv;
+   com_ptr<ID3D11RenderTargetView> ui_initial_original_rtv; // Leave nullptr to fall back on the current swapchain. This is an RTV but what matters is actually the resource behind it.
+   com_ptr<ID3D11RenderTargetView> ui_latest_original_rtv;
 
    // Misc
    com_ptr<ID3D11SamplerState> sampler_state_linear;

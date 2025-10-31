@@ -60,7 +60,7 @@ namespace DICE
 // This might look more like classic SDR tonemappers and is closer to how modern TVs and Monitors play back colors (usually they clip each individual channel to the peak brightness value, though in their native panel color space, or current SDR/HDR mode color space).
 // Overall, this seems to handle bright gradients more smoothly, even if it shifts hues more (and generally desaturating).
 #define DICE_TYPE_BY_CHANNEL_PQ 4
-// TODO: add perceptual log version? It probably barely matters (according to Lilium's research)
+// TODO: add perceptual log version? It doesn't look much better than PQ, though it should be simpler in the end (faster). Also try using the max to clip the input at at certain level instead of remapping it from infinite.
 // TODO: split these into different settings, given almost all combinations are possible
 
 struct DICESettings
@@ -68,6 +68,7 @@ struct DICESettings
   uint Type;
   // Determines where the highlights curve (shoulder) starts.
   // Values between 0.25 and 0.5 are good with DICE by PQ (any type).
+  // It automatically scales by your peak in PQ DICE, though you might want to increase it in SDR to clip more, instead of keeping a large range for soft highlights.
   // With linear/rgb DICE this barely makes a difference, zero is a good default but (e.g.) 0.5 would also work.
   // This should always be between 0 and 1.
   float ShoulderStart;

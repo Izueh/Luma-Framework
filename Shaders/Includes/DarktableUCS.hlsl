@@ -36,14 +36,10 @@ namespace CieXYZ
     s_xyY xyY(const float3 XYZ)
     {
       const float xyz = XYZ.x + XYZ.y + XYZ.z;
-
       s_xyY xyY;
-
       // max because for pure black (RGB(0,0,0) = XYZ(0,0,0)) there is a division by 0
-      xyY.xy = max(XYZ.xy / xyz, 0.f);
-
+      xyY.xy = max(XYZ.xy / xyz, 0.f); // TODO: division by 0? It doesn't seem to cause issues
       xyY.Y = XYZ.y;
-
       return xyY;
     }
     
@@ -59,13 +55,8 @@ namespace CieXYZ
     float3 XYZ(const s_xyY xyY)
     {
       float3 XYZ;
-
-      XYZ.xz = float2(xyY.xy.x, (1.f - xyY.xy.x - xyY.xy.y))
-            / xyY.xy.y
-            * xyY.Y;
-
+      XYZ.xz = float2(xyY.xy.x, (1.f - xyY.xy.x - xyY.xy.y)) / xyY.xy.y * xyY.Y; // TODO: division by 0? It doesn't seem to cause issues
       XYZ.y = xyY.Y;
-
       return XYZ;
     }
   } //xyYTo
@@ -96,11 +87,7 @@ namespace DarktableUcs
     float LStar(const float Y)
     {
       float YHat = pow(max(Y, 0), 0.631651345306265); // Clip negative luminances
-
-      float LStar = 2.098883786377
-                  * YHat
-                  / (YHat + 1.12426773749357);
-
+      float LStar = 2.098883786377 * YHat / (YHat + 1.12426773749357);
       return LStar;
     }
   } //YTo
@@ -111,9 +98,7 @@ namespace DarktableUcs
     {
       LStar = min(LStar, 2.098883786377 - 0.0000005); // It would be 0 or NaN beyond this
       float powerBase = -1.12426773749357 * LStar / (LStar - 2.098883786377);
-
       float Y = pow(powerBase, 1.5831518565279648);
-
       return Y;
     }
   } //LStarTo
@@ -129,15 +114,6 @@ namespace DarktableUcs
            0.745273540913283, -0.205375866083878, -0.165478376301988,
            0.318707282433486,  2.16743692732158,   0.291320554395942
         );
-
-      float3 UVD = mul(xyToUVD, float3(xy, 1.f));
-
-      UVD.xy /= UVD.z;
-
-      float2 UVStar = float2(1.39656225667, 1.4513954287)
-                    * UVD.xy
-                    / (abs(UVD.xy) + float2(1.49217352929, 1.52488637914));
-
       static const float2x2 UVStarToUVStarPrime =
         float2x2
         (
@@ -145,8 +121,10 @@ namespace DarktableUcs
            1.86323315098672,   1.971853092390862
         );
 
+      float3 UVD = mul(xyToUVD, float3(xy, 1.f));
+      UVD.xy /= UVD.z;
+      float2 UVStar = float2(1.39656225667, 1.4513954287) * UVD.xy / (abs(UVD.xy) + float2(1.49217352929, 1.52488637914));
       float2 UVStarPrime = mul(UVStarToUVStarPrime, UVStar);
-
       return UVStarPrime;
     }
   } //xyTo
@@ -161,13 +139,6 @@ namespace DarktableUcs
           -5.037522385190711, -2.504856328185843,
            4.760029407436461,  2.874012963239247
         );
-
-      float2 UVStar = mul(UVStarPrimeToUVStar, UVStarPrime);
-
-      float2 UV = float2(-1.49217352929, -1.52488637914)
-                * UVStar
-                / (abs(UVStar) - float2(1.39656225667, 1.4513954287));
-
       static const float3x3 UVToxyD =
         float3x3
         (
@@ -176,10 +147,10 @@ namespace DarktableUcs
            0.940254742367256,  1.0,               -0.0256325967652889
         );
 
+      float2 UVStar = mul(UVStarPrimeToUVStar, UVStarPrime);
+      float2 UV = float2(-1.49217352929, -1.52488637914) * UVStar / (abs(UVStar) - float2(1.39656225667, 1.4513954287));
       float3 xyD = mul(UVToxyD, float3(UV, 1.f));
-
       xyD.xy /= xyD.z;
-
       return xyD.xy;
     }
   } //UVTo
@@ -187,42 +158,24 @@ namespace DarktableUcs
   namespace xyYTo
   {
     // Simplified version (no white level adjustments)
-    float3 LUV
-    (
-      const s_xyY xyY
-    )
+    float3 LUV(const s_xyY xyY)
     {
       float LStar = YTo::LStar(xyY.Y);
-
       float2 UVStarPrime = xyTo::UV(xyY.xy);
-
       return float3(LStar, UVStarPrime);
     }
 
     // Simplified version (no white level adjustments)
-    float3 LCH
-    (
-      const s_xyY xyY
-    )
+    float3 LCH(const s_xyY xyY)
     {
       float J = YTo::LStar(xyY.Y);
-
       float2 UVStarPrime = xyTo::UV(xyY.xy);
-
-      float C = sqrt(UVStarPrime.x * UVStarPrime.x
-                   + UVStarPrime.y * UVStarPrime.y);
-
+      float C = sqrt(UVStarPrime.x * UVStarPrime.x + UVStarPrime.y * UVStarPrime.y);
       float H = atan2(UVStarPrime.y, UVStarPrime.x);
-
       return float3(J, C, H);
     }
       
-    float3 JCH
-    (
-      const s_xyY xyY,
-      const float YWhite = 1.0,
-      const float cz = 1 /*0.525*/
-    )
+    float3 JCH(const s_xyY xyY, const float YWhite = 1.0, const float cz = 1 /*0.525*/)
     {
       //input:
       //  * xyY in normalized CIE XYZ for the 2° 1931 observer adapted for D65
@@ -251,9 +204,7 @@ namespace DarktableUcs
               * pow(LStar, 0.6523997524738018)
               * pow(M2,    0.6007557017508491)
               / LWhite;
-
       float J = pow(LStar / LWhite, cz);
-
       float H = atan2(UVStarPrime.y, UVStarPrime.x);
 
       return float3(J, C, H);
@@ -262,10 +213,7 @@ namespace DarktableUcs
 
   namespace LUVTo
   {
-    s_xyY xyY
-    (
-      const float3 LUV
-    )
+    s_xyY xyY(const float3 LUV)
     {
       s_xyY xyY;
 
@@ -279,13 +227,9 @@ namespace DarktableUcs
   
   namespace LCHTo
   {
-    s_xyY xyY
-    (
-      const float3 LCH
-    )
+    s_xyY xyY(const float3 LCH)
     {
-      float2 UVStarPrime = LCH[1] * float2(cos(LCH[2]),
-                                           sin(LCH[2]));
+      float2 UVStarPrime = LCH[1] * float2(cos(LCH[2]), sin(LCH[2]));
 
       s_xyY xyY;
 
@@ -299,12 +243,7 @@ namespace DarktableUcs
 
   namespace JCHTo
   {
-    s_xyY xyY
-    (
-      const float3 JCH,
-      const float  YWhite = 1.0,
-      const float  cz = 1 /*0.525*/
-    )
+    s_xyY xyY(const float3 JCH, const float  YWhite = 1.0, const float  cz = 1 /*0.525*/)
     {
       //output: xyY in normalized CIE XYZ for the 2° 1931 observer adapted for D65
       //range:
@@ -319,19 +258,12 @@ namespace DarktableUcs
 
       float LStar = pow(J, (1.f / cz)) * LWhite;
 
-      float M = pow((C
-                   * LWhite
-                   / (15.932993652962535 * pow(LStar,
-                                               0.6523997524738018)))
-                , 0.8322850678616855);
+      float M = pow((C * LWhite / (15.932993652962535 * pow(LStar, 0.6523997524738018))), 0.8322850678616855);
 
-      float2 UVStarPrime = M * float2(cos(H),
-                                      sin(H));
+      float2 UVStarPrime = M * float2(cos(H), sin(H));
 
       s_xyY xyY;
-
       xyY.xy = UVTo::xy(UVStarPrime);
-
       xyY.Y = LStarTo::Y(LStar);
 
       return xyY;
@@ -340,7 +272,7 @@ namespace DarktableUcs
   
   // scRGB/BT.709
   // Paper white is expected to not have been multiplied in yet
-  float3 RGBToUCSLCH(float3 rgb, float paperWhite = ITU_WhiteLevelNits / sRGB_WhiteLevelNits)
+  float3 RGBToUCSLCH(float3 rgb, float paperWhite = ITU_WhiteLevelNits / sRGB_WhiteLevelNits) // TODO: review pw
   {
     float3 XYZ = CieXYZ::RGBTo::XZY(rgb);
     s_xyY xyY = CieXYZ::XYZTo::xyY(XYZ);

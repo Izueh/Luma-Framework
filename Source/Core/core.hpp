@@ -382,6 +382,8 @@ namespace
          // and thus mips like bloom might be missing
          SwapchainResolutionWidth = 1 << 7,
          SwapchainResolutionHeight = 1 << 8,
+         // Avoid upgrading 1x1 textures
+         No1Px = 1 << 9,
       };
       uint32_t texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
       std::unordered_set<float> texture_format_upgrades_2d_custom_aspect_ratios = { 16.f / 9.f };
@@ -410,26 +412,37 @@ namespace
       // UI
       //
 
-      // If enabled, all the UI will be drawn onto a separate (e.g.) UNORM texture and composed back with the game scene later on.
+      // If enabled, all the UI will be drawn onto a separate (e.g.) UNORM texture and composed back with the game scene at the very end, at least in case the scene is rendering.
       // This has multiple advantages:
       // - It allows the UI scene background to be tonemapped, increasing the UI readibility (this can be important in some games).
-      // - The scene rendering can be kept in linear scRGB even after encoding, as it doesn't need to blend with UI in gamma space.
+      // - The scene rendering can be kept in linear scRGB even after encoding, as it doesn't need to blended with UI in gamma space.
       // - The scene rendering doesn't needs to be scaled by the inverse of the UI brightness to allow UI brightness scaling.
       // - The UI avoids generating NaNs on the float upgraded float backbuffer.
       // - It avoids the UI subtracting colors as it did in SDR with UNORM textures (that were limited to 0), which cause large negative values with upgraded float textures.
       // - It can do AutoHDR on the game scene only given that the UI is in a different layer.
+      // - It allows hiding the UI.
+      // - It allows to possibly dither the UI separately, or scale parts of the UI in size.
+      // - It allows to change the vanilla blending formula in case alpha blends were ugly.
       // Note that drawing pre-multiplied UI on a separate texture can cause a slightly additional loss of quality, but the render target format can be upgraded to make it even better looking than vanilla.
-      bool enable_ui_separation = false;
+      bool enable_ui_separation = false; // TODO: remove dependency with "UI_DRAW_TYPE" 3
       // Leave unknown to automatically retrieve it from the swapchain, though that's not necessarily the right value,
       // especially if the UI used R8G8B8A8_UNORM instead of R10G10B10A2_UNORM/R16G16B16A16_FLOAT as the swapchain could have been, or in case it flipped sRGB views on or off compared to the swapchain.
       // It's important to pick a format that has the same "encoding" as the original game, to preserve the look of alpha blends, so keep linear space for linear space and gamma space for gamma space.
+      // Note: as of now the UI is expected to be gamma space during composition. // TODO: fix that when re-working the display composition and per game gamma settings! We should have an ecoding for draw and one for blending? Maybe using different views?
       // 
       // For high quality SDR use "DXGI_FORMAT_R16G16B16A16_UNORM", 16 bits might reduce banding. This is best for gamma space UI but can also work in linear.
-      // For high quality HDR use "DXGI_FORMAT_R16G16B16A16_FLOAT", though this can trigger NaNs or negative luminances (that you might want to preserve). This is best for linear space UI but can also work in gamma.
+      // For high quality HDR use "DXGI_FORMAT_R16G16B16A16_FLOAT", though this can trigger NaNs or negative luminances (that you might want to preserve). This is best for linear space UI but can also work in gamma. The UI in SDR games might still go into HDR if it's ever additive.
       // For linear space SDR use "DXGI_FORMAT_R8G8B8A8_UNORM_SRGB", especially if there's no need to upgrade the bit depth, gamut and dynamic range of the UI.
       // For gamma space SDR use "DXGI_FORMAT_R8G8B8A8_UNORM", especially if there's no need to upgrade the bit depth, gamut and dynamic range of the UI.
-      // For high quality gamma space SDR use "DXGI_FORMAT_R10G10B10A2_UNORM" can alternatively be used to improve the quality if you are sure the game doesn't read back alpha (you can try with "DXGI_FORMAT_R11G11B10_FLOAT" as a test, and see if any of the UI looks different, given it has no alpha).
+      // For high quality gamma space SDR use "DXGI_FORMAT_R10G10B10A2_UNORM", it can alternatively be used to improve the quality if you are sure the game doesn't read back alpha (you can try with "DXGI_FORMAT_R11G11B10_FLOAT" as a test, and see if any of the UI looks different, given it has no alpha).
       DXGI_FORMAT ui_separation_format = DXGI_FORMAT_UNKNOWN;
+      // Optionally add the UI shaders to this list, to make sure they draw to a separate render target for proper HDR composition
+      ShaderHashesList shader_hashes_UI;
+      // Shaders that might be running after "has_drawn_main_post_processing" has turned true, but that are still not UI (most games don't have a fixed last shader that runs on the scene rendering before UI, e.g. FXAA might add a pass based on user settings etc), so we have to exclude them like this
+      ShaderHashesList shader_hashes_UI_excluded;
+      // Hides gameplay UI (or well, any UI that draws when the main scene also draws, some games always render the main scene, even behind pause or main menus).
+      // Requires "enable_ui_separation"
+      bool hide_ui = false;
 
       //
       // Display
@@ -450,8 +463,8 @@ namespace
       int samplers_upgrade_mode = 4;
 #if DEVELOPMENT
       int samplers_upgrade_mode_2 = 0;
-      bool custom_texture_mip_lod_bias_offset = false; // Live edit
 #endif
+      PUBLISHING_CONSTEXPR bool custom_texture_mip_lod_bias_offset = false; // Live edit
    }
 
    // The root path of all the shaders we load and dump
@@ -496,8 +509,8 @@ namespace
 
       { CompileTimeStringHash("Display Composition"), { "Luma_DisplayComposition", reshade::api::pipeline_subobject_type::pixel_shader } },
       
-      { CompileTimeStringHash("Copy RGB Max 0 A Sat"), { "Luma_Copy_PS", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, { { "RGB_MAX", "1" }, { "A_SAT", "1" } } } },
-      { CompileTimeStringHash("Copy RGB Max 0 A Sat MS"), { "Luma_Copy_PS", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, { { "MS", "1" }, { "RGB_MAX", "1" }, { "A_SAT", "1" } } } },
+      { CompileTimeStringHash("Copy RGB Max 0 A Sat"), { "Luma_Copy_PS", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, { { "RGB_MAX_0", "1" }, { "A_SAT", "1" } } } },
+      { CompileTimeStringHash("Copy RGB Max 0 A Sat MS"), { "Luma_Copy_PS", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, { { "MS", "1" }, { "RGB_MAX_0", "1" }, { "A_SAT", "1" } } } },
       { CompileTimeStringHash("Sanitize A"), { "Luma_SanitizeAlpha", reshade::api::pipeline_subobject_type::compute_shader } },
       { CompileTimeStringHash("Sanitize RGBA CS"), { "Luma_SanitizeRGBA", reshade::api::pipeline_subobject_type::compute_shader } },
       { CompileTimeStringHash("Sanitize RGBA PS"), { "Luma_SanitizeRGBA", reshade::api::pipeline_subobject_type::pixel_shader } },
@@ -519,11 +532,6 @@ namespace
       { CompileTimeStringHash("Unclip LUT 1D"), { "Luma_UnclipLUT1D", reshade::api::pipeline_subobject_type::compute_shader } },
 #endif
    };
-
-   // Optionally add the UI shaders to this list, to make sure they draw to a separate render target for proper HDR composition
-   ShaderHashesList shader_hashes_UI;
-   // Shaders that might be running after "has_drawn_main_post_processing" has turned true, but that are still not UI (most games don't have a fixed last shader that runs on the scene rendering before UI, e.g. FXAA might add a pass based on user settings etc), so we have to exclude them like this
-   ShaderHashesList shader_hashes_UI_excluded;
 
    // TODO: make the data in these a unique ptr for easier handling, and the shader binary data contained inside of "CachedShader" too.
    // All the shaders the game ever loaded (including the ones that have been unloaded). Only used by shader dumping (if "ALLOW_SHADERS_DUMPING" is on) or to see their binary code in the ImGUI view. By original shader binary hash.
@@ -624,6 +632,7 @@ namespace
    thread_local bool waiting_on_upgraded_resource_init = false;
    thread_local reshade::api::resource_desc upgraded_resource_init_desc = {};
    thread_local void* upgraded_resource_init_data = {};
+   thread_local std::unordered_map<uint64_t, reshade::api::subresource_data*> upgraded_mapped_resources;
 #if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
    // Temporary cache of the live patched shader that points at the original shader
    thread_local const void* last_live_patched_original_shader_code = {};
@@ -1638,6 +1647,7 @@ namespace
 
                std::size_t preprocessed_hash = custom_shader->preprocessed_hash; // Empty
                // Note that if anybody manually changed the config hash, the data here could mismatch and end up recompiling when not needed or skipping recompilation even if needed (near impossible chance)
+               // TODO: ignore the per game ini config value in dev mode for global shaders, given they are shared between all projects in the repository shaders, and thus there would be a mismatch between the last built cso (by another game) and the current game's config hash, but it'd end up loading it anyway. We could always force re-calculate the hash from these, from the CSO, or store a file with the name of the last game that generated them.
                const bool should_load_compiled_shader = is_hlsl && !prevent_shader_cache_loading; // If this shader doesn't have an hlsl, we should never read it or save it on disk, there's no need (we can still fall back on the original .cso if needed)
                if (should_load_compiled_shader && reshade::get_config_value(nullptr, NAME_ADVANCED_SETTINGS.c_str(), &config_name[0], preprocessed_hash))
                {
@@ -2620,7 +2630,7 @@ namespace
       // so we don't support changing this shader define live, but if needed, we could always move these allocations
       if (GetShaderDefineCompiledNumericalValue(UI_DRAW_TYPE_HASH) >= 3)
       {
-         device_data.ui_texture = CloneTexture<ID3D11Texture2D>(native_device, (ID3D11Texture2D*)swapchain->get_back_buffer(0).handle, ui_separation_format, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET, 0, true, false, nullptr);
+         device_data.ui_texture = CloneTexture<ID3D11Texture2D>(native_device, (ID3D11Texture2D*)swapchain->get_back_buffer(0).handle, ui_separation_format, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET, D3D11_BIND_UNORDERED_ACCESS, true, false, nullptr); // Unordered Access is not needed until proven otherwise
          native_device->CreateRenderTargetView(device_data.ui_texture.get(), nullptr, &device_data.ui_texture_rtv);
          native_device->CreateShaderResourceView(device_data.ui_texture.get(), nullptr, &device_data.ui_texture_srv);
       }
@@ -4629,7 +4639,8 @@ namespace
       // If this is true, the UI and Scene were both drawn with a brightness that is relative to each other, so we need to normalize it back to the scene brightness range
       bool ui_needs_scaling = mod_active && GetShaderDefineCompiledNumericalValue(UI_DRAW_TYPE_HASH) == 2;
       // If this is true, the UI was drawn on a separate buffer and needs to be composed onto the scene (which allows for UI background tonemapping, for increased visibility in HDR)
-      bool ui_needs_composition = mod_active && GetShaderDefineCompiledNumericalValue(UI_DRAW_TYPE_HASH) >= 3 && device_data.ui_texture.get();
+      // Note: we could skip this if "device_data.has_drawn_main_post_processing" is false and our scene and UI paper whites are matching, however, let's not make it any more complicated.
+      bool ui_needs_composition = mod_active && enable_ui_separation && GetShaderDefineCompiledNumericalValue(UI_DRAW_TYPE_HASH) >= 3 && device_data.ui_texture.get();
       bool needs_gamut_mapping = mod_active && GetShaderDefineCompiledNumericalValue(GAMUT_MAPPING_TYPE_HASH) != 0;
       // TODO: add "TEST_SDR_HDR_SPLIT_VIEW_MODE" and "TEST_2X_ZOOM" as drawing conditions etc
       bool force_disable_display_composition = false;
@@ -4957,12 +4968,13 @@ namespace
                   // No need for "s_mutex_reshade" here or above, given that they are generally only also changed by the user manually changing the settings in ImGUI, which runs at the very end of the frame
                   custom_const_buffer_data_1 = input_linear ? 2 : 1;
                }
+               float custom_const_buffer_data_4 = (ui_needs_composition && device_data.has_drawn_main_post_processing) ? 1.f : 0.f;
                SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData, custom_const_buffer_data_1, custom_const_buffer_data_2, custom_const_buffer_data_3);
+               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData, custom_const_buffer_data_1, custom_const_buffer_data_2, custom_const_buffer_data_3, custom_const_buffer_data_4);
             }
 
             // Set UI texture (limited by "DrawStateStackType::SimpleGraphics")
-            ID3D11ShaderResourceView* const ui_texture_srv_const = ui_needs_composition ? device_data.ui_texture_srv.get() : nullptr;
+            ID3D11ShaderResourceView* const ui_texture_srv_const = (ui_needs_composition && (!device_data.has_drawn_main_post_processing || !hide_ui)) ? device_data.ui_texture_srv.get() : nullptr;
             native_device_context->PSSetShaderResources(1, 1, &ui_texture_srv_const);
 
             // Set the sampler, in case we needed it (limited by "DrawStateStackType::SimpleGraphics")
@@ -4993,8 +5005,13 @@ namespace
 
             if (ui_needs_composition)
             {
+               // UI render target should be all zero at the beginning of each frame (the next one)
                const FLOAT ColorRGBA[4] = { 0.f, 0.f, 0.f, 0.f };
                native_device_context->ClearRenderTargetView(device_data.ui_texture_rtv.get(), ColorRGBA);
+
+               // Reset this, it shouldn't persist between frames
+               device_data.ui_latest_original_rtv = nullptr;
+               device_data.ui_initial_original_rtv = nullptr;
             }
 
             draw_state_stack.Restore(native_device_context);
@@ -5216,34 +5233,71 @@ namespace
 #endif //DEVELOPMENT
 
       const bool mod_active = IsModActive(device_data);
+
       if (enable_ui_separation && mod_active)
       {
          ID3D11RenderTargetView* const ui_texture_rtv_const = device_data.ui_texture_rtv.get();
+         // We can either provide an include list, of all the UI shaders (we check if the render target matches below),
+         // or an exclude list, of all the scene post processing shaders, and then manually setting "has_drawn_main_post_processing" somewhere in your game's code (and exclude any non UI shader that possibly runs after it).
          // If the main post processing shaders didn't run, it means the scene isn't rendering, or showing anyway, so we don't need to separate the UI,
          // as it'd likely already draw correctly on the swapchain or whatever is its render target.
-         if ((device_data.has_drawn_main_post_processing &&
-            native_device_context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE
-            && !original_shader_hashes.Contains(shader_hashes_UI_excluded))
-            || original_shader_hashes.Contains(shader_hashes_UI))
+         // 
+         // We expect the UI to draw on the immediate context, as it does in most games, if not, handle the render targets yourself for the custom case.
+         if ((device_data.has_drawn_main_post_processing && native_device_context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE) || original_shader_hashes.Contains(shader_hashes_UI))
          {
-            com_ptr<ID3D11RenderTargetView> ui_target_rtv = nullptr; // swapchain or a custom one, or any!;
-
-            bool do_ui = false;
             com_ptr<ID3D11RenderTargetView> rtv;
             native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
-            if (rtv == ui_texture_rtv_const)
+            if (rtv && !original_shader_hashes.Contains(shader_hashes_UI_excluded))
             {
-               do_ui = true;
-            }
-            else if (rtv == ui_target_rtv)
-            {
-               native_device_context->OMSetRenderTargets(1, &ui_texture_rtv_const, nullptr); // Note: for now we don't restore this back to the original value, as we haven't found any game that reads back the RT, or doesn't set it every frame or draw call
-               do_ui = true;
-            }
+               bool do_ui = false;
 
-            if (do_ui)
-            {
+               D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
+               rtv->GetDesc(&rtv_desc);
 
+               // Usually the swapchain, if the UI was already drawn on the side, we wouldn't really need to change the render target manually (we could just upgrade that texture format, and replace the shader that composes the UI if it wasn't done properly),
+               // however some games compose the UI on a render target that contains the UI, but that isn't the swapchain yet, and then later copy it on the swapchain (possibly in a shader pass that does gamma/brightness adjustments, which we might as well skip on for the UI in HDR anyway, given we'd want them to be neutral).
+               bool targeting_swapchain = false;
+               if (!device_data.ui_initial_original_rtv)
+               {
+                  const std::shared_lock lock(device_data.mutex);
+                  targeting_swapchain = device_data.back_buffers.contains((uint64_t)rtv.get());
+               }
+               if (targeting_swapchain || (AreViewsOfSameResource(rtv.get(), device_data.ui_initial_original_rtv.get()) && rtv_desc.Texture2D.MipSlice == 0)) // Make sure it was writing to the base mip (just in case the game did weird stuff)
+               {
+                  device_data.ui_latest_original_rtv = rtv;
+
+                  // Render target was set to the UI one by the game, whether at the beginning of UI drawing, or again inside of it (sometimes UI draws stuff on the side to compose its textures).
+                  // Note: for now we don't restore this back to the original value, as we haven't found any game that reads back the RT, or doesn't set it every frame or draw call.
+                  // Most of the times rendering the original UI on a black (0 0 0 0 cleared) render target preserves the original blends look identically.
+                  native_device_context->OMSetRenderTargets(1, &ui_texture_rtv_const, nullptr);
+                  do_ui = true;
+
+#if DEVELOPMENT
+                  const std::shared_lock lock_trace(s_mutex_trace);
+                  if (trace_running)
+                  {
+                     const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+                     AddCustomTraceDrawCallData(cmd_list_data.trace_draw_calls_data, native_device_context, "Redirect UI", rtv.get(), true);
+                  }
+#endif
+               }
+               else if (rtv == ui_texture_rtv_const)
+               {
+                  // Render target was already previously changed by us, and the game hasn't changed it back
+                  do_ui = true;
+               }
+
+               if (do_ui)
+               {
+                  // UI render target has been effectively replaced, any extra code can be put here
+               }
+            }
+            // if any of the excluded shaders drew after or in between UI shaders, and the game was originally using the same RTV for all and didn't re-apply the RTV for every draw call,
+            // swap back the last rtv the game set on UI shaders. This can happen for games that have a final swapchain copy shader etc.
+            else if (rtv && rtv == ui_texture_rtv_const)
+            {
+               native_device_context->OMSetRenderTargets(1, &device_data.ui_latest_original_rtv, nullptr);
+               device_data.ui_latest_original_rtv = nullptr;
             }
          }
       }
@@ -6451,7 +6505,10 @@ namespace
 
       const bool is_depth = (desc.usage & reshade::api::resource_usage::depth_stencil) != 0;
 
-      // Re-use the "enable_automatic_indirect_texture_format_upgrades" flag to allow this case
+      bool enable_preventive_automatic_indirect_texture_format_upgrades = enable_automatic_indirect_texture_format_upgrades && false; // TODO: add a new flag for this, in can often break games
+#if GAME_THUMPER // It's needed there?
+      enable_preventive_automatic_indirect_texture_format_upgrades = enable_automatic_indirect_texture_format_upgrades;
+#endif
       if ((!(is_rt_or_ua || (enable_automatic_indirect_texture_format_upgrades ? is_writable_sr : false)) || !texture_upgrade_formats.contains(desc.texture.format)) && (!is_depth || !texture_depth_upgrade_formats.contains(desc.texture.format)))
       {
          return std::nullopt;
@@ -6500,6 +6557,10 @@ namespace
          {
             size_filter |= is_cube;
          }
+         if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px) != 0)
+         {
+            size_filter &= desc.texture.width != 1 && desc.texture.height != 1;
+         }
 
          // Always scale from the smallest dimension, as that gives up more threshold, depending on how the devs scaled down textures (they can use multiple rounding models)
          float min_aspect_ratio = desc.texture.width <= desc.texture.height ? ((float)(desc.texture.width - texture_format_upgrades_2d_aspect_ratio_pixel_threshold) / (float)desc.texture.height) : ((float)desc.texture.width / (float)(desc.texture.height + texture_format_upgrades_2d_aspect_ratio_pixel_threshold));
@@ -6528,7 +6589,7 @@ namespace
             bool aspect_ratio_filter = target_aspect_ratio >= (min_aspect_ratio - FLT_EPSILON) && target_aspect_ratio <= (max_aspect_ratio + FLT_EPSILON);
             size_filter |= aspect_ratio_filter;
 #if DEVELOPMENT
-            ASSERT_ONCE_MSG(!aspect_ratio_filter || max(desc.texture.width, desc.texture.height) > 1 || generating_manual_mips, "Upgrading 1x1 resource by aspect ratio, this is possibly unwanted"); // TODO: add a min size for upgrades? Like >1 or >32 on the smallest axis? Or ... scan if the allocations shrink in size over time
+            ASSERT_ONCE_MSG(!aspect_ratio_filter || max(desc.texture.width, desc.texture.height) > 1 || generating_manual_mips || ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px) != 0), "Upgrading 1x1 resource by aspect ratio, this is possibly unwanted"); // TODO: add a min size for upgrades? Like >1 or >32 on the smallest axis? Or ... scan if the allocations shrink in size over time
 #endif
          }
          if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::RenderAspectRatio) != 0)
@@ -6537,7 +6598,7 @@ namespace
             bool aspect_ratio_filter = target_aspect_ratio >= (min_aspect_ratio - FLT_EPSILON) && target_aspect_ratio <= (max_aspect_ratio + FLT_EPSILON);
             size_filter |= aspect_ratio_filter;
 #if DEVELOPMENT
-            ASSERT_ONCE_MSG(!aspect_ratio_filter || max(desc.texture.width, desc.texture.height) > 1 || generating_manual_mips, "Upgrading 1x1 resource by aspect ratio, this is possibly unwanted");
+            ASSERT_ONCE_MSG(!aspect_ratio_filter || max(desc.texture.width, desc.texture.height) > 1 || generating_manual_mips || ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px) != 0), "Upgrading 1x1 resource by aspect ratio, this is possibly unwanted");
 #endif
          }
          if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::CustomAspectRatio) != 0)
@@ -6549,7 +6610,7 @@ namespace
                bool aspect_ratio_filter = target_aspect_ratio >= (min_aspect_ratio - FLT_EPSILON) && target_aspect_ratio <= (max_aspect_ratio + FLT_EPSILON);
                size_filter |= aspect_ratio_filter;
 #if DEVELOPMENT
-               ASSERT_ONCE_MSG(!aspect_ratio_filter || max(desc.texture.width, desc.texture.height) > 1 || generating_manual_mips, "Upgrading 1x1 resource by aspect ratio, this is possibly unwanted");
+               ASSERT_ONCE_MSG(!aspect_ratio_filter || max(desc.texture.width, desc.texture.height) > 1 || generating_manual_mips || ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px) != 0), "Upgrading 1x1 resource by aspect ratio, this is possibly unwanted");
 #else
                if (size_filter) break;
 #endif
@@ -6612,7 +6673,7 @@ namespace
 
    // Returns true if it changed the data.
    // Remember to manually de-allocate the data later.
-   bool ConvertResourceData(const reshade::api::subresource_data* data, reshade::api::subresource_data& new_data, const reshade::api::resource_desc& desc, reshade::api::format new_format)
+   bool ConvertResourceData(const reshade::api::subresource_data* data, reshade::api::subresource_data& new_data, const reshade::api::resource_desc& desc, reshade::api::format new_format, bool pre_allocated = false)
    {
       ASSERT_ONCE(data->data != nullptr);
 
@@ -6633,7 +6694,8 @@ namespace
       case reshade::api::format::r8g8b8x8_unorm:
       case reshade::api::format::r8g8b8x8_unorm_srgb:
       {
-         new_data.data = new uint8_t[buffer_size];
+         if (!pre_allocated)
+            new_data.data = new uint8_t[buffer_size];
          new_data.row_pitch = desc.texture.width * bytes_per_pixel;
          new_data.slice_pitch = new_data.row_pitch * desc.texture.height;
          ConvertR8G8B8A8toR16G16B16A16((R8G8B8A8_UNORM*)data->data, (R16G16B16A16_FLOAT*)new_data.data, desc.texture.width, desc.texture.height, desc.texture.depth_or_layers);
@@ -6644,7 +6706,8 @@ namespace
       case reshade::api::format::b8g8r8x8_unorm:
       case reshade::api::format::b8g8r8x8_unorm_srgb:
       {
-         new_data.data = new uint8_t[buffer_size];
+         if (!pre_allocated)
+            new_data.data = new uint8_t[buffer_size];
          new_data.row_pitch = desc.texture.width * bytes_per_pixel;
          new_data.slice_pitch = new_data.row_pitch * desc.texture.height;
          ConvertR8G8B8A8toR16G16B16A16((B8G8R8A8_UNORM*)data->data, (R16G16B16A16_FLOAT*)new_data.data, desc.texture.width, desc.texture.height, desc.texture.depth_or_layers);
@@ -6841,6 +6904,8 @@ namespace
          return;
       }
       DeviceData& device_data = *device->get_private_data<DeviceData>();
+      if (&device_data == nullptr)
+         return;
       std::unique_lock lock(device_data.mutex);
       auto original_resource_to_mirrored_upgraded_resource = device_data.original_resources_to_mirrored_upgraded_resources.find(resource.handle);
       if (original_resource_to_mirrored_upgraded_resource != device_data.original_resources_to_mirrored_upgraded_resources.end())
@@ -7184,6 +7249,8 @@ namespace
       SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
 
       DeviceData& device_data = *device->get_private_data<DeviceData>();
+      if (&device_data == nullptr) // TODO: this can happen if DX destroyed the device before any of its resource views. We should store a list of devices that have had their destructor called, and thus have lost the device data.
+         return;
       std::unique_lock lock(device_data.mutex);
 
 #if DEVELOPMENT
@@ -7456,16 +7523,6 @@ namespace
          }
       }
 
-      {
-         // TODO: add support for this... update "reshade::api::subresource_data* data" to actually use the original format stride and all (assuming the data would be smaller).
-         // Then, in the unmap call, use "ConvertResourceData()" to convert it live. Apply it to the redirected mirrored upgraded resource instead if there's one.
-         // This (or "OnUpdateTextureRegion()") happens in Dishonored 2 (on boot, probably doesn't matter, it might be all black, but still, unsafe).
-         // If doing so, make sure this is called outside of "DEVELOPMENT".
-         const std::shared_lock lock(device_data.mutex);
-         ASSERT_ONCE(!device_data.upgraded_resources.contains(resource.handle)); // If this happened, we need to upgrade the data passed in to match the new format!
-         ASSERT_ONCE(!device_data.original_resources_to_mirrored_upgraded_resources.contains(resource.handle));
-      }
-
 #if GAME_PREY // For Prey only (given we manually upgrade resources through native hooks)
       ID3D11Resource* native_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
       com_ptr<ID3D11Texture2D> resource_texture;
@@ -7482,6 +7539,91 @@ namespace
       }
 #endif
 #endif // DEVELOPMENT
+
+      bool needs_downgrade = false;
+      bool needs_conversion = false;
+      {
+         const std::shared_lock lock(device_data.mutex);
+         needs_downgrade = device_data.upgraded_resources.contains(resource.handle);
+         needs_conversion = needs_downgrade || device_data.original_resources_to_mirrored_upgraded_resources.contains(resource.handle);
+      }
+      // If this happened, we need to upgrade the data passed in to match the new format!
+      // This happens in Dishonored 2 and Thief on boot, to update videos or splash screens.
+      if (needs_conversion)
+      {
+         ASSERT_ONCE(access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard); // For now we only support write, games generally don't read back textures from the CPU if not for screenshots or for save game snapshots
+         ASSERT_ONCE(data && data->data); // If this is nullptr, it might be a "ID3D11DeviceContext3::WriteToSubresource", which we don't support!
+
+         upgraded_mapped_resources[resource.handle] = data;
+
+         if (needs_downgrade)
+         {
+            reshade::api::resource_desc desc = device->get_resource_desc(resource);
+            // Update the stride to match the original format, we want the game to write to the resource as if it was the original format.
+            // This assumes two things:
+            // -The new format is wider and thus there will be enough memory.
+            // -The game doesn't dynamically branch on mapping behaviour based on the current (upgraded) resource format, already acknowledging the upgraded format (most games wouldn't, especially not the old ones)
+            constexpr size_t bytes_per_pixel = 4; // 4 for 8bpc, 8 for 16bpc // TODO: we are assuming the original was R8G8B8A8, that is not necessarily true, we need to map what was the original format of all upgraded resources. Same assumption in the unmap function.
+            data->row_pitch = desc.texture.width * bytes_per_pixel;
+         }
+      }
+   }
+
+   void OnUnmapTextureRegion(reshade::api::device* device, reshade::api::resource resource, uint32_t subresource)
+   {
+      SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
+
+      DeviceData& device_data = *device->get_private_data<DeviceData>();
+
+      if (auto it = upgraded_mapped_resources.find(resource.handle); it != upgraded_mapped_resources.end())
+      {
+         reshade::api::subresource_data* data = it->second;
+
+         bool direct_upgraded = false;
+         uint64_t indirect_upgraded_resource = 0;
+         {
+            const std::shared_lock lock(device_data.mutex);
+            direct_upgraded = device_data.upgraded_resources.contains(resource.handle);
+            indirect_upgraded_resource = MapFindOrDefaultValue(device_data.original_resources_to_mirrored_upgraded_resources, resource.handle, 0); // The indirect upgraded resource is guaranteed to be kept alive if the base one also is
+         }
+
+         // If we have an indirect upgrade, create an upgraded version of the data and map it in the indirect upgraded texture
+         if (indirect_upgraded_resource != 0)
+         {
+            reshade::api::resource_desc original_desc = device->get_resource_desc(resource);
+            reshade::api::resource_desc upgraded_desc = device->get_resource_desc({indirect_upgraded_resource});
+
+            reshade::api::subresource_data new_data = *data;
+            if (ConvertResourceData(data, new_data, original_desc, upgraded_desc.texture.format))
+            {
+               if (device->map_texture_region({indirect_upgraded_resource}, subresource, nullptr, reshade::api::map_access::write_discard, &new_data))
+               {
+                  device->unmap_texture_region({indirect_upgraded_resource}, subresource);
+               }
+               delete[] static_cast<uint8_t*>(new_data.data);
+            }
+         }
+
+         // Usually a resource would be either directly or indirectly upgraded, but let's keep support to have both happen at the same time, especially useful to swap formats live during development
+         if (direct_upgraded)
+         {
+            reshade::api::resource_desc upgraded_desc = device->get_resource_desc(resource);
+            reshade::api::resource_desc original_desc = upgraded_desc;
+            original_desc.texture.format = reshade::api::format::r8g8b8a8_unorm; // Guessed
+
+            const size_t buffer_size = original_desc.texture.height * original_desc.texture.depth_or_layers * data->row_pitch; // Automatic reconstruction based on what we told the game
+
+            // Copy aside the data the game wrote for the texture format it thought this texture would have,
+            // and then write it back in the same mapped memory, where it was originally meant to be anyway.
+            reshade::api::subresource_data old_data = *data;
+            old_data.data = new uint8_t[buffer_size];
+            bool pre_allocated = true; // The "data" was already allocated by DirectX on the direct upgraded resource, so it's of the right size already, and we couldn't replace the pointer anyway.
+            ConvertResourceData(&old_data, *data, original_desc, upgraded_desc.texture.format, pre_allocated);
+            delete[] static_cast<uint8_t*>(old_data.data);
+         }
+
+         upgraded_mapped_resources.erase(it);
+      }
    }
 
    bool OnUpdateTextureRegion(reshade::api::device* device, const reshade::api::subresource_data& data, reshade::api::resource resource, uint32_t subresource, const reshade::api::subresource_box* box)
@@ -10233,7 +10375,7 @@ namespace
                                                    }
                                                    else if (render_target_blend_desc.SrcBlend == D3D11_BLEND::D3D11_BLEND_ONE && render_target_blend_desc.DestBlend == D3D11_BLEND::D3D11_BLEND_INV_SRC_ALPHA)
                                                    {
-                                                      ImGui::Text("Blend RGB Mode: Premultiplied Alpha");
+                                                      ImGui::Text("Blend RGB Mode: Premultiplied Alpha"); // The alpha was supposedly (but not necessarily) pre-multiplied in the rgb before the pixel shader output
                                                       has_drawn_blend_rgb_text = true;
                                                    }
                                                    else if (render_target_blend_desc.SrcBlend == D3D11_BLEND::D3D11_BLEND_SRC_ALPHA && render_target_blend_desc.DestBlend == D3D11_BLEND::D3D11_BLEND_INV_SRC_ALPHA)
@@ -12744,9 +12886,27 @@ namespace
                }
 
                ImGui::NewLine();
+               if (enable_ui_separation)
+                  ImGui::Checkbox("Hide Gameplay UI", &hide_ui);
                if (enable_ui_separation ? ImGui::Button("Disable Separate UI Drawing and Composition") : ImGui::Button("Enable Separate UI Drawing and Composition"))
                {
                   enable_ui_separation = !enable_ui_separation;
+
+                  device_data.ui_texture = nullptr;
+                  device_data.ui_texture_rtv = nullptr;
+                  device_data.ui_texture_srv = nullptr;
+                  if (enable_ui_separation)
+                  {
+                     if (auto native_swapchain = device_data.GetMainNativeSwapchain())
+                     {
+                        com_ptr<ID3D11Texture2D> back_buffer;
+                        native_swapchain->GetBuffer(0, IID_PPV_ARGS(&back_buffer));
+                        ID3D11Device* native_device = (ID3D11Device*)runtime->get_device()->get_native();
+                        device_data.ui_texture = CloneTexture<ID3D11Texture2D>(native_device, back_buffer.get(), ui_separation_format, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET, D3D11_BIND_UNORDERED_ACCESS, true, false, nullptr);
+                        native_device->CreateRenderTargetView(device_data.ui_texture.get(), nullptr, &device_data.ui_texture_rtv);
+                        native_device->CreateShaderResourceView(device_data.ui_texture.get(), nullptr, &device_data.ui_texture_srv);
+                     }
+                  }
                }
 #endif
 
@@ -13681,9 +13841,15 @@ BOOL APIENTRY CoreMain(HMODULE h_module, DWORD fdw_reason, LPVOID lpv_reserved)
 #if RESHADE_API_VERSION >= 18
       reshade::register_event<reshade::addon_event::update_buffer_region_command>(OnUpdateBufferRegionCommand);
 #endif
-      reshade::register_event<reshade::addon_event::map_texture_region>(OnMapTextureRegion);
 #endif // DEVELOPMENT
-      reshade::register_event<reshade::addon_event::update_texture_region>(OnUpdateTextureRegion);
+#if !DEVELOPMENT
+      if (texture_format_upgrades_type > TextureFormatUpgradesType::None || swapchain_format_upgrade_type > TextureFormatUpgradesType::None)
+#endif
+      {
+         reshade::register_event<reshade::addon_event::map_texture_region>(OnMapTextureRegion);
+         reshade::register_event<reshade::addon_event::unmap_texture_region>(OnUnmapTextureRegion);
+         reshade::register_event<reshade::addon_event::update_texture_region>(OnUpdateTextureRegion);
+      }
 
       reshade::register_event<reshade::addon_event::clear_depth_stencil_view>(OnClearDepthStancilView);
       reshade::register_event<reshade::addon_event::clear_render_target_view>(OnClearRenderTargetView);
@@ -13793,9 +13959,15 @@ BOOL APIENTRY CoreMain(HMODULE h_module, DWORD fdw_reason, LPVOID lpv_reserved)
 #if RESHADE_API_VERSION >= 18
       reshade::unregister_event<reshade::addon_event::update_buffer_region_command>(OnUpdateBufferRegionCommand);
 #endif
-      reshade::unregister_event<reshade::addon_event::map_texture_region>(OnMapTextureRegion);
 #endif // DEVELOPMENT
-      reshade::unregister_event<reshade::addon_event::update_texture_region>(OnUpdateTextureRegion);
+#if !DEVELOPMENT
+      if (texture_format_upgrades_type > TextureFormatUpgradesType::None || swapchain_format_upgrade_type > TextureFormatUpgradesType::None)
+#endif
+      {
+         reshade::unregister_event<reshade::addon_event::map_texture_region>(OnMapTextureRegion);
+         reshade::unregister_event<reshade::addon_event::unmap_texture_region>(OnUnmapTextureRegion);
+         reshade::unregister_event<reshade::addon_event::update_texture_region>(OnUpdateTextureRegion);
+      }
 
       reshade::unregister_event<reshade::addon_event::clear_depth_stencil_view>(OnClearDepthStancilView);
       reshade::unregister_event<reshade::addon_event::clear_render_target_view>(OnClearRenderTargetView);

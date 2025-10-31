@@ -555,8 +555,8 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
 
 #if 1
 	// Restore SDR TM below mid gray and restore hue/chroma of SDR at a fixed percentage to retain the features of the SDR tonemapper (e.g. desaturation etc)
-	float3 oklch = linear_srgb_to_oklch(untonemapped);
-	float3 vanillaTMOklab = linear_srgb_to_oklch(vanillaTM);
+	float3 oklch = Oklab::linear_srgb_to_oklch(untonemapped);
+	float3 vanillaTMOklab = Oklab::linear_srgb_to_oklch(vanillaTM);
 	oklch[0] = lerp(vanillaTMOklab[0], oklch[0], saturate(pow(vanillaTMOklab[0], 3.0) * 2.0)); // We get raised blacks without this
 	oklch[1] = lerp(oklch[1], vanillaTMOklab[1], 0.75);
 	if (abs(vanillaTMOklab[2] - oklch[2]) > PI)
@@ -573,7 +573,7 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
 	oklch[2] = lerp(oklch[2], vanillaTMOklab[2], pow(saturate(vanillaTMOklab[0]), 0.75) * 0.667); // This restores the hue distortion from the vanilla tonemapper
 	// Reapply some pure saturation (chroma) after desaturating
 	oklch[1] = lerp(oklch[1], max(oklch[1], 1.0), saturate((vanillaTMOklab[0] * 2.0) - 1.0) * 0.0275);
-	untonemapped = oklch_to_linear_srgb(oklch);
+	untonemapped = Oklab::oklch_to_linear_srgb(oklch);
 #else
   float restoreBrightness = 1.0; // We get raised blacks without this
 	untonemapped = RestoreHueAndChrominance(untonemapped, saturate(vanillaTM), 0.75, 0.0, 0.0, FLT_MAX, restoreBrightness);

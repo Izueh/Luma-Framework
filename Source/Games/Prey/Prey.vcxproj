@@ -127,7 +127,7 @@
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil\include;..\..\External\NGX;..\..\External\NVAPI;..\..\External\FixelityFX;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil\include;..\..\External\NGX;..\..\External\NVAPI;$(SolutionDir)\Source\External\FidelityFX;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ExceptionHandling>Sync</ExceptionHandling>
@@ -178,7 +178,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil\include;..\..\External\NGX;..\..\External\NVAPI;..\..\External\FixelityFX;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil\include;..\..\External\NGX;..\..\External\NVAPI;$(SolutionDir)\Source\External\FidelityFX;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
       <LanguageStandard>stdcpplatest</LanguageStandard>
@@ -226,7 +226,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil\include;..\..\External\NGX;..\..\External\NVAPI;..\..\External\FixelityFX;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil\include;..\..\External\NGX;..\..\External\NVAPI;$(SolutionDir)\Source\External\FidelityFX;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
       <LanguageStandard>stdcpplatest</LanguageStandard>
@@ -274,7 +274,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil\include;..\..\External\NGX;..\..\External\NVAPI;..\..\External\FixelityFX;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\DKUtil\include;..\..\External\NGX;..\..\External\NVAPI;$(SolutionDir)\Source\External\FidelityFX;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
       <LanguageStandard>stdcpplatest</LanguageStandard>
@@ -308,7 +308,7 @@
       <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;comdlg32.lib;advapi32.lib;nvapi64.lib;nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\NVAPI\amd64;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ImportLibrary>
       </ImportLibrary>
     </Link>

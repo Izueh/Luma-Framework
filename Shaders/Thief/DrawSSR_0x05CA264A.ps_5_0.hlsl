@@ -97,7 +97,7 @@ void main(
   if (abs(r0.x) >= 0.01)
   {
     r2.xyzw /= dot(r2, 1) + 0.001; // Sum normalization, where the sum of values equals 1.
-    //r2.xyzw = clamp(r2.xyzw, 0.5, 1.5);
+    //r2.xyzw = clamp(r2.xyzw, 0.5, 1.5); // Test
     r4.xyzw *= r2.y;
     r4.xyzw += r2.x * r5.xyzw;
     r4.xyzw += r2.z * r6.xyzw;

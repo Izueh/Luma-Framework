@@ -335,6 +335,17 @@ bool AreResourcesEqual(ID3D11Resource* resource1, ID3D11Resource* resource2, boo
 	return (check_samples_count ? (size1 == size2) : (size1.x == size2.x && size1.y == size2.y && size1.z == size2.z)) && (!check_format || format1 == format2);
 }
 
+bool AreViewsOfSameResource(ID3D11View* view1, ID3D11View* view2)
+{
+   if (!view1 || !view2)
+      return false;
+   com_ptr<ID3D11Resource> resource1;
+   view1->GetResource(&resource1);
+   com_ptr<ID3D11Resource> resource2;
+   view2->GetResource(&resource2);
+   return resource1 == resource2;
+}
+
 template<typename T>
 using D3D11_RESOURCE_DESC = std::conditional_t<typeid(T) == typeid(ID3D11Texture2D), D3D11_TEXTURE2D_DESC, std::conditional_t<typeid(T) == typeid(ID3D11Texture3D), D3D11_TEXTURE3D_DESC, std::conditional_t<typeid(T) == typeid(ID3D11Texture1D), D3D11_TEXTURE1D_DESC, D3D11_BUFFER_DESC>>>;
 
@@ -623,7 +634,19 @@ inline uint16_t ConvertFloatToHalf(float value)
    // XMConvertFloatToHalf converts a float to a half, returning the 16-bit unsigned short representation.
    return DirectX::PackedVector::XMConvertFloatToHalf(value);
 }
-   
+
+inline __m128 u8rgba_to_unorm4(const uint8_t* rgba)
+{
+   // load 4 bytes into the low 32 bits
+   __m128i bytes = _mm_cvtsi32_si128(*(const int32_t*)rgba); // [r g b a 0 0 0 0 ...]
+
+   // zero-extend the 4 bytes to 4x int32: [r g b a]
+   __m128i ints = _mm_cvtepu8_epi32(bytes); // SSE4.1
+
+   __m128 f = _mm_cvtepi32_ps(ints); // int -> float
+   return _mm_mul_ps(f, _mm_set1_ps(1.0f / 255.0f));
+}
+
 template<typename T>
 void ConvertR8G8B8A8toR16G16B16A16(
    const T* src_data,
@@ -647,6 +670,9 @@ void ConvertR8G8B8A8toR16G16B16A16(
          float g = pixel.g / 255.0f;
          float b = pixel.b / 255.0f;
          float a = pixel.a / 255.0f;
+         // TODO: use simd instead, like "u8rgba_to_unorm4" above
+         //struct Pixel { uint8_t r,g,b,a; } pixel;
+         //__m128 rgba = u8rgba_to_unorm4(&pixel.r);
 
          // Convert normalized floats to half-floats.
          dst_data[i].r = ConvertFloatToHalf(r);

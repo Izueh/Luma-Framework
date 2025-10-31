@@ -1,3 +1,5 @@
+#include "../Includes/Common.hlsl"
+
 Texture2D<float4> t0 : register(t0);
 
 SamplerState s0_s : register(s0);
@@ -7,6 +9,8 @@ cbuffer cb0 : register(b0)
   float4 cb0[3];
 }
 
+// Note: this draws some black bars too but it's not really relevant as they are in 16:9 menus
+// There's a chance it also draws some fades to black or something.
 void main(
   float4 v0 : TEXCOORD0,
   float4 v1 : TEXCOORD1,
@@ -24,4 +28,10 @@ void main(
   // Luma: fix UI negative values to emulate UNORM blends
   o0.w = saturate(o0.w);
   o0.xyz = max(o0.xyz, 0.f);
+
+// Luma: this was the only UI element that was using a sRGB view, and thus writing in linear. Luma replaces the UI render target but kept it drawing in gamma space on a float RT, so it can't use sRGB views, thus linearize this before out.
+// Edit: we simply added this one to the list of shaders excluded from the UI, it shouldn't draw in with the UI brightness multiplier anyway!
+#if UI_DRAW_TYPE == 3 && 0
+  o0.xyz = linear_to_sRGB_gamma(o0.xyz);
+#endif
 }

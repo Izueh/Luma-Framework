@@ -189,14 +189,14 @@ void main(
 #endif // ENABLE_HUE_RESTORATION
 #if ENABLE_LUT_NORMALIZATION_TYPE >= 1
 #if 1 // This generates a huge amount of colors outside of the CIE graph, but preserves shadow saturation
-	float3 sourceOklab = linear_srgb_to_oklab(tonemappedColor);
-	float3 targetOklab = linear_srgb_to_oklab(outColor.rgb);
+	float3 sourceOklab = Oklab::linear_srgb_to_oklab(tonemappedColor);
+	float3 targetOklab = Oklab::linear_srgb_to_oklab(outColor.rgb);
 	targetOklab.x = lerp(sourceOklab.x, targetOklab.x, 0.333);
 #if 1
-  outColor.rgb = BT2020_To_BT709(SimpleGamutClip(oklab_to_linear_bt2020(targetOklab), true));
-  //outColor.rgb = BT2020_To_BT709(max(oklab_to_linear_bt2020(targetOklab), 0.0));
+  outColor.rgb = BT2020_To_BT709(SimpleGamutClip(Oklab::oklab_to_linear_bt2020(targetOklab), true));
+  //outColor.rgb = BT2020_To_BT709(max(Oklab::oklab_to_linear_bt2020(targetOklab), 0.0));
 #else
-  outColor.rgb = oklab_to_linear_srgb(targetOklab);
+  outColor.rgb = Oklab::oklab_to_linear_srgb(targetOklab);
   outColor.rgb = SimpleGamutClip(outColor.rgb, false);
 #endif
 #else // This reduces the percevied saturation in shadow

@@ -728,6 +728,22 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
       trace_draw_calls_data.reserve(trace_draw_calls_data.size() + 1000); // Possible optimization
    trace_draw_calls_data.push_back(trace_draw_call_data);
 }
+
+// Expects mutexes to already be locked
+void AddCustomTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data, ID3D11DeviceContext* native_device_context, const char* name, ID3D11View* target_view, bool insert_before_last = false)
+{
+   TraceDrawCallData trace_draw_call_data;
+   trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+   trace_draw_call_data.command_list = native_device_context;
+   trace_draw_call_data.custom_name = name;
+   // Re-use the RTV data for simplicity (this is hardcoded to be read by "TraceDrawCallData::TraceDrawCallType::Custom" in imgui)
+   GetResourceInfo(target_view, trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
+
+   if (insert_before_last && !trace_draw_calls_data.empty())
+      trace_draw_calls_data.insert(trace_draw_calls_data.end() - 1, trace_draw_call_data);
+   else
+      trace_draw_calls_data.push_back(trace_draw_call_data);
+}
 #endif
 
 // Fullscreen (full render target) pass

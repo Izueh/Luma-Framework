@@ -74,6 +74,7 @@ namespace SR
 		bool							is_supported = false;
 
 		bool							supports_dynamic_resolution = true;
+		// Whether it supports an input resolution lower than an output one. As opposite to matching resolutions (AA only). None of them support downscaling as of now.
 		bool							supports_upscaling = true;
 		// Whether the aspect ratio is expected to be the same between the render resolution and the output resolution
 		bool							supports_non_uniform_aspect_ratio_upscaling = true;
@@ -85,8 +86,8 @@ namespace SR
 		// Whether the implementation will preserve negative values in scRGB linear buffers, instead of clipping them (all sr implementations support hdr float buffers).
 		// Most implementations will assume sRGB/Rec.709 colors.
 		bool							supports_scrgb_hdr = false;
-		bool							requires_unordered_access_output_texture = true; // TODO: implement etc
-		bool							automatically_restores_pipeline_state = false; // TODO: implement etc
+		bool							requires_unordered_access_output_texture = true;
+		bool							automatically_restores_pipeline_state = false;
 		unsigned int				min_resolution = 1; // Min width or height
 
 		SettingsData				settings_data = {};
@@ -111,6 +112,7 @@ namespace SR
 		virtual void Deinit(InstanceData*& data, ID3D11Device* optional_device = nullptr) {}
 
 		// Note that this might expect the same command list all the times.
+		// Returns true if the settings changed or were up to date.
 		virtual bool UpdateSettings(InstanceData* data, ID3D11DeviceContext* command_list, const SettingsData& settings_data) { return false; }
 
 		struct DrawData
@@ -121,20 +123,25 @@ namespace SR
 			ID3D11Resource* source_color = nullptr;
 			ID3D11Resource* motion_vectors = nullptr;
 			ID3D11Resource* depth_buffer = nullptr; // SR expects the depth to be the device/HW one (1 being near, not 1 being the camera (linear depth)), though it might actually not matter
-			ID3D11Resource* exposure = nullptr;
+
+			// Optional data:
+			ID3D11Resource* exposure = nullptr; // Can be left nullptr to default to 1 or to auto exposure
+         ID3D11Resource* bias_mask = nullptr; // Reactivity/Bias mask (might not be used by all SR implementations)
+         ID3D11Resource* transparency_alpha = nullptr; // Amount of intensity in this pixel (only used by some FSR implementations)
 
 			// Can be left to 0 to pick the default/target render res.
 			unsigned int render_width = 0;
 			unsigned int render_height = 0;
 
 			float pre_exposure = 0.f; // Ignored if 0
-			float jitter_x = 0.f; // In NCD space // TODO: is it NDC or UV space?
+			float jitter_x = 0.f; // In NCD space
 			float jitter_y = 0.f; // In NCD space
-			float vert_fov = 0.f; // Ignored if 0 (not always needed)
+			float vert_fov = 0.f; // Radians. Ignored if 0 (not always needed)
 			float near_plane = 0.f;
 			float far_plane = 1.f;
-			float time_delta = -1.f; // Ignored if < 0 (not always needed)
-			float user_sharpness = -1.f; // Ignored/default if < 0
+			float time_delta = -1.f; // Seconds. Ignored if < 0 (not always needed)
+         uint64_t frame_index = 0;
+			float user_sharpness = -1.f; // Ignored/default if < 0. Neutral at 0 (at least in FSR).
 		};
 
 		// Returns true if drawing didn't fail.
@@ -142,6 +149,6 @@ namespace SR
 		virtual bool Draw(const InstanceData* data, ID3D11DeviceContext* command_list, const DrawData& draw_data) { return false; }
 
 		// Returns the suggested or requested period, depending on the implementation.
-		//virtual int GetJitterPhases() const { return 1; } // TODO
+		virtual int GetJitterPhases(const SR::InstanceData* data) const { return 1; } // TODO: implement around and fine the best values for DLSS etc
 	};
 }

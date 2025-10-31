@@ -37,12 +37,12 @@ namespace JzAzBz
         lms.y = rgb[0] * 0.289388f + rgb[1] * 0.525395f + rgb[2] * 0.157481f;
         lms.z = rgb[0] * 0.091098f + rgb[1] * 0.147588f + rgb[2] * 0.734234f;
 
-        float3 lmsPQ = Linear_to_PQ(lms / (HDR10_MaxWhiteNits / Rec709_WhiteLevelNits), GCT_MIRROR, JZAZBZ_EXPONENT_SCALE_FACTOR);
+        float3 lmsPQ = Linear_to_PQ(lms / (HDR10_MaxWhiteNits / Rec709_WhiteLevelNits), GCT_MIRROR, JZAZBZ_EXPONENT_SCALE_FACTOR); // Negative input values seem to work ok to prevent weird colors from breaking or clamping
 
         float iz = 0.5f * lmsPQ.x + 0.5f * lmsPQ.y;
 
         float3 jab;
-        jab.x = (0.44f * iz) / (1.0f - 0.56f * iz) - 1.6295499532821566e-11f;
+        jab.x = (0.44f * iz) / (1.0f - 0.56f * iz) - 1.6295499532821566e-11f; // TODO: why is this added to be removed below? It's a tiny number
         jab.y = 3.524000f * lmsPQ.x - 4.066708f * lmsPQ.y + 0.542708f * lmsPQ.z;
         jab.z = 0.199076f * lmsPQ.x + 1.096799f * lmsPQ.y - 1.295875f * lmsPQ.z;
         return jab;

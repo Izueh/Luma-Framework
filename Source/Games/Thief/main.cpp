@@ -29,7 +29,7 @@ public:
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');
       GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('1');
-      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('0');
+      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('3');
 
       GetShaderDefineData(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL_HASH).SetDefaultValue('1'); // The game just hard clipped to 1, it was all UNORM, it had no HDR rendering
    }
@@ -127,10 +127,26 @@ public:
       if (!device_data.has_drawn_main_post_processing && original_shader_hashes.Contains(shader_hashes_FinalPostProcess))
       {
          device_data.has_drawn_main_post_processing = true;
+
+         // UI doesn't write to the swapchain in this game
+         if (enable_ui_separation)
+         {
+            device_data.ui_initial_original_rtv = nullptr;
+            native_device_context->OMGetRenderTargets(1, &device_data.ui_initial_original_rtv, nullptr);
+         }
       }
-      else if (remove_black_bars && device_data.has_drawn_main_post_processing && original_shader_hashes.Contains(shader_hashes_BlackBars))
+      else if (device_data.has_drawn_main_post_processing)
       {
-         return DrawOrDispatchOverrideType::Skip;
+         // Refresh the final render target in case it was swapped by one of the later passes
+         if (enable_ui_separation && original_shader_hashes.Contains(shader_hashes_UI_excluded))
+         {
+            device_data.ui_initial_original_rtv = nullptr;
+            native_device_context->OMGetRenderTargets(1, &device_data.ui_initial_original_rtv, nullptr);
+         }
+         if (remove_black_bars && original_shader_hashes.Contains(shader_hashes_BlackBars))
+         {
+            return DrawOrDispatchOverrideType::Skip;
+         }
       }
       return DrawOrDispatchOverrideType::None;
    }
@@ -162,7 +178,7 @@ public:
 
    void PrintImGuiAbout() override
    {
-      ImGui::Text("Luma for \"Thief\" is developed by Pumbo and is open source and free.\nIf you enjoy it, consider donating.", "");
+      ImGui::Text("Luma for \"Thief\" is developed by Pumbo and is open source and free.\nIf you enjoy it, consider donating.\nMake sure FXAA is enabled in the game settings for the mod to work properly.", "");
 
       const auto button_color = ImGui::GetStyleColorVec4(ImGuiCol_Button);
       const auto button_hovered_color = ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
@@ -235,10 +251,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12;
 
-      // Needed as the UI can both generate NaNs (I think) and also do subtractive blends that result in colors with invalid (or overly low) luminances (that can be fixed by clamping all UI shaders alpha to 0-1),
+      // Needed as the UI can both generate NaNs (I think) and also do subtractive blends that result in colors with invalid (or overly low) luminances (that can be fixed by clamping all UI shaders alpha to 0-1) (update: it probably didn't do any subtractive blends),
       // thus drawing it separately and composing it on top, is better.
       // The game also casts a TYPELESS texture as UNORM, while it was previously cast as UNORM_SRGB (linear) (float textures can't preserve this behaviour)
-      enable_ui_separation = false; //TODOFT
+      enable_ui_separation = true;
 
       swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
@@ -253,10 +269,54 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
             reshade::api::format::r11g11b10_float,
       };
+      texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px;
+#if DEVELOPMENT // Seemingly not needed in this game but makes development easier. Or maybe not? It hangs the game on boot sometimes?
+      enable_indirect_texture_format_upgrades = false;
+#endif
+      enable_automatic_indirect_texture_format_upgrades = false;
 
-      // TODO
-      shader_hashes_FinalPostProcess.pixel_shaders.emplace(std::stoul("CDC104C3", nullptr, 16)); // Final order is Tonemap->FXAA(optional)->PP(optional)
-      shader_hashes_UI_excluded.pixel_shaders = { std::stoul("47FB9170", nullptr, 16), std::stoul("A394022E", nullptr, 16), std::stoul("1EAE8451", nullptr, 16), std::stoul("CDC104C3", nullptr, 16) };
+      // Final order is Tonemap->FXAA(optional)->PP(optional)
+      shader_hashes_FinalPostProcess.pixel_shaders = {
+         // Tonemappers
+         std::stoul("DDDC6D72", nullptr, 16),
+         std::stoul("C9DB6671", nullptr, 16),
+         std::stoul("BBFCB3DB", nullptr, 16),
+         std::stoul("B8BC8EE2", nullptr, 16),
+         std::stoul("B3C85DAA", nullptr, 16),
+         std::stoul("A394022E", nullptr, 16),
+         std::stoul("A350CA27", nullptr, 16),
+         std::stoul("8787CA4A", nullptr, 16),
+         std::stoul("91387CB8", nullptr, 16),
+         std::stoul("47FB9170", nullptr, 16),
+         std::stoul("7FCEB0F9", nullptr, 16),
+         std::stoul("7EAAD3CF", nullptr, 16),
+         std::stoul("7D63D6F8", nullptr, 16),
+         std::stoul("7D02C225", nullptr, 16),
+         std::stoul("3C5929C5", nullptr, 16),
+         std::stoul("1F8A7C3B", nullptr, 16),
+
+         // FXAA (add this optionally, just in the edge case where tonemap didn't run and FXAA was enabled (it's expected to be))
+         std::stoul("1EAE8451", nullptr, 16),
+      };
+      shader_hashes_UI_excluded.pixel_shaders = {
+         // In order of execution:
+
+         // FXAA
+         std::stoul("1EAE8451", nullptr, 16),
+
+         // Misc post process
+         // TODO: review whether 6537153A and 4824964A belong in there, they probably do (either way it shouldn't hurt if they are run before the tonemappers).
+         std::stoul("CDC104C3", nullptr, 16),
+         std::stoul("6537153A", nullptr, 16),
+         std::stoul("4824964A", nullptr, 16),
+         std::stoul("4606F1C6", nullptr, 16),
+
+         // UI black bars (they draw with sRGB views instead of non sRGB views (gamma space) like the rest of the UI, and anyway they are not part of the UI)
+         std::stoul("E9255521", nullptr, 16),
+
+         // Swapchain copy (after UI) (not needed anyway as the render target would have changed)
+         std::stoul("7FF6EC9E", nullptr, 16),
+      };
       shader_hashes_BlackBars.pixel_shaders.emplace(std::stoul("E9255521", nullptr, 16));
 
       game = new Thief();

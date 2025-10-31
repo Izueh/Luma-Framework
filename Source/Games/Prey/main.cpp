@@ -1396,6 +1396,11 @@ public:
                   dlss_pre_exposure = sr_custom_pre_exposure;
 #endif
 
+               if (!sr_instance_data->automatically_restores_pipeline_state)
+               {
+                  // TODO: cache the state and restore it below (FSR)
+               }
+
                // There doesn't seem to be a need to restore the DX state to whatever we had before (e.g. render targets, cbuffers, samplers, UAVs, texture shader resources, viewport, scissor rect, ...), CryEngine always sets everything it needs again for every pass.
                // DLSS internally keeps its own frames history, we don't need to do that ourselves (by feeding in an output buffer that was the previous frame's output, though we do have that if needed, it should be in ps_shader_resources[1]).
                SR::SuperResolutionImpl::DrawData draw_data;
@@ -1407,10 +1412,15 @@ public:
                draw_data.pre_exposure = dlss_pre_exposure;
                draw_data.jitter_x = projection_jitters.x * static_cast<float>(render_width_dlss) * -0.5f;
                draw_data.jitter_y = projection_jitters.y * static_cast<float>(render_height_dlss) * -0.5f;
-               // TODO: add near and far depth to all SR implementations!
                draw_data.reset = reset_dlss;
                draw_data.render_width = render_width_dlss;
                draw_data.render_height = render_height_dlss;
+               draw_data.near_plane = cb_per_view_global.CV_NearFarClipDist.x; // TODO: make sure the scale is in meters (seems to be?)
+               draw_data.far_plane = cb_per_view_global.CV_NearFarClipDist.y;
+               draw_data.vert_fov = atan(1.f / projection_matrix.m11) * 2.0 * 180 / M_PI;
+               draw_data.frame_index = cb_luma_global_settings.FrameIndex;
+               draw_data.time_delta = cb_per_view_global.CV_AnimGenParams.z - cb_per_view_global_previous.CV_AnimGenParams.z;
+
                if (sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data))
                {
                   device_data.has_drawn_sr = true;
@@ -1882,9 +1892,7 @@ public:
             device_data.force_reset_sr = true;
          }
 
-#if DEVELOPMENT
          if (!custom_texture_mip_lod_bias_offset)
-#endif
          {
             std::shared_lock shared_lock_samplers(s_mutex_samplers);
 

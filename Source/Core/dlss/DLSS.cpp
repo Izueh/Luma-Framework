@@ -2,7 +2,7 @@
 
 #if ENABLE_NGX
 
-#include "../NGX/nvsdk_ngx_helpers.h"
+#include "nvsdk_ngx_helpers.h"
 
 #include <cstring>
 #include <cassert>

@@ -16,6 +16,7 @@ cbuffer cb0 : register(b0)
   float4 cb0[23];
 }
 
+// TODO: this is actually screen space fog?
 void main(
   float4 v0 : TEXCOORD4,
   float v1 : TEXCOORD1,

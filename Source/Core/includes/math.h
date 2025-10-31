@@ -93,6 +93,14 @@ namespace Math
       return std::all_of(begin, begin + bytes, [](char byte) { return byte == 0; });
    }
 
+   template <class Map, class Key, class Value>
+   Value MapFindOrDefaultValue(const Map& m, const Key& k, const Value& default_value)
+   {
+      if (auto it = m.find(k); it != m.end())
+         return it->second;
+      return default_value;
+   }
+
    static constexpr unsigned int crc_table[256] = {
        0x00000000, 0x77073096, 0xee0e612c, 0x990951ba, 0x076dc419, 0x706af48f,
        0xe963a535, 0x9e6495a3,    0x0edb8832, 0x79dcb8a4, 0xe0d5e91e, 0x97d2d988,

@@ -60,7 +60,7 @@ void main(
   r0.w = min(-9.99999996e-013, r0.w);
   r3.x = -cb2[2].x / r0.w;
   r1.xyzw = r3.xyzw + -r2.xxxx;
-  r2.xyzw = saturate(cb0[12].xxxx * r3.xyzw); // TODO: remove these sat? They end up being too strong... Maybe we could TM it later?
+  r2.xyzw = saturate(cb0[12].xxxx * r3.xyzw); // Luma: remove these sat? They end up being waaaayyy too strong... Maybe we could TM it later? It doesn't seem to be necessary, they end up HDR anyway
   r0.w = dot(r2.xyzw, float4(0.25,0.25,0.25,0.25));
   r1.xyzw = saturate(cb0[12].xxxx * r1.xyzw);
   r1.x = dot(r1.xyzw, float4(0.25,0.25,0.25,0.25));

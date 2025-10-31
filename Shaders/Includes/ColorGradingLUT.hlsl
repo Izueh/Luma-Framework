@@ -4,6 +4,7 @@
 #include "Common.hlsl"
 #include "Oklab.hlsl"
 #include "DarktableUCS.hlsl"
+#include "JzAzBz.hlsl"
 
 //TODOFT: try basic extrapolation mode where we simply compress 0.5 to INF input to 0.5 to 1, do LUT and then decompress range again
 
@@ -42,6 +43,21 @@
 #define LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_BY_LUMINANCE_CORRECTION_LUMINANCE 3
 #define LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB_WITH_GAMMA_2_2_BY_LUMINANCE_CORRECTION_LUMINANCE_AND_GAMMA_2_2_BY_CHANNEL_CORRECTION_CHROMA 4
 #define DEFAULT_LUT_EXTRAPOLATION_TRANSFER_FUNCTION LUT_EXTRAPOLATION_TRANSFER_FUNCTION_GAMMA_2_2
+
+// TODO: pick one
+#if 0 // Oklab
+#define LINEAR_TO_UCS(x, colorSpace) Oklab::rgb_to_oklab(x, colorSpace)
+#define UCS_TO_LINEAR(x, colorSpace) Oklab::oklab_to_rgb(x, colorSpace)
+#elif 1 // JzAzBz
+#define LINEAR_TO_UCS(x, colorSpace) JzAzBz::rgbToJzazbz(x, colorSpace)
+#define UCS_TO_LINEAR(x, colorSpace) JzAzBz::jzazbzToRgb(x, colorSpace)
+#elif 1 // Darktable UCS
+#define LINEAR_TO_UCS(x, colorSpace) DarktableUcs::RGBToUCSLUV(x, colorSpace)
+#define UCS_TO_LINEAR(x, colorSpace) DarktableUcs::UCSLUVToRGB(x, colorSpace)
+#elif 1 // Hellwig/Fairchild
+#define LINEAR_TO_UCS(x, colorSpace) HellwigFairchild::rgb_to_ucs(x)
+#define UCS_TO_LINEAR(x, colorSpace) HellwigFairchild::ucs_to_rgb(x)
+#endif
 
 #if LUT_3D
 uint4
@@ -144,12 +160,12 @@ float3 RestoreHueAndChrominance(float3 targetColor, float3 sourceColor, float hu
   if (GetLuminance(targetColor, colorSpace) <= FLT_MIN)
     return targetColor; // Optionally we could blend the target towards the source, or towards black, but there's no need until proven otherwise
 
-	const float3 sourceOklab = colorSpace == CS_BT2020 ? linear_bt2020_to_oklab(sourceColor) : linear_srgb_to_oklab(sourceColor);
-	float3 targetOklab = colorSpace == CS_BT2020 ? linear_bt2020_to_oklab(targetColor) : linear_srgb_to_oklab(targetColor);
+	const float3 sourceUcsLab = LINEAR_TO_UCS(sourceColor, colorSpace);
+	float3 targetUcsLab = LINEAR_TO_UCS(targetColor, colorSpace);
    
-  targetOklab.x = lerp(targetOklab.x, sourceOklab.x, lightnessStrength);
+  targetUcsLab.x = lerp(targetUcsLab.x, sourceUcsLab.x, lightnessStrength);
   
-	float currentChrominance = length(targetOklab.yz);
+	float currentChrominance = length(targetUcsLab.yz);
 
   if (hueStrength != 0.0)
   {
@@ -158,26 +174,26 @@ float3 RestoreHueAndChrominance(float3 targetColor, float3 sourceColor, float hu
     // This method also works on white source colors because the center of the oklab ab diagram is a "white hue", thus we'd simply blend towards white (but never flipping beyond it (e.g. from positive to negative coordinates)),
     // and then restore the original chrominance later (white still conserving the original hue direction, so likely spitting out the same color as the original, or one very close to it).
     const float chrominancePre = currentChrominance;
-    targetOklab.yz = lerp(targetOklab.yz, sourceOklab.yz, hueStrength);
-    const float chrominancePost = length(targetOklab.yz);
+    targetUcsLab.yz = lerp(targetUcsLab.yz, sourceUcsLab.yz, hueStrength);
+    const float chrominancePost = length(targetUcsLab.yz);
     // Then restore chrominance to the original one
     float chrominanceRatio = safeDivision(chrominancePre, chrominancePost, 1);
-    targetOklab.yz *= chrominanceRatio;
+    targetUcsLab.yz *= chrominanceRatio;
     //currentChrominance = chrominancePre; // Redundant
   }
 
   if (chrominanceStrength != 0.0)
   {
-    const float sourceChrominance = length(sourceOklab.yz);
+    const float sourceChrominance = length(sourceUcsLab.yz);
     // Scale original chroma vector from 1.0 to ratio of target to new chroma
     // Note that this might either reduce or increase the chroma.
     float targetChrominanceRatio = safeDivision(sourceChrominance, currentChrominance, 1);
     // Optional safe boundaries (0.333x to 2x is a decent range)
     targetChrominanceRatio = clamp(targetChrominanceRatio, minChrominanceChange, maxChrominanceChange);
-    targetOklab.yz *= lerp(1.0, targetChrominanceRatio, chrominanceStrength);
+    targetUcsLab.yz *= lerp(1.0, targetChrominanceRatio, chrominanceStrength);
   }
 
-	return colorSpace == CS_BT2020 ? oklab_to_linear_bt2020(targetOklab) : oklab_to_linear_srgb(targetOklab);
+	return UCS_TO_LINEAR(targetUcsLab, colorSpace);
 }
 
 // Not 100% hue conservering but better than just max(color, 0.f), this maps the color on the closest humanly visible xy location on th CIE graph.
@@ -989,17 +1005,10 @@ float3 SampleLUTWithExtrapolation(LUT_TEXTURE_TYPE lut, SamplerState samplerStat
 #endif
       if (oklab) //TODOFT4: try oklab again? (update the starfield code ok extrapolation and oklab) And fix up oklab+PQ description above. Also try per channel (quality 1+) and try UCS.
       {
-#if 0
-#define LINEAR_TO_OKLCH(x) DarktableUcs::RGBToUCSLUV(x)
-#define OKLCH_TO_LINEAR(x) DarktableUcs::UCSLUCToRGB(x)
-#else
-#define LINEAR_TO_OKLCH(x) linear_srgb_to_oklab(x)
-#define OKLCH_TO_LINEAR(x) oklch_to_linear_srgb(x)
-#endif
         // OKLAB/OKLCH (it doesn't really look good, it limits the saturation too much, and though it retains vanilla hues more accurately, it just doesn't look that good, and it breaks on high luminances)
-        float3 unclampedUVOklch = LINEAR_TO_OKLCH(neutralLUTColorLinear);
-        float3 clampedUVOklch = LINEAR_TO_OKLCH(clampedNeutralLUTColorLinear);
-        float3 centeredUVOklch = LINEAR_TO_OKLCH(ColorGradingLUTTransferFunctionOut(centeredUV, settings.transferFunctionIn, false));
+        float3 unclampedUVOklch = LINEAR_TO_UCS(neutralLUTColorLinear, CS_DEFAULT);
+        float3 clampedUVOklch = LINEAR_TO_UCS(clampedNeutralLUTColorLinear, CS_DEFAULT);
+        float3 centeredUVOklch = LINEAR_TO_UCS(ColorGradingLUTTransferFunctionOut(centeredUV, settings.transferFunctionIn, false), CS_DEFAULT);
         
         const float3 distanceFromUnclampedToClampedOklch = unclampedUVOklch - clampedUVOklch;
         const float3 distanceFromClampedToCenteredOklch = clampedUVOklch - centeredUVOklch;
@@ -1008,8 +1017,8 @@ float3 SampleLUTWithExtrapolation(LUT_TEXTURE_TYPE lut, SamplerState samplerStat
         const float distanceFromClampedToCenteredOklch2 = length(clampedUVOklch.yz - centeredUVOklch.yz);
         const float extrapolationRatioOklch2 = safeDivision(distanceFromUnclampedToClampedOklch2, distanceFromClampedToCenteredOklch2, 0);
 
-        float3 derivedLUTColor = LINEAR_TO_OKLCH(clampedSample);
-        float3 derivedLUTCenteredColor = LINEAR_TO_OKLCH(centeredSample);
+        float3 derivedLUTColor = LINEAR_TO_UCS(clampedSample, CS_DEFAULT);
+        float3 derivedLUTCenteredColor = LINEAR_TO_UCS(centeredSample, CS_DEFAULT);
         float3 derivedLUTColorChangeOffset = derivedLUTColor - derivedLUTCenteredColor;
         // Reproject the centererd color change ratio onto the full range
 #if 0
@@ -1039,9 +1048,9 @@ float3 SampleLUTWithExtrapolation(LUT_TEXTURE_TYPE lut, SamplerState samplerStat
         // especially if the input color is extremely bright. We can't really fix the color from ending up as black though, unless we find a way to auto detect it.
         extrapolatedDerivedLUTColor.x = max(extrapolatedDerivedLUTColor.x, 0.f);
 
-        derivedLUTColor = oklab_to_oklch(derivedLUTColor);
-        derivedLUTCenteredColor = oklab_to_oklch(derivedLUTCenteredColor);
-        extrapolatedDerivedLUTColor = oklab_to_oklch(extrapolatedDerivedLUTColor);
+        derivedLUTColor = Oklab::oklab_to_oklch(derivedLUTColor);
+        derivedLUTCenteredColor = Oklab::oklab_to_oklch(derivedLUTCenteredColor);
+        extrapolatedDerivedLUTColor = Oklab::oklab_to_oklch(extrapolatedDerivedLUTColor);
 
 #if DEVELOPMENT && 0
         // Avoid flipping ab direction, if we reached white, stay on white.
@@ -1059,9 +1068,9 @@ float3 SampleLUTWithExtrapolation(LUT_TEXTURE_TYPE lut, SamplerState samplerStat
         }
 #endif
 
-        unclampedUVOklch = oklab_to_oklch(unclampedUVOklch);
-        clampedUVOklch = oklab_to_oklch(clampedUVOklch);
-        centeredUVOklch = oklab_to_oklch(centeredUVOklch);
+        unclampedUVOklch = Oklab::oklab_to_oklch(unclampedUVOklch);
+        clampedUVOklch = Oklab::oklab_to_oklch(clampedUVOklch);
+        centeredUVOklch = Oklab::oklab_to_oklch(centeredUVOklch);
         //TODOFT3: oklch's H can't be subracted like that given that they are circular
         const float3 distanceFromUnclampedToClampedOklch3 = unclampedUVOklch - clampedUVOklch;
         const float3 distanceFromClampedToCenteredOklch3 = clampedUVOklch - centeredUVOklch;
@@ -1088,15 +1097,15 @@ float3 SampleLUTWithExtrapolation(LUT_TEXTURE_TYPE lut, SamplerState samplerStat
         
         // Shift luminance and chroma to the extrapolated values, keep the original LUT edge hue (we can't just apply the same hue change, hue isn't really scalable).
         // This has problems in case the LUT color was white, so basically the hue is picked at random.
-        extrapolatedSample = oklch_to_linear_srgb(extrapolatedDerivedLUTColor.xyz);
-        //extrapolatedSample = oklab_to_linear_srgb(extrapolatedDerivedLUTColor.xyz); // OKLCH_TO_LINEAR?
-        //extrapolatedSample = oklab_to_linear_srgb(float3(extrapolatedDerivedLUTColor.x, derivedLUTColor.yz)); // OKLCH_TO_LINEAR?
+        extrapolatedSample = Oklab::oklch_to_linear_srgb(extrapolatedDerivedLUTColor.xyz);
+        //extrapolatedSample = Oklab::oklab_to_linear_srgb(extrapolatedDerivedLUTColor.xyz); // UCS_TO_LINEAR?
+        //extrapolatedSample = Oklab::oklab_to_linear_srgb(float3(extrapolatedDerivedLUTColor.x, derivedLUTColor.yz)); // UCS_TO_LINEAR?
   #if 0 // Looks bad without this
-        extrapolatedSample = oklch_to_linear_srgb(float3(extrapolatedDerivedLUTColor.xy, derivedLUTColor.z));
+        extrapolatedSample = Oklab::oklch_to_linear_srgb(float3(extrapolatedDerivedLUTColor.xy, derivedLUTColor.z));
   #endif
-        //extrapolatedSample = OKLCH_TO_LINEAR(float3(extrapolatedDerivedLUTColor.x, derivedLUTColor.yz));
-        //extrapolatedSample = OKLCH_TO_LINEAR(float3(derivedLUTColor.x, extrapolatedDerivedLUTColor.y, derivedLUTColor.z));
-        //extrapolatedSample = OKLCH_TO_LINEAR(float3(derivedLUTColor.xy, extrapolatedDerivedLUTColor.z));
+        //extrapolatedSample = UCS_TO_LINEAR(float3(extrapolatedDerivedLUTColor.x, derivedLUTColor.yz));
+        //extrapolatedSample = UCS_TO_LINEAR(float3(derivedLUTColor.x, extrapolatedDerivedLUTColor.y, derivedLUTColor.z));
+        //extrapolatedSample = UCS_TO_LINEAR(float3(derivedLUTColor.xy, extrapolatedDerivedLUTColor.z));
         //extrapolatedSample = abs(extrapolationRatioOklch);
 
 #if 0

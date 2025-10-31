@@ -23,7 +23,7 @@ float4 main(
 	// These will also turn NaNs into 0
 #if RGB_SAT 
 	color.rgb = saturate(color.rgb);
-#elif RGB_MAX
+#elif RGB_MAX_0
 	color.rgb = max(color.rgb, 0.0);
 #endif
 #if A_SAT 

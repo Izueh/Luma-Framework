@@ -97,7 +97,7 @@ FFX_API FfxCommandList ffxGetCommandListDX11(ID3D11DeviceContext* deviceContext)
 /// An abstract FidelityFX resources.
 ///
 /// @ingroup DX11Backend
-FFX_API FfxResource ffxGetResourceDX11(const ID3D11Resource* dx11Resource,
+FFX_API FfxResource ffxGetResourceDX11(ID3D11Resource* dx11Resource,
     FfxResourceDescription       ffxResDescription,
     wchar_t const*               ffxResName,
     FfxResourceStates            state = FFX_RESOURCE_STATE_COMPUTE_READ);

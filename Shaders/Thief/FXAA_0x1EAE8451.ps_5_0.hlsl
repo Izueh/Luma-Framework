@@ -357,7 +357,7 @@ void main(
     r0.xyz = t0.SampleLevel(s0_s, r2.xy, 0).xyz;
   }
   o0.xyzw = r0.xyzw;
-#if 0 // TODO: Luma - are these additions necessary?
+#if 0 // TODO: Luma - are these additions necessary? Needed by the UI?
   o0.w = saturate(o0.w);
 #elif 1
   o0.w = 1.f;

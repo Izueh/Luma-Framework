@@ -254,8 +254,7 @@ static const float SunShaftsBrightnessMultiplier = 4.0;
 // The value should be between 0 and 1.
 static const float SunShaftsAndLensOpticsExposureAlpha = 0.25; // Anything more than 0.25 can cause sun effects to be blinding if the exposure is too high (it's pretty high in some scenes)
 
-//TODOFT: test increase? Nah! It's not classy. Review after code changes. Maybe 250 or so is better.
-static const float BinkVideosAutoHDRPeakWhiteNits = 400; // Values beyond 700 will make AutoHDR look bad
+static const float BinkVideosAutoHDRPeakWhiteNits = 250; // Values beyond 700 will make AutoHDR look bad
 // The higher it is, the "later" highlights start
 static const float BinkVideosAutoHDRShoulderPow = 2.75; // A somewhat conservative value
 

@@ -315,9 +315,7 @@ public:
             device_data.force_reset_sr = true;
          }
 
-#if DEVELOPMENT
          if (!custom_texture_mip_lod_bias_offset)
-#endif
          {
             std::shared_lock shared_lock_samplers(s_mutex_samplers);
 
@@ -802,7 +800,7 @@ public:
             {
                game_device_data.final_post_process_command_list = nullptr;
                device_data.has_drawn_main_post_processing = true;
-               if (enable_ui_separation)
+               if (enable_ui_separation) // TODO: is this still needed?
                {
                   ID3D11RenderTargetView* const ui_texture_rtv_const = device_data.ui_texture_rtv.get();
                   native_device_context->OMSetRenderTargets(1, &ui_texture_rtv_const, nullptr);
@@ -1045,8 +1043,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // 6-13 are seemingly totally unused by Dishonored 2
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12;
-
-      enable_ui_separation = false;
 
       swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;

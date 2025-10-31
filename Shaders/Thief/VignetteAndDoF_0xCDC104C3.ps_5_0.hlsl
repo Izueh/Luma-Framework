@@ -56,7 +56,7 @@ void main(
   r1.x = dot(r0.yzw, 1.0 / 3.0);
   r1.xyz = r1.xxx + -r0.yzw;
   r2.xyzw = -cb0[3].xyzw + cb0[2].xyzw;
-  r2.xyzw = r0.xxxx * r2.xyzw + cb0[3].xyzw;
+  r2.xyzw = r0.x * r2.xyzw + cb0[3].xyzw;
   r0.xyz = r2.www * r1.xyz + r0.yzw;
   o0.xyz = r0.xyz * r2.xyz;
   o0.w = 1;
