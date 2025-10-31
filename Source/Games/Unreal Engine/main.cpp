@@ -3,6 +3,8 @@
 #define ENABLE_NGX 1
 #define DISABLE_DISPLAY_COMPOSITION 1
 #define ENABLE_FIDELITY_SK 1
+#define DISABLE_DISPLAY_COMPOSITION 1
+#define HIDE_DISPLAY_MODE 1
 
 #include "..\..\Core\core.hpp"
 #include "includes\shader_detect.hpp"
