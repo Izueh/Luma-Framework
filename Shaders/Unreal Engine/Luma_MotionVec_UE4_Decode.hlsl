@@ -1,225 +1,140 @@
 #include "includes/Common.hlsl"
 
-Texture2D<float4> DepthTexture : register(t0);    // Depth buffer
-Texture2D<float4> VelocityTexture : register(t1); // Velocity texture
+Texture2D<float4> SceneDepthTex : register(t0);
+Texture2D<float4> MotionVectorTex : register(t1);
 
 #if CS
-RWTexture2D<float2> OutVelocityCombinedTexture;
+RWTexture2D<float2> OutMotionVectorTex;
 #endif
 
 SamplerState s0_s : register(s0);
 
-cbuffer cb1 : register(b1)
+cbuffer LumaCB1 : register(b1)
 {
-   float4 cb1[140];
+   float4 LumaCB1[140];
 }
 
-#define AA_CROSS 1
-#define DILATE_MOTION_VECTORS 1
+#define MOTIONDILATIONRADIUS 1
 
-// This is how MVs were encoded in UE/FF7
-float2 EncodeVelocityToTexture(float2 In)
+float2 EncodeMotionVector(float2 motionVec)
 {
-   // 0.499f is a value smaller than 0.5f to avoid using the full range to use the clear color (0,0) as special value
-   // 0.5f to allow for a range of -2..2 instead of -1..1 for really fast motions for temporal AA.
-   // Texure is R16G16 UNORM
-   return In * (0.499f * 0.5f) + (32767.0f / 65535.0f);
+   return motionVec * (0.499f * 0.5f) + (32767.0f / 65535.0f);
 }
-float2 DecodeVelocityFromTexture(float2 In)
+float2 DecodeMotionVector(float2 motionSample)
 {
-#if 1
-   return (In - (32767.0f / 65535.0f)) / (0.499f * 0.5f);
-#else // MAD layout to help compiler. This is what UE/FF7 used but it's an unnecessary approximation
-   const float InvDiv = 1.0f / (0.499f * 0.5f);
-   return In * InvDiv - 32767.0f / 65535.0f * InvDiv;
-#endif
+   return (motionSample - (32767.0f / 65535.0f)) / (0.499f * 0.5f);
 }
 
-float2 ViewportUVToScreenPos(float2 ViewportUV)
+float2 ViewUVToNDC(float2 uv)
 {
-   return float2(2 * ViewportUV.x - 1, 1 - 2 * ViewportUV.y);
+   return float2(2 * uv.x - 1, 1 - 2 * uv.y);
 }
 
-float4 SvPositionToScreenPosition(float4 SvPosition)
+float4 SVToNDCPosition(float4 svPos)
 {
-   // todo: is already in .w or needs to be reconstructed like this:
-   //	SvPosition.w = ConvertFromDeviceZ(SvPosition.z);
-   float2 ViewRectMin = float2(LumaData.GameData.ViewportRect.xy);
-   float4 ViewSizeAndInvSize = LumaData.GameData.RenderResolution;
-   // float2 ViewRectMin = float2(0, 0);
-   // float4 ViewSizeAndInvSize = cb1[118];
+   float2 viewMin = float2(LumaData.GameData.ViewportRect.xy);
+   float4 viewSize = LumaData.GameData.RenderResolution; // Todo make it output to support not full res
+   float2 pixelPos = svPos.xy - viewMin.xy;
+   float3 NDCPos = float3((pixelPos * viewSize.zw - 0.5f) * float2(2, -2), svPos.z);
 
-   float2 PixelPos = SvPosition.xy - ViewRectMin.xy;
-
-   // NDC (NormalizedDeviceCoordinates, after the perspective divide)
-   float3 NDCPos = float3((PixelPos * ViewSizeAndInvSize.zw - 0.5f) * float2(2, -2), SvPosition.z);
-
-   // SvPosition.w: so .w has the SceneDepth, some mobile code and the DepthFade material expression wants that
-   return float4(NDCPos.xyz, 1) * SvPosition.w;
+   return float4(NDCPos.xyz, 1) * svPos.w;
 }
+
 #if CS
 [numthreads(8, 8, 1)]
-void main(uint2 GroupId: SV_GroupID, uint2 DispatchThreadId: SV_DispatchThreadID, uint2 GroupThreadId: SV_GroupThreadID,
-          uint GroupIndex: SV_GroupIndex)
+void main(uint2 threadGroupId: SV_GroupID, uint2 globalThreadId: SV_DispatchThreadID, uint2 localThreadId: SV_GroupThreadID,
+          uint localIndex: SV_GroupIndex)
 #else
-void main(float4 pos: SV_Position0, out float2 OutVelocityCombinedTexture: SV_Target0)
+void main(float4 pos: SV_Position0, out float2 OutMotionVectorTex: SV_Target0)
 #endif
 {
 
-   // Extract viewport parameters from constant buffer
-   uint2 Velocity_ViewportMin = (uint2)LumaData.GameData.ViewportRect.xy;
-   uint2 Velocity_ViewportMax = (uint2)LumaData.GameData.ViewportRect.xy + (uint2)LumaData.GameData.RenderResolution.xy;
-   float2 Velocity_ViewportSize = LumaData.GameData.RenderResolution.xy;
-   float2 Velocity_ViewportSizeInverse = LumaData.GameData.RenderResolution.zw;
-   float2 Velocity_ExtentInverse = LumaData.GameData.RenderResolution.zw;
-   uint2 CombinedVelocity_ViewportMin = (uint2)LumaData.GameData.ViewportRect.xy;
-   float2 CombinedVelocity_ViewportSize = LumaData.GameData.RenderResolution.xy;
-   float2 CombinedVelocity_ViewportSizeInverse = LumaData.GameData.RenderResolution.zw;
-   float2 TemporalJitterPixels =
+    uint4 viewportRect = uint4((uint2)LumaData.GameData.ViewportRect.xy, (uint2)(LumaData.GameData.ViewportRect.xy +
+                                                                                 LumaData.GameData.RenderResolution.xy));
+    float4 renderRes = LumaData.GameData.RenderResolution;
+    float4 viewExtent = LumaData.GameData.RenderResolution;
+
+    float2 jitter =
       LumaData.GameData.JitterOffset.xy * LumaData.GameData.RenderResolution.xy * float2(0.5, -0.5);
-   // Get current pixel position
 
 #if !CS
-   uint2 DispatchThreadId = (uint2)pos.xy;
+   uint2 globalThreadId = (uint2)pos.xy;
 #endif
 
-   uint2 PixelPos = min(DispatchThreadId + Velocity_ViewportMin, Velocity_ViewportMax - 1);
-   uint2 OutputPixelPos = (uint2)CombinedVelocity_ViewportMin + DispatchThreadId;
-   // Check viewport bounds
-   const bool bInsideViewport = all(PixelPos.xy < Velocity_ViewportMax);
-   if (!bInsideViewport) return;
-#if DILATE_MOTION_VECTORS
-   // Screen position of minimum depth for motion vector dilation
-   float2 VelocityOffset = float2(0.0, 0.0);
+   uint2 coords = min(globalThreadId + viewportRect.xy, viewportRect.zw - 1);
+   uint2 outCoords = (uint2)viewportRect.xy + globalThreadId;
+   const bool inViewport = all(coords.xy < viewportRect.zw);
+   if (!inViewport) return;
 
-   float2 NearestBufferUV = (PixelPos + 0.5f) * Velocity_ViewportSizeInverse;
-   float2 ViewportUV = (float2(DispatchThreadId) + 0.5f) * CombinedVelocity_ViewportSizeInverse;
+   float2 offset = float2(0.0, 0.0);
 
-   // Pixel coordinate of the center of output pixel O in the input viewport
-   float2 PPCo = ViewportUV * Velocity_ViewportSize + TemporalJitterPixels;
+   float2 nearestSampleUV = (coords + 0.5f) * renderRes.zw; //extent
+   float2 uv = (float2(globalThreadId) + 0.5f) * renderRes.zw;
 
-   // Pixel coordinate of the center of the nearest input pixel K
-   float2 PPCk = floor(PPCo) + 0.5;
+   float2 centerPixel = uv * renderRes.xy + jitter;
 
-   NearestBufferUV = Velocity_ExtentInverse * (Velocity_ViewportMin + PPCk);
+   float2 nearestPixel = floor(centerPixel) + 0.5;
 
-   // FIND MOTION OF PIXEL AND NEAREST IN NEIGHBORHOOD
-   float3 PosN; // Position of this pixel, possibly later nearest pixel in neighborhood
-   PosN.xy = ViewportUVToScreenPos(ViewportUV);
-   PosN.z = DepthTexture.SampleLevel(s0_s, NearestBufferUV, 0).x;
+   nearestSampleUV = viewExtent.zw * (viewportRect.xy + nearestPixel);
 
-   // Motion vector dilation based on depth
+   float3 nearestPos; 
+   nearestPos.xy = ViewUVToNDC(uv);
+   nearestPos.z = SceneDepthTex.SampleLevel(s0_s, nearestSampleUV, 0).x;
    {
-      // Sample depth in cross pattern to find nearest (foreground) pixel
-      float4 Depths;
-      Depths.x = DepthTexture.SampleLevel(s0_s, NearestBufferUV, 0, int2(-AA_CROSS, -AA_CROSS)).x;
-      Depths.y = DepthTexture.SampleLevel(s0_s, NearestBufferUV, 0, int2(AA_CROSS, -AA_CROSS)).x;
-      Depths.z = DepthTexture.SampleLevel(s0_s, NearestBufferUV, 0, int2(-AA_CROSS, AA_CROSS)).x;
-      Depths.w = DepthTexture.SampleLevel(s0_s, NearestBufferUV, 0, int2(AA_CROSS, AA_CROSS)).x;
+      float4 depth;
+      depth.x = SceneDepthTex.SampleLevel(s0_s, nearestSampleUV, 0, int2(-MOTIONDILATIONRADIUS, -MOTIONDILATIONRADIUS)).x;
+      depth.y = SceneDepthTex.SampleLevel(s0_s, nearestSampleUV, 0, int2(MOTIONDILATIONRADIUS, -MOTIONDILATIONRADIUS)).x;
+      depth.z = SceneDepthTex.SampleLevel(s0_s, nearestSampleUV, 0, int2(-MOTIONDILATIONRADIUS, MOTIONDILATIONRADIUS)).x;
+      depth.w = SceneDepthTex.SampleLevel(s0_s, nearestSampleUV, 0, int2(MOTIONDILATIONRADIUS, MOTIONDILATIONRADIUS)).x;
 
-      float2 DepthOffset = float2(AA_CROSS, AA_CROSS);
-      float DepthOffsetXx = float(AA_CROSS);
+      float2 depthoffset = float2(MOTIONDILATIONRADIUS, MOTIONDILATIONRADIUS);
+      float crossOffsetX = float(MOTIONDILATIONRADIUS);
 
-      // Find nearest depth (largest value in inverted Z buffer)
-      if (Depths.x > Depths.y)
+      if (depth.x > depth.y)
       {
-         DepthOffsetXx = -AA_CROSS;
+         crossOffsetX = -MOTIONDILATIONRADIUS;
       }
-      if (Depths.z > Depths.w)
+      if (depth.z > depth.w)
       {
-         DepthOffset.x = -AA_CROSS;
+         depthoffset.x = -MOTIONDILATIONRADIUS;
       }
-      float DepthsXY = max(Depths.x, Depths.y);
-      float DepthsZW = max(Depths.z, Depths.w);
-      if (DepthsXY > DepthsZW)
+      float maxCrossXY = max(depth.x, depth.y);
+      float maxCrossZW = max(depth.z, depth.w);
+      if (maxCrossXY > maxCrossZW)
       {
-         DepthOffset.y = -AA_CROSS;
-         DepthOffset.x = DepthOffsetXx;
+         depthoffset.y = -MOTIONDILATIONRADIUS;
+         depthoffset.x = crossOffsetX;
       }
-      float DepthsXYZW = max(DepthsXY, DepthsZW);
-      if (DepthsXYZW > PosN.z)
+      float maxCrossDepth = max(maxCrossXY, maxCrossZW);
+      if (maxCrossDepth > nearestPos.z)
       {
-         // Offset for reading from velocity texture
-         VelocityOffset = DepthOffset * Velocity_ExtentInverse;
-         PosN.z = DepthsXYZW;
+         offset = depthoffset * renderRes.zw; //extent
+         nearestPos.z = maxCrossDepth;
       }
    }
 
-   // Calculate camera motion
-   float4 ThisClip = float4(PosN.xy, PosN.z, 1);
+   float4 currentClipPos = float4(nearestPos.xy, nearestPos.z, 1);
 
-   // Transform using View.ClipToPrevClip matrix from cb1[114-117]
-   float4x4 ClipToPrevClip =
-      float4x4(cb1[LumaData.GameData.ClipToPrevClipIndex], cb1[LumaData.GameData.ClipToPrevClipIndex + 1],
-               cb1[LumaData.GameData.ClipToPrevClipIndex + 2], cb1[LumaData.GameData.ClipToPrevClipIndex + 3]);
-   // float4x4 ClipToPrevClip = LumaData.GameData.ClipToPrevClip;
-   float4 PrevClip = mul(ThisClip, ClipToPrevClip);
-   float2 PrevScreen = PrevClip.xy / PrevClip.w;
-   float2 BackN = PosN.xy - PrevScreen;
+   float4x4 currToPrevClip =
+      float4x4(LumaCB1[LumaData.GameData.ClipToPrevClipIndex], LumaCB1[LumaData.GameData.ClipToPrevClipIndex + 1],
+               LumaCB1[LumaData.GameData.ClipToPrevClipIndex + 2], LumaCB1[LumaData.GameData.ClipToPrevClipIndex + 3]);
+   float4 prevClipPos = mul(currentClipPos, currToPrevClip);
+   float2 prevScreenPos = prevClipPos.xy / prevClipPos.w;
+   float2 motionDelta = nearestPos.xy - prevScreenPos;
 
-   float2 BackTemp = BackN * Velocity_ViewportSize;
+   float2 screenSpaceDelta = motionDelta * renderRes.xy;
 
-   // Sample velocity texture with dilation offset
-   float4 VelocityN = VelocityTexture.SampleLevel(s0_s, NearestBufferUV + VelocityOffset, 0);
-   bool DynamicN = VelocityN.x > 0.0;
-   if (DynamicN)
+   float4 motionSample = MotionVectorTex.SampleLevel(s0_s, nearestSampleUV + offset, 0);
+   bool hasDynamicMotion = motionSample.x > 0.0;
+   if (hasDynamicMotion)
    {
-      BackN = DecodeVelocityFromTexture(VelocityN.xy).xy;
+      motionDelta = DecodeMotionVector(motionSample.xy).xy;
    }
-   BackTemp = BackN * CombinedVelocity_ViewportSize;
+   screenSpaceDelta = motionDelta * renderRes.xy;
 
-   // Output motion vector for DLSS
 #if CS
-   OutVelocityCombinedTexture[OutputPixelPos].xy = -BackTemp * float2(0.5, -0.5);
+   OutMotionVectorTex[outCoords].xy = -screenSpaceDelta * float2(0.5, -0.5);
 #else
-   OutVelocityCombinedTexture.xy = -BackTemp * float2(0.5, -0.5);
+   OutMotionVectorTex.xy = -screenSpaceDelta * float2(0.5, -0.5);
 #endif
-
-#else // !DILATE_MOTION_VECTORS
-
-   // Simple path without motion vector dilation
-   float4 EncodedVelocity = VelocityTexture.Load(int3(PixelPos, 0));
-   float Depth = DepthTexture.Load(int3(PixelPos, 0)).x;
-
-   float2 Velocity;
-   if (all(EncodedVelocity.xy > 0))
-   {
-      Velocity = DecodeVelocityFromTexture(EncodedVelocity.xy).xy;
-   }
-   else
-   {
-      // Calculate camera motion
-      float4 ClipPos;
-      ClipPos.xy = SvPositionToScreenPosition(float4(PixelPos.xy, 0, 1)).xy;
-      ClipPos.z = Depth;
-      ClipPos.w = 1;
-
-      float4x4 ClipToPrevClip =
-         float4x4(cb1[LumaData.GameData.ClipToPrevClipIndex], cb1[LumaData.GameData.ClipToPrevClipIndex + 1],
-                  cb1[LumaData.GameData.ClipToPrevClipIndex + 2], cb1[LumaData.GameData.ClipToPrevClipIndex + 3]);
-      // float4x4 ClipToPrevClip = LumaData.GameData.ClipToPrevClip;
-      float4 PrevClipPos = mul(ClipPos, ClipToPrevClip);
-
-      if (PrevClipPos.w > 0)
-      {
-         float2 PrevScreen = PrevClipPos.xy / PrevClipPos.w;
-         Velocity = ClipPos.xy - PrevScreen.xy;
-      }
-      else
-      {
-         Velocity = EncodedVelocity.xy;
-      }
-   }
-
-   float2 OutVelocity =
-      Velocity * float2(0.5, -0.5) * LumaData.GameData.RenderResolution.xy; // View.ViewSizeAndInvSize.xy
-
-   // Output motion vector for DLSS
-#if CS
-   OutVelocityCombinedTexture[OutputPixelPos].xy = -OutVelocity;
-#else
-   OutVelocityCombinedTexture.xy = -OutVelocity;
-#endif
-
-#endif // DILATE_MOTION_VECTORS
 }
