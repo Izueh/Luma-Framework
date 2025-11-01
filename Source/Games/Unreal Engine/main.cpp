@@ -1,7 +1,7 @@
 #define GAME_UNREAL_ENGINE 1
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
 #define ENABLE_NGX 1
-#define ENABLE_FIDELITY_SK 0
+#define ENABLE_FIDELITY_SK 1
 #define DISABLE_DISPLAY_COMPOSITION 1
 #define HIDE_DISPLAY_MODE 1
 
@@ -584,6 +584,9 @@ public:
                draw_data.reset          = reset_sr;
                draw_data.render_width   = game_device_data.render_resolution.x;
                draw_data.render_height  = game_device_data.render_resolution.y;
+               draw_data.near_plane     = 0.01f; // TODO: made up values
+               draw_data.far_plane      = 100000.f;
+               draw_data.vert_fov       =  60.f / 180 * M_PI;
 
                bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
                if (dlss_succeeded)
@@ -863,20 +866,18 @@ public:
       if (!custom_texture_mip_lod_bias_offset)
 #endif
       {
+         DeviceData& device_data = *device->get_private_data<DeviceData>();
          std::shared_lock shared_lock_samplers(s_mutex_samplers);
 
          const auto prev_texture_mip_lod_bias_offset = device_data.texture_mip_lod_bias_offset;
-         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.taa_detected)
+         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed /*&& device_data.taa_detected*/)
          {
             device_data.texture_mip_lod_bias_offset = std::log2(device_data.render_resolution.y / device_data.output_resolution.y) - 1.f; // This results in -1 at output res
          }
          else
          {
-            // Reset to best fallback value.
-            // This bias offset replaces the value from the game (see "samplers_upgrade_mode" 5), which was based on the "r_AntialiasingTSAAMipBias" cvar for most textures (it doesn't apply to all the ones that would benefit from it, and still applies to ones that exhibit moire patterns),
-            // but only if TAA was engaged (not SMAA or SMAA+TAA) (it might persist on SMAA after once using TAA, due to a bug).
-            // Prey defaults that to 0 but Luma's configs set it to -1.
-            device_data.texture_mip_lod_bias_offset = device_data.taa_detected ? -1.f : 0.f;
+            // Reset to default (our mip offset is additive, so this is neutral)
+            device_data.texture_mip_lod_bias_offset = 0.f;
          }
          const auto new_texture_mip_lod_bias_offset = device_data.texture_mip_lod_bias_offset;
 

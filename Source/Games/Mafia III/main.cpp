@@ -1235,6 +1235,7 @@ public:
       cb_luma_global_settings.GameSettings.CameraJitters.y *= -2.f / device_data.render_resolution.y;
       device_data.cb_luma_global_settings_dirty = true;
 
+      if (!custom_texture_mip_lod_bias_offset)
       {
          std::shared_lock shared_lock_samplers(s_mutex_samplers);
          if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && !no_jitters)

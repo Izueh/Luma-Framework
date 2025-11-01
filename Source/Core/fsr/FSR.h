@@ -6,7 +6,7 @@
 #ifndef ENABLE_FIDELITY_SK
 #define ENABLE_FIDELITY_SK 1
 #endif // ENABLE_FIDELITY_SK
-#else
+#elifdef ENABLE_FIDELITY_SK
 #undef ENABLE_FIDELITY_SK
 #define ENABLE_FIDELITY_SK 0
 #endif

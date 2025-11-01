@@ -283,7 +283,7 @@
       <AdditionalDependencies>nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ImportLibrary>
       </ImportLibrary>
     </Link>

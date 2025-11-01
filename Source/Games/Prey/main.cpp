@@ -1417,7 +1417,7 @@ public:
                draw_data.render_height = render_height_dlss;
                draw_data.near_plane = cb_per_view_global.CV_NearFarClipDist.x; // TODO: make sure the scale is in meters (seems to be?)
                draw_data.far_plane = cb_per_view_global.CV_NearFarClipDist.y;
-               draw_data.vert_fov = atan(1.f / projection_matrix.m11) * 2.0 * 180 / M_PI;
+               draw_data.vert_fov = atan(1.f / projection_matrix.m11) * 2.0;
                draw_data.frame_index = cb_luma_global_settings.FrameIndex;
                draw_data.time_delta = cb_per_view_global.CV_AnimGenParams.z - cb_per_view_global_previous.CV_AnimGenParams.z;
 

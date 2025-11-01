@@ -2160,7 +2160,7 @@ namespace
 
 #if ENABLE_FIDELITY_SK
       // Required by FSR 3 on DX11. Also goes to determine whether we have to use D3D11_1_UAV_SLOT_COUNT or (the older) D3D11_PS_CS_UAV_REGISTER_COUNT.
-      // Some games (e.g. INSIDE) crashes with this.
+      // This is usually fully retro compatible with all games.
       if (api_version == D3D_FEATURE_LEVEL_11_0)
       {
          api_version = D3D_FEATURE_LEVEL_11_1;
@@ -2301,6 +2301,7 @@ namespace
       }
       assert(SUCCEEDED(hr));
 
+      bool selected_sr_implementation = false;
       for (auto& sr_implementation : sr_implementations)
       {
          if (sr_implementation.second != nullptr)
@@ -2317,10 +2318,12 @@ namespace
             if (device_data.sr_implementations_instances[sr_implementation.first] && device_data.sr_implementations_instances[sr_implementation.first]->is_supported)
             {
                const std::shared_lock lock_reshade(s_mutex_reshade);
-               if (SR::AreTypesEqual(sr_user_type, sr_implementation.first))
+               if (!selected_sr_implementation && SR::AreTypesEqual(sr_user_type, sr_implementation.first))
                {
+                  selected_sr_implementation = true; // Take the first supported selected one
                   device_data.sr_type = sr_implementation.first;
-                  break; // Take the first supported selected one
+                  // For now we continue initializing the other ones, which usually shouldn't have a huge cost as no relevant resources are allocated,
+                  // however, if we wanted, we could dynamically init and deinit leaving just the currently used one.
                }
             }
             else
