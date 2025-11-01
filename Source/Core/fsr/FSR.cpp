@@ -195,7 +195,7 @@ namespace FidelityFX
       }
       if (settings_data.inverted_depth)
       {
-         context_desc.flags |= FFX_FSR3_ENABLE_DEPTH_INVERTED;
+         context_desc.flags |= FFX_FSR3_ENABLE_DEPTH_INVERTED | FFX_FSR3_ENABLE_DEPTH_INFINITE;
       }
       if (settings_data.mvs_jittered)
       {
@@ -308,14 +308,24 @@ namespace FidelityFX
       dispatch_upscale.renderSize.height = draw_data.render_height;
       dispatch_upscale.jitterOffset.x = draw_data.jitter_x;
       dispatch_upscale.jitterOffset.y = draw_data.jitter_y;
-      dispatch_upscale.motionVectorScale.x = custom_data->settings_data.mvs_x_scale;
-      dispatch_upscale.motionVectorScale.y = custom_data->settings_data.mvs_y_scale;
+      dispatch_upscale.motionVectorScale.x = custom_data->settings_data.mvs_x_scale * draw_data.render_width;
+      dispatch_upscale.motionVectorScale.y = custom_data->settings_data.mvs_y_scale * draw_data.render_height;
 
       dispatch_upscale.preExposure = draw_data.pre_exposure == 0.f ? 1.f : draw_data.pre_exposure;
 
       dispatch_upscale.cameraFovAngleVertical = draw_data.vert_fov;
-      dispatch_upscale.cameraFar = draw_data.near_plane; // TODO: why does FSR complain depth is too small with inverse depth? Even with 100000
-      dispatch_upscale.cameraNear = draw_data.far_plane;
+      if (custom_data->settings_data.inverted_depth)
+      {
+         dispatch_upscale.cameraFar = draw_data.near_plane;
+         dispatch_upscale.cameraNear = draw_data.far_plane;
+      }
+      else
+      {
+         dispatch_upscale.cameraFar = draw_data.far_plane;
+         dispatch_upscale.cameraNear = draw_data.near_plane;
+      }
+      //dispatch_upscale.cameraFar = draw_data.near_plane; // TODO: why does FSR complain depth is too small with inverse depth? Even with 100000
+      //dispatch_upscale.cameraNear = draw_data.far_plane;
       dispatch_upscale.viewSpaceToMetersFactor = 1.f; // This can be left at zero and still work. Most engines units should be meters.
 
       dispatch_upscale.reset = draw_data.reset;
