@@ -11821,7 +11821,7 @@ namespace
                display_mode_max++; // Add "SDR in HDR for HDR" mode
 #endif
             }
-#if !HIDE_DISPLAY_MODE && !DISABLE_DISPLAY_COMPOSITION
+#if !HIDE_DISPLAY_MODE
             ImGui::BeginDisabled(!hdr_supported_display);
             if (ImGui::SliderInt("Display Mode", reinterpret_cast<int*>(&display_mode), 0, display_mode_max, display_mode_preset_strings[(size_t)display_mode], ImGuiSliderFlags_NoInput))
             {
@@ -11855,7 +11855,7 @@ namespace
 #endif // !HIDE_DISPLAY_MODE || DISABLE_DISPLAY_COMPOSITION
             const bool mod_active = IsModActive(device_data);
             const bool has_separate_ui_paper_white = GetShaderDefineCompiledNumericalValue(UI_DRAW_TYPE_HASH) >= 1;
-#if !DISABLE_DISPLAY_COMPOSITION
+#if !HIDE_BRIGHTNESS_SETTINGS
             if (display_mode == DisplayModeType::HDR)
             {
                ImGui::BeginDisabled(!mod_active);
