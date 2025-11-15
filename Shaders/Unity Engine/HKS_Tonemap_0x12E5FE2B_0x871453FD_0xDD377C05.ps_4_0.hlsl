@@ -2,7 +2,6 @@
 #include "../Includes/DICE.hlsl"
 #include "../Includes/Reinhard.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl"
-#include "../Includes/Oklab.hlsl"
 
 Texture2D<float4> t1 : register(t1);
 Texture2D<float4> t0 : register(t0);

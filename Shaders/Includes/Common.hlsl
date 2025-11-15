@@ -138,7 +138,7 @@ float3 FakeHDR(float3 Color, float NormalizationPoint = 0.02, float FakeHDRInten
     // Branching or Max would be faster depending on how many pixels pass the test. We don't really even need to anymore with "blendIntensity".
     normalizedColor = normalizedColor > 1.0 ? pow(normalizedColor, 1.0 + FakeHDRIntensity) : normalizedColor;
     float3 alteredColor = lerp(Color, normalizedColor * NormalizationPoint, blendIntensity);
-    Color = lerp(RestoreLuminance(Color, alteredColor, ColorSpace), alteredColor, SaturationExpansionIntensity);
+    Color = lerp(RestoreLuminance(Color, alteredColor, true, ColorSpace), alteredColor, SaturationExpansionIntensity);
   }
   else if (Method == 1 || Method == 2)
   {

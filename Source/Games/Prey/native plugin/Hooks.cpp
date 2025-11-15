@@ -116,6 +116,17 @@ namespace Hooks
 			dku::Hook::WriteData(address + Offsets::Get(Offsets::OnHFOVChanged_Offset), &nop8, sizeof(nop8));  // minss -> nop
 		}
 
+		// No-op calls that reset the weapon FOV to 55.f
+		{
+			const auto address = Offsets::GetAddress(Offsets::ArkPlayerZoomManager_Reset);
+			
+			uint8_t nop3[] = { 0x90, 0x90, 0x90 };
+			uint8_t nop6[] = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
+			
+			dku::Hook::WriteData(address + Offsets::Get(Offsets::ArkPlayerZoomManager_Reset_Offset1), &nop3, sizeof(nop3)); // call -> nop
+			dku::Hook::WriteData(address + Offsets::Get(Offsets::ArkPlayerZoomManager_Reset_Offset2), &nop6, sizeof(nop6)); // call -> nop
+		}
+
 #if 0 // Old code branches to change the jitters scale depending on the rendering resolution (we tried *2, /2, etc), none of this was seemengly needed (Steam base game only)
 		if (Offsets::gameVersion == Offsets::GameVersion::PreySteam)
 		{

@@ -72,6 +72,10 @@ public:
 	static constexpr std::array<uintptr_t, static_cast<uint8_t>(GameVersion::COUNT)> OnHFOVChanged = { 0x17266D0, 0x1850B10, 0x16B4260, 0x17DCD10, 0x16F8CB0, 0x181CC30 };
 	static constexpr std::array<uintptr_t, static_cast<uint8_t>(GameVersion::COUNT)> OnHFOVChanged_Offset = { 0x8E, 0x8E, 0x89, 0x89, 0x8E, 0x8E };
 
+	static constexpr std::array<uintptr_t, static_cast<uint8_t>(GameVersion::COUNT)> ArkPlayerZoomManager_Reset = { 0x1490D80, 0x15B0560, 0x14328F0, 0x1551AB0, 0x1464270, 0x157BC80 };
+	static constexpr std::array<uintptr_t, static_cast<uint8_t>(GameVersion::COUNT)> ArkPlayerZoomManager_Reset_Offset1 = { 0x70, 0x70, 0x7A, 0x7A, 0x70, 0x70 };
+	static constexpr std::array<uintptr_t, static_cast<uint8_t>(GameVersion::COUNT)> ArkPlayerZoomManager_Reset_Offset2 = { 0xA5, 0xA5, 0xAF, 0xAF, 0xA5, 0xA5 };
+
 	// Hooks
 	static constexpr std::array<uintptr_t, static_cast<uint8_t>(GameVersion::COUNT)> SwapchainDesc_Func = { 0xF50000, 0xF733E0, 0xF17790, 0xF3C5F0, 0xF23FE0, 0xF40300 };
 	static constexpr std::array<uintptr_t, static_cast<uint8_t>(GameVersion::COUNT)> SwapchainDesc_Start = { 0x50E, 0x50E, 0x505, 0x505, 0x50E, 0x50E };

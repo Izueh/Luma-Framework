@@ -2152,8 +2152,7 @@ namespace
 #endif
 #endif
 
-
-#if DEVELOPMENT && 0 // Test: force the latest version to access all the latest features (it doesn't seem to work!)
+#if DEVELOPMENT && 0 // Test: force the latest version to access all the latest features (it doesn't seem to work! nor is much needed, but we should try again as ReShade had a bug with it)
       api_version = D3D_FEATURE_LEVEL_12_2;
       return true;
 #endif
@@ -12889,8 +12888,6 @@ namespace
                }
 
                ImGui::NewLine();
-               if (enable_ui_separation)
-                  ImGui::Checkbox("Hide Gameplay UI", &hide_ui);
                if (enable_ui_separation ? ImGui::Button("Disable Separate UI Drawing and Composition") : ImGui::Button("Enable Separate UI Drawing and Composition"))
                {
                   enable_ui_separation = !enable_ui_separation;
@@ -12911,6 +12908,8 @@ namespace
                      }
                   }
                }
+               if (enable_ui_separation)
+                  ImGui::Checkbox("Hide Gameplay UI", &hide_ui);
 #endif
 
                game->DrawImGuiDevSettings(device_data);

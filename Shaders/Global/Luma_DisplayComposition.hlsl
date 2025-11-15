@@ -222,7 +222,7 @@ bool DrawDebugTexture(float3 pos, inout float4 outColor, float gamePaperWhite, f
 		{
        		color.rgb = sRGB ? linear_to_sRGB_gamma(color.rgb, GCT_MIRROR) : (pow(abs(color.rgb), 1.f / DefaultGamma) * sign(color.rgb));
 		}
-		if (tonemap)
+		if (tonemap && !showAlpha)
 		{
     		const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
 #if 1 // No hue shifts, better analysis
