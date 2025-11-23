@@ -242,7 +242,8 @@ namespace FidelityFX
          {
             printf_s("FSR3: ffxFsr3ContextDestroy failed, error = %d\n", static_cast<int>(err_code));
          }
-         custom_data->context = {}; // Probably not very useful
+         //custom_data->context = {}; // Probably not very useful
+         memset(&custom_data->context, 0, sizeof(FfxFsr3Context));
          custom_data->has_context = false;
 
          free(custom_data->scratch_buffer);
@@ -308,8 +309,8 @@ namespace FidelityFX
       dispatch_upscale.renderSize.height = draw_data.render_height;
       dispatch_upscale.jitterOffset.x = draw_data.jitter_x;
       dispatch_upscale.jitterOffset.y = draw_data.jitter_y;
-      dispatch_upscale.motionVectorScale.x = custom_data->settings_data.mvs_x_scale * draw_data.render_width;
-      dispatch_upscale.motionVectorScale.y = custom_data->settings_data.mvs_y_scale * draw_data.render_height;
+      dispatch_upscale.motionVectorScale.x = custom_data->settings_data.mvs_x_scale;
+      dispatch_upscale.motionVectorScale.y = custom_data->settings_data.mvs_y_scale;
 
       dispatch_upscale.preExposure = draw_data.pre_exposure == 0.f ? 1.f : draw_data.pre_exposure;
 

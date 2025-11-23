@@ -78,8 +78,6 @@ namespace
 
    static inline float ComputeFovY(const Math::Matrix44F& view_to_clip)
    {
-      // Extract vertical FOV from projection matrix
-      // Reference: https://www.scratchapixel.com/lessons/mathematics-physics-for-computer-graphics/view-frustum/projection-matrix-decomposition
       float eps = 1e-3f;
       if (!NearZero(view_to_clip.m11, eps))
       {
@@ -99,7 +97,11 @@ struct GameDeviceDataUnrealEngine final : public GameDeviceData
    com_ptr<ID3D11Resource> depth_buffer;
    com_ptr<ID3D11RenderTargetView> sr_motion_vectors_rtv;
    com_ptr<ID3D11UnorderedAccessView> sr_motion_vectors_uav;
+   std::unique_ptr<SR::SettingsData> sr_settings_data;
+   std::unique_ptr<SR::SuperResolutionImpl::DrawData> sr_draw_data;
    std::atomic<bool> found_per_view_globals = false;
+   std::atomic<bool> camera_cut = false;
+   bool auto_exposure = true;
 #endif // ENABLE_SR
    float4 render_resolution = {0.0f, 0.0f, 0.0f, 0.0f};
    float4 viewport_rect = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -472,7 +474,7 @@ public:
             settings_data.hdr = true; // Unreal Engine does DLSS before tonemapping, in HDR linear space
             settings_data.inverted_depth = true;
             settings_data.mvs_jittered = false;
-            settings_data.auto_exposure = true; // Unreal Engine does TAA before tonemapping
+            settings_data.auto_exposure = game_device_data.auto_exposure; // Unreal Engine does TAA before tonemapping
             settings_data.use_experimental_features = sr_user_type == SR::UserType::DLSS_TRANSFORMER;
             settings_data.mvs_x_scale = 1.0f;
             settings_data.mvs_y_scale = 1.0f;
@@ -578,6 +580,8 @@ public:
                draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
                compute_state_stack.Cache(native_device_context, device_data.uav_max_count);
                DecodeMotionVectors(is_compute_shader, native_device_context, device_data, taa_shader_info);
+               ID3D11RenderTargetView* const* rtvs_const = (ID3D11RenderTargetView**)std::addressof(render_target_views[0]);
+               native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs_const, depth_stencil_view.get());
 #if DEVELOPMENT
                const std::shared_lock lock_trace(s_mutex_trace);
                if (trace_running)
@@ -592,8 +596,8 @@ public:
                   cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
                }
 #endif
-
-               bool reset_sr = device_data.force_reset_sr || dlss_output_changed;
+               // UE4 seems to skip taa on the first frame after a camera cut.
+               bool reset_sr = device_data.force_reset_sr || dlss_output_changed || game_device_data.camera_cut;
                device_data.force_reset_sr = false;
 
                SR::SuperResolutionImpl::DrawData draw_data;
@@ -618,6 +622,7 @@ public:
                {
                   device_data.has_drawn_sr = true;
                }
+               game_device_data.camera_cut = false;
                game_device_data.sr_source_color = nullptr;
                game_device_data.depth_buffer = nullptr;
 
@@ -674,6 +679,7 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
       game_device_data.found_per_view_globals = false;
+      game_device_data.camera_cut = !device_data.taa_detected && !device_data.has_drawn_sr && !device_data.force_reset_sr;
       device_data.has_drawn_sr = false;
       game_device_data.jitter = {0.0f, 0.0f};
    }
@@ -760,6 +766,29 @@ public:
                   "\nReShade"
                   "\nImGui"
                   "");
+   }
+
+   void DrawImGuiSettings(DeviceData& device_data) override
+   {
+#if ENABLE_SR
+      auto& game_device_data = GetGameDeviceData(device_data);
+
+      // Disable the checkbox if SR is not enabled (SRType == 0)
+      bool sr_enabled = device_data.sr_type != SR::Type::None;
+
+      if (!sr_enabled)
+         ImGui::BeginDisabled();
+
+      ImGui::Checkbox("Auto Exposure", &game_device_data.auto_exposure);
+
+      if (!sr_enabled)
+         ImGui::EndDisabled();
+
+      if (!sr_enabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      {
+         ImGui::SetTooltip("Enable Super Resolution (DLSS/FSR) to change this setting.");
+      }
+#endif
    }
 
    static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)

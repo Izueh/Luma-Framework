@@ -1,7 +1,7 @@
 #define GAME_FF7_REMAKE 1
 
 #define ENABLE_NGX 1
-#define ENABLE_FIDELITY_SK 0
+#define ENABLE_FIDELITY_SK 1
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
 #define DISABLE_DISPLAY_COMPOSITION 1
 #define HIDE_DISPLAY_MODE 1
@@ -18,6 +18,8 @@
 namespace
 {
    float2 projection_jitters = {0, 0};
+   float vert_fov = 60.f * (M_PI / 180.f);
+   float near_plane = 0.1f;
    std::unique_ptr<float4[]> downsample_buffer_data;
    std::unique_ptr<float4[]> upsample_buffer_data;
    ShaderHashesList shader_hashes_TAA;
@@ -35,7 +37,6 @@ namespace
    ShaderHashesList shader_hashes_Output_SDR;
    const uint32_t CBPerViewGlobal_buffer_size = 4096;
    std::atomic<bool> can_sharpen = true;
-   float enabled_custom_exposure = 1.f;
    float enabled_dithering_fix = 1.f;
    float sr_custom_pre_exposure = 0.f; // Ignored at 0
    float ignore_warnings = 0.f;
@@ -139,40 +140,51 @@ namespace
                .max = 1,
                .is_visible = []()
                { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR; }
-				}
-			}
-		},
+            }
+         }
+      },
       new Luma::Settings::Section{
-			.label = "Advanced Settings", 
-			.settings = {                                                   
-				new Luma::Settings::Setting{
-					.key = "IgnoreWarnings", 
-					.binding = &ignore_warnings, 
-					.type = Luma::Settings::SettingValueType::BOOLEAN, 
-					.can_reset = false, .label = "Ignore Warnings", 
-					.tooltip = "Ignore warning messages. Default is Off."}, 
-				new Luma::Settings::Setting{
-					.key = "EnableCustomPreExposure", 
-					.binding = &enabled_custom_exposure, 
-					.type = Luma::Settings::SettingValueType::BOOLEAN, 
-					.default_value = 1.f, 
-					.can_reset = true, 
-					.label = "Enable Custom Pre-Exposure for Super Resolution", 
-					.tooltip = "Computes custom pre-exposure value for Super Resolution (This is an estimate value), seems to reduce ghosting and other artifacts. Set to Off have fixed pre-exposure of 1.", 
-					.is_visible = [](){ return sr_user_type != SR::UserType::None; }},
-					new Luma::Settings::Setting{.key = "EnableDitheringFix", 
-					.binding = &enabled_dithering_fix, 
-					.type = Luma::Settings::SettingValueType::BOOLEAN, 
-					.default_value = 1.f, 
-					.can_reset = true, 
-					.label = "Enable Dithering Fix (Experimental)", 
-					.tooltip = "Enables a fix for dithering that can cause checkered patterns when using Super Resolution. Default is On, requires restart to take effect.", 
-					.is_visible = [](){ return sr_user_type != SR::UserType::None; }
-				}
-			}
-		}
-	};
+         .label = "Advanced Settings", 
+         .settings = {
+            new Luma::Settings::Setting{
+               .key = "IgnoreWarnings", 
+               .binding = &ignore_warnings, 
+               .type = Luma::Settings::SettingValueType::BOOLEAN, 
+               .can_reset = false, .label = "Ignore Warnings", 
+               .tooltip = "Ignore warning messages. Default is Off."
+            }, 
+            new Luma::Settings::Setting{
+               .key = "EnableDitheringFix", 
+               .binding = &enabled_dithering_fix, 
+               .type = Luma::Settings::SettingValueType::BOOLEAN, 
+               .default_value = 1.f, 
+               .can_reset = true, 
+               .label = "Enable Dithering Fix (Experimental)", 
+               .tooltip = "Enables a fix for dithering that can cause checkered patterns when using Super Resolution. Default is On, requires restart to take effect.",
+            }
+         }
+      }
+   };
 
+   static inline bool NearZero(float v, float eps)
+   {
+      return std::fabs(v) <= eps;
+   }
+
+   static inline float ComputeNearPlane(const Math::Matrix44F& view_to_clip)
+   {
+      return (view_to_clip.m33 - view_to_clip.m32) / (view_to_clip.m22 - view_to_clip.m23);
+   }
+
+   static inline float ComputeFovY(const Math::Matrix44F& view_to_clip)
+   {
+      float eps = 1e-3f;
+      if (!NearZero(view_to_clip.m11, eps))
+      {
+         return atan(1.f / view_to_clip.m11) * 2.0;
+      }
+      return 0.0f;
+   }
 } // namespace
 
 struct GameDeviceDataFF7Remake final : public GameDeviceData
@@ -180,10 +192,18 @@ struct GameDeviceDataFF7Remake final : public GameDeviceData
 #if ENABLE_SR
    // SR
    com_ptr<ID3D11Texture2D> sr_motion_vectors;
+   com_ptr<ID3D11ShaderResourceView> sr_motion_vectors_srv; // NEW: SRV for Motion Vectors
    com_ptr<ID3D11Resource> sr_source_color;
    com_ptr<ID3D11Resource> depth_buffer;
    com_ptr<ID3D11RenderTargetView> sr_motion_vectors_rtv;
+   std::unique_ptr<SR::SettingsData> sr_settings_data;
+   std::unique_ptr<SR::SuperResolutionImpl::DrawData> sr_draw_data;
 #endif // ENABLE_SR
+   // NEW: Bloom History Resources
+   com_ptr<ID3D11Texture2D> prev_bloom_texture;
+   com_ptr<ID3D11ShaderResourceView> prev_bloom_srv;
+   bool first_bloom_frame = true;
+   std::atomic<bool> camera_cut = false;
    std::atomic<bool> has_drawn_title = false;
    std::atomic<bool> has_drawn_taa = false;
    std::atomic<bool> has_drawn_upscaling = false;
@@ -251,6 +271,7 @@ public:
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
    {
       device_data.game = new GameDeviceDataFF7Remake;
+      auto& game_device_data = GetGameDeviceData(device_data);
    }
 
    std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size,
@@ -577,18 +598,6 @@ public:
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
-      // TODO: this seems like an unnecessary check that would only cause problems.
-      // A better optimization would be to do something similar, but instead checking the scene gbuffers composition shaders, that are guaranteed to run before post processing,
-      // so we can skip all the DLSS checks for shaders that run before (given that there's ~2000+ of them).
-      if (!game_device_data.has_drawn_title && original_shader_hashes.Contains(shader_hashes_Title))
-      {
-         game_device_data.has_drawn_title = true;
-      }
-
-      if (!game_device_data.has_drawn_title)
-      {
-         return DrawOrDispatchOverrideType::None;
-      }
 
       // Nothing more to do after tonemapping
       if (device_data.has_drawn_main_post_processing)
@@ -730,6 +739,9 @@ public:
             settings_data.hdr = true; // Unreal Engine does DLSS before tonemapping, in HDR linear space
             settings_data.inverted_depth = true;
             settings_data.mvs_jittered = false;
+            settings_data.auto_exposure = false;
+            settings_data.mvs_x_scale = 1.0f;
+            settings_data.mvs_y_scale = 1.0f;
             settings_data.use_experimental_features = sr_user_type == SR::UserType::DLSS_TRANSFORMER;
             sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
 
@@ -780,7 +792,11 @@ public:
                ps_shader_resources[4]->GetResource(&object_velocity);
 
                // TODO: add exposure texture support (it's possibly calculated just earlier in the auto exposure steps, but they could be after DLSS too, depends on UE), either way auto exposure is ok
-
+               DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
+               DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
+               // We don't actually replace the shaders with the classic luma shader swapping feature, so we need to set the CBs manually
+               draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
+               compute_state_stack.Cache(native_device_context, device_data.uav_max_count);
                // Decode the motion vector from pixel shader
                {
                   if (!AreResourcesEqual(object_velocity.get(), game_device_data.sr_motion_vectors.get(), false /*check_format*/))
@@ -791,20 +807,29 @@ public:
                      D3D11_TEXTURE2D_DESC object_velocity_texture_desc;
                      object_velocity_texture->GetDesc(&object_velocity_texture_desc);
                      ASSERT_ONCE((object_velocity_texture_desc.BindFlags & D3D11_BIND_RENDER_TARGET) == D3D11_BIND_RENDER_TARGET);
-#if 1 // Use the higher quality for MVs, the game's one were R16G16F. This has a ~1% cost on performance but helps with reducing shimmering on fine lines (stright lines looking segmented, like Bart's hair or Shark's teeth) when the camera is moving in a linear fashion.
+#if 0 // Use the higher quality for MVs, the game's one were R16G16F. This has a ~1% cost on performance but helps with reducing shimmering on fine lines (stright lines looking segmented, like Bart's hair or Shark's teeth) when the camera is moving in a linear fashion.
                      object_velocity_texture_desc.Format = DXGI_FORMAT_R32G32_FLOAT;
 #else // Note: for FF7, 16bit might be enough, to be tried and compared, but the extra precision won't hurt
                      object_velocity_texture_desc.Format = DXGI_FORMAT_R16G16_FLOAT;
 #endif
 
                      game_device_data.sr_motion_vectors = nullptr; // Make sure we discard the previous one
+
+                     // FIX: Add SHADER_RESOURCE bind flag so we can read MVs in Bloom pass
+                     object_velocity_texture_desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
+
                      hr = native_device->CreateTexture2D(&object_velocity_texture_desc, nullptr, &game_device_data.sr_motion_vectors);
                      ASSERT_ONCE(SUCCEEDED(hr));
 
                      game_device_data.sr_motion_vectors_rtv = nullptr; // Make sure we discard the previous one
+                     game_device_data.sr_motion_vectors_srv = nullptr; // Reset SRV
                      if (SUCCEEDED(hr))
                      {
                         hr = native_device->CreateRenderTargetView(game_device_data.sr_motion_vectors.get(), nullptr, &game_device_data.sr_motion_vectors_rtv);
+                        ASSERT_ONCE(SUCCEEDED(hr));
+
+                        // Create SRV for MVs
+                        hr = native_device->CreateShaderResourceView(game_device_data.sr_motion_vectors.get(), nullptr, &game_device_data.sr_motion_vectors_srv);
                         ASSERT_ONCE(SUCCEEDED(hr));
                      }
                   }
@@ -853,9 +878,11 @@ public:
                   native_device_context->PSSetShader(prev_shader_px.get(), nullptr, 0);
 
                   native_device_context->IASetPrimitiveTopology(primitive_topology);
+                  ID3D11RenderTargetView* const* rtvs_const = (ID3D11RenderTargetView**)std::addressof(render_target_views[0]);
+                  native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs_const, depth_stencil_view.get());
                }
 
-               bool reset_dlss = device_data.force_reset_sr || dlss_output_changed;
+               bool reset_dlss = device_data.force_reset_sr || dlss_output_changed || game_device_data.camera_cut;
                device_data.force_reset_sr = false;
 
                // Render resolution doesn't necessarily match with the source texture size, DRS draws on the top left of textures
@@ -873,27 +900,19 @@ public:
                }
 
                float dlss_pre_exposure = 0.f;
-               if (enabled_custom_exposure != 0.f)
-               {
-                  dlss_pre_exposure = sr_custom_pre_exposure;
-               }
-               else
-               {
-                  // #if DEVELOPMENT || TEST
-                  // 					dlss_pre_exposure = sr_custom_pre_exposure;
-                  // #endif
-               }
+
                SR::SuperResolutionImpl::DrawData draw_data;
                draw_data.source_color = game_device_data.sr_source_color.get();
                draw_data.output_color = device_data.sr_output_color.get();
                draw_data.motion_vectors = game_device_data.sr_motion_vectors.get();
                draw_data.depth_buffer = game_device_data.depth_buffer.get();
-               draw_data.pre_exposure = dlss_pre_exposure;
+               draw_data.pre_exposure = sr_custom_pre_exposure;
                draw_data.jitter_x = projection_jitters.x * device_data.render_resolution.x * 0.5f;
                draw_data.jitter_y = projection_jitters.y * device_data.render_resolution.y * -0.5f;
+               draw_data.user_sharpness = false;
                draw_data.far_plane = FLT_MAX;
-               draw_data.near_plane = 0.1;
-               draw_data.vert_fov = 60.f;
+               draw_data.near_plane = near_plane;
+               draw_data.vert_fov = vert_fov;
                draw_data.reset = reset_dlss;
                draw_data.render_width = render_width_dlss;
                draw_data.render_height = render_height_dlss;
@@ -903,12 +922,11 @@ public:
                {
                   device_data.has_drawn_sr = true;
                }
+               game_device_data.camera_cut = false;
                game_device_data.sr_source_color = nullptr;
                game_device_data.depth_buffer = nullptr;
-
-               // Restore the previous state
-               ID3D11RenderTargetView* const* rtvs_const = (ID3D11RenderTargetView**)std::addressof(render_target_views[0]);
-               native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs_const, depth_stencil_view.get());
+               draw_state_stack.Restore(native_device_context, device_data.uav_max_count);
+               compute_state_stack.Restore(native_device_context, device_data.uav_max_count);
 
                if (device_data.has_drawn_sr)
                {
@@ -981,11 +999,12 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      if (game_device_data.has_drawn_title)
-      {
-         ASSERT_ONCE(game_device_data.found_per_view_globals);
-      }
+      // if (game_device_data.has_drawn_title)
+      //{
+      //    ASSERT_ONCE(game_device_data.found_per_view_globals);
+      // }
 
+      game_device_data.camera_cut = !device_data.taa_detected && !device_data.has_drawn_sr && !device_data.force_reset_sr;
       device_data.has_drawn_main_post_processing = false;
       game_device_data.has_drawn_upscaling = false;
       game_device_data.has_drawn_taa = false;
@@ -996,6 +1015,7 @@ public:
       static std::mt19937 random_generator(std::chrono::system_clock::now().time_since_epoch().count());
       static auto random_range = static_cast<float>((std::mt19937::max)() - (std::mt19937::min)());
       cb_luma_global_settings.GameSettings.custom_random = static_cast<float>(random_generator() + (std::mt19937::min)()) / random_range;
+      cb_luma_global_settings.SRType = static_cast<uint32_t>(device_data.sr_type);
    }
 
    void PrintImGuiAbout() override
@@ -1150,10 +1170,6 @@ public:
       {
          return;
       }
-      if (!game_device_data.has_drawn_title)
-      {
-         return;
-      }
 
       // No need to convert to native DX11 flags
       if (access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write)
@@ -1164,10 +1180,6 @@ public:
          if (buffer_desc.ByteWidth == CBPerViewGlobal_buffer_size)
          {
             device_data.cb_per_view_global_buffer = buffer;
-#if DEVELOPMENT
-            // These are the classic "features" of cbuffer 13 (the one we are looking for), in case any of these were different, it could possibly mean we are looking at the wrong buffer here.
-            ASSERT_ONCE(buffer_desc.Usage == D3D11_USAGE_DYNAMIC && buffer_desc.BindFlags == D3D11_BIND_CONSTANT_BUFFER && buffer_desc.CPUAccessFlags == D3D11_CPU_ACCESS_WRITE && buffer_desc.MiscFlags == 0 && buffer_desc.StructureByteStride == 0);
-#endif // DEVELOPMENT
             ASSERT_ONCE(!device_data.cb_per_view_global_buffer_map_data);
             device_data.cb_per_view_global_buffer_map_data = *data;
          }
@@ -1234,10 +1246,19 @@ public:
             // Extract jitter from constant buffer 1
             projection_jitters.x = float_data[118].x;
             projection_jitters.y = float_data[118].y;
-            if (enabled_custom_exposure != 0.f)
-            {
-               sr_custom_pre_exposure = float_data[128].x * 100.0f; // Just a guess, needs testing
-            }
+
+            Math::Matrix44F projection_matrix;
+            std::memcpy(&projection_matrix, &float_data[24], sizeof(Math::Matrix44F));
+            near_plane = ComputeNearPlane(projection_matrix) / 100.0f; // Game uses cm
+            vert_fov = ComputeFovY(projection_matrix);
+
+            // check valid near plane and fov
+            if (near_plane < 0.01f || near_plane > 100.f)
+               near_plane = 0.1f;
+            if (vert_fov < (10.f * (M_PI / 180.f)) || vert_fov > (170.f * (M_PI / 180.f)))
+               vert_fov = 60.f * (M_PI / 180.f);
+
+            // game_device_data.camera_cut = float_data[140].y != 0.f;
          }
          device_data.cb_per_view_global_buffer_map_data = nullptr;
          device_data.cb_per_view_global_buffer = nullptr;

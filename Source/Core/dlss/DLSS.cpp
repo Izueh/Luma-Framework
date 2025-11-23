@@ -131,6 +131,10 @@ namespace NGX
 			NVSDK_NGX_Parameter_SetUI(runtime_params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, render_preset);
 			NVSDK_NGX_Parameter_SetUI(runtime_params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, render_preset);
 
+#if GAME_FF7_REMAKE
+            NVSDK_NGX_Parameter_SetUI(runtime_params, NVSDK_NGX_EParameter_Hint_UseFireflySwatter, 1);
+#endif
+
 			NVSDK_NGX_DLSS_Create_Params create_params;
 			std::memset(&create_params, 0, sizeof(create_params));
 
