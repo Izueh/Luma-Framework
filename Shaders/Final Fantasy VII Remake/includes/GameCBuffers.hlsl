@@ -17,15 +17,23 @@ namespace CB
 		float custom_sharpness_strength;
 		float custom_hdr_videos;
 		float custom_random;
-	};
+    };
 
-	struct LumaGameData
-	{
+    struct GTAOData
+    {
+        float Near;
+        float Far;
+        float FOV;
+    };
+
+    struct LumaGameData
+    {
         float4 RenderResolution;
         float4 OutputResolution;
 		uint4 ViewportRect;
 		float2 ResolutionScale; //Scale, InvScale
 		uint DrewUpscaling;
+		GTAOData GTAO;
 	};
 }
 

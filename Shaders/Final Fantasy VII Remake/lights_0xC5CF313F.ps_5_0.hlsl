@@ -73,7 +73,8 @@ void main(float4 v0: TEXCOORD0, float4 v1: TEXCOORD3, float4 v2: TEXCOORD5, floa
    r3.xy = (int2)v6.xy;
    r3.xyz = (int3)r3.xyz & int3(63, 63, 63);
    r3.w = 0;
-   r3.xyz = t0.Load(r3.xyzw).xyz;
+   // r3.xyz = t0.Load(r3.xyzw).xyz;
+   r3.xyz = float3(0.5, 0.5, 0.5);
    r4.xy = t2.Sample(s1_s, v0.xy).xy;
    r4.xy = r4.xy * float2(2, 2) + float2(-1, -1);
    r0.w = dot(r4.xy, r4.xy);

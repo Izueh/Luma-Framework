@@ -3,8 +3,9 @@
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
-#define DISABLE_DISPLAY_COMPOSITION 1
-#define HIDE_DISPLAY_MODE 1
+#define ENABLE_SHADER_CACHING 1
+#define DISABLE_DISPLAY_COMPOSITION 0
+#define HIDE_DISPLAY_MODE 0
 #ifdef NDEBUG
 #define ALLOW_SHADERS_DUMPING 1
 #endif
@@ -22,6 +23,18 @@ namespace
    float near_plane = 0.1f;
    std::unique_ptr<float4[]> downsample_buffer_data;
    std::unique_ptr<float4[]> upsample_buffer_data;
+
+   // GTAO Constants
+   constexpr size_t XE_GTAO_DEPTH_MIP_LEVELS = 5;
+   constexpr UINT XE_GTAO_NUMTHREADS_X = 8;
+   constexpr UINT XE_GTAO_NUMTHREADS_Y = 8;
+   float g_xegtao_enable = 1.f;  // Changed from bool to float
+
+   // GTAO Shader Hashes
+   ShaderHashesList shader_hashes_AO_Temporal;
+   ShaderHashesList shader_hashes_AO_Denoise1;
+   ShaderHashesList shader_hashes_AO_Denoise2;
+
    ShaderHashesList shader_hashes_TAA;
    ShaderHashesList shader_hashes_Title;
    ShaderHashesList shader_hashes_MotionVectors;
@@ -35,6 +48,7 @@ namespace
    ShaderHashesList shader_hashes_Velocity_Gather;
    ShaderHashesList shader_hashes_Output_HDR;
    ShaderHashesList shader_hashes_Output_SDR;
+
    const uint32_t CBPerViewGlobal_buffer_size = 4096;
    std::atomic<bool> can_sharpen = true;
    float enabled_dithering_fix = 1.f;
@@ -45,6 +59,15 @@ namespace
       new Luma::Settings::Section{
          .label = "Post Processing",
          .settings = {
+            new Luma::Settings::Setting{
+               .key = "EnableXEGTAO",
+               .binding = &g_xegtao_enable,
+               .type = Luma::Settings::SettingValueType::BOOLEAN,
+               .default_value = 1.f,
+               .can_reset = true,
+               .label = "Enable GTAO",
+               .tooltip = "Enable or disable GTAO ambient occlusion. Default is On."
+            },
             new Luma::Settings::Setting{
                .key = "TonemapType",
                .binding = &cb_luma_global_settings.GameSettings.tonemap_type,
@@ -59,7 +82,8 @@ namespace
                .is_enabled = []()
                { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR && (DEVELOPMENT || TEST); },
                .is_visible = []()
-               { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR && (DEVELOPMENT || TEST); }},
+               { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR && (DEVELOPMENT || TEST); }
+            },
             new Luma::Settings::Setting{
                .key = "FXBloom",
                .binding = &cb_luma_global_settings.GameSettings.custom_bloom,
@@ -84,7 +108,8 @@ namespace
                .min = 0.f,
                .max = 100.f,
                .parse = [](float value)
-               { return value * 0.02f; }},
+               { return value * 0.02f; }
+            },
             new Luma::Settings::Setting{
                .key = "FXFilmGrain",
                .binding = &cb_luma_global_settings.GameSettings.custom_film_grain_strength,
@@ -97,7 +122,8 @@ namespace
                .max = 100.f,
                //.is_visible = []() { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR; },
                .parse = [](float value)
-               { return value * 0.02f; }},
+               { return value * 0.02f; }
+            },
             new Luma::Settings::Setting{
                .key = "FXRCAS",
                .binding = &cb_luma_global_settings.GameSettings.custom_sharpness_strength,
@@ -113,7 +139,8 @@ namespace
                .is_visible = []()
                { return sr_user_type != SR::UserType::None; },
                .parse = [](float value)
-               { return value * 0.01f; }},
+               { return value * 0.01f; }
+            },
             new Luma::Settings::Setting{
                .key = "CustomLUTStrength",
                .binding = &cb_luma_global_settings.GameSettings.custom_lut_strength,
@@ -127,7 +154,8 @@ namespace
                .is_visible = []()
                { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR; },
                .parse = [](float value)
-               { return value * 0.01f; }},
+               { return value * 0.01f; }
+            },
             new Luma::Settings::Setting{
                .key = "FXHDRVideos",
                .binding = &cb_luma_global_settings.GameSettings.custom_hdr_videos,
@@ -199,6 +227,31 @@ struct GameDeviceDataFF7Remake final : public GameDeviceData
    std::unique_ptr<SR::SettingsData> sr_settings_data;
    std::unique_ptr<SR::SuperResolutionImpl::DrawData> sr_draw_data;
 #endif // ENABLE_SR
+
+   // NEW: GTAO Resources
+   com_ptr<ID3D11Texture2D> gtao_working_depth;
+   std::array<com_ptr<ID3D11UnorderedAccessView>, XE_GTAO_DEPTH_MIP_LEVELS> gtao_working_depth_uavs;
+   com_ptr<ID3D11ShaderResourceView> gtao_working_depth_srv;
+   
+   com_ptr<ID3D11Texture2D> gtao_ao_edges;
+   com_ptr<ID3D11UnorderedAccessView> gtao_ao_edges_uav;
+   com_ptr<ID3D11ShaderResourceView> gtao_ao_edges_srv;
+   
+   UINT gtao_width = 0;
+   UINT gtao_height = 0;
+
+   void CleanGTAOResources()
+   {
+      gtao_working_depth = nullptr;
+      for (auto& uav : gtao_working_depth_uavs) uav = nullptr;
+      gtao_working_depth_srv = nullptr;
+      gtao_ao_edges = nullptr;
+      gtao_ao_edges_uav = nullptr;
+      gtao_ao_edges_srv = nullptr;
+      gtao_width = 0;
+      gtao_height = 0;
+   }
+
    // NEW: Bloom History Resources
    com_ptr<ID3D11Texture2D> prev_bloom_texture;
    com_ptr<ID3D11ShaderResourceView> prev_bloom_srv;
@@ -244,6 +297,14 @@ public:
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('1');
 
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", reshade::api::pipeline_subobject_type::pixel_shader});
+
+      // Register GTAO compute shaders - defines come from Settings.hlsl, recompiled when changed
+      native_shaders_definitions.emplace(CompileTimeStringHash("FF7R XeGTAO Prefilter Depths"), 
+         ShaderDefinition("Luma_FF7R_XeGTAO_impl", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs"));
+      native_shaders_definitions.emplace(CompileTimeStringHash("FF7R XeGTAO Main Pass"), 
+         ShaderDefinition("Luma_FF7R_XeGTAO_impl", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs"));
+      native_shaders_definitions.emplace(CompileTimeStringHash("FF7R XeGTAO Denoise Pass"), 
+         ShaderDefinition("Luma_FF7R_XeGTAO_impl", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs"));
 
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12;
@@ -598,6 +659,340 @@ public:
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
+
+      // ============================================================================
+      // GTAO Implementation
+      // ============================================================================
+      bool gtao_enabled = g_xegtao_enable != 0.f;
+      // Replace the temporal AO pass with GTAO compute shaders
+      if (gtao_enabled && original_shader_hashes.Contains(shader_hashes_AO_Temporal))
+      {
+         // Check if compute shaders are available
+         auto it_prefilter = device_data.native_compute_shaders.find(CompileTimeStringHash("FF7R XeGTAO Prefilter Depths"));
+         auto it_main = device_data.native_compute_shaders.find(CompileTimeStringHash("FF7R XeGTAO Main Pass"));
+         
+         if (it_prefilter == device_data.native_compute_shaders.end() || 
+             it_main == device_data.native_compute_shaders.end() ||
+             !it_prefilter->second || !it_main->second)
+         {
+            return DrawOrDispatchOverrideType::None;
+         }
+
+         // Get the original SRVs bound to the pixel shader
+         com_ptr<ID3D11ShaderResourceView> ps_srvs[6];
+         native_device_context->PSGetShaderResources(0, 6, &ps_srvs[0]);
+         
+         // t1 = Normals, t2 = Depth (based on original shader resource layout)
+         com_ptr<ID3D11ShaderResourceView> srv_normals = ps_srvs[1];
+         com_ptr<ID3D11ShaderResourceView> srv_depth = ps_srvs[2];
+         
+         if (!srv_depth || !srv_normals)
+         {
+            return DrawOrDispatchOverrideType::None;
+         }
+
+         // Get render target to determine resolution and for debug output
+         com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+         com_ptr<ID3D11DepthStencilView> dsv;
+         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+         
+         if (!rtvs[0])
+         {
+            return DrawOrDispatchOverrideType::None;
+         }
+         
+         com_ptr<ID3D11Resource> rtv_resource;
+         rtvs[0]->GetResource(&rtv_resource);
+         com_ptr<ID3D11Texture2D> rtv_texture;
+         rtv_resource->QueryInterface(&rtv_texture);
+         
+         D3D11_TEXTURE2D_DESC rtv_desc;
+         rtv_texture->GetDesc(&rtv_desc);
+         
+         // Use render resolution when DRS is active, otherwise use texture size
+         UINT width = static_cast<UINT>(device_data.render_resolution.x);
+         UINT height = static_cast<UINT>(device_data.render_resolution.y);
+         
+         if (width == 0 || height == 0)
+         {
+            width = rtv_desc.Width;
+            height = rtv_desc.Height;
+         }
+         
+         // Create GTAO resources if needed
+         if (!CreateGTAOResources(native_device, game_device_data, width, height))
+         {
+            return DrawOrDispatchOverrideType::None;
+         }
+
+         // Get sampler (should be point sampler)
+         com_ptr<ID3D11SamplerState> ps_samplers[1];
+         native_device_context->PSGetSamplers(0, 1, &ps_samplers[0]);
+
+         // Get constant buffers that the shader needs
+         com_ptr<ID3D11Buffer> ps_cbs[2];
+         native_device_context->PSGetConstantBuffers(0, 2, &ps_cbs[0]);
+
+         // Set Luma constant buffers before caching state (like UE4 does)
+         if (!updated_cbuffers)
+         {
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData);
+            updated_cbuffers = true;
+         }
+
+         // Cache pipeline state
+         DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
+         DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
+         draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
+         compute_state_stack.Cache(native_device_context, device_data.uav_max_count);
+
+         // Unbind RTVs since we're doing compute
+         ID3D11RenderTargetView* null_rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+         native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, null_rtvs, nullptr);
+
+         // ========================================
+         // Pass 1: Prefilter Depths (16x16 blocks)
+         // ========================================
+         {
+            native_device_context->CSSetShader(it_prefilter->second.get(), nullptr, 0);
+            
+            // Bind depth as SRV (t0)
+            ID3D11ShaderResourceView* srvs[] = { srv_depth.get() };
+            native_device_context->CSSetShaderResources(0, 1, srvs);
+            
+            // Bind working depth UAVs (u0-u4)
+            ID3D11UnorderedAccessView* uavs[XE_GTAO_DEPTH_MIP_LEVELS];
+            for (UINT i = 0; i < XE_GTAO_DEPTH_MIP_LEVELS; ++i)
+               uavs[i] = game_device_data.gtao_working_depth_uavs[i].get();
+            native_device_context->CSSetUnorderedAccessViews(0, XE_GTAO_DEPTH_MIP_LEVELS, uavs, nullptr);
+            
+            // Set sampler
+            ID3D11SamplerState* samplers[] = { ps_samplers[0].get() };
+            native_device_context->CSSetSamplers(0, 1, samplers);
+            
+            // Set constant buffers (cb0, cb1 for depth linearization)
+            ID3D11Buffer* cbs[] = { ps_cbs[0].get(), ps_cbs[1].get() };
+            native_device_context->CSSetConstantBuffers(0, 2, cbs);
+            
+            // Dispatch: each thread processes 2x2, 8x8 threads per group = 16x16 pixels per group
+            UINT dispatch_x = (width + 15) / 16;
+            UINT dispatch_y = (height + 15) / 16;
+            native_device_context->Dispatch(dispatch_x, dispatch_y, 1);
+         }
+
+         // Unbind prefilter UAVs before main pass (resource hazard)
+         {
+            ID3D11UnorderedAccessView* null_uavs[XE_GTAO_DEPTH_MIP_LEVELS] = {};
+            native_device_context->CSSetUnorderedAccessViews(0, XE_GTAO_DEPTH_MIP_LEVELS, null_uavs, nullptr);
+         }
+
+         // ========================================
+         // Pass 2: Main GTAO Pass
+         // ========================================
+         {
+            native_device_context->CSSetShader(it_main->second.get(), nullptr, 0);
+            
+            // Bind working depth SRV (t0) and normals SRV (t1)
+            ID3D11ShaderResourceView* srvs[] = { game_device_data.gtao_working_depth_srv.get(), srv_normals.get() };
+            native_device_context->CSSetShaderResources(0, 2, srvs);
+            
+            // Bind AO+edges UAV (u0)
+            ID3D11UnorderedAccessView* uavs[] = { game_device_data.gtao_ao_edges_uav.get() };
+            native_device_context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+            
+            // Dispatch: 8x8 threads per group, 1 pixel per thread
+            UINT dispatch_x = (width + XE_GTAO_NUMTHREADS_X - 1) / XE_GTAO_NUMTHREADS_X;
+            UINT dispatch_y = (height + XE_GTAO_NUMTHREADS_Y - 1) / XE_GTAO_NUMTHREADS_Y;
+            native_device_context->Dispatch(dispatch_x, dispatch_y, 1);
+         }
+
+         // Unbind main pass UAV before restore
+         {
+            ID3D11UnorderedAccessView* null_uavs[] = { nullptr };
+            native_device_context->CSSetUnorderedAccessViews(0, 1, null_uavs, nullptr);
+         }
+
+         // Restore state - this handles all unbinding automatically
+         draw_state_stack.Restore(native_device_context, device_data.uav_max_count);
+         compute_state_stack.Restore(native_device_context, device_data.uav_max_count);
+         
+#if DEVELOPMENT
+         const std::shared_lock lock_trace(s_mutex_trace);
+         if (trace_running)
+         {
+            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+            TraceDrawCallData trace_draw_call_data;
+            trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+            trace_draw_call_data.command_list = native_device_context;
+            trace_draw_call_data.custom_name = "GTAO Prefilter + Main Pass";
+            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
+         }
+#endif
+
+         return DrawOrDispatchOverrideType::Replaced;
+      }
+
+      // Skip first denoiser pass when GTAO is enabled
+      if (gtao_enabled && original_shader_hashes.Contains(shader_hashes_AO_Denoise1))
+      {
+         return DrawOrDispatchOverrideType::Skip;
+      }
+
+      // Replace second (final) denoiser pass with GTAO denoise
+      if (gtao_enabled && original_shader_hashes.Contains(shader_hashes_AO_Denoise2))
+      {
+         if (!game_device_data.gtao_ao_edges_srv)
+         {
+            return DrawOrDispatchOverrideType::None;
+         }
+
+         auto it_denoise = device_data.native_compute_shaders.find(CompileTimeStringHash("FF7R XeGTAO Denoise Pass"));
+         
+         if (it_denoise == device_data.native_compute_shaders.end() || !it_denoise->second)
+         {
+            return DrawOrDispatchOverrideType::None;
+         }
+
+         // Get the original render target
+         com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+         com_ptr<ID3D11DepthStencilView> dsv;
+         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+         
+         if (!rtvs[0])
+         {
+            return DrawOrDispatchOverrideType::None;
+         }
+
+         com_ptr<ID3D11Resource> rtv_resource;
+         rtvs[0]->GetResource(&rtv_resource);
+         com_ptr<ID3D11Texture2D> rtv_texture;
+         rtv_resource->QueryInterface(&rtv_texture);
+         
+         D3D11_TEXTURE2D_DESC rtv_desc;
+         rtv_texture->GetDesc(&rtv_desc);
+
+         // Use render resolution when DRS is active
+         UINT width = static_cast<UINT>(device_data.render_resolution.x);
+         UINT height = static_cast<UINT>(device_data.render_resolution.y);
+         
+         if (width == 0 || height == 0)
+         {
+            width = rtv_desc.Width;
+            height = rtv_desc.Height;
+         }
+
+         // Get sampler
+         com_ptr<ID3D11SamplerState> ps_samplers[1];
+         native_device_context->PSGetSamplers(0, 1, &ps_samplers[0]);
+
+         // Check if the original render target supports UAV
+         bool rtv_supports_uav = (rtv_desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0;
+         
+         com_ptr<ID3D11Texture2D> output_texture;
+         com_ptr<ID3D11UnorderedAccessView> output_uav;
+         bool need_copy = false;
+
+         if (rtv_supports_uav)
+         {
+            output_texture = rtv_texture;
+            
+            D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+            uav_desc.Format = rtv_desc.Format;
+            uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+            uav_desc.Texture2D.MipSlice = 0;
+            
+            HRESULT hr = native_device->CreateUnorderedAccessView(output_texture.get(), &uav_desc, &output_uav);
+            if (FAILED(hr))
+            {
+               return DrawOrDispatchOverrideType::None;
+            }
+         }
+         else
+         {
+            D3D11_TEXTURE2D_DESC temp_desc = rtv_desc;
+            temp_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+            
+            HRESULT hr = native_device->CreateTexture2D(&temp_desc, nullptr, &output_texture);
+            if (FAILED(hr))
+            {
+               return DrawOrDispatchOverrideType::None;
+            }
+            
+            hr = native_device->CreateUnorderedAccessView(output_texture.get(), nullptr, &output_uav);
+            if (FAILED(hr))
+            {
+               return DrawOrDispatchOverrideType::None;
+            }
+            
+            need_copy = true;
+         }
+
+         // Set Luma constant buffers
+         if (!updated_cbuffers)
+         {
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData);
+            updated_cbuffers = true;
+         }
+
+         // Cache state
+         DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
+         DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
+         draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
+         compute_state_stack.Cache(native_device_context, device_data.uav_max_count);
+
+         // Unbind RTVs
+         ID3D11RenderTargetView* null_rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+         native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, null_rtvs, nullptr);
+
+         // Run denoise compute shader
+         native_device_context->CSSetShader(it_denoise->second.get(), nullptr, 0);
+         
+         ID3D11ShaderResourceView* srvs[] = { game_device_data.gtao_ao_edges_srv.get() };
+         native_device_context->CSSetShaderResources(0, 1, srvs);
+         
+         ID3D11UnorderedAccessView* uavs[] = { output_uav.get() };
+         native_device_context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+         
+         ID3D11SamplerState* samplers[] = { ps_samplers[0].get() };
+         native_device_context->CSSetSamplers(0, 1, samplers);
+         
+         // Dispatch: 8x8 threads, each thread processes 2 horizontal pixels (when not in debug mode)
+         // In debug mode, each thread processes 1 pixel
+         UINT dispatch_x = (width + XE_GTAO_NUMTHREADS_X - 1) / XE_GTAO_NUMTHREADS_X;
+         UINT dispatch_y = (height + XE_GTAO_NUMTHREADS_Y - 1) / XE_GTAO_NUMTHREADS_Y;
+         native_device_context->Dispatch(dispatch_x, dispatch_y, 1);
+
+         // Restore state
+         draw_state_stack.Restore(native_device_context, device_data.uav_max_count);
+         compute_state_stack.Restore(native_device_context, device_data.uav_max_count);
+         
+         // Copy result back if needed
+         if (need_copy)
+         {
+            native_device_context->CopyResource(rtv_texture.get(), output_texture.get());
+         }
+
+#if DEVELOPMENT
+         const std::shared_lock lock_trace(s_mutex_trace);
+         if (trace_running)
+         {
+            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+            TraceDrawCallData trace_draw_call_data;
+            trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+            trace_draw_call_data.command_list = native_device_context;
+            trace_draw_call_data.custom_name = "GTAO Denoise Pass";
+            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
+         }
+#endif
+
+         return DrawOrDispatchOverrideType::Replaced;
+      }
+
+      // ============================================================================
+      // END GTAO Implementation
+      // ============================================================================
 
       // Nothing more to do after tonemapping
       if (device_data.has_drawn_main_post_processing)
@@ -999,6 +1394,12 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
+      // NEW: Clean GTAO resources if resolution changed significantly or on cleanup
+      if (device_data.render_resolution.x != game_device_data.gtao_width)
+      {
+          game_device_data.CleanGTAOResources();
+      }
+
       // if (game_device_data.has_drawn_title)
       //{
       //    ASSERT_ONCE(game_device_data.found_per_view_globals);
@@ -1107,6 +1508,11 @@ public:
       data.GameData.ResolutionScale = {game_device_data.resolution_scale, 1.0f / game_device_data.resolution_scale};
       data.GameData.DrewUpscaling = device_data.has_drawn_sr ? 1 : 0;
       data.GameData.ViewportRect = game_device_data.viewport_rect;
+      // Populate GTAO Data
+      data.GameData.GTAO.Near = near_plane;
+      data.GameData.GTAO.Far = 10000.0f; // Approximate far plane
+      data.GameData.GTAO.FOV = vert_fov;
+
       can_sharpen = device_data.output_resolution.x == game_device_data.upscaled_render_resolution.x && device_data.output_resolution.y == game_device_data.upscaled_render_resolution.y;
       cb_luma_global_settings.GameSettings.custom_sharpness_strength = can_sharpen ? cb_luma_global_settings.GameSettings.custom_sharpness_strength : 0.0f;
    }
@@ -1260,6 +1666,7 @@ public:
 
             // game_device_data.camera_cut = float_data[140].y != 0.f;
          }
+        
          device_data.cb_per_view_global_buffer_map_data = nullptr;
          device_data.cb_per_view_global_buffer = nullptr;
          UpdateLODBias(device);
@@ -1319,6 +1726,71 @@ public:
    {
       Luma::Settings::DrawSettings();
    }
+
+   static bool CreateGTAOResources(ID3D11Device* native_device, GameDeviceDataFF7Remake& game_device_data, UINT width, UINT height)
+   {
+      if (game_device_data.gtao_width == width && game_device_data.gtao_height == height)
+         return true;
+      
+      game_device_data.CleanGTAOResources();
+      
+      HRESULT hr;
+      
+      D3D11_TEXTURE2D_DESC depth_desc = {};
+      depth_desc.Width = width;
+      depth_desc.Height = height;
+      depth_desc.MipLevels = XE_GTAO_DEPTH_MIP_LEVELS;
+      depth_desc.ArraySize = 1;
+      depth_desc.Format = DXGI_FORMAT_R32_FLOAT;
+      depth_desc.SampleDesc.Count = 1;
+      depth_desc.Usage = D3D11_USAGE_DEFAULT;
+      depth_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+      
+      hr = native_device->CreateTexture2D(&depth_desc, nullptr, &game_device_data.gtao_working_depth);
+      if (FAILED(hr)) return false;
+      
+      D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
+      uav_desc.Format = DXGI_FORMAT_R32_FLOAT;
+      uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
+      for (UINT i = 0; i < XE_GTAO_DEPTH_MIP_LEVELS; ++i)
+      {
+         uav_desc.Texture2D.MipSlice = i;
+         hr = native_device->CreateUnorderedAccessView(game_device_data.gtao_working_depth.get(), &uav_desc, &game_device_data.gtao_working_depth_uavs[i]);
+         if (FAILED(hr)) return false;
+      }
+      
+      D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+      srv_desc.Format = DXGI_FORMAT_R32_FLOAT;
+      srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+      srv_desc.Texture2D.MostDetailedMip = 0;
+      srv_desc.Texture2D.MipLevels = XE_GTAO_DEPTH_MIP_LEVELS;
+      hr = native_device->CreateShaderResourceView(game_device_data.gtao_working_depth.get(), &srv_desc, &game_device_data.gtao_working_depth_srv);
+      if (FAILED(hr)) return false;
+      
+      D3D11_TEXTURE2D_DESC ao_desc = {};
+      ao_desc.Width = width;
+      ao_desc.Height = height;
+      ao_desc.MipLevels = 1;
+      ao_desc.ArraySize = 1;
+      ao_desc.Format = DXGI_FORMAT_R8G8_UNORM;
+      ao_desc.SampleDesc.Count = 1;
+      ao_desc.Usage = D3D11_USAGE_DEFAULT;
+      ao_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
+      
+      hr = native_device->CreateTexture2D(&ao_desc, nullptr, &game_device_data.gtao_ao_edges);
+      if (FAILED(hr)) return false;
+      
+      hr = native_device->CreateUnorderedAccessView(game_device_data.gtao_ao_edges.get(), nullptr, &game_device_data.gtao_ao_edges_uav);
+      if (FAILED(hr)) return false;
+      
+      hr = native_device->CreateShaderResourceView(game_device_data.gtao_ao_edges.get(), nullptr, &game_device_data.gtao_ao_edges_srv);
+      if (FAILED(hr)) return false;
+      
+      game_device_data.gtao_width = width;
+      game_device_data.gtao_height = height;
+      
+      return true;
+   }
 };
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
 {
@@ -1338,6 +1810,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_Tonemap.pixel_shaders.emplace(std::stoul("F68D39B5", nullptr, 16));
       shader_hashes_Velocity_Flatten.compute_shaders.emplace(std::stoul("4EB2EA5B", nullptr, 16));
       shader_hashes_Velocity_Gather.compute_shaders.emplace(std::stoul("FEE03685", nullptr, 16));
+      shader_hashes_AO_Temporal.pixel_shaders.emplace(std::stoul("04BFE575", nullptr, 16));
+      shader_hashes_AO_Denoise1.pixel_shaders.emplace(std::stoul("8BD60486", nullptr, 16));
+      shader_hashes_AO_Denoise2.pixel_shaders.emplace(std::stoul("E6A8D4FB", nullptr, 16));
+
+      std::vector<ShaderDefineData> game_shader_defines_data = {
+         // GTAO defines
+         {"SSAO_TYPE", '1', true, false, "Screen Space Ambient Occlusion\n0 - Vanilla (UE4 SSDO)\n1 - Luma GTAO\nGTAO provides better quality ambient occlusion"},
+         {"XE_GTAO_QUALITY", '2', true, false, "GTAO Quality Level\n0 - Low\n1 - Medium\n2 - High (default)\n3 - Very High\n4 - Ultra\nHigher values use more samples for better quality but lower performance"},
+         {"XE_GTAO_DEBUG_OUTPUT", '1', true, false, "GTAO Debug Output\n0 - Normal denoise output\n1 - Debug raw AO visualization\nUseful for debugging GTAO output"},
+      };
+      shader_defines_data.append_range(game_shader_defines_data);
 
 #if DEVELOPMENT
       // These make things messy in this game, given it renders at lower resolutions and then upscales and adds black bars beyond 16:9
@@ -1357,6 +1840,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(std::stoul("F68D39B5", nullptr, 16), "Upscale and Tonemap");
       forced_shader_names.emplace(std::stoul("4EB2EA5B", nullptr, 16), "Velocity Flatten");
       forced_shader_names.emplace(std::stoul("FEE03685", nullptr, 16), "Velocity Gather");
+      forced_shader_names.emplace(std::stoul("1D610CBA", nullptr, 16), "Ambient Occlusion");
+      forced_shader_names.emplace(std::stoul("04BFE575", nullptr, 16), "Ambient Occlusion Temporal (GTAO Replaced)");
+      forced_shader_names.emplace(std::stoul("8BD60486", nullptr, 16), "Ambient Occlusion Denoise 1 (Skipped for GTAO)");
+      forced_shader_names.emplace(std::stoul("E6A8D4FB", nullptr, 16), "Ambient Occlusion Denoise 2 (GTAO Denoise)");
 #endif
 
 #if !DEVELOPMENT
