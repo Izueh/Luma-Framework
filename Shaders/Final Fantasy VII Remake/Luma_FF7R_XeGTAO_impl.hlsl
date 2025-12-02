@@ -1,6 +1,4 @@
 // XeGTAO implementation for Final Fantasy VII Remake
-//
-// Based on the Bioshock Infinite implementation and UE4 GTAO optimizations
 // For the reference see: https://github.com/GameTechDev/XeGTAO
 
 // Game Constant Buffers - needed for depth linearization and normal transformation
@@ -9,14 +7,6 @@ cbuffer cb0 : register(b0) { float4 cb0_data[21]; }
 
 // Luma Constant Buffers
 #include "Includes/Common.hlsl"
-
-// ------------------------------------------------------------------------------------------------
-// XeGTAO Configuration based on quality setting from Settings.hlsl
-// ------------------------------------------------------------------------------------------------
-
-// XeGTAO SLICE_COUNT vs UE4 NumAngles:
-// - XeGTAO samples bilaterally (+/- omega), so effective directions = SLICE_COUNT * 2
-// - Higher SLICE_COUNT = better angular coverage, fewer artifacts in corners
 
 #if XE_GTAO_QUALITY == 0 // Low - 6 effective directions, 2 radial samples
     #define SLICE_COUNT 3.0
@@ -59,42 +49,17 @@ void ComputeCameraParams()
 #define NDC_TO_VIEW_MUL float2(g_TanHalfFovX * 2.0, g_TanHalfFovY * -2.0)
 #define NDC_TO_VIEW_ADD float2(-g_TanHalfFovX, g_TanHalfFovY)
 
-// ------------------------------------------------------------------------------------------------
-// Effect Parameters - Read from game's cb0
-// ------------------------------------------------------------------------------------------------
-
 // Effect radius: cb0[18].w * 500 is world-space radius
-#define EFFECT_RADIUS (cb0_data[18].w * 500.0)
-#define RADIUS_MULTIPLIER 1.0
+#define EFFECT_RADIUS (cb0_data[18].w)
+#define RADIUS_MULTIPLIER 500.0
 
 // Thin occluder compensation from game: cb0[18].z
-#define THIN_OCCLUDER_COMPENSATION (2.0f)
+#define THIN_OCCLUDER_COMPENSATION (cb0_data[18].z)
 
-// Minimum radius scale: cb0[3].z / cb0[20].x * sqrt(2)
-#define MIN_RADIUS_SCALE (cb0_data[3].z * rcp(cb0_data[20].x) * 1.41421354)
-
-// Game uses hardcoded falloff values:
-// - Falloff start: 500 units, range: 100 units (1/0.01)
-// - This means falloff starts at 500/effectRadius of the radius
-// For XeGTAO, we express as fraction: falloff starts at (1 - EFFECT_FALLOFF_RANGE)
-// Game: starts at 500, ends at 600 for a 600-unit radius = starts at 83%
-// We'll use 0.5 as a reasonable default since game's is fixed
-#define EFFECT_FALLOFF_RANGE (saturate(100.0f / max(EFFECT_RADIUS, 1.0f)))
-
-// Maximum screen-space radius in pixels (prevents artifacts on close surfaces)
-#define XE_GTAO_MAX_PIXEL_RADIUS 256.0
-
-// Sample distribution power (2.0 = quadratic, concentrates samples near center)
-#define SAMPLE_DISTRIBUTION_POWER 3.0
+#define EFFECT_FALLOFF_RANGE 0.5
 
 // Final visibility power adjustment
 #define FINAL_VALUE_POWER 1.0
-
-// Denoise blur strength
-#define DENOISE_BLUR_BETA 1.2
-
-// Depth MIP sampling offset
-#define DEPTH_MIP_SAMPLING_OFFSET 3.3
 
 // ------------------------------------------------------------------------------------------------
 // Depth Handling
@@ -109,6 +74,20 @@ float XeGTAO_ScreenSpaceToViewSpaceDepth(float screenDepth)
     z2 = rcp(z2);
     return z1 + z2;
 }
+
+// float XeGTAO_ScreenSpaceToViewSpaceDepth(const float screenDepth)
+// {
+//     float depthLinearizeMul = CAMERA_CLIP_FAR * CAMERA_CLIP_NEAR / (CAMERA_CLIP_FAR - CAMERA_CLIP_NEAR);
+//     float depthLinearizeAdd = CAMERA_CLIP_FAR / (CAMERA_CLIP_FAR - CAMERA_CLIP_NEAR);
+
+//     // correct the handedness issue. need to make sure this below is correct, but I think it is.
+//     if (depthLinearizeMul * depthLinearizeAdd < 0.0) {
+//         depthLinearizeAdd = -depthLinearizeAdd;
+//     }
+
+//     // Optimised version of "-cameraClipNear / (cameraClipFar - projDepth * (cameraClipFar - cameraClipNear)) * cameraClipFar"
+//     return depthLinearizeMul / (depthLinearizeAdd - screenDepth);
+// }
 
 // ------------------------------------------------------------------------------------------------
 // World-to-View Matrix for Normal Transformation

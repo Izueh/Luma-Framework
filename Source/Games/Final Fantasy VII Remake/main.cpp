@@ -3,7 +3,6 @@
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
-#define ENABLE_SHADER_CACHING 1
 #define DISABLE_DISPLAY_COMPOSITION 0
 #define HIDE_DISPLAY_MODE 0
 #ifdef NDEBUG
@@ -28,7 +27,7 @@ namespace
    constexpr size_t XE_GTAO_DEPTH_MIP_LEVELS = 5;
    constexpr UINT XE_GTAO_NUMTHREADS_X = 8;
    constexpr UINT XE_GTAO_NUMTHREADS_Y = 8;
-   float g_xegtao_enable = 1.f;  // Changed from bool to float
+   float g_xegtao_enable = 0.f;  // Changed from bool to float
 
    // GTAO Shader Hashes
    ShaderHashesList shader_hashes_AO_Temporal;
@@ -63,10 +62,10 @@ namespace
                .key = "EnableXEGTAO",
                .binding = &g_xegtao_enable,
                .type = Luma::Settings::SettingValueType::BOOLEAN,
-               .default_value = 1.f,
+               .default_value = 0.f,
                .can_reset = true,
                .label = "Enable GTAO",
-               .tooltip = "Enable or disable GTAO ambient occlusion. Default is On."
+               .tooltip = "Enable or disable GTAO ambient occlusion (Experimental). Default is Off."
             },
             new Luma::Settings::Setting{
                .key = "TonemapType",

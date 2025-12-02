@@ -216,8 +216,6 @@ namespace
    std::recursive_mutex s_mutex_dumping;
    // For "custom_shaders_cache", "pipelines_to_reload". In general for loading shaders from disk and compiling them
    recursive_shared_mutex s_mutex_loading;
-   // Mutex for shader cache loading/saving ("compiled_shaders_cache")
-   std::shared_mutex s_mutex_compiled_shaders_cache;
    // Mutex for created shader DX objects (and "created_native_shaders")
    std::shared_mutex s_mutex_shader_objects;
    // Mutex for shader defines ("shader_defines_data", "code_shaders_defines", "shader_defines_data_index")
@@ -540,7 +538,6 @@ namespace
    // The data it contains is fully its own, so it's not by "Device". These are "immutable" once set.
    // Might be empty in some build configurations.
    std::unordered_map<uint32_t, CachedShader*> shader_cache;
-   std::unordered_map<uint32_t, void*> compiled_shaders_cache;
    // All the shaders the user has (and has had) as custom in the shader folders (whether they are game specific or Luma global/native shaders). By the original shader binary hash (unless they are Luma native shaders, in that case it'd be their custom hash).
    // The data it contains is fully its own, so it's not by "Device".
    // The hash here is 64 bit instead of 32 to leave extra room for Luma native shaders, that have customly generated hashes (to not mix with the game ones).
@@ -2970,13 +2967,12 @@ namespace
    }
 
 #pragma optimize("t", on) // Temporarily override optimization, this function is too slow in debug otherwise (comment this out if ever needed)
-#if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS || ENABLE_SHADER_CACHING
+#if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
    bool OnCreatePipeline(
       reshade::api::device* device,
       reshade::api::pipeline_layout layout,
       uint32_t subobject_count,
-      const reshade::api::pipeline_subobject* subobjects,
-      void*& replace_ptr)
+      const reshade::api::pipeline_subobject* subobjects)
    {
       SKIP_UNSUPPORTED_DEVICE_API(device->get_api(), false);
 
@@ -3125,7 +3121,7 @@ namespace
                      case reshade::api::pipeline_subobject_type::pixel_shader: { reshade_program_type = DXBCProgramType::PixelShader; break; }
                      }
                      ASSERT_ONCE(reshade_program_type == chunk_byte_code->program_type); // We should probably stop in this case
-#if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
+
                      uint32_t prev_size = 8;
                      uint32_t byte_code_size = (chunk_byte_code->chunk_size_dword * sizeof(uint32_t)) - prev_size; // The size is stored in "DWORD" elements and counted the size and program version/type in its count, so we remove them
 #if DEVELOPMENT
@@ -3191,10 +3187,9 @@ namespace
 
                         needs_new_md5_hash = true;
                      }
-#endif
                   }
                }
-#if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
+
                if (current_shader_data.code != original_shader_desc->code)
                {
                   ASSERT_ONCE_MSG((subobject_count == 1 || subobject_count == 2) && subobject.count == 1 && !last_live_patched_original_shader_code, "This behaviour is hardcoded to work with DX9-11, with one object (shader) per pipeline"); // input layouts have two subobjects (input layout and vertex shader)
@@ -3265,21 +3260,7 @@ namespace
                      std::get<2>(modified_shader_byte_code) = *reinterpret_cast<const Hash::MD5::Digest*>(current_shader_data.header->hash);
                   }
                }
-#endif
 
-#if ENABLE_SHADER_CACHING
-               // Check if shader has been compiled before and return cached version
-               // Otherwise compile and store in cache
-               // Return replace ptr to ReShade so it uses that instead
-               {
-                  std::shared_lock lock_device(s_mutex_compiled_shaders_cache);
-                  auto it = compiled_shaders_cache.find(shader_luma_hash);
-                  if (it != compiled_shaders_cache.end())
-                  {
-                     replace_ptr = it->second;
-                  }
-               }
-#endif
                break;
             }
             }
@@ -3438,17 +3419,7 @@ namespace
                // TODO: when out of "DEVELOPMENT" or "TEST" builds, we could early out before cloning the pipeline based on whether "custom_shaders_cache.contains(shader_hash)" is true. That'd avoid some stutters on shader loading. Note that below we might modify even shaders that we don't replace so consider that too.
                // TODO: use the native DX hash stored at the beginning of shaders binaries? It might not always be reliable though. It's too late anyway now, all of our hashes are in content.
                uint32_t shader_hash = (precalculated_shader_hash != -1) ? uint32_t(precalculated_shader_hash) : Shader::BinToHash(static_cast<const uint8_t*>(original_shader_desc->code), original_shader_desc->code_size);
-#if ENABLE_SHADER_CACHING
-               {
-                   std::unique_lock lock(s_mutex_compiled_shaders_cache);
-                   // If this shader isn't in the cache yet, store it now.
-                   if (pipeline.handle != 0 && compiled_shaders_cache.find(shader_hash) == compiled_shaders_cache.end())
-                   {
-                       // Store the raw pointer
-                       compiled_shaders_cache[shader_hash] = (void*)pipeline.handle;
-                   }
-               }
-#endif // ENABLE_SHADER_CACHING
+
 #if ALLOW_SHADERS_DUMPING || DEVELOPMENT
                {
                   const std::unique_lock lock_dumping(s_mutex_dumping); // Note: this isn't optimized, we should only lock it white reading/writing the dump data, not disassembling (?)
