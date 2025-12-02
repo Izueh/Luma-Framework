@@ -6,6 +6,8 @@
 #define DEVELOPMENT 1
 #endif // DEVELOPMENT
 
+#define CHECK_GRAPHICS_API_COMPATIBILITY 1
+
 #include "..\Core\core.hpp"
 
 struct GraphicsAnalyzerDeviceData final : public GameDeviceData

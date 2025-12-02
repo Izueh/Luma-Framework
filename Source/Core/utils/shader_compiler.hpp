@@ -742,7 +742,7 @@ namespace Shader
          // /Ges Not implemented:
          // if(flags1 & D3DCOMPILE_ENABLE_STRICTNESS) arguments.push_back(L"/Ges");
          if ((flags1 & D3DCOMPILE_IEEE_STRICTNESS) != 0) arguments.push_back(L"/Gis");
-         if ((flags1 & D3DCOMPILE_OPTIMIZATION_LEVEL2) != 0)
+         if ((flags1 & D3DCOMPILE_OPTIMIZATION_LEVEL2) != 0) // Same as "D3DCOMPILE_OPTIMIZATION_LEVEL0|D3DCOMPILE_OPTIMIZATION_LEVEL3"
          {
             switch (flags1 & D3DCOMPILE_OPTIMIZATION_LEVEL2)
             {

@@ -14,7 +14,7 @@ std::optional<std::string> GetD3DName(ID3D11DeviceChild* obj)
    return std::nullopt;
 }
 
-// Searcg fir wide string debug names as well, with normal string fallback. Both are converted back to non wide string.
+// Search for wide string debug names as well, with normal string fallback. Both are converted back to non wide string.
 std::optional<std::string> GetD3DNameW(ID3D11DeviceChild* obj)
 {
    if (obj == nullptr) return std::nullopt;

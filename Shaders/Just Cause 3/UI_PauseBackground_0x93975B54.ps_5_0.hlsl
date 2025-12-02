@@ -1,3 +1,5 @@
+#include "Includes/Common.hlsl"
+
 cbuffer cbConstants : register(b1)
 {
   float4 Constants : packoffset(c0);
@@ -14,4 +16,8 @@ void main(
   float4 r0;
   r0.xy = Constants.xy + v1.xy;
   o0.xyzw = Texture0.Sample(Texture0_s, r0.xy).xyzw;
+  
+#if 1 // Luma: fix gamma not matching on UI due to Vanilla swapping between sRGB and non sRGB views (we can't in HDR)
+  o0.xyz = linear_to_sRGB_gamma(o0.xyz, GCT_MIRROR);
+#endif
 }

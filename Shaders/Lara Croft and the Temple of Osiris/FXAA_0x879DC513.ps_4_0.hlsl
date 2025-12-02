@@ -11,6 +11,7 @@ cbuffer cbSSAA : register(b5)
 SamplerState SamplerGenericBilinearClamp_s : register(s13);
 Texture2D<float4> colorBuffer : register(t0);
 
+// TODO: 0x8D82CD42, 0x41D3CF49 and 0xD3440029 use a more approximate FXAA implementation that does improper luminance calculations, though they don't seem to be used?
 void main(
   float4 v0 : SV_POSITION0,
   float2 v1 : TEXCOORD0,

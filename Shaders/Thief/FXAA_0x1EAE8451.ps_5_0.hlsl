@@ -380,7 +380,7 @@ void main(
 	DICESettings settings = DefaultDICESettings();
 	o0.xyz = DICETonemap(o0.xyz * paperWhite, peakWhite, settings) / paperWhite;
 
-#if POST_PROCESS_SPACE_TYPE == 0 // TODO: handle all post process after this one to make it work in gamma space! Also make FXAA mandatory?
+#if POST_PROCESS_SPACE_TYPE == 0 // This is just for testing really, it's not good here as there's a couple optional passes after this (e.g. Vignette), that would need acknowledging of the changed gamma values
   o0.rgb = linear_to_sRGB_gamma(o0.rgb);
 #endif
 }

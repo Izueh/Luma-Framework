@@ -55,6 +55,7 @@ void main(
   r2.xyz = ScreenTexture.SampleLevel(ScreenSampler_s, v2.xy, 0, int2(0, 0)).xyz;
   r3.xyz = ScreenTexture.SampleLevel(ScreenSampler_s, v2.xy, 0, int2(1, 0)).xyz;
   r4.xyz = ScreenTexture.SampleLevel(ScreenSampler_s, v2.xy, 0, int2(0, 1)).xyz;
+  // TODO: fix RG improper luminance calculations
   r0.w = r0.y * 1.9632107 + r0.x;
   r1.w = r1.y * 1.9632107 + r1.x;
   r2.w = r2.y * 1.9632107 + r2.x;

@@ -1,9 +1,9 @@
 #include "../Includes/Common.hlsl"
 
-Texture2D<float4> t3 : register(t3);
-Texture2D<float4> t2 : register(t2);
-Texture2D<float4> t1 : register(t1);
-Texture2D<float4> t0 : register(t0);
+Texture2D<float> t3 : register(t3);
+Texture2D<float> t2 : register(t2);
+Texture2D<float> t1 : register(t1);
+Texture2D<float> t0 : register(t0);
 
 SamplerState s3_s : register(s3);
 SamplerState s2_s : register(s2);

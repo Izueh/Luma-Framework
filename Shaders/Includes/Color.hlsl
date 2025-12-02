@@ -61,6 +61,7 @@ float GetLuminance(float3 color, uint colorSpace = CS_DEFAULT)
 	return dot(color, Rec709_Luminance);
 }
 
+// Sets the luminance of the source on the target
 float3 RestoreLuminance(float3 targetColor, float sourceColorLuminance, bool safe = false, uint colorSpace = CS_DEFAULT)
 {
   float targetColorLuminance = GetLuminance(targetColor, colorSpace);

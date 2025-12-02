@@ -54,8 +54,8 @@ jobs:
     - name: Create ZIP per addon with matching shaders
       id: create_zip
       shell: pwsh
-      # We only build publishing and test for now, development builds can be built locally by devs
-      if: matrix.config == 'Publishing-Release' || matrix.config == 'Test-Release'
+      # We only build publishing and test for now, development builds can be built locally by devs (with the exclusion of the Generic and Graphics Analyzer mod, which can also be used to quickly download a dev/debug environment)
+      if: matrix.config == 'Publishing-Release' || matrix.config == 'Test-Release' || matrix.config == 'Development-Release'
       run: |
       
         # Find the addon file in the build folder (adjust path accordingly)
@@ -107,6 +107,16 @@ jobs:
           # We don't care to publish the template project, it's just there for reference
           if ($projectName -like '_Template' -or $projectName -like 'Template') {
             Write-Host "Project is a template. Skipping ZIP creation and upload."
+            continue
+          }
+          # Allow the Generic and Graphics Analyzer mods to be downloaded directly
+          elseif ("${{ matrix.config }}".StartsWith("Development") -and -not (
+                   $projectName -like '_Generic' -or
+                   $projectName -like 'Generic' -or
+                   $projectName -like '_Generic Mod' -or
+                   $projectName -like 'Generic Mod' -or
+                   $projectName -like 'Graphics Analyzer'
+                 )) {
             continue
           }
 
@@ -226,7 +236,7 @@ jobs:
         }
 
     - name: Upload ZIP
-      if: (matrix.config == 'Publishing-Release' || matrix.config == 'Test-Release') && steps.create_zip.outputs.skip_upload != 'true'
+      if: (matrix.config == 'Publishing-Release' || matrix.config == 'Test-Release' || matrix.config == 'Development-Release') && steps.create_zip.outputs.skip_upload != 'true'
       uses: actions/upload-artifact@v4
       with:
         name: Package-${{ matrix.config }}-${{ matrix.platform }}

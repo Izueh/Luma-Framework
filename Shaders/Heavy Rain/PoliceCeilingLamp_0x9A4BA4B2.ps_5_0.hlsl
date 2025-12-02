@@ -70,5 +70,5 @@ void main(
 
   // Luma
   o0.xyz = max(o0.xyz, 0.0);
-  o0.a = saturate(o0.a);
+  o0.a = saturate(o0.a); // Note: not clamping this on rgb somehow makes bloom stronger, even if the scene source value used to generate bloom stays within SDR range either way
 }

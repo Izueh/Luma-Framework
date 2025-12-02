@@ -49,7 +49,37 @@ namespace ShaderPatching
       D3D11_SB_OPCODE_DCL_GS_INSTANCE_COUNT,
    };
 
-   // TODO: only does 1 channel w at the moment, make generic and evolve into a function to construct any instruction. Same for the other function.
+   // mov_sat on the same register (xyzw by default)
+   std::vector<uint32_t> GetSatInstruction(D3D10_SB_OPERAND_TYPE input_output_type, uint32_t input_output_index, uint32_t mask = (D3D10_SB_OPERAND_4_COMPONENT_MASK_X | D3D10_SB_OPERAND_4_COMPONENT_MASK_Y | D3D10_SB_OPERAND_4_COMPONENT_MASK_Z | D3D10_SB_OPERAND_4_COMPONENT_MASK_W))
+   {
+      uint32_t opcode_token =
+         ENCODE_D3D10_SB_OPCODE_TYPE(D3D10_SB_OPCODE_MOV) |
+         ENCODE_D3D10_SB_TOKENIZED_INSTRUCTION_LENGTH(5) |
+         ENCODE_D3D10_SB_INSTRUCTION_SATURATE(true);
+      // Dest0 operand
+      uint32_t dest_0_operand_token =
+         ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
+         ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_MASK_MODE) |
+         ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(mask) |
+         ENCODE_D3D10_SB_OPERAND_TYPE(input_output_type) |
+         ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
+         ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
+      // Src0 operand
+      uint32_t src_0_operand_token =
+         ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
+         ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_MASK_MODE) |
+         ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(mask) |
+         ENCODE_D3D10_SB_OPERAND_TYPE(input_output_type) |
+         ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
+         ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
+
+      return std::vector<uint32_t>{
+         opcode_token,
+         dest_0_operand_token, input_output_index,
+         src_0_operand_token,  input_output_index};
+   }
+
+   // TODO: only does 1 channel w at the moment, make generic and evolve into a function to construct any instruction. Same for the other function. Does the source operand here work with a mask or just select1? (probably fine, see GetSatInstruction())
    std::vector<uint32_t> GetMovInstruction(D3D10_SB_OPERAND_TYPE output_type, uint32_t output_index, D3D10_SB_OPERAND_TYPE input_type, uint32_t input_index, bool saturate = false)
    {
       uint32_t opcode_token =
@@ -64,7 +94,7 @@ namespace ShaderPatching
          ENCODE_D3D10_SB_OPERAND_TYPE(output_type) |
          ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
          ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
-      // Src0 operand: o0.w (select_1 W)
+      // Src0 operand: r0.w (select_1 W)
       uint32_t src_0_operand_token =
          ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
          ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_SELECT_1_MODE) |

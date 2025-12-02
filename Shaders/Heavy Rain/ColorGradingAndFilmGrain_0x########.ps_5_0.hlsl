@@ -101,6 +101,7 @@ void main(
 #else
   float2 uv = v2.xy;
 #endif
+  bool forceVanillaSDR = ShouldForceSDR(uv);
   float4 sceneColor = texture0.Sample(sampler0_s, uv).rgba;
 #if ALPHA_OUT_TYPE == 2
   o0.w = sceneColor.a * register5.x + register5.y;
@@ -113,7 +114,10 @@ void main(
 #endif
 
 #if COMPOSE_EFFECTS && ENABLE_POST_PROCESS_EFFECTS // Composes different effects
-  sceneColor.rgb += texture2.Sample(sampler2_s, w1.xy).xyz * LumaSettings.GameSettings.BloomAndLensFlareIntensity; // Scale in gamma space
+  if (forceVanillaSDR)
+    sceneColor.rgb += saturate(texture2.Sample(sampler2_s, w1.xy).xyz);
+  else
+    sceneColor.rgb += texture2.Sample(sampler2_s, w1.xy).xyz * LumaSettings.GameSettings.BloomAndLensFlareIntensity; // Scale in gamma space
   sceneColor.rgb += texture3.Sample(Add2Sampler_s, w1.xy).xyz; // Additive screen space effects (e.g. low health overlay)
 #endif // COMPOSE_EFFECTS
 
@@ -123,7 +127,8 @@ void main(
 #if FILM_GRAIN
 #if ENABLE_LUMA // Boost film grain in highlights and remove it from mid tones
   float highlightsScale = 2.5; // > 1 looks good, but makes film grain very strong on highlights
-  grain *= linear_to_gamma1(max(GetLuminance(gamma_to_linear(sceneColor.rgb, GCT_MIRROR) * highlightsScale), 0.0)); // Note: try with a pow on "grain" instead?
+  if (!forceVanillaSDR)
+    grain *= linear_to_gamma1(max(GetLuminance(gamma_to_linear(sceneColor.rgb, GCT_MIRROR) * highlightsScale), 0.0)); // Note: try with a pow on "grain" instead?
 #endif // ENABLE_LUMA
   const float4 postProcessedColor = float4(sceneColor.rgb + grain * register4.z, 1.0);
 #else
@@ -152,6 +157,7 @@ void main(
   filter.z = register0._m22;
   filter.w = register0._m23;
   gradedSceneColor.b = dot(postProcessedColor, filter.xyzw);
+  // TODO: in a couple scenes, highlights on skin turn green/red/purple, for example in the first shrink section, or when Ethan first has an Origami blackout (in front of Shaun's room), it's likely these values would have clipped to white in SDR
 #endif // ENABLE_COLOR_GRADING
 
 #if COLOR_GRADING && ENABLE_COLOR_GRADING // Highlights boost and shadow tint
@@ -169,23 +175,31 @@ void main(
   // This will generate colors beyond Rec.709 in the shadow
 #if ENABLE_LUMA
 
+  if (forceVanillaSDR)
+  {
+    gradedSceneColor.rgb = saturate(gradedSceneColor.rgb);
+    gradedSceneColor.rgb = 1.0 - (shadowTint.rgb * (1.0 - gradedSceneColor.rgb));
+  }
+  else
+  {
 #if 0
-  // Compress back to 1 to apply the filter. This will desaturate highlights a lot more, but also, better boost highlights that were already > 1
-  float maxGradedSceneColor = max(max3(gradedSceneColor.rgb), 1.0);
-  gradedSceneColor.rgb /= maxGradedSceneColor;
-  gradedSceneColor.rgb = (gradedSceneColor.rgb > 0.0) ? (1.0 - (shadowTint.rgb * (1.0 - gradedSceneColor.rgb))) : gradedSceneColor.rgb;
-  gradedSceneColor.rgb *= maxGradedSceneColor;
+    // Compress back to 1 to apply the filter. This will desaturate highlights a lot more, but also, better boost highlights that were already > 1
+    float maxGradedSceneColor = max(max3(gradedSceneColor.rgb), 1.0);
+    gradedSceneColor.rgb /= maxGradedSceneColor;
+    gradedSceneColor.rgb = (gradedSceneColor.rgb > 0.0) ? (1.0 - (shadowTint.rgb * (1.0 - gradedSceneColor.rgb))) : gradedSceneColor.rgb;
+    gradedSceneColor.rgb *= maxGradedSceneColor;
 #elif 1
-  // If our source color went beyond 0-1 (either because of the filter above (unlikely), or because of prior wide gamut rendering or image modulation), emulate the filter at the closest 0 or 1 edge after the edge too
-  float3 clippedGradedSceneColor = 1.0 - (shadowTint.rgb * (1.0 - saturate(gradedSceneColor.rgb)));
-  gradedSceneColor.rgb += clippedGradedSceneColor - saturate(gradedSceneColor.rgb);
+    // If our source color went beyond 0-1 (either because of the filter above (unlikely), or because of prior wide gamut rendering or image modulation), emulate the filter at the closest 0 or 1 edge after the edge too
+    float3 clippedGradedSceneColor = 1.0 - (shadowTint.rgb * (1.0 - saturate(gradedSceneColor.rgb)));
+    gradedSceneColor.rgb += clippedGradedSceneColor - saturate(gradedSceneColor.rgb);
 #elif 1
-  gradedSceneColor.rgb = (gradedSceneColor.rgb >= 0.0 && gradedSceneColor.rgb < 1.0) ? (1.0 - (shadowTint.rgb * (1.0 - gradedSceneColor.rgb))) : gradedSceneColor.rgb;
+    gradedSceneColor.rgb = (gradedSceneColor.rgb >= 0.0 && gradedSceneColor.rgb < 1.0) ? (1.0 - (shadowTint.rgb * (1.0 - gradedSceneColor.rgb))) : gradedSceneColor.rgb;
 #else
-  // If we have negative colors, flip the filter direction of the filter otherwise they'd shift towards the opposite direction.
-  // Attempted idea to add negative scRGB values support, but I don't think it's needed (applying the filter through oklab might be better)
-  gradedSceneColor.rgb = (gradedSceneColor.rgb < 1.0) ? ((gradedSceneColor.rgb >= 0.0) ? (1.0 - (shadowTint.rgb * (1.0 - gradedSceneColor.rgb))) : (1.0 - ((1.0 - gradedSceneColor.rgb) / shadowTint.rgb))) : gradedSceneColor.rgb;
+    // If we have negative colors, flip the filter direction of the filter otherwise they'd shift towards the opposite direction.
+    // Attempted idea to add negative scRGB values support, but I don't think it's needed (applying the filter through oklab might be better)
+    gradedSceneColor.rgb = (gradedSceneColor.rgb < 1.0) ? ((gradedSceneColor.rgb >= 0.0) ? (1.0 - (shadowTint.rgb * (1.0 - gradedSceneColor.rgb))) : (1.0 - ((1.0 - gradedSceneColor.rgb) / shadowTint.rgb))) : gradedSceneColor.rgb;
 #endif
+  }
 
 #if 0 // TEST: draw shadow tint
   o0.xyz = 1.0 / shadowTint.rgb; return;
@@ -200,7 +214,7 @@ void main(
 #endif // COLOR_GRADING && ENABLE_COLOR_GRADING
 
 #if ENABLE_COLOR_GRADING
-  gradedSceneColor.rgb = lerp(postProcessedColor.rgb, gradedSceneColor.rgb, LumaSettings.GameSettings.ColorGradingIntensity);
+  gradedSceneColor.rgb = lerp(postProcessedColor.rgb, gradedSceneColor.rgb, forceVanillaSDR ? 1.0 : LumaSettings.GameSettings.ColorGradingIntensity);
 #endif // ENABLE_COLOR_GRADING
 
   // Gamma adjustments (usually neutral, based on the user gamma, but maybe influenced by scene too)
@@ -219,7 +233,7 @@ void main(
 #if ENABLE_LUMA && ALPHA_OUT_TYPE >= 2 // Skip tonemapping on world space UI
 
 #if ENABLE_FAKE_HDR // The game doesn't have many bright highlights, the dynamic range is relatively low, this helps alleviate that (note that bloom is pre-tonemapped to avoid this blowing up)
-  if (LumaSettings.DisplayMode == 1)
+  if (LumaSettings.DisplayMode == 1 && !forceVanillaSDR)
   {
     float normalizationPoint = 0.025; // Found empyrically
     float fakeHDRIntensity = LumaSettings.GameSettings.HDRBoostAmount * 0.25; // 0.1-0.15 looks good in most places. 0.2 looks better in dim scenes, but is too much AutoHDR like in bright scenes
@@ -231,7 +245,11 @@ void main(
   const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
   const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
   bool allowReinhard = true;
-  if (LumaSettings.DisplayMode == 1 || !allowReinhard)
+  if (forceVanillaSDR)
+  {
+    gradedSceneColor = saturate(gradedSceneColor);
+  }
+  else if (LumaSettings.DisplayMode == 1 || !allowReinhard)
   {
     bool perChannel = true; // Per channel causes hue shifts, which this game doesn't seem to expect that much, but bloom either forms steps with "DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE" (especially on blue, police cars sirens), or clips, with "DICE_TYPE_BY_LUMINANCE_PQ".
     DICESettings settings = DefaultDICESettings(perChannel ? DICE_TYPE_BY_CHANNEL_PQ : DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE);

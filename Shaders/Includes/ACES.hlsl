@@ -649,7 +649,7 @@ float3 ACESTonemap(float3 color, float paper_white, float peak_white, ACESSettin
 	float aces_min = ACES_MIN / paper_white;
 	float aces_max = peak_white / paper_white;
 
-   // Apply the inverse of the final gamma correction to the min nits parameter, to have it reliably set
+	// Apply the inverse of the final gamma correction to the min nits parameter, to have it reliably set
 	aces_min = ColorGradingLUTTransferFunctionOutCorrected(aces_min, GAMMA_CORRECTION_TYPE, VANILLA_ENCODING_TYPE).x;
 
 	aces_max /= mid_gray_scale;

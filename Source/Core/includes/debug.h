@@ -146,3 +146,13 @@ namespace
    }
 #endif // DEVELOPMENT || _DEBUG
 }
+
+// A macro wraper for the assert macro.
+// Example usage            : ensure(device->CreateTexture2D(&desc, nullptr, &tex), == S_OK);
+// In debug it expands to   : assert(device->CreateTexture2D(&desc, nullptr, &tex) == S_OK);
+// In release it expands to : device->CreateTexture2D(&desc, nullptr, &tex);
+#ifndef _DEBUG
+#define ensure(always_keep, discard_if_ndebug) always_keep
+#else
+#define ensure(always_keep, discard_if_ndebug) (assert(always_keep discard_if_ndebug))
+#endif

@@ -785,6 +785,7 @@ namespace Display
 			}
 
 			UINT color_space_supported = 0;
+         // Note: this function is weird and it will return true in case the swapchain was set to HDR, even if the display actually doesn't support it
 			if (SUCCEEDED(swapChain->CheckColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, &color_space_supported)))
 			{
 				supported |= color_space_supported & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT;

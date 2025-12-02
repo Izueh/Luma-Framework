@@ -68,7 +68,7 @@ public:
       
       std::vector<ShaderDefineData> game_shader_defines_data = {
          {"ENABLE_IMPROVED_MOTION_BLUR", '1', true, false, "Increase the quality of the game's motion blur in multiple ways", 1},
-         {"ENABLE_IMPROVED_BLOOM", '1', true, false, "Increase the quality of the game's motion blur, and makes it more \"HDR\"", 1},
+         {"ENABLE_IMPROVED_BLOOM", '1', true, false, "Increase the quality of the game's bloom, and makes it more \"HDR\"", 1},
          {"ENABLE_VIGNETTE", '1', true, false, "Allows disabling the game's vignette. This will also disable the blue/yellow filter and increase the brightness of the whole image", 1},
          {"ENABLE_DOF", '1', true, false, "Allows disabling the game's depth of field effect", 1},
          {"REMOVE_BLACK_BARS", '0', true, false, "Removes ugly black bars from Ultrawide, given that often menus and game were both pillarboxed and letterboxed at the same time.\nThis will also reveal some bad menus backgrounds", 1},

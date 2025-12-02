@@ -13,9 +13,9 @@ Luma also acts as a graphics analyzer, having deep debugging capabilities (captu
 # Instructions
 - (Prey only, optional otherwise) Set "VCPKG_ROOT" environment variable to your vcpkg installation folder if it wasn't already (download it from here "https://github.com/microsoft/vcpkg", the version integrated with Visual Studio doesn't seem to be as reliable).
 - Install the latest VC++ redist before running the code (https://aka.ms/vs/17/release/vc_redist.x64.exe), we enforced users to update to the latest versions, but "_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR" could be defined to avoid that.
-- Open "Luma.sln" and build it. Note that "Edit and Continue" build settings (\ZI) should not be used as they break the code patches generation (at least for projects that use DKUtil).
+- Open "Luma.sln" and build it. Note that "Edit and Continue" build settings (\ZI) should not be used as they break the code patches generation (at least for projects that use DKUtil, like Prey).
 - The code hot spots are in core.hpp and each game's main.cpp files.
-- Luma uses the game project for developing and shipping mods. Simply toggle between DEVELOPMENT, TEST and PUBLISHING configurations to enable their respective features. They automatically spread to shaders on the next load/compile. Building in Debug (as opposed to Release), simply adds debug symbols etc, but no additional development features.
+- Luma uses the game project for developing and shipping mods. Simply toggle between DEVELOPMENT, TEST and PUBLISHING configurations to enable their respective features. They automatically spread to shaders on the next load/compile. Both Development-Release and Development-Debug builds should have debug symbols (and thus allow break points), however "Debug" builds have optimizations disabled and more logs, so they are exponentially slower and should only be used if debugging is required (VS might default to them, so change it manually).
 
 # Adding a new game mod
 - Add the template file from the ".\Templates\VisualStudio" folder to (e.g.) "%USERPROFILE%\Documents\Visual Studio 2022\Templates\ProjectTemplates\Visual C++".
@@ -36,8 +36,9 @@ Luma also acts as a graphics analyzer, having deep debugging capabilities (captu
 - In publishing and test builds, shaders will be loaded from the ".\Luma\GameName" folder, starting from the game binary folder (where the addon is).
 
 # Releasing
-Github actions automatically build all game projects and package them with their respective shaders.
+Github actions automatically build all game projects and package them with their respective shaders (the Luma folder).
 Once your mod is ready, make a PR to the original repository.
+Make sure to test the mod in "Publishing" mode before wrapping it up, given that both the shaders and c++ code can change depending on the configuration.
 
 # Comparison with RenoDX
 Luma is similar to RenoDX (https://github.com/clshortfuse/renodx), where it got some inspiration from, but Luma is more focused on modding games deep down, like for example adding and replacing entire rendering techniques, adding DLSS or Ultrawide support etc. Porting simple mods between the two is relatively easy.

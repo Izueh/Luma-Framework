@@ -18,7 +18,8 @@ namespace DICE
     }
     const float lostRange = exp(-Max);
     const float restoreRangeScale = 1.f / (1.f - lostRange);
-    return (1.f - exp(-X)) * restoreRangeScale;
+	  float compression = 1.f - exp(-X);
+    return lerp(compression, compression * restoreRangeScale, compression);
   }
 
   // Refurbished DICE HDR tonemapper (per channel or luminance).
@@ -60,7 +61,7 @@ namespace DICE
 // This might look more like classic SDR tonemappers and is closer to how modern TVs and Monitors play back colors (usually they clip each individual channel to the peak brightness value, though in their native panel color space, or current SDR/HDR mode color space).
 // Overall, this seems to handle bright gradients more smoothly, even if it shifts hues more (and generally desaturating).
 #define DICE_TYPE_BY_CHANNEL_PQ 4
-// TODO: add perceptual log version? It doesn't look much better than PQ, though it should be simpler in the end (faster). Also try using the max to clip the input at at certain level instead of remapping it from infinite.
+// TODO: add perceptual log version? It doesn't look much better than PQ, though it should be simpler in the end (faster) (https://www.desmos.com/calculator/886c46d2ef). Also try using the max to clip the input at at certain level instead of remapping it from infinite.
 // TODO: split these into different settings, given almost all combinations are possible
 
 struct DICESettings
