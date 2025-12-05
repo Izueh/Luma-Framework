@@ -26,7 +26,21 @@ cbuffer cb0 : register(b0) { float4 cb0_data[21]; }
 #endif
 
 // Get resolution from LumaData
-#define VIEWPORT_PIXEL_SIZE (cb1_data[122].zw)
+// #define VIEWPORT_PIXEL_SIZE (cb1_data[126].zw) <-- Removed
+
+// ------------------------------------------------------------------------------------------------
+// Dynamic Resolution Handling
+// ------------------------------------------------------------------------------------------------
+
+// Calculate the scale ratio for internal use (Projection Matrix correction)
+#define DYNAMIC_RES_SCALE float2(cb1_data[122].x / cb1_data[126].x, cb1_data[122].y / cb1_data[126].y)
+
+// We set the Scale to 1.0 because VIEWPORT_PIXEL_SIZE is already based on the full texture size.
+// This ensures sampling UVs are correct (0 to Scale).
+#define XE_GTAO_RENDER_RESOLUTION_SCALE float2(1.0, 1.0)
+
+// We still clamp to the valid dynamic region
+#define XE_GTAO_SAMPLE_UV_CLAMP float2(cb1_data[122].x * VIEWPORT_PIXEL_SIZE.x, cb1_data[122].y * VIEWPORT_PIXEL_SIZE.y)
 
 // ------------------------------------------------------------------------------------------------
 // Camera Parameters
@@ -35,18 +49,10 @@ cbuffer cb0 : register(b0) { float4 cb0_data[21]; }
 static float g_TanHalfFovY;
 static float g_TanHalfFovX;
 
-void ComputeCameraParams()
-{
-    // FOV is already in radians
-    float fov = LumaData.GameData.GTAO.FOV;
-    if (fov <= 0.001f) fov = 1.0472f; // Default to 60 degrees in radians
-    
-    g_TanHalfFovY = tan(fov * 0.5);
-    float aspectRatio = cb1_data[122].x / cb1_data[122].y;
-    g_TanHalfFovX = g_TanHalfFovY * aspectRatio;
-}
 
-#define NDC_TO_VIEW_MUL float2(g_TanHalfFovX * 2.0, g_TanHalfFovY * -2.0)
+// Correct the View Space reconstruction.
+// Since our UVs only go from 0 to Scale, we need to stretch the Multiplier so that 'Scale' maps to the edge of the screen.
+#define NDC_TO_VIEW_MUL float2((g_TanHalfFovX * 2.0) / DYNAMIC_RES_SCALE.x, (g_TanHalfFovY * -2.0) / DYNAMIC_RES_SCALE.y)
 #define NDC_TO_VIEW_ADD float2(-g_TanHalfFovX, g_TanHalfFovY)
 
 // Effect radius: cb0[18].w * 500 is world-space radius
@@ -139,6 +145,39 @@ RWTexture2D<unorm float4> final_output : register(u0);
 #define XE_HILBERT_WIDTH (1U << XE_HILBERT_LEVEL)
 #define XE_HILBERT_AREA (XE_HILBERT_WIDTH * XE_HILBERT_WIDTH)
 
+void ComputeParams(inout GTAOConstants constants)
+{
+    constants.ViewportPixelSize = cb1_data[126].zw;
+    constants.ViewportSize = cb1_data[126].xy;
+
+    float2 renderResolutionScale = float2(cb1_data[122].x / cb1_data[126].x, cb1_data[122].y / cb1_data[126].y);
+
+    // FOV calculation
+    float fov = LumaData.GameData.GTAO.FOV;
+    if (fov <= 0.001f) fov = 1.0472f; // Default to 60 degrees in radians
+
+    float tanHalfFovY = tan(fov * 0.5);
+    float aspectRatio = cb1_data[122].x / cb1_data[122].y;
+    float tanHalfFovX = tanHalfFovY * aspectRatio;
+
+    constants.NDCToViewMul = float2((tanHalfFovX * 2.0) / renderResolutionScale.x, (tanHalfFovY * -2.0) / renderResolutionScale.y);
+    constants.NDCToViewAdd = float2(-tanHalfFovX, tanHalfFovY);
+
+    constants.NDCToViewMul_x_PixelSize = constants.NDCToViewMul * constants.ViewportPixelSize;
+
+    constants.EffectRadius = cb0_data[18].w;
+    constants.EffectFalloffRange = 0.5;
+    constants.RadiusMultiplier = 500.0;
+    constants.DenoiseBlurBeta = 1.2;
+    constants.SampleDistributionPower = 2.0;
+    constants.ThinOccluderCompensation = cb0_data[18].z;
+    constants.FinalValuePower = 1.0;
+    constants.DepthMIPSamplingOffset = 3.3;
+
+    constants.SampleUVClamp = float2(cb1_data[122].x * constants.ViewportPixelSize.x, cb1_data[122].y * constants.ViewportPixelSize.y);
+    constants.OcclusionTermScale = 1.5;
+}
+
 uint HilbertIndex(uint posX, uint posY)
 {
     uint index = 0U;
@@ -176,10 +215,11 @@ float2 SpatioTemporalNoise(uint2 pixCoord, uint temporalIndex)
 // ------------------------------------------------------------------------------------------------
 
 [numthreads(8, 8, 1)]
-void prefilter_depths16x16_cs(uint2 dtid : SV_DispatchThreadID, uint2 gtid : SV_GroupThreadID)
+void prefilter_depths16x16_cs(uint2 dtid: SV_DispatchThreadID, uint2 gtid: SV_GroupThreadID)
 {
-    ComputeCameraParams();
-    XeGTAO_PrefilterDepths16x16(dtid, gtid, tex0, smp, out_working_depth_mip0, out_working_depth_mip1, out_working_depth_mip2, out_working_depth_mip3, out_working_depth_mip4);
+    GTAOConstants constants;
+    ComputeParams(constants);
+    XeGTAO_PrefilterDepths16x16(dtid, gtid, tex0, smp, out_working_depth_mip0, out_working_depth_mip1, out_working_depth_mip2, out_working_depth_mip3, out_working_depth_mip4, constants);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -187,25 +227,27 @@ void prefilter_depths16x16_cs(uint2 dtid : SV_DispatchThreadID, uint2 gtid : SV_
 // ------------------------------------------------------------------------------------------------
 
 [numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]
-void main_pass_cs(uint2 dtid : SV_DispatchThreadID)
+void main_pass_cs(uint2 dtid: SV_DispatchThreadID)
 {
-    ComputeCameraParams();
-    
-    const float2 normalizedScreenPos = (dtid + 0.5) * VIEWPORT_PIXEL_SIZE;
-    
+    GTAOConstants constants;
+    ComputeParams(constants);
+    const float2 normalizedScreenPos = (dtid + 0.5) * constants.ViewportPixelSize;
+
     // Load world-space normal (stored as 0-1, convert to -1 to +1)
-    float3 worldNormal = tex1.SampleLevel(smp, normalizedScreenPos, 0).xyz;
+    // LUMA: Removed manual scaling here as normalizedScreenPos is already correct texture UV
+    float2 samplePos = min(normalizedScreenPos, constants.SampleUVClamp);
+    float3 worldNormal = tex1.SampleLevel(smp, samplePos, 0).xyz;
     worldNormal = worldNormal * 2.0 - 1.0;
     worldNormal = normalize(worldNormal);
-    
+
     // Transform to view space
     float3 viewspaceNormal = mul(worldNormal, GetWorldToViewMatrix());
-    
+
     viewspaceNormal = normalize(viewspaceNormal);
 
     uint temporalIndex = LumaSettings.FrameIndex;
-    
-    XeGTAO_MainPass(dtid, SpatioTemporalNoise(dtid, temporalIndex), viewspaceNormal, tex0, smp, ao_term_and_edges);
+
+    XeGTAO_MainPass(dtid, SpatioTemporalNoise(dtid, temporalIndex), viewspaceNormal, tex0, smp, ao_term_and_edges, constants);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -213,9 +255,11 @@ void main_pass_cs(uint2 dtid : SV_DispatchThreadID)
 // ------------------------------------------------------------------------------------------------
 
 [numthreads(XE_GTAO_NUMTHREADS_X, XE_GTAO_NUMTHREADS_Y, 1)]
-void denoise_pass_cs(uint2 dtid : SV_DispatchThreadID)
+void denoise_pass_cs(uint2 dtid: SV_DispatchThreadID)
 {
+    GTAOConstants constants;
+    ComputeParams(constants);
     // Normal denoise: each thread handles 2 horizontal pixels
     const uint2 pix_coord_base = dtid * uint2(2, 1);
-    XeGTAO_Denoise(pix_coord_base, tex0, smp, final_output, true);
+    XeGTAO_Denoise(pix_coord_base, tex0, smp, final_output, true, constants);
 }

@@ -719,7 +719,7 @@ public:
          }
          
          // Create GTAO resources if needed
-         if (!CreateGTAOResources(native_device, game_device_data, width, height))
+         if (!CreateGTAOResources(native_device, game_device_data, rtv_desc.Width, rtv_desc.Height))
          {
             return DrawOrDispatchOverrideType::None;
          }
@@ -1797,7 +1797,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    {
       default_paper_white = 250.f;
       Globals::SetGlobals(PROJECT_NAME, "Final Fantasy VII Remake Luma mod");
-      Globals::VERSION = 1;
+      Globals::VERSION = 2;
 
       shader_hashes_TAA.pixel_shaders.emplace(std::stoul("4729683B", nullptr, 16));
       shader_hashes_Title.pixel_shaders.emplace(std::stoul("5FEE74F9", nullptr, 16));
