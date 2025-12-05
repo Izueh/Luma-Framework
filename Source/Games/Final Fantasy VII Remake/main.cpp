@@ -1815,9 +1815,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
       std::vector<ShaderDefineData> game_shader_defines_data = {
          // GTAO defines
-         {"SSAO_TYPE", '1', true, false, "Screen Space Ambient Occlusion\n0 - Vanilla (UE4 SSDO)\n1 - Luma GTAO\nGTAO provides better quality ambient occlusion"},
-         {"XE_GTAO_QUALITY", '2', true, false, "GTAO Quality Level\n0 - Low\n1 - Medium\n2 - High (default)\n3 - Very High\n4 - Ultra\nHigher values use more samples for better quality but lower performance"},
-         {"XE_GTAO_DEBUG_OUTPUT", '1', true, false, "GTAO Debug Output\n0 - Normal denoise output\n1 - Debug raw AO visualization\nUseful for debugging GTAO output"},
+         {"XE_GTAO_QUALITY", '2', true, false, "GTAO Quality Level\n0 - Low\n1 - Medium\n2 - High (default)\n3 - Very High\n4 - Ultra\nHigher values use more samples for better quality but lower performance"}
       };
       shader_defines_data.append_range(game_shader_defines_data);
 
