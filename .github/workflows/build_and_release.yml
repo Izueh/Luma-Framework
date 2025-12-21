@@ -168,7 +168,7 @@ jobs:
 
             # Check if it's a .hlsl/hlsli file in an allowed directory
             #if ( $allowedExtensions -notcontains $_.Extension.ToLower() -or ($allowedDirs -notcontains $topDir)) {
-            if ($_.Extension.ToLower() -ne ".hlsl") {
+            if ($allowedExtensions -notcontains $_.Extension.ToLower()) {
               #Write-Host "Removing: $($_.FullName)"
               Remove-Item $_.FullName -Force
             }
