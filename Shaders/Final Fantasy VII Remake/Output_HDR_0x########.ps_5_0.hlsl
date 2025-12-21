@@ -228,29 +228,29 @@ float3 SampleVideoTexture(float2 pos, float2 v0) {
     r5.xyz = r4.xyz * float3(100,100,100) + -r3.yzw;
     r3.yzw = 1.0f * r5.xyz + r3.yzw;
   } else {
-    // r5.xyz = cmp(r4.xyz < float3(0.00313080009,0.00313080009,0.00313080009));
-    // r6.xyz = float3(12.9200001,12.9200001,12.9200001) * r4.xyz;
-    // r4.xyz = log2(r4.xyz);
-    // r4.xyz = float3(0.416666657,0.416666657,0.416666657) * r4.xyz;
-    // r4.xyz = exp2(r4.xyz);
-    // r4.xyz = r4.xyz * float3(1.05499995,1.05499995,1.05499995) + float3(-0.0549999997,-0.0549999997,-0.0549999997);
-    // r4.xyz = r5.xyz ? r6.xyz : r4.xyz;
-    // r4.xyz = log2(r4.xyz);
-    // r4.xyz = float3(2.20000005,2.20000005,2.20000005) * r4.xyz;
-    // r4.xyz = exp2(r4.xyz);
-    r4.xyz = gamma_sRGB_to_linear(r4.xyz);
     if (LumaSettings.GameSettings.custom_hdr_videos.x != 0.f) {
       float target_max_luminance = min(LumaSettings.PeakWhiteNits, pow(10.f, ((log10(LumaSettings.GamePaperWhiteNits) - 0.03460730900256) / 0.757737096673107)));
       target_max_luminance = lerp(1.f, target_max_luminance, .5f);
       r4.xyz = PumboAutoHDR(r4.xyz, target_max_luminance, LumaSettings.GamePaperWhiteNits);
+      if (LumaSettings.GameSettings.custom_film_grain_strength.x != 0.f) {
+        r4.xyz = renodx::effects::ApplyFilmGrain(r4.xyz,
+                                                  v0.xy,
+                                                  LumaSettings.GameSettings.custom_random.x,
+                                                  LumaSettings.GameSettings.custom_film_grain_strength.x * 0.03f,
+                                                  1.f);
+      }
     }
-    if (LumaSettings.GameSettings.custom_film_grain_strength.x != 0.f) {
-      r4.xyz = renodx::effects::ApplyFilmGrain(r4.xyz, 
-        v0.xy,         
-        LumaSettings.GameSettings.custom_random.x,
-        LumaSettings.GameSettings.custom_film_grain_strength.x * 0.03f,
-        1.f);
-    }
+    r5.xyz = cmp(r4.xyz < float3(0.00313080009,0.00313080009,0.00313080009));
+    r6.xyz = float3(12.9200001,12.9200001,12.9200001) * r4.xyz;
+    r4.xyz = log2(r4.xyz);
+    r4.xyz = float3(0.416666657,0.416666657,0.416666657) * r4.xyz;
+    r4.xyz = exp2(r4.xyz);
+    r4.xyz = r4.xyz * float3(1.05499995,1.05499995,1.05499995) + float3(-0.0549999997,-0.0549999997,-0.0549999997);
+    r4.xyz = r5.xyz ? r6.xyz : r4.xyz;
+    r4.xyz = log2(r4.xyz);
+    r4.xyz = float3(2.20000005,2.20000005,2.20000005) * r4.xyz;
+    r4.xyz = exp2(r4.xyz);
+    
     r5.x = dot(float3(0.627403915,0.329282999,0.0433131009), r4.xyz);
     r5.y = dot(float3(0.0690973029,0.919540584,0.0113623003), r4.xyz);
     r5.z = dot(float3(0.0163914002,0.0880132988,0.895595312), r4.xyz);

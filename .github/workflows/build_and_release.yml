@@ -134,6 +134,9 @@ jobs:
 
           # Allowed subdirectories
           $allowedDirs = @("Global", "Includes", $projectName)
+          
+          # Allowed file extensions
+          $allowedExtensions = @(".hlsl", ".hlsli")
 
           # Full path to the copied Shaders folder
           $shaderRoot = Join-Path $tempDir "Luma"
@@ -163,8 +166,8 @@ jobs:
             $topDir = ($relativePath -split '[\\/]', 2)[0]
             #Write-Host "Checking file: $($_.Name), Extension: $($_.Extension), TopDir: $topDir"
 
-            # Check if it's a .hlsl file in an allowed directory
-            #if ($_.Extension.ToLower() -ne ".hlsl" -or ($allowedDirs -notcontains $topDir)) {
+            # Check if it's a .hlsl/hlsli file in an allowed directory
+            #if ( $allowedExtensions -notcontains $_.Extension.ToLower() -or ($allowedDirs -notcontains $topDir)) {
             if ($_.Extension.ToLower() -ne ".hlsl") {
               #Write-Host "Removing: $($_.FullName)"
               Remove-Item $_.FullName -Force
