@@ -15,14 +15,14 @@ Texture2D<float4> SourceImage : register(t0); // Nearest sampler
 
 // Funny enough, exposure is written as depth.
 // Also, funny enough 2, this skips the top portion of the image as is always a 16:9 texture.
-// TODO: test if the auto exposure speed is adapted by FPS, because it often changes rapidly, which is very noticeable, especially in the sky
+// TODO: test if the auto exposure speed is adapted by FPS, because it often changes rapidly, which is very noticeable, especially in the sky (fixed now?)
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,
   out float oDepth : SV_Depth)
 {
   float4 r0;
-  r0.xyz = SourceImage.Sample(SourceImage_s, v1.xy).xyz; // TODO: use linear sampler and possibly box area downsampling to cover the whole range (even if slow...), or maybe call "generate mips" in DX11. This causes huge flickers when there's a small strong light on screen.
+  r0.xyz = SourceImage.Sample(SourceImage_s, v1.xy).xyz; // TODO: use linear sampler and possibly box area downsampling to cover the whole range (even if slow...), or maybe call "generate mips" in DX11. This causes huge flickers when there's a small strong light on screen. Done?
 
 #if 1 // Luma: improve auto exposure calculations
   
@@ -33,13 +33,13 @@ void main(
   r0.xyz /= max(1.0, max3(r0.xyz));
 #endif
 
-#if 0 // Probably looks too different on green/grass, even if perceptually it'd be more "accurate"
-  r0.x = linear_to_gamma1(GetLuminance(gamma_to_linear(r0.xyz, GCT_POSITIVE)));
-#else
+#if FORCE_VANILLA_AUTO_EXPOSURE
   r0.x = average(r0.xyz);
+#else // Probably looks very different on green/grass and blue/sky, but perceptually it's more accurate and that's what matters
+  r0.x = linear_to_gamma1(GetLuminance(gamma_to_linear(r0.xyz, GCT_POSITIVE)));
 #endif
 
-#if 0 // FORCE_VANILLA_AUTO_EXPOSURE // TODO: is this even really necessary? Maybe not! Especially given that "InstanceConsts[0].x" is almost always 1
+#if FORCE_VANILLA_AUTO_EXPOSURE && 0 // Note: is this even really necessary? Maybe not! Especially given that "InstanceConsts[0].x" is almost always 1
   r0.x = saturate(r0.x); // Preserve SDR look, otherwise in HDR exposure goes crazy
 #endif
 

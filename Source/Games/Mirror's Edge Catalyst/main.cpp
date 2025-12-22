@@ -1,5 +1,7 @@
-// ### Rename this ###
 #define GAME_MIRRORS_EDGE_CATALYST 1
+
+// Any message box breaks the input of the game forever
+#define DISABLE_AUTO_DEBUGGER 1
 
 #include "..\..\Core\core.hpp"
 

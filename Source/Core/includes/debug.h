@@ -50,10 +50,19 @@
             if (result == IDYES) { __debugbreak(); }                    \
         }                                                               \
     } while (false)
+#define ASSERT_MSGF(expression, fmt, ...)                                     \
+   do                                                                         \
+   {                                                                          \
+      char assert_buffer[512];                                                \
+      std::snprintf(assert_buffer, sizeof(assert_buffer), fmt, __VA_ARGS__);  \
+      ASSERT_MSG(expression, assert_buffer);                                  \
+   } while (false)
 #define ASSERT_ONCE(expression) do { { static bool asserted_once = false; \
 if (!asserted_once && !(expression)) { ASSERT(expression); asserted_once = true; } } } while (false)
 #define ASSERT_ONCE_MSG(expression, msg) do { { static bool asserted_once = false; \
 if (!asserted_once && !(expression)) { ASSERT_MSG(expression, msg); asserted_once = true; } } } while (false)
+#define ASSERT_ONCE_MSGF(expression, fmt, ...) do { { static bool asserted_once = false; \
+if (!asserted_once && !(expression)) { ASSERT_MSGF(expression, fmt, __VA_ARGS__); asserted_once = true; } } } while (false)
 
 #else
 #define ASSERT_MSG(expression, msg) ((void)0)
@@ -64,7 +73,7 @@ if (!asserted_once && !(expression)) { ASSERT_MSG(expression, msg); asserted_onc
 namespace
 {
 #if DEVELOPMENT || _DEBUG
-   // Returns true if it vaguely succeeded (definition of success in unclear)
+   // Returns true if it vaguely succeeded (definition of success is unclear)
    bool LaunchDebugger(const char* name, const DWORD unique_random_handle = 0)
    {
 #if 0 // Non stopping optional debugger

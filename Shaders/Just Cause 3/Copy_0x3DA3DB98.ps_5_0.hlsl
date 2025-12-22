@@ -14,7 +14,7 @@ void main(
 {
   outColor.xyzw = Tex.Load(int3(v0.xy, 0)).xyzw;
 
-#if 1 // In the original game, the texture we sample here would have been UNORM_SRGB but sampled as a UNORM view here, thus implicitly converting to gamma space, we need to do it manually with float textures. This is duplicated in the FXAA shader too!
+#if 1 // In the original game, the texture we sample here would have been UNORM_SRGB but sampled as a UNORM view here, thus implicitly converting to gamma space, we need to do it manually with float textures. This is duplicated in the FXAA shader too! And in the pause menu background.
   if (LumaData.CustomData1) // If drawing on swapchain!
   {
     float2 size;

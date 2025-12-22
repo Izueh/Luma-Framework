@@ -459,7 +459,7 @@ void main(
   // so we keep any grading on highlights too.
   // The only downside of this is that if ~0.18 was mapped to blue but ~1.0 was mapped to green (e.g.), we clip to ~0.18 so we'd lose the highlights specific grading,
   // but the game doesn't seem to do stuff like that.
-  if (doHDR) // TODO: redo SDR too? It was extremely clipped. Also find a way to expand the sat range?
+  if (doHDR) // TODO: redo SDR too? It was extremely clipped. Also find a way to expand the sat range? Also maybe do a different HDR techniques for other "TONEMAP_TYPE" rather than 3 (which might actually always be used for the whole game)?
   {
     // Note: we could try to do this in BT.2020 but it's unlikely to change much, given that it's the saturation on shadow that would affect it, but we can't control it given it's through the LUT
     tonemapperLostColor = tonemapperInColor != 0.f ? (tonemapperLostColor * (tonemappedColor / tonemapperInColor)) : 0.0;

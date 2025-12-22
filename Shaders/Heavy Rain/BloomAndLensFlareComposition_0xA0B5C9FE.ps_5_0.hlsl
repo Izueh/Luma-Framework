@@ -26,7 +26,8 @@ void main(
 
 #if ENABLE_LUMA // TODO: sometimes bloom is drawn as additive through the Copy shader, and in that case, we aren't handling it, because we can't easily know if it was bloom or any other copy
 #if ENABLE_FAKE_HDR // Apply the inverse of our following HDR boost to avoid bloom going crazy in it
-  if (LumaSettings.DisplayMode == 1)
+  bool forceVanillaSDR = ShouldForceSDR(v1.xy);
+  if (LumaSettings.DisplayMode == 1 && !forceVanillaSDR)
   {
     float normalizationPoint = 0.025; // Found empyrically
     float fakeHDRReduction = 0.5; // Found empyrically

@@ -1178,13 +1178,13 @@ public:
       if (!game_device_data.has_drawn_taa)
       {
 			device_data.force_reset_sr = true; // If the frame didn't draw the scene, DLSS needs to reset to prevent the old history from blending with the new scene
+         device_data.taa_detected = false;
       }
 
       game_device_data.motion_vectors = nullptr;
       game_device_data.depth = nullptr;
 
       device_data.has_drawn_main_post_processing = false;
-      device_data.taa_detected = false;
       device_data.has_drawn_sr = false;
       game_device_data.try_draw_dlss_next = false;
       //ASSERT_ONCE(game_device_data.found_per_view_globals);

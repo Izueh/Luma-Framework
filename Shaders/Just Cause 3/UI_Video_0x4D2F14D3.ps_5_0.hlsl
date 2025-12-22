@@ -18,12 +18,12 @@ void main(
   float Y = VideoLuma.Sample(VideoLuma_s, v1.xy).x;
   float Cb = VideoCb.Sample(VideoCb_s, v1.xy).x;
 
-#if DEVELOPMENT && 0 // Test videos // TODO: review colors, and add AutoHDR, maybe emulate the constrast boost from accidentally interepreting them as limited. In both shaders!
-  o0.xyz = YUVtoRGB(Y, Cr, Cb, DVS1 * 4);
-  if (DVS2)
-    o0.xyz = Cr * float3(1.59500003,-0.813000023,0) + Y * float3(1.16400003,1.16400003,1.16400003) + Cb * float3(0,-0.391000003,2.01699996) + float3(-0.870000005,0.528999984,-1.08159995);
-#elif 1 // Luma: fixed color space (it was using limited BT.601 but it was full BT.709)
+// TODO: add AutoHDR? In both shaders!
+#if 1 // Luma: fixed color space (it was using limited BT.601 but it was full BT.709)
   o0.xyz = YUVtoRGB(Y, Cr, Cb, 0);
+#if 1 // Emulate the constrast boost from accidentally interepreting them as limited, but without clipping
+  o0.rgb = EmulateShadowClip(o0.rgb, false, 0.15);
+#endif
 #else
   o0.xyz = Cr * float3(1.59500003,-0.813000023,0) + Y * float3(1.16400003,1.16400003,1.16400003) + Cb * float3(0,-0.391000003,2.01699996) + float3(-0.870000005,0.528999984,-1.08159995);
 #endif

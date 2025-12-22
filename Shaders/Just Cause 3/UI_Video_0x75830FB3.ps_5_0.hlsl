@@ -31,5 +31,8 @@ void main(
   float Cb = tex_1_.Sample(sampler_tex_1__s, v1.xy).x;
 
   o0.rgb = YUVtoRGB(Y, Cr, Cb, 0);
+#if 1 // Emulate the constrast boost from accidentally interepreting them as limited, but without clipping
+  o0.rgb = EmulateShadowClip(o0.rgb, false, 0.15);
+#endif
 #endif
 }

@@ -1,6 +1,10 @@
 #define GAME_JUST_CAUSE_3 1
 
-// TODO: this breaks everything? It does... probably due to the gbuffers. I don't know why.
+#if 0 // TODO: delete? the game has no proper motion vectors (only from camera movement, but no dynamic/skeletal objects), nor has camera jitters (we could insert these, but...). Also done after SMAA DLSS would clip HDR gamut if there was any.
+#define ENABLE_NGX 1
+#define ENABLE_FIDELITY_SK 1
+#endif
+
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 0
 
 #include "..\..\Core\core.hpp"
@@ -10,6 +14,17 @@
 namespace
 {
    ShaderHashesList shader_hashes_SwapchainCopy;
+   ShaderHashesList shader_hashes_LateAutoExposure;
+   ShaderHashesList shader_hashes_SMAA_2TX;
+
+   // TODO: make game device data... and reset them when swapchain res schanges
+   com_ptr<ID3D11Texture2D> auto_exposure_mip_chain_texture;
+   com_ptr<ID3D11ShaderResourceView> auto_exposure_mip_chain_srv;
+   com_ptr<ID3D11ShaderResourceView> auto_exposure_mip_last_srv;
+
+   com_ptr<ID3D11Resource> depth;
+
+   bool has_drawn_taa;
 }
 
 class JustCause3 final : public Game
@@ -129,12 +144,13 @@ public:
       {
          std::vector<uint8_t> appended_patch;
 
-         constexpr bool enable_unorm_emulation = true;
+         constexpr bool enable_unorm_emulation = false; // TODO: this breaks everything... I don't know why. Also, re-enable ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
          constexpr bool enable_r11g11b10float_emulation = true;
          if (gbuffers_pattern_found && enable_unorm_emulation)
          {
             // Saturate all 4 outputs
-            std::vector<uint32_t> mov_sat_onxyzw_onxyzw = ShaderPatching::GetSatInstruction(D3D10_SB_OPERAND_TYPE_OUTPUT, 0);
+            std::vector<uint32_t> mov_sat_onxyzw_onxyzw;
+            mov_sat_onxyzw_onxyzw = ShaderPatching::GetSatInstruction(D3D10_SB_OPERAND_TYPE_OUTPUT, 0);
             appended_patch.insert(appended_patch.end(), reinterpret_cast<uint8_t*>(mov_sat_onxyzw_onxyzw.data()), reinterpret_cast<uint8_t*>(mov_sat_onxyzw_onxyzw.data()) + mov_sat_onxyzw_onxyzw.size() * sizeof(uint32_t));
             mov_sat_onxyzw_onxyzw = ShaderPatching::GetSatInstruction(D3D10_SB_OPERAND_TYPE_OUTPUT, 1);
             appended_patch.insert(appended_patch.end(), reinterpret_cast<uint8_t*>(mov_sat_onxyzw_onxyzw.data()), reinterpret_cast<uint8_t*>(mov_sat_onxyzw_onxyzw.data()) + mov_sat_onxyzw_onxyzw.size() * sizeof(uint32_t));
@@ -201,10 +217,260 @@ public:
          uint32_t custom_data_1 = is_rt_swapchain ? 1 : 0;
          SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData, custom_data_1);
          updated_cbuffers = true;
-         return DrawOrDispatchOverrideType::None;
+      }
+      // Replace the auto exposure approximate pass with a full 1x1 mip downscale.
+      // Exposure was sampling some random texels of the scene onto a fixed ~300x100 texture, which causes the game to flicker when small strong lights were on screen, due to the exposure constantly changing.
+      // This has a performance cost but it fixes relevant issues with the game.
+      else if (is_custom_pass && original_shader_hashes.Contains(shader_hashes_LateAutoExposure) && test_index != 1)
+      {
+         com_ptr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0, 1, &srv);
+         if (srv.get())
+         {
+            com_ptr<ID3D11Resource> sr;
+            srv->GetResource(&sr);
+
+            uint4 size_a, size_b;
+            DXGI_FORMAT format_a, format_b;
+            GetResourceInfo(auto_exposure_mip_chain_texture.get(), size_a, format_a);
+            GetResourceInfo(sr.get(), size_b, format_b);
+            if (size_a != size_b || format_a != format_b)
+            {
+               UINT mips = GetTextureMaxMipLevels(size_b.x, size_b.y, size_b.z); // Up to 1x1
+               auto_exposure_mip_chain_texture = CloneTexture<ID3D11Texture2D>(native_device, sr.get(), DXGI_FORMAT_UNKNOWN, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_UNORDERED_ACCESS, false, false, native_device_context, mips);
+               auto_exposure_mip_chain_srv = nullptr;
+               auto_exposure_mip_last_srv = nullptr;
+               if (auto_exposure_mip_chain_texture)
+               {
+                  D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+                  srv->GetDesc(&srv_desc);
+                  srv_desc.Texture2D.MipLevels = 1;
+                  srv_desc.Texture2D.MostDetailedMip = mips - 1; // Only give access to the 1x1 resource
+                  HRESULT hr = native_device->CreateShaderResourceView(auto_exposure_mip_chain_texture.get(), &srv_desc, &auto_exposure_mip_last_srv);
+                  ASSERT_ONCE(SUCCEEDED(hr));
+                  hr = native_device->CreateShaderResourceView(auto_exposure_mip_chain_texture.get(), nullptr, &auto_exposure_mip_chain_srv);
+                  ASSERT_ONCE(SUCCEEDED(hr));
+               }
+            }
+
+            native_device_context->CopySubresourceRegion(auto_exposure_mip_chain_texture.get(), 0, 0, 0, 0, sr.get(), 0, nullptr);
+
+            native_device_context->GenerateMips(auto_exposure_mip_chain_srv.get());
+
+#if DEVELOPMENT
+            const std::shared_lock lock_trace(s_mutex_trace);
+            if (trace_running)
+            {
+               const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+               TraceDrawCallData trace_draw_call_data;
+               trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+               trace_draw_call_data.command_list = native_device_context;
+               trace_draw_call_data.custom_name = "Generate Auto Exposure Mips";
+               cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
+            }
+#endif
+
+            ID3D11ShaderResourceView* const auto_exposure_mip_last_srv_const = auto_exposure_mip_last_srv.get();
+            native_device_context->PSSetShaderResources(0, 1, &auto_exposure_mip_last_srv_const);
+         }
+      }
+      else if (original_shader_hashes.Contains(shader_hashes_SMAA_2TX))
+      {
+         has_drawn_taa = true;
+         device_data.taa_detected = true;
+#if ENABLE_SR
+         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed)
+         {
+            assert(device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && !device_data.has_drawn_sr);
+
+            // 0 Source Color (post SMAA, pre TAA)
+            // 1 Previous Color (post SMAA, pre TAA)
+            // 2 Raw Motion Vectors (directly in UV space)
+            com_ptr<ID3D11ShaderResourceView> ps_shader_resources[3];
+            native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), &ps_shader_resources[0]);
+
+            com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1
+            com_ptr<ID3D11DepthStencilView> depth_stencil_view;
+            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
+            const bool dlss_inputs_valid = ps_shader_resources[0].get() != nullptr && render_target_views[0].get() != nullptr;
+            ASSERT_ONCE(dlss_inputs_valid);
+
+            if (dlss_inputs_valid)
+            {
+               auto* sr_instance_data = device_data.GetSRInstanceData();
+               ASSERT_ONCE(sr_instance_data);
+
+               com_ptr<ID3D11Resource> output_color_resource;
+               render_target_views[0]->GetResource(&output_color_resource);
+               com_ptr<ID3D11Texture2D> output_color;
+               HRESULT hr = output_color_resource->QueryInterface(&output_color);
+               ASSERT_ONCE(SUCCEEDED(hr));
+
+               D3D11_TEXTURE2D_DESC taa_output_texture_desc;
+               output_color->GetDesc(&taa_output_texture_desc);
+
+               SR::SettingsData settings_data;
+               settings_data.output_width = unsigned int(device_data.output_resolution.x + 0.5);
+               settings_data.output_height = unsigned int(device_data.output_resolution.y + 0.5);
+               settings_data.render_width = unsigned int(device_data.render_resolution.x + 0.5);
+               settings_data.render_height = unsigned int(device_data.render_resolution.y + 0.5);
+               settings_data.hdr = true; // At this point we are linear and "HDR" though the image is partially tonemapped if we are after SMAA
+               settings_data.inverted_depth = true; // TODO
+               settings_data.mvs_jittered = false;
+               settings_data.auto_exposure = true; // TODO: Exp is 1
+               // MVs in UV space, so we need to scale by the render resolution to transform to pixel space
+               settings_data.mvs_x_scale = device_data.render_resolution.x;
+               settings_data.mvs_y_scale = device_data.render_resolution.y; // TODO: flip?
+               settings_data.use_experimental_features = sr_user_type == SR::UserType::DLSS_TRANSFORMER;
+               sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
+
+               bool skip_dlss = taa_output_texture_desc.Width < sr_instance_data->min_resolution || taa_output_texture_desc.Height < sr_instance_data->min_resolution;
+               bool dlss_output_changed = false;
+
+               constexpr bool dlss_use_native_uav = true;
+               bool dlss_output_supports_uav = dlss_use_native_uav && (taa_output_texture_desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0;
+               // Create a copy that supports Unordered Access if it wasn't already supported
+               if (!dlss_output_supports_uav)
+               {
+                  D3D11_TEXTURE2D_DESC dlss_output_texture_desc = taa_output_texture_desc;
+                  dlss_output_texture_desc.Width = std::lrintf(device_data.output_resolution.x);
+                  dlss_output_texture_desc.Height = std::lrintf(device_data.output_resolution.y);
+                  dlss_output_texture_desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
+
+                  if (device_data.sr_output_color.get())
+                  {
+                     D3D11_TEXTURE2D_DESC prev_dlss_output_texture_desc;
+                     device_data.sr_output_color->GetDesc(&prev_dlss_output_texture_desc);
+                     dlss_output_changed = prev_dlss_output_texture_desc.Width != dlss_output_texture_desc.Width || prev_dlss_output_texture_desc.Height != dlss_output_texture_desc.Height || prev_dlss_output_texture_desc.Format != dlss_output_texture_desc.Format;
+                  }
+                  if (!device_data.sr_output_color.get() || dlss_output_changed)
+                  {
+                     device_data.sr_output_color = nullptr; // Make sure we discard the previous one
+                     hr = native_device->CreateTexture2D(&dlss_output_texture_desc, nullptr, &device_data.sr_output_color);
+                     ASSERT_ONCE(SUCCEEDED(hr));
+                  }
+                  // Texture creation failed, we can't proceed with DLSS
+                  if (!device_data.sr_output_color.get())
+                  {
+                     skip_dlss = true;
+                  }
+               }
+               else
+               {
+                  ASSERT_ONCE(device_data.sr_output_color == nullptr);
+                  device_data.sr_output_color = output_color;
+               }
+
+               if (!skip_dlss)
+               {
+                  com_ptr<ID3D11Resource> sr_source_color;
+                  ps_shader_resources[0]->GetResource(&sr_source_color);
+#if 1 // TODO: doesn't work, depth needs to be extracted from the "Gen Motion Vectors" shader
+                  depth_stencil_view->GetResource(&depth);
+#endif
+                  com_ptr<ID3D11Resource> motion_vectors;
+                  ps_shader_resources[2]->GetResource(&motion_vectors);
+
+                  ASSERT_ONCE(motion_vectors.get() && depth.get());
+
+                  bool reset_dlss = device_data.force_reset_sr || dlss_output_changed;
+                  device_data.force_reset_sr = false;
+
+                  float dlss_pre_exposure = 0.f;
+                  float2 jitters{}; // TODO
+
+                  SR::SuperResolutionImpl::DrawData draw_data;
+                  draw_data.source_color = sr_source_color.get();
+                  draw_data.output_color = device_data.sr_output_color.get();
+                  draw_data.motion_vectors = motion_vectors.get();
+                  draw_data.depth_buffer = depth.get();
+                  draw_data.pre_exposure = dlss_pre_exposure;
+                  draw_data.jitter_x = jitters.x;
+                  draw_data.jitter_y = jitters.y;
+                  draw_data.reset = reset_dlss;
+
+                  bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
+                  if (dlss_succeeded)
+                  {
+                     device_data.has_drawn_sr = true;
+                  }
+
+                  if (device_data.has_drawn_sr)
+                  {
+#if DEVELOPMENT
+                     const std::shared_lock lock_trace(s_mutex_trace);
+                     if (trace_running)
+                     {
+                        const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+                        TraceDrawCallData trace_draw_call_data;
+                        trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+                        trace_draw_call_data.command_list = native_device_context;
+                        trace_draw_call_data.custom_name = "DLSS";
+                        // Re-use the RTV data for simplicity
+                        GetResourceInfo(device_data.sr_output_color.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
+                        cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
+                     }
+#endif
+
+                     if (!dlss_output_supports_uav)
+                     {
+                        native_device_context->CopyResource(output_color.get(), device_data.sr_output_color.get()); // DX11 doesn't need barriers
+                     }
+                     else
+                     {
+                        device_data.sr_output_color = nullptr;
+                     }
+
+                     return DrawOrDispatchOverrideType::Replaced;
+                  }
+                  else
+                  {
+                     device_data.force_reset_sr = true;
+                  }
+               }
+               if (dlss_output_supports_uav)
+               {
+                  device_data.sr_output_color = nullptr;
+               }
+            }
+            return DrawOrDispatchOverrideType::None;
+         }
+#endif // ENABLE_SR
       }
 
       return DrawOrDispatchOverrideType::None; // Don't cancel the original draw call
+   }
+
+   void OnPresent(ID3D11Device* native_device, DeviceData& device_data) override
+   {
+      if (!has_drawn_taa)
+      {
+#if ENABLE_SR
+         device_data.force_reset_sr = true; // If the frame didn't draw the scene, SR needs to reset to prevent the old history from blending with the new scene
+#endif
+         device_data.taa_detected = false;
+      }
+
+      depth = nullptr;
+
+      device_data.has_drawn_main_post_processing = false; // TODO: never set true for now
+      device_data.has_drawn_sr = false;
+      has_drawn_taa = false;
+
+#if 0 // TODO: enable this once we add jitters)
+      if (!custom_texture_mip_lod_bias_offset)
+      {
+         std::shared_lock shared_lock_samplers(s_mutex_samplers);
+         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed)
+         {
+            device_data.texture_mip_lod_bias_offset = std::log2(device_data.render_resolution.y / device_data.output_resolution.y) - 1.f; // This results in -1 at output res
+         }
+         else
+         {
+            device_data.texture_mip_lod_bias_offset = 0.f;
+         }
+      }
+#endif
    }
 
    void LoadConfigs() override
@@ -330,7 +596,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       enable_automatic_indirect_texture_format_upgrades = true;
 
       // The game has x16 AA but it doesn't seem to apply to many textures
-      //enable_samplers_upgrade = true;
+      enable_samplers_upgrade = true;
       // TODO: allow upgrading AA samplers... this is currently not working in this game!
 
       luma_settings_cbuffer_index = 13;
@@ -393,6 +659,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          };
 
       shader_hashes_SwapchainCopy.pixel_shaders = {std::stoul("3DA3DB98", nullptr, 16)};
+      shader_hashes_LateAutoExposure.pixel_shaders = {std::stoul("23B61EDE", nullptr, 16)};
+      shader_hashes_SMAA_2TX.pixel_shaders = {std::stoul("F7078237", nullptr, 16)};
 
       // Defaults are hardcoded in ImGUI too
       cb_luma_global_settings.GameSettings.ColorGradingIntensity = 0.8f; // Don't default to 1 (vanilla) because it's too saturated and hue shifted

@@ -83,6 +83,9 @@
 #ifndef ENABLE_SHADER_CLASS_INSTANCES
 #define ENABLE_SHADER_CLASS_INSTANCES 0
 #endif // ENABLE_SHADER_CLASS_INSTANCES
+#ifndef ENABLE_SMAA
+#define ENABLE_SMAA 0
+#endif // ENABLE_SMAA
 // 64x only
 #ifndef ENABLE_NGX
 #define ENABLE_NGX 0
@@ -529,7 +532,7 @@ namespace
       { CompileTimeStringHash("Unclip LUT 1D"), { "Luma_UnclipLUT1D", reshade::api::pipeline_subobject_type::compute_shader } },
 #endif
 
-#ifdef ENABLE_SMAA // CB::LumaGameSettings::OutputRes is required! See BioShock Series implementation.
+#if ENABLE_SMAA // CB::LumaGameSettings::OutputRes is required! See BioShock Series implementation.
       { CompileTimeStringHash("SMAA Edge Detection VS"), { "Luma_SMAA_impl", reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "smaa_edge_detection_vs" } },
       { CompileTimeStringHash("SMAA Edge Detection PS"), { "Luma_SMAA_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "smaa_edge_detection_ps" } },
       { CompileTimeStringHash("SMAA Blending Weight Calculation VS"), { "Luma_SMAA_impl", reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "smaa_blending_weight_calculation_vs" } },
@@ -2316,13 +2319,17 @@ namespace
 
       // Lot of games are not setting this by them self,
       // so it defaults to 3 which introduces significant input latency.
-      hr = native_dxgi_device->SetMaximumFrameLatency(1);
-      assert(SUCCEEDED(hr));
+      // We should possibly link this to the "DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT" flag.
+      HRESULT hr2 = native_dxgi_device->SetMaximumFrameLatency(1);
+      assert(SUCCEEDED(hr2));
 
 #if ENABLE_SR
       com_ptr<IDXGIAdapter> native_adapter;
-      hr = native_dxgi_device->GetAdapter(&native_adapter);
-      assert(SUCCEEDED(hr));
+      if (SUCCEEDED(hr))
+      {
+         hr = native_dxgi_device->GetAdapter(&native_adapter);
+         assert(SUCCEEDED(hr));
+      }
 
       bool selected_sr_implementation = false;
       for (auto& sr_implementation : sr_implementations)
@@ -5358,7 +5365,7 @@ namespace
                            uint64_t resource_view = prev_resource_view;
                            if (FindOrCreateIndirectUpgradedResourceView(device, prev_resource_view, resource_view, device_data, true, reshade::api::resource_usage::render_target, lock_device_read))
                            {
-                              rtvs[pixel_shader_hashes->second.second[i]] = reinterpret_cast<ID3D11RenderTargetView*>(resource_view);
+                              rtvs[pixel_shader_hashes->second.first[i]] = reinterpret_cast<ID3D11RenderTargetView*>(resource_view);
                               any_changed = true;
                            }
                         }

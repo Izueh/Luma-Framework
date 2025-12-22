@@ -3,7 +3,7 @@
 #include "../Includes/ColorGradingLUT.hlsl"
 
 Texture2D<float4> SourceTexture : register(t0);
-#if _FA1EB89D
+#if _FA1EB89D // All permutations have color grading (LUT)
 Texture2D<float4> InternalGradingLUT : register(t1);
 #elif _A8D65F39 // Bloom
 Texture2D<float4> BloomTexture : register(t1);
@@ -16,10 +16,14 @@ Texture2D<float4> HalfResSourceTexture : register(t3);
 Texture2D<float4> BloomTexture : register(t1);
 Texture2D<float4> VignetteTexture : register(t2);
 Texture2D<float4> InternalGradingLUT : register(t3);
+#elif _331779B3 // Bloom + Mask
+Texture2D<float4> BloomTexture : register(t1);
+Texture2D<float4> InternalGradingLUT : register(t2);
+Texture2D<float4> MaskTexture : register(t3);
 #endif
 SamplerState sampler0 : register(s0);  // Bilinear
 
-// TODO: find the other 2 FXAA shaders (matching the non FXAA versions of "FA1EB89D" and "DB8E089A")
+// TODO: find the other 3 FXAA shaders (matching the non FXAA versions of "FA1EB89D" and "DB8E089A" and "331779B3")
 #if _5A0FD042
 #define FXAA 1
 #else
@@ -36,6 +40,12 @@ float3 GetSceneColor(float2 inCoords, Texture2D<float4> _texture, SamplerState _
 {
   const float sampleBias = cb0[21].x; // Expected to be zero, though it could be used by the game to do a very ugly game blur effect
   float3 sceneColor = _texture.SampleBias(_sampler, inCoords.xy, sampleBias).rgb;
+
+#if _331779B3
+  float4 maskColor = MaskTexture.SampleBias(_sampler, inCoords.xy, sampleBias).rgba; // Note sure when this is used exactly
+  sceneColor = lerp(sceneColor, maskColor.rgb, maskColor.a);
+#endif
+
 #if FXAA
   float3 halfResSceneColor = HalfResSourceTexture.SampleBias(_sampler, inCoords.xy, sampleBias).rgb; // This was R10G10B10A2_UNORM stored in linear space // Note: hardcoded the texture...
   if (abs(GetLuminance(sceneColor) - GetLuminance(halfResSceneColor)) > 0.02) // Luma: some optimization branch they do to skip FXAA if the full res and half res colors were close enough (it might help preserve texture detail too)
@@ -146,7 +156,7 @@ float3 ApplyBloom(float2 inCoords, float3 color, Texture2D<float4> _texture, Sam
 float3 ApplyExposure(float3 color)
 {
   const float exposure = cb0[130].w;
-  return color * exposure;
+  return color * exposure; // Luma: removed saturate()
 }
 
 float3 ApplyLUT(float3 color, Texture2D<float4> _texture, SamplerState _sampler)
@@ -248,7 +258,7 @@ void main(
 
   float3 color;
   color = GetSceneColor(inCoords, SourceTexture, sampler0);
-#if _A8D65F39 || _DB8E089A || _5A0FD042
+#if _A8D65F39 || _DB8E089A || _5A0FD042 || _331779B3
   color = ApplyBloom(inCoords, color, BloomTexture, sampler0);
 #endif
   color = ApplyExposure(color);

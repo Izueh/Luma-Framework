@@ -4,7 +4,7 @@ Texture2D<float4> t0 : register(t0); // Normal maps (for Specular objects only)
 Texture2D<float4> t1 : register(t1); // Depth or something
 Texture2D<float4> t2 : register(t2); // Previously prepared SSR step (looks like a mix of normal maps and specularity etc) (if we upgraded textures, this has huge values and needs clamping)
 Texture2D<float4> t3 : register(t3);
-Texture2D<float4> t4 : register(t4);
+Texture2D<float4> t4 : register(t4); // TODO: do we need to clamp these too?
 
 SamplerState s0_s : register(s0);
 SamplerState s1_s : register(s1);
@@ -29,7 +29,7 @@ void main(
   out float4 o1 : SV_Target1)
 {
   float4 r0,r1,r2,r3,r4;
-  r0.x = t0.Sample(s3_s, v0.xy).w;
+  r0.x = t0.Sample(s3_s, v0.xy).w; // Note: w might go beyond 1 with upgraded textures, but it should be fine
   if (0.00999999978 < r0.x) {
     r0.yz = t0.SampleLevel(s3_s, v0.xy, 0).xy;
     r1.xy = r0.yz + r0.yz;
@@ -101,15 +101,16 @@ void main(
     r0.y = r0.w / r0.y;
     r0.z = 1 - r4.w;
 
-    // Luma
+#if 0 // Luma
     if (IsNaN_Strict(r0.z))
     {
-      r0.z = 0+1;
+      r0.z = 0+1; // 1?
     }
     if (IsNaN_Strict(r0.y))
     {
       r0.y = 0;
     }
+#endif
     
     r1.xyz = r2.xyz * r0.z;
     r0.w = t4.Sample(s4_s, v0.xy).w;
@@ -124,7 +125,7 @@ void main(
 
     o0.w = r0.z;
 
-#if 1 // Luma: fix NaN alpha blends
+#if 0 // Luma: fix NaN alpha blends
     if (IsNaN_Strict(o0.w))
     {
       o0.w = 0;

@@ -724,4 +724,16 @@ float3 YUVtoRGB(float Y, float Cr, float Cb, uint type = 0)
   return color;
 }
 
+// Linear in/out
+// Can emulate shadow crush/clip from bad lut sampling, or from interpreting full range videos as limited range videos etc.
+float3 EmulateShadowClip(float3 Color, bool LinearInOut = true, float AdjustmentScale = 0.333)
+{
+  // "AdjustmentScale" is basically the added contrast curve strength
+  float adjustmentRange = 1.0 / 3.0;
+  float3 colorLinear = LinearInOut ? Color : gamma_to_linear(Color, GCT_MIRROR);
+  float3 colorGamma = LinearInOut ? linear_to_gamma(Color, GCT_MIRROR) : Color;
+  float3 finalColorLinear = colorLinear * lerp(AdjustmentScale, 1.0, saturate(colorGamma / adjustmentRange));
+  return LinearInOut ? finalColorLinear : linear_to_gamma(finalColorLinear, GCT_MIRROR);
+}
+
 #endif // SRC_COLOR_HLSL

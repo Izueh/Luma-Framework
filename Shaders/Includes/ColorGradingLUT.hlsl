@@ -483,8 +483,19 @@ void ColorGradingLUTTransferFunctionInOutCorrected(inout float3 col, uint transf
     }
 }
 
-// Corrects transfer function encoded LUT coordinates to return more accurate LUT colors from linear in/out LUTs.
-// This expects input coordinates within the 0-1 range (it should not be used to find the extrapolated (out of range) coordinates, but only on valid LUT coordinates).
+// Corrects transfer function encoded LUT coordinates to return more accurate LUT colors for LUTs that have an encoded input but linear output (or all other combinations).
+// Assuming a 2 pixels 1D LUT, the first point would map 0 to 0 and the second point 1 to 1.
+// Now, if the LUT was meant to be sampled in gamma 2.2 space (as it should, otherwise the point distribution would all be focused on highlights),
+// and we sampled 0.5 from the LUT, ideally we'd get 0.5 in output too, but if the LUT output was linear space (e.g. UNORM_SRGB, or FLOAT textures),
+// we'd then expect the result to be roughly 0.218 (0.5^2.2, similar to mid grey), but instead we'd get 0.5, which isn't correct, as it's much brighter than expected.
+// This contributes to creating banding and generally broken greadients (incontiguous steps).
+// This formula skewes the input coordinates in a way that forces the output to return 0.218, without any downsides.
+// For LUTs that use the same encoding and decoding formula, then the contiguity error from interpolated mid points isn't really problematic, unless the encoding curve suddenly changed between two LUT points (which usually isn't the case), hence a basic blend is pretty accurate already.
+// Note that in cases the LUT inverted colors (e.g. mapping 0 to 1 and 1 to 0) this code actually makes the output less accurate, however, it's an acceptable consequence, which almost never arises and can be avoided in other ways (by branching out flipped LUTs).
+// For cases where the LUT is also very strong in intensity, this also doesn't help as much as weaker luts, however, it will still skew the output towards more accurate results.
+// 
+// It can also be used with tetrahedral interpolation.
+// This expects input coordinates within the 0-1 range (prior to acknowledging the half texel offset of LUTs, which should be applied after, just before actually sampling the LUT) (it should not be used to find the extrapolated (out of range) coordinates, but only on valid LUT coordinates).
 float3 AdjustLUTCoordinatesForLinearLUT(const float3 clampedLUTCoordinatesGammaSpace, bool highQuality = true, uint lutTransferFunctionIn = DEFAULT_LUT_EXTRAPOLATION_TRANSFER_FUNCTION, bool lutInputLinear = false, bool lutOutputLinear = false, const float3 lutSize = LUT_SIZE, bool specifyLinearSpaceLUTCoordinates = false, float3 clampedLUTCoordinatesLinearSpace = 0)
 {
 	if (!specifyLinearSpaceLUTCoordinates)
@@ -511,9 +522,9 @@ float3 AdjustLUTCoordinatesForLinearLUT(const float3 clampedLUTCoordinatesGammaS
   return clampedLUTCoordinatesGammaSpace;
 #else
 //TODOFT4: when this branch runs, there's some speckles on the shotgun numerical decal in some scenes (e.g. when under a light, in front of the place where I tested AF on a decal a lot) (with DLSS they turn into black dots in the albedo view). Would this happen without "dev" settings enabled!? Probably not!
-  // Given that we haven't scaled for the LUT half texel size, we floor and ceil with the LUT size as opposed to the LUT max
-  float3 previousLUTCoordinatesGammaSpace = floor(clampedLUTCoordinatesGammaSpace * lutSize) / lutSize;
-  float3 nextLUTCoordinatesGammaSpace = ceil(clampedLUTCoordinatesGammaSpace * lutSize) / lutSize;
+  float3 lutMax = lutSize - 1.0;
+  float3 previousLUTCoordinatesGammaSpace = floor(clampedLUTCoordinatesGammaSpace * lutMax) / lutMax;
+  float3 nextLUTCoordinatesGammaSpace = ceil(clampedLUTCoordinatesGammaSpace * lutMax) / lutMax;
   float3 previousLUTCoordinatesLinearSpace = ColorGradingLUTTransferFunctionOut(previousLUTCoordinatesGammaSpace, lutTransferFunctionIn, false);
   float3 nextLUTCoordinatesLinearSpace = ColorGradingLUTTransferFunctionOut(nextLUTCoordinatesGammaSpace, lutTransferFunctionIn, false);
   // Every step size is different as it depends on where we are within the transfer function range.

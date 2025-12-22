@@ -13,18 +13,16 @@ Texture2D<float4> SceneTexture : register(t0); // Post SMAA (pre TAA)
 Texture2D<float4> PrevSceneTexture : register(t1); // Post previous SMAA (pre TAA)
 Texture2D<float2> VelocityTexture : register(t2);
 
-// TODO: replace with DLSS, especially if there's jitters (or add them)! The game massively needs good TAA...
+// Unfortunately the game has no motion vectors (not for moving/animated meshes), nor has jitters, so adding FSR/DLSS is out of the question.
+// This also means this shader was simply blending with the history with no regards for depth (visiblity), or animated objects movement.
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,
   out float4 o0 : SV_Target0)
 {
   float4 r0,r1,r2,r3;
-  int4 r0i;
-  r0i.x = (int)Consts.x;
-  if (r0i.x != 0)
+  if ((int)Consts.x)
   {
-    r0i.x = (int)Consts.y;
     r0.yz = VelocityTexture.SampleLevel(SamplerLinear_s, v1.xy, 0).xy;
     r1.xyzw = SceneTexture.SampleLevel(SamplerLinear_s, v1.xy, 0).xyzw;
     r0.yz = v1.xy + -r0.yz;
@@ -45,7 +43,7 @@ void main(
     r0.zw = (r3.x < r0.zw);
     r0.z = asfloat(asint(r0.w) | asint(r0.z));
     r0.z = r0.z ? 0 : r0.y;
-    r0.x = r0i.x ? r0.z : r0.y;
+    r0.x = ((int)Consts.y) ? r0.z : r0.y;
     o0.xyzw = r0.x * (r2.xyzw - r1.xyzw) + r1.xyzw; // Lerp
   }
   else

@@ -1,7 +1,13 @@
+#include "Includes/Common.hlsl"
+
 cbuffer cbInstanceConsts : register(b1)
 {
   float4 InstanceConsts[2] : packoffset(c0);
 }
+
+#ifndef FORCE_VANILLA_AUTO_EXPOSURE
+#define FORCE_VANILLA_AUTO_EXPOSURE 0
+#endif // FORCE_VANILLA_AUTO_EXPOSURE
 
 SamplerState SourceImage_s : register(s0);
 Texture2D<float4> SourceImage : register(t0);
@@ -18,6 +24,10 @@ void main(
   r0.xyz = max(r0.xyz, 0.0); // Fix Nans and remove negative values (they'd be trash)
 #endif
   r0.xyz = InstanceConsts[0].yyy * r0.xyz;
+#if FORCE_VANILLA_AUTO_EXPOSURE
   r0.x = dot(r0.xyz, float3(0.333333343,0.333333343,0.333333343));
+#else
+  r0.x = GetLuminance(r0.xyz);
+#endif
   oDepth = saturate(InstanceConsts[0].x * r0.x);
 }

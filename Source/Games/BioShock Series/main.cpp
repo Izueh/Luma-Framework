@@ -1,6 +1,6 @@
 #define GAME_BIOSHOCK_SERIES 1
 
-#define ENABLE_SMAA
+#define ENABLE_SMAA 1
 
 #include "..\..\Core\core.hpp"
 

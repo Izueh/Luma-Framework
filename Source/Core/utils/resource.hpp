@@ -458,6 +458,10 @@ com_ptr<T> CloneTexture(ID3D11Device* native_device, ID3D11Resource* texture_res
          if (overridden_mip_levels != -1)
          {
             texture_desc.MipLevels = overridden_mip_levels;
+            if (overridden_mip_levels != 1)
+               texture_desc.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
+            else
+               texture_desc.MiscFlags &= ~D3D11_RESOURCE_MISC_GENERATE_MIPS;
          }
          texture_desc.BindFlags |= add_bind_flags;
          texture_desc.BindFlags &= ~remove_bind_flags;
