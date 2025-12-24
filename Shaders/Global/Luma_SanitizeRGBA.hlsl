@@ -8,7 +8,7 @@ RWTexture2D<float4> sourceTargetTexture : register(u0);
 [numthreads(8,8,1)]
 void main(uint3 vDispatchThreadId : SV_DispatchThreadID)
 #else // PS
-float4 main(float4 pos : SV_Position0) : SV_Target0
+float4 main(float4 pos : SV_Position) : SV_Target0
 #endif
 {
 #if CS

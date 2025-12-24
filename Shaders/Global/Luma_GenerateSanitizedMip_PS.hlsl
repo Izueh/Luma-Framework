@@ -4,7 +4,7 @@
 Texture2D<float4> sourceMip : register(t0);
 
 // This can downscale mips and smooth out any NaNs with their closest non NaN value (iteratively)
-float4 main(float4 pos : SV_Position0) : SV_Target0
+float4 main(float4 pos : SV_Position) : SV_Target0
 {
   const int2 pixelPos = pos.xy;
 

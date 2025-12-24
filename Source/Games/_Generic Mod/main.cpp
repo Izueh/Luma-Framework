@@ -1,5 +1,7 @@
 #define GAME_GENERIC 1
 
+#define CHECK_GRAPHICS_API_COMPATIBILITY 1
+
 #include "..\..\Core\core.hpp"
 
 namespace
@@ -158,6 +160,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             reshade::api::format::r11g11b10_float,
       };
       texture_upgrade_formats.insert(toggleable_texture_upgrade_formats.begin(), toggleable_texture_upgrade_formats.end());
+      texture_upgrade_formats.erase(reshade::api::format::r16g16b16a16_unorm); // This might be more likely to cause damange than not generally, so remove by default
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
 
       game = new GenericGame();

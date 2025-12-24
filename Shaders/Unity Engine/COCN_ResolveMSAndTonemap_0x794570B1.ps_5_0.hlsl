@@ -28,7 +28,7 @@ float3 UnityTonemapper(float3 x)
   float whiteLevel = 5.3;
   float whiteScale = Tonemap_Uncharted2_Eval(whiteLevel, a, b, c, d, e, f).x;
 
-  // Note: the second division by "whiteScale" is what makes the Unity tonemapper different from the original UC2, this version however seems to make no sense as it doesn't rescrict between 0 and 1
+  // Note: the addition of the first division by "whiteScale" is what makes the Unity tonemapper different from the original UC2, and that would seemengly compress colors a lot more aggressively
   return sign(x) * Tonemap_Uncharted2_Eval(abs(x) / whiteScale, a, b, c, d, e, f) / whiteScale; // Luma: add sign*abs to preserve negative values (it's fine as it outputs 0 for 0)
 #else // There seemengly is no way to make this curve output something that looks right in HDR, at least not in COCOON, that heavily relied on clipping to hue shift
   float a = 0.2 * 2 * LumaSettings.DevSetting05;

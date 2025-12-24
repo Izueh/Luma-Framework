@@ -2,8 +2,8 @@
 #include "../Includes/ColorGradingLUT.hlsl"
 #include "../Includes/DICE.hlsl"
 
-#ifndef ENABLE_FAKE_HDR
-#define ENABLE_FAKE_HDR 1
+#ifndef ENABLE_HDR_BOOST
+#define ENABLE_HDR_BOOST 1
 #endif
 
 Texture2D<float4> Tex : register(t0);
@@ -17,6 +17,12 @@ void main(
 #if 1 // In the original game, the texture we sample here would have been UNORM_SRGB but sampled as a UNORM view here, thus implicitly converting to gamma space, we need to do it manually with float textures. This is duplicated in the FXAA shader too! And in the pause menu background.
   if (LumaData.CustomData1) // If drawing on swapchain!
   {
+    // If SR is active, we would have previously converted to BT.2020 to avoid SR clipping negative scRGB colors!
+    if (LumaSettings.SRType)
+    {
+      outColor.rgb = BT2020_To_BT709(outColor.rgb);
+    }
+
     float2 size;
     Tex.GetDimensions(size.x, size.y);
     float2 uv = v0.xy / size.xy;
@@ -24,7 +30,7 @@ void main(
     // Do tonemapping here so it doesn't influence any anti aliasing, or auto exposure etc
     if (doHDR)
     {
-#if ENABLE_FAKE_HDR
+#if ENABLE_HDR_BOOST
       float normalizationPoint = 0.025; // Found empyrically
       float fakeHDRIntensity = 0.1; // Hardcoded for now, no other value looked balance so there's not much need to expose it
       float fakeHDRSaturation = LumaSettings.GameSettings.HDRBoostSaturationAmount;

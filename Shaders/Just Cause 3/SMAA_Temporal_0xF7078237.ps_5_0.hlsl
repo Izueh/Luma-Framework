@@ -10,10 +10,10 @@ cbuffer cbConsts : register(b1)
 
 SamplerState SamplerLinear_s : register(s0);
 Texture2D<float4> SceneTexture : register(t0); // Post SMAA (pre TAA)
-Texture2D<float4> PrevSceneTexture : register(t1); // Post previous SMAA (pre TAA)
+Texture2D<float4> PrevSceneTexture : register(t1); // Post previous SMAA (pre TAA) (but post tonemap exposure, hence the image aren't 100% blendable)
 Texture2D<float2> VelocityTexture : register(t2);
 
-// Unfortunately the game has no motion vectors (not for moving/animated meshes), nor has jitters, so adding FSR/DLSS is out of the question.
+// Unfortunately the game has no motion vectors (not for moving/animated meshes), nor has jitters (or maybe it does, 4x), so adding FSR/DLSS is out of the question.
 // This also means this shader was simply blending with the history with no regards for depth (visiblity), or animated objects movement.
 void main(
   float4 v0 : SV_Position0,
@@ -25,10 +25,10 @@ void main(
   {
     r0.yz = VelocityTexture.SampleLevel(SamplerLinear_s, v1.xy, 0).xy;
     r1.xyzw = SceneTexture.SampleLevel(SamplerLinear_s, v1.xy, 0).xyzw;
-    r0.yz = v1.xy + -r0.yz;
+    r0.yz = v1.xy - r0.yz;
     r2.xyzw = PrevSceneTexture.SampleLevel(SamplerLinear_s, r0.yz, 0).xyzw;
 
-    // Undo encoding on luminance (from tonemapper, on w, before SMAA) to turn it back to linear
+    // Undo encoding on luminance (from tonemapper, on w, before SMAA) to turn it back to linear (this wouldn't be necessary on float upgraded render targets but whatever)
     r0.y = r1.w * r1.w;
     r0.w = r2.w * r2.w;
 

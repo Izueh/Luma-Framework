@@ -23,10 +23,6 @@ void main(
   
 #if FIX_VIDEOS_COLOR_SPACE
   outColor.rgb = YUVtoRGB(Y, Cr, Cb, 0);
-#if DEVELOPMENT && FIX_VIDEOS_COLOR_SPACE == 2 // TODO: delete. Temp test
-  outColor.rgb = YUVtoRGB(Y, Cr, Cb, 2);
-  outColor.rgb = linear_to_gamma(BT601_To_BT709(gamma_to_linear(outColor.rgb)));
-#endif
 #else // Incorrect red levels, skin looks red
   outColor.rgb = YUVtoRGB(Y, Cr, Cb, 2);
 #endif

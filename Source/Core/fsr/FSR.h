@@ -29,7 +29,9 @@ namespace FidelityFX
 
 		virtual bool Draw(const SR::InstanceData* data, ID3D11DeviceContext* command_list, const DrawData& draw_data) override;
 
-      virtual int GetJitterPhases(const SR::InstanceData* data) const;
+		virtual int GetJitterPhases(const SR::InstanceData* data) const;
+		
+		virtual bool NeedsStateRestoration() const { return true; }
 	};
 }
 

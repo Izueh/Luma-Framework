@@ -3,8 +3,9 @@
 
 #include "Math.hlsl"
 
+// TODO: this will spread everywhere, make sure it's localized
 // Needed by "linearToLog()" and "logToLinear()"
-#pragma warning( disable : 4122 )
+//#pragma warning( disable : 4122 )
 
 // SDR linear mid gray.
 // This is based on the commonly used value, though perception space mid gray (0.5) in sRGB or Gamma 2.2 would theoretically be ~0.2155 in linear.
@@ -102,6 +103,7 @@ float GetChrominance(float3 color)
     return (maxVal == 0.0) ? 0.0 : chrominance;
 }
 
+// Note: this sets the relative chrominance, not absolute, so an input value of 1 leaves the color unchanged.
 // Note: this changes the luminance of a color, possibly increasing it by a good amount
 // Note: the result might depend on the color space
 float3 SetChrominance(float3 color, float chrominance)
@@ -179,19 +181,25 @@ float3 CorrectPerChannelTonemapHiglightsDesaturation(float3 color, float peakBri
 #endif
 }
 
-// This basically does gamut mapping, however it's not focused on gamut as primaries, but on peak white.
-// The color is expected to be in the specified color space and in linear.
+// This basically does gamut mapping, however it's not focused on gamut as primaries, but on peak white (MaxRange).
+// The color is expected to be in the specified color space and in linear; ideally previously tonemapped by luminance to the same peak value.
+// Tonemapping by luminance can cause blue and red values to "overshoot" beyond the RGB peak of the display, especially blue, given that it's roughly 10 times less luminous than green (green can never overshoot, as it's the brightest color).
 // 
-// The sum of "DesaturationAmount" and "DarkeningAmount" needs to be <= 1, both within 0 and 1. They only apply to "FixPositives".
-// The closer the sum is to 1, the more each color channel will be containted within its peak range.
-float3 CorrectOutOfRangeColor(float3 Color, bool FixNegatives = true, bool FixPositives = true, float DesaturationAmount = 0.5, float DarkeningAmount = 0.5, float Peak = 1.0, uint ColorSpace = CS_DEFAULT)
+// "PositivesDesaturationVsDarkeningRatio" determines how much we do desaturation vs darkening to get the highlights back in range ("FixPositives" only). We always correct up to a 100%, but we can get there in both ways.
+// For best results, it's generally better to do 50% desaturation or more. If darkening is done, highlights will simply flatten and lose detail, making them look out of place; while with desaturation at least their color will change, giving a more natural look.
+// However if desaturation is done to 100%, this would turn too white (and kinda hue shift, given that doing desaturation in RGB doesn't closely match perception), so doing some darkening is a good workaround to avoid heavy desaturation or clipping.
+// 
+// "PositivesSmoothingRatio" should be from 0 to 1, mapping the smoothing start from "0" to "MaxRange"; usually a something like "0.2" would be a good start.
+// It's there to prevent a step in gradients, when highlights start having out of range values.
+// It starts smoothing in the darkening and desaturation earlier, so the results appear more natural (smooth).
+float3 CorrectOutOfRangeColor(float3 Color, bool FixNegatives = true, bool FixPositives = true, float PositivesDesaturationVsDarkeningRatio = 1.0, float MaxRange = 1.0, float PositivesSmoothingRatio = 0.0, uint ColorSpace = CS_DEFAULT)
 {
   if (FixNegatives && any(Color < 0.0)) // Optional "optimization" branch
   {
     float colorLuminance = GetLuminance(Color, ColorSpace);
 
-    float3 positiveColor = max(Color.xyz, 0.0);
-	float3 negativeColor = min(Color.xyz, 0.0);
+    float3 positiveColor = max(Color, 0.0);
+	float3 negativeColor = min(Color, 0.0);
 	float positiveLuminance = GetLuminance(positiveColor, ColorSpace);
 	float negativeLuminance = GetLuminance(negativeColor, ColorSpace);
 	// Desaturate until we are not out of gamut anymore
@@ -202,29 +210,68 @@ float3 CorrectOutOfRangeColor(float3 Color, bool FixNegatives = true, bool FixPo
 	  float desaturateAlpha = safeDivision(minChannel, minChannel - colorLuminance, 0); // Both division elements are meant to be negative so the ratio resolves to a positive value
 	  Color = lerp(Color, colorLuminance, desaturateAlpha);
 	}
+#if 0 // Disabled as this won't actually constrain the results within the gamut, and there's no proper way for it to do it really (not without raising the brightness), given that it sets luminance to 0 while allowing some positive and negative values
 	// Increase luminance until it's 0 if we were below 0 (it will clip out the negative gamut)
 	else if (colorLuminance < -FLT_MIN)
 	{
 	  float negativePositiveLuminanceRatio = positiveLuminance / -negativeLuminance;
-	  negativeColor.xyz *= negativePositiveLuminanceRatio;
-	  Color.xyz = positiveColor + negativeColor;
+	  negativeColor *= negativePositiveLuminanceRatio;
+	  Color = positiveColor + negativeColor;
 	}
-	// Snap to 0 if the overall luminance was zero, there's nothing to savage, no valid information on rgb ratio
+#endif
+	// Snap to 0 if the overall luminance was zero (or possibly less), there's nothing to savage, no valid information on rgb ratio
 	else
 	{
-	  Color.xyz = 0.0;
+	  Color = 0.0;
 	}
   }
 
-  if (FixPositives && any(Color > Peak)) // Optional "optimization" branch
-  {
-    float colorLuminance = GetLuminance(Color, ColorSpace);
-    float colorLuminanceInExcess = colorLuminance - Peak;
-    float maxColorInExcess = max3(Color) - Peak; // This is guaranteed to be >= "colorLuminanceInExcess"
-    float brightnessReduction = saturate(safeDivision(Peak, max3(Color), 1)); // Fall back to one in case of division by zero
+  float colorPeak = max3(Color); // This is guaranteed to be >= "colorLuminance"
+  float startRange = MaxRange * (1.0 - PositivesSmoothingRatio);
+  float smoothedRange = PositivesSmoothingRatio > 0.0 ? clamp(colorPeak, startRange, MaxRange) : MaxRange; // Smooth the range by rgb max, not luminance, as luminance could be very low if we only have blue, and yet the rgb max could be out of range
+  if (FixPositives && colorPeak > startRange) // Optional "optimization" branch
+  {	
+	// Find out the required darkening and desaturation amounts to contain the color within the max range value.
+  	float colorLuminance = GetLuminance(Color, ColorSpace); // Expected to be > 0 if we got here, otherwise run "FixNegatives".
+  	float targetLuminance = min(colorLuminance, smoothedRange);
+    float colorLuminanceInExcess = targetLuminance - smoothedRange; // This would be ~0 if we previously tonemapped by luminance to the same peak, otherwise it might be negative...
+    float maxColorInExcess = colorPeak - smoothedRange; // This is guaranteed to be >= "colorLuminanceInExcess"
+#if 0
+    float desaturateAlpha = saturate(maxColorInExcess / (maxColorInExcess - colorLuminanceInExcess));
+#else // Extra safety possibly not needed but do it for now, float has precision loss...
     float desaturateAlpha = saturate(safeDivision(maxColorInExcess, maxColorInExcess - colorLuminanceInExcess, 0)); // Fall back to zero in case of division by zero
-    Color = lerp(Color, colorLuminance, desaturateAlpha * DesaturationAmount);
-    Color = lerp(Color, Color * brightnessReduction, DarkeningAmount); // Also reduce the brightness to partially maintain the hue, at the cost of brightness
+#endif
+	
+	// The sum of these need to be 1 to properly contain the color peak channel within the max allowed range,
+	// though theoretically we could set these values independently (as long as their sum is <= 1)\.
+	float DarkeningAmount = 1.0 - PositivesDesaturationVsDarkeningRatio;
+	float DesaturationAmount = PositivesDesaturationVsDarkeningRatio;
+
+	// Desaturate to contain rgb within the peak, on each channel
+    float3 newColor = lerp(Color, targetLuminance, desaturateAlpha * DesaturationAmount);
+
+	// If desaturation didn't fully contain rgb within the peak, shrink color to peak, maintaining the hue at the cost of brightness.
+#if 0
+    float darkeningInvAlpha = saturate(smoothedRange / max3(newColor));
+#else // Extra safety possibly not needed but do it for now, float has precision loss...
+    float darkeningInvAlpha = saturate(safeDivision(smoothedRange, max3(newColor), 1)); // Fall back to one in case of division by zero
+#endif
+	newColor *= darkeningInvAlpha;
+	
+	if (PositivesSmoothingRatio <= 0.0)
+	{
+		Color = newColor;
+	}
+	else
+	{
+		// At 0 we at the beginning of the smoothing range, at 1 at the end (meaning we don't smooth anymore, the correction applies at 100% intensity)
+#if 0 // TODO: try both versions, smooth step is a bit random here, but might actually look better
+		float smoothingProgress = smoothstep(startRange, MaxRange, colorPeak);
+#else
+		float smoothingProgress = saturate(InverseLerp(startRange, MaxRange, colorPeak));
+#endif
+		Color = lerp(Color, newColor, smoothingProgress);
+	}
   }
 
   return Color;
@@ -375,13 +422,9 @@ float sqrt_mirrored(float x)
 {
 	return sqrt(abs(x)) * sign(x);
 }
-float4 sqr_mirrored(float4 x)
+float pow_mirrored(float x, float y)
 {
-	return sqr(x) * sign(x);
-}
-float4 sqrt_mirrored(float4 x)
-{
-	return sqrt(abs(x)) * sign(x);
+	return pow(abs(x), y) * sign(x);
 }
 float3 sqr_mirrored(float3 x)
 {
@@ -390,6 +433,22 @@ float3 sqr_mirrored(float3 x)
 float3 sqrt_mirrored(float3 x)
 {
 	return sqrt(abs(x)) * sign(x);
+}
+float3 pow_mirrored(float3 x, float3 y)
+{
+	return pow(abs(x), y) * sign(x);
+}
+float4 sqr_mirrored(float4 x)
+{
+	return sqr(x) * sign(x);
+}
+float4 sqrt_mirrored(float4 x)
+{
+	return sqrt(abs(x)) * sign(x);
+}
+float4 pow_mirrored(float4 x, float4 y)
+{
+	return pow(abs(x), y) * sign(x);
 }
 
 static const float PQ_constant_M1 =  0.1593017578125f;
@@ -452,10 +511,11 @@ float3 linearToLog_internal(float3 linearColor, float3 logGrey = LogGrey)
 // "logColor" is expected to be != 0.
 float3 logToLinear_internal(float3 logColor, float3 logGrey = LogGrey)
 {
-//#pragma warning( disable : 4122 ) // Note: this doesn't work here
+#pragma warning( disable : 4122 ) // Note: this doesn't work here
 	return exp2((logColor - logGrey) * LogLinearRange) * LogLinearGrey;
-//#pragma warning( default : 4122 )
+#pragma warning( default : 4122 )
 }
+
 
 // Perceptual encoding functions (more accurate than HDR10 PQ).
 // "linearColor" is expected to be >= 0 and with a white point around 80-100.
@@ -493,10 +553,23 @@ static const float3x3 BT2020_2_BT709 = {
 	-0.12455047667026519775390625f,     1.13289988040924072265625f,     -0.0083494223654270172119140625f,
 	-0.01815076358616352081298828125f, -0.100578896701335906982421875f,  1.11872971057891845703125f };
 
+// SMPTE 170M - BT.601 (NTSC-M) (USA) -> BT.709
 static const float3x3 BT601_2_BT709 = {
     0.939497225737661f,					0.0502268452914346f,			0.0102759289709032f,
     0.0177558637510127f,				0.965824605885027f,				0.0164195303639603f,
    -0.0016216320996701f,				-0.00437400622653655f,			1.00599563832621f };
+
+// ARIB TR-B9 (9300K+27MPCD with vK20 and CAT02 chromatic adaptation) (NTSC-J) -> BT.709
+static const float3x3 NTSCJ_2_BT709 = {
+    0.768497526f, -0.210804164f, 0.000297427177f,
+    0.0397904068f, 1.04825413f, 0.00555809540f,
+    0.00147510506f, 0.0328789241f, 1.36515128f };
+
+// EBU - BT.470BG/BT.601 (PAL) -> BT.709
+static const float3x3 PAL_2_BT709 = {
+	1.04408168421813,		-0.0440816842181253,	0.000000000000000,
+	0.000000000000000,	1.00000000000000,			0.000000000000000,
+	0.000000000000000,	0.0118044782106489,		0.988195521789351 };
 
 float3 BT709_To_BT2020(float3 color)
 {
@@ -508,10 +581,26 @@ float3 BT2020_To_BT709(float3 color)
 	return mul(BT2020_2_BT709, color);
 }
 
-// TODO: this doesn't seem to be right... Tested with Mafia III videos.
 float3 BT601_To_BT709(float3 color)
 {
 	return mul(BT601_2_BT709, color);
+}
+
+float3 FromColorSpaceToColorSpace(float3 color, uint colorSpaceIn, uint colorSpaceOut)
+{
+	if (colorSpaceIn == CS_BT709 && colorSpaceOut == CS_BT2020)
+	{
+		return BT709_To_BT2020(color);
+	}
+	else if (colorSpaceIn == CS_BT2020 && colorSpaceOut == CS_BT709)
+	{
+		return BT2020_To_BT709(color);
+	}
+	else if (colorSpaceIn == colorSpaceOut)
+	{
+		return color;
+	}
+	return float3(1, 0, 1); // Not implemented, return purple
 }
 
 static const float2 D65xy = float2(0.3127f, 0.3290f);
@@ -734,6 +823,46 @@ float3 EmulateShadowClip(float3 Color, bool LinearInOut = true, float Adjustment
   float3 colorGamma = LinearInOut ? linear_to_gamma(Color, GCT_MIRROR) : Color;
   float3 finalColorLinear = colorLinear * lerp(AdjustmentScale, 1.0, saturate(colorGamma / adjustmentRange));
   return LinearInOut ? finalColorLinear : linear_to_gamma(finalColorLinear, GCT_MIRROR);
+}
+
+// Linear or Gamma in/out
+// Modernizes old school grading that either clips or raises blacks, not really suitable for modern OLEDs.
+// Perceptually raises shadow without raising the black floor.
+float3 EmulateShadowRaise(float3 Color, float3 Offset, bool LinearInOut = true)
+{
+	// Whether the offset was removing color (causing clipping in SDR, and expanding the color range in HDR), or adding to color (raising blacks),
+	// for a range matching double of its abs offset, don't fully apply the offset.
+	// This means 0 will stay 0, while most of the image will still be affected.
+	// This will also prevent levels from accidentally generating invalid negative values in HDR,
+	// that would sometimes expand the gamut, but more often simply generate weird or broken colors.
+	float range = LinearInOut ? 3.0 : 2.0; // Arbitrary but decent // TODO: try range...
+	float center = LinearInOut ? MidGray : 0.5; // A bit random but should be fine
+	float3 alpha = saturate(Color / abs(Offset * range));
+
+	// Another approximation
+	// For the positive case, we do a sqrt to shift the intensity and make it look nicer.
+	// For the negative case, we might do a sqr, otherwise the result would flatten itself to 0 for the whole range if range was 1,
+	// and even if it wasn't, it'd generate negative values for an input of >= 0. Update: somehow doing "sqr" there breaks, so leave it "linear" (it doesn't seem to flatten either, likely because of the "range" making alpha smaller).
+	if (!LinearInOut)
+		alpha = Offset >= 0.0 ? sqrt(alpha) : alpha;
+
+	// If levels go too high, force apply them anyway
+	alpha = lerp(alpha, 1.0, saturate((abs(Offset) - center) * range));
+
+	Color += Offset * alpha;
+	return Color;
+}
+
+// If our color has any negative values (e.g. scRGB) and we want to multiply it by a factor,
+// we should flip the scaling direction when the source color is below 0.
+// For example, if the red multiplier was 1.5, meaning the final color would end up being more red,
+// if we start from a negative red value (which would expand the gamut on blue/green),
+// we don't want to further push the negative red value out (lower it),
+// but increase it (bring it closer to 0) by dividing it, which will do its job of making the color more red.
+// Do not use this if the scale is "uniform" and meant to simply do brightness scaling, because that should be a normal multiplication.
+float3 MultiplyExtendedGamutColor(float3 Color, float3 Scale)
+{
+	return (Color >= 0.0 || Scale == 0.0) ? (Color * Scale) : (Color / Scale);
 }
 
 #endif // SRC_COLOR_HLSL

@@ -507,7 +507,7 @@ void main(
       else
       {
         tonemappedColor = RestoreLuminance(tonemappedColor, Reinhard::ReinhardRange(GetLuminance(tonemappedColor), shoulderStart, -1.0, peakWhite / paperWhite, false).x, true);
-        tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, true, 0.5, 0.5, peakWhite / paperWhite);
+        tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, true, 0.5, peakWhite / paperWhite);
       }
     }
 
@@ -565,7 +565,7 @@ void main(
     // Crop out all non supported sRGB colors (<0), emulating UNORM, very much emulating the original color
     tonemappedColor = max(tonemappedColor, 0.0);
     // Desaturate highlights as in vanilla (or well, similar to it)
-    tonemappedColor = RestoreLuminance(tonemappedColor, CorrectOutOfRangeColor(tonemappedColor, false, true, 1.0, 0.0));
+    tonemappedColor = RestoreLuminance(tonemappedColor, CorrectOutOfRangeColor(tonemappedColor, false, true, 1.0));
     tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
 
 #elif VANILLA_LOOK_TYPE >= 1
@@ -581,7 +581,7 @@ void main(
 #if (SCENE || BLUR || BLOOM) && VIGNETTE
     tonemappedColor = gamma_to_linear(tonemappedColor, GCT_MIRROR);
     tonemappedColor = BT709_To_BT2020(tonemappedColor);
-    tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, false, 0.5, 0.5, 1.0, CS_BT2020);
+    tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, false, 0.5, 1.0, 0.2, CS_BT2020);
     tonemappedColor = BT2020_To_BT709(tonemappedColor);
     tonemappedColor = linear_to_gamma(tonemappedColor, GCT_MIRROR);
 #else

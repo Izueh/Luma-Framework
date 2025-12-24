@@ -111,7 +111,7 @@ void main(
       else
       {
         o0.xyz = RestoreLuminance(o0.xyz, Reinhard::ReinhardRange(GetLuminance(o0.xyz), shoulderStart, -1.0, peakWhite / paperWhite, false).x, true);
-        o0.xyz = CorrectOutOfRangeColor(o0.xyz, true, true, 0.5, 0.5, peakWhite / paperWhite);
+        o0.xyz = CorrectOutOfRangeColor(o0.xyz, true, true, 0.5, peakWhite / paperWhite);
       }
     }
 

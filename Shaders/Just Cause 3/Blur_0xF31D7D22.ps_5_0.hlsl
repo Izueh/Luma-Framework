@@ -17,7 +17,7 @@ void main(
 {
   float4 r0,r1,r2;
   float2 editedConsts = Consts.xy;
-#if !ENABLE_ANAMORPHIC_BLOOM // Luma: fix bloom being stretched horizontally, it had a 1.5 multiplier on the hor axis // TODO: make sure this shader isn't re-used for anything else, given it might
+#if !ENABLE_ANAMORPHIC_BLOOM // Luma: fix bloom being stretched horizontally, it had a 1.5 multiplier on the hor axis
 #if 1 // Stretches but doesn't preserve the overall bloom size, which is fine as bloom was too big anyway (old school)
   editedConsts.x /= 1.5;
 #elif 0
@@ -50,4 +50,7 @@ void main(
   r0.xyz = r2.xyz * float3(0.0864199996,0.0864199996,0.0864199996) + r0.xyz;
   o0.xyz = r1.xyz * float3(0.0370370001,0.0370370001,0.0370370001) + r0.xyz;
   o0.w = 1;
+
+  // Luma: fix negative values:
+  o0.xyz = max(o0.xyz, 0.0);
 }

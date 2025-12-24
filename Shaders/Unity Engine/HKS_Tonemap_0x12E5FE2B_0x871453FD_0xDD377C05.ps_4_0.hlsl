@@ -48,8 +48,6 @@ void main(
 
   // The game uses a 256x4 LUT, with the horizontal axis being contrast, and each vertical line being a different color (rgb, 4th axis is unknown, seems never used, probably just to make the texture res even)
 #if ENABLE_LUMA
-  const bool extrapolateLUTsMethod = vanilla ? -1 : 1;
-  
   float lutWidth;
   float lutHeight;
   t1.GetDimensions(lutWidth, lutHeight);
@@ -60,12 +58,37 @@ void main(
     xScale = 1.0;
     xOffset = 0.0;
   }
+  
+  float3 lutEncodedInput = sceneColor.rgb;
+  float3 lutMin = 0.0;
+  float3 lutMax = 1.0;
+  if (!vanilla)
+  {
+    Find1DLUTClippingEdges(t1, 256, 0.0375, 0, 1, 2, lutMin, lutMax); // TODO: move this to the vertex shader or something? It can be extremely slow per pixel, though for now we lowered the max search range so much that it doesn't matter!
+#if DEVELOPMENT && 0 // Print purple when LUTs present clipping
+    bool eq = false;
+#if 0 // Disable the double checked testing, this is only needed to verify "Find1DLUTClippingEdges" is working properly!
+    bool rEq = abs(t1.Load(int3(0, 0, 0)).r - t1.Load(int3(1, 0, 0)).r) <= 0.001;
+    bool gEq = abs(t1.Load(int3(0, 1, 0)).g - t1.Load(int3(1, 1, 0)).g) <= 0.001;
+    bool bEq = abs(t1.Load(int3(0, 2, 0)).b - t1.Load(int3(1, 2, 0)).b) <= 0.001;
+    eq = rEq || gEq || bEq;
+#endif
+    if (any(lutMin != 0.0) || any(lutMax != 1.0) || eq)
+    {
+      o0 = float4(1, 0, 1, 1);
+      return;
+    }
+#endif
+  }
+  // Compress the input to be 100% within the LUT clipping range. Some LUTs clipped inputs like 1 2 and 3 (out of 255) to 0 in this game. Possibly the same for highlights (but mirrored).
+  // Note that this might expand the gamut, possibly in weird ways!
+  lutEncodedInput = remap(lutEncodedInput, 0, 1, lutMin, lutMax);
 
-  float4 redLUT = sampleLUTWithExtrapolation1D(t1, s1_s, float2((sceneColor.r * xScale) + xOffset, 0.125), extrapolateLUTsMethod).rgba;
-  float4 greenLUT = sampleLUTWithExtrapolation1D(t1, s1_s, float2((sceneColor.g * xScale) + xOffset, 0.375), extrapolateLUTsMethod).rgba;
-  float4 blueLUT = sampleLUTWithExtrapolation1D(t1, s1_s, float2((sceneColor.b * xScale) + xOffset, 0.625), extrapolateLUTsMethod).rgba;
-  float3 gradedSceneColor = float3(redLUT.r, greenLUT.g, blueLUT.b);
+  float3 gradedSceneColor = Sample1DLUTWithExtrapolation(t1, s1_s, lutEncodedInput, 0, 1, 2, 0, 1, 2, 3, false, !vanilla, !vanilla).rgb;
   float3 gradedSceneColorLinear;
+
+  // Re-expand the LUT output from its clipping range, to the full range, preventing colors from clipping. This possibly generates a wider gamut too.
+  gradedSceneColor = remap(gradedSceneColor, lutMin, lutMax, 0, 1);
 
   // Hues correction
   if (!vanilla)
@@ -73,7 +96,7 @@ void main(
     float4 redBlackLUT = t1.Sample(s1_s, float2((0 * xScale) + xOffset, 0.125)).rgba;
     float4 greenBlackLUT = t1.Sample(s1_s, float2((0 * xScale) + xOffset, 0.375)).rgba;
     float4 blueBlackLUT = t1.Sample(s1_s, float2((0 * xScale) + xOffset, 0.625)).rgba;
-    float3 gradedBlackColorLinear = gamma_to_linear(float3(redBlackLUT.r, greenBlackLUT.g, greenBlackLUT.b));
+    float3 gradedBlackColorLinear = gamma_to_linear(float3(redBlackLUT.r, greenBlackLUT.g, blueBlackLUT.b));
 
 // Draw purple if the LUT is pre-clipped (e.g. going full black before the min input point, and going full white before the max input point).
 // We don't care for the case where LUTs don't reach 1 on the max input point, because LUT extrapolation will take care of the rest.
@@ -240,9 +263,7 @@ void main(
     gradedSceneColorLinear = DICETonemap(gradedSceneColorLinear * paperWhite, peakWhite, settings) / paperWhite;
     
 #if GAMUT_MAPPING_TYPE == 0
-    float desaturationAmount = 0.5;
-    float darkeningAmount = 0.5;
-    gradedSceneColorLinear = BT2020_To_BT709(CorrectOutOfRangeColor(BT709_To_BT2020(gradedSceneColorLinear), true, false, desaturationAmount, darkeningAmount, peakWhite / paperWhite, CS_BT2020));
+    gradedSceneColorLinear = BT2020_To_BT709(CorrectOutOfRangeColor(BT709_To_BT2020(gradedSceneColorLinear), true, false, 0.5, peakWhite / paperWhite, 0.0, CS_BT2020));
 #endif
 
 #if ENABLE_DITHERING // HDR only, it's hard to see it in SDR
@@ -269,9 +290,8 @@ void main(
 #endif
 
 #if GAMUT_MAPPING_TYPE == 0 && 0 // Looks bad with "RestoreHueAndChrominance". Not needed with "gradedSceneColorLinearChannelTM".
-    float desaturationAmount = DVS1; // 0.5
-    float darkeningAmount = DVS2; // 0.5
-    gradedSceneColorLinear = CorrectOutOfRangeColor(gradedSceneColorLinear, true, true, desaturationAmount, darkeningAmount, peakWhite / paperWhite);
+    float desaturationVsDarkeningRatio = DVS1; // 0.5
+    gradedSceneColorLinear = CorrectOutOfRangeColor(gradedSceneColorLinear, true, true, desaturationVsDarkeningRatio, peakWhite / paperWhite);
 #endif
   }
 

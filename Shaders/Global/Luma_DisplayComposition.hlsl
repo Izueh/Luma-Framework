@@ -12,7 +12,7 @@ Texture2DMSArray<float4> debugTexture2DMSArray : register(t5);
 Texture3D<float4> debugTexture3D : register(t6);
 Texture1D<float4> debugTexture1D : register(t7);
 Texture1DArray<float4> debugTexture1DArray : register(t8);
-// TODO: add TextureCube(s) support... Update "debug_draw_srv_slot_numbers" in c++ if you change this.
+// TODO: add TextureCube(s) support... Update "debug_draw_srv_slot_numbers" in c++ if you change this. And also for uint/sint textures.
 #endif
 
 // Note: this might not always be set, only use in known cases
@@ -137,11 +137,11 @@ bool DrawDebugTexture(float3 pos, inout float4 outColor, float gamePaperWhite, f
 		int sampleIndex = 0; // Expose for manual analysis if necessary
 		if (_texture1D && _textureArray)
 		{
-			debugTexture1DArray.Load(int3(debugPosInt.x, debugPosInt.y, mipLevel)); // The array elements are spread vertically
+			color = debugTexture1DArray.Load(int3(debugPosInt.x, debugPosInt.y, mipLevel)); // The array elements are spread vertically
 		}
 		else if (_texture1D)
 		{
-			debugTexture1D.Load(int2(debugPosInt.x, mipLevel));
+			color = debugTexture1D.Load(int2(debugPosInt.x, mipLevel));
 		}
 		else if (_texture3D)
 		{
@@ -227,7 +227,7 @@ bool DrawDebugTexture(float3 pos, inout float4 outColor, float gamePaperWhite, f
     		const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
 #if 1 // No hue shifts, better analysis
     		color.rgb = RestoreLuminance(color.rgb, Reinhard::ReinhardRange(GetLuminance(color.rgb), MidGray, -1.0, peakWhite / gamePaperWhite).x, true);
-    		color.rgb = CorrectOutOfRangeColor(color.rgb, true, true, 0.5, 0.5, peakWhite / gamePaperWhite);
+    		color.rgb = CorrectOutOfRangeColor(color.rgb, true, true, 0.5, peakWhite / gamePaperWhite);
 #else
   			color.rgb = Reinhard::ReinhardRange(color.rgb, MidGray, -1.0, peakWhite / gamePaperWhite);
 #endif
@@ -290,7 +290,7 @@ float3 ComposeUI(float3 pos, float3 linearSceneColor, float gamePaperWhite, floa
 }
 
 // Custom Luma shader to apply the display (or output) transfer function from a linear input (or apply custom gamma correction)
-float4 main(float4 pos : SV_Position0) : SV_Target0
+float4 main(float4 pos : SV_Position) : SV_Target0
 {
 	// Game scene paper white and Generic paper white for when we can't account for the UI paper white.
 	// If "POST_PROCESS_SPACE_TYPE" or "EARLY_DISPLAY_ENCODING" are 1, this might have already been applied in.

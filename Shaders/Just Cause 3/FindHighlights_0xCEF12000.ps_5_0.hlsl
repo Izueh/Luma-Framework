@@ -6,7 +6,7 @@ cbuffer cbConsts : register(b1)
 SamplerState LinearClampSampler_s : register(s0);
 Texture2D<float4> ColorTexture : register(t0);
 
-// TODO: this has 2 follow up "downscale" shaders and the last one creates NaNs or black pixels around car reflections from the sun
+// TODO: this has 2 follow up "downscale" shaders and the last one creates NaNs or black pixels around car reflections from the sun (we currently worked around it with clamps?)
 void main(
   float4 v0 : SV_Position0,
   float2 v1 : TEXCOORD0,

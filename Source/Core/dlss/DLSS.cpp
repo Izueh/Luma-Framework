@@ -4,6 +4,8 @@
 
 #include "nvsdk_ngx_helpers.h"
 
+#include "../includes/debug.h"
+
 #include <cstring>
 #include <cassert>
 #include <unordered_set>
@@ -390,8 +392,8 @@ bool NGX::DLSS::Draw(const SR::InstanceData* data, ID3D11DeviceContext* command_
 
 	eval_params.pInDepth = draw_data.depth_buffer;
 	eval_params.pInMotionVectors = draw_data.motion_vectors;
-	eval_params.InRenderSubrectDimensions.Width = draw_data.render_width;
-	eval_params.InRenderSubrectDimensions.Height = draw_data.render_height;
+	eval_params.InRenderSubrectDimensions.Width = render_width;
+	eval_params.InRenderSubrectDimensions.Height = render_height;
 	eval_params.Feature.pInColor = draw_data.source_color;
 	eval_params.Feature.pInOutput = draw_data.output_color; // Needs to be a UAV
 	eval_params.pInExposureTexture = draw_data.exposure; // Only used in HDR mode. Needs to be a 2D texture.
@@ -412,6 +414,8 @@ bool NGX::DLSS::Draw(const SR::InstanceData* data, ID3D11DeviceContext* command_
 		custom_data->instance.runtime_params,
 		&eval_params
 	);
+
+	//ASSERT_MSGF(NVSDK_NGX_SUCCEED(result), "DLSS Error: %u\n", uint32_t(result));
 
 	return NVSDK_NGX_SUCCEED(result);
 }

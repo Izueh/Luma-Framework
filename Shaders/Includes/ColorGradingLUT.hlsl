@@ -51,9 +51,9 @@
 #elif 1 // JzAzBz
 #define LINEAR_TO_UCS(x, colorSpace) JzAzBz::rgbToJzazbz(x, colorSpace)
 #define UCS_TO_LINEAR(x, colorSpace) JzAzBz::jzazbzToRgb(x, colorSpace)
-#elif 1 // Darktable UCS
-#define LINEAR_TO_UCS(x, colorSpace) DarktableUcs::RGBToUCSLUV(x, colorSpace)
-#define UCS_TO_LINEAR(x, colorSpace) DarktableUcs::UCSLUVToRGB(x, colorSpace)
+#elif 1 // Darktable UCS // TODO: add color space support!!!
+#define LINEAR_TO_UCS(x, colorSpace) DarktableUcs::RGBToUCSLUV(x)
+#define UCS_TO_LINEAR(x, colorSpace) DarktableUcs::UCSLUVToRGB(x)
 #elif 1 // Hellwig/Fairchild
 #define LINEAR_TO_UCS(x, colorSpace) HellwigFairchild::rgb_to_ucs(x)
 #define UCS_TO_LINEAR(x, colorSpace) HellwigFairchild::ucs_to_rgb(x)
@@ -78,8 +78,11 @@ ConditionalConvert3DTo2DLUTCoordinates(uint3 Coordinates3D, uint3 lutSize = LUT_
 #define HIGH_QUALITY_ENCODING_TYPE 1
 #endif
 
+//TODOFT: try basic extrapolation mode where we simply compress 0.5 to INF input to 0.5 to 1, do LUT and then decompress range again
+//TODO: invert direction of extrapolation below 0?
+//TODO: if the input color has 0 chroma (1 1 1, or 2 2 2, etc), don't extrapolate on the grey axis and just scale the original LUT white color?
 //TODOFT5: use Log instead of PQ? It's actually not making much difference
-//TODOFT5: Do extrapolation in another color space? Does that even make sense?
+//TODOFT5: Do extrapolation in another color space? Does that even make sense? Maybe in linear it'd actually be best to avoid hue shifts.
 float3 Linear_to_PQ2(float3 LinearColor, int clampType = GCT_DEFAULT)
 {
 #if HIGH_QUALITY_ENCODING_TYPE == 0
@@ -977,7 +980,7 @@ float3 SampleLUTWithExtrapolation(LUT_TEXTURE_TYPE lut, SamplerState samplerStat
 		const float3 unclampedTonemappedUV_UCS = DarktableUcs::RGBToUCSLUV(neutralLUTColorLinearTonemapped);
 		const float3 clampedSample_UCS = DarktableUcs::RGBToUCSLUV(clampedSample);
     
-#pragma warning( default : 4000 )
+#pragma warning( disable : 4000 )
 		float3 extrapolatedSample;
 
     // Here we do the actual extrapolation logic, which is relatively different depending on the quality mode.
@@ -1353,7 +1356,7 @@ float3 SampleLUTWithExtrapolation(LUT_TEXTURE_TYPE lut, SamplerState samplerStat
         extrapolatedSample = RestoreLuminance(extrapolatedSample, extrapolatedSample_PQ); //TODOFT: this creates some broken gradients?
       }
 		}
-#pragma warning( disable : 4000 )
+#pragma warning( default : 4000 )
 
     if (settings.clipExtrapolationToWhite)
     {
@@ -1555,85 +1558,299 @@ float3 SampleLUTWithExtrapolation(LUT_TEXTURE_TYPE lut, SamplerState samplerStat
 	return outputSample;
 }
 
-// Sample that allows to go beyond the 0-1 coordinates range through extrapolation.
+// Returns the lower or higher non clipped edge of the LUT (as 0-1 float, without acknowledging the LUT half texel offset, that should be applied later only when sampling).
+// if "backwards" is false, it will find the last texel that is 0 (or well, the texel before the first one that is > 0), given that before there the LUT would be "clipping", as it would have been UNORM and unable to represent values lower than 0.
+// if "backwards" is true, it will find the earliest texel that is 1 (or well, the texel before the first one that is > 0), given that from there on the LUT would be "clipping", as it would have been UNORM and unable to represent values higher than 1.
+// Once we have this, we can do some form of LUT extrapolation, to allow outputs that would have clipped to 1 before the end of the LUT to keep growing beyond 1, and outputs that would have clipped to 0 after the start of the LUT to keep lowering below 0.
+// "maxRange" is the max amount we crawl the LUT of, with 1 being all of it. 0.5 is a good start but if you are doing this per pixel and know the game doesn't really clip LUTs, setting to 0.0375 or so might be a good start. If set to 1 and the LUT had been flattened, min and max could end up being the same, or maybe even flipped? So be careful!
+// The texture is expected to be a 2D texture even it's 1 in height.
+// Note that if just 1 texel was clipped at the edge of each side, some quadratic interpolation advanced sampling could fit it too, but if it's any more, not really.
+// Note that this could end up generating negative (and possibly invalid) colors (expanded gamut) after remapping, if you don't want that, clip the output to >= 0 (but then doing this wouldn't help nearly as much).
+float3 Find1DLUTClippingEdge(Texture2D<float4> lut, const uint lutSize, float maxRange /*= 0.5*/, const uint lutRedY /*= 0*/, const uint lutGreenY /*= 0*/, const uint lutBlueY /*= 0*/, const bool backwards)
+{
+  const uint lutMax = lutSize - 1;
+
+  const uint3 baseLutEdge = backwards ? lutMax : 0;
+  uint3 lutEdge = baseLutEdge; // If we never found any (e.g. LUT is all white or black), act as if the LUT had no clipping at all, we don't really have an alternative (this might be a LUT that flips colors)
+  bool3 foundEdges = false;
+
+  int searchStart = backwards ? lutMax : 0;
+  int searchEnd = backwards ? 0 : lutMax;
+  searchEnd += int(lutMax * (1.0 - maxRange) + 0.5) * (backwards ? 1 : -1);
+  int searchStep = backwards ? -1 : 1;
+  int i = -int(lutMax); // Random default to avoid false positives below
+  [loop]
+  for (i = searchStart; backwards ? (i >= searchEnd) : (i <= searchEnd); i += searchStep)
+  {
+    float3 output;
+    // Avoid doing 3 samples if they'd all be the same
+    if (lutRedY == lutGreenY && lutRedY == lutBlueY)
+    {
+      output = lut.Load(int3(i, lutRedY, 0)).rgb;
+    }
+    // This design kinda makes no sense, but some games use it
+    else
+    {
+      output.r = lut.Load(int3(i, lutRedY, 0)).r;
+      output.g = lut.Load(int3(i, lutGreenY, 0)).g;
+      output.b = lut.Load(int3(i, lutBlueY, 0)).b;
+    }
+    [unroll]
+    for (int k = 0; k <= 2; k++)
+    {
+      // First crossing on each channel.
+      // Here we assume the LUT couldn't output values less than 0, given 1D LUTs were only really used by older games, and had UNORM LUTs.
+      // In case the LUT inverted colors, this should detect it immediately and end at the first iteration.
+      // Note: we can optionally add some thresholds, even if we assume LUTs to properly sample to the exact float values of 0 and 1.
+      // Note: if both the first and second texels were >0 (or <1) while also having the same value, this function doesn't help detect that (it couldn't).
+      float threshold = FLT_EPSILON;
+      if (!foundEdges[k] && (backwards ? (output[k] < (1.0 - threshold)) : (output[k] > (0.0 + threshold))))
+      {
+        foundEdges[k] = true;
+        lutEdge[k] = backwards ? min(i + 1, lutMax) : max(i - 1, 0);
+      }
+    }
+
+    if (all(foundEdges))
+    {
+      break;
+    }
+  }
+
+  // If we reached the end of our scan without founding the edge, just move the edges to whatever edge we last scanned, as it's the closest result we could get to the actual valid one.
+  // This is arguable, as it might be the LUT was flattened to a single color etc. It should ideally be optional.
+  i -= searchStep;
+  bool wasLast = i == searchEnd;
+  if (wasLast)
+  {
+    lutEdge = foundEdges ? lutEdge : (backwards ? min(i, lutMax) : max(i, 0));
+  }
+
+  return float3(lutEdge) / float(lutMax);
+}
+
+// See "Find1DLUTClippingEdge"
+void Find1DLUTClippingEdges(Texture2D<float4> lut, const uint lutSize, float maxRange /*= 0.5*/, const uint lutRedY /*= 0*/, const uint lutGreenY /*= 0*/, const uint lutBlueY /*= 0*/, out float3 lutMinInput /*= 0*/, out float3 lutMaxInput /*= 1*/)
+{
+  lutMinInput = Find1DLUTClippingEdge(lut, lutSize, maxRange, lutRedY, lutGreenY, lutBlueY, false);
+  lutMaxInput = Find1DLUTClippingEdge(lut, lutSize, maxRange, lutRedY, lutGreenY, lutBlueY, true);
+}
+
+// Due to their nature, any LUT that wasn't purely neutral, would have quantized multiple texels to the same value, unless they were more than 8bit or so in their 0-1 output range.
+// For example, a LUT could have had an 8 bit gradient like 140 141 141 142; Any sample that fell between the two 141 texels would result in a broken gradient (a gradient suddenly turning flag, and then recovering to its previous angle soon after).
+// This formula smooths the results by making each texel the average of the two ones next to it, so the gradient above would turn into something like 140 140.5 (141) 141.5 142. With "(141)"" being the middle value between the two central texels, not an actual texel.
+// If more than two texels in a row quantized, this won't be able to smooth that, but that's generally pretty rare so it's fine (we could expand the search radius but it's not really necessary).
+// This isn't conceptually far from the tetrahedral interpolation that 2D and 3D LUTs use, however quantization doesn't cause as many issues with them, because the output is always a blend of 8 samples (cube edges).
+float4 Sample1DLUTWithSmoothing(Texture2D<float4> lut, const float lutMax, float3 color, const uint lutRedY = 0, const uint lutGreenY = 0, const uint lutBlueY = 0, const uint lutRedChannel = 0, const uint lutGreenChannel = 1, const uint lutBlueChannel = 2, const uint lutAlphaChannel = 3, const bool singleChannelInput = false)
+{
+  color = saturate(color); // There's nothing to smooth beyond the edges, and texture loads might fail, so clamp!
+
+  int lutMaxI = int(lutMax + 0.5);
+  int3 inputTexelCenter = (color * lutMax) + 0.5; // Unused, but here for clarity
+  // Floor and take the sample before and the two after
+  int3 inputTexelFloored = color * lutMax;
+  int3 inputTexelN1 = max(inputTexelFloored - 1, 0); // Not sure the clamps are necessary, it could be Load() already clamps pixels to the valid range, but let's do it anyway
+  int3 inputTexelP1 = min(inputTexelFloored + 1, lutMaxI);
+  int3 inputTexelP2 = min(inputTexelFloored + 2, lutMaxI);
+  
+  // The progress between sample 1 and 2
+  float4 alpha = float4(frac(color * lutMax), 0.5);
+  
+  float4 smoothingIntensity = 1.0; // Expose if necessary (as a single float)
+
+  // Disable smoothing around edges, we'd average the edge value with the texel after it (the more central one), which mean 0/black would get raised and 1/white would get lowered.
+  smoothingIntensity.rgb = (inputTexelFloored <= 0 || inputTexelFloored >= (lutMaxI - 1)) ? 0.0 : smoothingIntensity.rgb;
+
+  float4 colors[4];
+
+  // See "Sample1DLUTWithExtrapolation" for explanation of these branches.
+  if (singleChannelInput)
+  {
+    float4 tempColor;
+    
+    tempColor = lut.Load(int3(inputTexelN1.r, lutRedY, 0));
+    colors[0].r = tempColor[lutRedChannel];
+    colors[0].g = tempColor[lutGreenChannel];
+    colors[0].b = tempColor[lutBlueChannel];
+    colors[0].a = tempColor[lutAlphaChannel];
+
+    tempColor = lut.Load(int3(inputTexelFloored.r, lutRedY, 0));
+    colors[1].r = tempColor[lutRedChannel];
+    colors[1].g = tempColor[lutGreenChannel];
+    colors[1].b = tempColor[lutBlueChannel];
+    colors[1].a = tempColor[lutAlphaChannel];
+
+    tempColor = lut.Load(int3(inputTexelP1.r, lutRedY, 0));
+    colors[2].r = tempColor[lutRedChannel];
+    colors[2].g = tempColor[lutGreenChannel];
+    colors[2].b = tempColor[lutBlueChannel];
+    colors[2].a = tempColor[lutAlphaChannel];
+
+    tempColor = lut.Load(int3(inputTexelP2.r, lutRedY, 0));
+    colors[3].r = tempColor[lutRedChannel];
+    colors[3].g = tempColor[lutGreenChannel];
+    colors[3].b = tempColor[lutBlueChannel];
+    colors[3].a = tempColor[lutAlphaChannel];
+
+    smoothingIntensity.a = smoothingIntensity.r;
+    alpha.a = alpha.r;
+  }
+  else
+  {
+    colors[0].r = lut.Load(int3(inputTexelN1.r, lutRedY, 0))[lutRedChannel];
+    colors[0].g = lut.Load(int3(inputTexelN1.g, lutGreenY, 0))[lutGreenChannel];
+    colors[0].b = lut.Load(int3(inputTexelN1.b, lutBlueY, 0))[lutBlueChannel];
+    colors[0].a = 1.0;
+
+    colors[1].r = lut.Load(int3(inputTexelFloored.r, lutRedY, 0))[lutRedChannel];
+    colors[1].g = lut.Load(int3(inputTexelFloored.g, lutGreenY, 0))[lutGreenChannel];
+    colors[1].b = lut.Load(int3(inputTexelFloored.b, lutBlueY, 0))[lutBlueChannel];
+    colors[1].a = 1.0;
+
+    colors[2].r = lut.Load(int3(inputTexelP1.r, lutRedY, 0))[lutRedChannel];
+    colors[2].g = lut.Load(int3(inputTexelP1.g, lutGreenY, 0))[lutGreenChannel];
+    colors[2].b = lut.Load(int3(inputTexelP1.b, lutBlueY, 0))[lutBlueChannel];
+    colors[2].a = 1.0;
+
+    colors[3].r = lut.Load(int3(inputTexelP2.r, lutRedY, 0))[lutRedChannel];
+    colors[3].g = lut.Load(int3(inputTexelP2.g, lutGreenY, 0))[lutGreenChannel];
+    colors[3].b = lut.Load(int3(inputTexelP2.b, lutBlueY, 0))[lutBlueChannel];
+    colors[3].a = 1.0;
+  }
+
+#if 1
+  // Set our two sampled texel colors to be a blend of their immediate neighbors.
+  float4 smoothedColor1 = lerp(colors[0], colors[2], 0.5);
+  float4 smoothedColor2 = lerp(colors[1], colors[3], 0.5);
+  // Black back to the raw sample value if the intensity is lower.
+  smoothedColor1 = lerp(colors[1], smoothedColor1, smoothingIntensity);
+  smoothedColor2 = lerp(colors[2], smoothedColor2, smoothingIntensity);
+
+  // Linear interpolation
+  float4 finalSmoothedColor = lerp(smoothedColor1, smoothedColor2, alpha);
+  return finalSmoothedColor;
+#else // Cubic interpolation is probably be better for this, even if LUTs generally always grow in value as they progress, so linear interpolation is okish already // TODO: disabled as this doesn't seem to work as nicely? The math seems right though, maybe it's simply too "conservative" and leaves bad gradients in
+  // Linear fallback
+  float4 linearColor = lerp(colors[1], colors[2], alpha);
+
+  // Catmull–Rom cubic
+  float4 t = alpha;
+  float4 t2 = t * t;
+  float4 t3 = t2 * t;
+
+  float4 cubicSmoothedColor =
+    0.5 * (
+      (2.0 * colors[1]) +
+      (-colors[0] + colors[2]) * t +
+      (2.0 * colors[0] - 5.0 * colors[1] + 4.0 * colors[2] - colors[3]) * t2 +
+      (-colors[0] + 3.0 * colors[1] - 3.0 * colors[2] + colors[3]) * t3
+    );
+
+  float4 finalSmoothedColor = lerp(linearColor, cubicSmoothedColor, smoothingIntensity);
+  return finalSmoothedColor;
+#endif
+}
+
+// Sample that allows to go beyond the 0-1 coordinates range of a 1D horizontal LUT through extrapolation.
 // It finds the rate of change (acceleration) of the LUT color around the requested clamped coordinates, and guesses what color the sampling would have with the out of range coordinates.
-// Extrapolating LUT by re-apply the rate of change has the benefit of consistency. If the LUT has the same color at (e.g.) uv 0.9 0.9 and 1.0 1.0, thus clipping to white or black, the extrapolation will also stay clipped.
+// Extrapolating LUT by re-apply the rate of change has the benefit of consistency. If the LUT has the same color at (e.g.) uv 0.9 0.9 and 1.0 1.0, thus clipping to white or black, the extrapolation might also stay clipped (use "Find1DLUTClippingEdges" to handle that).
 // Additionally, if the LUT had inverted colors or highly fluctuating colors, extrapolation would work a lot better than a raw LUT out of range extraction with a luminance multiplier.
 //
-// This function does not acknowledge the LUT transfer function nor any specific LUT properties.
-// This function allows your to pick whether you want to extrapolate diagonal, horizontal or veretical coordinates.
+// The performance impact is low as this only does one extra sample per pixel (unless smoothing is on).
+// For best results, this should be paired with "Find1DLUTClippingEdges", run around the extrapolation, though by default it's not because it's expensive to run that per pixel, and it's not needed in most games.
+// This function does not acknowledge the LUT transfer function nor any specific LUT properties (as long as the input and output encoding are the same, it should be ok, extrapolation generally works better in a perceptual encoding though).
 // Note that this function might return "invalid colors", they could have negative values etc etc, so make sure to clamp them after if you need to.
-// This version is for a 2D float4 texture with a single gradient (not a 3D map reprojected in 2D with horizontal/vertical slices), but the logic applies to 3D textures too.
-//
-// "unclampedUV" is expected to have been remapped within the range that excludes that last half texels at the edges.
-// "extrapolationDirection" 0 is both hor and ver. 1 is hor only. 2 is ver only.
-float4 sampleLUTWithExtrapolation1D(Texture2D<float4> lut, SamplerState samplerState, float2 unclampedUV, const int extrapolationDirection = 0)
+// This version is for a 2D float4 texture with a single gradient per channel.
+float4 Sample1DLUTWithExtrapolation(Texture2D<float4> lut, SamplerState linearSampler, float3 unclampedColor, const uint lutRedY = 0, const uint lutGreenY = 0, const uint lutBlueY = 0, const uint lutRedChannel = 0, const uint lutGreenChannel = 1, const uint lutBlueChannel = 2, const uint lutAlphaChannel = 3, const bool singleChannelInput = false, const bool enableExtrapolation = true, const bool enableSmoothing = true, float backwardsAmount = 0.5)
 {
   // LUT size in texels
   float lutWidth;
   float lutHeight;
-  lut.GetDimensions(lutWidth, lutHeight);
+  lut.GetDimensions(lutWidth, lutHeight); // TODO: optionally pass this in
   const float2 lutSize = float2(lutWidth, lutHeight);
   const float2 lutMax = lutSize - 1.0;
   const float2 uvScale = lutMax / lutSize;        // Also "1-(1/lutSize)"
-  const float2 uvOffset = 1.0 / (2.0 * lutSize);  // Also "(1/lutSize)/2"
+  const float2 uvOffset = 1.0 / (2.0 * lutSize);  // Also "(1/lutSize)/2" or "(0.5/lutSize)"
   // The uv distance between the center of one texel and the next one
-  const float2 lutTexelRange = 1.0 / lutMax;
+  const float2 lutTexelRange = (lutMax.y == 0.0) ? 0.5 : (1.0 / lutMax);
 
-  // Remap the input coords to also include the last half texels at the edges, essentually working in full 0-1 range,
-  // we will re-map them out when sampling, this is essential for proper extrapolation math.
-  if (lutMax.x != 0)
-    unclampedUV.x = (unclampedUV.x - uvOffset.x) / uvScale.x;
-  if (lutMax.y != 0)
-    unclampedUV.y = (unclampedUV.y - uvOffset.y) / uvScale.y;
+  const float3 clampedColor = saturate(unclampedColor);
+  const float3 distanceFromUnclampedToClamped = abs(unclampedColor - clampedColor); // Note: abs() here is probably not necessary as it cancels itself out with "distanceFromClampedToCentered"
+  const bool3 uvOutOfRange = distanceFromUnclampedToClamped > FLT_MIN; // Some threshold is needed to avoid divisions by tiny numbers
 
-  const float2 clampedUV = saturate(unclampedUV);
-  const float distanceFromUnclampedToClamped = length(unclampedUV - clampedUV);
-  const bool uvOutOfRange = distanceFromUnclampedToClamped > FLT_MIN;  // Some threshold is needed to avoid divisions by tiny numbers
+  // y (uv.y)
+  const float3 v = (lutMax.y == 0.0) ? 0.5 : (float3(lutRedY, lutGreenY, lutBlueY) / lutMax.y);
 
-  const float4 clampedSample = lut.Sample(samplerState, (clampedUV * uvScale) + uvOffset).xyzw;  // Use "clampedUV" instead of "unclampedUV" as we don't know what kind of sampler was in use here
-
-  if (uvOutOfRange && extrapolationDirection >= 0)
+  float4 clampedSample;
+  if (enableSmoothing)
   {
-    float2 centeredUV;
-    // Diagonal
-    if (extrapolationDirection == 0) // TODO: delete this case, it's not used and wasn't good
+    clampedSample = Sample1DLUTWithSmoothing(lut, lutMax.x, unclampedColor, lutRedY, lutGreenY, lutBlueY, lutRedChannel, lutGreenChannel, lutBlueChannel, lutAlphaChannel, singleChannelInput);
+  }
+  else
+  {
+    // If the input was "float" as opposed to "float3" ("singleChannelInput"), only do one sample and swizzle the channels as requested.
+    if (singleChannelInput) // We assume "lutRedY", "lutGreenY" and "lutBlueY" are all equal, as they should in this case
     {
-      // Find the direction between the clamped and unclamped coordinates, flip it, and use it to determine
-      // where more centered texel for extrapolation is.
-      centeredUV = clampedUV - (normalize(unclampedUV - clampedUV) * (1.0 - lutTexelRange));
+      float4 tempClampedSample;
+      tempClampedSample = lut.Sample(linearSampler, (float2(clampedColor.r, v.r) * uvScale) + uvOffset);
+      clampedSample.r = tempClampedSample[lutRedChannel];
+      clampedSample.g = tempClampedSample[lutGreenChannel];
+      clampedSample.b = tempClampedSample[lutBlueChannel];
+      clampedSample.a = tempClampedSample[lutAlphaChannel];
     }
-    // Horizontal or Vertical (use Diagonal if you want both Horizontal and Vertical at the same time)
     else
     {
-      const bool extrapolateHorizontalCoordinates = extrapolationDirection == 0 || extrapolationDirection == 1;
-      const bool extrapolateVerticalCoordinates = extrapolationDirection == 0 || extrapolationDirection == 2;
-
-      float2 backwardsAmount = lutTexelRange;
-#if 1 // New distance to travel back of, to avoid the hue shifts that are often at the edges of LUTs. Taking two samples in two different backwards points and blending them also looks worse in "Hollow Knight: Silksong".
-      if (extrapolateHorizontalCoordinates)
-        backwardsAmount.x = 0.5;
-      if (extrapolateVerticalCoordinates)
-        backwardsAmount.y = 0.5;
-#endif
-
-      centeredUV = float2(clampedUV.x >= 0.5 ? max(clampedUV.x - backwardsAmount.x, 0.5) : min(clampedUV.x + backwardsAmount.x, 0.5), clampedUV.y >= 0.5 ? max(clampedUV.y - backwardsAmount.y, 0.5) : min(clampedUV.y + backwardsAmount.y, 0.5));
-      centeredUV = float2(extrapolateHorizontalCoordinates ? centeredUV.x : unclampedUV.x, extrapolateVerticalCoordinates ? centeredUV.y : unclampedUV.y);
+      // Use "clampedColor" instead of "unclampedColor" as we don't know what kind of sampler was in use here.
+      // Some games have one stripe for all channels, simply sampling the sample stripe with a different r/g/b color, meaning the LUT could only ever change contrast, or fade to white/black etc.
+      // Other games sample the same stripe for all color channels, but read a different channel for each output.
+      // Yet other games sample a different stripe for each channel, and potentially also a different chanel for each output.
+      // This code supports all variations.
+      clampedSample.r = lut.Sample(linearSampler, (float2(clampedColor.r, v.r) * uvScale) + uvOffset)[lutRedChannel];
+      clampedSample.g = lut.Sample(linearSampler, (float2(clampedColor.g, v.g) * uvScale) + uvOffset)[lutGreenChannel];
+      clampedSample.b = lut.Sample(linearSampler, (float2(clampedColor.b, v.b) * uvScale) + uvOffset)[lutBlueChannel];
+      clampedSample.a = 1.0; // Default alpha to 1 (a neutral value), it's likely the calling code won't read it, as it'd make no sense in this case
     }
-
-    const float4 centeredSample = lut.Sample(samplerState, (centeredUV * uvScale) + uvOffset).xyzw;
-    // Note: if we are only doing "Horizontal" or "Vertical" extrapolation, we could replace this "length()" calculation with a simple subtraction
-    const float distanceFromClampedToCentered = length(clampedUV - centeredUV);
-    const float extrapolationRatio = distanceFromClampedToCentered == 0.0 ? 0.0 : (distanceFromUnclampedToClamped / distanceFromClampedToCentered);
-#if 1  // Lerp in gamma space, this seems to look better for old games (especially when the whole renders is in gamma space, never linearized), and the "extrapolationRatio" is in gamma space too
-    const float4 extrapolatedSample = lerp(centeredSample, clampedSample, 1.0 + extrapolationRatio);
-#else  // Lerp in linear space to make it more "accurate"
-    float4 extrapolatedSample = lerp(pow(centeredSample, DefaultGamma), pow(clampedSample, DefaultGamma), 1.0 + extrapolationRatio);
-    extrapolatedSample = pow(abs(extrapolatedSample), 1.0 / DefaultGamma) * sign(extrapolatedSample);
-#endif
-    return extrapolatedSample;
   }
-  return clampedSample;
+
+  float4 finalColor = clampedSample;
+
+  if (enableExtrapolation && any(uvOutOfRange))
+  {
+    // "backwardsAmount" is the distance to travel back of, it's best if it is ~0.5 to avoid the hue shifts that are often at the edges of LUTs, and also prevents the edges from being clamped.
+    if (backwardsAmount <= 0.0)
+      backwardsAmount = lutTexelRange.x * 2.0; // Travel back by 2 texels, 1 single texel offset can often end up having the same color, especially around the edges, due to the quantization to 8 bit
+
+    float3 centeredColor = unclampedColor;
+    // Don't go backwards more than the center, or it'd get messy (we shouldn't even be here if that would have happened)
+    centeredColor = clampedColor >= 0.5 ? max(clampedColor - backwardsAmount, 0.5) : min(clampedColor + backwardsAmount, 0.5);
+
+    float4 centeredSample;
+    // No need to use "Sample1DLUTWithSmoothing" here, it's barely make any difference, and possibly would be less accurate
+    // TODO: try a higher quality mode that considers two backwards samples. Though taking two samples in two different backwards points and blending them also looks worse in "Hollow Knight: Silksong" (does it really?).
+    if (singleChannelInput)
+    {
+      float4 tempCenteredSample;
+      tempCenteredSample = lut.Sample(linearSampler, (float2(centeredColor.r, v.r) * uvScale) + uvOffset);
+      centeredSample.r = tempCenteredSample[lutRedChannel];
+      centeredSample.g = tempCenteredSample[lutGreenChannel];
+      centeredSample.b = tempCenteredSample[lutBlueChannel];
+      centeredSample.a = tempCenteredSample[lutAlphaChannel];
+    }
+    else
+    {
+      centeredSample.r = lut.Sample(linearSampler, (float2(centeredColor.r, v.r) * uvScale) + uvOffset)[lutRedChannel];
+      centeredSample.g = lut.Sample(linearSampler, (float2(centeredColor.g, v.g) * uvScale) + uvOffset)[lutGreenChannel];
+      centeredSample.b = lut.Sample(linearSampler, (float2(centeredColor.b, v.b) * uvScale) + uvOffset)[lutBlueChannel];
+      centeredSample.a = 1.0;
+    }
+    const float3 distanceFromClampedToCentered = abs(clampedColor - centeredColor);
+    const float3 extrapolationRatio = (!uvOutOfRange || distanceFromClampedToCentered == 0.0) ? 0.0 : (distanceFromUnclampedToClamped / distanceFromClampedToCentered);
+    const float4 extrapolationRatio4 = singleChannelInput ? extrapolationRatio.r : float4(extrapolationRatio.rgb, 0.0);
+    const float4 extrapolatedColor = lerp(centeredSample, clampedSample, 1.0 + extrapolationRatio4); // Extrapolate individually on every each channel (it couldn't really be otherwise, 1D LUTs don't have any cross pollution between channels)
+    finalColor = extrapolatedColor;
+  }
+
+  return finalColor;
 }
 
 // Note that this function expects "LUT_SIZE" to be divisible by 2. If your LUT is (e.g.) 15x instead of 16x, move some math to be floating point and round to the closest pixel.

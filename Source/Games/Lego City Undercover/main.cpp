@@ -108,7 +108,7 @@ public:
             {
                ASSERT_ONCE(instruction_size == 1);
 
-               ASSERT_ONCE(appended_patches_addresses.empty()); // To make sure this is handled probably
+               ASSERT_ONCE(appended_patches_addresses.empty()); // To make sure this is handled properly
 
                // Add the patch before every single return value!
                // Shift it by how much the data would have been shifted by prior patches we already added.
@@ -120,10 +120,6 @@ public:
                   break;
             }
 #endif
-
-            i += instruction_size;
-            if (instruction_size == 0)
-               break;
          }
 
 #if 1 // Old version of the code // TODO: no idea why this is required over the new code, the new one crashes or hangs on boot? There's probably some logic bug somewhere
@@ -165,6 +161,8 @@ public:
          }
          else
          {
+            std::memcpy(new_code.get(), code, size);
+
             size_t valid_size = size;
 
             std::unique_ptr<std::byte[]> scratch_buffer = std::make_unique<std::byte[]>(size + appended_patch.size() * appended_patches_addresses.size());

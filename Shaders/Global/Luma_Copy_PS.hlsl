@@ -6,7 +6,7 @@ Texture2D<float4> sourceTexture : register(t0);
 
 // Custom Luma shader to copy a texture into another one (when e.g. they are of a different format but with matching size)
 float4 main(
-	float4 pos : SV_Position0
+	float4 pos : SV_Position
 #if MS
 	, uint sampleIndex : SV_SampleIndex
 #endif

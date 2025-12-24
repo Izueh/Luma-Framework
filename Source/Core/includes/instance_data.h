@@ -92,7 +92,7 @@ struct TraceDrawCallData
    std::thread::id thread_id = {};
 
    // Depth/Stencil
-   enum class DepthStateType
+   enum class DepthStateType // TODO: rename to DepthStancilStateType, and "depth_state_names" too
    {
       Disabled,
       TestAndWrite,
@@ -115,7 +115,7 @@ struct TraceDrawCallData
    UINT index_buffer_offset = 0;
 
    DepthStateType depth_state = DepthStateType::Disabled;
-   bool stencil_enabled = false;
+   DepthStateType stencil_state = DepthStateType::Disabled;
    bool scissors = false;
    float4 viewport_0 = {};
    // Already includes all the render targets
@@ -144,7 +144,7 @@ struct TraceDrawCallData
    std::string rt_debug_name[rtvs_size] = {}; // Debug name of the texture or the view
    bool rt_is_swapchain[rtvs_size] = {};
    // Shader Resource (Resource+Views)
-#if GAME_BURNOUT_PARADISE // TODO: remove these hacks... Burnout Paradise crashes due to too big allocations
+#if GAME_BURNOUT_PARADISE_REMASTERED // TODO: remove these hacks... Burnout Paradise crashes due to too big allocations
    static constexpr size_t srvs_size = 16;
 #else
    static constexpr size_t srvs_size = D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT;
@@ -161,7 +161,7 @@ struct TraceDrawCallData
    bool sr_is_rt[srvs_size] = {};
    bool sr_is_ua[srvs_size] = {};
    // Unordered Access (Resource+Views)
-#if GAME_BURNOUT_PARADISE
+#if GAME_BURNOUT_PARADISE_REMASTERED
    static constexpr size_t uavs_size = 16;
 #else
    static constexpr size_t uavs_size = D3D11_1_UAV_SLOT_COUNT;
@@ -199,6 +199,7 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
    CB::LumaInstanceDataPadded cb_luma_instance_data = {};
    // Always start from dirty given that deferred command lists inherit the cbuffers data from the immediate ones, but we don't know when they will get joined, so we always need to assume the data was dirty and needs to be re-set from scratch
    bool force_cb_luma_instance_data_dirty = true;
+   bool async_set_cb_luma_instance_data_settings = false;
 
    // Whether the luma global settings have been set in this command list (device context), in case it was a deferred one
    bool async_set_cb_luma_global_settings = false;
@@ -238,7 +239,7 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 
    std::unordered_set<uint64_t> upgraded_resources; // All the directly upgraded resources, excluding the swapchains backbuffers, as they are created internally by DX
 #if DEVELOPMENT
-   std::unordered_map<uint64_t, reshade::api::format> original_upgraded_resources_formats; // These include the swapchain buffers too!
+   std::unordered_map<uint64_t, reshade::api::format> original_upgraded_resources_formats; // Maps the original resource to its upgraded format. These include the swapchain buffers too!
    std::unordered_map<uint64_t, std::pair<uint64_t, reshade::api::format>> original_upgraded_resource_views_formats; // All the views for upgraded resources, with the resource and the original resource view format
 #endif
    std::unordered_map<uint64_t, uint64_t> original_resources_to_mirrored_upgraded_resources; // TODO: convert/copy the initial/current data from the source texture when created. Also rename to "indirect_upgraded"
@@ -320,7 +321,7 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    // Native Shaders Resources
    com_ptr<ID3D11Texture2D> temp_copy_source_texture;
    com_ptr<ID3D11Texture2D> temp_copy_target_texture;
-   com_ptr<ID3D11Texture2D> display_composition_texture;
+   com_ptr<ID3D11Texture2D> display_composition_texture; // Temporary copy texture of the swapchain that we use to draw back to the swapchain with a display composition shader (e.g. to change brightness, transfer function, gamut etc)
    com_ptr<ID3D11ShaderResourceView> display_composition_srv;
 
    // CBuffers

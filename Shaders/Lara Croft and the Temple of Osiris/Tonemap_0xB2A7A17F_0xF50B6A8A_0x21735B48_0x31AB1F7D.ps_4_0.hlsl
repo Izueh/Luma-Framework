@@ -151,25 +151,26 @@ void main(
   lookupTexture.GetDimensions(lutWidth, lutHeight); // 256x2
   float xScale = (lutWidth - 1.f) / lutWidth;
   float xOffset = 1.f / (2.f * lutWidth);
-  const bool extrapolateLUTsMethod = 1;
 
-  float lutRed = sampleLUTWithExtrapolation1D(lookupTexture, SamplerGenericBilinearClamp_s, float2((tonemappedColor.r * xScale) + xOffset, 0.25), extrapolateLUTsMethod).w;
-  float lutGreen = sampleLUTWithExtrapolation1D(lookupTexture, SamplerGenericBilinearClamp_s, float2((tonemappedColor.g * xScale) + xOffset, 0.25), extrapolateLUTsMethod).w;
-  float lutBlue = sampleLUTWithExtrapolation1D(lookupTexture, SamplerGenericBilinearClamp_s, float2((tonemappedColor.b * xScale) + xOffset, 0.25), extrapolateLUTsMethod).w;
+  uint colorChannel = 3; // Use w/a
+  float3 lutColor = Sample1DLUTWithExtrapolation(lookupTexture, SamplerGenericBilinearClamp_s, tonemappedColor, 0, 0, 0, colorChannel, colorChannel, colorChannel, colorChannel).rgb;
 #else // Vanilla: broken sampling, it doesn't acknowledge the half texel offset, crushing blacks
-  float lutRed = lookupTexture.SampleLevel(SamplerGenericBilinearClamp_s, float2(tonemappedColor.r, 0.25), 0).w;
+  float lutRed = lookupTexture.SampleLevel(SamplerGenericBilinearClamp_s, float2(tonemappedColor.r, 0.25), 0).w; // Sample W (it's possible RGBA are all the same)
   float lutGreen = lookupTexture.SampleLevel(SamplerGenericBilinearClamp_s, float2(tonemappedColor.g, 0.25), 0).w;
   float lutBlue = lookupTexture.SampleLevel(SamplerGenericBilinearClamp_s, float2(tonemappedColor.b, 0.25), 0).w;
-#endif
   float3 lutColor = float3(lutRed, lutGreen, lutBlue);
+#endif
   float lutPeakIn = max3(lutColor);
-#if 1 // Luma: LUT extrapolation
-  float4 lutPeakOut = sampleLUTWithExtrapolation1D(lookupTexture, SamplerGenericBilinearClamp_s, float2((lutPeakIn * xScale) + xOffset, 0.75), extrapolateLUTsMethod).rgba;
+#if 1 // Luma
+  float4 lutPeakOut;
+  // TODO: LUT extrapolation seems to make little sense here? Should we just clamp to avoid issues? Does this even influence the colors or does it just do a fade?
+  lutPeakOut.rgba = Sample1DLUTWithExtrapolation(lookupTexture, SamplerGenericBilinearClamp_s, lutPeakIn, 1, 1, 1, 0, 1, 2, 3, true).rgba;
+  //float4 lutPeakOut = lookupTexture.SampleLevel(SamplerGenericBilinearClamp_s, float2((lutPeakIn * xScale) + xOffset, 0.75), 0).rgba; // Let the input clip
 #else
   float4 lutPeakOut = lookupTexture.SampleLevel(SamplerGenericBilinearClamp_s, float2(lutPeakIn, 0.75), 0).rgba;
 #endif
-  float alpha = -lutPeakOut.w * 2.0 + 1.0;
-  float3 lutModulatedColor = lerp(lutColor, lutPeakIn, alpha); // Luma: removed saturate
+  float alpha = -lutPeakOut.w * 2.0 + 1.0; // From -1 to 1 (weird)
+  float3 lutModulatedColor = (lerp(lutColor, lutPeakIn, alpha)); // Luma: we removed the saturate but I it might be better with it?
   float lutPeakOutInversePeak = 1.0 - max3(lutPeakOut.rgb);
 #if 1 // Luma: made blending safe for HDR values
   tonemappedColor = (lutModulatedColor * saturate(lutPeakOutInversePeak)) + (lutPeakOut.rgb * saturate(lutPeakIn));
@@ -236,7 +237,7 @@ void main(
     else
     {
       tonemappedColor = RestoreLuminance(tonemappedColor, Reinhard::ReinhardRange(GetLuminance(tonemappedColor), shoulderStart, -1.0, peakWhite / paperWhite, false).x, true);
-      tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, true, 0.5, 0.5, peakWhite / paperWhite);
+      tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, true, 0.5, peakWhite / paperWhite);
     }
   }
 #endif

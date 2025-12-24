@@ -197,8 +197,6 @@ void main(
     DICESettings settings = DefaultDICESettings();
     settings.Type = DICE_TYPE_BY_LUMINANCE_PQ; // DICE_TYPE_BY_LUMINANCE_RGB
     settings.ShoulderStart = 0.5;
-    settings.DesaturationAmount = 0.0;
-    settings.DarkeningAmount = 0.0;
     const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
     const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
     colorPeakChannel = DICETonemap(colorPeakChannel * paperWhite, peakWhite, settings).x / paperWhite;

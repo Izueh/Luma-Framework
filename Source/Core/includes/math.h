@@ -93,8 +93,8 @@ namespace Math
       return std::all_of(begin, begin + bytes, [](char byte) { return byte == 0; });
    }
 
-   template <class Map, class Key, class Value>
-   Value MapFindOrDefaultValue(const Map& m, const Key& k, const Value& default_value)
+   template <class Map>
+   typename Map::mapped_type MapFindOrDefaultValue(const Map& m, const typename Map::key_type& k, const typename Map::mapped_type& default_value)
    {
       if (auto it = m.find(k); it != m.end())
          return it->second;

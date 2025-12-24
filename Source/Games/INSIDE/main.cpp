@@ -794,6 +794,7 @@ public:
          game_device_data.lighting_buffer_rtv.reset();
          game_device_data.scene_color_rtv.reset();
       }
+      device_data.has_drawn_main_post_processing = false;
    }
 
    void LoadConfigs() override

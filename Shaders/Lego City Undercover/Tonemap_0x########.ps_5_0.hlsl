@@ -279,7 +279,7 @@ void main(
         else
         {
           tonemappedColor = RestoreLuminance(tonemappedColor, Reinhard::ReinhardRange(GetLuminance(tonemappedColor), shoulderStart, -1.0, peakWhite / paperWhite, false).x, true);
-          tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, true, 0.5, 0.5, peakWhite / paperWhite);
+          tonemappedColor = CorrectOutOfRangeColor(tonemappedColor, true, true, 0.5, peakWhite / paperWhite);
         }
       }
       

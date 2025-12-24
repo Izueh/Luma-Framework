@@ -391,13 +391,6 @@ public:
       device_data.cb_luma_global_settings_dirty = true;
    }
 
-   bool ForceVanillaSwapchainLinear() const override
-   {
-      // The vanilla swapchain was last written by the game's AA with an sRGB view, so in linear.
-      // The UI would be written to the swapchain with non sRGB views, so with texture upgrades, the UI is broken, but the game should be linear nonetheless.
-      return swapchain_format_upgrade_type > TextureFormatUpgradesType::None && swapchain_upgrade_type == SwapchainUpgradeType::scRGB;
-   }
-
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
@@ -2101,6 +2094,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // Optional, we manually upgrade LUTs, that seem to be fixed over time (they aren't render targets somehow, at least not always)
       texture_format_upgrades_lut_size = 32;
       texture_format_upgrades_lut_dimensions = LUTDimensions::_3D;
+
+      // The vanilla swapchain was last written by the game's AA with an sRGB view, so in linear.
+      // The UI would be written to the swapchain with non sRGB views, so with texture upgrades, the UI is broken, but the game should be linear nonetheless.
+      force_vanilla_swapchain_linear = swapchain_format_upgrade_type > TextureFormatUpgradesType::None && swapchain_upgrade_type == SwapchainUpgradeType::scRGB;
 
 #if DEVELOPMENT // TODO: put this feature release too. But, they currently break some metal shiny stuff (e.g. truck in the opening scene)
       // Needed for DLSS mips in case there's jitters

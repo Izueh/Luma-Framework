@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <string.h>
 
 constexpr float srgb_white_level = 80;
 static float default_paper_white = 203; // ITU White Level

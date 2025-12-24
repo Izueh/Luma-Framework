@@ -214,14 +214,8 @@ void main(
 
   const float paperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
   const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
-	DICESettings settings = DefaultDICESettings();
-#if 1
-  settings.Type = DICE_TYPE_BY_LUMINANCE_RGB;
-  settings.ShoulderStart = (settings.Type > DICE_TYPE_BY_LUMINANCE_RGB) ? (1.0 / 3.0) : 0.0; // Setting it higher than 1/3 might cause highlights clipping as detail is too compressed. Setting it lower than 1/4 would probably look dynamic range. 1/3 seems like the best compromize.
-  settings.DesaturationAmount = 1.0 / 3.0; //TODO?
-  settings.DarkeningAmount = 1.0 / 3.0;
-#endif
-  outColor.rgb = DICETonemap(outColor.rgb * paperWhite, peakWhite, settings) / paperWhite; //TODO: try by luminance!
+	DICESettings settings = DefaultDICESettings(DICE_TYPE_BY_LUMINANCE_GAMMA_CORRECT_CHANNELS_BEYOND_PEAK_WHITE);
+  outColor.rgb = DICETonemap(outColor.rgb * paperWhite, peakWhite, settings) / paperWhite; //TODO: try by channel and by luminance!
 #else // TONEMAP_TYPE == 1
   outColor.rgb = tonemappedHDRColor * gamma_to_linear1(1.035);
 #endif // TONEMAP_TYPE < 2

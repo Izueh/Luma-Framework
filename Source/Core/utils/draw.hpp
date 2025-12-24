@@ -396,11 +396,19 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
          dsv = RedirectMirroredRVS(dsv.get());
 
          com_ptr<ID3D11DepthStencilState> depth_stencil_state;
-         native_device_context->OMGetDepthStencilState(&depth_stencil_state, nullptr);
+         UINT stencil_ref;
+         native_device_context->OMGetDepthStencilState(&depth_stencil_state, &stencil_ref);
          if (depth_stencil_state)
          {
             D3D11_DEPTH_STENCIL_DESC depth_stencil_desc;
             depth_stencil_state->GetDesc(&depth_stencil_desc);
+
+            D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc = {};
+            if (dsv.get())
+            {
+               dsv->GetDesc(&dsv_desc);
+            }
+
             if (depth_stencil_desc.DepthEnable)
             {
                if (dsv.get())
@@ -437,12 +445,28 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
                }
             }
 
-            trace_draw_call_data.stencil_enabled = depth_stencil_desc.StencilEnable && dsv.get(); // TODO: do better states for it
-
-            if (trace_draw_call_data.depth_state != TraceDrawCallData::DepthStateType::Disabled && trace_draw_call_data.depth_state != TraceDrawCallData::DepthStateType::Invalid)
+            bool has_valid_stencil_dsv = dsv.get() && (dsv_desc.Format == DXGI_FORMAT_D24_UNORM_S8_UINT || dsv_desc.Format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT);
+            bool any_stencil_pass_op_writes = depth_stencil_desc.FrontFace.StencilFailOp != D3D11_STENCIL_OP_KEEP || depth_stencil_desc.FrontFace.StencilDepthFailOp != D3D11_STENCIL_OP_KEEP || depth_stencil_desc.FrontFace.StencilPassOp != D3D11_STENCIL_OP_KEEP || depth_stencil_desc.BackFace.StencilFailOp != D3D11_STENCIL_OP_KEEP || depth_stencil_desc.BackFace.StencilDepthFailOp != D3D11_STENCIL_OP_KEEP || depth_stencil_desc.BackFace.StencilPassOp != D3D11_STENCIL_OP_KEEP; // Note: "D3D11_STENCIL_OP_KEEP" isn't 0, so it's possitive that 0 is also treated as "NOP"
+            bool any_stencil_func_tests = depth_stencil_desc.FrontFace.StencilFunc != D3D11_COMPARISON_ALWAYS || depth_stencil_desc.BackFace.StencilFunc != D3D11_COMPARISON_ALWAYS;
+            
+            bool stencil_enabled_write = depth_stencil_desc.StencilEnable && has_valid_stencil_dsv && depth_stencil_desc.StencilWriteMask != 0 && any_stencil_pass_op_writes;
+            bool stencil_enabled_read = depth_stencil_desc.StencilEnable && has_valid_stencil_dsv && depth_stencil_desc.StencilReadMask != 0 && any_stencil_func_tests; // "stencil_ref" doesn't really tell us anything regarding read/write
+            if (stencil_enabled_read && stencil_enabled_write)
             {
-               D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc;
-               dsv->GetDesc(&dsv_desc);
+               trace_draw_call_data.stencil_state = TraceDrawCallData::DepthStateType::TestAndWrite;
+            }
+            else if (stencil_enabled_read)
+            {
+               trace_draw_call_data.stencil_state = TraceDrawCallData::DepthStateType::TestOnly;
+            }
+            else if (stencil_enabled_write)
+            {
+               trace_draw_call_data.stencil_state = TraceDrawCallData::DepthStateType::WriteOnly;
+            }
+
+            if ((trace_draw_call_data.depth_state != TraceDrawCallData::DepthStateType::Disabled && trace_draw_call_data.depth_state != TraceDrawCallData::DepthStateType::Invalid)
+               || (trace_draw_call_data.stencil_state != TraceDrawCallData::DepthStateType::Disabled && trace_draw_call_data.stencil_state != TraceDrawCallData::DepthStateType::Invalid))
+            {
                trace_draw_call_data.dsv_format = dsv_desc.Format;
                ASSERT_ONCE(dsv_desc.Format != DXGI_FORMAT_UNKNOWN); // Unexpected?
                com_ptr<ID3D11Resource> ds_resource;
@@ -502,7 +526,7 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
          if (!dsv)
          {
             trace_draw_call_data.depth_state = TraceDrawCallData::DepthStateType::Disabled;
-            trace_draw_call_data.stencil_enabled = false;
+            trace_draw_call_data.stencil_state = TraceDrawCallData::DepthStateType::Disabled;
          }
          for (UINT i = 0; i < device_data.uav_max_count && i < TraceDrawCallData::uavs_size; i++)
          {
@@ -1101,7 +1125,7 @@ void SanitizeNaNs(ID3D11Device* device, ID3D11DeviceContext* device_context, ID3
 
                if (IsSignedFloatFormat(texture_2d_desc.Format)) // They couldn't have NaNs otherwise, so we don't even need to worry about supporting sRGB UNORM formats as UAV
                {
-                  data.texture_2d = CloneTexture<ID3D11Texture2D>(device, resource.get(), DXGI_FORMAT_UNKNOWN, D3D11_BIND_SHADER_RESOURCE | (smoothed ? D3D11_BIND_UNORDERED_ACCESS : 0), D3D11_BIND_RENDER_TARGET, false, false, device_context, smoothed ? 0 : -1); // Create texture with mips for NaN filtering
+                  data.texture_2d = CloneTexture<ID3D11Texture2D>(device, resource.get(), DXGI_FORMAT_UNKNOWN, D3D11_BIND_SHADER_RESOURCE | (smoothed ? D3D11_BIND_UNORDERED_ACCESS : 0), smoothed ? 0 : D3D11_BIND_RENDER_TARGET, false, false, device_context, smoothed ? 0 : -1); // Create texture with mips for NaN filtering
                   if (data.texture_2d)
                   {
                      data.original_rtv = rtv;
@@ -1313,7 +1337,7 @@ void DrawSMAA(ID3D11Device* device, ID3D11DeviceContext* device_context, const D
    //
 
    // Create area texture.
-   static com_ptr<ID3D11ShaderResourceView> srv_area_tex;
+   static com_ptr<ID3D11ShaderResourceView> srv_area_tex; // TODO: this will cause crashes!
    [[unlikely]] if (!srv_area_tex)
    {
       D3D11_TEXTURE2D_DESC tex_desc = {};

@@ -2,8 +2,8 @@
 #include "../Includes/ColorGradingLUT.hlsl"
 #include "../Includes/DICE.hlsl"
 
-#ifndef ENABLE_FAKE_HDR
-#define ENABLE_FAKE_HDR 1
+#ifndef ENABLE_HDR_BOOST
+#define ENABLE_HDR_BOOST 1
 #endif
 
 cbuffer cbConsts : register(b1)
@@ -189,7 +189,7 @@ void main(
   bool doHDR = !ShouldForceSDR(v1.xy) && LumaSettings.DisplayMode == 1;
   if (doHDR)
   {
-#if ENABLE_FAKE_HDR
+#if ENABLE_HDR_BOOST
     float normalizationPoint = 0.025;
     float fakeHDRIntensity = 0.1;
     float fakeHDRSaturation = LumaSettings.GameSettings.HDRBoostSaturationAmount;

@@ -251,17 +251,18 @@ void main(
   }
   else if (LumaSettings.DisplayMode == 1 || !allowReinhard)
   {
-    bool perChannel = true; // Per channel causes hue shifts, which this game doesn't seem to expect that much, but bloom either forms steps with "DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE" (especially on blue, police cars sirens), or clips, with "DICE_TYPE_BY_LUMINANCE_PQ".
+    bool perChannel = false; // Per channel causes hue shifts, which this game doesn't seem to expect that much, but bloom either forms steps with "DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE" (especially on blue, police cars sirens), or clips, with "DICE_TYPE_BY_LUMINANCE_PQ".
     DICESettings settings = DefaultDICESettings(perChannel ? DICE_TYPE_BY_CHANNEL_PQ : DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE);
-    settings.DarkeningAmount = 0.0; // Darkening makes some stuff like police cars sirens bloom, become a blob of blue, because by ratio all colors were similar, so we scale them by peak, they won't be distinguishable anymore.
-    settings.DesaturationAmount = 1.0 - settings.DarkeningAmount; // Desaturation too much also causes visible steps/blobs, but it's less worse
+    // Darkening makes some stuff like police cars sirens bloom, become a blob of blue, because by ratio all colors were similar, so we scale them by peak, they won't be distinguishable anymore.
+    // Desaturation too much also causes visible steps/blobs, but it's less worse.
+    settings.DesaturationVsDarkeningRatio = 1.0;
     gradedSceneColor = DICETonemap(gradedSceneColor * paperWhite, peakWhite, settings) / paperWhite;
   }
   else
   {
 #if 1
     gradedSceneColor = RestoreLuminance(gradedSceneColor, Reinhard::ReinhardRange(GetLuminance(gradedSceneColor), MidGray, -1.0, peakWhite / paperWhite, false).x, true);
-    gradedSceneColor = CorrectOutOfRangeColor(gradedSceneColor, true, true, 0.5, 0.5, peakWhite / paperWhite); // TM by luminance generates out of gamut colors, and some were already in the scene anyway
+    gradedSceneColor = CorrectOutOfRangeColor(gradedSceneColor, true, true, 0.5, peakWhite / paperWhite); // TM by luminance generates out of gamut colors, and some were already in the scene anyway
 #else
     gradedSceneColor = Reinhard::ReinhardRange(gradedSceneColor, MidGray, -1.0, peakWhite / paperWhite, false);
 #endif

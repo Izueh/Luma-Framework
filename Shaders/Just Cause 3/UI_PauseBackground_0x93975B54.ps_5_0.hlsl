@@ -19,7 +19,7 @@ void main(
   r0.xy = Constants.xy + v1.xy;
   o0.xyzw = Texture0.Sample(Texture0_s, r0.xy).xyzw;
   
-#if 1 // Luma
+#if 1 // Luma  
   bool doHDR = LumaSettings.DisplayMode == 1;
   // We need to tonemap the background copy as it's done before the final swapchain copy shader, which is when we would have tonemapped
   if (doHDR)

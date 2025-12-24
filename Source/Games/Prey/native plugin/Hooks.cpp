@@ -721,6 +721,7 @@ namespace Hooks
 	void Hooks::PatchSwapchainDesc(DXGI_SWAP_CHAIN_DESC& a_desc)
 	{
 		// set flags (done by the code that we wrote over). Prey didn't have any of these.
+		// At the moment ReShade will present with "DXGI_PRESENT_ALLOW_TEARING", otherwise we might need to add it ourselves (if we didn't have ReShade).
 		a_desc.Flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH | DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING | DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
 
 		// set LDRPostProcessFormat

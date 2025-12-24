@@ -35,6 +35,10 @@ float remap(float input, float oldMin, float oldMax, float newMin, float newMax)
 {
 	return ((input - oldMin) * ((newMax - newMin) / (oldMax - oldMin))) + newMin;
 }
+float3 remap(float3 input, float3 oldMin, float3 oldMax, float3 newMin, float3 newMax)
+{
+	return ((input - oldMin) * ((newMax - newMin) / (oldMax - oldMin))) + newMin;
+}
 
 // Returns 0, 1, -1/0/+1 or +/-FLT_MAX if "dividend" is 0
 float safeDivision(float quotient, float dividend, int fallbackMode = 0)
@@ -214,6 +218,13 @@ bool cubeCoordinatesIntersection(out float3 intersection, float3 coordinates, fl
   float t = -1.f / dot(sideNormal, coordinates);
   intersection = coordinates * t;
   return true;
+}
+
+float2 MirrorUV(float2 uv)
+{
+	float2 modded = fmod( uv, 2.0 );
+	modded += ( modded < 0 ) ? 2.0 : 0.0; // Ensure positive values
+  return ( modded <= 1.0 ) ? modded : ( 2.0 - modded );
 }
 
 #endif // SRC_MATH_HLSL

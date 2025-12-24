@@ -102,6 +102,7 @@ public:
       auto& game_device_data = GetGameDeviceData(device_data);
 
       game_device_data.has_drawn_tonemap = false;
+      device_data.has_drawn_main_post_processing = true;
    }
 
    void PrintImGuiAbout() override

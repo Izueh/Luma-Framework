@@ -319,7 +319,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
    {
       Globals::SetGlobals(PROJECT_NAME, "Thumper Luma mod");
-      Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::WorkInProgress;
       Globals::VERSION = 1;
 
       swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;

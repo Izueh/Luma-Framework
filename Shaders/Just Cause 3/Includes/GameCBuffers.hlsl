@@ -11,6 +11,7 @@ namespace CB
 	{
 		float ColorGradingIntensity;
 		float HDRBoostSaturationAmount;
+		float BloomIntensity;
 	};
 	
 	struct LumaGameData

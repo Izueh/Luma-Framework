@@ -6,7 +6,7 @@ SamplerState pointSampler : register(s0);
 // Based on "D3D11_REQ_TEXTURE1D_U_DIMENSION"
 #define MAX_2D_MIP_LEVELS 15
 
-float4 main(float4 pos : SV_Position0) : SV_Target0
+float4 main(float4 pos : SV_Position) : SV_Target0
 {
   uint2 size;
   uint levels; // TODO: hardcode this in by permutation to optimize the shader?

@@ -93,21 +93,30 @@ float3 linear_to_game_gamma(float3 Color, bool Mirrored = true)
 // "SDRColor" is meant to be in "SDR range" (linear), as in, a value of 1 matching SDR white (something between 80, 100, 203, 300 nits, or whatever else)
 // This function already knows your Luma peak white nits setting, so actually pass in the max value for paper white 80 (e.g. 400-750, beyond that it looks bad)
 // https://github.com/Filoppi/PumboAutoHDR
-float3 PumboAutoHDR(float3 SDRColor, float MaxPeakWhiteNits, float _PaperWhiteNits, float ShoulderPow = 2.75f)
+float3 PumboAutoHDR(float3 SDRColor, float MaxPeakWhiteNits, float _PaperWhiteNits, float ShoulderPow = 2.75f, float SaturationExpansionIntensity = 0.2f) // TODO: default "SaturationExpansionIntensity"?
 {
 #if 1 // This might disproportionally brighten up pure colors
-	const float SDRRatio = max3(SDRColor);
+	float SDRRatio = max3(SDRColor);
 #elif 0
-	const float SDRRatio = average(SDRColor);
+	float SDRRatio = average(SDRColor);
 #else // This nearly ignores blue!
-	const float SDRRatio = max(GetLuminance(SDRColor), 0.f);
+	float SDRRatio = max(GetLuminance(SDRColor), 0.f);
 #endif
 	// Limit AutoHDR brightness, it won't look good beyond a certain level.
 	// The paper white multiplier is applied later so we account for that.
-	const float AutoHDRMaxWhite = max(min(MaxPeakWhiteNits / sRGB_WhiteLevelNits, PeakWhiteNits / _PaperWhiteNits), 1.f);
-	const float AutoHDRExtraRatio = pow(saturate(SDRRatio), ShoulderPow) * (AutoHDRMaxWhite - 1.f);
-	const float AutoHDRTotalRatio = SDRRatio + AutoHDRExtraRatio;
-	return SDRColor * safeDivision(AutoHDRTotalRatio, SDRRatio, 1);
+	float AutoHDRMaxWhite = max(min(MaxPeakWhiteNits / sRGB_WhiteLevelNits, PeakWhiteNits / _PaperWhiteNits), 1.f);
+
+	float AutoHDRExtraRatio = pow(saturate(SDRRatio), ShoulderPow) * (AutoHDRMaxWhite - 1.f);
+	float AutoHDRTotalRatio = SDRRatio + AutoHDRExtraRatio;
+  float SingleColorScale = safeDivision(AutoHDRTotalRatio, SDRRatio, 1);
+  
+  // Calculate it again but with "per channel", which would expand gamut (not hue conservative)
+  float3 SDRRatio3 = SDRColor;
+	float3 AutoHDRExtraRatio3 = pow(saturate(SDRRatio3), ShoulderPow) * (AutoHDRMaxWhite - 1.f);
+	float3 AutoHDRTotalRatio3 = SDRRatio3 + AutoHDRExtraRatio3;
+  float3 PerChannelColorScale = safeDivision(AutoHDRTotalRatio3, SDRRatio3, 1);
+
+	return SDRColor * lerp(SingleColorScale, PerChannelColorScale, SaturationExpansionIntensity);
 }
 
 // Takes an SDR/HDR linear color (that doesn't have that much dynamic range) and expands the high midtones and highlights.

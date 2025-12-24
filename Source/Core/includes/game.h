@@ -91,6 +91,4 @@ public:
    virtual float GetTonemapUIBackgroundAmount(const DeviceData& device_data) const { return 0.f; }
    // In case your SR implementation had any extra resources, you can clean them up here
    virtual void CleanExtraSRResources(DeviceData& device_data) {}
-	// Some games use a non linear swapchain, but always write to it through sRGB view, so we should essentially treat it as linear
-   virtual bool ForceVanillaSwapchainLinear() const { return false; }
 };

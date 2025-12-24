@@ -222,7 +222,7 @@ namespace FidelityFX
             {
             case FFX_MESSAGE_TYPE_ERROR:
                printf_s("FSR3 Error: %s\n", buffer); // TODO: use "OutputDebugStringA", this doesn't work in a dll
-               ASSERT(false);
+               ASSERT_MSGF(false, "FSR3 Error: %s\n", buffer);
                break;
             case FFX_MESSAGE_TYPE_WARNING:
                printf_s("FSR3 Warning: %s\n", buffer);

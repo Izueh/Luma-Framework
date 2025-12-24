@@ -162,4 +162,4 @@ void main(
   o1 = saturate(o1);
   o2 = saturate(o2);
   o3 = saturate(o3);
-  }
+}

@@ -317,7 +317,7 @@ float4 main(float4 gl_FragCoord : SV_Position) : SV_Target0
       else
       {
         outColor.rgb = RestoreLuminance(outColor.rgb, Reinhard::ReinhardRange(GetLuminance(outColor.rgb), MidGray, -1.0, peakWhite / paperWhite, false).x, true);
-        outColor.rgb = CorrectOutOfRangeColor(outColor.rgb, true, true, 0.5, 0.5, peakWhite / paperWhite);
+        outColor.rgb = CorrectOutOfRangeColor(outColor.rgb, true, true, 0.5, peakWhite / paperWhite);
       }
     }
   

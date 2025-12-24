@@ -236,7 +236,7 @@
       <AdditionalDependencies>nvsdk_ngx_d.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>..\..\External\NGX\libs</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ImportLibrary>
       </ImportLibrary>
     </Link>
@@ -283,7 +283,7 @@
       <AdditionalDependencies>nvsdk_ngx_d.lib</AdditionalDependencies>
       <AdditionalLibraryDirectories>..\..\External\NGX\libs</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
-      <GenerateDebugInformation>false</GenerateDebugInformation>
+      <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ImportLibrary>
       </ImportLibrary>
     </Link>

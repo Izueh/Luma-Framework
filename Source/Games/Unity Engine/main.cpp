@@ -134,6 +134,10 @@ public:
 
       char ui_type = '2';
 
+      // Needed by "SoD" given it used sRGB views (it should work on other Unity games too)
+      // Most recent Unity games do the whole post processing, UI and swapchain presentation in linear (sRGB textures), even if the swapchain isn't sRGB.
+      force_vanilla_swapchain_linear = true;
+
       // Games like SoD have problems if upgrading random resources, they get stuck during loading screens (we could try some more advanced upgrade rules, but it's not particularly necessary).
       // Unity does bloom in HDR so upgrading mips isn't really necessary, and often it's seemingly done at full resolution anyway.
       if (game_id != GAME_SHADOWS_OF_DOUBT)
@@ -156,15 +160,34 @@ public:
          // Needed by bloom and FXAA (at least the typeless one)
          texture_upgrade_formats.emplace(reshade::api::format::r10g10b10a2_typeless);
          texture_upgrade_formats.emplace(reshade::api::format::r10g10b10a2_unorm);
+
+         redirected_shader_hashes["PoPTLC_Tonemap"] =
+            {
+               "FA1EB89D",
+               "A8D65F39",
+               "5A0FD042",
+               "DB8E089A",
+               "331779B3",
+               "37BB5F3B",
+               "3A60763D",
+               "3B79940A",
+               "486FAF9A",
+               "681DD226",
+               "9B9CCB1B",
+               "E17B54F4",
+               "EAD71346",
+            };
       }
 
       if (game_id == GAME_HOLLOW_KNIGHT_SILKSONG)
       {
          texture_format_upgrades_2d_size_filters |= (uint32_t)TextureFormatUpgrades2DSizeFilters::CustomAspectRatio;
-         //prevent_fullscreen_state = false; // TODO: FSE crashes whether this is true or not. Not to be used.
+         prevent_fullscreen_state = false; // TODO: FSE crashes whether this is true or not. Not to be used.
          // TODO: this game resizes render targets before the swapchain, so if we upgrade by swapchain aspect ratio, sometimes it fails
+         force_vanilla_swapchain_linear = false; // Game was all gamma space
 
-         shader_hashes_CharacterLight.pixel_shaders.emplace(std::stoul("C80BBEC9", nullptr, 16));
+         shader_hashes_CharacterLight.pixel_shaders.emplace(0xC80BBEC9);
+         shader_hashes_CharacterLight.pixel_shaders.emplace(0x112C8692); // TODO: new shader that adds dithering... maybe we should warn users to disable dithering in the game settings if this is detected as Luma's dithering is better
 
          shader_hashes_UI_VideoDecode.pixel_shaders.emplace(std::stoul("8674BE1F", nullptr, 16));
          shader_hashes_UI_Sprite.pixel_shaders.emplace(std::stoul("2FDE313D", nullptr, 16));
@@ -180,8 +203,9 @@ public:
             {"ENABLE_CHARACTER_LIGHT", '1', true, false, "Allow disabling the character/hero/player light that the game uses to give visibility around the character.", 1},
             {"ENABLE_VIGNETTE", '1', true, false, "Allows disabling the vignette effect. Luma already fixes it for ultrawide given it was too strong out of the box.", 1},
             {"ENABLE_DARKNESS_EFFECT", '1', true, false, "Allows disabling the darkness effect. The game draws a veil of darkness at the edges of the screen, especially on top.", 1},
-            {"ENABLE_DITHERING", '1', true, false, "Adds a pass of dithering on the HDR output, to fight off banding due to the game excessive usage of low quality textures.\nLuma already fixes most of the banding to begin with, so this is optional.", 1},
+            {"ENABLE_DITHERING", '1', true, false, "Adds a pass of dithering on the HDR output, to fight off banding due to the game excessive usage of low quality textures.\nLuma already fixes most of the banding to begin with, so this is optional.\nDisabling dithering in the game's settings is suggested as Luma's doesn't need it.", 1},
             {"ENABLE_COLOR_GRADING", '1', true, false, "Disables the game's color grading LUT. The game won't look as intended without it, so just use this if you are curious.", 1},
+            {"FIX_BLUR_OFFSET", '1', true, false, "The game's background blur was accidentally offsetting with each blur interation, this fixes it, making sure it looks correct at any quality setting.", 1},
          };
          shader_defines_data.append_range(game_shader_defines_data);
 
@@ -244,15 +268,6 @@ public:
       {
          device_data.game = new GameDeviceDataHollowKnightSilksong;
       }
-   }
-
-   // Needed by "SoD" given it used sRGB views (it should work on other Unity games too)
-   bool ForceVanillaSwapchainLinear() const override
-   {
-      // Most recent Unity games do the whole post processing, UI and swapchain presentation in linear (sRGB textures), even if the swapchain isn't sRGB.
-      if (game_id == GAME_HOLLOW_KNIGHT_SILKSONG)
-         return false;
-      return true;
    }
 
    void OnInitSwapchain(reshade::api::swapchain* swapchain) override
@@ -342,6 +357,8 @@ public:
          auto& game_device_data = *static_cast<GameDeviceDataHollowKnightSilksong*>(device_data.game);
          game_device_data.video_playing = false;
          //game_device_data.video_texture = nullptr;
+         
+         device_data.has_drawn_main_post_processing = true;
       }
    }
 

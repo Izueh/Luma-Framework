@@ -64,6 +64,46 @@ uint3 GetTextureMipSize(uint3 base_size, UINT mip_level)
    return mip_size;
 }
 
+// Useful in case we need to find the optimal amount of mips to then linearly resample a texture to a target size
+uint32_t GetOptimalTextureMipLevelsForTargetSize(uint32_t src_w, uint32_t src_h, uint32_t target_w, uint32_t target_h)
+{
+   uint32_t max_mip = GetTextureMaxMipLevels(src_w, src_h);
+
+   uint32_t best_mip = 0;
+   float best_cost = std::numeric_limits<float>::infinity();
+
+   // We find the most optimal mip level, that is "closest" to the target, considering two axes
+   for (uint32_t mip = 0; mip < max_mip; ++mip)
+   {
+      uint32_t w = GetTextureMipSize(src_w, mip);
+      uint32_t h = GetTextureMipSize(src_h, mip);
+
+      // How much we'd need to scale this mip to reach the target size
+      float scale_x = static_cast<float>(target_w) / static_cast<float>(w);
+      float scale_y = static_cast<float>(target_h) / static_cast<float>(h);
+
+      // We want scale ~ 1.0 in both directions. Use log2 distance from 1 as a symmetric metric:
+      //   cost = |log2(scale_x)| + |log2(scale_y)|
+      // This treats 0.5x and 2x as equally "far" from ideal.
+      auto log2_abs = [](float x)
+      {
+         // Avoid log2(0)
+         x = max(x, 1e-8f);
+         return std::abs(std::log2(x));
+      };
+
+      float cost = log2_abs(scale_x) + log2_abs(scale_y);
+
+      if (cost < best_cost)
+      {
+         best_cost = cost;
+         best_mip = mip;
+      }
+   }
+
+   return best_mip + 1;
+}
+
 UINT GetSRVMipLevel(const D3D11_SHADER_RESOURCE_VIEW_DESC& desc)
 {
    switch (desc.ViewDimension)
@@ -459,7 +499,12 @@ com_ptr<T> CloneTexture(ID3D11Device* native_device, ID3D11Resource* texture_res
          {
             texture_desc.MipLevels = overridden_mip_levels;
             if (overridden_mip_levels != 1)
+            {
                texture_desc.MiscFlags |= D3D11_RESOURCE_MISC_GENERATE_MIPS;
+               // Add the other required flags
+               add_bind_flags |= D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+               remove_bind_flags &= ~(D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET);
+            }
             else
                texture_desc.MiscFlags &= ~D3D11_RESOURCE_MISC_GENERATE_MIPS;
          }
@@ -719,11 +764,12 @@ enum class DebugDrawTextureOptionsMask : uint32_t
 enum class DebugDrawMode : uint32_t
 {
    Custom,
-   // TODO: rename all of these to "View", or not (and also Depth to Depth+Stencil?)
+   // TODO: rename all of these to "View", or not
    RenderTarget,
    UnorderedAccessView,
    ShaderResource,
    Depth,
+   Stencil,
 };
 static constexpr const char* debug_draw_mode_strings[] = {
     "Custom",
@@ -731,6 +777,7 @@ static constexpr const char* debug_draw_mode_strings[] = {
     "Unordered Access View",
     "Shader Resource",
     "Depth",
+    "Stencil",
 };
 
 bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view_index, reshade::api::command_list* cmd_list, bool is_dispatch /*= false*/)
@@ -741,7 +788,7 @@ bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view
 
    com_ptr<ID3D11Resource> texture_resource;
    DXGI_FORMAT forced_texture_format = DXGI_FORMAT_UNKNOWN;
-   if (debug_draw_mode == DebugDrawMode::RenderTarget || debug_draw_mode == DebugDrawMode::Depth)
+   if (debug_draw_mode == DebugDrawMode::RenderTarget || debug_draw_mode == DebugDrawMode::Depth || debug_draw_mode == DebugDrawMode::Stencil)
    {
       com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
       com_ptr<ID3D11DepthStencilView> dsv;
@@ -759,8 +806,9 @@ bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view
             device_data.debug_draw_texture_format = rtv_desc.Format;
          }
       }
-      else if (dsv) // DebugDrawMode::Depth
+      else if (dsv) // DebugDrawMode::Depth || DebugDrawMode::Stencil
       {
+         bool true_depth_false_stencil = debug_draw_mode == DebugDrawMode::Depth;
          dsv->GetResource(&texture_resource);
          GetResourceInfo(texture_resource.get(), device_data.debug_draw_texture_size, device_data.debug_draw_texture_format);
          D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc;
@@ -771,23 +819,23 @@ bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view
          {
          case DXGI_FORMAT_D16_UNORM:
          {
-            device_data.debug_draw_texture_format = DXGI_FORMAT_R16_UNORM;
+            device_data.debug_draw_texture_format = true_depth_false_stencil ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT_UNKNOWN;
          }
          break;
          case DXGI_FORMAT_D24_UNORM_S8_UINT:
          {
-            device_data.debug_draw_texture_format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS; // Or use "DXGI_FORMAT_X24_TYPELESS_G8_UINT" to do SRV on Stencil
+            device_data.debug_draw_texture_format = true_depth_false_stencil ? DXGI_FORMAT_R24_UNORM_X8_TYPELESS : DXGI_FORMAT_X24_TYPELESS_G8_UINT;
             forced_texture_format = DXGI_FORMAT_R24G8_TYPELESS;
          }
          break;
          case DXGI_FORMAT_D32_FLOAT:
          {
-            device_data.debug_draw_texture_format = DXGI_FORMAT_R32_FLOAT;
+            device_data.debug_draw_texture_format = true_depth_false_stencil ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_UNKNOWN;
          }
          break;
          case DXGI_FORMAT_D32_FLOAT_S8X24_UINT:
          {
-            device_data.debug_draw_texture_format = DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS; // Or use "DXGI_FORMAT_X32_TYPELESS_G8X24_UINT" to do SRV on Stencil
+            device_data.debug_draw_texture_format = true_depth_false_stencil ? DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS : DXGI_FORMAT_X32_TYPELESS_G8X24_UINT;
             forced_texture_format = DXGI_FORMAT_R32G8X24_TYPELESS;
          }
          break;
@@ -842,7 +890,8 @@ bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view
       }
    }
 
-   device_data.debug_draw_texture = nullptr; // Always clear it, even if the new creation failed
+   // TODO: as optimization, we could skip re-creating the texture every frame if the new attempted texture is identical to the previous one.
+   device_data.debug_draw_texture = nullptr; // Always clear it, even if the new creation failed, because we shouldn't really keep the old one (even if "debug_draw_auto_clear_texture" is true)
    if (texture_resource)
    {
       // Note: it's possible to use "ID3D11Resource::GetType()" instead of this
@@ -867,6 +916,7 @@ bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view
          texture_desc.MiscFlags &= ~D3D11_RESOURCE_MISC_TEXTURECUBE; // Remove the cube flag in an attempt to support it anyway as a 2D Array
          if (forced_texture_format != DXGI_FORMAT_UNKNOWN)
             texture_desc.Format = forced_texture_format;
+         device_data.debug_draw_texture = nullptr;
          hr = native_device->CreateTexture2D(&texture_desc, nullptr, reinterpret_cast<ID3D11Texture2D**>(&device_data.debug_draw_texture)); // TODO: figure out error, happens sometimes. And make thread safe!
       }
       else if (texture_3d)
@@ -880,6 +930,7 @@ bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view
          texture_desc.MiscFlags &= ~D3D11_RESOURCE_MISC_SHARED;
          if (forced_texture_format != DXGI_FORMAT_UNKNOWN)
             texture_desc.Format = forced_texture_format;
+         device_data.debug_draw_texture = nullptr;
          hr = native_device->CreateTexture3D(&texture_desc, nullptr, reinterpret_cast<ID3D11Texture3D**>(&device_data.debug_draw_texture));
       }
       else if (texture_1d)
@@ -893,6 +944,7 @@ bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view
          texture_desc.MiscFlags &= ~D3D11_RESOURCE_MISC_SHARED;
          if (forced_texture_format != DXGI_FORMAT_UNKNOWN)
             texture_desc.Format = forced_texture_format;
+         device_data.debug_draw_texture = nullptr;
          hr = native_device->CreateTexture1D(&texture_desc, nullptr, reinterpret_cast<ID3D11Texture1D**>(&device_data.debug_draw_texture));
       }
       // Back it up as it gets immediately overwritten or re-used later

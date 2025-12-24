@@ -183,6 +183,8 @@ cbuffer LumaSettings : register(LUMA_SETTINGS_CB_INDEX)
 {
   struct
   {
+    float2 SwapchainSize;
+    float2 SwapchainInvSize;
     // 0 for SDR (80 nits) (gamma sRGB output)
     // 1 for HDR
     // 2 for SDR on HDR (203 nits) (gamma 2.2 output)

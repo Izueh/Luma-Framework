@@ -252,7 +252,7 @@ void main(
       else
       {
         o0.rgb = RestoreLuminance(o0.rgb, Reinhard::ReinhardRange(GetLuminance(o0.rgb), MidGray, -1.0, peakWhite / paperWhite, false).x, true);
-        o0.rgb = CorrectOutOfRangeColor(o0.rgb, true, true, 0.5, 0.5, peakWhite / paperWhite);
+        o0.rgb = CorrectOutOfRangeColor(o0.rgb, true, true, 0.5, peakWhite / paperWhite);
       }
     }
   

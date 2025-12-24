@@ -15,7 +15,7 @@ namespace JzAzBz
 {
     #define JZAZBZ_EXPONENT_SCALE_FACTOR 1.7f // Scale factor for exponent
 
-    // Input: linear rgb with a paper white of ~100 nits (SDR neutral)
+    // Input: linear rgb with a paper white of ~100 nits (SDR neutral) (pre scale it if you want)
     // Jz Luminance-like
     // Az Red–Green opponent axis
     // Bz Blue–Yellow opponent axis

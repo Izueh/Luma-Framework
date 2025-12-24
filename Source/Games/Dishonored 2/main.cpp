@@ -826,6 +826,11 @@ public:
 
             // Do "delayed" DLSS:
 
+            DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
+            DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
+            draw_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
+            compute_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
+
             auto* sr_instance_data = device_data.GetSRInstanceData();
             ASSERT_ONCE(sr_instance_data);
 
@@ -868,6 +873,9 @@ public:
             game_device_data.sr_source_color = nullptr;
             game_device_data.sr_motion_vectors = nullptr;
             device_data.sr_output_color = nullptr;
+
+            draw_state_stack.Restore(native_device_context.get());
+            compute_state_stack.Restore(native_device_context.get());
 
             if (dlss_succeeded)
             {
@@ -1018,6 +1026,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    {
       Globals::SetGlobals(PROJECT_NAME, "Dishonored 2 + Death of the Outsider Luma mod");
       Globals::VERSION = 1;
+      Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::WorkInProgress;
 
       shader_hashes_TAA.compute_shaders.emplace(std::stoul("06BBC941", nullptr, 16)); // DH2
       shader_hashes_TAA.compute_shaders.emplace(std::stoul("8EDF67D9", nullptr, 16)); // DH2 Low quality TAA? // TODO: add an assert on this!

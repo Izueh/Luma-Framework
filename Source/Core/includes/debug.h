@@ -7,7 +7,9 @@
 #include <fstream>
 
 // DEFINE_NAME_AS_STRING
+#ifndef _STRINGIZE // Already defined by some MSVC includes
 #define _STRINGIZE(x) _STRINGIZE2(x)
+#endif
 // DEFINE_VALUE_AS_STRING
 #define _STRINGIZE2(x) #x
 

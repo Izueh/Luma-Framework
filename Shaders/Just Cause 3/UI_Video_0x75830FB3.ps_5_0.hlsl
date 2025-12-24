@@ -1,4 +1,9 @@
 #include "Includes/Common.hlsl"
+#include "../Includes/ColorGradingLUT.hlsl"
+
+#ifndef ENABLE_HDR_BOOST
+#define ENABLE_HDR_BOOST 1
+#endif
 
 SamplerState sampler_tex_0__s : register(s0);
 SamplerState sampler_tex_1__s : register(s1);
@@ -34,5 +39,17 @@ void main(
 #if 1 // Emulate the constrast boost from accidentally interepreting them as limited, but without clipping
   o0.rgb = EmulateShadowClip(o0.rgb, false, 0.15);
 #endif
+#endif
+
+#if ENABLE_HDR_BOOST
+  o0.rgb = gamma_sRGB_to_linear(o0.rgb, GCT_MIRROR); // Assume "VANILLA_ENCODING_TYPE" sRGB here
+  o0.rgb = PumboAutoHDR(o0.rgb, 250.0, LumaSettings.GamePaperWhiteNits);
+  o0.rgb = linear_to_sRGB_gamma(o0.rgb, GCT_MIRROR);
+#endif
+
+#if UI_DRAW_TYPE == 2 // This is drawn in the UI phase but it's not exactly classifiable UI, so make sure it scales with the game brightness instead
+  ColorGradingLUTTransferFunctionInOutCorrected(o0.rgb, VANILLA_ENCODING_TYPE, GAMMA_CORRECTION_TYPE, true);
+  o0.rgb *= LumaSettings.GamePaperWhiteNits / LumaSettings.UIPaperWhiteNits;
+  ColorGradingLUTTransferFunctionInOutCorrected(o0.rgb, GAMMA_CORRECTION_TYPE, VANILLA_ENCODING_TYPE, true);
 #endif
 }

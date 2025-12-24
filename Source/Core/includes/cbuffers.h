@@ -51,6 +51,8 @@ namespace CB
    // This is mirrored in shaders (it's described there).
    struct LumaGlobalSettings
    {
+      float2 SwapchainSize;
+      float2 SwapchainInvSize;
       DisplayModeType DisplayMode;
       float ScenePeakWhite;
       float ScenePaperWhite;

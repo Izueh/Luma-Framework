@@ -1,30 +1,72 @@
 #define GAME_JUST_CAUSE_3 1
 
-#if 0 // TODO: delete? the game has no proper motion vectors (only from camera movement, but no dynamic/skeletal objects), nor has camera jitters (we could insert these, but...). Also done after SMAA DLSS would clip HDR gamut if there was any.
+#if 1 // SR
+// TODO: move SR to run before the final screen space stuff starts happening (e.g. heat distortion, bloom, blur, tonemap, etc)! Alternatively, dejitter the image before calculating bloom and dof etc?
 #define ENABLE_NGX 1
+// TODO: fix FSR being darker...? It's probably because of the wrong depth/fov params
 #define ENABLE_FIDELITY_SK 1
 #endif
 
-#define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 0
+#define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
+
+// Hooking a debugger crashes the game (possibly due to Steam DRM, but there's only that version, and Steamless doesn't do anything)
+#define DISABLE_AUTO_DEBUGGER 1
 
 #include "..\..\Core\core.hpp"
 
 #include "..\..\Core\includes\shader_patching.h"
 
+#include <chrono>
+
 namespace
 {
+   ShaderHashesList shader_hashes_Tonemapper;
+   ShaderHashesList shader_hashes_DownscaleBlur;
+   ShaderHashesList shader_hashes_Blur;
    ShaderHashesList shader_hashes_SwapchainCopy;
+   ShaderHashesList shader_hashes_PauseBackgroundCopy;
+   ShaderHashesList shader_hashes_EarlyAutoExposure;
    ShaderHashesList shader_hashes_LateAutoExposure;
+   ShaderHashesList shader_hashes_SMAA_EdgeDetection;
+   ShaderHashesList shader_hashes_SMAA;
    ShaderHashesList shader_hashes_SMAA_2TX;
+   ShaderHashesList shader_hashes_GenMotionVectors;
+   ShaderHashesList shader_hashes_GenMotionVectors_TAA;
+   ShaderHashesList shader_hashes_TerrainMaterials;
+   ShaderHashesList shader_hashes_Materials;
 
-   // TODO: make game device data... and reset them when swapchain res schanges
+   std::shared_mutex materials_mutex;
+#if DEVELOPMENT && 0 // TODO: delete
+   std::thread::id materials_thread_id = std::thread::id();
+#endif
+
+   constexpr uint32_t FORCE_VANILLA_AUTO_EXPOSURE_TYPE_HASH = char_ptr_crc32("FORCE_VANILLA_AUTO_EXPOSURE_TYPE");
+
+   // TODO: make game device data... and force reset them when swapchain res changes, though this game only ever creates a device once
    com_ptr<ID3D11Texture2D> auto_exposure_mip_chain_texture;
    com_ptr<ID3D11ShaderResourceView> auto_exposure_mip_chain_srv;
    com_ptr<ID3D11ShaderResourceView> auto_exposure_mip_last_srv;
 
+   com_ptr<ID3D11Resource> secondary_bloom_texture;
+   com_ptr<ID3D11ShaderResourceView> secondary_bloom_srv;
+
+   com_ptr<ID3D11SamplerState> af_sampler;
+
    com_ptr<ID3D11Resource> depth;
 
-   bool has_drawn_taa;
+   bool has_downscaled_bloom = false;
+   bool has_drawn_taa = false;
+   bool has_done_swapchain_copy = false;
+
+   uint32_t bloom_blur_passes = 0;
+#if DEVELOPMENT // TODO: delete, it seems fine now!
+   uint32_t blur_passes = 0;
+#endif
+
+   float2 frame_jitters = float2(0.f, 0.f);
+
+   float frame_rate = 60.f;
+   std::chrono::high_resolution_clock::time_point last_frame_time;
 }
 
 class JustCause3 final : public Game
@@ -34,16 +76,26 @@ public:
    {
       std::vector<ShaderDefineData> game_shader_defines_data = {
          {"FORCE_VANILLA_FOG", '1', true, false, "In HDR, the fog texture might get upgraded and thus unclipped, causing the fog to be stronger.\nEnable this to re-clamp it to vanilla levels.", 1},
-         {"FORCE_VANILLA_AUTO_EXPOSURE", '0', true, false, "The game auto exposure was calculated after tonemapping, hence HDR will affect it.\nTo keep a exposure level as vanilla SDR, turn this on, however, it doesn't actually seem to look better in HDR.", 1},
+         {"FORCE_VANILLA_AUTO_EXPOSURE_TYPE", '0', true, false, "The game auto exposure was calculated after tonemapping, hence HDR will affect it.\nThe higher the value of this, the closer the exposure level will be to the vanilla SDR, however, it doesn't actually seem to look better in HDR.", 2},
+         {"DISABLE_AUTO_EXPOSURE", '0', true, false, "Disables the game's strong auto exposure adjustments.", 1},
          {"ENABLE_ANAMORPHIC_BLOOM", '0', true, false, "The game bloom was stretched horizontally to emulate the look of film. It doesn't seem to fit with the rest of the game, so Luma disables that by default.", 1},
-         {"ENABLE_FAKE_HDR", '1', true, false, "Enable a \"Fake\" HDR boosting effect", 1},
+         {"ENABLE_HDR_BOOST", '1', true, false, "Enable a \"Fake\" HDR boosting effect (applies to videos too).", 1},
+         {"HIGH_QUALITY_LUT", '0', true, false, "Enables a higher quality analysis for the Color Grading + Tonemapping SDR LUT, for better HDR extrapolation from it.\nNote that this isn't necessarily better.", 1},
+         {"ENABLE_SHIMMER_FILTER", '0', true, false, "Enables an anti shimmering/fireflies filter, that either clips small highlights or spreads them around, in favour of image stability.\nThis does not do anything if Luma's Super Resolution is enabled.", 1},
+         {"FIX_MOTION_BLUR_SHUTTER_SPEED", '1', true, false, "The game's motion blur was barely noticeable beyond 60 fps, this makes the intensity match how it looked at 60 fps, independently of the frame rate.", 1},
       };
       shader_defines_data.append_range(game_shader_defines_data);
 
+#if ENABLE_SR
+      sr_game_tooltip = "Select \"SMAA T2X\" in the game's AA settings for Super Resolution (DLSS/DLAA or FSR) to engage.\n";
+#endif
+
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
-      GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('0'); // The game looks best in sRGB<->sRGB. Doing any kind of 2.2 conversion, whether per channel or by luminance crushes blacks and makes the game look unnatural (especially doing the night). Though just in case, "3" looks second best here. Ideally we'd expose it as a slider, or dynamically pick it based on the LUT and time of day.
+      GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('0'); // The game looks best in sRGB<->sRGB. Doing any kind of 2.2 conversion, whether per channel or by luminance, crushes blacks and makes the game look unnatural (especially doing the night). Though just in case, "3" looks second best here. Ideally we'd expose it as a slider, or dynamically pick it based on the LUT and time of day. // TODO: try again on OLED
       GetShaderDefineData(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL_HASH).SetDefaultValue('1');
+
+      last_frame_time = std::chrono::high_resolution_clock::now();
    }
 
    // Add a saturate on materials/gbuffers
@@ -55,6 +107,7 @@ public:
       std::unique_ptr<std::byte[]> new_code = nullptr;
 
       bool gbuffers_pattern_found = false;
+      bool gbuffers_diffuse_pattern_found = false;
       bool lighting_pattern_found = false;
 
       // The game first renders to 4 UNORM GBuffers (which we might upgrade to FLOAT RTs hence we need to add saturate() on their output, to prevent values beyond 0-1 and NaNs)
@@ -63,25 +116,34 @@ public:
       const char str_to_find_gbuffers_3[] = "DiffuseAlpha";
       const char str_to_find_gbuffers_4[] = "NormalMap";
       const char str_to_find_gbuffers_5[] = "MaterialConsts"; // Sometimes it's "cbMaterialConsts" too
+      const char str_to_find_gbuffers_6[] = "DecalAlbedoMap"; // Sometimes it's "cbMaterialConsts" too
+      const char str_to_find_gbuffers_7[] = "SamplerRegular"; // This is always at slot 0
 
       // The game then composes the gbuffers and renders "lighting" on top (lights, fog, transparency (glass), particles, decals, ...)
       const char str_to_find_lighting[] = "LightingFrameConsts";
 
       std::vector<std::byte> pattern_safety_check;
+      bool pattern_found;
       pattern_safety_check = std::vector<std::byte>(reinterpret_cast<const std::byte*>(str_to_find_gbuffers_1), reinterpret_cast<const std::byte*>(str_to_find_gbuffers_1) + strlen(str_to_find_gbuffers_1));
       gbuffers_pattern_found |= !System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(shader_object), shader_object_size, pattern_safety_check, true).empty();
       pattern_safety_check = std::vector<std::byte>(reinterpret_cast<const std::byte*>(str_to_find_gbuffers_2), reinterpret_cast<const std::byte*>(str_to_find_gbuffers_2) + strlen(str_to_find_gbuffers_2));
-      gbuffers_pattern_found |= !System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(shader_object), shader_object_size, pattern_safety_check, true).empty();
+      pattern_found = !System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(shader_object), shader_object_size, pattern_safety_check, true).empty();
+      gbuffers_pattern_found |= pattern_found;
+      gbuffers_diffuse_pattern_found |= pattern_found;
       pattern_safety_check = std::vector<std::byte>(reinterpret_cast<const std::byte*>(str_to_find_gbuffers_3), reinterpret_cast<const std::byte*>(str_to_find_gbuffers_3) + strlen(str_to_find_gbuffers_3));
       gbuffers_pattern_found |= !System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(shader_object), shader_object_size, pattern_safety_check, true).empty();
       pattern_safety_check = std::vector<std::byte>(reinterpret_cast<const std::byte*>(str_to_find_gbuffers_4), reinterpret_cast<const std::byte*>(str_to_find_gbuffers_4) + strlen(str_to_find_gbuffers_4));
       gbuffers_pattern_found |= !System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(shader_object), shader_object_size, pattern_safety_check, true).empty();
       pattern_safety_check = std::vector<std::byte>(reinterpret_cast<const std::byte*>(str_to_find_gbuffers_5), reinterpret_cast<const std::byte*>(str_to_find_gbuffers_5) + strlen(str_to_find_gbuffers_5));
       gbuffers_pattern_found |= !System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(shader_object), shader_object_size, pattern_safety_check, true).empty();
+      pattern_safety_check = std::vector<std::byte>(reinterpret_cast<const std::byte*>(str_to_find_gbuffers_6), reinterpret_cast<const std::byte*>(str_to_find_gbuffers_6) + strlen(str_to_find_gbuffers_6));
+      gbuffers_pattern_found |= !System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(shader_object), shader_object_size, pattern_safety_check, true).empty();
+      pattern_safety_check = std::vector<std::byte>(reinterpret_cast<const std::byte*>(str_to_find_gbuffers_7), reinterpret_cast<const std::byte*>(str_to_find_gbuffers_7) + strlen(str_to_find_gbuffers_7));
+      gbuffers_diffuse_pattern_found |= !System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(shader_object), shader_object_size, pattern_safety_check, true).empty();
+      // TODO: why does "0xDFBD067F" fail this check?
 
       pattern_safety_check = std::vector<std::byte>(reinterpret_cast<const std::byte*>(str_to_find_lighting), reinterpret_cast<const std::byte*>(str_to_find_lighting) + strlen(str_to_find_lighting));
       lighting_pattern_found |= !System::ScanMemoryForPattern(reinterpret_cast<const std::byte*>(shader_object), shader_object_size, pattern_safety_check, true).empty();
-      if (lighting_pattern_found)
 
       if (!gbuffers_pattern_found && !lighting_pattern_found)
          return new_code;
@@ -142,9 +204,23 @@ public:
 
       if (gbuffers_pattern_found || lighting_pattern_found)
       {
+         if (gbuffers_pattern_found && gbuffers_diffuse_pattern_found)
+         {
+#if DEVELOPMENT && 0
+            std::thread::id materials_thread_id = std::thread::id();
+            if (materials_thread_id != std::thread::id())
+            {
+               ASSERT_ONCE(materials_thread_id == std::this_thread::get_id());
+            }
+            materials_thread_id = std::this_thread::get_id();
+#endif
+            const std::unique_lock lock(materials_mutex);
+            shader_hashes_Materials.pixel_shaders.emplace(uint32_t(shader_hash));
+         }
+
          std::vector<uint8_t> appended_patch;
 
-         constexpr bool enable_unorm_emulation = false; // TODO: this breaks everything... I don't know why. Also, re-enable ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
+         constexpr bool enable_unorm_emulation = false; // TODO: this breaks everything... I don't know why. Probably because of some false positive that writes on float or snorm.
          constexpr bool enable_r11g11b10float_emulation = true;
          if (gbuffers_pattern_found && enable_unorm_emulation)
          {
@@ -198,8 +274,70 @@ public:
 
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
+      const std::shared_lock lock(materials_mutex); // Note: this could be "optimized" a bit, given that most shaders will compile on boot and on the same thread, but not all (I checked). Either way it shouldn't be too slow.
+      if (enable_samplers_upgrade && original_shader_hashes.Contains(shader_hashes_TerrainMaterials) && test_index != 2)
+      {
+         // Replace sampler 3 and 4 with the one in slot 5 (AF)
+         //SamplerState DetailColorState_s : register(s3)
+         //SamplerState DetailBumpState_s : register(s4)
+         //SamplerState SamplerStateDiffuseAnisotropic_s : register(s5)
+
+         // TODO: it'd probably be enough to do this once when this shader is bound, for performance reasons, but anyway we could skip second calls here
+         com_ptr<ID3D11SamplerState> sampler_states[2];
+         if (!af_sampler)
+         {
+            native_device_context->PSGetSamplers(5, 1, &sampler_states[0]);
+            sampler_states[1] = sampler_states[0]; // Duplicate, so we can do a single set below
+            af_sampler = sampler_states[0];        // Cache it aside!
+         }
+         else
+         {
+            sampler_states[0] = af_sampler;
+            sampler_states[1] = af_sampler;
+         }
+         ID3D11SamplerState* const* sampler_states_const = (ID3D11SamplerState**)std::addressof(sampler_states[0]);
+         native_device_context->PSSetSamplers(3, 2, sampler_states_const); // TODO: actually this doesn't do anything?
+      }
+      else if (enable_samplers_upgrade && original_shader_hashes.Contains(shader_hashes_Materials) && af_sampler && test_index != 2)
+      {
+         // TODO: replace these too, in all detected materials (through shader patching), then store a map of material hashes and which samplers do they need replaced.
+         // All of these were "linear" in the engine while they should have been AF.
+         // A few of these would already be AF. Target state: "D3D11_FILTER_ANISOTROPIC" "D3D11_TEXTURE_ADDRESS_WRAP" "D3D11_COMPARISON_NEVER" 16x.
+         // SamplerState DiffuseMap_s : register(s0);
+         // SamplerState NormalMap_s : register(s1);
+         // SamplerState PropertiesMap_s : register(s2); // ?
+         // SamplerState PropertyMap_s : register(s2); // ?
+         // SamplerState DetailDiffuseMap_s : register(s3);
+         // SamplerState DetailNormalMap_s : register(s4);
+         // SamplerState NormalDetailMap_s : register(s4);
+         // SamplerState EmissiveMap_s : register(s5);
+         // SamplerState FeatureMap_s : register(s5); // ?
+         // SamplerState WrinkleMap_s : register(s6); // ?
+         // SamplerState MetallicMap_s : register(s9);
+         //
+         // SamplerState SamplerRegular_s : register(s0);
+         // SamplerState SamplerNormalMap_s : register(s1);
+         // 
+         // Transparency or Alpha Masked:
+         // SamplerState DiffuseBase_s : register(s0);
+
+#if DEVELOPMENT && 0
+         if (materials_thread_id != std::thread::id())
+         {
+            ASSERT_ONCE(materials_thread_id == std::this_thread::get_id());
+         }
+         materials_thread_id = std::this_thread::get_id();
+#endif
+
+         ID3D11SamplerState* sampler_states[3];
+         sampler_states[0] = af_sampler.get();
+         sampler_states[1] = af_sampler.get();
+         sampler_states[2] = af_sampler.get(); // For simpler materials, the ones with "SamplerRegular", this isn't set/used but it should be fine anyway
+         ID3D11SamplerState* const* sampler_states_const = (ID3D11SamplerState**)std::addressof(sampler_states[0]);
+         native_device_context->PSSetSamplers(0, 3, sampler_states_const);
+      }
       // Make sure the swapchain copy shader always and only targets the swapchain RT, otherwise we'd need to branch in it!
-      if (is_custom_pass && original_shader_hashes.Contains(shader_hashes_SwapchainCopy))
+      else if (is_custom_pass && original_shader_hashes.Contains(shader_hashes_SwapchainCopy))
       {
          com_ptr<ID3D11RenderTargetView> rtv;
          native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
@@ -217,11 +355,67 @@ public:
          uint32_t custom_data_1 = is_rt_swapchain ? 1 : 0;
          SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData, custom_data_1);
          updated_cbuffers = true;
+
+         if (is_rt_swapchain)
+            has_done_swapchain_copy = true;
+      }
+      else if (is_custom_pass && original_shader_hashes.Contains(shader_hashes_PauseBackgroundCopy))
+      {
+         uint32_t custom_data_1 = has_done_swapchain_copy ? 1 : 0;
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData, custom_data_1);
+         updated_cbuffers = true;
+      }
+      else if (original_shader_hashes.Contains(shader_hashes_DownscaleBlur))
+      {
+         // This always runs before tm
+         has_downscaled_bloom = true;
+      }
+      else if (original_shader_hashes.Contains(shader_hashes_Blur))
+      {
+         if (has_downscaled_bloom)
+         {
+            bloom_blur_passes++;
+            // The 6th bloom pass was done and allowed bloom to be "symmetrical" (like a small dot blooming to a circle) but somehow they forgot to use the last
+            if (bloom_blur_passes == 6)
+            {
+               com_ptr<ID3D11RenderTargetView> render_target_views[1];
+               native_device_context->OMGetRenderTargets(1, &render_target_views[0], nullptr);
+               com_ptr<ID3D11Resource> current_secondary_bloom_texture;
+               if (render_target_views[0])
+                  render_target_views[0]->GetResource(&current_secondary_bloom_texture);
+               if (current_secondary_bloom_texture != secondary_bloom_texture)
+               {
+                  secondary_bloom_texture = nullptr;
+                  secondary_bloom_srv = nullptr;
+
+                  if (current_secondary_bloom_texture)
+                  {
+                     secondary_bloom_texture = current_secondary_bloom_texture;
+                     HRESULT hr = native_device->CreateShaderResourceView(secondary_bloom_texture.get(), nullptr, &secondary_bloom_srv);
+                     ASSERT_ONCE(SUCCEEDED(hr));
+                  }
+               }
+            }
+         }
+#if DEVELOPMENT
+         blur_passes++;
+#endif
+      }
+      else if (has_downscaled_bloom && original_shader_hashes.Contains(shader_hashes_Tonemapper))
+      {
+         device_data.has_drawn_main_post_processing = true;
+
+         if (secondary_bloom_srv)
+         {
+            ID3D11ShaderResourceView* const secondary_bloom_srv_const = secondary_bloom_srv.get();
+            native_device_context->PSSetShaderResources(4, 1, &secondary_bloom_srv_const);
+         }
       }
       // Replace the auto exposure approximate pass with a full 1x1 mip downscale.
       // Exposure was sampling some random texels of the scene onto a fixed ~300x100 texture, which causes the game to flicker when small strong lights were on screen, due to the exposure constantly changing.
       // This has a performance cost but it fixes relevant issues with the game.
-      else if (is_custom_pass && original_shader_hashes.Contains(shader_hashes_LateAutoExposure) && test_index != 1)
+      // TODO: fix occasional light flickers (from secondary or primary bloom) that happen at night, especially when DLSS is enabled?
+      else if (is_custom_pass && (original_shader_hashes.Contains(shader_hashes_EarlyAutoExposure) || original_shader_hashes.Contains(shader_hashes_LateAutoExposure)) && GetShaderDefineCompiledNumericalValue(FORCE_VANILLA_AUTO_EXPOSURE_TYPE_HASH) <= 1 && test_index != 1)
       {
          com_ptr<ID3D11ShaderResourceView> srv;
          native_device_context->PSGetShaderResources(0, 1, &srv);
@@ -234,9 +428,13 @@ public:
             DXGI_FORMAT format_a, format_b;
             GetResourceInfo(auto_exposure_mip_chain_texture.get(), size_a, format_a);
             GetResourceInfo(sr.get(), size_b, format_b);
+            // Note: we would have upgraded both the SRV of "shader_hashes_EarlyAutoExposure" and "shader_hashes_LateAutoExposure" so the format check doesn't trigger twice per frame!
             if (size_a != size_b || format_a != format_b)
             {
                UINT mips = GetTextureMaxMipLevels(size_b.x, size_b.y, size_b.z); // Up to 1x1
+#if 1
+               mips = GetOptimalTextureMipLevelsForTargetSize(size_b.x, size_b.y, 320, 180);
+#endif
                auto_exposure_mip_chain_texture = CloneTexture<ID3D11Texture2D>(native_device, sr.get(), DXGI_FORMAT_UNKNOWN, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_UNORDERED_ACCESS, false, false, native_device_context, mips);
                auto_exposure_mip_chain_srv = nullptr;
                auto_exposure_mip_last_srv = nullptr;
@@ -269,9 +467,85 @@ public:
                cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
             }
 #endif
-
             ID3D11ShaderResourceView* const auto_exposure_mip_last_srv_const = auto_exposure_mip_last_srv.get();
             native_device_context->PSSetShaderResources(0, 1, &auto_exposure_mip_last_srv_const);
+
+            // Add a linear sampler to aid in conservative downscaling, otherwise auto exposure flickers, because it was using a point sampler to downscale a huge image on a tiny one.
+            // The target image is always 320x180, and misses a part of the top of the image for some reason...
+            // It seems like this is read back in c++ and it takes the min and max to calculate the exposure, or some sample random points on it, because if we manually pre-average the color,
+            // the exposure changes, so we need to preserve the min and max, but also make the image smooth and conservative.
+            ID3D11SamplerState* const sampler_state_linear = device_data.sampler_state_linear.get();
+            native_device_context->PSSetSamplers(D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT - 1, 1, &sampler_state_linear);
+         }
+      }
+      else if (original_shader_hashes.Contains(shader_hashes_GenMotionVectors))
+      {
+         depth.reset();
+
+#if 0 // Depth is bound as SRV not as DSV
+         com_ptr<ID3D11RenderTargetView> render_target_views[1];
+         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
+         native_device_context->OMGetRenderTargets(1, &render_target_views[0], &depth_stencil_view);
+         if (depth_stencil_view)
+            depth_stencil_view->GetResource(&depth);
+#else
+         com_ptr<ID3D11ShaderResourceView> srv[1];
+         native_device_context->PSGetShaderResources(1, ARRAYSIZE(srv), &srv[0]);
+         if (srv[0])
+            srv[0]->GetResource(&depth);
+#endif
+
+         if (original_shader_hashes.Contains(shader_hashes_GenMotionVectors_TAA))
+         {
+            bool is_even_frame = cb_luma_global_settings.FrameIndex % 2;
+            is_even_frame = (test_index == 3) ? !is_even_frame : is_even_frame; // Test swap it, we need to predict the order from the game...
+            // SMAA T2X jitter patterns (it only has two, and they don't even go all the way to the edge (that'd be 0.5))
+            // TODO: alternatively... we could try to find the jitter in cbuffers, like Fog, AO, camera MVs generation, or at least try to determine it with heuristics from 2 camera matrices (once we know the whether the frame is even or odd, we are good until we pause the game probably).
+            // Otherwise, we could link DLSS to SMAA non T2X and force the jitters in the global buffer the have which holds the default view proj matrix (like in Mafia III).
+            // We could also scan all cbuffers for 0.25 and 0.25*rendRes etc
+            // TODO: test+finish. Also they might be 0.5 instead
+            // In UV space
+            if (is_even_frame)
+            {
+               frame_jitters = float2(0.25f, -0.25f);
+            }
+            else
+            {
+               frame_jitters = float2(-0.25f, 0.25f);
+            }
+            if (cb_luma_global_settings.DevSettings[0])
+            {
+               frame_jitters.x *= 2.f;
+               frame_jitters.y *= 2.f;
+            }
+            if (cb_luma_global_settings.DevSettings[1])
+            {
+               frame_jitters.x *= -1.f;
+            }
+            if (cb_luma_global_settings.DevSettings[2])
+            {
+               frame_jitters.y *= -1.f;
+            }
+         }
+         else
+         {
+            frame_jitters = float2(0.f, 0.f);
+         }
+
+         if (is_custom_pass)
+         {
+            uint32_t custom_data_1 = Math::AsInt(frame_jitters.x / device_data.render_resolution.x);
+            uint32_t custom_data_2 = Math::AsInt(frame_jitters.y / device_data.render_resolution.y);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData, custom_data_1, custom_data_2, max(frame_rate, 10.f)); // Clamp the frame rate (a bit random). Ideally we'd retrieve it from the game cbuffers but I couldn't find it
+            updated_cbuffers = true;
+         }
+      }
+      else if (original_shader_hashes.Contains(shader_hashes_SMAA_EdgeDetection))
+      {
+         // We can skip these if Super Resolution is on, as they won't be used!
+         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.taa_detected)
+         {
+            return DrawOrDispatchOverrideType::Skip;
          }
       }
       else if (original_shader_hashes.Contains(shader_hashes_SMAA_2TX))
@@ -292,11 +566,16 @@ public:
             com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1
             com_ptr<ID3D11DepthStencilView> depth_stencil_view;
             native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
-            const bool dlss_inputs_valid = ps_shader_resources[0].get() != nullptr && render_target_views[0].get() != nullptr;
+            const bool dlss_inputs_valid = ps_shader_resources[0].get() && ps_shader_resources[2].get() && render_target_views[0].get() && depth.get();
             ASSERT_ONCE(dlss_inputs_valid);
 
             if (dlss_inputs_valid)
             {
+               DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
+               DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
+               draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
+               compute_state_stack.Cache(native_device_context, device_data.uav_max_count);
+
                auto* sr_instance_data = device_data.GetSRInstanceData();
                ASSERT_ONCE(sr_instance_data);
 
@@ -315,12 +594,12 @@ public:
                settings_data.render_width = unsigned int(device_data.render_resolution.x + 0.5);
                settings_data.render_height = unsigned int(device_data.render_resolution.y + 0.5);
                settings_data.hdr = true; // At this point we are linear and "HDR" though the image is partially tonemapped if we are after SMAA
-               settings_data.inverted_depth = true; // TODO
-               settings_data.mvs_jittered = false;
-               settings_data.auto_exposure = true; // TODO: Exp is 1
-               // MVs in UV space, so we need to scale by the render resolution to transform to pixel space
-               settings_data.mvs_x_scale = device_data.render_resolution.x;
-               settings_data.mvs_y_scale = device_data.render_resolution.y; // TODO: flip?
+               settings_data.inverted_depth = true;
+               settings_data.mvs_jittered = false; // See shader 0xA1037803
+               settings_data.auto_exposure = true; // TODO: Exp is 1 given it's all after post processing, but actually constantly changes all the times, given it's calculated after DLSS but applied b4... We could re-use the LateAutoExposure shader pass mips to calculate the avg luminance though!
+               // MVs in UV space, so we need to scale by the render resolution to transform to pixel space // TODO: flip? Seems like no! describe them!
+               settings_data.mvs_x_scale = cb_luma_global_settings.DevSettings[7] ? 1.f : device_data.render_resolution.x * cb_luma_global_settings.DevSettings[8];
+               settings_data.mvs_y_scale = cb_luma_global_settings.DevSettings[7] ? 1.f : device_data.render_resolution.y * cb_luma_global_settings.DevSettings[9];
                settings_data.use_experimental_features = sr_user_type == SR::UserType::DLSS_TRANSFORMER;
                sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
 
@@ -365,19 +644,15 @@ public:
                {
                   com_ptr<ID3D11Resource> sr_source_color;
                   ps_shader_resources[0]->GetResource(&sr_source_color);
-#if 1 // TODO: doesn't work, depth needs to be extracted from the "Gen Motion Vectors" shader
-                  depth_stencil_view->GetResource(&depth);
-#endif
                   com_ptr<ID3D11Resource> motion_vectors;
                   ps_shader_resources[2]->GetResource(&motion_vectors);
 
-                  ASSERT_ONCE(motion_vectors.get() && depth.get());
+                  ASSERT_ONCE(motion_vectors.get() && sr_source_color.get() && depth.get());
 
                   bool reset_dlss = device_data.force_reset_sr || dlss_output_changed;
                   device_data.force_reset_sr = false;
 
                   float dlss_pre_exposure = 0.f;
-                  float2 jitters{}; // TODO
 
                   SR::SuperResolutionImpl::DrawData draw_data;
                   draw_data.source_color = sr_source_color.get();
@@ -385,15 +660,25 @@ public:
                   draw_data.motion_vectors = motion_vectors.get();
                   draw_data.depth_buffer = depth.get();
                   draw_data.pre_exposure = dlss_pre_exposure;
-                  draw_data.jitter_x = jitters.x;
-                  draw_data.jitter_y = jitters.y;
-                  draw_data.reset = reset_dlss;
+                  draw_data.jitter_x = frame_jitters.x;
+                  draw_data.jitter_y = frame_jitters.y;
+                  draw_data.reset = reset_dlss; // TODO: implement camera cuts too... I don't think the game has them exposed though. Possibly reset DLSS when we pause the game or go into a loading screen.
+
+                  // TODO: we might be able to pull most of this from "7BE70E91" or "A1037803"
+                  draw_data.near_plane = 0.00001;
+                  draw_data.far_plane = FLT_MAX;
+                  draw_data.vert_fov = 1.0; // atan(1.f / projection_matrix.m11) * 2.0;
+                  draw_data.frame_index = cb_luma_global_settings.FrameIndex;
+                  draw_data.time_delta = 1.0 / 60.0;
 
                   bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
                   if (dlss_succeeded)
                   {
                      device_data.has_drawn_sr = true;
                   }
+
+                  draw_state_stack.Restore(native_device_context, device_data.uav_max_count);
+                  compute_state_stack.Restore(native_device_context, device_data.uav_max_count);
 
                   if (device_data.has_drawn_sr)
                   {
@@ -405,7 +690,7 @@ public:
                         TraceDrawCallData trace_draw_call_data;
                         trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
                         trace_draw_call_data.command_list = native_device_context;
-                        trace_draw_call_data.custom_name = "DLSS";
+                        trace_draw_call_data.custom_name = "Super Resolution";
                         // Re-use the RTV data for simplicity
                         GetResourceInfo(device_data.sr_output_color.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
                         cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
@@ -425,6 +710,10 @@ public:
                   }
                   else
                   {
+                     cb_luma_global_settings.SRType = 0;
+                     device_data.cb_luma_global_settings_dirty = true;
+
+                     device_data.sr_suppressed = true;
                      device_data.force_reset_sr = true;
                   }
                }
@@ -449,15 +738,39 @@ public:
          device_data.force_reset_sr = true; // If the frame didn't draw the scene, SR needs to reset to prevent the old history from blending with the new scene
 #endif
          device_data.taa_detected = false;
+
+         // Theoretically we turn this flag off one frame late (or well, at the end of the frame),
+         // but then again, if no scene rendered, this flag wouldn't have been used for anything.
+         if (cb_luma_global_settings.SRType > 0)
+         {
+            cb_luma_global_settings.SRType = 0; // No need for "s_mutex_reshade" here, given that they are generally only also changed by the user manually changing the settings in ImGUI, which runs at the very end of the frame
+            device_data.cb_luma_global_settings_dirty = true;
+         }
+
+         device_data.sr_suppressed = false;
+         frame_jitters = float2(0.f, 0.f);
+      }
+
+      bool drew_sr = cb_luma_global_settings.SRType > 0;                                                                                                                        // If this was true, SR would have been enabled and probably drew
+      cb_luma_global_settings.SRType = (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.taa_detected) ? (uint(device_data.sr_type) + 1) : 0; // No need for "s_mutex_reshade" here, given that they are generally only also changed by the user manually changing the settings in ImGUI, which runs at the very end of the frame
+      if (cb_luma_global_settings.SRType > 0 && !drew_sr)
+      {
+         device_data.cb_luma_global_settings_dirty = true;
+         // Reset SR history when we toggle SR on and off manually, or when the user in the game changes the AA mode,
+         // otherwise the history from the last time SR was active will be kept (SR implementations don't know time passes since it was last used).
+         // We could also clear SR resources here when we know it's unused for a while, but it would possibly lead to stutters.
+         device_data.force_reset_sr = true;
       }
 
       depth = nullptr;
 
-      device_data.has_drawn_main_post_processing = false; // TODO: never set true for now
+      device_data.has_drawn_main_post_processing = false;
       device_data.has_drawn_sr = false;
       has_drawn_taa = false;
+      has_downscaled_bloom = false;
+      has_done_swapchain_copy = false;
 
-#if 0 // TODO: enable this once we add jitters)
+#if 1 // TODO: enable this once we add jitters? Works even without tbh
       if (!custom_texture_mip_lod_bias_offset)
       {
          std::shared_lock shared_lock_samplers(s_mutex_samplers);
@@ -471,6 +784,18 @@ public:
          }
       }
 #endif
+
+      bloom_blur_passes = 0;
+#if DEVELOPMENT
+      // Make sure this shader isn't re-used for anything else other than motion blur, given it might
+      ASSERT_ONCE(blur_passes == 6 || blur_passes == 0);
+      blur_passes = 0;
+#endif
+
+      auto now = std::chrono::high_resolution_clock::now();
+      std::chrono::duration<float> delta = now - last_frame_time;
+      frame_rate = 1.0f / delta.count();
+      last_frame_time = now;
    }
 
    void LoadConfigs() override
@@ -478,6 +803,7 @@ public:
       reshade::api::effect_runtime* runtime = nullptr;
       reshade::get_config_value(runtime, NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
       reshade::get_config_value(runtime, NAME, "HDRBoostSaturationAmount", cb_luma_global_settings.GameSettings.HDRBoostSaturationAmount);
+      reshade::get_config_value(runtime, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
       // "device_data.cb_luma_global_settings_dirty" should already be true at this point
    }
 
@@ -495,7 +821,7 @@ public:
          }
          DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingIntensity, 0.8f, "ColorGradingIntensity", runtime);
 
-         if (GetShaderDefineCompiledNumericalValue(char_ptr_crc32("ENABLE_FAKE_HDR")) > 0)
+         if (GetShaderDefineCompiledNumericalValue(char_ptr_crc32("ENABLE_HDR_BOOST")) > 0)
          {
             if (ImGui::SliderFloat("HDR Saturation Boost", &cb_luma_global_settings.GameSettings.HDRBoostSaturationAmount, 0.f, 1.f))
             {
@@ -504,6 +830,12 @@ public:
             DrawResetButton(cb_luma_global_settings.GameSettings.HDRBoostSaturationAmount, 0.2f, "HDRBoostSaturationAmount", runtime);
          }
       }
+
+      if (ImGui::SliderFloat("Bloom Intensity", &cb_luma_global_settings.GameSettings.BloomIntensity, 0.f, 1.f))
+      {
+         reshade::set_config_value(runtime, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
+      }
+      DrawResetButton(cb_luma_global_settings.GameSettings.BloomIntensity, 1.0f, "BloomIntensity", runtime);
    }
 
    void PrintImGuiAbout() override
@@ -592,12 +924,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          reshade::api::format::r11g11b10_float,
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
-      enable_indirect_texture_format_upgrades = true; // TODO: is this causing the "low memory" warning on boot?
+      enable_indirect_texture_format_upgrades = true;
       enable_automatic_indirect_texture_format_upgrades = true;
 
-      // The game has x16 AA but it doesn't seem to apply to many textures
+      // The game has x16 AA but it doesn't seem to apply to many textures (mainly because it literally used linear samplers instead of AF for many...)
       enable_samplers_upgrade = true;
-      // TODO: allow upgrading AA samplers... this is currently not working in this game!
 
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 11; // 12 is used
@@ -658,13 +989,76 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             "FDBDB73F",
          };
 
-      shader_hashes_SwapchainCopy.pixel_shaders = {std::stoul("3DA3DB98", nullptr, 16)};
-      shader_hashes_LateAutoExposure.pixel_shaders = {std::stoul("23B61EDE", nullptr, 16)};
-      shader_hashes_SMAA_2TX.pixel_shaders = {std::stoul("F7078237", nullptr, 16)};
+      shader_hashes_Tonemapper.pixel_shaders = {
+         0x01F41F2D,
+         0x0BAC4255,
+         0x0C35F299,
+         0x148CD952,
+         0x15BC0ABC,
+         0x1C087BA1,
+         0x2319D5A4,
+         0x2607E7C0,
+         0x288B16D3,
+         0x2FB48E77,
+         0x371AD4D5,
+         0x3753CA0A,
+         0x38ABE9E7,
+         0x3EC5DBB9,
+         0x4030BF6E,
+         0x49704266,
+         0x4A9BFEC5,
+         0x6A1C711F,
+         0x6C0BCB6B,
+         0x6F6BFEDA,
+         0x75190444,
+         0x79193F1D,
+         0x7CF7827A,
+         0x7F138E1C,
+         0x83CC89FB,
+         0x8610E7F5,
+         0x87F34BAA,
+         0x8D59471A,
+         0x8D8F7072,
+         0x92550B56,
+         0x96DA986B,
+         0x9C62A6F9,
+         0x9D857B42,
+         0xA274F081,
+         0xA91CF149,
+         0xA91F8AB9,
+         0xA9CEF67D,
+         0xADAFB4CD,
+         0xBCF2BA69,
+         0xBF1F1C29,
+         0xC16B4E6B,
+         0xD0F9B11B,
+         0xD4B1C6E9,
+         0xDC0FE377,
+         0xDED46AD7,
+         0xE1ECF661,
+         0xF21C9CBA,
+         0xF4E80E62,
+         0xFA0676EF,
+         0xFA796E93,
+         0xFDBDB73F,
+      };
+      shader_hashes_DownscaleBlur.pixel_shaders = { 0x8FE1772E };
+      shader_hashes_Blur.pixel_shaders = { 0xF31D7D22 };
+      shader_hashes_SwapchainCopy.pixel_shaders = { 0x3DA3DB98 };
+      shader_hashes_PauseBackgroundCopy.pixel_shaders = { 0x018C83B7 };
+      shader_hashes_EarlyAutoExposure.pixel_shaders = { 0x71D05CE4 };
+      shader_hashes_LateAutoExposure.pixel_shaders = { 0x23B61EDE };
+      shader_hashes_SMAA_EdgeDetection.pixel_shaders = { 0x60EB1F22, 0x5040BB59 };
+      shader_hashes_SMAA.pixel_shaders = { 0x8A824E55 };
+      shader_hashes_SMAA_2TX.pixel_shaders = { 0xF7078237 };
+      shader_hashes_GenMotionVectors.pixel_shaders = { 0xA1037803, 0x2E0AC461 };
+      shader_hashes_GenMotionVectors_TAA.pixel_shaders = { 0xA1037803 };
+      shader_hashes_TerrainMaterials.pixel_shaders = { 0x87E0C350, 0xE2313E10, 0x95A485D4 };
 
       // Defaults are hardcoded in ImGUI too
       cb_luma_global_settings.GameSettings.ColorGradingIntensity = 0.8f; // Don't default to 1 (vanilla) because it's too saturated and hue shifted
       cb_luma_global_settings.GameSettings.HDRBoostSaturationAmount = 0.2f;
+      cb_luma_global_settings.GameSettings.BloomIntensity = 1.0f;
       // TODO: use "default_luma_global_game_settings"
 
 #if DEVELOPMENT
@@ -674,8 +1068,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(Shader::Hash_StrToNum("8A824E55"), "SMAA");
 
       forced_shader_names.emplace(Shader::Hash_StrToNum("D8C32AC0"), "Sky/Stars");
+      forced_shader_names.emplace(Shader::Hash_StrToNum("Clouds"), "Heat Distortion");
+
+      forced_shader_names.emplace(Shader::Hash_StrToNum("47827156"), "Heat Distortion");
+
+      forced_shader_names.emplace(Shader::Hash_StrToNum("87E0C350"), "Close Terrain");
+      forced_shader_names.emplace(Shader::Hash_StrToNum("E2313E10"), "Mid Terrain");
+      forced_shader_names.emplace(Shader::Hash_StrToNum("95A485D4"), "Far Terrain");
 
       forced_shader_names.emplace(Shader::Hash_StrToNum("592575B0"), "Clear 4 Textures to Black");
+
+      forced_shader_names.emplace(Shader::Hash_StrToNum("CA7DFA32"), "GBuffers composition"); // One of the many?
 #endif
 
       game = new JustCause3();
