@@ -1,3 +1,7 @@
+#ifndef BLOOM
+#define BLOOM 1
+#endif
+
 cbuffer _Globals : register(b0)
 {
   row_major float4x4 g_SMapTM[4] : packoffset(c101);
@@ -39,5 +43,9 @@ void main(
   float4 bloomFilter = 1.0;
   bloomFilter.xyz = IntensityWarmCol.x * (r1x * (-ColdCol.xyz + IntensityWarmCol.yzw) + ColdCol.xyz);
 
+#if BLOOM
   o0.xyzw = sceneColor + (bloomFilter.xyzw * someColorFactor);
+#else
+  o0.xyzw = sceneColor;
+#endif
 }

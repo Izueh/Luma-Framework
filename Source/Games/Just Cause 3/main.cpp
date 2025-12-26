@@ -513,6 +513,7 @@ public:
             {
                frame_jitters = float2(-0.25f, 0.25f);
             }
+#if DEVELOPMENT
             if (cb_luma_global_settings.DevSettings[0])
             {
                frame_jitters.x *= 2.f;
@@ -526,6 +527,7 @@ public:
             {
                frame_jitters.y *= -1.f;
             }
+#endif
          }
          else
          {
@@ -598,8 +600,13 @@ public:
                settings_data.mvs_jittered = false; // See shader 0xA1037803
                settings_data.auto_exposure = true; // TODO: Exp is 1 given it's all after post processing, but actually constantly changes all the times, given it's calculated after DLSS but applied b4... We could re-use the LateAutoExposure shader pass mips to calculate the avg luminance though!
                // MVs in UV space, so we need to scale by the render resolution to transform to pixel space // TODO: flip? Seems like no! describe them!
+#if DEVELOPMENT
                settings_data.mvs_x_scale = cb_luma_global_settings.DevSettings[7] ? 1.f : device_data.render_resolution.x * cb_luma_global_settings.DevSettings[8];
                settings_data.mvs_y_scale = cb_luma_global_settings.DevSettings[7] ? 1.f : device_data.render_resolution.y * cb_luma_global_settings.DevSettings[9];
+#else
+               settings_data.mvs_x_scale = device_data.render_resolution.x;
+               settings_data.mvs_y_scale = device_data.render_resolution.y;
+#endif
                settings_data.use_experimental_features = sr_user_type == SR::UserType::DLSS_TRANSFORMER;
                sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
 
