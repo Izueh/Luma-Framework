@@ -2,8 +2,11 @@
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
+#if !DEVELOPMENT
 #define DISABLE_DISPLAY_COMPOSITION 1
 #define HIDE_DISPLAY_MODE 1
+#define HIDE_BRIGHTNESS_SETTINGS 1
+#endif
 
 #include "..\..\Core\core.hpp"
 #include "includes\shader_detect.hpp"
@@ -12,9 +15,18 @@ namespace
 {
    ShaderHashesList shader_hashes_TAA;
    ShaderHashesList shader_hashes_TAA_Candidates;
+   ShaderHashesList shader_hashes_SSAO; // Added SSAO list
+   ShaderHashesList shader_hashes_Dithering; // Dithering shader list
    GlobalCBInfo global_cb_info;
    std::shared_mutex taa_mutex;
+   std::shared_mutex ssao_mutex; // Added mutex for SSAO info
+   std::shared_mutex dithering_mutex; // Mutex for dithering info
    std::unordered_map<uint64_t, TAAShaderInfo> taa_shader_candidate_info;
+   std::unordered_map<uint64_t, SSAOShaderInfo> ssao_shader_info_map; // Added map for SSAO info
+   std::unordered_map<uint64_t, DitheringShaderInfo> dithering_shader_info_map; // Map for dithering info
+   
+   // Dithering fix configuration
+   bool enable_dithering_fix = false; // Master switch for dithering fix
 
    static inline bool NearZero(float v, float eps)
    {
@@ -222,8 +234,8 @@ public:
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('0');
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs PS"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", reshade::api::pipeline_subobject_type::pixel_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs CS"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", reshade::api::pipeline_subobject_type::compute_shader});
-      luma_settings_cbuffer_index = 13;
-      luma_data_cbuffer_index = 12;
+      luma_settings_cbuffer_index = 9;
+      luma_data_cbuffer_index = 8;
    }
 
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -247,13 +259,79 @@ public:
 #if ENABLE_SR
    std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) override
    {
-      // TAA was already detected
+      // Only process pixel/compute shaders
       if (type != reshade::api::pipeline_subobject_type::pixel_shader && type != reshade::api::pipeline_subobject_type::compute_shader)
          return nullptr;
+
+      // SSAO Detection
+      {
+         SSAOShaderInfo ssao_info;
+         if (IsUE4SSAOCandidate(code, size, ssao_info))
+         {
+            reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 SSAO shader. Hash: 0x{:08X}", shader_hash).c_str());
+            if (type == reshade::api::pipeline_subobject_type::pixel_shader)
+               shader_hashes_SSAO.pixel_shaders.emplace(static_cast<unsigned long>(shader_hash));
+            else
+               shader_hashes_SSAO.compute_shaders.emplace(static_cast<unsigned long>(shader_hash));
+            
+            const std::unique_lock ssao_lock(ssao_mutex);
+            ssao_shader_info_map.emplace(shader_hash, ssao_info);
+         }
+      }
+
+      // Dithering Detection and Modification
+      if (enable_dithering_fix)
+      {
+         DitheringShaderInfo dither_info;
+         if (IsUE4DitheringShader(code, size, shader_hash, dither_info))
+         {
+            const char* dither_type_str = "Unknown";
+            switch (dither_info.type)
+            {
+               case DitheringType::Texture_ScreenSpace: dither_type_str = "Texture_ScreenSpace"; break;
+               default: break;
+            }
+            
+            reshade::log::message(reshade::log::level::info, 
+               std::format("UE4: Detected dithering shader. Hash: 0x{:08X}, Type: {}, TexSize: {}x{}, TextureReg: t{}, HasDiscard: {}, Modifiable: {}", 
+                  shader_hash, dither_type_str, dither_info.noise_texture_size, dither_info.noise_texture_size,
+                  dither_info.noise_texture_register, dither_info.has_discard, dither_info.modification_supported).c_str());
+            
+            if (type == reshade::api::pipeline_subobject_type::pixel_shader)
+               shader_hashes_Dithering.pixel_shaders.emplace(static_cast<unsigned long>(shader_hash));
+            else
+               shader_hashes_Dithering.compute_shaders.emplace(static_cast<unsigned long>(shader_hash));
+            
+            {
+               const std::unique_lock dither_lock(dithering_mutex);
+               dithering_shader_info_map.emplace(shader_hash, dither_info);
+            }
+
+            // Attempt to modify the shader
+            // For Texture_ScreenSpace:
+            //   - No discard: Replace SAMPLE with MOV 0.5 (neutral noise)
+            //   - Has discard: Inject cbuffer for temporal randomization (TODO)
+            bool should_modify = dither_info.modification_supported;
+
+            if (should_modify)
+            {
+               auto modified = ModifyDitheringShader(code, size, dither_info);
+               if (modified)
+               {
+                  reshade::log::message(reshade::log::level::info, 
+                     std::format("UE4: Successfully modified dithering shader. Hash: 0x{:08X}", shader_hash).c_str());
+                  return modified;
+               }
+            }
+         }
+      }
+
+      // TAA Detection (only if we haven't found TAA yet)
       if (!shader_hashes_TAA.Empty())
          return nullptr;
+         
       TAAShaderInfo taa_shader_info = {};
-      bool is_taa_candidate = IsUE4TAACandidate(code, size, taa_shader_info) && FindShaderInfo(code, size, taa_shader_info);
+      bool is_taa_candidate = IsUE4TAACandidate(code, size, shader_hash, taa_shader_info) && FindShaderInfo(code, size, taa_shader_info);
       if (is_taa_candidate)
       {
          reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 TAA shader Candidate. Hash: 0x{:08X}", shader_hash).c_str());
@@ -317,8 +395,14 @@ public:
             D3D11_TEXTURE2D_DESC desc;
             texture2d->GetDesc(&desc);
             // check format
-            if (desc.Width != device_data.render_resolution.x || desc.Height != device_data.render_resolution.y)
+            float output_aspect_ratio = static_cast<float>(desc.Width) / static_cast<float>(desc.Height);
+            float swapchain_aspect_ratio = device_data.render_resolution.x / device_data.render_resolution.y;
+
+            if (std::fabs(output_aspect_ratio - swapchain_aspect_ratio) > FLT_EPSILON)
+                continue;
+            if (desc.Width < device_data.render_resolution.x || desc.Height < device_data.render_resolution.y)
                continue;
+
             switch (desc.Format)
             {
             case DXGI_FORMAT_R11G11B10_FLOAT:
@@ -456,7 +540,16 @@ public:
             output_color->GetDesc(&taa_output_texture_desc);
 
             if (taa_output_texture_desc.Width != device_data.render_resolution.x || taa_output_texture_desc.Height != device_data.render_resolution.y)
-               return DrawOrDispatchOverrideType::None;
+            {
+               float output_aspect_ratio = static_cast<float>(taa_output_texture_desc.Width) / static_cast<float>(taa_output_texture_desc.Height);
+               float swapchain_aspect_ratio = device_data.render_resolution.x / device_data.render_resolution.y;
+
+               if (std::fabs(output_aspect_ratio - swapchain_aspect_ratio) > FLT_EPSILON)
+               {
+                  device_data.force_reset_sr = true;
+                  return DrawOrDispatchOverrideType::None;
+               }
+            }
 
             D3D11_VIEWPORT viewport;
             uint32_t num_viewports = 1;
@@ -466,11 +559,11 @@ public:
             device_data.sr_render_resolution_scale = 1.0f; // DLAA only
 
             SR::SettingsData settings_data;
-            settings_data.output_width = game_device_data.render_resolution.x;
-            settings_data.output_height = game_device_data.render_resolution.y;
+            settings_data.output_width = taa_output_texture_desc.Width;
+            settings_data.output_height = taa_output_texture_desc.Height;
             settings_data.render_width = game_device_data.render_resolution.x;
             settings_data.render_height = game_device_data.render_resolution.y;
-            settings_data.dynamic_resolution = false;
+            settings_data.dynamic_resolution = true;
             settings_data.hdr = true; // Unreal Engine does DLSS before tonemapping, in HDR linear space
             settings_data.inverted_depth = true;
             settings_data.mvs_jittered = false;
@@ -489,8 +582,8 @@ public:
             if (!dlss_output_supports_uav)
             {
                D3D11_TEXTURE2D_DESC dlss_output_texture_desc = taa_output_texture_desc;
-               dlss_output_texture_desc.Width = std::lrintf(game_device_data.render_resolution.x);
-               dlss_output_texture_desc.Height = std::lrintf(game_device_data.render_resolution.y);
+               //dlss_output_texture_desc.Width = std::lrintf(game_device_data.render_resolution.x);
+               //dlss_output_texture_desc.Height = std::lrintf(game_device_data.render_resolution.y);
                dlss_output_texture_desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
 
                if (device_data.sr_output_color.get())
@@ -784,9 +877,16 @@ public:
       if (!sr_enabled)
          ImGui::EndDisabled();
 
-      if (!sr_enabled && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Enable Super Resolution (DLSS/FSR) to change this setting.");
+      }
+      
+      ImGui::Checkbox("Dithering Fix (Experimental)", &game_device_data.dithering_fix);
+
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      {
+         ImGui::SetTooltip("Fixes dithering issues that may appear when using DLSS/FSR with TAA. Very experimental. Requires restart.");
       }
 #endif
    }
@@ -811,10 +911,6 @@ public:
          if (buffer_desc.ByteWidth == global_cb_info.size)
          {
             device_data.cb_per_view_global_buffer = buffer;
-#if DEVELOPMENT
-            // These are the classic "features" of cbuffer 13 (the one we are looking for), in case any of these were different, it could possibly mean we are looking at the wrong buffer here.
-            ASSERT_ONCE(buffer_desc.Usage == D3D11_USAGE_DYNAMIC && buffer_desc.BindFlags == D3D11_BIND_CONSTANT_BUFFER && buffer_desc.CPUAccessFlags == D3D11_CPU_ACCESS_WRITE && buffer_desc.MiscFlags == 0 && buffer_desc.StructureByteStride == 0);
-#endif // DEVELOPMENT
             ASSERT_ONCE(!device_data.cb_per_view_global_buffer_map_data);
             device_data.cb_per_view_global_buffer_map_data = *data;
          }
@@ -974,10 +1070,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    {
       Globals::SetGlobals(PROJECT_NAME, "Unreal Engine Generic Luma mod"); // ### Rename this ###
       Globals::VERSION = 1;
-
+#if DEVELOPMENT
+      swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
+      swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
+      texture_format_upgrades_type = TextureFormatUpgradesType::None;
+#else
       swapchain_format_upgrade_type = TextureFormatUpgradesType::None;
       swapchain_upgrade_type = SwapchainUpgradeType::None;
       texture_format_upgrades_type = TextureFormatUpgradesType::None;
+#endif
       // ### Check which of these are needed and remove the rest ###
       // texture_upgrade_formats = {
       //       reshade::api::format::r8g8b8a8_unorm,
