@@ -61,7 +61,7 @@ namespace SR
 		float mvs_y_scale = 1.f; // Flip or scale by render res
 		// Alternatively, either force the exposure to 1 (or 0.18 mid grey) if we run after tonemapping, or feed the correct one if we run before
 		bool auto_exposure = false;
-		// DLSS render preset hint (maps to NVSDK_NGX_DLSS_Hint_Render_Preset values: 0=Default, 6=F, 10=J, 11=K, 12=L, 13=M)
+		// Render preset hint if supported.
 		unsigned int render_preset = 0;
 	};
 
