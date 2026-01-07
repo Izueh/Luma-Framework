@@ -343,7 +343,7 @@ void main(
     float2 uvCoord = r1.zw;
 
     r2.xyz = colorTex.SampleLevel(colorSampler, uvCoord, 0).xyz;
-    if (LumaData.GameData.DrewUpscaling && LumaSettings.GameSettings.custom_sharpness_strength != 0.f) {
+    if (LumaData.GameData.DrewUpscaling && LumaSettings.GameSettings.can_sharpen != 0.f) {
       r2.xyz = RCAS(int2(v0.xy), 0, 0x7FFFFFFF, LumaSettings.GameSettings.custom_sharpness_strength, colorTex, dummyFloat2Texture, 1.f, true , float4(r2.xyz, 1.0f)).rgb;
     }
     float3 colorSample = r2.xyz;
