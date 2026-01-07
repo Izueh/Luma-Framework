@@ -1396,7 +1396,7 @@ public:
       // NEW: Clean GTAO resources if resolution changed significantly or on cleanup
       if (device_data.render_resolution.x != game_device_data.gtao_width)
       {
-          game_device_data.CleanGTAOResources();
+         game_device_data.CleanGTAOResources();
       }
 
       // if (game_device_data.has_drawn_title)
@@ -1407,8 +1407,12 @@ public:
       game_device_data.camera_cut = !device_data.taa_detected && !device_data.has_drawn_sr && !device_data.force_reset_sr;
       device_data.has_drawn_main_post_processing = false;
       game_device_data.has_drawn_upscaling = false;
+      if (!game_device_data.has_drawn_taa)
+      {
+         device_data.sr_suppressed = false;
+         device_data.taa_detected = false;
+      }
       game_device_data.has_drawn_taa = false;
-      device_data.taa_detected = false;
       device_data.has_drawn_sr = false;
       game_device_data.found_per_view_globals = false;
       device_data.cb_luma_global_settings_dirty = true;
@@ -1513,7 +1517,7 @@ public:
       data.GameData.GTAO.FOV = vert_fov;
 
       can_sharpen = device_data.output_resolution.x == game_device_data.upscaled_render_resolution.x && device_data.output_resolution.y == game_device_data.upscaled_render_resolution.y;
-      cb_luma_global_settings.GameSettings.custom_sharpness_strength = can_sharpen ? cb_luma_global_settings.GameSettings.custom_sharpness_strength : 0.0f;
+      cb_luma_global_settings.GameSettings.can_sharpen = can_sharpen ? 1.f : 0.f;
    }
 
    static void UpdateLODBias(reshade::api::device* device)

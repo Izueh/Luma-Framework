@@ -16,7 +16,8 @@ namespace CB
 		float custom_film_grain_strength;
 		float custom_sharpness_strength;
 		float custom_hdr_videos;
-		float custom_random;
+        float custom_random;
+        float can_sharpen;
     };
 
     struct GTAOData
