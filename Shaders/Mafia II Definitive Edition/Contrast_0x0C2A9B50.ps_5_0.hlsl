@@ -29,35 +29,40 @@ void main(
   float4 v2 : COLOR0,
   out float4 o0 : SV_Target0)
 {
-  float4 r0,r1,r2,r3,r4,r5;
+  bool forceVanillaSDR = ShouldForceSDR(v1.xy);
 
   // Mutually exclusive
   bool contrastMode1 = ContrastMode.y == 0; // Actual contrast - Common one
   bool contrastMode2 = ContrastMode.y == 1; // Increases saturation
   bool contrastMode3 = ContrastMode.y == 2; // Actual contrast (slightly different)
-  
+
   float contrast = ContrastMode.x + ContrastMode.x; // Not sure why it's scaled, maybe because neutral was 0.5 in their editor, but here it's 1. Neutral at 0.
   
 #if DEVELOPMENT && 0
   contrastMode1 = DVS7;
   contrastMode2 = DVS8;
   contrastMode3 = DVS9;
-  contrast = DVS6 * 2;
+  contrast = (DVS6 * 4.0) - 2.0;
 #endif
 
-  r1.xyzw = TMU0_Sampler.Sample(TMU0_Sampler_sampler_s, v1.xy).xyzw;
-  o0.w = r1.w;
-  float3 sceneColor = r1.xyz;
+  // TODO: do these in linear space if "IMPROVED_COLOR_GRADING_TYPE" is enabled (mode 2 is already handled)
+
+  float4 sceneColor4 = TMU0_Sampler.Sample(TMU0_Sampler_sampler_s, v1.xy).xyzw;
+  o0.w = sceneColor4.w;
+  float3 sceneColor = sceneColor4.xyz;
   uint colorSpace = CS_BT709;
 #if IMPROVED_COLOR_GRADING_TYPE >= 2 // Do it all in BT.2020, it should look better!
-  sceneColor = linear_to_gamma(BT709_To_BT2020(gamma_to_linear(sceneColor, GCT_MIRROR)), GCT_MIRROR);
-  colorSpace = CS_BT2020;
+  if (!forceVanillaSDR)
+  {
+    sceneColor = linear_to_gamma(BT709_To_BT2020(gamma_to_linear(sceneColor, GCT_MIRROR)), GCT_MIRROR);
+    colorSpace = CS_BT2020;
+  }
 #endif // IMPROVED_COLOR_GRADING_TYPE >= 2
 
-#if 1 // Luma: calc luminance in linear space
-  float luminance = linear_to_gamma1(GetLuminance(gamma_to_linear(sceneColor, GCT_POSITIVE), colorSpace)); // Don't use "emulatedSceneColor" for higher precision, we clamp it later (hopefully it doesn't expose any broken math)
-#else
   float luminance = GetLuminance(sceneColor, colorSpace);
+#if 1 // Luma: calc luminance in linear space
+  if (!forceVanillaSDR)
+    luminance = linear_to_gamma1(GetLuminance(gamma_to_linear(sceneColor, GCT_POSITIVE), colorSpace)); // Don't use "emulatedSceneColor" for higher precision, we clamp it later (hopefully it doesn't expose any broken math)
 #endif
 
   float3 emulatedSceneColor = sceneColor;
@@ -73,12 +78,14 @@ void main(
     // If we don't do this, highlights wouldn't get boosted and gradients would break.
     luminance = min(luminance, 0.9375);
     emulatedSceneColor = min(emulatedSceneColor, 0.9375);
+    if (contrastMode1) // This fixes some broken gradients when contrast is high
+      luminance = linear_to_gamma1(GetLuminance(gamma_to_linear(emulatedSceneColor, GCT_POSITIVE), colorSpace));
   }
 
   // All modes shared code
   float3 luminanceDistance = sceneColor - luminance; // Result is from -1 to +1 (in SDR)
-  float3 normalizedLuminanceDistance = luminanceDistance * 0.5 + 0.5; // Result is from 0 to 1 (in SDR)
-  float3 tempColor = contrastMode1 ? luminance : (contrastMode2 ? normalizedLuminanceDistance : sceneColor);
+  float3 normalizedLuminanceDistance = luminanceDistance * 0.5 + 0.5; // Result is from 0 to 1 (in SDR). This is clamped below.
+  float3 tempColor = contrastMode1 ? luminance : (contrastMode2 ? normalizedLuminanceDistance : emulatedSceneColor);
   float emulatedluminance = luminance;
 #if 1 // Luma: attempt at preventing colors from breaking (emulating vanilla ranges) (makes the branches below redundant) (similar to directly using "emulatedSceneColor")
   tempColor = saturate(tempColor);
@@ -86,24 +93,22 @@ void main(
 #endif
   float3 tempColor2 = tempColor * (1.5 - tempColor) + 0.5; // Maps 0 to 0.5, 0.5 to 1.0 and 1.0 to 1.0. Values between 0.5 and 1.0 overshoot beyond 1 (a peak of 1.0625 for 0.75 input). This formula doesn't seem to be safe for input values beyond 0-1, it should clip at 0.5.
 
-  // Mode 1
-  r3.xyz = tempColor * tempColor2 - emulatedluminance; // Luminance based (contrast around luminance) 
+  float3 mode1 = tempColor * tempColor2 - emulatedluminance; // Luminance based (contrast around luminance) 
 
-  // Mode 2
-  r5.xyz = (((tempColor2 * tempColor) * 2.0 + emulatedluminance) - 1.0) - emulatedSceneColor; // Contrast on RGB from the greyscale? This is weird and likely looks deep fried. Update: it's saturation
+  float3 mode2 = (((tempColor2 * tempColor) * 2.0 + emulatedluminance) - 1.0) - emulatedSceneColor; // Contrast on RGB from the greyscale? This is weird and likely looks deep fried. Update: it's saturation
 
-  // Mode 3
-  r4.xyz = tempColor * tempColor2 - emulatedSceneColor;
+  float3 mode3 = tempColor * tempColor2 - emulatedSceneColor;
 
   o0.xyz = sceneColor;
 #if ENABLE_COLOR_GRADING
-  o0.xyz += (contrastMode1 ? r3.xyz : (contrastMode2 ? r5.xyz : (contrastMode3 ? r4.xyz : 0.0))) * contrast;
+  o0.xyz += (contrastMode1 ? mode1 : (contrastMode2 ? mode2 : (contrastMode3 ? mode3 : 0.0))) * contrast;
 #endif
 
-#if IMPROVED_COLOR_GRADING_TYPE >= 2
+#if IMPROVED_COLOR_GRADING_TYPE >= 1
 
-  // Do saturation in linear space (roughly matched in intensity) (the other types are okish to be run in gamma space)
-  if (contrastMode2)
+  // Overwrite the color: do saturation in linear space (roughly matched in intensity) (the other types are okish to be run in gamma space).
+  // Note: without this, mode 2 can have steps in highlights.
+  if (!forceVanillaSDR && contrastMode2)
   {
     sceneColor = gamma_to_linear(sceneColor, GCT_MIRROR);
     o0.xyz = Saturation(sceneColor, (contrast * 0.25) + 1.0, colorSpace);
@@ -113,7 +118,10 @@ void main(
     o0.xyz = gamma_to_linear(o0.xyz, GCT_MIRROR);
   }
   
-  o0.xyz = linear_to_gamma(BT2020_To_BT709(o0.rgb), GCT_MIRROR);
+  if (colorSpace == CS_BT2020)
+    o0.xyz = BT2020_To_BT709(o0.rgb);
+  
+  o0.xyz = linear_to_gamma(o0.rgb, GCT_MIRROR);
 
-#endif // IMPROVED_COLOR_GRADING_TYPE >= 2
+#endif // IMPROVED_COLOR_GRADING_TYPE >= 1
 }

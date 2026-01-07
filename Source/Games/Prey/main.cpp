@@ -1152,6 +1152,8 @@ public:
          ASSERT_ONCE(dlss_inputs_valid);
          if (dlss_inputs_valid)
          {
+            // TODO: add FSR 3 state reset? probably not needed!
+
             com_ptr<ID3D11Resource> output_color_resource;
             render_target_views[0]->GetResource(&output_color_resource);
             com_ptr<ID3D11Texture2D> output_color;

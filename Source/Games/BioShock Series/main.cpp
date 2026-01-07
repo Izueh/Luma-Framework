@@ -158,12 +158,12 @@ public:
       std::vector<ShaderDefineData> game_shader_defines_data = {
          {"TONEMAP_TYPE", '1', true, false, "0 - SDR: Vanilla\n2 - SDR/HDR: Vanilla+\n3 - HDR: Untonemapped"},
          {"ALLOW_AA", '0', true, false, "Allows disabling the game's FXAA implementation", 1},
-         {"ENABLE_LUMA", '1', true, false, "Allow disabling the mod's improvements to the game's look", 1},
+         {"ENABLE_LUMA", '1', true, false, "Allows disabling the mod's improvements to the game's look", 1},
          {"ENABLE_IMPROVED_BLOOM", '1', true, false, "Reduces the excessive bloom's pixelation due to usage of nearest neighbor texture sampling in the original shaders", 1},
          {"ENABLE_LUT_EXTRAPOLATION", '1', true, false, "Use Luma's signature technique for expanding Color Grading LUTs from SDR to HDR", 1},
          {"ENABLE_COLOR_GRADING", '1', true, false, "Allows disabling the color grading LUT (some other color filters might still get applied)", 1},
          {"DISABLE_BLACK_BARS", '0', true, false,
-         "Disable broken black bars in UltraWide, given that they only cover an horizontal part of the screen, leaving the vertical view visible.\nThis will remove them from 16:9 too", 1}, // TODO: WIP
+         "Disable broken black bars in UltraWide in BioShock 2, given that they only cover an horizontal part of the screen, leaving the vertical view visible.\nThis will remove them from 16:9 too", 1}, // TODO: fix this. It breaks the minimap in BS2. We could simply skip drawing the shader if its run immediately after scene rendering, before UI, and has a specific vertex shader
          {"LUT_SAMPLING_ERROR_EMULATION_MODE", '1', true, false,
          "BioShock 2 Remastered had a bug in the color grading shader that accidentally boosted contrast and clipped both shadow and highlight."
          "\nLuma fixes that, however without the bug shadows are fairly raised, so this attempts to emulate the error without clipping detail."

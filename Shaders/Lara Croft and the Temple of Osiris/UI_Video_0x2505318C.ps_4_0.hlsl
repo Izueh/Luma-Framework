@@ -39,6 +39,6 @@ void main(
   // Luma: add a light AutoHDR pass on videos
   if (LumaSettings.DisplayMode == 1)
   {
-    o0.rgb = PumboAutoHDR(o0.rgb, 250.0, LumaSettings.GamePaperWhiteNits);
+    o0.rgb = PumboAutoHDR(o0.rgb, 250.0, LumaSettings.UIPaperWhiteNits);
   }
 }

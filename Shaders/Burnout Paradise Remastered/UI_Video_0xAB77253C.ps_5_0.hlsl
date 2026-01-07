@@ -31,7 +31,7 @@ void main(
   if (LumaSettings.DisplayMode == 1)
   {
     r0.rgb = gamma_to_linear(r0.rgb, GCT_MIRROR);
-    r0.rgb = PumboAutoHDR(r0.rgb, lerp(sRGB_WhiteLevelNits, 250.0, LumaSettings.GameSettings.HDRBoostIntensity), LumaSettings.GamePaperWhiteNits);
+    r0.rgb = PumboAutoHDR(r0.rgb, lerp(sRGB_WhiteLevelNits, 250.0, LumaSettings.GameSettings.HDRBoostIntensity), LumaSettings.UIPaperWhiteNits);
     r0.rgb = linear_to_gamma(r0.rgb, GCT_MIRROR);
   }
 

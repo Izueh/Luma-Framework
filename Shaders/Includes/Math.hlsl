@@ -123,13 +123,49 @@ float InverseLerp(float a, float b, float value)
   return (value - a) / (b - a);
 }
 
+float Sign_Fast(float x)
+{
+  return x >= 0.0 ? 1.0 : -1.0;
+}
+float2 Sign_Fast(float2 x)
+{
+  return x >= 0.0 ? 1.0 : -1.0;
+}
+float3 Sign_Fast(float3 x)
+{
+  return x >= 0.0 ? 1.0 : -1.0;
+}
+float4 Sign_Fast(float4 x)
+{
+  return x >= 0.0 ? 1.0 : -1.0;
+}
+
+// Builds +1.0 or -1.0 by copying x's sign bit into 1.0f
+// This returns -1.0 for a -0.f input
+float Sign_UltraFast(float x)
+{
+  return asfloat((asuint(x) & 0x80000000u) | 0x3F800000u);
+}
+float2 Sign_UltraFast(float2 x)
+{
+  return asfloat((asuint(x) & 0x80000000u) | 0x3F800000u);
+}
+float3 Sign_UltraFast(float3 x)
+{
+  return asfloat((asuint(x) & 0x80000000u) | 0x3F800000u);
+}
+float4 Sign_UltraFast(float4 x)
+{
+  return asfloat((asuint(x) & 0x80000000u) | 0x3F800000u);
+}
+
 float safePow(float base, float exponent)
 {
-  return pow(abs(base), exponent) * sign(base);
+  return pow(abs(base), exponent) * Sign_Fast(base);
 }
 float3 safePow(float3 base, float exponent)
 {
-  return pow(abs(base), exponent) * sign(base);
+  return pow(abs(base), exponent) * Sign_Fast(base);
 }
 
 float sqr(float x) { return x * x; }

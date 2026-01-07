@@ -24,7 +24,7 @@ void main(
   if (size.x == 1280 && size.y == 640) // All loading screens are of this size, make them HDR!
   {
     o0.rgb = gamma_sRGB_to_linear(o0.rgb, GCT_MIRROR); // Assume "VANILLA_ENCODING_TYPE" sRGB here
-    o0.rgb = PumboAutoHDR(o0.rgb, 250.0, LumaSettings.GamePaperWhiteNits);
+    o0.rgb = PumboAutoHDR(o0.rgb, 250.0, LumaSettings.UIPaperWhiteNits);
     o0.rgb = linear_to_sRGB_gamma(o0.rgb, GCT_MIRROR);
   }
 #endif

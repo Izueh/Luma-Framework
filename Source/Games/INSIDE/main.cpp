@@ -243,9 +243,9 @@ public:
 
       std::vector<ShaderDefineData> game_shader_defines_data = {
          {"ENABLE_LUMA", '1', true, false, "Enables all Luma's post processing modifications, to improve the image and output HDR", 1},
-         {"ENABLE_FILM_GRAIN", '1', true, false, "Allow disabling the game's film grain effect", 1},
-         {"ENABLE_LENS_DISTORTION", '1', true, false, "Allow disabling the game's lens distortion effect", 1},
-         {"ENABLE_CHROMATIC_ABERRATION", '1', true, false, "Allow disabling the game's chromatic aberration effect", 1},
+         {"ENABLE_FILM_GRAIN", '1', true, false, "Allows disabling the game's film grain effect", 1},
+         {"ENABLE_LENS_DISTORTION", '1', true, false, "Allows disabling the game's lens distortion effect", 1},
+         {"ENABLE_CHROMATIC_ABERRATION", '1', true, false, "Allows disabling the game's chromatic aberration effect", 1},
          {"ENABLE_BLACK_FLOOR_TWEAKS_TYPE", '1', true, false, "Allows customizing how the game handles the black floor. Set to 0 for the vanilla look. Set to 3 for increased visibility.", 3},
 #if DEVELOPMENT || TEST
          {"ENABLE_FAKE_HDR", '0', true, false, "Enable a \"Fake\" HDR boosting effect (not usually necessary as the game's tonemapper can already extract highlights)", 1},

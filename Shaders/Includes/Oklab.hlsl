@@ -53,7 +53,7 @@ namespace Oklab
 
 		//L'M'S'
 		// If we pass in scRGB negative colors (or better, colors outside the Oklab gamut), this avoids them breaking
-		float3 lms_ = mirrored ? (pow(abs(lms), 1.f/3.f) * sign(lms)) : pow(lms, 1.f/3.f);
+		float3 lms_ = mirrored ? (pow(abs(lms), 1.f/3.f) * Sign_Fast(lms)) : pow(lms, 1.f/3.f);
 
 		return mul(oklms__to_oklab, lms_);
 	}
@@ -65,7 +65,7 @@ namespace Oklab
 		float3 lms = mul(bt2020_to_oklms, rgb);
 
 		//L'M'S'
-		float3 lms_ = mirrored ? (pow(abs(lms), 1.f/3.f) * sign(lms)) : pow(lms, 1.f/3.f);
+		float3 lms_ = mirrored ? (pow(abs(lms), 1.f/3.f) * Sign_Fast(lms)) : pow(lms, 1.f/3.f);
 
 		return mul(oklms__to_oklab, lms_);
 	}

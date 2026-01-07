@@ -159,7 +159,7 @@ void main(
   if (!forceVanilla)
   {
     colorGradedColor = MultiplyExtendedGamutColor(colorGradedColor, levelMul);
-    colorGradedColor = EmulateShadowRaise(colorGradedColor, levelAdd, false); // Note: this can lower the blue tint the game has (on top, visor effect), but it makes it look less old gen
+    colorGradedColor = EmulateShadowOffset(colorGradedColor, levelAdd, false); // Note: this can lower the blue tint the game has (on top, visor effect), but it makes it look less old gen
   }
   else
 #endif // IMPROVED_COLOR_GRADING_TYPE >= 1

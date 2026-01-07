@@ -84,13 +84,6 @@ void main(
     DICESettings settings = DefaultDICESettings(DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE);
     r0.rgb = DICETonemap(r0.rgb * paperWhite, peakWhite, settings) / paperWhite;
   }
-  
-  // Convert to gamma space before UI rendering and swapchain copy
-#if VANILLA_ENCODING_TYPE == 0 // Original code
-  o0.xyz = linear_to_sRGB_gamma(r0.xyz, GCT_MIRROR); // Luma: added sRGB mirroring!
-#else // Luma: try gamma 2.2 (this branch shouldn't really be here?)
-  o0.xyz = linear_to_gamma(r0.xyz, GCT_MIRROR);
-#endif
 
 #if ENABLE_FXAA
   o0.w = 0; // With FXAA this would still be the luminance, so force it to 0 (a default neutral value) in case it was ever used by the UI
@@ -102,5 +95,12 @@ void main(
 	ColorGradingLUTTransferFunctionInOutCorrected(o0.rgb, VANILLA_ENCODING_TYPE, min(GAMMA_CORRECTION_TYPE, 1), true); // Clamp "GAMMA_CORRECTION_TYPE" to 1 as values above aren't supported by these funcs but they are similar enough
   o0.rgb *= LumaSettings.GamePaperWhiteNits / LumaSettings.UIPaperWhiteNits;
 	ColorGradingLUTTransferFunctionInOutCorrected(o0.rgb, min(GAMMA_CORRECTION_TYPE, 1), VANILLA_ENCODING_TYPE, true);
+#endif
+  
+  // Convert to gamma space before UI rendering and swapchain copy
+#if VANILLA_ENCODING_TYPE == 0 // Original code
+  o0.xyz = linear_to_sRGB_gamma(r0.xyz, GCT_MIRROR); // Luma: added sRGB mirroring!
+#else // Luma: try gamma 2.2 (this branch shouldn't really be here?)
+  o0.xyz = linear_to_gamma(r0.xyz, GCT_MIRROR);
 #endif
 }

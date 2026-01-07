@@ -659,6 +659,7 @@ namespace Display
 			{
 				const bool bVirtual = pathInfo.flags & DISPLAYCONFIG_PATH_SUPPORT_VIRTUAL_MODE;
 				const uint32_t modeIndex = bVirtual ? pathInfo.sourceInfo.sourceModeInfoIdx : pathInfo.sourceInfo.modeInfoIdx;
+				if (modeIndex == DISPLAYCONFIG_PATH_MODE_IDX_INVALID || modeIndex >= modeCount) continue;
 				assert(modes[modeIndex].infoType == DISPLAYCONFIG_MODE_INFO_TYPE_SOURCE);
 				const DISPLAYCONFIG_SOURCE_MODE& sourceMode = modes[modeIndex].sourceMode;
 
@@ -802,32 +803,32 @@ namespace Display
 		return false;
 	}
 
-	// Returns true if the display has been successfully set to an HDR mode, or if it already was.
+	// Returns true if the display has been successfully set to the target SDR/HDR mode, or if it already was.
 	// Returns false in case of an unknown error.
-	bool SetHDREnabled(HWND hwnd)
+	bool SetHDREnabled(HWND hwnd, bool enabled = true)
 	{
 	#if NTDDI_VERSION >= NTDDI_WIN11_GE
 		// This will only succeed from Windows 11 24H2
 		DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 colorInfo2{};
 		if (GetColorInfo2(hwnd, colorInfo2))
 		{
-			if (colorInfo2.highDynamicRangeSupported && !colorInfo2.advancedColorLimitedByPolicy && colorInfo2.activeColorMode != DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR)
+			if (colorInfo2.highDynamicRangeSupported && (!enabled || !colorInfo2.advancedColorLimitedByPolicy) && (colorInfo2.activeColorMode != DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR) != enabled)
 			{
 				DISPLAYCONFIG_SET_HDR_STATE setHDRState{};
 				setHDRState.header.type = DISPLAYCONFIG_DEVICE_INFO_SET_HDR_STATE;
 				setHDRState.header.size = sizeof(setHDRState);
 				setHDRState.header.adapterId = colorInfo2.header.adapterId;
 				setHDRState.header.id = colorInfo2.header.id;
-				setHDRState.enableHdr = true;
-				bool enabled = (ERROR_SUCCESS == DisplayConfigSetDeviceInfo(&setHDRState.header));
+				setHDRState.enableHdr = enabled;
+				enabled = (ERROR_SUCCESS == DisplayConfigSetDeviceInfo(&setHDRState.header));
 	#ifndef NDEBUG
 				// Verify that Windows reports HDR as enabled by the user, even if it was an application to enable it.
-				// The function above seemengly turns on "DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2::highDynamicRangeUserEnabled" too.
+				// The function above seemingly turns on "DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2::highDynamicRangeUserEnabled" too.
 				assert(!enabled || !GetColorInfo2(hwnd, colorInfo2) || colorInfo2.activeColorMode == DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR);
 	#endif
-				return enabled;
+				return enabled == (bool)setHDRState.enableHdr;
 			}
-			return colorInfo2.activeColorMode == DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR;
+			return (colorInfo2.activeColorMode == DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR) == enabled;
 		}
 	#endif
 
@@ -837,18 +838,18 @@ namespace Display
 		DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO colorInfo{};
 		if (GetColorInfo(hwnd, colorInfo))
 		{
-			if (colorInfo.advancedColorSupported && !colorInfo.advancedColorForceDisabled && !colorInfo.advancedColorEnabled)
+			if (colorInfo.advancedColorSupported && (!enabled || !colorInfo.advancedColorForceDisabled) && static_cast<bool>(colorInfo.advancedColorEnabled) != enabled)
 			{
 				DISPLAYCONFIG_SET_ADVANCED_COLOR_STATE setAdvancedColorState{};
 				setAdvancedColorState.header.type = DISPLAYCONFIG_DEVICE_INFO_SET_ADVANCED_COLOR_STATE;
 				setAdvancedColorState.header.size = sizeof(setAdvancedColorState);
 				setAdvancedColorState.header.adapterId = colorInfo.header.adapterId;
 				setAdvancedColorState.header.id = colorInfo.header.id;
-				setAdvancedColorState.enableAdvancedColor = true;
-				bool enabled = (ERROR_SUCCESS == DisplayConfigSetDeviceInfo(&setAdvancedColorState.header));
-				return enabled;
+				setAdvancedColorState.enableAdvancedColor = enabled;
+				enabled = (ERROR_SUCCESS == DisplayConfigSetDeviceInfo(&setAdvancedColorState.header));
+				return enabled == (bool)setAdvancedColorState.enableAdvancedColor;
 			}
-			return colorInfo.advancedColorEnabled;
+			return static_cast<bool>( colorInfo.advancedColorEnabled ) == enabled;
 		}
 
 		return false;

@@ -1,4 +1,5 @@
 #include "../Includes/Common.hlsl"
+#include "../Includes/ColorGradingLUT.hlsl"
 
 // Textures 1 and 4 always come together, expanding the pixel shader input signature.
 #if _0806297C || _0FFE0AED || _1BCED85C || _211FB55F || _27E3BE86 || _288047AA || _2F104EE3 || _33B467FB || _435E4F7A || _44880094 || _49644172 || _49D7718D || _49F6EFCE || _4DA41D5E || _4E137FCB || _5109AB83 || _6A62D2F7 || _6EA8AD80 || _7579CEAD || _7758DF4C || _7AFD9825 || _80524805 || _8321F836 || _86F8F7C9 || _8CE1E3FA || _939824ED || _97EE9E05 || _A0B3FA64 || _A393BEBF || _A78AC640 || _A857DBC1 || _B3BE6B94 || _B756FB04 || _B8D26E59 || _CA2E65D6 || _CB9FA7F0 || _D259AA98 || _DB3F0961 || _DD1033D8 || _E0B922A1 || _E79BD563 || _E87A3D68 || _EA9C5691 || _F345BA5D
@@ -97,8 +98,8 @@
 #ifndef IMPROVED_COLOR_GRADING_TYPE
 #define IMPROVED_COLOR_GRADING_TYPE 2
 #endif
-#ifndef BLOOM
-#define BLOOM 1
+#ifndef ENABLE_BLOOM
+#define ENABLE_BLOOM 1
 #endif
 #ifndef ENABLE_COLOR_GRADING
 #define ENABLE_COLOR_GRADING 1
@@ -436,15 +437,22 @@ void main(
   }
 #endif // BLUR
   
-  float colorGradingIntensity = forceVanilla ? 1.0 : 1.0; // TODO: expose grading intensity and default it to 66%?
-  float raisedBlacksLowering = forceVanilla ? 0.0 : 1.0; // This is being used in places where we guess the game would raise shadow
-  float crushedBlacksLowering = forceVanilla ? 0.0 : 1.0; // This is being used in places where we guess the game would crush shadow
-#if IMPROVED_COLOR_GRADING_TYPE >= 1
+  float colorGradingIntensity = 1.0; // TODO: expose grading intensity and default it to 66%? We already have "IMPROVED_COLOR_GRADING_TYPE" and "ENABLE_COLOR_GRADING"...
+  float raisedBlacksLowering = 0.0; // This is being used in places where we guess the game would raise shadow
+  float crushedBlacksLowering = 0.0; // This is being used in places where we guess the game would crush shadow
+#if IMPROVED_COLOR_GRADING_TYPE >= 3
   if (!forceVanilla)
   {
-    colorGradingIntensity = 0.8; // Overall the grading looked unnatural and too heavy, slightly reduce it
+#if IMPROVED_COLOR_GRADING_TYPE == 3
+    // TODO: find even better defaults... the situation is very tricky as if we unbalance the raise and crush, the levels get messed up, ambient lighting looks off (too contrasty), mood is gone etc. Maybe we could find the matching raise and crush setting strength by analyzing the current offsets...
+    colorGradingIntensity = 0.85; // Overall the grading looked unnatural and too heavy, slightly reduce it.
     raisedBlacksLowering = 0.5; // Additive filters were too strong for modern displays.
     crushedBlacksLowering = 0.8; // Lowering this too much can cause crushed blacks, or well, anyway create too much constrast. This is basically used to simulate ambient lighting.
+#else // Drastically reduce grading raise and crush on shadow, and reduce the overall intensity. This will have a similar visibily level to the non graded image, though shadow might look crushed.
+    colorGradingIntensity = 0.75;
+    raisedBlacksLowering = 1.0;
+    crushedBlacksLowering = 1.0;
+#endif
 #if DEVELOPMENT && 0
     colorGradingIntensity = DVS1;
     raisedBlacksLowering = DVS2;
@@ -456,51 +464,123 @@ void main(
   colorGradingIntensity = 0.0;
 #endif // !ENABLE_COLOR_GRADING
 
-#if BLOOM
+#if ENABLE_BLOOM
   {
-    float3 filteredBloomColor = bloomColor; // The filter is always run on the raw bloom color. It dims bloom a lot, without seemengly coloring it (not always)!
+    // Luma settings:
+    float bloomIntensity = 1.0;
+    bool fadeBloomHighlights = true; // Enabled by default given that when it's off, bloom is too discolored, bright and stepped (I tried a lot of math, but couldn't find a better way, it already looks good anyway!)
+    float fadeBloomHighlightsIntensity = 1.0; // Only acknowledged if "fadeBloomHighlights" is true
+    bool linearSpaceBloom = false; // Disabled as it looks way too faint (it's barely visible)
 
-    float bloomIntensity = forceVanilla ? 1.0 : 1.0;
+    float3 filteredBloomColor = bloomColor; // The filter is always run on the raw bloom color. It dims bloom a lot, without always coloring it!
 
-    filteredBloomColor.r = dot(pp14_BloomColorMatrix._m00_m01_m02_m03, float4(bloomColor, 1.0));
-    filteredBloomColor.g = dot(pp14_BloomColorMatrix._m10_m11_m12_m13, float4(bloomColor, 1.0));
-    filteredBloomColor.b = dot(pp14_BloomColorMatrix._m20_m21_m22_m23, float4(bloomColor, 1.0));
-
-    // Remove any bloom filter color if requested
-    if (colorGradingIntensity != 1.0) // Avoid math issues with these functions in case they aren't meant to do anything
-      filteredBloomColor = lerp(filteredBloomColor, RestoreLuminance(bloomColor, filteredBloomColor), colorGradingIntensity); // Make it preserve the luminance but keep the old color ratio
-
-    // Clip out negatives, given there'd be a lot of them from the dimming
-    filteredBloomColor = max(filteredBloomColor, 0.0);
-
-    filteredBloomColor *= bloomIntensity;
-
-    if (!forceVanilla) // Luma: don't darken the scene when bloom is added, we are in HDR, we don't need to!!! We still need to clamp the negative values given they are way below 0 (due to subtractive generation). If we don't do this, bloomed highlights get clipped to their bloom value.
+#if IMPROVED_COLOR_GRADING_TYPE >= 1
+    if (!forceVanilla && !fadeBloomHighlights) // This prevents bloom having steps from a random color to black, though it also makes bloom slightly stronger (due to it being present in shadow as well, and having a stronger highlights coloration)
     {
-#if 1 // TODO: this makes car headlights clip too much?
-      bool linearSpaceBloom = false; // Disabled as it looks way too faint
-      if (!forceVanilla && linearSpaceBloom) // Luma: add them in linear space to minimize hue distortions
-      {
-        composedColor = gamma_to_linear(composedColor, GCT_MIRROR);
-        filteredBloomColor = gamma_to_linear(filteredBloomColor, GCT_POSITIVE);
-      }
-      composedColor += filteredBloomColor;
-      if (!forceVanilla && linearSpaceBloom)
-      {
-        composedColor = linear_to_gamma(composedColor, GCT_MIRROR);
-      }
-#else // Luma: more vanilla conversative alternative (this doesn't work yet, math is bad)
-      float3 bloomScale = saturate(max(composedColor.xyz, 1.0) - filteredBloomColor);
-      composedColor = filteredBloomColor + (composedColor.xyz * bloomScale);
+      filteredBloomColor.r = dot(pp14_BloomColorMatrix._m00_m01_m02, bloomColor);
+      filteredBloomColor.g = dot(pp14_BloomColorMatrix._m10_m11_m12, bloomColor);
+      filteredBloomColor.b = dot(pp14_BloomColorMatrix._m20_m21_m22, bloomColor);
+
+      // Note: depending on "IMPROVED_COLOR_GRADING_TYPE", we could run this in BT.2020 like we do for "pp12_ColorMatrix" below, to slightly expand gamut, however it doesn't really matter for bloom!
+      float3 matrixAdd = pp14_BloomColorMatrix._m03_m13_m23;
+#if 0 // Doesn't work, the output it either still stepped (broken gradients), or too bright
+      float offsetReductionIntensity = 0.5;
+      filteredBloomColor = EmulateShadowOffset(filteredBloomColor, matrixAdd * offsetReductionIntensity, false, false) + (matrixAdd * (1.0 - offsetReductionIntensity));
+#elif 1 // Do it by average so we avoid randomly coloring bloom due to clipping values below 0. This prevents it from having ugly colors and steps on gradients.
+      float filteredBloomColorAverage = average(filteredBloomColor);
+      float offsetReductionIntensity = 0.75;
+      float filteredBloomColorOffsettedAverage = (EmulateShadowOffset(filteredBloomColorAverage, average(matrixAdd) * offsetReductionIntensity, false, false) + (average(matrixAdd) * (1.0 - offsetReductionIntensity))).x; // TODO: this assumes "pp14_BloomColorMatrix._m03_m13_m23" has the same value on rgb!!! It usually does.
+      filteredBloomColor *= safeDivision(filteredBloomColorOffsettedAverage,  filteredBloomColorAverage, 1);
+#elif 0 // Similar to above, but by linear luminance instead of average (overkill and possibly less "correct")
+      filteredBloomColor = gamma_to_linear(filteredBloomColor, GCT_MIRROR);
+      filteredBloomColor = RestoreLuminance(filteredBloomColor, gamma_to_linear1(linear_to_gamma1(GetLuminance(filteredBloomColor), GCT_MIRROR) + average(matrixAdd), GCT_MIRROR));
+      filteredBloomColor = linear_to_gamma(filteredBloomColor, GCT_MIRROR);
+#else
+      filteredBloomColor += matrixAdd;
 #endif
     }
     else
+#endif // IMPROVED_COLOR_GRADING_TYPE >= 1
     {
-      float3 bloomScale = 1.0 - min(filteredBloomColor, 1.0);
-      composedColor = filteredBloomColor + (composedColor.xyz * bloomScale);
+      // Note: after this, bloom is almost all black given it subtracts a fixed rgb threshold. This means its color filter will exclusively apply to highlights, causing large steps (broken gradients) in the image if the filter is too strong (unless we only blend it in for shadow/midtones).
+      // Note: the rgb multiplier is actually usually neutral, and so is the subtractive part. What tints bloom is actually clipping values below zero, given it's done per channel, so colors get very shifted.
+      filteredBloomColor.r = dot(pp14_BloomColorMatrix._m00_m01_m02_m03, float4(bloomColor, 1.0));
+      filteredBloomColor.g = dot(pp14_BloomColorMatrix._m10_m11_m12_m13, float4(bloomColor, 1.0));
+      filteredBloomColor.b = dot(pp14_BloomColorMatrix._m20_m21_m22_m23, float4(bloomColor, 1.0));
+    }
+
+#if 0 // Test: debug filtered bloom
+    o0.rgb = filteredBloomColor; return;
+#endif
+    
+    // Apply the filter on a hypothetical color of white.
+    // Useful to normalize the bloom in case it was ever needed
+    float3 neutralBloomFilter = float3(dot(pp14_BloomColorMatrix._m20_m21_m22_m23, 1.0), dot(pp14_BloomColorMatrix._m10_m11_m12_m13, 1.0), dot(pp14_BloomColorMatrix._m20_m21_m22_m23, 1.0));
+
+    float bloomColorGradingIntensity = colorGradingIntensity;
+#if 0 // We have a new implementation of "fadeBloomHighlights==false" above
+    if (!forceVanilla && !fadeBloomHighlights) // Disable bloom grading in highlights, otherwise they'd cause steps in the image
+      bloomColorGradingIntensity *= saturate(max3(filteredBloomColor / neutralBloomFilter));
+#endif
+
+    float3 bloomColorHighlights = max(filteredBloomColor, 0.0);
+    bool forceBloomColorHighlightsCalculation = fadeBloomHighlights; // Calculate it in linear space for better results
+    // Remove any bloom filter color if requested
+    if (bloomColorGradingIntensity != 1.0 || forceBloomColorHighlightsCalculation) // Avoid math issues with these functions in case they aren't meant to do anything
+    {
+      filteredBloomColor = gamma_to_linear(filteredBloomColor, GCT_MIRROR);
+      bloomColorHighlights = RestoreLuminance(gamma_to_linear(bloomColor, GCT_MIRROR), max(filteredBloomColor, 0.0));
+      float3 bloomColorHighlightsLocal = RestoreLuminance(gamma_to_linear(bloomColor, GCT_MIRROR), filteredBloomColor); // Let negative luminance through here
+      filteredBloomColor = lerp(bloomColorHighlightsLocal, filteredBloomColor, bloomColorGradingIntensity); // Make it preserve the luminance but keep the old color ratio
+      filteredBloomColor = linear_to_gamma(filteredBloomColor, GCT_POSITIVE);
+      bloomColorHighlights = linear_to_gamma(bloomColorHighlights, GCT_POSITIVE);
+    }
+    // Clip out negatives, given there'd be a lot of them from the dimming
+    else
+    {
+      filteredBloomColor = max(filteredBloomColor, 0.0);
+    }
+
+    if (!forceVanilla) // Luma: don't darken the scene when bloom is added, we are in HDR, we don't need to!!! We still need to clamp the negative values given they are way below 0 (due to subtractive generation). If we don't do this, bloomed highlights get clipped to their bloom value.
+    {
+      if (linearSpaceBloom) // Luma: add them in linear space to minimize hue distortions
+      {
+        composedColor = gamma_to_linear(composedColor, GCT_MIRROR);
+        filteredBloomColor = gamma_to_linear(filteredBloomColor, GCT_POSITIVE);
+        bloomColor = gamma_to_linear(bloomColor, GCT_MIRROR);
+      }
+
+      if (!fadeBloomHighlights) // Note: this makes car headlights clip too much? Anyway it causes broken gradients because bloom highlights are highly colored, so they need to be faded out when too bright. The new branch below looks better anyway so this is fine!
+      {
+        filteredBloomColor *= bloomIntensity;
+        composedColor += filteredBloomColor;
+      }
+      else // Luma: more vanilla conservative alternative, blend in bloom depending on the ratio between the scene and bloom color (this should allow a bit more HDR bloom, though it'd also risk causing more broken gradients in highlights). This can still have some "posterization", mostly visible in motion.
+      {
+#if 0
+        float3 bloomBackgroundPassthrough = 1.0 - min(filteredBloomColor, 1.0);
+#else // Disable if it causes posterization
+        float3 bloomBackgroundPassthrough = 1.0 - min(filteredBloomColor / max(composedColor.xyz, 1.0), 1.0); // The filtered bloom is usually much lower than 1 even on highlights, so this doesn't darken by much
+#endif
+        bloomBackgroundPassthrough = lerp(bloomBackgroundPassthrough, 1.0, fadeBloomHighlightsIntensity);
+        //bloomColorHighlights = lerp(bloomColorHighlights, bloomColor, sqr(saturate((bloomColor - 0.5) * 2.0))); // Creates more steps for some reason...
+        filteredBloomColor = lerp(filteredBloomColor, bloomColorHighlights, fadeBloomHighlightsIntensity * saturate(bloomColor * 1.333)); // Restore the non filtered bloomed scene color on filtered bloom highlights (Luma values)
+        filteredBloomColor *= bloomIntensity;
+        composedColor = filteredBloomColor + (composedColor.xyz * bloomBackgroundPassthrough); // Higher bloom reduces the background color, not itself (original logic is to avoid clipping in SDR)
+      }
+
+      if (linearSpaceBloom)
+      {
+        composedColor = linear_to_gamma(composedColor, GCT_MIRROR);
+      }
+    }
+    else
+    {
+      float3 bloomBackgroundPassthrough = 1.0 - min(filteredBloomColor, 1.0);
+      composedColor = filteredBloomColor + (composedColor.xyz * bloomBackgroundPassthrough);
     }
   }
-#endif // BLOOM
+#endif // ENABLE_BLOOM
 
 #if ENABLE_COLOR_GRADING
   const float3 preLevelsAndFilerColor = composedColor;
@@ -519,7 +599,7 @@ void main(
     // Re-create the addend for BT.2020.
     // We basically simulate what the addend would do to a neutral (black) color, and then convert it to BT.2020.
     // The difference is that if we now apply this one to a BT.2020 colors, if there's any subtraction, gamut will expand,
-    // but also the "EmulateShadowRaise" function below will clamp to 0, but in BT.2020 it will have more room to expand the gamut.
+    // but also the "EmulateShadowOffset" function below will clamp to 0, but in BT.2020 it will have more room to expand the gamut.
     // Even if, levels seem to mostly be additive here anyway!
     float neutralAdd = 0.0; // Might make it 1 as well, but that sounds more wrong
     float3 levelAddBT2020 = linear_to_gamma(BT709_To_BT2020(gamma_to_linear(levelAdd + neutralAdd, GCT_MIRROR)), GCT_MIRROR) - neutralAdd;
@@ -530,7 +610,7 @@ void main(
 #endif // IMPROVED_COLOR_GRADING_TYPE >= 2
 
     composedColor = MultiplyExtendedGamutColor(composedColor, levelMul);
-    composedColor = EmulateShadowRaise(composedColor, levelAdd * raisedBlacksLowering, false) + (levelAdd * (1.0 - raisedBlacksLowering));
+    composedColor = EmulateShadowOffset(composedColor, levelAdd * raisedBlacksLowering, false) + (levelAdd * (1.0 - raisedBlacksLowering));
 
 #if IMPROVED_COLOR_GRADING_TYPE >= 2
     composedColor = linear_to_gamma(BT2020_To_BT709(gamma_to_linear(composedColor, GCT_MIRROR)), GCT_MIRROR);
@@ -566,11 +646,11 @@ void main(
     filteredFinalColor = linear_to_gamma(BT709_To_BT2020(gamma_to_linear(filteredFinalColor, GCT_MIRROR)), GCT_MIRROR);
 #endif // IMPROVED_COLOR_GRADING_TYPE >= 2
 
-    filteredFinalColor = EmulateShadowRaise(filteredFinalColor, matrixAdd * crushedBlacksLowering, false) + (matrixAdd * (1.0 - crushedBlacksLowering));
+    filteredFinalColor = EmulateShadowOffset(filteredFinalColor, matrixAdd * crushedBlacksLowering, false) + (matrixAdd * (1.0 - crushedBlacksLowering));
     
 #if IMPROVED_COLOR_GRADING_TYPE >= 2
     filteredFinalColor = BT2020_To_BT709(gamma_to_linear(filteredFinalColor, GCT_MIRROR));
-#if 0 // TODO: leave this out? negative channels might still be raised by later code, and thus recovered (however unlikely)
+#if 0 // TODO: leave this out? negative channels might still be raised by later code, and thus recovered (however unlikely, they weren't in vanilla)
 		FixColorGradingLUTNegativeLuminance(filteredFinalColor); // Make sure there's no negative luminance for the following passes, they wouldn't really help much
 #endif
     filteredFinalColor = linear_to_gamma(filteredFinalColor, GCT_MIRROR);

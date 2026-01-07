@@ -395,7 +395,7 @@ public:
       reshade::get_config_value(runtime, NAME, "OriginalTonemapperColorIntensity", cb_luma_global_settings.GameSettings.OriginalTonemapperColorIntensity);
       // "device_data.cb_luma_global_settings_dirty" should already be true at this point
 
-      reshade::get_config_value(runtime, NAME, "HDRCarReflections", hdr_car_reflections); // Allow disabling this for performance reasons, even better it'd be to make them R11G110B10_FLOAT, given it'd be barely noticeable
+      reshade::get_config_value(runtime, NAME, "HDRCarReflections", hdr_car_reflections); // Allows disabling this for performance reasons, even better it'd be to make them R11G110B10_FLOAT, given it'd be barely noticeable
       if (hdr_car_reflections)
       {
          // Note: this is very much overkill but it will make car reflections cubemaps HDR too, given they had some clipping. This can help us make the sky brighter with an HDR boost too!

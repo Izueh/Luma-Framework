@@ -323,10 +323,10 @@ public:
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
 
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"ENABLE_LUMA", '1', true, false, "Allow disabling the mod's improvements to the game's look", 1},
-         {"ENABLE_CHROMATIC_ABERRATION", '1', true, false, "Allow disabling the game's chromatic aberration", 1},
-         {"ENABLE_FILM_GRAIN", '1', true, false, "Allow disabling the game's film grain effect (it's not always present)", 1},
-         {"ENABLE_DITHERING", '1', true, false, "Allow disabling the game's dithering (it isn't particularly useful in HDR, but it can help with banding in the sky)", 1},
+         {"ENABLE_LUMA", '1', true, false, "Allows disabling the mod's improvements to the game's look", 1},
+         {"ENABLE_CHROMATIC_ABERRATION", '1', true, false, "Allows disabling the game's chromatic aberration", 1},
+         {"ENABLE_FILM_GRAIN", '1', true, false, "Allows disabling the game's film grain effect (it's not always present)", 1},
+         {"ENABLE_DITHERING", '1', true, false, "Allows disabling the game's dithering (it isn't particularly useful in HDR, but it can help with banding in the sky)", 1},
          {"ALLOW_AA", '1', true, false, "The game uses FXAA at the end, which wasn't really a good combination with TAA\nIf Luma's Super Resolution is used, this is already skipped\nThis is better off if sharpening is used", 1},
 #if DEVELOPMENT || TEST
          {"STRETCH_ORIGINAL_TONEMAPPER", '0', true, false, "An alternative HDR implementation that doesn't look good", 1},

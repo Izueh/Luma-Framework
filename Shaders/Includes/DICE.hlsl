@@ -53,7 +53,7 @@ struct DICESettings
   // Only relevant with per channel types, like "DICE_TYPE_BY_CHANNEL_PQ".
   bool Mirrored;
 
-  // Controls the amount of desaturation vs darkening to contain the final RGB color within the peak, when tonemapping by luminance.
+  // Controls the amount of desaturation (1) vs darkening (0) to contain the final RGB color within the peak, when tonemapping by luminance.
   // Darkening can generally flatten detail so it's not that suggested unless needed for a specific reason.
   // For types "DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE", "DICE_TYPE_BY_LUMINANCE_PQ_WITH_BY_CHANNEL_CHROMINANCE_PLUS_CORRECT_CHANNELS_BEYOND_PEAK_WHITE" and "DICE_TYPE_BY_LUMINANCE_GAMMA_CORRECT_CHANNELS_BEYOND_PEAK_WHITE" only.
   float DesaturationVsDarkeningRatio;
@@ -161,7 +161,7 @@ DICESettings DefaultDICESettings(uint Type = DICE_TYPE_BY_CHANNEL_PQ)
   Settings.Mirrored = false;
   Settings.InOutColorSpace = CS_BT709;
   Settings.ProcessingColorSpace = CS_BT2020; // Work in BT.2020 by default, to match HDR displays primaries. Set to BT.709 for SDR.
-  Settings.DesaturationVsDarkeningRatio = 1.0; // TODOFT5: make it 0 for all when doing highlights contrainment around the code!!!
+  Settings.DesaturationVsDarkeningRatio = 1.0; // TODOFT5: make it 0 for all when doing highlights containment around the code!!! (actually 1, that should be the full desat value)
   Settings.Gamma = 1.0 / 2.5;
   Settings.HighlightsDesaturation = 0.0;
   return Settings;
@@ -175,7 +175,7 @@ float3 DICETonemap(
   float PeakWhite,
   const DICESettings Settings /*= DefaultDICESettings()*/)
 {
-#if 0 // TODO: add these as separate modes. For now we TM by average, given that it should not ignore blue compression, preventing it from getting too bright and too white (either desaturated to be contained in the rgb peak, or clipped)
+#if 0 // TODO: add these as separate modes. For now we TM by average, given that it should not ignore blue compression, preventing it from getting too bright and too white (either desaturated to be contained in the rgb peak, or clipped). Note that "CorrectOutOfRangeColor" isn't necessary when doing TM by peak.
   const float sourceLuminance = max3(FromColorSpaceToColorSpace(Color, Settings.InOutColorSpace, Settings.ProcessingColorSpace));
 #elif 1 // This looks best! it's the most balanced
   const float sourceLuminance = average(FromColorSpaceToColorSpace(Color, Settings.InOutColorSpace, Settings.ProcessingColorSpace));

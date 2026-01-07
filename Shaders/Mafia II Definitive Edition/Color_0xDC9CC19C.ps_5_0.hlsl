@@ -1,5 +1,9 @@
 #include "../Includes/Common.hlsl"
 
+#ifndef DISABLE_BLACK_BARS
+#define DISABLE_BLACK_BARS 1
+#endif
+
 cbuffer _Globals : register(b0)
 {
   float4 c130_GlobalSceneParams : packoffset(c15);
@@ -23,7 +27,7 @@ void main(
 #endif
   o0.xyz = r0.xyz;
 
-#if 1 // Luma: disable black bars (cbuffer flag to tell if this draw matched the conditions black bars draw in)
+#if DISABLE_BLACK_BARS // Luma: disable black bars (cbuffer flag to tell if this draw matched the conditions black bars draw in)
   if (LumaData.CustomData1 != 0 && all(c025_VisualColorModulator.xyz == 1.0) && c025_VisualColorModulator.w == 1.0) // Also check the color as extra safety
   {
     discard;

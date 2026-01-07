@@ -6,12 +6,16 @@
 // We get a warning on boot without this?
 #define ENABLE_GAME_PIPELINE_STATE_READBACK 1
 
+// To access "last_draw_dispatch_data"
+#define ENABLE_DRAW_DISPATCH_DATA_CACHE 1
+
 #include "..\..\Core\core.hpp"
 
 namespace
 {
    ShaderHashesList shader_hashes_DecodeVideo;
    ShaderHashesList shader_hashes_UI_Video;
+   ShaderHashesList shader_hashes_UI_Boot;
    ShaderHashesList shader_hashes_Tonemap;
    ShaderHashesList shader_hashes_BlackBars;
 
@@ -29,9 +33,13 @@ struct GameDeviceDataMafiaIIDE final : public GameDeviceData
    // so do the extra main menu video fix the first time we get to the menu after the game boots, and never again if the user comes back to the menu (one way to tell could be the amount of UI draws, but it's whatever!)
    // TODO: fix that (not a big deal)
    bool is_in_main_menu = true;
+
+   // Device is only ever created one so this is fine
+   bool has_booted = false;
+
+   bool has_drawn_anything = false;
 };
 
-// TODO: when the game boots, the text gets corrupted for a few frames, but we can't yet capture the input to do a graphics capture... fix it
 class MafiaIIDE final : public Game
 {
 public:
@@ -49,7 +57,13 @@ public:
       std::vector<ShaderDefineData> game_shader_defines_data = {
          {"ENABLE_IMPROVED_BLOOM", '1', true, false, "Fixes bloom downscaling the image in a cheap way, causing it to flicker (be unstable).", 1},
          {"ENABLE_HDR_BOOST", '1', true, false, "Enable a \"Fake\" HDR boosting effect (applies to videos too).", 1},
+         {"IMPROVED_COLOR_GRADING_TYPE", '2', true, false, "0 - Vanilla\n1 - Modernizes the color grading logic (e.g. running in linear space, avoids quality loss from math etc)\n2 - Same as 1, but also expands gamut (working in BT.2020)\n3 - Lowers the color grading strengths and expands the dynamic range (less raised blacks, though they were used to simulate ambient lighting so it might not always look right)\n4 - Fully expanded dynamic range (similar to 3 but stronger)", 4},
+         {"ENABLE_BLOOM", '1', true, false, "Allows disabling the game's bloom effects.", 1},
+         {"ENABLE_COLOR_GRADING", '1', true, false, "Allows disabling the game's color grading effects.", 1},
+         {"DISABLE_BLACK_BARS", '1', true, false, "Disable black bars around 16:9 during cutscenes (useful for ultrawide).", 1},
+         {"FORCE_BT709_VIDEOS", '1', true, false, "Corrects videos color space, decoding them as BT.709 instead of BT.601. This is mostly noticeable in reds, producing better skin tones.\nIt's not 100% guaranteed the fix is correct so it's optional.", 1},
       };
+
       shader_defines_data.append_range(game_shader_defines_data);
 
       GetShaderDefineData(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL_HASH).SetDefaultValue('1');
@@ -73,6 +87,47 @@ public:
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
+
+      // Fixes the boot screen accumulating garbage because the swapchain wasn't cleared, so we forcefully clear the swapchain, which wasn't done (possibly due to luma texture upgrades?)
+      if (((stages & reshade::api::shader_stage::pixel) == reshade::api::shader_stage::pixel)) // Game only has pixel shaders (no compute)
+      {
+#if 0 // Doesn't work, there's likely other shaders
+         if (!original_shader_hashes.Contains(shader_hashes_UI_Boot))
+         {
+            game_device_data.has_booted = true;
+         }
+         else
+#endif
+         if (!game_device_data.has_booted && !game_device_data.has_drawn_anything)
+         {
+            SwapchainData& swapchain_data = *(*device_data.swapchains.begin())->get_private_data<SwapchainData>(); // Game only ever has 1 swapchain, so this is safe
+            com_ptr<ID3D11RenderTargetView> display_composition_rtv;
+            {
+               const std::shared_lock lock_swapchain(swapchain_data.mutex);
+               display_composition_rtv = swapchain_data.display_composition_rtvs.empty() ? nullptr : swapchain_data.display_composition_rtvs[0]; // Always 1 swapchain buffer in DX11, this will never change as it'd break the design of games that rely on it
+            }
+
+            ID3D11RenderTargetView* display_composition_rtv_const = display_composition_rtv.get();
+            constexpr FLOAT clear_color[4] = { 0.f, 0.f, 0.f, 1.f };
+            native_device_context->ClearRenderTargetView(display_composition_rtv.get(), clear_color);
+
+#if DEVELOPMENT
+            const std::shared_lock lock_trace(s_mutex_trace);
+            if (trace_running)
+            {
+               const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+               TraceDrawCallData trace_draw_call_data;
+               trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+               trace_draw_call_data.command_list = native_device_context;
+               trace_draw_call_data.custom_name = "Clear Swapchain";
+               // Re-use the RTV data for simplicity
+               GetResourceInfo(display_composition_rtv.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
+               cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
+            }
+#endif
+         }
+         game_device_data.has_drawn_anything = true;
+      }
 
       // This only runs some frames
       if (original_shader_hashes.Contains(shader_hashes_DecodeVideo))
@@ -145,13 +200,15 @@ public:
       {
          game_device_data.video = nullptr; // Clear the video shader, it doesn't (and shouldn't) draw during scene rendering
 
-         device_data.has_drawn_main_post_processing = true; // This shader seemengly always run, at least when the scene is rendering
+         device_data.has_drawn_main_post_processing = true; // This shader seemingly always run, at least when the scene is rendering
          game_device_data.pending_draws_to_black_bars = 2; // We expect black bars to draw immediately after (after another copy shader)
 
          // If we are drawing the scene, we aren't in the main menu
          game_device_data.is_in_main_menu = false;
+         game_device_data.has_booted = true;
       }
-      else if (original_shader_hashes.Contains(shader_hashes_BlackBars) && remove_black_bars && game_device_data.pending_draws_to_black_bars == 1 && test_index != 14)
+      // Sometimes there's a single fullscreen black bar. By checking the index count, we only acknowledge double black bars for cutscenes.
+      else if (original_shader_hashes.Contains(shader_hashes_BlackBars) && remove_black_bars && game_device_data.pending_draws_to_black_bars == 1 && last_draw_dispatch_data.index_count == 12 && test_index != 14)
       {
          if (is_custom_pass)
          {
@@ -179,6 +236,8 @@ public:
 
       device_data.has_drawn_main_post_processing = false;
       game_device_data.pending_draws_to_black_bars = 0; // Unnecessary, but clean
+
+      game_device_data.has_drawn_anything = false;
    }
 
    void PrintImGuiAbout() override
@@ -284,6 +343,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       force_borderless = true;
       force_ignore_dpi = true;
 
+      // Needed to force clear the swapchain on boot, otherwise alpha goes beyond 0-1 as it draws in an additive way
+      force_create_swapchain_rtvs = true;
+
       // TODO: these are all the permutations that have a color matrix, but there's ~200 other that don't. Whether they are used or not is unclear, probably not. Use "43758.5469" (nah, false positives) or "s050_PostProcessSrcTexture" as search patterns to find them? We could automatically collect these in c++ and warn users.
       // If necessary, we could simply add a check to make sure any known color grading shader has run, otherwise send a warning.
       redirected_shader_hashes["ColorGrading"] =
@@ -341,6 +403,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_DecodeVideo.pixel_shaders = {0xBFAEA516};
       shader_hashes_UI_Video.vertex_shaders = {0x661B34E8};
       shader_hashes_UI_Video.pixel_shaders = {0xDC056E98};
+      shader_hashes_UI_Boot.pixel_shaders = {0xF48758E4};
       shader_hashes_Tonemap.pixel_shaders = {0xD80171EC};
       shader_hashes_BlackBars.vertex_shaders = {0x2D4034E6};
       shader_hashes_BlackBars.pixel_shaders = {0xDC9CC19C};
