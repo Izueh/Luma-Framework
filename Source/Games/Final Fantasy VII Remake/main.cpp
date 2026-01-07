@@ -1136,7 +1136,7 @@ public:
             settings_data.auto_exposure = false;
             settings_data.mvs_x_scale = 1.0f;
             settings_data.mvs_y_scale = 1.0f;
-            settings_data.use_experimental_features = sr_user_type == SR::UserType::DLSS_TRANSFORMER;
+            settings_data.render_preset = dlss_render_preset;
             sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
 
             bool skip_dlss = taa_output_texture_desc.Width < sr_instance_data->min_resolution || taa_output_texture_desc.Height < sr_instance_data->min_resolution;

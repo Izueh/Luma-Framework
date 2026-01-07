@@ -551,7 +551,7 @@ public:
             // MVs in UV space, so we need to scale by the render resolution to transform to pixel space
             settings_data.mvs_x_scale = device_data.render_resolution.x;
             settings_data.mvs_y_scale = device_data.render_resolution.y;
-            settings_data.use_experimental_features = sr_user_type == SR::UserType::DLSS_TRANSFORMER;
+            settings_data.render_preset = dlss_render_preset;
             sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
 
             bool skip_dlss = taa_output_texture_desc.Width < sr_instance_data->min_resolution || taa_output_texture_desc.Height < sr_instance_data->min_resolution;

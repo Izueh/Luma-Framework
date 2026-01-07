@@ -12,8 +12,7 @@ namespace SR
 	{
 		None,
 		Auto,
-		DLSS_CNN,
-		DLSS_TRANSFORMER,
+		DLSS,
 		FSR_3,
 	};
 
@@ -33,9 +32,7 @@ namespace SR
 			return type == Type::None;
 		case SR::UserType::Auto:
 			return true; // Always accept it for now, given that it's the first one we find compatible
-		case SR::UserType::DLSS_CNN:
-			return type == Type::DLSS;
-		case SR::UserType::DLSS_TRANSFORMER:
+		case SR::UserType::DLSS:
 			return type == Type::DLSS;
 		case SR::UserType::FSR_3:
 			return type == Type::FSR;
@@ -64,8 +61,8 @@ namespace SR
 		float mvs_y_scale = 1.f; // Flip or scale by render res
 		// Alternatively, either force the exposure to 1 (or 0.18 mid grey) if we run after tonemapping, or feed the correct one if we run before
 		bool auto_exposure = false;
-		// Enable beta/experimental features, if any. They might have better quality in most places but have major issues in others.
-		bool use_experimental_features = false;
+		// DLSS render preset hint (maps to NVSDK_NGX_DLSS_Hint_Render_Preset values: 0=Default, 6=F, 10=J, 11=K, 12=L, 13=M)
+		unsigned int render_preset = 0;
 	};
 
 	// Interface to be subclassed. Represents a handle.

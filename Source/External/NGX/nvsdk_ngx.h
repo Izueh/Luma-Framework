@@ -639,6 +639,10 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_D3D12_GetFeatureRequirements
                                                                                  const NVSDK_NGX_FeatureDiscoveryInfo *FeatureDiscoveryInfo,
                                                                                  NVSDK_NGX_FeatureRequirement *OutSupported);
 
+NVSDK_NGX_API NVSDK_NGX_Result NVSDK_CONV NVSDK_NGX_CUDA_GetFeatureRequirements(int CudaDevice,
+                                                                                const NVSDK_NGX_FeatureDiscoveryInfo *FeatureDiscoveryInfo,
+                                                                                NVSDK_NGX_FeatureRequirement *OutSupported);
+
 ////////////////////////////////////////////////////////////////////////////////
 // NVSDK_NGX_EvaluateFeature
 // -----------------------------------------------------------------------------

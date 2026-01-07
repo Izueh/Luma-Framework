@@ -519,7 +519,7 @@ public:
                settings_data.hdr = true; // The "HDR" flag in DLSS SR actually means whether the color is in linear space or "sRGB gamma" (apparently not 2.2) (SDR) space, colors beyond 0-1 don't seem to be clipped either way
                settings_data.inverted_depth = false;
                settings_data.mvs_jittered = false;
-               settings_data.use_experimental_features = sr_user_type == SR::UserType::DLSS_TRANSFORMER;
+               settings_data.render_preset = dlss_render_preset;
                sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
             }
 
@@ -844,7 +844,7 @@ public:
             settings_data.hdr = true; // The "HDR" flag in DLSS SR actually means whether the color is in linear space or "sRGB gamma" (apparently not 2.2) (SDR) space, colors beyond 0-1 don't seem to be clipped either way
             settings_data.inverted_depth = false;
             settings_data.mvs_jittered = false;
-            settings_data.use_experimental_features = sr_user_type == SR::UserType::DLSS_TRANSFORMER;
+            settings_data.render_preset = dlss_render_preset;
             sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context.get(), settings_data);
 
             bool reset_dlss = device_data.force_reset_sr;

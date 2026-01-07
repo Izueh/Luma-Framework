@@ -568,7 +568,7 @@ public:
             settings_data.inverted_depth = true;
             settings_data.mvs_jittered = false;
             settings_data.auto_exposure = game_device_data.auto_exposure; // Unreal Engine does TAA before tonemapping
-            settings_data.use_experimental_features = sr_user_type == SR::UserType::DLSS_TRANSFORMER;
+            settings_data.render_preset = dlss_render_preset;
             settings_data.mvs_x_scale = 1.0f;
             settings_data.mvs_y_scale = 1.0f;
             sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);

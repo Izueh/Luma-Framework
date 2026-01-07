@@ -107,22 +107,7 @@ namespace NGX
 			// NOTE: we might also want to check against the closest "DLSSOptimalSettingsInfo" for its "Max_width" and "Max_height"
 			// to check if we are actually running DLAA or DLSS? It's probably unnecessary.
 			const bool is_dlaa = perf_quality_value == NVSDK_NGX_PerfQuality_Value::NVSDK_NGX_PerfQuality_Value_DLAA || (settings_data.render_width >= settings_data.output_width && settings_data.render_height >= settings_data.output_height);
-
-			NVSDK_NGX_DLSS_Hint_Render_Preset render_preset = NVSDK_NGX_DLSS_Hint_Render_Preset_Default;
-#if DLSS_FORCE_RENDER_PRESET
-			if (settings_data.use_experimental_features)
-			{
-				render_preset = NVSDK_NGX_DLSS_Hint_Render_Preset((int)NVSDK_NGX_DLSS_Hint_Render_Preset_K);
-			}
-			else
-			{
-				render_preset = NVSDK_NGX_DLSS_Hint_Render_Preset_E;
-				if (is_dlaa)
-				{
-					render_preset = NVSDK_NGX_DLSS_Hint_Render_Preset_F;
-				}
-			}
-#endif // DLSS_FORCE_RENDER_PRESET
+			NVSDK_NGX_DLSS_Hint_Render_Preset render_preset = static_cast<NVSDK_NGX_DLSS_Hint_Render_Preset>(settings_data.render_preset);
 
 			// Set all of them for simplicity, these params belong to a specific quality mode anyway.
 			// If we set "NVSDK_NGX_DLSS_Hint_Render_Preset_Default", it should be equal to not setting anything at all.

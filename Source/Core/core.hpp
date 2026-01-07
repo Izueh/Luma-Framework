@@ -262,6 +262,9 @@ namespace
    SR::UserType sr_user_type = SR::UserType::Auto; // If set to a non "None" value, some SR tech is enabled by the user (but not necessarily supported+initialized correctly, that's by device)
    std::map<SR::Type, std::unique_ptr<SR::SuperResolutionImpl>> sr_implementations; // All the SR implementations class objects (not necessarily initialized, nor fully loaded)
 
+   // DLSS render preset selection (maps to NVSDK_NGX_DLSS_Hint_Render_Preset values)
+   unsigned int dlss_render_preset = 0;
+
    const char* sr_game_tooltip = "";
 #endif // ENABLE_SR
 
@@ -11757,10 +11760,8 @@ namespace
                selected_sr_user_type = "None"; break;
             case SR::UserType::Auto:
                selected_sr_user_type = "Auto"; break;
-            case SR::UserType::DLSS_CNN:
-               selected_sr_user_type = "DLSS (CNN Model)"; break;
-            case SR::UserType::DLSS_TRANSFORMER:
-               selected_sr_user_type = "DLSS (Transformer Model)"; break;
+            case SR::UserType::DLSS:
+               selected_sr_user_type = "DLSS"; break;
             case SR::UserType::FSR_3:
                selected_sr_user_type = "FSR 3"; break;
             }
@@ -11810,10 +11811,8 @@ namespace
                constexpr bool always_show_auto_sr = true; // It's the default value, so just always show it
                if (always_show_auto_sr || sr_auto_type != SR::Type::None)
                   AddComboItem("Auto", SR::UserType::Auto, sr_auto_type, !device_data.sr_implementations_instances.empty());
-               AddComboItem("DLSS (CNN Model)", SR::UserType::DLSS_CNN, SR::Type::DLSS, device_data.sr_implementations_instances.contains(SR::Type::DLSS));
-               AddComboItem("DLSS (Transformer Model)", SR::UserType::DLSS_TRANSFORMER, SR::Type::DLSS, device_data.sr_implementations_instances.contains(SR::Type::DLSS));
+               AddComboItem("DLSS", SR::UserType::DLSS, SR::Type::DLSS, device_data.sr_implementations_instances.contains(SR::Type::DLSS));
                AddComboItem("FSR 3", SR::UserType::FSR_3, SR::Type::FSR, device_data.sr_implementations_instances.contains(SR::Type::FSR));
-
                ImGui::EndCombo();
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -11854,6 +11853,49 @@ namespace
                   size.x += style.FramePadding.x;
                   size.y += style.FramePadding.y;
                   ImGui::InvisibleButton("", ImVec2(size.x, size.y));
+               }
+
+               const char* selected_dlss_preset = nullptr;
+               switch (dlss_render_preset)
+               {
+               case 0: // NVSDK_NGX_DLSS_Hint_Render_Preset_Default
+                  selected_dlss_preset = "Default"; break;
+               case 6: // NVSDK_NGX_DLSS_Hint_Render_Preset_F
+                  selected_dlss_preset = "F (CNN)"; break;
+               case 10: // NVSDK_NGX_DLSS_Hint_Render_Preset_J
+                  selected_dlss_preset = "J"; break;
+               case 11: // NVSDK_NGX_DLSS_Hint_Render_Preset_K
+                  selected_dlss_preset = "K"; break;
+               case 12: // NVSDK_NGX_DLSS_Hint_Render_Preset_L
+                  selected_dlss_preset = "L"; break;
+               case 13: // NVSDK_NGX_DLSS_Hint_Render_Preset_M
+                  selected_dlss_preset = "M"; break;
+               default:
+                  selected_dlss_preset = "Default"; break;
+               }
+
+               if (sr_type == SR::Type::DLSS && ImGui::BeginCombo("DLSS Preset", selected_dlss_preset))
+               {
+                  auto AddPresetItem = [&](const char* name, unsigned int value)
+                  {
+                     const bool is_selected = (dlss_render_preset == value);
+                     if (ImGui::Selectable(name, is_selected))
+                     {
+                        dlss_render_preset = value;
+                        reshade::set_config_value(runtime, NAME, "DLSSRenderPreset", static_cast<int>(dlss_render_preset));
+                     }
+                     if (is_selected)
+                        ImGui::SetItemDefaultFocus();
+                  };
+
+                  AddPresetItem("Default", 0);   // NVSDK_NGX_DLSS_Hint_Render_Preset_Default
+                  AddPresetItem("F (CNN)", 6);   // NVSDK_NGX_DLSS_Hint_Render_Preset_F
+                  AddPresetItem("J", 10);        // NVSDK_NGX_DLSS_Hint_Render_Preset_J
+                  AddPresetItem("K", 11);        // NVSDK_NGX_DLSS_Hint_Render_Preset_K
+                  AddPresetItem("L", 12);        // NVSDK_NGX_DLSS_Hint_Render_Preset_L
+                  AddPresetItem("M", 13);        // NVSDK_NGX_DLSS_Hint_Render_Preset_M
+
+                  ImGui::EndCombo();
                }
             }
 
@@ -13649,6 +13691,10 @@ void Init(bool async)
       int sr_user_type_i = int(sr_user_type);
       reshade::get_config_value(runtime, NAME, "SRUserType", sr_user_type_i); // This will be reset later if not compatible
       sr_user_type = SR::UserType(sr_user_type_i);
+
+      int dlss_render_preset_i = static_cast<int>(dlss_render_preset);
+      reshade::get_config_value(runtime, NAME, "DLSSRenderPreset", dlss_render_preset_i);
+      dlss_render_preset = static_cast<unsigned int>(dlss_render_preset_i);
 #endif
       int display_mode_i = int(cb_luma_global_settings.DisplayMode);
       reshade::get_config_value(runtime, NAME, "DisplayMode", display_mode_i);
