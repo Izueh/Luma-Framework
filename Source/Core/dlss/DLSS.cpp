@@ -15,9 +15,6 @@
 // Should be <= the max (last) of NVSDK_NGX_PerfQuality_Value
 #define NUM_PERF_QUALITY_MODES 6
 
-// Our rendering presets are pretty much the default ones mentioned in the DLSS SDK, do we want to force them, or do we want to allow NV to change them through updates?
-#define DLSS_FORCE_RENDER_PRESET 1
-
 namespace NGX
 {
 	const char* project_id = "d8238c51-1f2f-438d-a309-38c16e33c716"; // This needs to be a GUID. We generated a unique one. This isn't registered by NV. This was generated for Luma. It's ok to share it for all games.

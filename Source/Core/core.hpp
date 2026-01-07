@@ -266,7 +266,7 @@ namespace
    std::map<SR::Type, std::unique_ptr<SR::SuperResolutionImpl>> sr_implementations; // All the SR implementations class objects (not necessarily initialized, nor fully loaded)
 
    // DLSS render preset selection (maps to NVSDK_NGX_DLSS_Hint_Render_Preset values)
-   unsigned int dlss_render_preset = 0;
+   unsigned int dlss_render_preset = 0; // NVSDK_NGX_DLSS_Hint_Render_Preset_Default
 
    const char* sr_game_tooltip = "";
 #endif // ENABLE_SR
@@ -11923,7 +11923,7 @@ namespace
 
                if (sr_type == SR::Type::DLSS && ImGui::BeginCombo("DLSS Preset", selected_dlss_preset))
                {
-                  auto AddPresetItem = [&](const char* name, unsigned int value)
+                  auto AddPresetItem = [&](const char* name, unsigned int value, const char* tooltip = "")
                   {
                      const bool is_selected = (dlss_render_preset == value);
                      if (ImGui::Selectable(name, is_selected))
@@ -11931,16 +11931,21 @@ namespace
                         dlss_render_preset = value;
                         reshade::set_config_value(runtime, NAME, "DLSSRenderPreset", static_cast<int>(dlss_render_preset));
                      }
+                     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                     {
+                        ImGui::SetTooltip(tooltip);
+                     }
+
                      if (is_selected)
                         ImGui::SetItemDefaultFocus();
                   };
 
-                  AddPresetItem("Default", 0);   // NVSDK_NGX_DLSS_Hint_Render_Preset_Default
-                  AddPresetItem("F (CNN)", 6);   // NVSDK_NGX_DLSS_Hint_Render_Preset_F
-                  AddPresetItem("J", 10);        // NVSDK_NGX_DLSS_Hint_Render_Preset_J
-                  AddPresetItem("K", 11);        // NVSDK_NGX_DLSS_Hint_Render_Preset_K
-                  AddPresetItem("L", 12);        // NVSDK_NGX_DLSS_Hint_Render_Preset_L
-                  AddPresetItem("M", 13);        // NVSDK_NGX_DLSS_Hint_Render_Preset_M
+                  AddPresetItem("Default", 0, "Uses NVIDIA suggested preset."); // NVSDK_NGX_DLSS_Hint_Render_Preset_Default
+                  AddPresetItem("F (CNN)", 6, "Deprecated CNN model. It is more performant, but blurier than the newer models.");  // NVSDK_NGX_DLSS_Hint_Render_Preset_F
+                  AddPresetItem("J", 10, "Very similar to K. Has issues with some transparent effects and volumetrics."); // NVSDK_NGX_DLSS_Hint_Render_Preset_J
+                  AddPresetItem("K", 11, "Very similar to J. Has issues with some transparent effects and volumetrics."); // NVSDK_NGX_DLSS_Hint_Render_Preset_K
+                  AddPresetItem("L", 12, "Highest quality, but very performance intensive. Meant to be used when upscaling from very low resolution (Ultra Performance)."); // NVSDK_NGX_DLSS_Hint_Render_Preset_L
+                  AddPresetItem("M", 13, "Best quality to performance ratio."); // NVSDK_NGX_DLSS_Hint_Render_Preset_M
 
                   ImGui::EndCombo();
                }
