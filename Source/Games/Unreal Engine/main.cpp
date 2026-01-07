@@ -882,8 +882,8 @@ public:
          ImGui::SetTooltip("Enable Super Resolution (DLSS/FSR) to change this setting.");
       }
       
-      ImGui::Checkbox("Dithering Fix (Experimental)", &game_device_data.dithering_fix);
-
+      ImGui::Checkbox("Dithering Fix (Experimental)", &enable_dithering_fix);
+      
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Fixes dithering issues that may appear when using DLSS/FSR with TAA. Very experimental. Requires restart.");
