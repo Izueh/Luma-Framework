@@ -200,7 +200,7 @@ public:
 
          std::vector<ShaderDefineData> game_shader_defines_data = {
             {"ENABLE_LUMA", '1', true, false, "Enables all Luma's post processing modifications, to improve the image and output HDR.", 1},
-            {"ENABLE_CHARACTER_LIGHT", '1', true, false, "Allow disabling the character/hero/player light that the game uses to give visibility around the character.", 1},
+            {"ENABLE_CHARACTER_LIGHT", '1', true, false, "Allows disabling the character/hero/player light that the game uses to give visibility around the character.", 1},
             {"ENABLE_VIGNETTE", '1', true, false, "Allows disabling the vignette effect. Luma already fixes it for ultrawide given it was too strong out of the box.", 1},
             {"ENABLE_DARKNESS_EFFECT", '1', true, false, "Allows disabling the darkness effect. The game draws a veil of darkness at the edges of the screen, especially on top.", 1},
             {"ENABLE_DITHERING", '1', true, false, "Adds a pass of dithering on the HDR output, to fight off banding due to the game excessive usage of low quality textures.\nLuma already fixes most of the banding to begin with, so this is optional.\nDisabling dithering in the game's settings is suggested as Luma's doesn't need it.", 1},
@@ -235,7 +235,7 @@ public:
       if (game_id == GAME_COCOON)
       {
          std::vector<ShaderDefineData> game_shader_defines_data = {
-            {"ENABLE_FILM_GRAIN", '1', true, false, "Allow disabling the game's faint film grain effect", 1},
+            {"ENABLE_FILM_GRAIN", '1', true, false, "Allows disabling the game's faint film grain effect", 1},
          };
 
          shader_defines_data.append_range(game_shader_defines_data);

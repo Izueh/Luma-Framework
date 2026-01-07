@@ -27,13 +27,13 @@ void main(
   
   if (LumaData.CustomData1) // Luma: this means this copy shader is targeting a video
   {
+      o0.rgb = gamma_sRGB_to_linear(o0.rgb, GCT_MIRROR); // Assume "VANILLA_ENCODING_TYPE" sRGB here
+
 #if ENABLE_HDR_BOOST
     // Luma: add HDR extrapolation on videos
     if (LumaSettings.DisplayMode == 1)
     {
-      o0.rgb = gamma_sRGB_to_linear(o0.rgb, GCT_MIRROR); // Assume "VANILLA_ENCODING_TYPE" sRGB here
       o0.rgb = PumboAutoHDR(o0.rgb, 250.0, LumaSettings.GamePaperWhiteNits);
-      o0.rgb = linear_to_sRGB_gamma(o0.rgb, GCT_MIRROR);
     }
 #endif
 
@@ -42,5 +42,7 @@ void main(
     o0.rgb *= LumaSettings.GamePaperWhiteNits / LumaSettings.UIPaperWhiteNits;
     ColorGradingLUTTransferFunctionInOutCorrected(o0.rgb, min(GAMMA_CORRECTION_TYPE, 1), VANILLA_ENCODING_TYPE, true);
 #endif
+
+    o0.rgb = linear_to_sRGB_gamma(o0.rgb, GCT_MIRROR);
   }
 }

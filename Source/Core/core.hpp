@@ -118,6 +118,9 @@
 #ifndef ENABLE_POST_DRAW_CALLBACK
 #define ENABLE_POST_DRAW_CALLBACK 0
 #endif // ENABLE_POST_DRAW_CALLBACK
+#ifndef ENABLE_DRAW_DISPATCH_DATA_CACHE
+#define ENABLE_DRAW_DISPATCH_DATA_CACHE 0
+#endif // ENABLE_DRAW_DISPATCH_DATA_CACHE
 #ifndef TEST_DUPLICATE_SHADER_HASH
 #define TEST_DUPLICATE_SHADER_HASH 0
 #endif // TEST_DUPLICATE_SHADER_HASH
@@ -668,6 +671,9 @@ namespace
    // The actual current pre-calculated shader hash (of the live patched shader, if it was)
    thread_local uint64_t last_live_patched_shader_hash = -1;
 #endif
+#if ENABLE_DRAW_DISPATCH_DATA_CACHE || DEVELOPMENT
+   thread_local DrawDispatchData last_draw_dispatch_data = {};
+#endif // ENABLE_DRAW_DISPATCH_DATA_CACHE || DEVELOPMENT
 #if DEVELOPMENT
    // ReShade specific design as we don't get a rejection between the create and init events if creation failed
    thread_local reshade::api::format last_attempted_upgraded_resource_creation_format = reshade::api::format::unknown;
@@ -680,7 +686,6 @@ namespace
    std::string last_drawn_shader = ""; // Not exactly thread safe but it's fine...
 
    thread_local reshade::api::command_list* thread_local_cmd_list = nullptr; // Hacky global variable (possibly not cleared, stale), only use to quickly tell the command list of the thread
-   thread_local DrawDispatchData last_draw_dispatch_data = {};
 
    std::unordered_map<const ID3D11InputLayout*, std::vector<D3D11_INPUT_ELEMENT_DESC>> input_layouts_descs;
 
@@ -3749,26 +3754,51 @@ namespace
                         // Capture 1 to 3 digits after the specified digit (e.g. t/u/o etc) at the end
                         const std::regex pattern_cbs(R"(dcl_constantbuffer.*[cC][bB]([0-9]{1,2}))");
                         const std::regex pattern_samplers(R"(dcl_sampler.*[sS]([0-9]{1,2}))");
-                        const std::regex pattern_srv(R"(.*dcl_resource_texture.*[tT]([0-9]{1,3})$)");
+                        const std::regex pattern_srv(R"(.*dcl_resource_texture.*[tT]([0-9]{1,3})$)"); // In DX9 these are "dcl_2d s0" etc, sampler+srv together
                         const std::regex pattern_uav(R"(.*dcl_uav_.*[uU]([0-9]{1,2})$)"); // TODO: verify that all the UAV binding types have incremental numbers, or whether they grow in parallel
                         const std::regex pattern_rtv(R"(dcl_output.*[oO]([0-9]{1,1}))"); // Match up to 9 even if theoretically "D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT" is up to 7
                         const std::regex pattern_depth(R"(dcl_output_depth)");
+                        const std::regex pattern_sm(R"(\b(ps|vs|gs|hs|ds|cs)_(\d+)_(\d+)\s*$)", std::regex_constants::icase); // e.g. ps_5_0
 
+                        bool stop_at_next_0 = true;
                         bool matching_line = false;
                         while (std::getline(iss, line)) {
+                           bool prev_matching_line = matching_line;
+                           std::smatch match;
+
+                           // Sometimes (e.g. Mafia II video shaders), DX10-11 shaders have a blob with their original DX9 code,
+                           // or anyway a comment blob with the DX9 asm.
+                           // When decompiling, this shows in the list on top of the new shader, and our code scanning got confused as it stopped before the actual shader asm code,
+                           // because the DX9 version already had lines starting with 0...
+                           // Here we force skip all shader models declared with a different version than ours.
+                           if (!matching_line && std::regex_search(line, match, pattern_sm) && match.size() >= 4) {
+                              std::string type = match[1].str(); // ps/vs/...
+                              int major_version = std::stoi(match[2].str());
+                              int minor_version = std::stoi(match[3].str());
+
+                              int final_major_version = -1;
+                              if (cached_shader->type_and_version.size() > 3 && std::isdigit(static_cast<unsigned char>(cached_shader->type_and_version[3])))
+                                 final_major_version = cached_shader->type_and_version[3] - '0';
+                              if (major_version != final_major_version)
+                              {
+                                 stop_at_next_0 = false;
+                              }
+                           }
+
                            // Trim leading spaces
                            size_t first = line.find_first_not_of(" \t");
                            if (first != std::string::npos && (first + 1) < line.size())
                            {
                               // Stop if line starts with "0 ", as that's the first line that highlights the code beginning
                               if (line.at(first) == '0' && line.at(first + 1) == ' ')
-                                 break;
+                              {
+                                 if (stop_at_next_0)
+                                    break;
+                                 stop_at_next_0 = true;
+                              }
                            }
 
-                           bool prev_matching_line = matching_line;
-
                            bool cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
-                           std::smatch match;
                            // Use search for CBs and RTVs etc because they have additional text after we found the number we are looking for
                            if (std::regex_search(line, match, pattern_cbs) && match.size() >= 2) {
                               int num = std::stoi(match[1].str());
@@ -5885,8 +5915,10 @@ namespace
 
          pre_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
       }
+#endif
 
-      // TODO: it'd be nicer to do this better.
+#if ENABLE_DRAW_DISPATCH_DATA_CACHE || DEVELOPMENT
+      // TODO: it'd be nicer to do this better. Maybe pass it in "OnDrawOrDispatch_Custom" etc.
       last_draw_dispatch_data = {};
       last_draw_dispatch_data.vertex_count = vertex_count;
       last_draw_dispatch_data.instance_count = instance_count;
@@ -6054,7 +6086,9 @@ namespace
 
          pre_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
       }
+#endif
 
+#if ENABLE_DRAW_DISPATCH_DATA_CACHE || DEVELOPMENT
       last_draw_dispatch_data = {};
       last_draw_dispatch_data.instance_count = instance_count;
       last_draw_dispatch_data.first_instance = first_instance;
@@ -6176,7 +6210,9 @@ namespace
 
          pre_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
       }
+#endif
 
+#if ENABLE_DRAW_DISPATCH_DATA_CACHE || DEVELOPMENT
       last_draw_dispatch_data = {};
       last_draw_dispatch_data.dispatch_count = uint3( group_count_x, group_count_y, group_count_z );
 #endif
@@ -6331,7 +6367,9 @@ namespace
          else
             pre_draw_state_stack_graphics.Cache(native_device_context, device_data.uav_max_count);
       }
+#endif
 
+#if ENABLE_DRAW_DISPATCH_DATA_CACHE || DEVELOPMENT
       last_draw_dispatch_data = {};
       // All the data is unknown as it's delegated to the GPU
       last_draw_dispatch_data.indirect = true;
@@ -8499,12 +8537,21 @@ namespace
       DeviceData& device_data = *runtime->get_device()->get_private_data<DeviceData>();
 #if DEVELOPMENT
       {
+         // Some games fail to capture input on boot, so use a special key to force a graphics capture
+         static bool graphics_capture_key_down = false; // "static" is fine, games usually only have one present call per frame
+         bool was_graphics_capture_key_down = graphics_capture_key_down;
+         graphics_capture_key_down = GetAsyncKeyState(VK_SUBTRACT) & 0x8000; // Numpad - key
+         if (graphics_capture_key_down && !was_graphics_capture_key_down)
+         {
+            trace_scheduled = true;
+         }
+         was_graphics_capture_key_down = graphics_capture_key_down;
+
          const std::unique_lock lock_trace(s_mutex_trace);
          if (trace_running)
          {
 #if _DEBUG && LOG_VERBOSE
-            reshade::log::message(reshade::log::level::info, "present()");
-            reshade::log::message(reshade::log::level::info, "--- End Frame ---");
+            reshade::log::message(reshade::log::level::info, "--- Frame Graphics Capture Ended ---");
 #endif
             trace_running = false;
             CommandListData& cmd_list_data = *runtime->get_command_queue()->get_immediate_command_list()->get_private_data<CommandListData>();
@@ -8514,7 +8561,7 @@ namespace
          else if (trace_scheduled)
          {
 #if _DEBUG && LOG_VERBOSE
-            reshade::log::message(reshade::log::level::info, "--- Frame ---");
+            reshade::log::message(reshade::log::level::info, "--- Frame Graphics Capture Started ---");
 #endif
             // Split the trace logic over "two" frames, to make sure we capture everything in between two present calls
             trace_scheduled = false;
@@ -9793,7 +9840,7 @@ namespace
                                  if (custom_shader && custom_shader->is_hlsl && !custom_shader->file_path.empty() && ImGui::Button("Open hlsl in IDE"))
                                  {
                                     // You may need to specify the full path to "code.exe" if it's not in PATH.
-                                    HINSTANCE ret_val = ShellExecuteA(nullptr, "open", "code", ("\"" + custom_shader->file_path.string() + "\"").c_str(), nullptr, SW_SHOWNORMAL); // TODO: instruct users on how to use this (add "code" path to VS Code).
+                                    HINSTANCE ret_val = ShellExecuteA(nullptr, "open", "code", ("\"" + custom_shader->file_path.string() + "\"").c_str(), nullptr, SW_SHOWNORMAL); // TODO: instruct users on how to use this (add "code" path to VS Code). // TODO: this fails with Mafia II DE...
                                     ASSERT_ONCE(ret_val > (HINSTANCE)32); // Unknown reason
                                  }
 

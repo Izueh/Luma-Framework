@@ -335,7 +335,7 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
 
   float3 shadowRaise = saturate(1.0 - color) * ColorCorrectLift.xyz; // Raise shadow // Luma: added saturate for HDR safety
 #if 1
-  color = EmulateShadowRaise(color, shadowRaise); // TODO: try
+  color = EmulateShadowOffset(color, shadowRaise); // TODO: try
 #else
   color += shadowRaise;
 #endif
@@ -346,7 +346,7 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
 #endif
   color = pow(abs(color), max(9.99999997e-007, ColorCorrectGamma.xyz)) * sign(color); // Usually neutral (1)
 #if 1 // TODO: test
-  color = EmulateShadowRaise(color, ColorCorrectOffset.xyz);
+  color = EmulateShadowOffset(color, ColorCorrectOffset.xyz);
 #else
   color += ColorCorrectOffset.xyz;
 #endif

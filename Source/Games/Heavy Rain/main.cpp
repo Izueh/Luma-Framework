@@ -54,7 +54,7 @@ public:
    void OnInit(bool async) override
    {
       std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"ENABLE_LUMA", '1', true, false, "Allow disabling the mod's improvements to the game's look", 1},
+         {"ENABLE_LUMA", '1', true, false, "Allows disabling the mod's improvements to the game's look", 1},
          {"ENABLE_FILM_GRAIN", '1', true, false, "Allows disabling the game's Film Grain effect, which Luma already improves by default", 1},
          {"ENABLE_FAKE_HDR", '1', true, false, "Enable a \"Fake\" HDR boosting effect, as the game's dynamic range was fairly limited to begin with", 1},
          {"ENABLE_COLOR_GRADING", '1', true, false, "Allows disabling the color grading LUT (some other color filters might still get applied)", 1},

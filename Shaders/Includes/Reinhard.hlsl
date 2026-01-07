@@ -164,7 +164,7 @@ float3 ReinhardTonemap(float3 color, float peak_nits, float diffuse_nits, Reinha
           settings.mid_grey_value,
           settings.mid_grey_nits / settings.reference_white);
 
-      color_output *= sign(color);
+      color_output *= Sign_Fast(color);
 
       return color_output;
     };

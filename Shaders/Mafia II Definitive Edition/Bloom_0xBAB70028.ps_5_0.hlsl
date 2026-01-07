@@ -1,5 +1,5 @@
-#ifndef BLOOM
-#define BLOOM 1
+#ifndef ENABLE_BLOOM
+#define ENABLE_BLOOM 1
 #endif
 
 cbuffer _Globals : register(b0)
@@ -31,7 +31,7 @@ void main(
 
   float4 sceneColor = TMU0_Sampler.Sample(TMU0_Sampler_sampler_s, v1.xy).xyzw;
   float4 emulatedSceneColor = sceneColor;
-#if 1 // Luma: added saturate() to emulate vanilla UNORM behaviour, though however intuitive this might look, it makes bloom look more broken for extreme values, maybe because the double subtraction ends up mirrored again. Edit: actually it looks broken without this. // TODO: test again in the DLC that starts in an industrial area shootout.
+#if 1 // Luma: added saturate() to emulate vanilla UNORM behaviour, though however intuitive this might look, it makes bloom look more broken for extreme values, maybe because the double subtraction ends up mirrored again. Edit: actually it looks broken without this. A good place to test might be the beginning of DLC1.
   emulatedSceneColor = saturate(emulatedSceneColor);
 #endif
   float4 invSceneColor = 1.0 - emulatedSceneColor;
@@ -43,7 +43,7 @@ void main(
   float4 bloomFilter = 1.0;
   bloomFilter.xyz = IntensityWarmCol.x * (r1x * (-ColdCol.xyz + IntensityWarmCol.yzw) + ColdCol.xyz);
 
-#if BLOOM
+#if ENABLE_BLOOM
   o0.xyzw = sceneColor + (bloomFilter.xyzw * someColorFactor);
 #else
   o0.xyzw = sceneColor;

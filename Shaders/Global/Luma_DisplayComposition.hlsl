@@ -216,11 +216,11 @@ bool DrawDebugTexture(float3 pos, inout float4 outColor, float gamePaperWhite, f
 		}
 		if (gammaToLinear) // Linearize (output expects linear) (use if image appeared too bright (gamma space viewed as linear))
 		{
-        	color.rgb = sRGB ? gamma_sRGB_to_linear(color.rgb, GCT_MIRROR) : (pow(abs(color.rgb), DefaultGamma) * sign(color.rgb));
+        	color.rgb = sRGB ? gamma_sRGB_to_linear(color.rgb, GCT_MIRROR) : (pow(abs(color.rgb), DefaultGamma) * Sign_Fast(color.rgb));
 		}
 		if (linearToGamma) // Gammify (usually not necessary) (use if image appeared too dark (linear space viewed as gamma))
 		{
-       		color.rgb = sRGB ? linear_to_sRGB_gamma(color.rgb, GCT_MIRROR) : (pow(abs(color.rgb), 1.f / DefaultGamma) * sign(color.rgb));
+       		color.rgb = sRGB ? linear_to_sRGB_gamma(color.rgb, GCT_MIRROR) : (pow(abs(color.rgb), 1.f / DefaultGamma) * Sign_Fast(color.rgb));
 		}
 		if (tonemap && !showAlpha)
 		{

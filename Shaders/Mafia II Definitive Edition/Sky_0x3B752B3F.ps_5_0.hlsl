@@ -37,12 +37,13 @@ void main(
   o0.xyz = r0.xyz;
     
 #if ENABLE_HDR_BOOST && 0 // The sky seems fine... disabled
-  if (LumaSettings.DisplayMode == 1)
+  bool forceVanilla = ShouldForceSDR(v0.xy * LumaSettings.SwapchainInvSize.xy);
+  if (LumaSettings.DisplayMode == 1 && !forceVanilla)
   {
     o0.xyz = gamma_to_linear(o0.xyz, GCT_MIRROR);
 
     float normalizationPoint = 0.025; // Found empyrically
-    float fakeHDRIntensity = 0.2;
+    float fakeHDRIntensity = 0.15;
     float saturationExpansionIntensity = 0.1;
 #if DEVELOPMENT && 0
     fakeHDRIntensity = DVS4;
