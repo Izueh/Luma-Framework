@@ -63,6 +63,22 @@ namespace SR
 		bool auto_exposure = false;
 		// Render preset hint if supported.
 		unsigned int render_preset = 0;
+
+		bool operator==(const SettingsData& other) const {
+			return 
+				(output_width == other.output_width) &&
+				(output_height == other.output_height) &&
+				(render_width == other.render_width) &&
+				(render_height == other.render_height) &&
+				(dynamic_resolution == other.dynamic_resolution) &&
+				(hdr == other.hdr) &&
+				(inverted_depth == other.inverted_depth) &&
+				(mvs_jittered == other.mvs_jittered) &&
+				(fabs(mvs_x_scale - other.mvs_x_scale) < FLT_EPSILON) &&
+				(fabs(mvs_y_scale - other.mvs_y_scale) < FLT_EPSILON) &&
+				(auto_exposure == other.auto_exposure) &&
+				(render_preset == other.render_preset);
+    	}
 	};
 
 	// Interface to be subclassed. Represents a handle.

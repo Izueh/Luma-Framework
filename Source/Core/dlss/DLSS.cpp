@@ -273,7 +273,7 @@ bool NGX::DLSS::UpdateSettings(SR::InstanceData* data, ID3D11DeviceContext* comm
 	bool feature_instance_created = custom_data->instance.super_sampling_feature != nullptr && custom_data->instance.runtime_params != nullptr;
 
 	// No need to re-instantiate DLSS "features" if all the params are the same
-	if (memcmp(&settings_data, &custom_data->settings_data, sizeof(SR::SettingsData)) == 0
+	if (settings_data == custom_data->settings_data
 		&& custom_data->instance.command_list.Get() == command_list && feature_instance_created)
 	{
 		return true;
@@ -337,6 +337,18 @@ bool NGX::DLSS::UpdateSettings(SR::InstanceData* data, ID3D11DeviceContext* comm
 	{
 		assert(quality_mode == NVSDK_NGX_PerfQuality_Value_DLAA);
 		quality_mode = NVSDK_NGX_PerfQuality_Value_DLAA; // Just in case (this isn't expected to happen)
+	}
+
+	// Release old DLSS instance before creating a new one to prevent memory leaks
+	if (custom_data->instance.super_sampling_feature != nullptr)
+	{
+		NVSDK_NGX_D3D11_ReleaseFeature(custom_data->instance.super_sampling_feature);
+		custom_data->unique_handles.erase(custom_data->instance.super_sampling_feature);
+	}
+	if (custom_data->instance.runtime_params != nullptr)
+	{
+		NVSDK_NGX_D3D11_DestroyParameters(custom_data->instance.runtime_params);
+		custom_data->unique_parameters.erase(custom_data->instance.runtime_params);
 	}
 
 	custom_data->settings_data = settings_data;

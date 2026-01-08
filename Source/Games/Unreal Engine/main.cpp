@@ -777,6 +777,18 @@ public:
       game_device_data.jitter = {0.0f, 0.0f};
    }
 
+   void CleanExtraSRResources(DeviceData& device_data) override
+   {
+      auto& game_device_data = GetGameDeviceData(device_data);
+      game_device_data.sr_motion_vectors = nullptr;
+      game_device_data.sr_motion_vectors_rtv = nullptr;
+      game_device_data.sr_motion_vectors_uav = nullptr;
+      game_device_data.sr_source_color = nullptr;
+      game_device_data.depth_buffer = nullptr;
+      game_device_data.sr_settings_data = nullptr;
+      game_device_data.sr_draw_data = nullptr;
+   }
+
    void UpdateLumaInstanceDataCB(CB::LumaInstanceDataPadded& data, CommandListData& cmd_list_data, DeviceData& device_data) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);

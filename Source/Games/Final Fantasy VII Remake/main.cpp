@@ -259,6 +259,7 @@ struct GameDeviceDataFF7Remake final : public GameDeviceData
    std::atomic<bool> has_drawn_title = false;
    std::atomic<bool> has_drawn_taa = false;
    std::atomic<bool> has_drawn_upscaling = false;
+   std::atomic<bool> has_drawn_gtao = false;
    std::atomic<bool> found_per_view_globals = false;
    std::atomic<bool> drs_active = false;
    std::atomic<uint32_t> jitterless_frames_count = 0;
@@ -666,6 +667,7 @@ public:
       // Replace the temporal AO pass with GTAO compute shaders
       if (gtao_enabled && original_shader_hashes.Contains(shader_hashes_AO_Temporal))
       {
+         game_device_data.has_drawn_gtao = true;
          // Check if compute shaders are available
          auto it_prefilter = device_data.native_compute_shaders.find(CompileTimeStringHash("FF7R XeGTAO Prefilter Depths"));
          auto it_main = device_data.native_compute_shaders.find(CompileTimeStringHash("FF7R XeGTAO Main Pass"));
@@ -719,7 +721,7 @@ public:
          }
          
          // Create GTAO resources if needed
-         if (!CreateGTAOResources(native_device, game_device_data, rtv_desc.Width, rtv_desc.Height))
+         if (!CreateGTAOResources(native_device, game_device_data, width, height))
          {
             return DrawOrDispatchOverrideType::None;
          }
@@ -1393,8 +1395,8 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      // NEW: Clean GTAO resources if resolution changed significantly or on cleanup
-      if (device_data.render_resolution.x != game_device_data.gtao_width)
+      // Clean GTAO resources if they exist but weren't used this frame (Prey pattern)
+      if (!game_device_data.has_drawn_gtao && game_device_data.gtao_working_depth.get())
       {
          game_device_data.CleanGTAOResources();
       }
@@ -1414,12 +1416,25 @@ public:
       }
       game_device_data.has_drawn_taa = false;
       device_data.has_drawn_sr = false;
+      game_device_data.has_drawn_gtao = false;
       game_device_data.found_per_view_globals = false;
       device_data.cb_luma_global_settings_dirty = true;
       static std::mt19937 random_generator(std::chrono::system_clock::now().time_since_epoch().count());
       static auto random_range = static_cast<float>((std::mt19937::max)() - (std::mt19937::min)());
       cb_luma_global_settings.GameSettings.custom_random = static_cast<float>(random_generator() + (std::mt19937::min)()) / random_range;
       cb_luma_global_settings.SRType = static_cast<uint32_t>(device_data.sr_type);
+   }
+
+   void CleanExtraSRResources(DeviceData& device_data) override
+   {
+      auto& game_device_data = GetGameDeviceData(device_data);
+      game_device_data.sr_motion_vectors = nullptr;
+      game_device_data.sr_motion_vectors_srv = nullptr;
+      game_device_data.sr_motion_vectors_rtv = nullptr;
+      game_device_data.sr_source_color = nullptr;
+      game_device_data.depth_buffer = nullptr;
+      game_device_data.sr_settings_data = nullptr;
+      game_device_data.sr_draw_data = nullptr;
    }
 
    void PrintImGuiAbout() override
@@ -1732,10 +1747,18 @@ public:
 
    static bool CreateGTAOResources(ID3D11Device* native_device, GameDeviceDataFF7Remake& game_device_data, UINT width, UINT height)
    {
-      if (game_device_data.gtao_width == width && game_device_data.gtao_height == height)
+      // Return early if resources already exist with correct dimensions
+      if (game_device_data.gtao_working_depth.get() && game_device_data.gtao_width == width && game_device_data.gtao_height == height)
          return true;
       
-      game_device_data.CleanGTAOResources();
+      // Clean old resources if dimensions changed
+      if (game_device_data.gtao_width != width || game_device_data.gtao_height != height)
+      {
+         game_device_data.CleanGTAOResources();
+      }
+      
+      game_device_data.gtao_width = width;
+      game_device_data.gtao_height = height;
       
       HRESULT hr;
       
@@ -1788,9 +1811,6 @@ public:
       
       hr = native_device->CreateShaderResourceView(game_device_data.gtao_ao_edges.get(), nullptr, &game_device_data.gtao_ao_edges_srv);
       if (FAILED(hr)) return false;
-      
-      game_device_data.gtao_width = width;
-      game_device_data.gtao_height = height;
       
       return true;
    }
