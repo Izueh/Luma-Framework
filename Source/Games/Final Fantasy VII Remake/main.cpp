@@ -1,12 +1,14 @@
 #define GAME_FF7_REMAKE 1
 
+#define ENABLE_SR 1
 #define ENABLE_NGX 1
-#define ENABLE_FIDELITY_SK 1
+#define ENABLE_FIDELITY_SK 0
+#define ENABLE_GTAO 1
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
-#define DISABLE_DISPLAY_COMPOSITION 0
-#define HIDE_DISPLAY_MODE 0
+#define DISABLE_DISPLAY_COMPOSITION 1
+#define HIDE_DISPLAY_MODE 1
 #ifdef NDEBUG
-#define ALLOW_SHADERS_DUMPING 1
+#define ALLOW_SHADERS_DUMPING 0
 #endif
 
 #include <chrono>
@@ -23,6 +25,7 @@ namespace
    std::unique_ptr<float4[]> downsample_buffer_data;
    std::unique_ptr<float4[]> upsample_buffer_data;
 
+#if ENABLE_GTAO
    // GTAO Constants
    constexpr size_t XE_GTAO_DEPTH_MIP_LEVELS = 5;
    constexpr UINT XE_GTAO_NUMTHREADS_X = 8;
@@ -33,6 +36,7 @@ namespace
    ShaderHashesList shader_hashes_AO_Temporal;
    ShaderHashesList shader_hashes_AO_Denoise1;
    ShaderHashesList shader_hashes_AO_Denoise2;
+#endif
 
    ShaderHashesList shader_hashes_TAA;
    ShaderHashesList shader_hashes_Title;
@@ -58,6 +62,7 @@ namespace
       new Luma::Settings::Section{
          .label = "Post Processing",
          .settings = {
+#if ENABLE_GTAO
             new Luma::Settings::Setting{
                .key = "EnableXEGTAO",
                .binding = &g_xegtao_enable,
@@ -67,6 +72,7 @@ namespace
                .label = "Enable GTAO",
                .tooltip = "Enable or disable GTAO ambient occlusion (Experimental). Default is Off."
             },
+#endif
             new Luma::Settings::Setting{
                .key = "TonemapType",
                .binding = &cb_luma_global_settings.GameSettings.tonemap_type,
@@ -123,6 +129,7 @@ namespace
                .parse = [](float value)
                { return value * 0.02f; }
             },
+#if ENABLE_SR
             new Luma::Settings::Setting{
                .key = "FXRCAS",
                .binding = &cb_luma_global_settings.GameSettings.custom_sharpness_strength,
@@ -140,6 +147,7 @@ namespace
                .parse = [](float value)
                { return value * 0.01f; }
             },
+#endif // ENABLE_SR
             new Luma::Settings::Setting{
                .key = "CustomLUTStrength",
                .binding = &cb_luma_global_settings.GameSettings.custom_lut_strength,
@@ -227,6 +235,7 @@ struct GameDeviceDataFF7Remake final : public GameDeviceData
    std::unique_ptr<SR::SuperResolutionImpl::DrawData> sr_draw_data;
 #endif // ENABLE_SR
 
+#if ENABLE_GTAO
    // NEW: GTAO Resources
    com_ptr<ID3D11Texture2D> gtao_working_depth;
    std::array<com_ptr<ID3D11UnorderedAccessView>, XE_GTAO_DEPTH_MIP_LEVELS> gtao_working_depth_uavs;
@@ -250,6 +259,7 @@ struct GameDeviceDataFF7Remake final : public GameDeviceData
       gtao_width = 0;
       gtao_height = 0;
    }
+#endif
 
    // NEW: Bloom History Resources
    com_ptr<ID3D11Texture2D> prev_bloom_texture;
@@ -259,7 +269,9 @@ struct GameDeviceDataFF7Remake final : public GameDeviceData
    std::atomic<bool> has_drawn_title = false;
    std::atomic<bool> has_drawn_taa = false;
    std::atomic<bool> has_drawn_upscaling = false;
+#if ENABLE_GTAO
    std::atomic<bool> has_drawn_gtao = false;
+#endif
    std::atomic<bool> found_per_view_globals = false;
    std::atomic<bool> drs_active = false;
    std::atomic<uint32_t> jitterless_frames_count = 0;
@@ -298,6 +310,7 @@ public:
 
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", reshade::api::pipeline_subobject_type::pixel_shader});
 
+#if ENABLE_GTAO
       // Register GTAO compute shaders - defines come from Settings.hlsl, recompiled when changed
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R XeGTAO Prefilter Depths"), 
          ShaderDefinition("Luma_FF7R_XeGTAO_impl", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs"));
@@ -305,6 +318,7 @@ public:
          ShaderDefinition("Luma_FF7R_XeGTAO_impl", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs"));
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R XeGTAO Denoise Pass"), 
          ShaderDefinition("Luma_FF7R_XeGTAO_impl", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs"));
+#endif
 
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12;
@@ -660,6 +674,7 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
+#if ENABLE_GTAO
       // ============================================================================
       // GTAO Implementation
       // ============================================================================
@@ -994,6 +1009,7 @@ public:
       // ============================================================================
       // END GTAO Implementation
       // ============================================================================
+#endif
 
       // Nothing more to do after tonemapping
       if (device_data.has_drawn_main_post_processing)
@@ -1395,36 +1411,41 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
+#if ENABLE_GTAO
       // Clean GTAO resources if they exist but weren't used this frame (Prey pattern)
       if (!game_device_data.has_drawn_gtao && game_device_data.gtao_working_depth.get())
       {
          game_device_data.CleanGTAOResources();
       }
+      game_device_data.has_drawn_gtao = false;
+
+#endif
 
       // if (game_device_data.has_drawn_title)
       //{
       //    ASSERT_ONCE(game_device_data.found_per_view_globals);
       // }
-
-      game_device_data.camera_cut = !device_data.taa_detected && !device_data.has_drawn_sr && !device_data.force_reset_sr;
-      device_data.has_drawn_main_post_processing = false;
-      game_device_data.has_drawn_upscaling = false;
+#if ENABLE_SR
       if (!game_device_data.has_drawn_taa)
       {
          device_data.sr_suppressed = false;
          device_data.taa_detected = false;
       }
-      game_device_data.has_drawn_taa = false;
       device_data.has_drawn_sr = false;
-      game_device_data.has_drawn_gtao = false;
+      game_device_data.camera_cut = !device_data.taa_detected && !device_data.has_drawn_sr && !device_data.force_reset_sr;
+      cb_luma_global_settings.SRType = static_cast<uint32_t>(device_data.sr_type);
+      game_device_data.has_drawn_upscaling = false;
+#endif
+      device_data.has_drawn_main_post_processing = false;
+      game_device_data.has_drawn_taa = false;
       game_device_data.found_per_view_globals = false;
       device_data.cb_luma_global_settings_dirty = true;
       static std::mt19937 random_generator(std::chrono::system_clock::now().time_since_epoch().count());
       static auto random_range = static_cast<float>((std::mt19937::max)() - (std::mt19937::min)());
       cb_luma_global_settings.GameSettings.custom_random = static_cast<float>(random_generator() + (std::mt19937::min)()) / random_range;
-      cb_luma_global_settings.SRType = static_cast<uint32_t>(device_data.sr_type);
    }
 
+#if ENABLE_SR
    void CleanExtraSRResources(DeviceData& device_data) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
@@ -1436,7 +1457,7 @@ public:
       game_device_data.sr_settings_data = nullptr;
       game_device_data.sr_draw_data = nullptr;
    }
-
+#endif
    void PrintImGuiAbout() override
    {
       ImGui::PushTextWrapPos(0.0f);
@@ -1526,15 +1547,18 @@ public:
       data.GameData.ResolutionScale = {game_device_data.resolution_scale, 1.0f / game_device_data.resolution_scale};
       data.GameData.DrewUpscaling = device_data.has_drawn_sr ? 1 : 0;
       data.GameData.ViewportRect = game_device_data.viewport_rect;
+#if ENABLE_GTAO
       // Populate GTAO Data
       data.GameData.GTAO.Near = near_plane;
       data.GameData.GTAO.Far = 10000.0f; // Approximate far plane
       data.GameData.GTAO.FOV = vert_fov;
+#endif
 
       can_sharpen = device_data.output_resolution.x == game_device_data.upscaled_render_resolution.x && device_data.output_resolution.y == game_device_data.upscaled_render_resolution.y;
       cb_luma_global_settings.GameSettings.can_sharpen = can_sharpen ? 1.f : 0.f;
    }
 
+#if ENABLE_SR
    static void UpdateLODBias(reshade::api::device* device)
    {
       DeviceData& device_data = *device->get_private_data<DeviceData>();
@@ -1581,6 +1605,7 @@ public:
          }
       }
    }
+#endif
 
    static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
    {
@@ -1645,6 +1670,7 @@ public:
             size_t thread_id = std::hash<std::thread::id>{}(std::this_thread::get_id());
             ASSERT_ONCE(!game_device_data.found_per_view_globals); // We found this twice? Shouldn't happen, we should probably reject one of the two
             bool has_jitters = float_data[118].x != 0.f || float_data[118].y != 0.f;
+#if ENABLE_SR
             if (has_jitters)
             {
                game_device_data.jitterless_frames_count = 0;
@@ -1665,6 +1691,8 @@ public:
                   }
                }
             }
+            UpdateLODBias(device);
+#endif // ENABLE_SR
 
             game_device_data.found_per_view_globals = true;
             // Extract jitter from constant buffer 1
@@ -1687,7 +1715,6 @@ public:
         
          device_data.cb_per_view_global_buffer_map_data = nullptr;
          device_data.cb_per_view_global_buffer = nullptr;
-         UpdateLODBias(device);
       }
    }
 
@@ -1745,6 +1772,7 @@ public:
       Luma::Settings::DrawSettings();
    }
 
+#if ENABLE_GTAO
    static bool CreateGTAOResources(ID3D11Device* native_device, GameDeviceDataFF7Remake& game_device_data, UINT width, UINT height)
    {
       // Return early if resources already exist with correct dimensions
@@ -1814,6 +1842,7 @@ public:
       
       return true;
    }
+#endif
 };
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
 {
@@ -1833,6 +1862,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_Tonemap.pixel_shaders.emplace(std::stoul("F68D39B5", nullptr, 16));
       shader_hashes_Velocity_Flatten.compute_shaders.emplace(std::stoul("4EB2EA5B", nullptr, 16));
       shader_hashes_Velocity_Gather.compute_shaders.emplace(std::stoul("FEE03685", nullptr, 16));
+#if ENABLE_GTAO
       shader_hashes_AO_Temporal.pixel_shaders.emplace(std::stoul("04BFE575", nullptr, 16));
       shader_hashes_AO_Denoise1.pixel_shaders.emplace(std::stoul("8BD60486", nullptr, 16));
       shader_hashes_AO_Denoise2.pixel_shaders.emplace(std::stoul("E6A8D4FB", nullptr, 16));
@@ -1842,6 +1872,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          {"XE_GTAO_QUALITY", '2', true, false, "GTAO Quality Level\n0 - Low\n1 - Medium\n2 - High (default)\n3 - Very High\n4 - Ultra\nHigher values use more samples for better quality but lower performance"}
       };
       shader_defines_data.append_range(game_shader_defines_data);
+#endif
 
 #if DEVELOPMENT
       // These make things messy in this game, given it renders at lower resolutions and then upscales and adds black bars beyond 16:9
@@ -1862,9 +1893,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(std::stoul("4EB2EA5B", nullptr, 16), "Velocity Flatten");
       forced_shader_names.emplace(std::stoul("FEE03685", nullptr, 16), "Velocity Gather");
       forced_shader_names.emplace(std::stoul("1D610CBA", nullptr, 16), "Ambient Occlusion");
+#if ENABLE_GTAO
       forced_shader_names.emplace(std::stoul("04BFE575", nullptr, 16), "Ambient Occlusion Temporal (GTAO Replaced)");
       forced_shader_names.emplace(std::stoul("8BD60486", nullptr, 16), "Ambient Occlusion Denoise 1 (Skipped for GTAO)");
       forced_shader_names.emplace(std::stoul("E6A8D4FB", nullptr, 16), "Ambient Occlusion Denoise 2 (GTAO Denoise)");
+#endif
 #endif
 
 #if !DEVELOPMENT
