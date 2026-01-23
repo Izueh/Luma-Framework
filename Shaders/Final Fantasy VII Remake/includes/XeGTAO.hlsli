@@ -84,7 +84,9 @@
 
 struct GTAOConstants
 {
-    float2 ViewportPixelSize;
+    float2 ViewportPixelSize;       // 1/fullTextureSize - for source texture UV calculations
+    float2 RenderPixelSize;         // 1/actualRenderSize - for working texture UV calculations
+    float2 ViewportOffset;          // Viewport offset in pixels (cb1[121].xy)
     float2 ViewportSize;
     float2 NDCToViewMul;
     float2 NDCToViewAdd;
@@ -97,7 +99,8 @@ struct GTAOConstants
     float ThinOccluderCompensation;
     float FinalValuePower;
     float DepthMIPSamplingOffset;
-    float2 SampleUVClamp;
+    float2 SampleUVClamp;           // UV clamp for source textures
+    float2 WorkingUVClamp;          // UV clamp for working textures (no viewport offset)
     float OcclusionTermScale;
 };
 
@@ -151,12 +154,14 @@ void XeGTAO_PrefilterDepths16x16(uint2 dispatchThreadID, uint2 groupThreadID, Te
     // MIP 0
     const uint2 baseCoord = dispatchThreadID;
     const uint2 pixCoord = baseCoord * 2;
-    // LUMA: Added clamping to GatherRed
-    float4 depths4 = sourceNDCDepth.GatherRed(depthSampler, min(float2(pixCoord * consts.ViewportPixelSize), consts.SampleUVClamp), int2(1, 1));
+    // Sample from source depth texture (game's depth buffer - uses viewport offset)
+    float2 sourceUV = (consts.ViewportOffset + pixCoord) * consts.ViewportPixelSize;
+    float4 depths4 = sourceNDCDepth.GatherRed(depthSampler, min(sourceUV, consts.SampleUVClamp), int2(1, 1));
     float depth0 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depths4.w));
     float depth1 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depths4.z));
     float depth2 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depths4.x));
     float depth3 = XeGTAO_ClampDepth(XeGTAO_ScreenSpaceToViewSpaceDepth(depths4.y));
+    // Write to working depth texture (our buffer - no viewport offset, uses pixCoord directly)
     outDepth0[pixCoord + uint2(0, 0)] = depth0;
     outDepth0[pixCoord + uint2(1, 0)] = depth1;
     outDepth0[pixCoord + uint2(0, 1)] = depth2;
@@ -237,10 +242,12 @@ float XeGTAO_PackEdges(float4 edgesLRTB)
 }
 
 // Inputs are screen XY and viewspace depth, output is viewspace position
-float3 XeGTAO_ComputeViewspacePosition(float2 screenPos, float viewspaceDepth, const GTAOConstants consts)
+// screenPos is pixel coordinate (0 to actualRenderSize)
+float3 XeGTAO_ComputeViewspacePosition(float2 pixelPos, float viewspaceDepth, const GTAOConstants consts)
 {
 	float3 ret;
-	ret.xy = (consts.NDCToViewMul * screenPos.xy + consts.NDCToViewAdd) * viewspaceDepth;
+	// NDCToViewMul already includes 1/actualRenderSize, so we multiply by pixel position directly
+	ret.xy = (consts.NDCToViewMul * pixelPos.xy + consts.NDCToViewAdd) * viewspaceDepth;
 	ret.z = viewspaceDepth;
 	return ret;
 }
@@ -262,11 +269,12 @@ float XeGTAO_FastACos(float inX)
 
 void XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal, Texture2D sourceViewspaceDepth, SamplerState depthSampler, RWTexture2D<unorm float2> outWorkingAOTermAndEdges, const GTAOConstants consts)
 {
-    float2 normalizedScreenPos = (pixCoord + 0.5) * consts.ViewportPixelSize;
+    // Working depth texture uses RenderPixelSize (it's sized to actualRenderSize)
+    float2 workingDepthUV = (pixCoord + 0.5) * consts.RenderPixelSize;
 
-    // LUMA: Added clamping to GatherRed
-    float4 valuesUL = sourceViewspaceDepth.GatherRed(depthSampler, min(float2(pixCoord * consts.ViewportPixelSize), consts.SampleUVClamp));
-    float4 valuesBR = sourceViewspaceDepth.GatherRed(depthSampler, min(float2(pixCoord * consts.ViewportPixelSize), consts.SampleUVClamp), int2(1, 1));
+    // Sample from working depth texture (our buffer - no viewport offset)
+    float4 valuesUL = sourceViewspaceDepth.GatherRed(depthSampler, workingDepthUV);
+    float4 valuesBR = sourceViewspaceDepth.GatherRed(depthSampler, workingDepthUV, int2(1, 1));
 
     // viewspace Z at the center
     float viewspaceZ = valuesUL.y; //sourceViewspaceDepth.SampleLevel( depthSampler, normalizedScreenPos, 0 ).x; 
@@ -283,7 +291,9 @@ void XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal, 
     // Move center pixel slightly towards camera to avoid imprecision artifacts due to depth buffer imprecision; offset depends on depth texture format used
     viewspaceZ *= 0.99999; // this is good for FP32 depth buffer
 
-    const float3 pixCenterPos = XeGTAO_ComputeViewspacePosition(normalizedScreenPos, viewspaceZ, consts);
+    // Use pixel coordinates for viewspace position (NDCToViewMul includes 1/actualRenderSize)
+    const float2 pixelCenterPos2D = pixCoord + 0.5;
+    const float3 pixCenterPos = XeGTAO_ComputeViewspacePosition(pixelCenterPos2D, viewspaceZ, consts);
     const float3 viewVec = normalize(-pixCenterPos);
 
     // prevents normals that are facing away from the view vector - xeGTAO struggles with extreme cases, but in Vanilla it seems rare so it's disabled by default
@@ -389,19 +399,23 @@ void XeGTAO_MainPass(uint2 pixCoord, float2 localNoise, float3 viewspaceNormal, 
                 // note: when sampling, using point_point_point or point_point_linear sampler works, but linear_linear_linear will cause unwanted interpolation between neighbouring depth values on the same MIP level!
                 const float mipLevel = clamp(log2(sampleOffsetLength) - consts.DepthMIPSamplingOffset, 0.0, XE_GTAO_DEPTH_MIP_LEVELS);
 
-                // Snap to pixel center (more correct direction math, avoids artifacts due to sampling pos not matching depth texel center - messes up slope - but adds other 
-                // artifacts due to them being pushed off the slice). Also use full precision for high res cases.
-                sampleOffset = round(sampleOffset) * consts.ViewportPixelSize;
+                // Snap to pixel center (offset is in pixels)
+                sampleOffset = round(sampleOffset);
+                
+                // Sample positions in pixel coordinates
+                float2 samplePixelPos0 = pixelCenterPos2D + sampleOffset;
+                float2 samplePixelPos1 = pixelCenterPos2D - sampleOffset;
+                
+                // Convert to UV for working depth sampling (uses RenderPixelSize)
+                float2 sampleUV0 = samplePixelPos0 * consts.RenderPixelSize;
+                float2 sampleUV1 = samplePixelPos1 * consts.RenderPixelSize;
 
-                float2 sampleScreenPos0 = normalizedScreenPos + sampleOffset;
-                // LUMA: Added clamping to SampleLevel
-                float SZ0 = sourceViewspaceDepth.SampleLevel(depthSampler, min(sampleScreenPos0, consts.SampleUVClamp), mipLevel).x;
-                float3 samplePos0 = XeGTAO_ComputeViewspacePosition(sampleScreenPos0, SZ0, consts);
+                // Sample from working depth texture
+                float SZ0 = sourceViewspaceDepth.SampleLevel(depthSampler, sampleUV0, mipLevel).x;
+                float3 samplePos0 = XeGTAO_ComputeViewspacePosition(samplePixelPos0, SZ0, consts);
 
-                float2 sampleScreenPos1 = normalizedScreenPos - sampleOffset;
-                // LUMA: Added clamping to SampleLevel
-                float SZ1 = sourceViewspaceDepth.SampleLevel(depthSampler, min(sampleScreenPos1, consts.SampleUVClamp), mipLevel).x;
-                float3 samplePos1 = XeGTAO_ComputeViewspacePosition(sampleScreenPos1, SZ1, consts);
+                float SZ1 = sourceViewspaceDepth.SampleLevel(depthSampler, sampleUV1, mipLevel).x;
+                float3 samplePos1 = XeGTAO_ComputeViewspacePosition(samplePixelPos1, SZ1, consts);
 
                 float3 sampleDelta0 = samplePos0 - pixCenterPos; // using lpfloat for sampleDelta causes precision issues
                 float3 sampleDelta1 = samplePos1 - pixCenterPos; // using lpfloat for sampleDelta causes precision issues
@@ -507,26 +521,21 @@ void XeGTAO_Denoise(uint2 pixCoordBase, Texture2D sourceAOTermAndEdges, SamplerS
     float weightBL[2];
     float weightBR[2];
 
-    // gather edge and visibility quads, used later
-    const float2 gatherCenter = float2(pixCoordBase.x, pixCoordBase.y) * consts.ViewportPixelSize;
-    
-    // LUMA: Added clamping to GatherGreen/Red
-    // Note: We clamp the base coordinate. The offsets in Gather are handled by hardware but might sample border color if outside. 
-    // Ideally we clamp the final UV, but Gather takes a single UV.
-    const float2 clampedGatherCenter = min(gatherCenter, consts.SampleUVClamp);
+    // Gather edge and visibility quads from working AO texture (uses RenderPixelSize)
+    const float2 gatherCenter = float2(pixCoordBase.x, pixCoordBase.y) * consts.RenderPixelSize;
 
-    float4 edgesQ0 = sourceAOTermAndEdges.GatherGreen(texSampler, clampedGatherCenter, int2(0, 0));
-    float4 edgesQ1 = sourceAOTermAndEdges.GatherGreen(texSampler, clampedGatherCenter, int2(2, 0));
-    float4 edgesQ2 = sourceAOTermAndEdges.GatherGreen(texSampler, clampedGatherCenter, int2(1, 2));
+    float4 edgesQ0 = sourceAOTermAndEdges.GatherGreen(texSampler, gatherCenter, int2(0, 0));
+    float4 edgesQ1 = sourceAOTermAndEdges.GatherGreen(texSampler, gatherCenter, int2(2, 0));
+    float4 edgesQ2 = sourceAOTermAndEdges.GatherGreen(texSampler, gatherCenter, int2(1, 2));
 
     float visQ0[4];
-    XeGTAO_DecodeGatherPartial(sourceAOTermAndEdges.GatherRed(texSampler, clampedGatherCenter, int2(0, 0)), visQ0);
+    XeGTAO_DecodeGatherPartial(sourceAOTermAndEdges.GatherRed(texSampler, gatherCenter, int2(0, 0)), visQ0);
     float visQ1[4];
-    XeGTAO_DecodeGatherPartial(sourceAOTermAndEdges.GatherRed(texSampler, clampedGatherCenter, int2(2, 0)), visQ1);
+    XeGTAO_DecodeGatherPartial(sourceAOTermAndEdges.GatherRed(texSampler, gatherCenter, int2(2, 0)), visQ1);
     float visQ2[4];
-    XeGTAO_DecodeGatherPartial(sourceAOTermAndEdges.GatherRed(texSampler, clampedGatherCenter, int2(0, 2)), visQ2);
+    XeGTAO_DecodeGatherPartial(sourceAOTermAndEdges.GatherRed(texSampler, gatherCenter, int2(0, 2)), visQ2);
     float visQ3[4];
-    XeGTAO_DecodeGatherPartial(sourceAOTermAndEdges.GatherRed(texSampler, clampedGatherCenter, int2(2, 2)), visQ3);
+    XeGTAO_DecodeGatherPartial(sourceAOTermAndEdges.GatherRed(texSampler, gatherCenter, int2(2, 2)), visQ3);
 
     for (int side = 0; side < 2; side++) {
         const int2 pixCoord = int2(pixCoordBase.x + side, pixCoordBase.y);

@@ -25,47 +25,19 @@ cbuffer cb0 : register(b0) { float4 cb0_data[21]; }
     #define STEPS_PER_SLICE 4.0
 #endif
 
-// Get resolution from LumaData
-// #define VIEWPORT_PIXEL_SIZE (cb1_data[126].zw) <-- Removed
-
 // ------------------------------------------------------------------------------------------------
 // Dynamic Resolution Handling
 // ------------------------------------------------------------------------------------------------
-
-// Calculate the scale ratio for internal use (Projection Matrix correction)
-#define DYNAMIC_RES_SCALE float2(cb1_data[122].x / cb1_data[126].x, cb1_data[122].y / cb1_data[126].y)
-
-// We set the Scale to 1.0 because VIEWPORT_PIXEL_SIZE is already based on the full texture size.
-// This ensures sampling UVs are correct (0 to Scale).
-#define XE_GTAO_RENDER_RESOLUTION_SCALE float2(1.0, 1.0)
-
-// We still clamp to the valid dynamic region
-#define XE_GTAO_SAMPLE_UV_CLAMP float2(cb1_data[122].x * VIEWPORT_PIXEL_SIZE.x, cb1_data[122].y * VIEWPORT_PIXEL_SIZE.y)
-
+// FF7R uses dynamic resolution where:
+// - cb1_data[126].xy = Full texture size (e.g., 1920x1080)
+// - cb1_data[126].zw = Full texture pixel size (1/1920, 1/1080)  
+// - cb1_data[122].xy = Actual render resolution (e.g., 1280x720 at 67% scale)
+//
+// For GTAO with dynamic resolution:
+// - ViewportPixelSize uses full texture pixel size (for UV calculations)
+// - NDCToViewMul_x_PixelSize uses actual render resolution pixel size (for screen-space radius)
+// - SampleUVClamp limits sampling to the valid rendered region
 // ------------------------------------------------------------------------------------------------
-// Camera Parameters
-// ------------------------------------------------------------------------------------------------
-
-static float g_TanHalfFovY;
-static float g_TanHalfFovX;
-
-
-// Correct the View Space reconstruction.
-// Since our UVs only go from 0 to Scale, we need to stretch the Multiplier so that 'Scale' maps to the edge of the screen.
-#define NDC_TO_VIEW_MUL float2((g_TanHalfFovX * 2.0) / DYNAMIC_RES_SCALE.x, (g_TanHalfFovY * -2.0) / DYNAMIC_RES_SCALE.y)
-#define NDC_TO_VIEW_ADD float2(-g_TanHalfFovX, g_TanHalfFovY)
-
-// Effect radius: cb0[18].w * 500 is world-space radius
-#define EFFECT_RADIUS (cb0_data[18].w)
-#define RADIUS_MULTIPLIER 500.0
-
-// Thin occluder compensation from game: cb0[18].z
-#define THIN_OCCLUDER_COMPENSATION (cb0_data[18].z)
-
-#define EFFECT_FALLOFF_RANGE 0.5
-
-// Final visibility power adjustment
-#define FINAL_VALUE_POWER 1.0
 
 // ------------------------------------------------------------------------------------------------
 // Depth Handling
@@ -147,23 +119,35 @@ RWTexture2D<unorm float4> final_output : register(u0);
 
 void ComputeParams(inout GTAOConstants constants)
 {
+    // Full texture size and pixel size (for source texture UV calculations)
     constants.ViewportPixelSize = cb1_data[126].zw;
     constants.ViewportSize = cb1_data[126].xy;
+    
+    // Viewport offset - where the rendered region starts in the texture
+    constants.ViewportOffset = cb1_data[121].xy;
 
-    float2 renderResolutionScale = float2(cb1_data[122].x / cb1_data[126].x, cb1_data[122].y / cb1_data[126].y);
+    // Actual render resolution
+    float2 actualRenderSize = cb1_data[122].xy;
+    float2 actualRenderPixelSize = cb1_data[122].zw;
+    
+    // Render pixel size for working texture UV calculations
+    constants.RenderPixelSize = actualRenderPixelSize;
 
     // FOV calculation
     float fov = LumaData.GameData.GTAO.FOV;
     if (fov <= 0.001f) fov = 1.0472f; // Default to 60 degrees in radians
 
     float tanHalfFovY = tan(fov * 0.5);
-    float aspectRatio = cb1_data[122].x / cb1_data[122].y;
+    float aspectRatio = actualRenderSize.x / actualRenderSize.y;
     float tanHalfFovX = tanHalfFovY * aspectRatio;
 
-    constants.NDCToViewMul = float2((tanHalfFovX * 2.0) / renderResolutionScale.x, (tanHalfFovY * -2.0) / renderResolutionScale.y);
+    // NDC to view conversion
+    // Maps pixel coordinate in [0, actualRenderSize] to viewspace
+    constants.NDCToViewMul = float2(tanHalfFovX * 2.0, tanHalfFovY * -2.0) * actualRenderPixelSize;
     constants.NDCToViewAdd = float2(-tanHalfFovX, tanHalfFovY);
 
-    constants.NDCToViewMul_x_PixelSize = constants.NDCToViewMul * constants.ViewportPixelSize;
+    // NDCToViewMul_x_PixelSize represents viewspace size of one actual render pixel
+    constants.NDCToViewMul_x_PixelSize = float2(tanHalfFovX * 2.0, tanHalfFovY * -2.0) * actualRenderPixelSize;
 
     constants.EffectRadius = cb0_data[18].w;
     constants.EffectFalloffRange = 0.5;
@@ -174,7 +158,12 @@ void ComputeParams(inout GTAOConstants constants)
     constants.FinalValuePower = 1.0;
     constants.DepthMIPSamplingOffset = 3.3;
 
-    constants.SampleUVClamp = float2(cb1_data[122].x * constants.ViewportPixelSize.x, cb1_data[122].y * constants.ViewportPixelSize.y);
+    // UV clamp for source textures (with viewport offset)
+    constants.SampleUVClamp = (constants.ViewportOffset + actualRenderSize) * constants.ViewportPixelSize;
+    
+    // UV clamp for working textures (no viewport offset, uses RenderPixelSize)
+    constants.WorkingUVClamp = float2(1.0, 1.0); // Working textures are sized to actualRenderSize
+    
     constants.OcclusionTermScale = 1.5;
 }
 
@@ -231,12 +220,13 @@ void main_pass_cs(uint2 dtid: SV_DispatchThreadID)
 {
     GTAOConstants constants;
     ComputeParams(constants);
-    const float2 normalizedScreenPos = (dtid + 0.5) * constants.ViewportPixelSize;
-
+    
+    // Sample normal from game's normal buffer (needs viewport offset for source textures)
+    float2 normalSampleUV = (constants.ViewportOffset + dtid + 0.5) * constants.ViewportPixelSize;
+    normalSampleUV = min(normalSampleUV, constants.SampleUVClamp);
+    
     // Load world-space normal (stored as 0-1, convert to -1 to +1)
-    // LUMA: Removed manual scaling here as normalizedScreenPos is already correct texture UV
-    float2 samplePos = min(normalizedScreenPos, constants.SampleUVClamp);
-    float3 worldNormal = tex1.SampleLevel(smp, samplePos, 0).xyz;
+    float3 worldNormal = tex1.SampleLevel(smp, normalSampleUV, 0).xyz;
     worldNormal = worldNormal * 2.0 - 1.0;
     worldNormal = normalize(worldNormal);
 

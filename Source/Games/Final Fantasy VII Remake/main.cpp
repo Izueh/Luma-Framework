@@ -824,15 +824,21 @@ public:
          D3D11_TEXTURE2D_DESC rtv_desc;
          rtv_texture->GetDesc(&rtv_desc);
          
-         // Use render resolution when DRS is active, otherwise use texture size
+         // Use render resolution from global buffer (updated in OnUnmapBufferRegion from cb1[122])
+         // This is set early in the frame before any draw calls
          UINT width = static_cast<UINT>(device_data.render_resolution.x);
          UINT height = static_cast<UINT>(device_data.render_resolution.y);
          
+         // Fallback to render target size if render_resolution not set
          if (width == 0 || height == 0)
          {
             width = rtv_desc.Width;
             height = rtv_desc.Height;
          }
+         
+         // Get constant buffers that the shader needs
+         com_ptr<ID3D11Buffer> ps_cbs[2];
+         native_device_context->PSGetConstantBuffers(0, 2, &ps_cbs[0]);
          
          // Create GTAO resources if needed
          if (!CreateGTAOResources(native_device, game_device_data, width, height))
@@ -843,10 +849,6 @@ public:
          // Get sampler (should be point sampler)
          com_ptr<ID3D11SamplerState> ps_samplers[1];
          native_device_context->PSGetSamplers(0, 1, &ps_samplers[0]);
-
-         // Get constant buffers that the shader needs
-         com_ptr<ID3D11Buffer> ps_cbs[2];
-         native_device_context->PSGetConstantBuffers(0, 2, &ps_cbs[0]);
 
          // Set Luma constant buffers before caching state (like UE4 does)
          if (!updated_cbuffers)
@@ -987,9 +989,10 @@ public:
          D3D11_TEXTURE2D_DESC rtv_desc;
          rtv_texture->GetDesc(&rtv_desc);
 
-         // Use render resolution when DRS is active
-         UINT width = static_cast<UINT>(device_data.render_resolution.x);
-         UINT height = static_cast<UINT>(device_data.render_resolution.y);
+         // Use the same resolution as the GTAO resources that were created in the main pass
+         // This ensures consistency between passes
+         UINT width = game_device_data.gtao_width;
+         UINT height = game_device_data.gtao_height;
          
          if (width == 0 || height == 0)
          {
@@ -1000,6 +1003,10 @@ public:
          // Get sampler
          com_ptr<ID3D11SamplerState> ps_samplers[1];
          native_device_context->PSGetSamplers(0, 1, &ps_samplers[0]);
+         
+         // Get constant buffers that the shader needs
+         com_ptr<ID3D11Buffer> ps_cbs[2];
+         native_device_context->PSGetConstantBuffers(0, 2, &ps_cbs[0]);
 
          // Check if the original render target supports UAV
          bool rtv_supports_uav = (rtv_desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0;
@@ -1072,6 +1079,10 @@ public:
          
          ID3D11SamplerState* samplers[] = { ps_samplers[0].get() };
          native_device_context->CSSetSamplers(0, 1, samplers);
+         
+         // Set constant buffers (cb0, cb1 for shader parameters)
+         ID3D11Buffer* cbs[] = { ps_cbs[0].get(), ps_cbs[1].get() };
+         native_device_context->CSSetConstantBuffers(0, 2, cbs);
          
          // Dispatch: 8x8 threads, each thread processes 2 horizontal pixels (when not in debug mode)
          // In debug mode, each thread processes 1 pixel
@@ -1784,6 +1795,13 @@ public:
             // Extract jitter from constant buffer 1
             projection_jitters.x = float_data[118].x;
             projection_jitters.y = float_data[118].y;
+            
+            // Update render resolution from cb1[122] early so GTAO can use it before TAA runs
+            // cb1[122].xy = actual render size (the rendered region within the texture)
+            if (float_data[122].x > 0 && float_data[122].y > 0)
+            {
+               device_data.render_resolution = {float_data[122].x, float_data[122].y};
+            }
 
             Math::Matrix44F projection_matrix;
             std::memcpy(&projection_matrix, &float_data[24], sizeof(Math::Matrix44F));
