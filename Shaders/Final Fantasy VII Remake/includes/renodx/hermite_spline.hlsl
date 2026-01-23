@@ -1,8 +1,8 @@
 #ifndef SRC_HERMITE_SPLINE_HLSL
 #define SRC_HERMITE_SPLINE_HLSL
 
-#include "Color.hlsl"
-#include "Math.hlsl"
+#include "..\..\..\Includes\Color.hlsl"
+#include "..\..\..\Includes\Math.hlsl"
 
 float Rescale(float x, float x_min, float x_max, float y_min = 0, float y_max = 1, bool clamp = false) {
     float value = lerp(y_min, y_max, (x - x_min) / (x_max - x_min));

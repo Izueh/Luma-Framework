@@ -9758,7 +9758,7 @@ namespace
 
                         ImGui::PushID(index);
                         ImGui::PushStyleColor(ImGuiCol_Text, text_color);
-                        if (ImGui::Selectable(name.str().c_str(), is_selected, ImGuiSelectableFlags_AllowItemOverlap))
+                        if (ImGui::Selectable(name.str().c_str(), is_selected, ImGuiSelectableFlags_AllowOverlap))
                         {
                            selected_index = index;
                            changed_selected = true;
@@ -10135,7 +10135,7 @@ namespace
                                           ImGui::NewLine();
                                           ImGui::Text("Tracked Constant Buffer:");
                                           ImGui::Text("Resource Hash: %s", device_data.track_buffer_data.hash.c_str());
-                                          if (ImGui::BeginChild("TrackBufferScroll", ImVec2(0, 500), ImGuiChildFlags_Border))
+                                          if (ImGui::BeginChild("TrackBufferScroll", ImVec2(0, 500), ImGuiChildFlags_Borders))
                                           {
                                              // TODO: match with the shader assembly cbs etc (if the data is available)
                                              // TODO: add a matrix 4x4 view?
@@ -10200,7 +10200,7 @@ namespace
 
                                  ImGui::NewLine();
                                  ImGui::Text("State Analysis:");
-                                 if (ImGui::BeginChild("StateAnalysisScroll", ImVec2(0, -FLT_MIN), ImGuiChildFlags_Border)) // I prefer it without a separate scrolling box for now
+                                 if (ImGui::BeginChild("StateAnalysisScroll", ImVec2(0, -FLT_MIN), ImGuiChildFlags_Borders)) // I prefer it without a separate scrolling box for now
                                  {
                                     bool is_first_draw = true;
 
