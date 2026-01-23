@@ -2194,8 +2194,23 @@ namespace
 #if DEVELOPMENT || TEST
       ASSERT_ONCE_MSG(api == reshade::api::device_api::d3d11, "Luma only supports DirectX 11 at the moment, add \"CHECK_GRAPHICS_API_COMPATIBILITY\" to ignore calls from other APIs");
 #else
-      if (api != reshade::api::device_api::d3d11)
-         MessageBoxA(NULL, "The application tried to create a non DirectX 11 device. Luma currently only supports DirectX 11, the application might crash.", NAME, MB_SETFOREGROUND);
+      static bool skip_api_compatibility_check = false;
+      if (!skip_api_compatibility_check)
+      {
+         const std::shared_lock lock(s_mutex_reshade);
+         reshade::get_config_value(nullptr, NAME, "SkipAPICompatibilityCheck", skip_api_compatibility_check);
+      }
+      if (api != reshade::api::device_api::d3d11 && !skip_api_compatibility_check)
+      {
+         int ret = MessageBoxA(NULL, "The application tried to create a non DirectX 11 device. Luma currently only supports DirectX 11, the application might crash.\nPress \"OK\" to continue.\nPress \"Cancel\" to skip this message in the future.", NAME, MB_SETFOREGROUND | MB_OKCANCEL);
+         if (ret == IDCANCEL)
+         {
+            const std::unique_lock lock(s_mutex_reshade);
+            reshade::set_config_value(nullptr, NAME, "SkipAPICompatibilityCheck", true);
+            skip_api_compatibility_check = true;
+         }
+         return false;
+      }
 #endif
 #endif
 

@@ -18,6 +18,18 @@ namespace CB
 		float custom_hdr_videos;
         float custom_random;
         float can_sharpen;
+
+        // Color Grading
+        float exposure;
+        float highlights;
+        float shadows;
+        float contrast;
+        float flare;
+        float saturation;
+        float highlight_saturation;
+        float hue_correction_strength;
+        float hue_correction_type; // 0 = input, 1 = output
+        float blowout;		
     };
 
     struct GTAOData

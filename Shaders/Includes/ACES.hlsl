@@ -475,6 +475,85 @@ namespace ACES
        return rgb_pre;
    }
 
+   float ODTToneMap(float x_pre, float min_y, float max_y)
+   {
+       const float min_lum = min_y;
+       const float max_lum = max_y;
+       // Aces-dev has more expensive version
+       // AcesParams PARAMS = init_aces_params(minY, maxY);
+
+       static const float2x2 BENDS_LOW_TABLE = float2x2(
+           MIN_STOP_RRT, 0.18, MIN_STOP_SDR, 0.35);
+
+       static const float2x2 BENDS_HIGH_TABLE = float2x2(
+           MAX_STOP_SDR, 0.89, MAX_STOP_RRT, 0.90);
+
+       float min_lum_log10 = log10(min_lum);
+       float max_lum_log10 = log10(max_lum);
+       const float aces_min = LookUpAcesMin(min_lum_log10);
+       const float aces_max = LookUpAcesMax(max_lum_log10);
+       // float3 MIN_PT = float3(lookup_ACESmin(minLum), minLum, 0.0);
+       static const float3 MID_PT = float3(0.18, 4.8, 1.55);
+       // float3 MAX_PT = float3(lookup_ACESmax(maxLum), maxLum, 0.0);
+       // float coefs_low[5];
+       // float coefs_high[5];
+       float3 coefs_low_a;
+       float3 coefs_low_b;
+       float3 coefs_high_a;
+       float3 coefs_high_b;
+
+       float2 log_min = float2(log10(aces_min), min_lum_log10);
+       static const float2 LOG_MID = float2(log10(MID_PT.xy));
+       float2 log_max = float2(log10(aces_max), max_lum_log10);
+
+       float knot_inc_low = (LOG_MID.x - log_min.x) / 3.0;
+       // float halfKnotInc = (logMid.x - log_min.x) / 6.0;
+
+       // Determine two lowest coefficients (straddling minPt)
+       // coefs_low[0] = (MIN_PT.z * (log_min.x- 0.5 * knot_inc_low)) + ( log_min.y - MIN_PT.z * log_min.x);
+       // coefs_low[1] = (MIN_PT.z * (log_min.x+ 0.5 * knot_inc_low)) + ( log_min.y - MIN_PT.z * log_min.x);
+       // NOTE: if slope=0, then the above becomes just
+       coefs_low_a.x = log_min.y;
+       coefs_low_a.y = coefs_low_a.x;
+       // leaving it as a variable for now in case we decide we need non-zero slope extensions
+
+       // Determine two highest coefficients (straddling midPt)
+       float min_coef = LOG_MID.y - MID_PT.z * LOG_MID.x;
+       coefs_low_b.x = (MID_PT.z * (LOG_MID.x - 0.5 * knot_inc_low)) + (LOG_MID.y - MID_PT.z * LOG_MID.x);
+       coefs_low_b.y = (MID_PT.z * (LOG_MID.x + 0.5 * knot_inc_low)) + (LOG_MID.y - MID_PT.z * LOG_MID.x);
+       coefs_low_b.z = coefs_low_b.y;
+
+       // Middle coefficient (which defines the "sharpness of the bend") is linearly interpolated
+       float pct_low = Interpolate1D(BENDS_LOW_TABLE, log2(aces_min / 0.18));
+       coefs_low_a.z = log_min.y + pct_low * (LOG_MID.y - log_min.y);
+
+       float knot_inc_high = (log_max.x - LOG_MID.x) / 3.0;
+       // float halfKnotInc = (log_max.x - logMid.x) / 6.0;
+
+       // Determine two lowest coefficients (straddling midPt)
+       // float minCoef = ( logMid.y - MID_PT.z * logMid.x);
+       coefs_high_a.x = (MID_PT.z * (LOG_MID.x - 0.5 * knot_inc_high)) + min_coef;
+       coefs_high_a.y = (MID_PT.z * (LOG_MID.x + 0.5 * knot_inc_high)) + min_coef;
+
+       // Determine two highest coefficients (straddling maxPt)
+       // coefs_high[3] = (MAX_PT.z * (log_max.x-0.5*knotIncHigh)) + ( log_max.y - MAX_PT.z * log_max.x);
+       // coefs_high[4] = (MAX_PT.z * (log_max.x+0.5*knotIncHigh)) + ( log_max.y - MAX_PT.z * log_max.x);
+       // NOTE: if slope=0, then the above becomes just
+       coefs_high_b.x = log_max.y;
+       coefs_high_b.y = coefs_high_b.x;
+       coefs_high_b.z = coefs_high_b.y;
+       // leaving it as a variable for now in case we decide we need non-zero slope extensions
+
+       // Middle coefficient (which defines the "sharpness of the bend") is linearly interpolated
+
+       float pct_high = Interpolate1D(BENDS_HIGH_TABLE, log2(aces_max / 0.18));
+       coefs_high_a.z = LOG_MID.y + pct_high * (log_max.y - LOG_MID.y);
+
+       float x_post = SSTS(x_pre, float3(log_min.x, log_min.y, 0), float3(LOG_MID.x, LOG_MID.y, MID_PT.z), float3(log_max.x, log_max.y, 0), coefs_low_a, coefs_low_b, coefs_high_a, coefs_high_b);
+
+       return x_post;
+   }
+
    float3 ODTToneMap(float3 rgb_pre, float min_y, float max_y, bool dark_to_dim = false, bool legacy_desat = false)
    {
        const float min_lum = min_y;

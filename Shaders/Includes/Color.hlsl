@@ -479,6 +479,24 @@ float3 Linear_to_PQ(float3 LinearColor, int clampType = GCT_DEFAULT, float Expon
 	return pq;
 }
 
+float Linear_to_PQ(float LinearColor, int clampType = GCT_DEFAULT, float Exponent = 1.0)
+{
+	float colorSign = Sign_Fast(LinearColor);
+	if (clampType == GCT_POSITIVE)
+		LinearColor = max(LinearColor, 0.f);
+	else if (clampType == GCT_SATURATE)
+		LinearColor = saturate(LinearColor);
+	else if (clampType == GCT_MIRROR)
+		LinearColor = abs(LinearColor);
+	float colorPow = pow(LinearColor, PQ_constant_M1);
+	float numerator = PQ_constant_C1 + PQ_constant_C2 * colorPow;
+	float denominator = 1.f + PQ_constant_C3 * colorPow;
+	float pq = pow(numerator / denominator, PQ_constant_M2 * Exponent);
+	if (clampType == GCT_MIRROR)
+		return pq * colorSign;
+	return pq;
+}
+
 float3 PQ_to_Linear(float3 ST2084Color, int clampType = GCT_DEFAULT, float Exponent = 1.0)
 {
 	float3 ST2084ColorSign = Sign_Fast(ST2084Color);
@@ -494,6 +512,24 @@ float3 PQ_to_Linear(float3 ST2084Color, int clampType = GCT_DEFAULT, float Expon
 	float3 linearColor = pow(numerator / denominator, 1.f / PQ_constant_M1);
 	if (clampType == GCT_MIRROR)
 		return linearColor * ST2084ColorSign;
+	return linearColor;
+}
+
+float PQ_to_Linear(float ST2084Color, int clampType = GCT_DEFAULT, float Exponent = 1.0)
+{
+	float colorSign = Sign_Fast(ST2084Color);
+	if (clampType == GCT_POSITIVE)
+		ST2084Color = max(ST2084Color, 0.f);
+	else if (clampType == GCT_SATURATE)
+		ST2084Color = saturate(ST2084Color);
+	else if (clampType == GCT_MIRROR)
+		ST2084Color = abs(ST2084Color);
+	float colorPow = pow(ST2084Color, 1.f / (PQ_constant_M2 * Exponent));
+	float numerator = max(colorPow - PQ_constant_C1, 0.f);
+	float denominator = PQ_constant_C2 - (PQ_constant_C3 * colorPow);
+	float linearColor = pow(numerator / denominator, 1.f / PQ_constant_M1);
+	if (clampType == GCT_MIRROR)
+		return linearColor * colorSign;
 	return linearColor;
 }
 

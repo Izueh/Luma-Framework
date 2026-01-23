@@ -169,11 +169,33 @@ float3 LUT_PQ_to_Linear(float3 color)
 }
 
 float getMidGray() {
-  float3 lutInputColor = saturate(Linear_to_PQ(0.18f * (100.f / HDR10_MaxWhiteNits)));
-  float3 lutResult = SampleLUT(lut2Tex, lutInputColor);
-  float3 lutOutputColor_bt2020 = PQ_to_Linear(lutResult, GCT_POSITIVE) * (HDR10_MaxWhiteNits / 250.f);
+  // Input: mid-gray 0.18 in SDR linear, scaled by 0.01 for PQ input (18 nits / 10000 = 0.0018)
+//   float3 lutInputColor = saturate(Linear_to_PQ(0.18f * 0.01f));
+  
+//   // First sample lut1 to get the intermediate result
+//   float3 lut1Result = SampleLUT(lut1Tex, lutInputColor);
+  
+// #if _A8EB118F
+//   // Vignette path: lut3Tex produces the graded ACES color
+//   float3 lutResult = SampleLUT(lut3Tex, lut1Result);
+// #else
+//   // Standard path: lut2Tex produces the graded ACES color
+//   float3 lutResult = SampleLUT(lut2Tex, lut1Result);
+// #endif
+  
+//   // Convert both to linear nits
+//   float3 lut1Linear = LUT_PQ_to_Linear(lut1Result) ;
+//   float3 lutLinear = LUT_PQ_to_Linear(lutResult);
 
-  return GetLuminance(lutOutputColor_bt2020, CS_BT2020);
+//   // Apply the same blend the game uses: lerp(lut2/3Linear, lut1Linear, cb0[26].z)
+//   float3 blendedLinear = lerp(lutLinear, lut1Linear, cb0[26].z);
+  
+//   // blendedLinear is in nits (0-10000 range)
+//   // Normalize to 250 nits paper white
+//   float midGrayNits = GetLuminance(blendedLinear, CS_BT709);
+//   float midGrayNormalized = midGrayNits / 250.f;
+
+  return 0.3414f;
 }
 
 #if _D950DA01 || _3B489929 || _8D04181D
@@ -490,7 +512,9 @@ void main(
     }
 
     float3 colorSample = r2.xyz;
-    float3 pqColor = Linear_to_PQ(colorSample / (HDR10_MaxWhiteNits / sRGB_WhiteLevelNits));
+    // Original shader multiplies by 0.01 before PQ encoding
+    // This assumes input is in nits scale where 100.0 = SDR reference white (100 nits)
+    float3 pqColor = Linear_to_PQ(colorSample * (100.0f / HDR10_MaxWhiteNits));
     r4.xyz = pqColor;
 
     r3.xyz = SampleLUT(lut1Tex, pqColor);
@@ -528,10 +552,11 @@ void main(
     float3 lut3Linear = LUT_PQ_to_Linear(lut3Sample);
     r3.xyz = lut3Linear;
 
-    float3 lut1OutputLinear = LUT_PQ_to_Linear(lut1Output) - r3.xyz;
+    float3 lut1OutputLinear = LUT_PQ_to_Linear(lut1Output);
     r2.xyz = lut1OutputLinear;
 
-    r2.xyz = 1.0f * lut1OutputLinear + lut3Linear; // blend LUT3 vs pre-LUT3
+    // Original: lerp from lut3Linear to lut1OutputLinear based on cb0[26].z
+    r2.xyz = lerp(lut3Linear, lut1OutputLinear, cb0[26].z);
     
     r1.zw = cb0[21].xy * r1.xy;
     r1.zw = max(cb0[22].xy, r1.zw);
@@ -602,7 +627,8 @@ void main(
     // r2.xyz = cb0[25].xxx * r2.xyz + r2.www; // adjust chroma contrast threshold
 #else
 
-    r3.xyz = SampleLUT(lut2Tex, lut1Sample);
+    // Sample LUT2 using lut1Output (not lut1Sample) - this respects the SDR fallback selection
+    r3.xyz = SampleLUT(lut2Tex, lut1Output);
 
     float3 lut2Sample = r3.xyz;
     float3 lut2Linear = LUT_PQ_to_Linear(lut2Sample);
@@ -612,7 +638,9 @@ void main(
     float3 lut1Linear = LUT_PQ_to_Linear(lut1Output);
     r2.xyz = lut1Linear;
 
-    r2.xyz = 1.0f * lut1Linear + lut2Linear;
+    // Original: r2.xyz = cb0[26].zzz * (lut1Linear - lut2Linear) + lut2Linear;
+    // This is a lerp from lut2Linear to lut1Linear based on cb0[26].z
+    r2.xyz = lerp(lut2Linear, lut1Linear, cb0[26].z);
 
   #if _5CD12E67
     r2.xyz = ApplyOverlay(r2.xyz, fogTex, fogSampler, pixelPos.xy);

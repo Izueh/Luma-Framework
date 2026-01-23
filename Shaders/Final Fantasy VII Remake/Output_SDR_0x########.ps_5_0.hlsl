@@ -347,7 +347,8 @@ void main(
       r2.xyz = RCAS(int2(v0.xy), 0, 0x7FFFFFFF, LumaSettings.GameSettings.custom_sharpness_strength, colorTex, dummyFloat2Texture, 1.f, true , float4(r2.xyz, 1.0f)).rgb;
     }
     float3 colorSample = r2.xyz;
-    float3 pqColor = Linear_to_PQ(colorSample / (HDR10_MaxWhiteNits / sRGB_WhiteLevelNits));
+    // Original shader multiplies by 0.01 before PQ encoding
+    float3 pqColor = Linear_to_PQ(colorSample * 0.01f);
 
     r3.xyz = SampleLUT(lut1Tex, pqColor.xyz);
 

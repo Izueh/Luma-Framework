@@ -3,8 +3,8 @@
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
-#define DISABLE_DISPLAY_COMPOSITION 0
-#define HIDE_DISPLAY_MODE 0
+#define DISABLE_DISPLAY_COMPOSITION 1
+#define HIDE_DISPLAY_MODE 1
 #ifdef NDEBUG
 #define ALLOW_SHADERS_DUMPING 1
 #endif
@@ -68,22 +68,6 @@ namespace
                .tooltip = "Enable or disable GTAO ambient occlusion (Experimental). Default is Off."
             },
             new Luma::Settings::Setting{
-               .key = "TonemapType",
-               .binding = &cb_luma_global_settings.GameSettings.tonemap_type,
-               .type = Luma::Settings::SettingValueType::INTEGER,
-               .default_value = 0.f,
-               .can_reset = true,
-               .label = "Tone Map Type",
-               .tooltip = "Tone mapping algorithm to use",
-               .labels = {"ACES 1", "ACES 2"},
-               .min = 0.f,
-               .max = 1.f,
-               .is_enabled = []()
-               { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR && (DEVELOPMENT || TEST); },
-               .is_visible = []()
-               { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR && (DEVELOPMENT || TEST); }
-            },
-            new Luma::Settings::Setting{
                .key = "FXBloom",
                .binding = &cb_luma_global_settings.GameSettings.custom_bloom,
                .type = Luma::Settings::SettingValueType::FLOAT,
@@ -140,21 +124,7 @@ namespace
                .parse = [](float value)
                { return value * 0.01f; }
             },
-            new Luma::Settings::Setting{
-               .key = "CustomLUTStrength",
-               .binding = &cb_luma_global_settings.GameSettings.custom_lut_strength,
-               .type = Luma::Settings::SettingValueType::FLOAT,
-               .default_value = 100.f,
-               .can_reset = true,
-               .label = "LUT Strength",
-               .tooltip = "LUT strength multiplier. Default is 100.",
-               .min = 0.f,
-               .max = 100.f,
-               .is_visible = []()
-               { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR; },
-               .parse = [](float value)
-               { return value * 0.01f; }
-            },
+
             new Luma::Settings::Setting{
                .key = "FXHDRVideos",
                .binding = &cb_luma_global_settings.GameSettings.custom_hdr_videos,
@@ -167,6 +137,150 @@ namespace
                .max = 1,
                .is_visible = []()
                { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR; }
+            }
+         }
+      },
+      new Luma::Settings::Section{
+         .label = "Color Grading",
+         .is_visible = []()
+         { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR && (TEST || DEVELOPMENT); },
+         .settings = {
+            new Luma::Settings::Setting{
+               .key = "TonemapType",
+               .binding = &cb_luma_global_settings.GameSettings.tonemap_type,
+               .type = Luma::Settings::SettingValueType::INTEGER,
+               .default_value = 1.f,
+               .can_reset = true,
+               .label = "Tone Map Type",
+               .tooltip = "Tone mapping algorithm to use",
+               .labels = {"Vanilla","Reinhard", "ACES"},
+               .min = 0.f,
+               .max = 2.f,
+               .is_enabled = []()
+               { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR; },
+               .is_visible = []()
+               { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR; }
+            },
+            new Luma::Settings::Setting{
+               .key = "CustomLUTStrength",
+               .binding = &cb_luma_global_settings.GameSettings.custom_lut_strength,
+               .type = Luma::Settings::SettingValueType::FLOAT,
+               .default_value = 92.f,
+               .can_reset = true,
+               .label = "LUT Strength",
+               .tooltip = "LUT strength multiplier.",
+               .min = 0.f,
+               .max = 100.f,
+               .is_visible = []()
+               { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR; },
+               .parse = [](float value)
+               { return value * 0.01f; }
+            },
+            new Luma::Settings::Setting{
+               .key = "ColorGradeHueCorrection",
+               .binding = &cb_luma_global_settings.GameSettings.hue_correction_strength,
+               .type = Luma::Settings::SettingValueType::FLOAT,
+               .default_value = 0.3f,
+               .can_reset = true,
+               .label = "Hue Shift",
+               .min = 0.f,
+               .max = 1.f,
+               .format = "%.2f",
+            },
+            new Luma::Settings::Setting{
+               .key = "ColorGradeExposure",
+               .binding = &cb_luma_global_settings.GameSettings.exposure,
+               .type = Luma::Settings::SettingValueType::FLOAT,
+               .default_value = 1.f,
+               .can_reset = true,
+               .label = "Exposure",
+               .min = 0.f,
+               .max = 2.f,
+               .format = "%.2f",
+            },
+            new Luma::Settings::Setting{
+               .key = "ColorGradeHighlights",
+               .binding = &cb_luma_global_settings.GameSettings.highlights,
+               .type = Luma::Settings::SettingValueType::FLOAT,
+               .default_value = 50.f,
+               .can_reset = true,
+               .label = "Highlights",
+               .min = 0.f,
+               .max = 100.f,
+               .parse = [](float value)
+               { return value * 0.02f;}
+            },
+            new Luma::Settings::Setting{
+               .key = "ColorGradeShadows",
+               .binding = &cb_luma_global_settings.GameSettings.shadows,
+               .type = Luma::Settings::SettingValueType::FLOAT,
+               .default_value = 50.f,
+               .can_reset = true,
+               .label = "Shadows",
+               .min = 0.f,
+               .max = 100.f,
+               .parse = [](float value)
+               { return value * 0.02f; }
+            },
+            new Luma::Settings::Setting{
+               .key = "ColorGradeContrast",
+               .binding = &cb_luma_global_settings.GameSettings.contrast,
+               .type = Luma::Settings::SettingValueType::FLOAT,
+               .default_value = 50.f,
+               .can_reset = true,
+               .label = "Contrast",
+               .min = 0.f,
+               .max = 100.f,
+               .parse = [](float value)
+               { return value * 0.02f; }
+            },
+            new Luma::Settings::Setting{
+               .key = "ColorGradeSaturation",
+               .binding = &cb_luma_global_settings.GameSettings.saturation,
+               .type = Luma::Settings::SettingValueType::FLOAT,
+               .default_value = 50.f,
+               .can_reset = true,
+               .label = "Saturation",
+               .min = 0.f,
+               .max = 100.f,
+               .parse = [](float value)
+               { return value * 0.02f; }
+            },
+            new Luma::Settings::Setting{
+               .key = "ColorGradeHighlightSaturation",
+               .binding = &cb_luma_global_settings.GameSettings.highlight_saturation,
+               .type = Luma::Settings::SettingValueType::FLOAT,
+               .default_value = 50.f,
+               .can_reset = true,
+               .label = "Highlight Saturation",
+               .min = 0.f,
+               .max = 100.f,
+               .parse = [](float value)
+               { return value * 0.02f; }
+            },
+            new Luma::Settings::Setting{
+               .key = "ColorGradeBlowout",
+               .binding = &cb_luma_global_settings.GameSettings.blowout,
+               .type = Luma::Settings::SettingValueType::FLOAT,
+               .default_value = 20.f,
+               .can_reset = true,
+               .label = "Blowout",
+               .min = 0.f,
+               .max = 100.f,
+               .parse = [](float value)
+               { return value * 0.02f; }
+            },
+            new Luma::Settings::Setting{
+               .key = "ColorGradeFlare",
+               .binding = &cb_luma_global_settings.GameSettings.flare,
+               .type = Luma::Settings::SettingValueType::FLOAT,
+               .default_value = 0.f,
+               .can_reset = true,
+               .label = "Flare",
+               .min = 0.f,
+               .max = 100.f,
+               .parse = [](float value)
+               { return value * 0.02f; }
             }
          }
       },
