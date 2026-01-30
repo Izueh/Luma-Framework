@@ -12,6 +12,22 @@ namespace
 
    typedef uint32_t uint;
 
+
+   struct int2
+   {
+      int32_t x;
+      int32_t y;
+
+      friend bool operator==(const int2& lhs, const int2& rhs)
+      {
+         return lhs.x == rhs.x && lhs.y == rhs.y;
+      }
+      friend bool operator!=(const int2& lhs, const int2& rhs)
+      {
+         return !(lhs == rhs);
+      }
+   };
+
    struct uint2
    {
       uint x;
