@@ -1,3 +1,6 @@
+#include "GameCBuffers.hlsl"
+#include "../Includes/Common.hlsl"
+
 #include "../Includes/Color.hlsl"
 #include "../Includes/ColorGradingLUT.hlsl"
 #include "../Includes/Oklab.hlsl"
