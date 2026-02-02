@@ -749,8 +749,8 @@ void main(
     r0.x = r0.x * 0.000977517106 + r0.w;
     color.z = saturate(r0.y ? r0.x : r0.w);
   }
-    
-#if EARLY_DISPLAY_ENCODING //scRGB OUTPUT
+
+#if DEVELOPMENT && EARLY_DISPLAY_ENCODING //scRGB OUTPUT
     color = PQ_to_Linear(color);
     color *= (HDR10_MaxWhiteNits / sRGB_WhiteLevelNits);
     color = BT2020_To_BT709(color);

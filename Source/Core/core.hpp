@@ -688,6 +688,9 @@ namespace
    WNDPROC game_window_custom_proc = nullptr;
 #endif
    thread_local bool last_swapchain_linear_space = false;
+#if GAME_FF7_REMAKE
+   thread_local reshade::api::format last_swapchain_format = reshade::api::format::r10g10b10a2_unorm;
+#endif
    thread_local bool waiting_on_upgraded_resource_init = false;
    thread_local reshade::api::resource_desc upgraded_resource_init_desc = {};
    thread_local void* upgraded_resource_init_data = {};
@@ -2642,7 +2645,9 @@ namespace
 
       // Note that occasionally this breaks after resizing the swapchain, because some games resize the swapchain maintaining whatever format it had before
       last_swapchain_linear_space = desc.back_buffer.texture.format == reshade::api::format::r8g8b8a8_unorm_srgb || desc.back_buffer.texture.format == reshade::api::format::b8g8r8a8_unorm_srgb || desc.back_buffer.texture.format == reshade::api::format::r16g16b16a16_float;
-
+#if GAME_FF7_REMAKE
+      last_swapchain_format = desc.back_buffer.texture.format;
+#endif
       if (swapchain_format_upgrade_type == TextureFormatUpgradesType::AllowedEnabled && swapchain_upgrade_type > SwapchainUpgradeType::None)
       {
          ASSERT_ONCE(desc.back_buffer.texture.format == reshade::api::format::r10g10b10a2_unorm || desc.back_buffer.texture.format == reshade::api::format::r8g8b8a8_unorm || desc.back_buffer.texture.format == reshade::api::format::r8g8b8a8_unorm_srgb || desc.back_buffer.texture.format == reshade::api::format::b8g8r8a8_unorm || desc.back_buffer.texture.format == reshade::api::format::b8g8r8a8_unorm_srgb || desc.back_buffer.texture.format == reshade::api::format::r16g16b16a16_float); // Just a bunch of formats we encountered and we are sure we can upgrade (or that have already been upgraded)
@@ -2838,10 +2843,28 @@ namespace
          bool set_color_space = false;
          if (swapchain_format_upgrade_type == TextureFormatUpgradesType::AllowedEnabled && swapchain_upgrade_type > SwapchainUpgradeType::None)
          {
+#if !GAME_FF7_REMAKE
             if (swapchain_upgrade_type == SwapchainUpgradeType::scRGB)
                color_space = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
             else         
                color_space = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+#else // FF7 Remake 
+            if (swapchain_upgrade_type == SwapchainUpgradeType::scRGB)
+            {
+               color_space = DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
+            }
+            else
+            {
+               if (last_swapchain_format == reshade::api::format::r16g16b16a16_float)
+               {
+                  color_space = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+               }
+               else
+               {
+                  color_space = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+               }
+            }
+#endif  
             set_color_space = true;
          }
          // Note: if we are not upgrading the swapchain, we don't know the original color space,
@@ -2856,8 +2879,8 @@ namespace
 #if 0 // 10 bit could be SDR or HDR, it's impossible to know for sure... For now, assume SDR given that Luma could always upgrade the swapchain to HDR10 anyway
             else if (swapchain_desc.BufferDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM)
             {
-               color_space = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
-            }
+                      color_space = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+                   }
 #endif
             set_color_space = false;
          }

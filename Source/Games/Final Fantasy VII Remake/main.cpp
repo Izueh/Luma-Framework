@@ -151,9 +151,9 @@ namespace
                .can_reset = true,
                .label = "Tone Map Type",
                .tooltip = "Tone mapping algorithm to use",
-               .labels = {"Vanilla","Reinhard", "ACES"},
+               .labels = {"Vanilla","Neutwo"},
                .min = 0.f,
-               .max = 2.f,
+               .max = 1.f,
                .is_enabled = []()
                { return cb_luma_global_settings.DisplayMode == DisplayModeType::HDR; },
                .is_visible = []()
@@ -2003,11 +2003,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       old_shader_file_names.emplace("Velocity_Flatten_0x4EB2EA5B.cs_5_0.hlsl");
       old_shader_file_names.emplace("Velocity_Gather_0xFEE03685.cs_5_0.hlsl");
 #endif
+
 #if !DEVELOPMENT
-      force_disable_display_composition = true; // Game already has an HDR toggle and we just inherit that
-#endif
+      swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
+      swapchain_upgrade_type = SwapchainUpgradeType::HDR10;
+#else
       swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
+#endif
+
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       // Texture upgrades (8 bit unorm and 11 bit float etc to 16 bit float)
       texture_upgrade_formats = {

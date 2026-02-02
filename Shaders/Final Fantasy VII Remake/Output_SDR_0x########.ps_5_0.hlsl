@@ -490,7 +490,7 @@ void main(
       color.xyz = saturate(r0.yzw ? r2.xyz : r1.xyz);
     }
 
-#if EARLY_DISPLAY_ENCODING
+#if DEVELOPMENT && EARLY_DISPLAY_ENCODING
     color.xyz = gamma_to_linear(color.xyz, GCT_MIRROR, 2.2f);
 #endif
 
