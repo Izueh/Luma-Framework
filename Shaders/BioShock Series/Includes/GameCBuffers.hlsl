@@ -14,8 +14,8 @@ namespace CB
 		float FogCorrectionIntensity;
 		float FogIntensity;
 		float BloomIntensity;
-		float BloomRadius;
-	};
+        float BloomRadius;
+    };
 	
 	struct LumaGameData
 	{
