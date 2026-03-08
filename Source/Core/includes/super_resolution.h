@@ -39,6 +39,33 @@ namespace SR
 		}
 		return false;
 	}
+	
+	// E.g. use base 2 for x and base 3 for y.
+	// Index should go from 0 to phases-1.
+	// Returns [-0.5 0.5].
+	constexpr float HaltonSequence(unsigned int index, unsigned int base)
+	{
+      index += 1; // Add 1 to avoid skewing towards 0, given that 0 always results in 0.
+		float result = 0.0f;
+		float inv_base = 1.0f / float(base);
+		float fraction = inv_base;
+		while (index > 0)
+		{
+			result += float(index % base) * fraction;
+			index /= base;
+			fraction *= inv_base;
+		}
+		return result - 0.5;
+	}
+	
+	static float GetMipLODBias(float render_height, float output_height)
+	{
+		return std::log2(float(render_height) / float(max(render_height, output_height))) - 1.f;
+	}
+	static float GetMipLODBias(unsigned int render_height, unsigned int output_height)
+	{
+		return GetMipLODBias(float(render_height), float(output_height));
+	}
 
 	struct SettingsData
 	{
@@ -150,10 +177,10 @@ namespace SR
 			float jitter_x = 0.f; // In UV space (from -0.5 to 0.5, not influenced by resolution)
 			float jitter_y = 0.f; // In UV space (from -0.5 to 0.5, not influenced by resolution)
 			float vert_fov = 0.f; // Radians. Ignored if 0 (not always needed)
-			float near_plane = 0.f;
-			float far_plane = 1.f;
+			float near_plane = 0.01f; // In meters
+			float far_plane = 1000.f; // In meters
 			float time_delta = -1.f; // Seconds. Ignored if < 0 (not always needed)
-			unsigned long long frame_index = 0; // TODO: figure out why using uint64_t breaks the build here
+			unsigned long long frame_index = 0;
 			float user_sharpness = -1.f; // Ignored/default if < 0. Neutral at 0 (at least in FSR).
 		};
 
@@ -162,7 +189,16 @@ namespace SR
 		virtual bool Draw(const InstanceData* data, ID3D11DeviceContext* command_list, const DrawData& draw_data) { return false; }
 
 		// Returns the suggested or requested period, depending on the implementation.
-		virtual int GetJitterPhases(const SR::InstanceData* data) const { return 1; } // TODO: implement around and fine the best values for DLSS etc
+		// All implementations work well with Halton for now, so always use that.
+		virtual int GetJitterPhases(const SR::InstanceData* data) const { return 1 /*jitters disabled*/; }
+
+		// Returns the suggested mip lod bias for the current resolution scale.
+		// This assumes the jitter phases are increased with lower resolution scales.
+		// -1 at native resolution as we'd still be running TAA.
+		static float GetMipLODBias(const SR::InstanceData* data)
+		{
+			return SR::GetMipLODBias(data->settings_data.render_height, data->settings_data.output_height);
+		}
 		
 		// Whether the implementation leaves the state dirty compared to when it begun
 		virtual bool NeedsStateRestoration() const { return false; }

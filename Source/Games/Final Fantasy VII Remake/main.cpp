@@ -3,10 +3,6 @@
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
-#if !DEVELOPMENT
-#define DISABLE_DISPLAY_COMPOSITION 1
-#endif
-#define HIDE_DISPLAY_MODE 1
 #ifdef NDEBUG
 #define ALLOW_SHADERS_DUMPING 1
 #endif
@@ -2158,9 +2154,9 @@ public:
          std::shared_lock shared_lock_samplers(s_mutex_samplers);
 
          const auto prev_texture_mip_lod_bias_offset = device_data.texture_mip_lod_bias_offset;
-         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.taa_detected && device_data.cloned_pipeline_count != 0)
+         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.taa_detected)
          {
-            device_data.texture_mip_lod_bias_offset = std::log2(device_data.render_resolution.y / game_device_data.upscaled_render_resolution.y) - 1.f; // This results in -1 at output res
+            device_data.texture_mip_lod_bias_offset = SR::GetMipLODBias(device_data.render_resolution.y, device_data.output_resolution.y); // This results in -1 at output res
          }
          else
          {

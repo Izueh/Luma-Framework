@@ -336,7 +336,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // The game also has a bug where in windowed mode, if the resolution matches the screen (or maybe even if not?), the swapchain is resized to a slightly higher resolution than the screen.
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolutionWidth;
       enable_indirect_texture_format_upgrades = true;
-      enable_automatic_indirect_texture_format_upgrades = true;
+      enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
 
       // Prevents the game's fullscreen exclusive mode from being clunky, though it still is, and windowed in this game doesn't respect the target size, actually going above it
       force_borderless = true;

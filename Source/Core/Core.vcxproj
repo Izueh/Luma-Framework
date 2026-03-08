@@ -602,6 +602,7 @@
     <ClCompile Include="dlss\DLSS.cpp" />
     <ClCompile Include="core.hpp" />
     <ClCompile Include="fsr\FSR.cpp" />
+    <ClCompile Include="includes\instance_data.cpp" />
     <ClCompile Include="utils\system.cpp" />
   </ItemGroup>
   <ItemGroup>

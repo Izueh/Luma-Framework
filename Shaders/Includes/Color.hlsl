@@ -546,7 +546,7 @@ float3 linearToLog_internal(float3 linearColor, float3 logGrey = LogGrey)
 {
 	return (log2(linearColor) / LogLinearRange) - (log2(LogLinearGrey) / LogLinearRange) + logGrey;
 }
-// "logColor" is expected to be != 0.
+// "logColor" is expected to be != 0 (is it...? Why?).
 float3 logToLinear_internal(float3 logColor, float3 logGrey = LogGrey)
 {
 #pragma warning( disable : 4122 ) // Note: this doesn't work here
@@ -555,7 +555,7 @@ float3 logToLinear_internal(float3 logColor, float3 logGrey = LogGrey)
 }
 
 
-// Perceptual encoding functions (more accurate than HDR10 PQ).
+// Perceptual encoding functions (more "accurate" than HDR10 PQ).
 // "linearColor" is expected to be >= 0 and with a white point around 80-100.
 // These function are "normalized" so that they will map a linear color value of 0 to a log encoding of 0.
 float3 linearToLog(float3 linearColor, int clampType = GCT_DEFAULT, float3 logGrey = LogGrey)
@@ -873,7 +873,7 @@ float3 EmulateShadowOffset(float3 Color, float3 Offset, bool LinearInOut = true,
 	// This means 0 will stay 0, while most of the image will still be affected.
 	// This will also prevent levels from accidentally generating invalid negative values in HDR,
 	// that would sometimes expand the gamut, but more often simply generate weird or broken colors.
-	float range = LinearInOut ? 3.0 : 2.0; // Arbitrary but decent // TODO: try range...
+	float range = LinearInOut ? 3.0 : 2.0; // Arbitrary but decent // TODO: try range... Also possibly expand it even more, with little effect beyond *1.5, but at least we'd avoid broken gradients
 	float center = LinearInOut ? MidGray : 0.5; // A bit random but should be fine
 	float3 alpha = saturate(Color / abs(Offset * range));
 

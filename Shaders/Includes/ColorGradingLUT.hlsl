@@ -688,8 +688,8 @@ float3 SampleLUT(LUT_TEXTURE_TYPE lut, SamplerState samplerState, float3 color, 
       }
     }
 
-    indV2 = min(floorBaseCoords + indV2, chartMax);
-    indV3 = min(floorBaseCoords + indV3, chartMax);
+    indV2 = min(floorBaseCoords + indV2, chartMaxUint);
+    indV3 = min(floorBaseCoords + indV3, chartMaxUint);
 
     const float3 v2 = lut.Load(ConditionalConvert3DTo2DLUTCoordinates(indV2, chartDimUint)).rgb;
     const float3 v3 = lut.Load(ConditionalConvert3DTo2DLUTCoordinates(indV3, chartDimUint)).rgb;

@@ -167,10 +167,10 @@ float3 SampleLUTTexel(int3 pixelCoords)
 #endif
   return 0.0;
 }
-float3 SampleLUTCoordi(float3 uv)
+float3 SampleLUTCoords(float3 uvw)
 {
 #if COLOR_GRADING_LUT
-  return ColorCorrectionTexture.Sample(ColorCorrectionTexture_s, uv).rgb;
+  return ColorCorrectionTexture.Sample(ColorCorrectionTexture_s, uvw).rgb;
 #endif
   return 0.0;
 }
@@ -445,7 +445,7 @@ void main(
 
   float3 blurredScene = BlurredSceneTexture.Sample(BlurredSceneTexture_s, uv).xyz;
   float3 bloomedScene = BloomTexture.Sample(BloomTexture_s, uv).xyz;
-  float3 secondaryBloomedScene = SecondaryBloomTexture.Sample(SecondaryBloomTexture_s, uv).xyz; // TODO: expose bloom scale user setting? It's quite strong...
+  float3 secondaryBloomedScene = SecondaryBloomTexture.Sample(SecondaryBloomTexture_s, uv).xyz;
 #if 0 // Mirror lens dirt around its aspect ratio, so it doesn't stretch in UW
     float2 lensDirtSize;
     LensDirtTexture.GetDimensions(lensDirtSize.x, lensDirtSize.y); // This looked non stretched in its native aspect ratio

@@ -28,6 +28,8 @@ namespace NGX
 		virtual bool UpdateSettings(SR::InstanceData* data, ID3D11DeviceContext* command_list, const SR::SettingsData& settings_data) override;
 
 		virtual bool Draw(const SR::InstanceData* data, ID3D11DeviceContext* command_list, const DrawData& draw_data) override;
+		
+		virtual int GetJitterPhases(const SR::InstanceData* data) const;
 	};
 }
 

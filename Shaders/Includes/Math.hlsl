@@ -116,9 +116,9 @@ bool3 IsInfinite_Strict(float3 x)
 
 float InverseLerp(float a, float b, float value)
 {
-  // Avoid division by zero
+  // Avoid division by zero, and default to the mid point (neutral)
   if (a == b) {
-    return 0.0;
+    return 0.5;
   }
   return (value - a) / (b - a);
 }
@@ -260,11 +260,23 @@ bool cubeCoordinatesIntersection(out float3 intersection, float3 coordinates, fl
   return true;
 }
 
+// Mirror + repeat
 float2 MirrorUV(float2 uv)
 {
+#if 1
 	float2 modded = fmod( uv, 2.0 );
 	modded += ( modded < 0 ) ? 2.0 : 0.0; // Ensure positive values
   return ( modded <= 1.0 ) ? modded : ( 2.0 - modded );
+#else // TODO: cheaper version?
+  return 1.0 - abs(frac(uv * 0.5) * 2.0 - 1.0);
+#endif
+}
+
+// Repeat (no mirror)
+float2 RepeatUV(float2 uv)
+{
+    uv = abs(frac(uv * 0.5) * 2.0 - 1.0);
+    return uv;
 }
 
 #endif // SRC_MATH_HLSL

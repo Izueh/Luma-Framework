@@ -35,7 +35,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
 
       enable_indirect_texture_format_upgrades = true;
-      enable_automatic_indirect_texture_format_upgrades = true;
+      enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
 
       // ### Check which of these are needed and remove the rest ###
       texture_upgrade_formats = {

@@ -37,6 +37,10 @@ Texture2D tex : register(t0);
 #define LUMA_BLOOM_TINT float3(1.0, 1.0, 1.0)
 #endif
 
+#ifndef LUMA_BLOOM_SCALE
+#define LUMA_BLOOM_SCALE 1.0
+#endif
+
 //
 
 // Fullscreen triangle VS.
@@ -99,7 +103,7 @@ float4 bloom_prefilter_ps(float4 pos : SV_Position, float2 texcoord : TEXCOORD) 
     color *= LUMA_BLOOM_TINT;
     color *= luma * rcp(max(1e-6, GetLuminance(color)));
 
-    return float4(color, 1.0);
+    return float4(color * LUMA_BLOOM_SCALE, 1.0);
 }
 
 float4 bloom_downsample_ps(float4 pos : SV_Position, float2 texcoord : TEXCOORD) : SV_Target

@@ -292,7 +292,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 #if DEVELOPMENT // Seemingly not needed in this game but makes development easier
       enable_indirect_texture_format_upgrades = true;
 #endif
-      enable_automatic_indirect_texture_format_upgrades = true;
+      enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
 
       redirected_shader_hashes["Tonemap"] =
          {

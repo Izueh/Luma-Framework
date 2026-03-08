@@ -571,7 +571,7 @@ public:
                TraceDrawCallData trace_draw_call_data;
                trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
                trace_draw_call_data.command_list = native_device_context;
-               trace_draw_call_data.custom_name = "DLSS Draw Exposure"; // TODO: rename ~all text with DLSS in the name to "SR"
+               trace_draw_call_data.custom_name = "Super Resolution Draw Exposure"; // TODO: rename ~all text with DLSS in the name to "SR"
                // Re-use the RTV data for simplicity
                GetResourceInfo(game_device_data.exposure_buffer_gpu.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
                cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
@@ -1902,7 +1902,7 @@ public:
             const auto prev_texture_mip_lod_bias_offset = device_data.texture_mip_lod_bias_offset;
             if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.taa_detected && device_data.cloned_pipeline_count != 0)
             {
-               device_data.texture_mip_lod_bias_offset = std::log2(device_data.render_resolution.y / device_data.output_resolution.y) - 1.f; // This results in -1 at output res
+               device_data.texture_mip_lod_bias_offset = SR::GetMipLODBias(device_data.render_resolution.y, device_data.output_resolution.y);
             }
             else
             {

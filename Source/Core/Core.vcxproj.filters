@@ -11,6 +11,9 @@
     <ClCompile Include="fsr\FSR.cpp">
       <Filter>FSR</Filter>
     </ClCompile>
+    <ClCompile Include="includes\instance_data.cpp">
+      <Filter>Includes</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="DLSS">

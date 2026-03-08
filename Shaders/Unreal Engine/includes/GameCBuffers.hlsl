@@ -9,7 +9,9 @@ namespace CB
 {
 	struct LumaGameSettings
     {
-        uint4 _dummy;
+        float HDRHighlightsHuePreservation;
+        float HDRHighlightsChrominancePreservation;
+        float HDRChrominance;
 	};
 
 	struct LumaGameData

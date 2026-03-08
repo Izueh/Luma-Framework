@@ -251,13 +251,14 @@ public:
       }
       else // bioshock_game == BioShockGame::BioShock_Infinite
       {
-         g_bloom_nmips = 5;
+         g_bloom_nmips = 6;
          g_bloom_sigmas.resize(g_bloom_nmips);
-         g_bloom_sigmas[0] = 2.0f;
-         g_bloom_sigmas[1] = 2.0f;
-         g_bloom_sigmas[2] = 2.0f;
+         g_bloom_sigmas[0] = 1.5f;
+         g_bloom_sigmas[1] = 1.0f;
+         g_bloom_sigmas[2] = 1.0f;
          g_bloom_sigmas[3] = 1.0f;
          g_bloom_sigmas[4] = 1.0f;
+         g_bloom_sigmas[5] = 1.0f;
       }
    }
 
@@ -1007,7 +1008,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       if (bioshock_game == BioShockGame::BioShock_Infinite)
       {
          enable_indirect_texture_format_upgrades = true; // TODO: try
-         enable_automatic_indirect_texture_format_upgrades = true;
+         enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
       }
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
       enable_upgraded_texture_resource_copy_redirection = true; // TODO: investigate more if it happens (thus disabled in dev mode)
@@ -1043,7 +1044,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       }
       else if (bioshock_game == BioShockGame::BioShock_Infinite)
       {
-         pixel_shader_hashes_BSI_BloomPrefilter.pixel_shaders = { 0xC39285AF, 0x6F4F1E8F };
+         pixel_shader_hashes_BSI_BloomPrefilter.pixel_shaders = { 0xC39285AF, 0x6F4F1E8F, 0x9113DE68, 0xAD03A911 };
          pixel_shader_hashes_Tonemap.pixel_shaders = { Shader::Hash_StrToNum("29D570D8") };
          pixel_shader_hashes_AA.pixel_shaders = { Shader::Hash_StrToNum("27BD2A2E"), Shader::Hash_StrToNum("5CDD5AB1") }; // Different qualities
          pixel_shader_hashes_depth_copy.pixel_shaders = { Shader::Hash_StrToNum("496E549B") };

@@ -238,4 +238,42 @@ namespace Math
       fov_rad = std::atan(std::tan(fov_rad / 2.f) * (target_aspect_target / source_aspect_target)) * 2.f;
       return fov_rad / scaling;
    }
+
+   template <size_t N>
+   std::vector<std::byte> MakeFloatsPatternS(const float (&v)[N])
+   {
+       std::vector<std::byte> out;
+       out.resize(N * sizeof(float));
+
+       for (size_t i = 0; i < N; ++i)
+       {
+           std::uint32_t bits = 0;
+           std::memcpy(&bits, &v[i], sizeof(bits)); // Avoids strict-aliasing UB
+
+           out[i * 4 + 0] = std::byte((bits >>  0) & 0xFFu);
+           out[i * 4 + 1] = std::byte((bits >>  8) & 0xFFu);
+           out[i * 4 + 2] = std::byte((bits >> 16) & 0xFFu);
+           out[i * 4 + 3] = std::byte((bits >> 24) & 0xFFu);
+       }
+
+       return out;
+   }
+
+   template <size_t N>
+   consteval auto MakeFloatsPattern(const std::array<float, N>& in)
+      -> std::array<std::byte, N * sizeof(float)>
+   {
+       std::array<std::byte, N * sizeof(float)> out{};
+
+       for (size_t i = 0; i < N; ++i)
+       {
+           auto b = std::bit_cast<std::array<std::byte, 4>>(in[i]);
+           out[i * 4 + 0] = b[0];
+           out[i * 4 + 1] = b[1];
+           out[i * 4 + 2] = b[2];
+           out[i * 4 + 3] = b[3];
+       }
+
+       return out;
+   }
 }

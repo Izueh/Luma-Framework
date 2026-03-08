@@ -114,7 +114,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type         = SwapchainUpgradeType::scRGB;
       texture_format_upgrades_type   = TextureFormatUpgradesType::AllowedEnabled;
       enable_indirect_texture_format_upgrades = true; // Might not be needed but works with it!
-      enable_automatic_indirect_texture_format_upgrades = true;
+      enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
       texture_upgrade_formats = {
             reshade::api::format::r8g8b8a8_unorm,
             reshade::api::format::r8g8b8a8_unorm_srgb,

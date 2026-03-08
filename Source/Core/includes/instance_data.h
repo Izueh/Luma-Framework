@@ -183,6 +183,10 @@ struct TraceDrawCallData
    std::string ds_hash = {}; // Ptr hash (not content hash)
    std::string ds_debug_name = {}; // Debug name of the texture or the view
 
+   // TODO: these might not always be filled up!
+   bool any_input_resources_format_upgraded = false;
+   bool any_output_resources_format_upgraded = false;
+
    bool IsRTVValid(size_t index) const { return rtv_format[index] != DXGI_FORMAT_UNKNOWN && rtv_format[index] != DXGI_FORMAT(-1); }
    bool IsSRVValid(size_t index) const { return srv_format[index] != DXGI_FORMAT_UNKNOWN && srv_format[index] != DXGI_FORMAT(-1); }
    bool IsUAVValid(size_t index) const { return uav_format[index] != DXGI_FORMAT_UNKNOWN && uav_format[index] != DXGI_FORMAT(-1); }
@@ -191,7 +195,8 @@ struct TraceDrawCallData
    const char* custom_name = "Unknown";
 };
 
-// Applies to command lists and command queue (DirectX 11 command list and deferred or immediate contexts, though usually it's for "ID3D11DeviceContext")
+// Applies to command lists and command queue (DirectX 11 command list and deferred or immediate contexts, though usually it's for "ID3D11DeviceContext").
+// All runtime states are thread safe as long as they were in the original implementation.
 struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
 {
    bool is_primary = false; // Immediate/Primary (as opposed to Async/Secondary/Deferred)
@@ -204,6 +209,11 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
    // Whether the luma global settings have been set in this command list (device context), in case it was a deferred one
    bool async_set_cb_luma_global_settings = false;
 
+   std::atomic<bool> write_finished{false};
+
+   // Only used when checking for "ChainTextureFormatUpgradesType::DirectAndIndirectDependencies", as it might be disabled at runtime.
+   uint enable_chain_indirect_texture_format_upgrades = 0; // TODO: ChainTextureFormatUpgradesType
+
    reshade::api::pipeline pipeline_state_original_compute_shader = reshade::api::pipeline(0);
    reshade::api::pipeline pipeline_state_original_vertex_shader = reshade::api::pipeline(0);
    reshade::api::pipeline pipeline_state_original_pixel_shader = reshade::api::pipeline(0);
@@ -215,9 +225,56 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
    bool pipeline_state_has_custom_graphics_shader = false;
    bool pipeline_state_has_custom_compute_shader = false;
 
+   enum ViewState
+   {
+      NotSet,
+      // Could be null or valid
+      Set,
+      SetAndUpgraded,
+   };
+
+   std::array<ViewState, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> ps_srvs_state = {};
+   std::array<ViewState, D3D11_1_UAV_SLOT_COUNT> ps_uavs_state = {};
+   std::array<ViewState, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> cs_srvs_state = {};
+   std::array<ViewState, D3D11_1_UAV_SLOT_COUNT> cs_uavs_state = {};
+   bool any_upgraded_ps_srvs = false;
+   bool any_upgraded_ps_uavs = false;
+   bool any_upgraded_cs_srvs = false;
+   bool any_upgraded_cs_uavs = false;
+
+   void ResetUpgradedViews()
+   {
+      ps_srvs_state.fill(ViewState::NotSet);
+      ps_uavs_state.fill(ViewState::NotSet);
+      cs_srvs_state.fill(ViewState::NotSet);
+      cs_uavs_state.fill(ViewState::NotSet);
+      any_upgraded_ps_srvs = false;
+      any_upgraded_ps_uavs = false;
+      any_upgraded_cs_srvs = false;
+      any_upgraded_cs_uavs = false;
+   }
+   void UpdateUpgradedPSSRVs()
+   {
+      any_upgraded_ps_srvs = std::any_of(ps_srvs_state.begin(), ps_srvs_state.end(), [](auto v) { return v == ViewState::SetAndUpgraded; });
+   }
+   void UpdateUpgradedPSUAVs()
+   {
+      any_upgraded_ps_uavs = std::any_of(ps_uavs_state.begin(), ps_uavs_state.end(), [](auto v) { return v == ViewState::SetAndUpgraded; });
+   }
+   void UpdateUpgradedCSSRVs()
+   {
+      any_upgraded_cs_srvs = std::any_of(cs_srvs_state.begin(), cs_srvs_state.end(), [](auto v) { return v == ViewState::SetAndUpgraded; });
+   }
+   void UpdateUpgradedCSUAVs()
+   {
+      any_upgraded_cs_uavs = std::any_of(cs_uavs_state.begin(), cs_uavs_state.end(), [](auto v) { return v == ViewState::SetAndUpgraded; });
+   }
+
 #if DEVELOPMENT
    std::shared_mutex mutex_trace;
    std::vector<TraceDrawCallData> trace_draw_calls_data;
+
+   void AddGraphicsCaptureCustomDrawCall(const char* name, class ID3D11DeviceContext* native_device_context, class ID3D11Resource* resource = nullptr, class ID3D11View* view = nullptr);
 
    bool requires_join = false;
 

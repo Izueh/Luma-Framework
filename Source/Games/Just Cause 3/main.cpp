@@ -1,11 +1,10 @@
 #define GAME_JUST_CAUSE_3 1
 
-#if 1 // SR
 // TODO: move SR to run before the final screen space stuff starts happening (e.g. heat distortion, bloom, blur, tonemap, etc)! Alternatively, dejitter the image before calculating bloom and dof etc?
 #define ENABLE_NGX 1
-// TODO: fix FSR being darker...? It's probably because of the wrong depth/fov params
-#define ENABLE_FIDELITY_SK 1
-#endif
+// FSR is disabled in publishing builds, JC3 has no proper motion vectors on vegetation nor skinned meshes, hence it looks terrible on them (DLSS looks fine with them!).
+#define ENABLE_FIDELITY_SK ((DEVELOPMENT || TEST) ? 1 : 0)
+#define AUTO_ENABLE_SR 1
 
 #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
 
@@ -17,6 +16,8 @@
 #include "..\..\Core\includes\shader_patching.h"
 
 #include <chrono>
+
+#define READ_BACK_JITTERS 0
 
 namespace
 {
@@ -36,9 +37,6 @@ namespace
    ShaderHashesList shader_hashes_Materials;
 
    std::shared_mutex materials_mutex;
-#if DEVELOPMENT && 0 // TODO: delete
-   std::thread::id materials_thread_id = std::thread::id();
-#endif
 
    constexpr uint32_t FORCE_VANILLA_AUTO_EXPOSURE_TYPE_HASH = char_ptr_crc32("FORCE_VANILLA_AUTO_EXPOSURE_TYPE");
 
@@ -59,14 +57,127 @@ namespace
    bool has_done_swapchain_copy = false;
 
    uint32_t bloom_blur_passes = 0;
-#if DEVELOPMENT // TODO: delete, it seems fine now!
+#if DEVELOPMENT // TODO: delete, it seems fine now, but play some more with the checks enabled!
    uint32_t blur_passes = 0;
 #endif
 
-   float2 frame_jitters = float2(0.f, 0.f);
-
    float frame_rate = 60.f;
    std::chrono::high_resolution_clock::time_point last_frame_time;
+
+   // The last set (or read back) value
+   float2 frame_jitters = float2(0.f, 0.f);
+   float2 prev_frame_jitters = frame_jitters;
+
+   uint8_t* jump_memory = nullptr;
+#if READ_BACK_JITTERS
+   // Jitters sequence (e.g. Halton). x and y for every row.
+   // Can be any multiple of 2. Should be at least 8x phases for proper super resolution.
+   constexpr float jittersPattern[] = {
+       0.0f,        -0.16666666f,
+      -0.25f,        0.16666667f,
+       0.25f,       -0.38888889f,
+      -0.375f,      -0.05555555f,
+       0.125f,       0.27777778f,
+      -0.125f,      -0.27777778f,
+       0.375f,       0.05555556f,
+      -0.4375f,      0.38888889f
+   };
+#else
+   float jittersPattern[] = {
+      0.0f, 0.0f
+   };
+   
+   void SetCurrentJitters(float2 jitters)
+   {
+      if (!jump_memory)
+         return;
+      memcpy(jittersPattern, &jitters, sizeof(jitters));
+      memcpy(jump_memory, &jitters, sizeof(jitters));
+   }
+#endif
+   constexpr uint8_t jittersPhases = ARRAYSIZE(jittersPattern) / 2;
+
+   uint32_t GetGameFrameIndex()
+   {
+      constexpr auto readAddressOffset = 0x2D3A6B0; // Hardcoded for end of 2025 Steam version
+
+      const uintptr_t baseAddr = (uintptr_t)GetModuleHandleA(NULL);
+      uint32_t currentFrame = *(uint32_t*)(baseAddr + readAddressOffset); // a static variable with the frame index, updated at the beginning of the frame
+      return currentFrame;
+   }
+
+   // Read this after the frame begun to be sure the frame index updated
+   float2 GetCurrentJitter(int32_t frame_offset = 0)
+   {
+#if READ_BACK_JITTERS
+      uint32_t phase = (int32_t(GetGameFrameIndex()) - frame_offset) % jittersPhases;
+#else
+      uint32_t phase = 0;
+#endif
+      float curJitX = jittersPattern[phase * 2];
+      float curJitY = jittersPattern[phase * 2 + 1];
+      return float2{curJitX, curJitY};
+   }
+
+   bool PatchJitters()
+   {
+      constexpr auto patchAddressOffset = 0xC7725; // Hardcoded for end of 2025 Steam version // TODO: add some checks to make sure version is good, otherwise disable custom jitters
+      constexpr size_t stolenLen = 20; // Length of bytes we are overwriting
+
+      const uintptr_t baseAddr = (uintptr_t)GetModuleHandleA(NULL);
+      uintptr_t patchAddr = baseAddr + patchAddressOffset;
+
+      uint8_t phasesMinusOne = jittersPhases - 1;
+      std::vector<uint8_t> shellcode = {
+         0x48, 0xB9, 0, 0, 0, 0, 0, 0, 0, 0,          // mov rcx, [jitters table address]
+         0x83, 0xE0, phasesMinusOne,                  // and eax, (e.g.) 7 [EAX = current frame index]
+         0x41, 0xBA, 0x00, 0x00, 0x00, 0x40,          // mov r10d, 0x40000000 (stolen bytes)
+         0x66, 0x41, 0x0F, 0x6E, 0xD2,                // movd xmm2, r10d
+         0x49, 0xBA, 0, 0, 0, 0, 0, 0, 0, 0,          // mov r10, [return address]
+         0x41, 0xFF, 0xE2                             // jmp r10
+      };
+
+      size_t allocSize = sizeof(jittersPattern) + shellcode.size() + 16; // Add 16 for extra safety
+      jump_memory = (uint8_t*)VirtualAlloc(NULL, allocSize, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+      if (!jump_memory)
+         return false;
+
+      uintptr_t jittersTableAddr = (uintptr_t)jump_memory;
+      uintptr_t codeAddr = (uintptr_t)jump_memory + sizeof(jittersPattern);
+      uintptr_t returnAddr = patchAddr + stolenLen;
+
+      // Put the jitters right before the byte code
+      memcpy(jump_memory, jittersPattern, sizeof(jittersPattern));
+
+      memcpy(&shellcode[2], &jittersTableAddr, sizeof(void*));
+      memcpy(&shellcode[26], &returnAddr, sizeof(void*));
+      memcpy((void*)codeAddr, shellcode.data(), shellcode.size());
+
+      FlushInstructionCache(GetCurrentProcess(), (void*)codeAddr, shellcode.size());
+
+      DWORD oldProtect;
+      BOOL success = VirtualProtect((void*)patchAddr, stolenLen, PAGE_EXECUTE_READWRITE, &oldProtect);
+      if (success)
+      {
+         // Build jump to shellcode
+         uint8_t jmpToShellcode[13] = {0x49, 0xBA, 0, 0, 0, 0, 0, 0, 0, 0, 0x41, 0xFF, 0xE2}; // mov r10, addr; jmp r10
+         memcpy(&jmpToShellcode[2], &codeAddr, sizeof(void*));
+
+         memset((void*)patchAddr, 0x90, stolenLen);    // NOP original bytes
+         memcpy((void*)patchAddr, jmpToShellcode, 13); // Write the jump
+
+         VirtualProtect((void*)patchAddr, stolenLen, oldProtect, &oldProtect);
+
+         FlushInstructionCache(GetCurrentProcess(), (void*)patchAddr, stolenLen);
+
+         return true;
+      }
+
+      if (jump_memory)
+         VirtualFree(jump_memory, 0, MEM_RELEASE);
+
+      return false;
+   }
 }
 
 class JustCause3 final : public Game
@@ -87,7 +198,7 @@ public:
       shader_defines_data.append_range(game_shader_defines_data);
 
 #if ENABLE_SR
-      sr_game_tooltip = "Select \"SMAA T2X\" in the game's AA settings for Super Resolution (DLSS/DLAA or FSR) to engage.\n";
+      sr_game_tooltip = "Select \"SMAA T2X\" in the game's AA settings for Super Resolution (DLSS/DLAA or FSR) to engage.\nNote that characters miss motion vectors from their animations so they might end up a bit smudged.\n";
 #endif
 
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('0');
@@ -96,6 +207,33 @@ public:
       GetShaderDefineData(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL_HASH).SetDefaultValue('1');
 
       last_frame_time = std::chrono::high_resolution_clock::now();
+   }
+   
+   void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
+   {
+      D3D11_TEXTURE2D_DESC exposure_texture_desc; // DLSS fails if we pass in a 1D texture so we have to make a 2D one
+      exposure_texture_desc.Width = 1;
+      exposure_texture_desc.Height = 1;
+      exposure_texture_desc.MipLevels = 1;
+      exposure_texture_desc.ArraySize = 1;
+      exposure_texture_desc.Format = DXGI_FORMAT::DXGI_FORMAT_R32_FLOAT; // FP32 just so it's easier to initialize data for it
+      exposure_texture_desc.SampleDesc.Count = 1;
+      exposure_texture_desc.SampleDesc.Quality = 0;
+      exposure_texture_desc.Usage = D3D11_USAGE_IMMUTABLE;
+      exposure_texture_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+      exposure_texture_desc.CPUAccessFlags = 0;
+      exposure_texture_desc.MiscFlags = 0;
+      
+      // It's best to force an exposure of 1 given that DLSS runs after the auto exposure is applied (in tonemapping).
+      // Theoretically knowing the average exposure of the frame would still be beneficial to it (somehow) so maybe we could simply let the auto exposure in,
+      D3D11_SUBRESOURCE_DATA exposure_texture_data;
+      exposure_texture_data.pSysMem = &device_data.sr_exposure_texture_value; // This needs to be "static" data in case the texture initialization was somehow delayed and read the data after the stack destroyed it
+      exposure_texture_data.SysMemPitch = 32;
+      exposure_texture_data.SysMemSlicePitch = 32;
+      
+      device_data.sr_exposure = nullptr; // Make sure we discard the previous one
+      HRESULT hr = native_device->CreateTexture2D(&exposure_texture_desc, &exposure_texture_data, &device_data.sr_exposure);
+      assert(SUCCEEDED(hr));
    }
 
    // Add a saturate on materials/gbuffers
@@ -206,15 +344,7 @@ public:
       {
          if (gbuffers_pattern_found && gbuffers_diffuse_pattern_found)
          {
-#if DEVELOPMENT && 0
-            std::thread::id materials_thread_id = std::thread::id();
-            if (materials_thread_id != std::thread::id())
-            {
-               ASSERT_ONCE(materials_thread_id == std::this_thread::get_id());
-            }
-            materials_thread_id = std::this_thread::get_id();
-#endif
-            const std::unique_lock lock(materials_mutex);
+            const std::unique_lock lock(materials_mutex); // This is all single threaded anyway (verified)
             shader_hashes_Materials.pixel_shaders.emplace(uint32_t(shader_hash));
          }
 
@@ -320,14 +450,6 @@ public:
          // 
          // Transparency or Alpha Masked:
          // SamplerState DiffuseBase_s : register(s0);
-
-#if DEVELOPMENT && 0
-         if (materials_thread_id != std::thread::id())
-         {
-            ASSERT_ONCE(materials_thread_id == std::this_thread::get_id());
-         }
-         materials_thread_id = std::this_thread::get_id();
-#endif
 
          ID3D11SamplerState* sampler_states[3];
          sampler_states[0] = af_sampler.get();
@@ -495,50 +617,22 @@ public:
             srv[0]->GetResource(&depth);
 #endif
 
+#if DEVELOPMENT && READ_BACK_JITTERS // TODO: delete after testing it (it doesn't matter if it fails around pause)
+         // This always runs when SMAA 2TX
          if (original_shader_hashes.Contains(shader_hashes_GenMotionVectors_TAA))
          {
-            bool is_even_frame = cb_luma_global_settings.FrameIndex % 2;
-            is_even_frame = (test_index == 3) ? !is_even_frame : is_even_frame; // Test swap it, we need to predict the order from the game...
-            // SMAA T2X jitter patterns (it only has two, and they don't even go all the way to the edge (that'd be 0.5))
-            // TODO: alternatively... we could try to find the jitter in cbuffers, like Fog, AO, camera MVs generation, or at least try to determine it with heuristics from 2 camera matrices (once we know the whether the frame is even or odd, we are good until we pause the game probably).
-            // Otherwise, we could link DLSS to SMAA non T2X and force the jitters in the global buffer the have which holds the default view proj matrix (like in Mafia III).
-            // We could also scan all cbuffers for 0.25 and 0.25*rendRes etc
-            // TODO: test+finish. Also they might be 0.5 instead
-            // In UV space
-            if (is_even_frame)
+            const bool sr_active = device_data.sr_type != SR::Type::None && !device_data.sr_suppressed;
+            if (sr_active)
             {
-               frame_jitters = float2(0.25f, -0.25f);
+               // Verify the jitters we predicted is correct!
+               ASSERT_ONCE(frame_jitters == GetCurrentJitter());
             }
-            else
-            {
-               frame_jitters = float2(-0.25f, 0.25f);
-            }
-#if DEVELOPMENT
-            if (cb_luma_global_settings.DevSettings[0])
-            {
-               frame_jitters.x *= 2.f;
-               frame_jitters.y *= 2.f;
-            }
-            if (cb_luma_global_settings.DevSettings[1])
-            {
-               frame_jitters.x *= -1.f;
-            }
-            if (cb_luma_global_settings.DevSettings[2])
-            {
-               frame_jitters.y *= -1.f;
-            }
+         }
 #endif
-         }
-         else
-         {
-            frame_jitters = float2(0.f, 0.f);
-         }
 
          if (is_custom_pass)
          {
-            uint32_t custom_data_1 = Math::AsInt(frame_jitters.x / device_data.render_resolution.x);
-            uint32_t custom_data_2 = Math::AsInt(frame_jitters.y / device_data.render_resolution.y);
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData, custom_data_1, custom_data_2, max(frame_rate, 10.f)); // Clamp the frame rate (a bit random). Ideally we'd retrieve it from the game cbuffers but I couldn't find it
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData, 0, 0, max(frame_rate, 10.f)); // Clamp the frame rate (a bit random). Ideally we'd retrieve it from the game cbuffers but I couldn't find it
             updated_cbuffers = true;
          }
       }
@@ -597,16 +691,11 @@ public:
                settings_data.render_height = unsigned int(device_data.render_resolution.y + 0.5);
                settings_data.hdr = true; // At this point we are linear and "HDR" though the image is partially tonemapped if we are after SMAA
                settings_data.inverted_depth = true;
-               settings_data.mvs_jittered = false; // See shader 0xA1037803
-               settings_data.auto_exposure = true; // TODO: Exp is 1 given it's all after post processing, but actually constantly changes all the times, given it's calculated after DLSS but applied b4... We could re-use the LateAutoExposure shader pass mips to calculate the avg luminance though!
-               // MVs in UV space, so we need to scale by the render resolution to transform to pixel space // TODO: flip? Seems like no! describe them!
-#if DEVELOPMENT
-               settings_data.mvs_x_scale = cb_luma_global_settings.DevSettings[7] ? 1.f : device_data.render_resolution.x * cb_luma_global_settings.DevSettings[8];
-               settings_data.mvs_y_scale = cb_luma_global_settings.DevSettings[7] ? 1.f : device_data.render_resolution.y * cb_luma_global_settings.DevSettings[9];
-#else
-               settings_data.mvs_x_scale = device_data.render_resolution.x;
-               settings_data.mvs_y_scale = device_data.render_resolution.y;
-#endif
+               settings_data.mvs_jittered = false; // See shader 0xA1037803, they were partially jittered (with the current frame jitter but not the previous one, so we fixed that up and completely removed jitters, so it also makes motion blur independent from them)
+               settings_data.auto_exposure = device_data.sr_type != SR::Type::FSR; // Exp is ~1 given it's all after post processing (and the game's auto exposure). FSR breaks with auto exposure in this game (it heavily clips highlights). DLSS looks fine with it.
+               // MVs in UV space, so we need to scale by the render resolution to transform to pixel space
+               settings_data.mvs_x_scale = -device_data.render_resolution.x;
+               settings_data.mvs_y_scale = -device_data.render_resolution.y;
                settings_data.render_preset = dlss_render_preset;
                sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
 
@@ -667,16 +756,22 @@ public:
                   draw_data.motion_vectors = motion_vectors.get();
                   draw_data.depth_buffer = depth.get();
                   draw_data.pre_exposure = dlss_pre_exposure;
-                  draw_data.jitter_x = frame_jitters.x;
+                  draw_data.jitter_x = frame_jitters.x; // Not 100% sure these shouldn't be scaled by 0.5, but probably not! (I tried, couldn't tell the difference, but logic points towards not doing it)
                   draw_data.jitter_y = frame_jitters.y;
                   draw_data.reset = reset_dlss; // TODO: implement camera cuts too... I don't think the game has them exposed though. Possibly reset DLSS when we pause the game or go into a loading screen.
 
-                  // TODO: we might be able to pull most of this from "7BE70E91" or "A1037803"
-                  draw_data.near_plane = 0.00001;
-                  draw_data.far_plane = FLT_MAX;
-                  draw_data.vert_fov = 1.0; // atan(1.f / projection_matrix.m11) * 2.0;
+#if 1 // Extracted from proj matrix on the CPU (not 100% if this or the ones below are right)
+                  draw_data.near_plane = 0.1; // 10cm
+                  draw_data.far_plane = 40000.0; // 40km
+#else // Extracted from "A1037803" PS cbuffers. Supposedly they are fixed throughout the game. "7BE70E91" might also have them.
+                  draw_data.near_plane = 0.025; // 2.5cm
+                  draw_data.far_plane = 10000.0; // 10km
+#endif
+                  draw_data.vert_fov = 0.60894538; // Would be "atan(1.f / projection_matrix.m11) * 2.0", however we don't have the proj matrix in any cbuffer in this game, it's only in the CPU. No current SR implementation uses this anyway. Seems like the default is 34.89 degs.
                   draw_data.frame_index = cb_luma_global_settings.FrameIndex;
                   draw_data.time_delta = 1.0 / 60.0;
+                  if (!settings_data.auto_exposure)
+                     draw_data.exposure = device_data.sr_exposure.get();
 
                   bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
                   if (dlss_succeeded)
@@ -737,6 +832,18 @@ public:
       return DrawOrDispatchOverrideType::None; // Don't cancel the original draw call
    }
 
+   void UpdateLumaInstanceDataCB(CB::LumaInstanceDataPadded& data, CommandListData& cmd_list_data, DeviceData& device_data) override
+   {
+      float2 jitters = frame_jitters;
+      jitters.x /= device_data.render_resolution.x;
+      jitters.y /= device_data.render_resolution.y;
+      memcpy(&data.GameData.CurrJitters, &jitters, sizeof(jitters));
+      jitters = prev_frame_jitters;
+      jitters.x /= device_data.render_resolution.x;
+      jitters.y /= device_data.render_resolution.y;
+      memcpy(&data.GameData.PrevJitters, &jitters, sizeof(jitters));
+   }
+
    void OnPresent(ID3D11Device* native_device, DeviceData& device_data) override
    {
       if (!has_drawn_taa)
@@ -755,7 +862,6 @@ public:
          }
 
          device_data.sr_suppressed = false;
-         frame_jitters = float2(0.f, 0.f);
       }
 
       bool drew_sr = cb_luma_global_settings.SRType > 0;                                                                                                                        // If this was true, SR would have been enabled and probably drew
@@ -777,20 +883,18 @@ public:
       has_downscaled_bloom = false;
       has_done_swapchain_copy = false;
 
-#if 1 // TODO: enable this once we add jitters? Works even without tbh
       if (!custom_texture_mip_lod_bias_offset)
       {
          std::shared_lock shared_lock_samplers(s_mutex_samplers);
          if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed)
          {
-            device_data.texture_mip_lod_bias_offset = std::log2(device_data.render_resolution.y / device_data.output_resolution.y) - 1.f; // This results in -1 at output res
+            device_data.texture_mip_lod_bias_offset = SR::GetMipLODBias(device_data.render_resolution.y, device_data.output_resolution.y); // This results in -1 at output res
          }
          else
          {
             device_data.texture_mip_lod_bias_offset = 0.f;
          }
       }
-#endif
 
       bloom_blur_passes = 0;
 #if DEVELOPMENT
@@ -803,6 +907,64 @@ public:
       std::chrono::duration<float> delta = now - last_frame_time;
       frame_rate = 1.0f / delta.count();
       last_frame_time = now;
+
+      const bool sr_active = device_data.sr_type != SR::Type::None && !device_data.sr_suppressed;
+#if !READ_BACK_JITTERS
+      // Force write the jitters in the game's memory every frame
+      float2 jitters;
+      if (sr_active)
+      {
+         int next_frame_index = (cb_luma_global_settings.FrameIndex + 1) % 8; // Pre-increment, as it will be incremented after this. Period of 8 for native resolution.
+         jitters.x = SR::HaltonSequence(next_frame_index, 2);
+         jitters.y = SR::HaltonSequence(next_frame_index, 3);
+      }
+      else
+      {
+         bool is_even_frame = (GetGameFrameIndex() + 1) % 2; // Next frame, it hasn't been increased yet
+         // The game jitter matrix is -0.25 0.25, 0.25 -0.25. Respectively x and y.
+         // Just two frames, the standard SMAA T2X jitter pattern.
+         // We emulate it here, to restore the vanilla behaviour without our custom jitters code.
+         if (is_even_frame)
+         {
+            jitters = float2(-0.25f, 0.25f);
+         }
+         else
+         {
+            jitters = float2(0.25f, -0.25f);
+         }
+      }
+      SetCurrentJitters(jitters);
+#endif
+
+      prev_frame_jitters = frame_jitters;
+      if (device_data.taa_detected)
+      {
+         // "frame_jitters" is in UV space, and shouldn't go beyond -0.5 and 0.5.
+         if (sr_active) // Use the jitters we write
+         {
+            // TODO: make sure Fog, AO, sun shadow etc aren't affected by jitters (the sun shadow clearly are, in a bad way)
+            frame_jitters = GetCurrentJitter(1); // Next frame (only matters with "READ_BACK_JITTERS")
+         }
+         else // Fall back on original game jitters, without changing them
+         {
+            bool is_even_frame = (GetGameFrameIndex() + 1) % 2;
+            // The game jitter matrix is -0.25 0.25, 0.25 -0.25. Respectively x and y.
+            // Just two frames, the standard SMAA T2X jitter pattern.
+            if (is_even_frame)
+            {
+               frame_jitters = float2(-0.25f, 0.25f);
+            }
+            else
+            {
+               frame_jitters = float2(0.25f, -0.25f);
+            }
+         }
+      }
+      else
+      {
+         frame_jitters = float2(0.f, 0.f);
+         prev_frame_jitters = frame_jitters;
+      }
    }
 
    void LoadConfigs() override
@@ -897,6 +1059,9 @@ public:
       ImGui::Text("Credits:"
                   "\n\nMain:"
                   "\nPumbo"
+         
+                  "\n\nContributors:"
+                  "\nz1rp"
 
                   "\n\nThird Party:"
                   "\nReShade"
@@ -911,6 +1076,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    {
       Globals::SetGlobals(PROJECT_NAME, "Just Cause 3 Luma mod");
       Globals::VERSION = 1;
+
+      bool patch_successful = PatchJitters();
+      ASSERT(patch_successful);
 
       swapchain_format_upgrade_type  = TextureFormatUpgradesType::AllowedEnabled;
       swapchain_upgrade_type         = SwapchainUpgradeType::scRGB;
@@ -932,7 +1100,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
       enable_indirect_texture_format_upgrades = true;
-      enable_automatic_indirect_texture_format_upgrades = true;
+      enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
 
       // The game has x16 AA but it doesn't seem to apply to many textures (mainly because it literally used linear samplers instead of AF for many...)
       enable_samplers_upgrade = true;
@@ -1069,7 +1237,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // TODO: use "default_luma_global_game_settings"
 
 #if DEVELOPMENT
-      forced_shader_names.emplace(Shader::Hash_StrToNum("A1037803"), "Gen Motion Vectors");
       forced_shader_names.emplace(Shader::Hash_StrToNum("60EB1F22"), "SMAA Edge Detection 1");
       forced_shader_names.emplace(Shader::Hash_StrToNum("5DB69E08"), "SMAA Edge Detection 2");
       forced_shader_names.emplace(Shader::Hash_StrToNum("8A824E55"), "SMAA");
@@ -1089,6 +1256,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 #endif
 
       game = new JustCause3();
+   }
+   else if (ul_reason_for_call == DLL_PROCESS_DETACH)
+   {
+#if 0 // TODO: restore the original memory
+      // Disabled as we'd need to restore the previous values. It's not really needed in this game.
+      if (jump_memory)
+         VirtualFree(jump_memory, 0, MEM_RELEASE);
+#endif
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

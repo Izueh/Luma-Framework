@@ -79,7 +79,15 @@
         float4x4 CameraDelta : packoffset(c11);
         float4 MotionBlurSettings : packoffset(c15);
     }
-    #define LUMA_BLOOM_THRESHOLD (BloomScaleAndThreshold.y * rcp(max(BloomScaleAndThreshold.x, 1e-6)))
-    #define LUMA_BLOOM_SOFT_KNEE LUMA_BLOOM_THRESHOLD
+
+    float3 threshold(float3 color)
+    {
+	    float br = max(max(color.r, color.g), color.b);
+	    float mask = saturate((br - BloomScaleAndThreshold.y) * 0.5);
+	    return color * mask;
+    }
+
+    #define LUMA_BLOOM_THRESHOLD_FUNCTION(color) threshold(color)
+    #define LUMA_BLOOM_SCALE BloomScaleAndThreshold.x
 #endif
 #include "../Includes/Bloom.hlsl"

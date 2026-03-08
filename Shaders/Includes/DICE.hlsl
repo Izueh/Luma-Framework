@@ -49,15 +49,17 @@ struct DICESettings
   // Best set to the display color space, like BT.2020 in HDR
   uint ProcessingColorSpace;
 
-  // Tonemap negative colors as well. It might better compress out of gamut colors.
-  // Only relevant with per channel types, like "DICE_TYPE_BY_CHANNEL_PQ".
+  // Tonemap negative colors as well (depending on the mode). It might better compress out of gamut colors.
+  // This also forces gamut mapping of negative colors.
   bool Mirrored;
 
   // Controls the amount of desaturation (1) vs darkening (0) to contain the final RGB color within the peak, when tonemapping by luminance.
   // Darkening can generally flatten detail so it's not that suggested unless needed for a specific reason.
   // For types "DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE", "DICE_TYPE_BY_LUMINANCE_PQ_WITH_BY_CHANNEL_CHROMINANCE_PLUS_CORRECT_CHANNELS_BEYOND_PEAK_WHITE" and "DICE_TYPE_BY_LUMINANCE_GAMMA_CORRECT_CHANNELS_BEYOND_PEAK_WHITE" only.
   float DesaturationVsDarkeningRatio;
-  float Smoothing;
+  // If we do gamut mapping, we need to kind of smoothing threshold to start it before it becomes necessary, to avoid steps in gradients (e.g. we compress 1.01 to 1, then we also compress 0.99 to 0.985 or something).
+  // Set to <0 to set it automatically based on the highlights shoulder.
+  float GamutMappingSmoothing;
 
   // Perceptual exponent for "DICE_TYPE_BY_LUMINANCE_GAMMA_CORRECT_CHANNELS_BEYOND_PEAK_WHITE" (values between 2 and 3 are generally good)
   float Gamma;
@@ -157,8 +159,8 @@ DICESettings DefaultDICESettings(uint Type = DICE_TYPE_BY_CHANNEL_PQ)
   Settings.Type = Type;
   Settings.InputMax = FLT_MAX; // Ignored by default
   Settings.ShoulderStart = (Settings.Type > DICE_TYPE_BY_LUMINANCE_RGB) ? (1.0 / 3.0) : 0.0; // Setting it higher than 1/3 might cause highlights clipping as detail is too compressed. Setting it lower than 1/4 would probably look dynamic range. 1/3 seems like the best compromise. There's usually no need to start compressing from paper white just to keep the SDR range unchanged.
-  Settings.Smoothing = -1.0;
-  Settings.Mirrored = false;
+  Settings.GamutMappingSmoothing = 0.2;
+  Settings.Mirrored = true;
   Settings.InOutColorSpace = CS_BT709;
   Settings.ProcessingColorSpace = CS_BT2020; // Work in BT.2020 by default, to match HDR displays primaries. Set to BT.709 for SDR.
   Settings.DesaturationVsDarkeningRatio = 1.0; // TODOFT5: make it 0 for all when doing highlights containment around the code!!! (actually 1, that should be the full desat value)
@@ -195,7 +197,7 @@ float3 DICETonemap(
     // but tests showed scaling it in linear actually produces a better curve and more consistently follows the peak across different values
     const float shoulderStartPerceptual = DICE::ToPerceptual(shoulderStart / normalizationRange, Settings).x;
     const float inputMaxPerceptual = DICE::ToPerceptual(Settings.InputMax / normalizationRange, Settings).x;
-    const float peakWhitePerceptual = DICE::ToPerceptual(PeakWhite / normalizationRange, Settings).x;
+    const float peakWhitePerceptual = DICE::ToPerceptual(PeakWhite / normalizationRange, Settings).x; // TODO: review. Should we just apply "Settings.ShoulderStart" in perceptual space to this? It might be more consistent and avoid highlights getting too aggressive at very high peak brightnesses?
     
     // Convert to the display primaries, for example in HDR it's good to tonemap in BT.2020.
     // Theoretically some modes (e.g. "DICE_TYPE_BY_LUMINANCE_PQ") don't need this conversion as results would be identical, but we do it anyway for simplicity.
@@ -276,9 +278,9 @@ float3 DICETonemap(
       // We need to do this even if the tonemapper didn't do anything above, because (e.g.) blue might still go beyond peak even if the overall luminance is low
       if (Settings.Type == DICE_TYPE_BY_LUMINANCE_PQ_CORRECT_CHANNELS_BEYOND_PEAK_WHITE || Settings.Type == DICE_TYPE_BY_LUMINANCE_PQ_WITH_BY_CHANNEL_CHROMINANCE_PLUS_CORRECT_CHANNELS_BEYOND_PEAK_WHITE || Settings.Type == DICE_TYPE_BY_LUMINANCE_GAMMA_CORRECT_CHANNELS_BEYOND_PEAK_WHITE)
       {
-        float smoothing = Settings.ShoulderStart; // Match to shoulder start, just so we can re-use the parameter. 0.2 would be a good default otherwise.
-        if (Settings.Smoothing >= 0) // TODO: delete or rename once tested
-          smoothing = Settings.Smoothing;
+        float smoothing = 1.0 - Settings.ShoulderStart; // Match to shoulder start, just so we can re-use the parameter. 0.2 would be a good default otherwise.
+        if (Settings.GamutMappingSmoothing >= 0.0)
+          smoothing = Settings.GamutMappingSmoothing;
         Color = CorrectOutOfRangeColor(Color, Settings.Mirrored, true, Settings.DesaturationVsDarkeningRatio, PeakWhite, smoothing, Settings.ProcessingColorSpace);
       }
     }

@@ -115,8 +115,8 @@ namespace NGX
 			NVSDK_NGX_Parameter_SetUI(runtime_params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance, render_preset);
 			NVSDK_NGX_Parameter_SetUI(runtime_params, NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance, render_preset);
 
-#if GAME_FF7_REMAKE
-            NVSDK_NGX_Parameter_SetUI(runtime_params, NVSDK_NGX_EParameter_Hint_UseFireflySwatter, 1);
+#if GAME_FF7_REMAKE // TODO: pass in as param
+			NVSDK_NGX_Parameter_SetUI(runtime_params, NVSDK_NGX_EParameter_Hint_UseFireflySwatter, 1);
 #endif
 
 			NVSDK_NGX_DLSS_Create_Params create_params;
@@ -250,6 +250,14 @@ bool NGX::DLSS::HasInit(const SR::InstanceData* data) const
 bool NGX::DLSS::IsSupported(const SR::InstanceData* data) const
 {
 	return data && data->is_supported;
+}
+
+int NGX::DLSS::GetJitterPhases(const SR::InstanceData* data) const
+{
+	// Nvidia suggested formula.
+	constexpr int base_phases = 8; // We start from a baseline of 8, for native resolution (DLAA).
+	// Use Y resolution as it's generally more reliable.
+   return std::lrintf(float(base_phases) * pow(max(float(data->settings_data.output_height) / float(data->settings_data.render_height), 1.f), 2.f));
 }
 
 bool NGX::DLSS::UpdateSettings(SR::InstanceData* data, ID3D11DeviceContext* command_list, const SR::SettingsData& settings_data)

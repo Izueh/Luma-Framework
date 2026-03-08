@@ -56,12 +56,6 @@ Texture2D<float4> p_default_Material_2A938F645990781_Param_texture : register(t1
 
 #define cmp
 
-float2 MirrorUV(float2 uv)
-{
-    uv = abs(frac(uv * 0.5) * 2.0 - 1.0);
-    return uv;
-}
-
 float3 GetWorldPos(float2 uv, float depth, float4x4 invViewProj)
 {
     // Convert UV + depth to NDC space

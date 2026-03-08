@@ -304,7 +304,7 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
     color = color >= midGrayOut ? rawColor : color;
 
 #if 0 // Expand colors below mid grey
-    // Find the LUT change ration in shadow (below mid gray) in the original color space (BT.709),
+    // Find the LUT change ratio in shadow (below mid gray) in the original color space (BT.709),
     // and reproject it in BT.2020, it will slightly shift colors,
     // but as long as this is a tonemapping LUT that applied some filmic TM on shadow (crushing them and expanding their saturation/contrast),
     // it should look nicer when expanded.
@@ -324,7 +324,7 @@ void main(uint3 vThreadID : SV_DispatchThreadID)
     float3 expandedColor = lerp(color, BT2020_To_BT709(BT709_To_BT2020(rawColor) * colorRatio), expansionRatio * DVS7); // TODO: remove DVS!!! Also flip the "colorRatio >= 1.0" condition above???
     color = lerp(expandedColor, color, pow(saturate(color / midGrayOut), 2.0));
 #endif
-#else
+#else // !HIGH_QUALITY_LUT
     // Remap the raw color to the same average brightness
     rawColor *= midGrayOut / midGrayIn;
     color = lerp(color, rawColor, pow(saturate(color / midGrayOut), 2.0));

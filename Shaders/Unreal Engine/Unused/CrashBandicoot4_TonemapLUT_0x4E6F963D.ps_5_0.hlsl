@@ -49,7 +49,7 @@ void main(
   r1.xyz = float3(-0.434017599,-0.434017599,-0.434017599) + r1.xyz;
   r1.xyz = float3(14,14,14) * r1.xyz;
   r1.xyz = exp2(r1.xyz);
-  r1.xyz = r1.xyz * float3(0.180000007,0.180000007,0.180000007) + float3(-0.00266771927,-0.00266771927,-0.00266771927);
+  r1.xyz = r1.xyz * 0.18 + float3(-0.00266771927,-0.00266771927,-0.00266771927);
   r0.xyz = r0.zzz ? r0.xyw : r1.xyz;
   r0.w = 1.00055635 * cb0[44].y;
   r1.x = cmp(6996.10791 >= cb0[44].y);
@@ -183,7 +183,7 @@ void main(
   r1.xyz = log2(r1.xyz);
   r1.xyz = r2.xyz * r1.xyz;
   r1.xyz = exp2(r1.xyz);
-  r1.xyz = float3(0.180000007,0.180000007,0.180000007) * r1.xyz;
+  r1.xyz = 0.18 * r1.xyz;
   r2.xyz = r3.xyz * r3.www;
   r2.xyz = float3(1,1,1) / r2.xyz;
   r1.xyz = log2(r1.xyz);
@@ -210,7 +210,7 @@ void main(
   r2.xyz = log2(r2.xyz);
   r2.xyz = r3.xyz * r2.xyz;
   r2.xyz = exp2(r2.xyz);
-  r2.xyz = float3(0.180000007,0.180000007,0.180000007) * r2.xyz;
+  r2.xyz = 0.18 * r2.xyz;
   r3.xyz = r4.xyz * r4.www;
   r3.xyz = float3(1,1,1) / r3.xyz;
   r2.xyz = log2(r2.xyz);
@@ -239,7 +239,7 @@ void main(
   r0.xyz = log2(r0.xyz);
   r0.xyz = r4.xyz * r0.xyz;
   r0.xyz = exp2(r0.xyz);
-  r0.xyz = float3(0.180000007,0.180000007,0.180000007) * r0.xyz;
+  r0.xyz = 0.18 * r0.xyz;
   r4.xyz = r6.xyz * r6.www;
   r4.xyz = float3(1,1,1) / r4.xyz;
   r0.xyz = log2(r0.xyz);
@@ -305,7 +305,7 @@ void main(
     r0.z = r3.w + r3.z;
     r0.z = r0.z + r3.y;
     r0.y = r0.y * 1.75 + r0.z;
-    r0.w = -0.400000006 + r0.x;
+    r0.w = -0.4 + r0.x;
     r1.w = 2.5 * r0.w;
     r1.w = 1 + -abs(r1.w);
     r1.w = max(0, r1.w);
@@ -315,10 +315,10 @@ void main(
     r0.w = (int)r0.w;
     r1.w = -r1.w * r1.w + 1;
     r0.w = r0.w * r1.w + 1;
-    r0.zw = float2(0.333333343,0.0250000004) * r0.yw;
+    r0.zw = float2(0.333333343,0.025) * r0.yw;
     r1.w = cmp(0.159999996 >= r0.y);
-    r0.y = cmp(r0.y >= 0.479999989);
-    r0.z = 0.0799999982 / r0.z;
+    r0.y = cmp(r0.y >= 0.48);
+    r0.z = 0.08 / r0.z;
     r0.z = -0.5 + r0.z;
     r0.z = r0.w * r0.z;
     r0.y = r0.y ? 0 : r0.z;
@@ -372,9 +372,9 @@ void main(
     r0.z = r0.w * r0.z;
     r0.z = r0.z * r0.z;
     r0.x = r0.z * r0.x;
-    r0.y = -r3.y * r0.y + 0.0299999993;
+    r0.y = -r3.y * r0.y + 0.03;
     r0.x = r0.x * r0.y;
-    r4.x = r0.x * 0.180000007 + r4.y;
+    r4.x = r0.x * 0.18 + r4.y;
     r0.x = dot(float3(1.45143926,-0.236510754,-0.214928567), r4.xzw);
     r0.y = dot(float3(-0.0765537769,1.17622972,-0.0996759236), r4.xzw);
     r0.z = dot(float3(0.00831614807,-0.00603244966,0.997716308), r4.xzw);
@@ -382,11 +382,11 @@ void main(
     r0.w = dot(r0.xyz, float3(0.272228718,0.674081743,0.0536895171));
     r0.xyz = r0.xyz + -r0.www;
     r0.xyz = r0.xyz * float3(0.959999979,0.959999979,0.959999979) + r0.www;
-    r3.xy = float2(1,0.180000007) + cb0[36].ww;
+    r3.xy = float2(1,0.18) + cb0[36].ww;
     r0.w = -cb0[36].y + r3.x;
     r1.w = 1 + cb0[37].x;
     r2.w = -cb0[36].z + r1.w;
-    r3.x = cmp(0.800000012 < cb0[36].y);
+    r3.x = cmp(0.8 < cb0[36].y);
     r3.zw = float2(0.819999993,1) + -cb0[36].yy;
     r3.zw = r3.zw / cb0[36].xx;
     r3.z = -0.744727492 + r3.z;
@@ -540,7 +540,7 @@ void main(
         r3.w = 0.0250000004 * r3.w;
         r4.w = cmp(0.159999996 >= r1.w);
         r1.w = cmp(r1.w >= 0.479999989);
-        r2.w = 0.0799999982 / r2.w;
+        r2.w = 0.08 / r2.w;
         r2.w = -0.5 + r2.w;
         r2.w = r3.w * r2.w;
         r1.w = r1.w ? 0 : r2.w;
@@ -613,9 +613,9 @@ void main(
         }
         r0.w = r2.w * r0.w;
         r0.w = 1.5 * r0.w;
-        r1.w = -r7.y * r1.w + 0.0299999993;
+        r1.w = -r7.y * r1.w + 0.03;
         r0.w = r1.w * r0.w;
-        r6.x = r0.w * 0.180000007 + r6.y;
+        r6.x = r0.w * 0.18 + r6.y;
         r6.xyz = max(float3(0,0,0), r6.xzw);
         r6.xyz = min(float3(65535,65535,65535), r6.xyz);
         r7.x = dot(float3(1.45143926,-0.236510754,-0.214928567), r6.xyz);
@@ -982,7 +982,7 @@ void main(
           r2.w = r2.w + r7.y;
           r1.w = r1.w * 1.75 + r2.w;
           r2.w = 0.333333343 * r1.w;
-          r3.w = -0.400000006 + r0.w;
+          r3.w = -0.4 + r0.w;
           r4.w = 2.5 * r3.w;
           r4.w = 1 + -abs(r4.w);
           r4.w = max(0, r4.w);
@@ -992,10 +992,10 @@ void main(
           r3.w = (int)r3.w;
           r4.w = -r4.w * r4.w + 1;
           r3.w = r3.w * r4.w + 1;
-          r3.w = 0.0250000004 * r3.w;
-          r4.w = cmp(0.159999996 >= r1.w);
-          r1.w = cmp(r1.w >= 0.479999989);
-          r2.w = 0.0799999982 / r2.w;
+          r3.w = 0.025 * r3.w;
+          r4.w = cmp(0.16 >= r1.w);
+          r1.w = cmp(r1.w >= 0.48);
+          r2.w = 0.08 / r2.w;
           r2.w = -0.5 + r2.w;
           r2.w = r3.w * r2.w;
           r1.w = r1.w ? 0 : r2.w;
@@ -1068,9 +1068,9 @@ void main(
           }
           r0.w = r2.w * r0.w;
           r0.w = 1.5 * r0.w;
-          r1.w = -r7.y * r1.w + 0.0299999993;
+          r1.w = -r7.y * r1.w + 0.03;
           r0.w = r1.w * r0.w;
-          r6.x = r0.w * 0.180000007 + r6.y;
+          r6.x = r0.w * 0.187 + r6.y;
           r6.xyz = max(float3(0,0,0), r6.xzw);
           r6.xyz = min(float3(65535,65535,65535), r6.xyz);
           r7.x = dot(float3(1.45143926,-0.236510754,-0.214928567), r6.xyz);

@@ -5,26 +5,6 @@
 
 #include "..\..\Core\core.hpp"
 
-uint32_t GetHaltonSequencePhases(float renderResY, float outputResY, float basePhases)
-{
-   // NV DLSS suggested formula
-   return std::lrintf(basePhases * pow(outputResY / renderResY, 2.f));
-}
-
-float Halton(int32_t Index, int32_t Base)
-{
-   float Result = 0.0f;
-   float InvBase = 1.0f / Base;
-   float Fraction = InvBase;
-   while (Index > 0)
-   {
-      Result += (Index % Base) * Fraction;
-      Index /= Base;
-      Fraction *= InvBase;
-   }
-   return Result;
-}
-
 #if 0
 bool IsProjectionMatrix(const DirectX::XMMATRIX& m, float tolerance = 1e-5f)
 {
@@ -1204,8 +1184,8 @@ public:
       int temporal_frame = cb_luma_global_settings.FrameIndex % phases;
 
       // Note: we add 1 to the temporal frame here to avoid a bias, given that Halton always returns 0 for 0
-      game_device_data.taa_jitters.x = Halton(temporal_frame + 1, 2) - 0.5f;
-      game_device_data.taa_jitters.y = Halton(temporal_frame + 1, 3) - 0.5f;
+      game_device_data.taa_jitters.x = SR::HaltonSequence(temporal_frame, 2);
+      game_device_data.taa_jitters.y = SR::HaltonSequence(temporal_frame, 3);
 
 #if DEVELOPMENT
       //TODOFT: delete
@@ -1233,7 +1213,7 @@ public:
          std::shared_lock shared_lock_samplers(s_mutex_samplers);
          if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && !no_jitters)
          {
-            device_data.texture_mip_lod_bias_offset = std::log2(device_data.render_resolution.y / device_data.output_resolution.y) - 1.f; // This results in -1 at output res
+            device_data.texture_mip_lod_bias_offset = SR::GetMipLODBias(device_data.render_resolution.y, device_data.output_resolution.y); // This results in -1 at output res
          }
          else
          {

@@ -652,7 +652,8 @@ namespace Display
 			return false;
 		}
 
-		const HMONITOR monitorFromWindow = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONULL);
+		const auto monitorFallback = hwnd == 0 ? MONITOR_DEFAULTTOPRIMARY : MONITOR_DEFAULTTONULL; // We prefer simply failing than using the closest/primary monitor if the window doesn't overlap any
+		const HMONITOR monitorFromWindow = MonitorFromWindow(hwnd, monitorFallback);
 		for (auto& pathInfo : paths)
 		{
 			if (pathInfo.flags & DISPLAYCONFIG_PATH_ACTIVE && pathInfo.sourceInfo.statusFlags & DISPLAYCONFIG_SOURCE_IN_USE)
@@ -666,7 +667,7 @@ namespace Display
 				RECT rect{ sourceMode.position.x, sourceMode.position.y, sourceMode.position.x + (LONG)sourceMode.width, sourceMode.position.y + (LONG)sourceMode.height };
 				if (!IsRectEmpty(&rect))
 				{
-					const HMONITOR monitorFromMode = MonitorFromRect(&rect, MONITOR_DEFAULTTONULL);
+					const HMONITOR monitorFromMode = MonitorFromRect(&rect, MONITOR_DEFAULTTONULL); // No need to default this to the primary or closest, it should never be a problem
 					if (monitorFromMode != nullptr && monitorFromMode == monitorFromWindow)
 					{
 						outPathInfo = pathInfo;
@@ -724,10 +725,10 @@ namespace Display
 	}
 	#endif
 
-	// Pass in the game window (e.g. retrieve it from the swapchain).
+	// Pass in the game window (e.g. retrieve it from the swapchain), or 0 to fall back on the primary display.
 	// Optionally pass in the swapchain pointer to fall back to checking on the swapchain.
 	// If HDR is enabled, it's automatically also supported.
-	bool IsHDRSupportedAndEnabled(HWND hwnd, bool& supported, bool& enabled, IDXGISwapChain3* swapChain = nullptr)
+   bool IsHDRSupportedAndEnabled(HWND hwnd /*= 0*/, bool& supported, bool& enabled, IDXGISwapChain3* swapChain = nullptr)
 	{
 		// Default to not supported for the unknown/failed states
 		supported = false;
@@ -812,7 +813,7 @@ namespace Display
 		DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO_2 colorInfo2{};
 		if (GetColorInfo2(hwnd, colorInfo2))
 		{
-			if (colorInfo2.highDynamicRangeSupported && (!enabled || !colorInfo2.advancedColorLimitedByPolicy) && (colorInfo2.activeColorMode != DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR) != enabled)
+			if (colorInfo2.highDynamicRangeSupported && (!enabled || !colorInfo2.advancedColorLimitedByPolicy) && (colorInfo2.activeColorMode == DISPLAYCONFIG_ADVANCED_COLOR_MODE_HDR) != enabled)
 			{
 				DISPLAYCONFIG_SET_HDR_STATE setHDRState{};
 				setHDRState.header.type = DISPLAYCONFIG_DEVICE_INFO_SET_HDR_STATE;

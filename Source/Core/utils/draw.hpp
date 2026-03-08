@@ -354,6 +354,32 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
       }
       return ptr;
    };
+   auto FlagUpgradedResources = [&](auto* rv)
+   {
+      com_ptr<ID3D11Resource> resource;
+      if (rv)
+      {
+         rv->GetResource(&resource);
+
+         const bool upgraded = device_data.original_resources_to_mirrored_upgraded_resources.contains((uint64_t)resource.get()) || device_data.upgraded_resources.contains((uint64_t)resource.get()) || (/*swapchain_upgrade_type > SwapchainUpgradeType::None &&*/ device_data.back_buffers.contains((uint64_t)resource.get())); // TODO: expose "swapchain_upgrade_type" here or something like that
+
+         using ViewType = std::remove_pointer_t<decltype(rv)>;
+         // Note: depth/stencil views are ignored for now
+         if constexpr (std::is_same_v<ViewType, ID3D11ShaderResourceView>)
+         {
+            trace_draw_call_data.any_input_resources_format_upgraded |= upgraded;
+         }
+         else if constexpr (std::is_same_v<ViewType, ID3D11RenderTargetView>)
+         {
+            trace_draw_call_data.any_output_resources_format_upgraded |= upgraded;
+         }
+         else if constexpr (std::is_same_v<ViewType, ID3D11UnorderedAccessView>)
+         {
+            trace_draw_call_data.any_input_resources_format_upgraded |= upgraded;
+            trace_draw_call_data.any_output_resources_format_upgraded |= upgraded;
+         }
+      }
+   };
 
    // Note that the pipelines can be run more than once so this will return the first one matching (there's only one actually, we don't have separate settings for their running instance, as that's runtime stuff)
    const auto pipeline_pair = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle);
@@ -510,6 +536,7 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
                   rtvs[i]->GetResource(&rt_resource);
                   ASSERT_ONCE(rt_resource != nullptr); // Could happen
                }
+               FlagUpgradedResources(rtvs[i].get());
                if (rt_resource)
                {
                   // If any of the set RTs are the swapchain, set it to true
@@ -540,6 +567,7 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
                if (uavs[i]) uavs[i]->GetDesc(&uav_desc);
                trace_draw_call_data.uav_format[i] = uav_desc.Format;
 
+               FlagUpgradedResources(uavs[i].get());
                GetResourceInfo(uavs[i].get(), trace_draw_call_data.ua_size[i], trace_draw_call_data.ua_format[i], &trace_draw_call_data.ua_type_name[i], &trace_draw_call_data.ua_hash[i], &trace_draw_call_data.ua_debug_name[i], &trace_draw_call_data.ua_is_rt[i]);
                
                trace_draw_call_data.uav_mip[i] = GetUAVMipLevel(uav_desc);
@@ -562,6 +590,7 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
                if (srvs[i]) srvs[i]->GetDesc(&srv_desc);
                trace_draw_call_data.srv_format[i] = srv_desc.Format;
 
+               FlagUpgradedResources(srvs[i].get());
                GetResourceInfo(srvs[i].get(), trace_draw_call_data.sr_size[i], trace_draw_call_data.sr_format[i], &trace_draw_call_data.sr_type_name[i], &trace_draw_call_data.sr_hash[i], &trace_draw_call_data.sr_debug_name[i], &trace_draw_call_data.sr_is_rt[i], &trace_draw_call_data.sr_is_ua[i]);
 
                trace_draw_call_data.srv_mip[i] = GetSRVMipLevel(srv_desc);
@@ -614,6 +643,7 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
                if (srvs[i]) srvs[i]->GetDesc(&srv_desc);
                trace_draw_call_data.srv_format[i] = srv_desc.Format;
 
+               FlagUpgradedResources(srvs[i].get());
                GetResourceInfo(srvs[i].get(), trace_draw_call_data.sr_size[i], trace_draw_call_data.sr_format[i], &trace_draw_call_data.sr_type_name[i], &trace_draw_call_data.sr_hash[i], &trace_draw_call_data.sr_debug_name[i], &trace_draw_call_data.sr_is_rt[i], &trace_draw_call_data.sr_is_ua[i]);
 
                trace_draw_call_data.srv_mip[i] = GetSRVMipLevel(srv_desc);
@@ -690,6 +720,7 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
                if (srvs[i]) srvs[i]->GetDesc(&srv_desc);
                trace_draw_call_data.srv_format[i] = srv_desc.Format;
 
+               FlagUpgradedResources(srvs[i].get());
                GetResourceInfo(srvs[i].get(), trace_draw_call_data.sr_size[i], trace_draw_call_data.sr_format[i], &trace_draw_call_data.sr_type_name[i], &trace_draw_call_data.sr_hash[i], &trace_draw_call_data.sr_debug_name[i], &trace_draw_call_data.sr_is_rt[i], &trace_draw_call_data.sr_is_ua[i]);
 
                trace_draw_call_data.srv_mip[i] = GetSRVMipLevel(srv_desc);
@@ -712,6 +743,7 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
                if (uavs[i]) uavs[i]->GetDesc(&uav_desc);
                trace_draw_call_data.uav_format[i] = uav_desc.Format;
 
+               FlagUpgradedResources(uavs[i].get());
                GetResourceInfo(uavs[i].get(), trace_draw_call_data.ua_size[i], trace_draw_call_data.ua_format[i], &trace_draw_call_data.ua_type_name[i], &trace_draw_call_data.ua_hash[i], &trace_draw_call_data.ua_debug_name[i], &trace_draw_call_data.ua_is_rt[i]);
 
                trace_draw_call_data.uav_mip[i] = GetUAVMipLevel(uav_desc);
