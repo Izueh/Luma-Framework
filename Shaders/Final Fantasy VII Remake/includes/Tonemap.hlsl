@@ -191,6 +191,7 @@ float3 ApplyExposureContrastFlareHighlightsShadowsByLuminance(float3 untonemappe
     float3 color = untonemapped;
 
     color *= config.exposure;
+    y *= config.exposure;
 
     // contrast & flare
     const float y_normalized = y / mid_gray;
