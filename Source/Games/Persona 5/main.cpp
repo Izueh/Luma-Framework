@@ -499,7 +499,7 @@ public:
       auto CheckAndHandleRenderPassTransition = [native_device_context, &cmd_list_data, &device_data, &game_device_data](ID3D11RenderTargetView** render_target_views, ID3D11DepthStencilView* depth_stencil_view)
       {
          com_ptr<ID3D11Resource> resource;
-         render_target_views[0]->GetResource(&resource);
+         render_target_views[1]->GetResource(&resource);
          if (!resource)
          {
             return DrawOrDispatchOverrideType::None;
@@ -513,9 +513,10 @@ public:
          D3D11_TEXTURE2D_DESC tex_desc;
          tex->GetDesc(&tex_desc);
 
-         // the normal gbuffer is DXGI_FORMAT_R11G11B10_FLOAT
-         // for planar reflection it will be the standart scene color format(DXGI_FORMAT_R10G10B10A2_UNORM)
-         if (tex_desc.Format != DXGI_FORMAT_R11G11B10_FLOAT)
+         // the normal gbuffer is DXGI_FORMAT_R10G10B10A2_UNORM (or DXGI_FORMAT_R16G16B16A16_FLOAT when upgraded by renodx)
+         // for planar reflections render target 1 is DXGI_FORMAT_R8G8B8A8_UNORM
+         if (tex_desc.Format != DXGI_FORMAT_R10G10B10A2_UNORM &&
+             tex_desc.Format != DXGI_FORMAT_R16G16B16A16_FLOAT)
          {
             game_device_data.frame_phase = FramePhase::REFLECTION;
          }
@@ -892,17 +893,17 @@ public:
 
                com_ptr<ID3D11ShaderResourceView> motion_vectors_srv;
                {
-                   D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
-                   srv_desc.Format = motion_vectors_desc.Format;
-                   srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-                   srv_desc.Texture2D.MostDetailedMip = 0;
-                   srv_desc.Texture2D.MipLevels = 1;
-                   device->CreateShaderResourceView(game_device_data.motion_vectors.get(),
-                       &srv_desc,
-                       &motion_vectors_srv);
+                  D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
+                  srv_desc.Format = motion_vectors_desc.Format;
+                  srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+                  srv_desc.Texture2D.MostDetailedMip = 0;
+                  srv_desc.Texture2D.MipLevels = 1;
+                  device->CreateShaderResourceView(game_device_data.motion_vectors.get(),
+                     &srv_desc,
+                     &motion_vectors_srv);
                }
 
-               ID3D11ShaderResourceView* srvs[] = { motion_vectors_srv.get()};
+               ID3D11ShaderResourceView* srvs[] = {motion_vectors_srv.get()};
                ID3D11UnorderedAccessView* uavs[] = {game_device_data.decoded_motion_vectors_uav.get()};
                native_device_context->CSSetShader(device_data.native_compute_shaders[CompileTimeStringHash("Decode Motion Vector")].get(), 0, 0);
                native_device_context->CSSetShaderResources(0, 1, srvs);
@@ -1089,7 +1090,7 @@ public:
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
-          ImGui::SetTooltip("When enabled setting Rendering Scale to 50%% or 75%% will use Super Resolution (DLSS or FSR) to scale the image to the output resolution.\nOtherwise Super Resolution will only be used as AA and the image is bilinearly upscaled.");
+         ImGui::SetTooltip("When enabled setting Rendering Scale to 50%% or 75%% will use Super Resolution (DLSS or FSR) to scale the image to the output resolution.\nOtherwise Super Resolution will only be used as AA and the image is bilinearly upscaled.");
       }
 
       const char* previewString;
@@ -1129,7 +1130,7 @@ public:
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
-          ImGui::SetTooltip("Set ingame Shadow Quality to Medium. Requires restart/resetting Shadow Quality in settings.\nIn game settings:\nLow - 1024\nMedium - 2048\nHigh - 4096");
+         ImGui::SetTooltip("Set ingame Shadow Quality to Medium. Requires restart/resetting Shadow Quality in settings.\nIn game settings:\nLow - 1024\nMedium - 2048\nHigh - 4096");
       }
    }
 
