@@ -2,14 +2,11 @@
 // Granblue Fantasy Relink - DLAA/FSRAA Helper Functions
 // Adapted from FFXV implementation for Granblue Fantasy Relink
 // =============================================================================
-#include <cfloat>
-
 // Extract shader resources from the TAA shader state and store in game_device_data
 // Granblue TAA slots: source_color=3, depth=5, motion_vectors=23
 // Motion vectors are already decoded and not jittered in Granblue
 // Returns true if all required resources are present and valid
 static bool ExtractTAAShaderResources(
-   ID3D11Device* native_device,
    ID3D11DeviceContext* native_device_context,
    GameDeviceDataGBFR& game_device_data)
 {
@@ -44,9 +41,7 @@ static bool ExtractTAAShaderResources(
           game_device_data.sr_motion_vectors.get() != nullptr;
 }
 
-// Setup DLSS/FSR output texture
-// Modifies device_data.sr_output_color as needed
-// Returns the output texture and whether it supports UAV
+// Setup DLSS/FSR output texture.
 static bool SetupSROutput(
    ID3D11Device* native_device,
    DeviceData& device_data,
@@ -66,15 +61,14 @@ static bool SetupSROutput(
    out_texture->GetDesc(&out_texture_desc);
    game_device_data.taa_rt1_desc = out_texture_desc;
 
-   // Check if output supports UAV
-   constexpr bool use_native_uav = true; // Force intermediate texture to prevent output corruption
+   // Prefer writing directly to the native TAA output when UAV-capable.
+   constexpr bool use_native_uav = true;
    game_device_data.output_supports_uav = use_native_uav && (out_texture_desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0;
 
    // Get SR instance data for min resolution check
    auto* sr_instance_data = device_data.GetSRInstanceData();
    if (sr_instance_data)
    {
-      
       if (out_texture_desc.Width < sr_instance_data->min_resolution ||
           out_texture_desc.Height < sr_instance_data->min_resolution)
          return false;
@@ -113,60 +107,3 @@ static bool SetupSROutput(
    return true;
 }
 
-// Extract camera data (FOV, near, far) from the projection matrix in cbSceneBuffer
-static void ExtractCameraData(GameDeviceDataGBFR& game_device_data, const void* scene_buffer)
-{
-   Math::Matrix44 view, proj, inv_view;
-   view = *reinterpret_cast<const Math::Matrix44*>(reinterpret_cast<const uint8_t*>(scene_buffer) + offsetof(cbSceneBuffer, g_View));
-   inv_view = *reinterpret_cast<const Math::Matrix44*>(reinterpret_cast<const uint8_t*>(scene_buffer) + offsetof(cbSceneBuffer, g_ViewInverseMatrix));
-
-   float* float_buffer = reinterpret_cast<float*>(const_cast<void*>(scene_buffer));
-   std::memcpy(&proj, reinterpret_cast<const uint8_t*>(scene_buffer) + offsetof(cbSceneBuffer, g_Proj), sizeof(Math::Matrix44));
-
-
-   // Extract vertical FOV from projection matrix
-   // For a standard perspective projection:
-   // m11 = 1 / tan(fov_y / 2)  (in row-major, this is _22 in column-major)
-   // Here m11 corresponds to the Y-axis scale factor
-   float m11 = proj.m11;
-   if (m11 != 0.0f)
-   {
-      game_device_data.camera_fov = 2.0f * std::atan(1.0f / m11);
-   }
-
-   // Extract near and far planes
-   // For standard DX projection (looking down +Z or -Z):
-   // HLSL _m22 = f / (f - n)  or  f / (n - f)
-   // HLSL _m32 = -n * f / (f - n)  or  n * f / (n - f)
-   // Note: HLSL column-major _mRC maps to C++ row-major m(C)(R)
-   //   so HLSL _m22 (diagonal) = proj.m22, HLSL _m32 = proj.m23
-   float m22 = proj.m22;
-   float m32 = proj.m23;  // HLSL _m32 (column 2, row 3 → C++ row-major index 11)
-
-   if (m22 != 0.0f)
-   {
-      // n = m32 / m22
-      float n = m32 / m22;
-      float f = 0.0f;
-
-      if ((1.0f + m22) != 0.0f)
-      {
-         f = m32 / (1.0f + m22);
-      }
-
-      // Use absolute values since projection conventions vary
-      game_device_data.camera_near = std::abs(n);
-      game_device_data.camera_far = std::abs(f);
-   }
-
-   // Extract TAA jitter from the projection matrix.
-   // HLSL column-major layout: g_Proj starts at byte 64 (cb0[4]).
-   //   Column 0 (cb0[4]): _m00, _m10, _m20, _m30
-   //   Column 1 (cb0[5]): _m01, _m11, _m21, _m31
-   // _m20 (jitter X) = cb0[4].z = byte 72 → C++ proj.m02
-   // _m21 (jitter Y) = cb0[5].z = byte 88 → C++ proj.m12
-   // These are the asymmetric frustum offsets, zero without TAA, containing
-   // the sub-pixel NDC jitter when TAA is active. Values should be in ~[-1,1] NDC range.
-   game_device_data.jitter.x = proj.m02;
-   game_device_data.jitter.y = proj.m12;
-}
