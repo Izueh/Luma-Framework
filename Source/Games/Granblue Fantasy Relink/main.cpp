@@ -9,15 +9,13 @@
 #define JITTER_PHASES 8
 
 #include <d3d11.h>
-// #include "..\..\..\Shaders\Granblue Fantasy Relink\Includes\GameCBuffers.hlsl"
 #include "..\..\Core\core.hpp"
 #include "includes\cbuffers.h"
 #include "includes\safetyhook.hpp"
-#include <cstring>
 
 namespace
 {
-   
+
    struct GameDeviceDataGBFR final : public GameDeviceData
    {
 #if ENABLE_SR
@@ -54,6 +52,8 @@ namespace
       ID3D11Buffer* pending_scene_buffer = nullptr;
       UINT pending_first_constant = 0;
       UINT pending_num_constants = 0;
+      std::mutex scene_buffer_bindings_mutex;
+      std::set<UINT> scene_buffer_offsets_this_frame;
    };
 
    struct JitterEntry
@@ -113,22 +113,30 @@ namespace
       const UINT* pFirstConstant,
       const UINT* pNumConstants)
    {
-      // Detect first VSSetConstantBuffers1 with StartSlot=0 for the frame
+      // Detect VSSetConstantBuffers1 with StartSlot=0 and exactly 48 constants (SceneBuffer)
       // and store the buffer info so the immediate context can patch it later.
+      // numConstants == 48 is the unique fingerprint of the SceneBuffer bind; other slot-0
+      // binds in the frame use different constant counts.
       if (StartSlot == 0 && NumBuffers >= 1 && ppConstantBuffers && ppConstantBuffers[0] &&
-          pFirstConstant && pNumConstants)
+          pFirstConstant && pNumConstants && pNumConstants[0] == 48)
       {
          DeviceData* device_data = g_device_data_ptr.load(std::memory_order_acquire);
          if (device_data)
          {
             auto& game_device_data = *static_cast<GameDeviceDataGBFR*>(device_data->game);
+            const UINT current_first_constant = pFirstConstant[0];
 
-            // Only collect once per frame (first deferred context to reach here wins)
+            {
+               std::lock_guard<std::mutex> lock(game_device_data.scene_buffer_bindings_mutex);
+               game_device_data.scene_buffer_offsets_this_frame.insert(current_first_constant);
+            }
+
+            // Set pending fields on first capture per frame (CAS ensures only one writer).
             bool expected = false;
             if (game_device_data.scene_buffer_collect_guard.compare_exchange_strong(expected, true, std::memory_order_relaxed))
             {
                game_device_data.pending_scene_buffer = ppConstantBuffers[0];
-               game_device_data.pending_first_constant = pFirstConstant[0];
+               game_device_data.pending_first_constant = current_first_constant;
                game_device_data.pending_num_constants = pNumConstants[0];
                // Release ensures the three stores above are visible to any thread
                // that does an acquire-load of scene_buffer_info_collected.
@@ -196,9 +204,9 @@ namespace
          {
             CB::LumaInstanceDataPadded instance_data = {};
             instance_data.GameData.JitterOffset.x     = game_device_data.jitter.x * 2.0f / resX;
-            instance_data.GameData.JitterOffset.y     = game_device_data.jitter.y * 2.0f / resY;
+            instance_data.GameData.JitterOffset.y     = game_device_data.jitter.y * -2.0f / resY;
             instance_data.GameData.PrevJitterOffset.x = game_device_data.prev_jitter.x * 2.0f / resX;
-            instance_data.GameData.PrevJitterOffset.y = game_device_data.prev_jitter.y * 2.0f / resY;
+            instance_data.GameData.PrevJitterOffset.y = game_device_data.prev_jitter.y * -2.0f / resY;
             D3D11_MAPPED_SUBRESOURCE mapped = {};
             if (SUCCEEDED(pContext->Map(device_data->luma_instance_data.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
             {
@@ -386,15 +394,26 @@ public:
             if (!game_device_data.scene_buffer_patched_this_frame.load(std::memory_order_relaxed) &&
                 game_device_data.scene_buffer_info_collected.load(std::memory_order_acquire))
             {
-               game_device_data.scene_buffer_patched_this_frame.store(true, std::memory_order_release);
-               com_ptr<ID3D11DeviceContext1> immediate_context1;
-               if (SUCCEEDED(native_device_context->QueryInterface(IID_PPV_ARGS(&immediate_context1))))
+               std::set<UINT> offsets_to_patch;
                {
-                  PatchSceneBufferInHook(
-                     immediate_context1.get(),
-                     game_device_data.pending_scene_buffer,
-                     game_device_data.pending_first_constant,
-                     game_device_data.pending_num_constants);
+                  std::lock_guard<std::mutex> lock(game_device_data.scene_buffer_bindings_mutex);
+                  offsets_to_patch = game_device_data.scene_buffer_offsets_this_frame;
+               }
+               if (!offsets_to_patch.empty())
+               {
+                  game_device_data.scene_buffer_patched_this_frame.store(true, std::memory_order_release);
+                  com_ptr<ID3D11DeviceContext1> immediate_context1;
+                  if (SUCCEEDED(native_device_context->QueryInterface(IID_PPV_ARGS(&immediate_context1))))
+                  {
+                     for (UINT offset : offsets_to_patch)
+                     {
+                        PatchSceneBufferInHook(
+                           immediate_context1.get(),
+                           game_device_data.pending_scene_buffer,
+                           offset,
+                           game_device_data.pending_num_constants);
+                     }
+                  }
                }
             }
          }
@@ -624,6 +643,25 @@ public:
       game_device_data.scene_buffer_collect_guard.store(false, std::memory_order_relaxed);
       game_device_data.scene_buffer_info_collected.store(false, std::memory_order_relaxed);
       game_device_data.pending_scene_buffer = nullptr;
+      game_device_data.pending_first_constant = 0;
+      game_device_data.pending_num_constants = 0;
+      {
+         std::lock_guard<std::mutex> lock(game_device_data.scene_buffer_bindings_mutex);
+         game_device_data.scene_buffer_offsets_this_frame.clear();
+      }
+
+      if (!custom_texture_mip_lod_bias_offset)
+      {
+         std::shared_lock shared_lock_samplers(s_mutex_samplers);
+         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed)
+         {
+            device_data.texture_mip_lod_bias_offset = SR::GetMipLODBias(device_data.render_resolution.y, device_data.output_resolution.y); // This results in -1 at output res
+         }
+         else
+         {
+            device_data.texture_mip_lod_bias_offset = 0.f;
+         }
+      }
 
       game_device_data.prev_jitter = game_device_data.jitter;
       // OnPresent runs before FrameIndex increments, so +1 advances to the next frame sample.
@@ -633,10 +671,58 @@ public:
 
 
    }
-
    void PrintImGuiAbout() override
    {
-      ImGui::Text("Granblue Fantasy Relink Luma mod - DLAA/FSRAA", "");
+      ImGui::Text("Luma for \"Granblue Fantasy Relink\" is developed by Izueh and is open source and free.\nIf you enjoy it, consider donating");
+
+      const auto button_color = ImGui::GetStyleColorVec4(ImGuiCol_Button);
+      const auto button_hovered_color = ImGui::GetStyleColorVec4(ImGuiCol_ButtonHovered);
+      const auto button_active_color = ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive);
+      ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(70, 134, 0, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(70 + 9, 134 + 9, 0, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, IM_COL32(70 + 18, 134 + 18, 0, 255));
+      static const std::string donation_link_izueh = std::string("Buy Izueh a Coffee on ko-fi ") + std::string(ICON_FK_OK);
+      if (ImGui::Button(donation_link_izueh.c_str()))
+      {
+         system("start https://ko-fi.com/izueh");
+      }
+      ImGui::PopStyleColor(3);
+
+      ImGui::NewLine();
+      // Restore the previous color, otherwise the state we set would persist even if we popped it
+      ImGui::PushStyleColor(ImGuiCol_Button, button_color);
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, button_hovered_color);
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, button_active_color);
+#if 0
+      static const std::string mod_link = std::string("Nexus Mods Page ") + std::string(ICON_FK_SEARCH);
+      if (ImGui::Button(mod_link.c_str()))
+      {
+         system("start https://www.nexusmods.com/prey2017/mods/149");
+      }
+#endif
+      static const std::string social_link = std::string("Join our \"HDR Den\" Discord ") + std::string(ICON_FK_SEARCH);
+      if (ImGui::Button(social_link.c_str()))
+      {
+         // Unique link for Luma by Pumbo (to track the origin of people joining), do not share for other purposes
+         static const std::string obfuscated_link = std::string("start https://discord.gg/J9fM") + std::string("3EVuEZ");
+         system(obfuscated_link.c_str());
+      }
+      static const std::string contributing_link = std::string("Contribute on Github ") + std::string(ICON_FK_FILE_CODE);
+      if (ImGui::Button(contributing_link.c_str()))
+      {
+         system("start https://github.com/Filoppi/Luma-Framework");
+      }
+      ImGui::PopStyleColor(3);
+
+      ImGui::NewLine();
+      ImGui::Text("Credits:"
+                  "\n\nMain:"
+                  "\nIzueh"
+
+                  "\n\nThird Party:"
+                  "\nReShade"
+                  "\nImGui"
+                  "");
    }
 };
 
@@ -684,9 +770,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 #if DEVELOPMENT
       forced_shader_names.emplace(std::stoul("478E345C", nullptr, 16), "TAA");
       forced_shader_names.emplace(std::stoul("E49E117A", nullptr, 16), "TAA RenoDX");
-      forced_shader_names.emplace(std::stoul("DA85F5BB", nullptr, 16), "SceneBuffer_CS");
 #endif
-
+      enable_samplers_upgrade = true;
       game = new GranblueFantasyRelink();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)

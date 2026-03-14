@@ -972,16 +972,24 @@ bool CopyBuffer(com_ptr<ID3D11Buffer> cb, ID3D11DeviceContext* native_device_con
    D3D11_BUFFER_DESC desc = {};
    cb->GetDesc(&desc);
 
+   com_ptr<ID3D11Device> native_device;
+   native_device_context->GetDevice(&native_device);
+   // Always use the immediate context for CopyResource and Map.
+   // Deferred contexts do not support D3D11_MAP_READ (returns E_INVALIDARG) and
+   // their commands may not yet be flushed to the GPU.
+   com_ptr<ID3D11DeviceContext> map_context;
+   native_device->GetImmediateContext(&map_context);
+
    // Clone it if it can't be read by the CPU
    if ((desc.CPUAccessFlags & D3D11_CPU_ACCESS_READ) == 0 || desc.Usage != D3D11_USAGE_STAGING)
    {
       com_ptr<ID3D11Buffer> cb_copy;
-      com_ptr<ID3D11Device> native_device;
       desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
       desc.Usage = D3D11_USAGE_STAGING;
       desc.BindFlags = 0;
+      desc.MiscFlags = 0;         // MiscFlags incompatible with staging (e.g. structured) must be cleared
+      desc.StructureByteStride = 0; // Must be 0 when MiscFlags has no D3D11_RESOURCE_MISC_BUFFER_STRUCTURED
 
-      native_device_context->GetDevice(&native_device);
       HRESULT hr = native_device->CreateBuffer(&desc, nullptr, &cb_copy);
       if (FAILED(hr))
       {
@@ -989,13 +997,12 @@ bool CopyBuffer(com_ptr<ID3D11Buffer> cb, ID3D11DeviceContext* native_device_con
          ASSERT_ONCE(false);
          return false;
       }
-      native_device_context->CopyResource(cb_copy.get(), cb.get());
+      map_context->CopyResource(cb_copy.get(), cb.get());
       cb = cb_copy;
    }
 
    D3D11_MAPPED_SUBRESOURCE mapped = {};
-   // Map in DX11 here can seemengly be done on deferred contexts too, it will stall the CPU until the GPU has the latest values (no need to flush the command list)
-   HRESULT hr = native_device_context->Map(cb.get(), 0, D3D11_MAP_READ, 0, &mapped);
+   HRESULT hr = map_context->Map(cb.get(), 0, D3D11_MAP_READ, 0, &mapped);
    if (FAILED(hr))
    {
       buffer_data.clear();
@@ -1012,7 +1019,7 @@ bool CopyBuffer(com_ptr<ID3D11Buffer> cb, ID3D11DeviceContext* native_device_con
    }
    std::memcpy(buffer_data.data(), mapped.pData, desc.ByteWidth);
 
-   native_device_context->Unmap(cb.get(), 0);
+   map_context->Unmap(cb.get(), 0);
    return true;
 }
 #endif // DEVELOPMENT
