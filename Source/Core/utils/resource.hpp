@@ -1007,10 +1007,9 @@ bool CopyBuffer(com_ptr<ID3D11Buffer> cb, ID3D11DeviceContext* native_device_con
       desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
       desc.Usage = D3D11_USAGE_STAGING;
       desc.BindFlags = 0;
-      desc.MiscFlags = 0;
-      desc.StructureByteStride = 0;
+      desc.MiscFlags = 0; // Some flags might be incompatible with staging
+      desc.StructureByteStride = 0; // Must be zero for safety, as we cleared "D3D11_RESOURCE_MISC_BUFFER_STRUCTURED"
 
-      native_device_context->GetDevice(&native_device);
       HRESULT hr = native_device->CreateBuffer(&desc, nullptr, &cb_copy);
       if (FAILED(hr))
       {

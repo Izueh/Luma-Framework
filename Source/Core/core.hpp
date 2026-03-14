@@ -6227,17 +6227,28 @@ namespace
          if (track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == track_buffer_pipeline_target_instance)
          {
             com_ptr<ID3D11Buffer> cb;
+            UINT cb_first = 0, cb_num = 0;
+            com_ptr<ID3D11DeviceContext1> native_device_context_1;
+            native_device_context->QueryInterface(&native_device_context_1);
             if (track_buffer_pipeline_ps)
             {
-               native_device_context->PSGetConstantBuffers(track_buffer_index, 1, &cb);
+               if (native_device_context_1)
+                  native_device_context_1->PSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+               else
+                  native_device_context->PSGetConstantBuffers(track_buffer_index, 1, &cb);
             }
             else if (track_buffer_pipeline_vs)
             {
-               native_device_context->VSGetConstantBuffers(track_buffer_index, 1, &cb);
+               if (native_device_context_1)
+                  native_device_context_1->VSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+               else
+                  native_device_context->VSGetConstantBuffers(track_buffer_index, 1, &cb);
             }
             // Copy the buffer in our data, and make a copy if necessary, if we are in a deferred context
             device_data.track_buffer_data.data_valid = CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
             device_data.track_buffer_data.hash = std::to_string(std::hash<void*>{}(cb.get()));
+            device_data.track_buffer_data.first_constant = cb_first;
+            device_data.track_buffer_data.num_constants = cb_num;
          }
       }
       if (cancelled_or_replaced)
@@ -6384,17 +6395,28 @@ namespace
          if (track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == track_buffer_pipeline_target_instance)
          {
             com_ptr<ID3D11Buffer> cb;
+            UINT cb_first = 0, cb_num = 0;
+            com_ptr<ID3D11DeviceContext1> native_device_context_1;
+            native_device_context->QueryInterface(&native_device_context_1);
             if (track_buffer_pipeline_ps)
             {
-               native_device_context->PSGetConstantBuffers(track_buffer_index, 1, &cb);
+               if (native_device_context_1)
+                  native_device_context_1->PSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+               else
+                  native_device_context->PSGetConstantBuffers(track_buffer_index, 1, &cb);
             }
             else if (track_buffer_pipeline_vs)
             {
-               native_device_context->VSGetConstantBuffers(track_buffer_index, 1, &cb);
+               if (native_device_context_1)
+                  native_device_context_1->VSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+               else
+                  native_device_context->VSGetConstantBuffers(track_buffer_index, 1, &cb);
             }
             // Copy the buffer in our data, and make a copy if necessary, if we are in a deferred context
             device_data.track_buffer_data.data_valid = CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
             device_data.track_buffer_data.hash = std::to_string(std::hash<void*>{}(cb.get()));
+            device_data.track_buffer_data.first_constant = cb_first;
+            device_data.track_buffer_data.num_constants = cb_num;
          }
       }
       if (cancelled_or_replaced)
@@ -6500,10 +6522,18 @@ namespace
          if (track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == track_buffer_pipeline_target_instance)
          {
             com_ptr<ID3D11Buffer> cb;
-            native_device_context->CSGetConstantBuffers(track_buffer_index, 1, &cb);
+            UINT cb_first = 0, cb_num = 0;
+            com_ptr<ID3D11DeviceContext1> native_device_context_1;
+            native_device_context->QueryInterface(&native_device_context_1);
+            if (native_device_context_1)
+               native_device_context_1->CSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+            else
+               native_device_context->CSGetConstantBuffers(track_buffer_index, 1, &cb);
             // Copy the buffer in our data, and make a copy if necessary, if we are in a deferred context
             device_data.track_buffer_data.data_valid = CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
             device_data.track_buffer_data.hash = std::to_string(std::hash<void*>{}(cb.get()));
+            device_data.track_buffer_data.first_constant = cb_first;
+            device_data.track_buffer_data.num_constants = cb_num;
          }
       }
       if (cancelled_or_replaced)
@@ -6672,21 +6702,35 @@ namespace
          if (track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == track_buffer_pipeline_target_instance)
          {
             com_ptr<ID3D11Buffer> cb;
+            UINT cb_first = 0, cb_num = 0;
+            com_ptr<ID3D11DeviceContext1> native_device_context_1;
+            native_device_context->QueryInterface(&native_device_context_1);
             if (track_buffer_pipeline_ps)
             {
-               native_device_context->PSGetConstantBuffers(track_buffer_index, 1, &cb);
+               if (native_device_context_1)
+                  native_device_context_1->PSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+               else
+                  native_device_context->PSGetConstantBuffers(track_buffer_index, 1, &cb);
             }
             else if (track_buffer_pipeline_vs)
             {
-               native_device_context->VSGetConstantBuffers(track_buffer_index, 1, &cb);
+               if (native_device_context_1)
+                  native_device_context_1->VSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+               else
+                  native_device_context->VSGetConstantBuffers(track_buffer_index, 1, &cb);
             }
             else if (track_buffer_pipeline_cs)
             {
-               native_device_context->CSGetConstantBuffers(track_buffer_index, 1, &cb);
+               if (native_device_context_1)
+                  native_device_context_1->CSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+               else
+                  native_device_context->CSGetConstantBuffers(track_buffer_index, 1, &cb);
             }
             // Copy the buffer in our data, and make a copy if necessary, if we are in a deferred context
             device_data.track_buffer_data.data_valid = CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
             device_data.track_buffer_data.hash = std::to_string(std::hash<void*>{}(cb.get()));
+            device_data.track_buffer_data.first_constant = cb_first;
+            device_data.track_buffer_data.num_constants = cb_num;
          }
       }
       if (cancelled_or_replaced)
@@ -10538,6 +10582,17 @@ namespace
                                           ImGui::NewLine();
                                           ImGui::Text("Tracked Constant Buffer:");
                                           ImGui::Text("Resource Hash: %s", device_data.track_buffer_data.hash.c_str());
+                                          const UINT tb_first = device_data.track_buffer_data.first_constant;
+                                          const UINT tb_num = device_data.track_buffer_data.num_constants;
+                                          // Each D3D11.1 "constant" is a float4 = 4 floats in our data vector.
+                                          // tb_num == 0 means D3D11.0 path (no partial-bind info): show the whole buffer.
+                                          const size_t tb_display_begin = (tb_num != 0) ? (size_t)tb_first * 4 : 0;
+                                          const size_t tb_display_end = (tb_num != 0) ? (size_t)(tb_first + tb_num) * 4 : device_data.track_buffer_data.data.size();
+                                          const size_t tb_display_end_clamped = (std::min)(tb_display_end, device_data.track_buffer_data.data.size());
+                                          if (tb_num != 0)
+                                          {
+                                             ImGui::Text("Partial Bind: first constant %u, %u constants (floats %zu..%zu)", tb_first, tb_num, tb_display_begin, tb_display_end_clamped);
+                                          }
                                           if (ImGui::BeginChild("TrackBufferScroll", ImVec2(0, 500), ImGuiChildFlags_Borders))
                                           {
                                              // TODO: match with the shader assembly cbs etc (if the data is available)
@@ -10548,14 +10603,15 @@ namespace
                                                 ImGui::TableSetupColumn("Int Value", ImGuiTableColumnFlags_WidthStretch);
                                                 ImGui::TableHeadersRow();
 
-                                                for (size_t i = 0; i < device_data.track_buffer_data.data.size(); ++i)
+                                                for (size_t i = tb_display_begin; i < tb_display_end_clamped; ++i)
                                                 {
                                                    float this_data = device_data.track_buffer_data.data[i];
                                                    ImGui::TableNextRow();
                                                    ImGui::TableSetColumnIndex(0);
                                                    static const char* components[] = { "x", "y", "z", "w" };
-                                                   size_t group = i / 4; // Split index by float4
-                                                   size_t comp_index = i % 4; // Print out the x/y/w/z identifier
+                                                   size_t relative_i = i - tb_display_begin; // 0-based offset within the visible slice
+                                                   size_t group = relative_i / 4; // Split index by float4
+                                                   size_t comp_index = relative_i % 4; // Print out the x/y/w/z identifier
                                                    ImGui::Text("%zu:%s", group, components[comp_index]);
                                                    // First print as float
                                                    ImGui::TableSetColumnIndex(1);
@@ -10584,9 +10640,9 @@ namespace
                                           if (ImGui::Button("Copy Constant Buffer Data to Clipboard (float)"))
                                           {
                                              std::ostringstream oss;
-                                             for (size_t i = 0; i < device_data.track_buffer_data.data.size(); ++i) {
+                                             for (size_t i = tb_display_begin; i < tb_display_end_clamped; ++i) {
                                                 oss << device_data.track_buffer_data.data[i];
-                                                if (i + 1 < device_data.track_buffer_data.data.size())
+                                                if (i + 1 < tb_display_end_clamped)
                                                    oss << '\n';
                                              }
                                              System::CopyToClipboard(oss.str());
@@ -11470,6 +11526,12 @@ namespace
                                              ImGui::Text("");
                                              ImGui::Text("CB Index: %u", i);
                                              ImGui::Text("CB Hash: %s", draw_call_data.cb_hash[i].c_str());
+                                             if (draw_call_data.cb_num_constants[i] != 0)
+                                             {
+                                                const bool is_partial = draw_call_data.cb_first_constant[i] != 0 || draw_call_data.cb_num_constants[i] != D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT;
+                                                ImGui::Text("CB First Constant: %u%s", draw_call_data.cb_first_constant[i], is_partial ? " (partial)" : "");
+                                                ImGui::Text("CB Num Constants: %u", draw_call_data.cb_num_constants[i]);
+                                             }
                                              const bool is_highlighted_resource = highlighted_resource == draw_call_data.cb_hash[i];
                                              if (is_highlighted_resource ? ImGui::Button("Unhighlight Resource") : ImGui::Button("Highlight Resource"))
                                              {
