@@ -16,8 +16,9 @@ static bool ExtractTAAShaderResources(
    native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), reinterpret_cast<ID3D11ShaderResourceView**>(ps_shader_resources));
 
    // Validate that required SRVs are present
-   // t3 = current color, t5 = depth, t23 = motion vectors
-   if (!ps_shader_resources[3].get() || !ps_shader_resources[5].get() || !ps_shader_resources[23].get())
+   // t3 = current color, t23 = motion vectors (required); t5 = depth (optional — absent for
+   // NewAA at <100% scale; depth_buffer is pre-populated from the outline CS intercept).
+   if (!ps_shader_resources[3].get() || !ps_shader_resources[23].get())
    {
       return false;
    }
@@ -27,17 +28,20 @@ static bool ExtractTAAShaderResources(
    game_device_data.sr_source_color = nullptr;
    ps_shader_resources[3]->GetResource(&game_device_data.sr_source_color);
 
-   // t5 = depth buffer
-   game_device_data.depth_buffer = nullptr;
-   ps_shader_resources[5]->GetResource(&game_device_data.depth_buffer);
+   // t5 = depth buffer (optional — NewAA at <100% scale does not bind t5;
+   // depth was cached from the outline CS dispatch (0xDA85F5BB) earlier this frame).
+   if (ps_shader_resources[5].get())
+   {
+      game_device_data.depth_buffer = nullptr;
+      ps_shader_resources[5]->GetResource(&game_device_data.depth_buffer);
+   }
 
    // t23 = motion vectors (already decoded, not jittered)
    game_device_data.sr_motion_vectors = nullptr;
    ps_shader_resources[23]->GetResource(&game_device_data.sr_motion_vectors);
 
-   // Validate that all resources were successfully extracted
+   // Depth is either freshly extracted from t5 or pre-cached from the outline CS.
    return game_device_data.sr_source_color.get() != nullptr &&
-          game_device_data.depth_buffer.get() != nullptr &&
           game_device_data.sr_motion_vectors.get() != nullptr;
 }
 
@@ -53,9 +57,21 @@ static bool SetupSROutput(
    // Get output texture from render target
 
    com_ptr<ID3D11Texture2D> out_texture;
-   HRESULT hr = game_device_data.taa_rt1_resource->QueryInterface(&out_texture);
+   HRESULT hr;
+
+   if (game_device_data.render_scale == 1.f)
+   {
+      // In DLAA mode we can write directly to the TAA output RT when UAV-capable, so get the underlying texture.
+      hr = game_device_data.taa_rt1_resource->QueryInterface(&out_texture);
+   }
+   else
+   {
+      // In upscaling mode we need a separate output texture to avoid overwriting the TAA input (and because the TUP shader is recorded with t3 = sr_output_color_srv, so we must fill sr_output_color with the DLSS output).
+      hr = game_device_data.taa_upscale_rt_resource->QueryInterface(&out_texture);
+   }
    if (FAILED(hr))
       return false;
+
    D3D11_TEXTURE2D_DESC out_texture_desc;
 
    out_texture->GetDesc(&out_texture_desc);
@@ -84,8 +100,8 @@ static bool SetupSROutput(
          D3D11_TEXTURE2D_DESC prev_desc;
          device_data.sr_output_color->GetDesc(&prev_desc);
          game_device_data.output_changed = prev_desc.Width != dlss_output_desc.Width ||
-                              prev_desc.Height != dlss_output_desc.Height ||
-                              prev_desc.Format != dlss_output_desc.Format;
+                                           prev_desc.Height != dlss_output_desc.Height ||
+                                           prev_desc.Format != dlss_output_desc.Format;
       }
 
       if (!device_data.sr_output_color.get() || game_device_data.output_changed)
@@ -106,4 +122,3 @@ static bool SetupSROutput(
 
    return true;
 }
-
