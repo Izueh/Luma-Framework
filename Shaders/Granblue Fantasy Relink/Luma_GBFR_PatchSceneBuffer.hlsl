@@ -44,6 +44,10 @@ void main(uint3 ThreadID: SV_DispatchThreadID)
    proj[2][0] = LumaData.GameData.JitterOffset.x;
    proj[2][1] = LumaData.GameData.JitterOffset.y;
 
+   // scale fov for debugging purposes
+      // proj[0][0] *= 0.5;
+      // proj[1][1] *= 0.5;
+
    patched.g_Proj = proj;
 
    patched.g_ViewProjection = mul(patched.g_View, patched.g_Proj);
@@ -55,6 +59,10 @@ void main(uint3 ThreadID: SV_DispatchThreadID)
 
    prevProj[2][0] = LumaData.GameData.PrevJitterOffset.x;
    prevProj[2][1] = LumaData.GameData.PrevJitterOffset.y;
+
+   // scale fov for debugging purposes
+   // prevProj[0][0] *= 0.5;
+   // prevProj[1][1] *= 0.5;
 
    patched.g_PrevProj = prevProj;
 

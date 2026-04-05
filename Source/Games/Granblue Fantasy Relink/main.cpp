@@ -1,8 +1,11 @@
+#include <cstdint>
+#include <d3d11_1.h>
 #define GAME_GRANBLUE_FANTASY_RELINK 1
 
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
 #define JITTER_PHASES 8
+#define PATCH_SCENE_BUFFER 1
 
 #include <d3d11.h>
 #include "..\..\Core\core.hpp"
@@ -11,43 +14,241 @@
 
 namespace
 {
-
    struct GameDeviceDataGBFR final : public GameDeviceData
    {
+      struct BufferInfo
+      {
+         ComPtr<ID3D11Buffer> buffer;
+         UINT num_constants;
+         UINT first_constant;
+      };
+
+      struct CutsceneOverlayPrepReplayState
+      {
+         static constexpr UINT kCapturedVertexBufferCount = 2;
+
+         bool valid = false;
+         ComPtr<ID3D11VertexShader> vertex_shader;
+         ComPtr<ID3D11PixelShader> pixel_shader;
+         ComPtr<ID3D11InputLayout> input_layout;
+         std::array<ComPtr<ID3D11Buffer>, kCapturedVertexBufferCount> vertex_buffers;
+         std::array<UINT, kCapturedVertexBufferCount> vertex_buffer_strides = {};
+         std::array<UINT, kCapturedVertexBufferCount> vertex_buffer_offsets = {};
+         BufferInfo vs_constant_buffer_slot1;
+         BufferInfo ps_constant_buffer_slot1;
+
+         void Reset()
+         {
+            valid = false;
+            vertex_shader = nullptr;
+            pixel_shader = nullptr;
+            input_layout = nullptr;
+            for (auto& buffer : vertex_buffers)
+            {
+               buffer = nullptr;
+            }
+            vertex_buffer_strides.fill(0);
+            vertex_buffer_offsets.fill(0);
+            vs_constant_buffer_slot1.buffer = nullptr;
+            vs_constant_buffer_slot1.num_constants = 0;
+            vs_constant_buffer_slot1.first_constant = 0;
+            ps_constant_buffer_slot1.buffer = nullptr;
+            ps_constant_buffer_slot1.num_constants = 0;
+            ps_constant_buffer_slot1.first_constant = 0;
+         }
+      };
+
+      struct CutsceneOverlayReplayState
+      {
+         static constexpr UINT kCapturedVertexBufferCount = 2;
+
+         bool valid = false;
+         ComPtr<ID3D11VertexShader> vertex_shader;
+         ComPtr<ID3D11PixelShader> pixel_shader;
+         ComPtr<ID3D11InputLayout> input_layout;
+         std::array<ComPtr<ID3D11Buffer>, kCapturedVertexBufferCount> vertex_buffers;
+         std::array<UINT, kCapturedVertexBufferCount> vertex_buffer_strides = {};
+         std::array<UINT, kCapturedVertexBufferCount> vertex_buffer_offsets = {};
+         BufferInfo vs_constant_buffer_slot1;
+         BufferInfo ps_constant_buffer_slot1;
+         ComPtr<ID3D11ShaderResourceView> ps_shader_resource_slot1;
+
+         void Reset()
+         {
+            valid = false;
+            vertex_shader = nullptr;
+            input_layout = nullptr;
+            for (auto& buffer : vertex_buffers)
+            {
+               buffer = nullptr;
+            }
+            vertex_buffer_strides.fill(0);
+            vertex_buffer_offsets.fill(0);
+            vs_constant_buffer_slot1.buffer = nullptr;
+            vs_constant_buffer_slot1.num_constants = 0;
+            vs_constant_buffer_slot1.first_constant = 0;
+            ps_constant_buffer_slot1.buffer = nullptr;
+            ps_constant_buffer_slot1.num_constants = 0;
+            ps_constant_buffer_slot1.first_constant = 0;
+            ps_shader_resource_slot1 = nullptr;
+         }
+      };
+
+      struct MotionBlurReplayState
+      {
+         static constexpr UINT kCapturedVertexBufferCount = 2;
+
+         bool valid = false;
+         ComPtr<ID3D11VertexShader> vertex_shader;
+         ComPtr<ID3D11PixelShader> pixel_shader;
+         ComPtr<ID3D11InputLayout> input_layout;
+         D3D11_PRIMITIVE_TOPOLOGY primitive_topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+         std::array<ComPtr<ID3D11Buffer>, kCapturedVertexBufferCount> vertex_buffers;
+         std::array<UINT, kCapturedVertexBufferCount> vertex_buffer_strides = {};
+         std::array<UINT, kCapturedVertexBufferCount> vertex_buffer_offsets = {};
+         BufferInfo ps_cbuffer_b10;
+         BufferInfo ps_cbuffer_b12;
+         ComPtr<ID3D11ShaderResourceView> ps_srv_t0;
+         ComPtr<ID3D11ShaderResourceView> ps_srv_t1;
+         ComPtr<ID3D11ShaderResourceView> ps_srv_t4;
+         ComPtr<ID3D11ShaderResourceView> ps_srv_t5;
+
+         void Reset()
+         {
+            valid = false;
+            vertex_shader = nullptr;
+            pixel_shader = nullptr;
+            input_layout = nullptr;
+            primitive_topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+            for (auto& buffer : vertex_buffers)
+            {
+               buffer = nullptr;
+            }
+            vertex_buffer_strides.fill(0);
+            vertex_buffer_offsets.fill(0);
+            ps_cbuffer_b10.buffer = nullptr;
+            ps_cbuffer_b10.num_constants = 0;
+            ps_cbuffer_b10.first_constant = 0;
+            ps_cbuffer_b12.buffer = nullptr;
+            ps_cbuffer_b12.num_constants = 0;
+            ps_cbuffer_b12.first_constant = 0;
+            ps_srv_t0 = nullptr;
+            ps_srv_t1 = nullptr;
+            ps_srv_t4 = nullptr;
+            ps_srv_t5 = nullptr;
+         }
+      };
+
+      struct CutscenePostPassReplayState
+      {
+         bool valid = false;
+         ComPtr<ID3D11VertexShader> vertex_shader;
+         ComPtr<ID3D11PixelShader> pixel_shader;
+         BufferInfo ps_constant_buffer_slot1;
+         ComPtr<ID3D11SamplerState> ps_sampler_slot0;
+
+         void Reset()
+         {
+            valid = false;
+            vertex_shader = nullptr;
+            pixel_shader = nullptr;
+            ps_constant_buffer_slot1.buffer = nullptr;
+            ps_constant_buffer_slot1.num_constants = 0;
+            ps_constant_buffer_slot1.first_constant = 0;
+            ps_sampler_slot0 = nullptr;
+         }
+      };
+
 #if ENABLE_SR
-      // SR - Resources extracted from TAA pass
-      com_ptr<ID3D11Resource> sr_source_color;   // t3: current color
-      com_ptr<ID3D11Resource> depth_buffer;      // t5: depth
-      com_ptr<ID3D11Resource> sr_motion_vectors; // t23: motion vectors (already decoded)
-      com_ptr<ID3D11Resource> taa_rt1_resource;
-      com_ptr<ID3D11Resource> taa_upscale_rt_resource;
-      D3D11_TEXTURE2D_DESC taa_rt1_desc;
-      com_ptr<ID3D11ShaderResourceView> sr_output_color_srv;
+      ComPtr<ID3D11Resource> sr_source_color;
+      ComPtr<ID3D11ShaderResourceView> sr_source_color_srv;
+      ComPtr<ID3D11Texture2D> pre_sr_encode_texture;
+      ComPtr<ID3D11ShaderResourceView> pre_sr_encode_srv;
+      ComPtr<ID3D11RenderTargetView> pre_sr_encode_rtv;
+      ComPtr<ID3D11Texture2D> post_sr_encode_texture;
+      ComPtr<ID3D11ShaderResourceView> post_sr_encode_srv;
+      ComPtr<ID3D11RenderTargetView> post_sr_encode_rtv;
+      ComPtr<ID3D11Resource> depth_buffer;
+      ComPtr<ID3D11Resource> sr_motion_vectors;
+
+      ComPtr<ID3D11Texture2D> sr_output_color;
+      ComPtr<ID3D11ShaderResourceView> sr_output_color_srv;
       std::atomic<ID3D11DeviceContext*> draw_device_context = nullptr;
-      ID3D11CommandList* remainder_command_list = nullptr; // Raw pointer for identity comparison only
-      com_ptr<ID3D11CommandList> partial_command_list;
-      com_ptr<ID3D11Buffer> modifiable_index_vertex_buffer;
+
+      std::atomic<ID3D11CommandList*> remainder_command_list = nullptr;
+      ComPtr<ID3D11CommandList> partial_command_list;
+      ComPtr<ID3D11Buffer> modifiable_index_vertex_buffer;
       std::atomic<bool> output_supports_uav = false;
       std::atomic<bool> output_changed = false;
+      std::atomic<bool> tonemap_draw_pending = false; // Set when TAA/TU reached tonemap point before captures were ready
 
 #endif // ENABLE_SR
+
+      ComPtr<ID3D11Texture2D> exposure_texture;
+      ComPtr<ID3D11ShaderResourceView> exposure_texture_srv;
+      ComPtr<ID3D11ShaderResourceView> bloom_texture_srv;
+      ComPtr<ID3D11Texture2D> taa_temp_output_resource;
+      ComPtr<ID3D11ShaderResourceView> taa_temp_output_srv;
+      ComPtr<ID3D11RenderTargetView> taa_temp_output_rtv;
+      ComPtr<ID3D11Texture2D> taa_output_texture;
+      ComPtr<ID3D11RenderTargetView> taa_output_texture_rtv;
+
+      // Motion blur late replay resources.
+      std::array<MotionBlurReplayState, 2> motion_blur_replay_states;
+      ComPtr<ID3D11Texture2D> motion_blur_intermediate_resource;
+      ComPtr<ID3D11ShaderResourceView> motion_blur_intermediate_srv;
+      ComPtr<ID3D11RenderTargetView> motion_blur_intermediate_rtv;
+      ComPtr<ID3D11Texture2D> motion_blur_output_resource;
+      ComPtr<ID3D11ShaderResourceView> motion_blur_output_srv;
+      ComPtr<ID3D11RenderTargetView> motion_blur_output_rtv;
+      std::atomic<bool> motion_blur_pending = false;
+      bool motion_blur_seen = false;
+      bool motion_blur_first_pass_seen = false;
+      bool motion_blur_second_pass_seen = false;
+      bool motion_blur_output_ready = false;
+      uint32_t motion_blur_invocation_count = 0;
+
+      ComPtr<ID3D11Resource> cutscene_gamma_input_resource;
+
+      std::atomic<bool> cutscene_overlay_pending = false;
+      std::atomic<bool> cutscene_overlay_prep_pending = false;
+      std::atomic<bool> cutscene_gamma_pending = false;
+      std::atomic<bool> cutscene_color_grade_pending = false;
+      
+      ComPtr<ID3D11Texture2D> cutscene_intermediate_resource;
+      ComPtr<ID3D11ShaderResourceView> cutscene_intermediate_srv;
+      ComPtr<ID3D11RenderTargetView> cutscene_intermediate_rtv;
+
+      ComPtr<ID3D11Texture2D> cutscene_gamma_resource;
+      ComPtr<ID3D11ShaderResourceView> cutscene_gamma_srv;
+      ComPtr<ID3D11RenderTargetView> cutscene_gamma_rtv;
+
+      ComPtr<ID3D11Texture2D> cutscene_color_grade_resource;
+      ComPtr<ID3D11ShaderResourceView> cutscene_color_grade_srv;
+      ComPtr<ID3D11RenderTargetView> cutscene_color_grade_rtv;
+
+      CutsceneOverlayReplayState cutscene_overlay_replay_state;
+      CutsceneOverlayPrepReplayState cutscene_overlay_prep_replay_state;
+      CutscenePostPassReplayState cutscene_gamma_replay_state;
+      CutscenePostPassReplayState cutscene_color_grade_replay_state;
+
+      ComPtr<ID3D11Texture2D> cutscene_overlay_prep_resource;
+      ComPtr<ID3D11ShaderResourceView> cutscene_overlay_prep_srv;
+      ComPtr<ID3D11RenderTargetView> cutscene_overlay_prep_rtv;
 
       float camera_fov = 60.0f * (3.14159265f / 180.0f);
       float camera_near = 0.1f;
       float camera_far = 10000.0f;
       float2 jitter = {0, 0};
       float2 prev_jitter = {0, 0};
-      float render_scale = 1.0f;
 
       // Scene buffer patching resources
-      com_ptr<ID3D11Buffer> scratch_scene_buffer; // Structured buffer for compute shader output (sizeof(cbSceneBuffer))
-      com_ptr<ID3D11UnorderedAccessView> scratch_scene_buffer_uav;
+      ComPtr<ID3D11Buffer> scratch_scene_buffer;
+      ComPtr<ID3D11UnorderedAccessView> scratch_scene_buffer_uav;
       std::atomic<bool> scene_buffer_patched_this_frame = false;
 
-      // Pending scene buffer patch info: written by the deferred context hook,
-      // consumed by execute_secondary_command_list on the immediate context.
-      std::atomic<bool> scene_buffer_collect_guard = false;  // CAS guard so only one deferred thread writes
-      std::atomic<bool> scene_buffer_info_collected = false; // Release-stored after pending fields are written
+      std::atomic<bool> scene_buffer_collect_guard = false;
+      std::atomic<bool> scene_buffer_info_collected = false;
       ID3D11Buffer* pending_scene_buffer = nullptr;
       UINT pending_first_constant = 0;
       UINT pending_num_constants = 0;
@@ -55,9 +256,20 @@ namespace
       std::set<UINT> scene_buffer_offsets_this_frame;
    };
 
-   ShaderHashesList shader_hashes_OutlineCS;        // Outline / edge-detection pass (0xDA85F5BB) — depth source for NewAA
-   ShaderHashesList shader_hashes_Temporal_Upscale; // PostAA temporal upsampling pass (0x6EEF1071)
+   ShaderHashesList shader_hashes_OutlineCS;
+   ShaderHashesList shader_hashes_Temporal_Upscale;
    ShaderHashesList shader_hashes_TAA;
+   ShaderHashesList shader_hashes_Tonemap;
+   ShaderHashesList shader_hashes_MotionBlur;
+   ShaderHashesList shader_hashes_MotionBlurDenoise;
+   ShaderHashesList shader_hashes_CutsceneGamma;
+   ShaderHashesList shader_hashes_CutsceneColorGrade;
+   ShaderHashesList shader_hashes_CutsceneOverlay;
+   ShaderHashesList shader_hashes_CutsceneOverlayPrep;
+
+   float render_scale = 1.0f;
+   bool render_scale_changed = false;
+
    const uint32_t CBSceneBuffer_size = sizeof(cbSceneBuffer);
 
    constexpr std::array<float2, JITTER_PHASES> precomputed_jitters = []()
@@ -93,7 +305,7 @@ namespace
       {
          auto& game_device_data = *static_cast<GameDeviceDataGBFR*>(device_data->game);
 
-         float scale = game_device_data.render_scale;
+         float scale = render_scale;
          {
             const double aspect_ratio = static_cast<double>(device_data->output_resolution.x) / device_data->output_resolution.y;
             auto render_dims = Math::FindClosestIntegerResolutionForAspectRatio(
@@ -111,10 +323,6 @@ namespace
 
       char result = g_rt_creation_hook.unsafe_call<char>(screen_width, screen_height);
 
-      // Re-write scaled dims after the original returns. The original may have re-written
-      // the globals with native dims (e.g. via an internal UpdateScreenResolution call that
-      // ran between our pre-write and CreateRenderTargets). This ensures any subsequent
-      // CreateRenderTargets invocation still picks up the scaled resolution.
       if (device_data && device_data->game)
       {
          auto& game_device_data_rt = *static_cast<GameDeviceDataGBFR*>(device_data->game);
@@ -151,7 +359,7 @@ namespace
             device_data->output_resolution.x = static_cast<float>(native_w);
             device_data->output_resolution.y = static_cast<float>(native_h);
 
-            float scale = game_device_data.render_scale;
+            float scale = render_scale;
             {
                const double aspect_ratio = static_cast<double>(device_data->output_resolution.x) / device_data->output_resolution.y;
                auto render_dims = Math::FindClosestIntegerResolutionForAspectRatio(
@@ -166,8 +374,6 @@ namespace
             *reinterpret_cast<uint32_t*>(mod_base + kRenderWidth_RVA) = static_cast<uint32_t>(device_data->render_resolution.x);
             *reinterpret_cast<uint32_t*>(mod_base + kRenderHeight_RVA) = static_cast<uint32_t>(device_data->render_resolution.y);
 
-            // Clear the cached-dims guard (xmmword_145FB48E8) so the next call to
-            // InitializeDX11RenderingPipeline doesn't return early.
             constexpr uintptr_t kCachedDimsRVA = 0x05FB48E8; // xmmword_145FB48E8
             *reinterpret_cast<__int64*>(mod_base + kCachedDimsRVA) = 0;
             *reinterpret_cast<__int64*>(mod_base + kCachedDimsRVA + 8) = 0;
@@ -181,6 +387,338 @@ namespace
    {
       void** vtable = *reinterpret_cast<void***>(obj);
       return vtable[index];
+   }
+
+   static void CaptureCutsceneOverlayPrepReplayState(ID3D11DeviceContext* context, GameDeviceDataGBFR& game_device_data)
+   {
+      auto& replay_state = game_device_data.cutscene_overlay_prep_replay_state;
+      replay_state.Reset();
+
+      context->VSGetShader(replay_state.vertex_shader.put(), nullptr, nullptr);
+      context->PSGetShader(replay_state.pixel_shader.put(), nullptr, nullptr);
+      context->IAGetInputLayout(replay_state.input_layout.put());
+
+      ID3D11Buffer* vertex_buffers[GameDeviceDataGBFR::CutsceneOverlayPrepReplayState::kCapturedVertexBufferCount] = {};
+      context->IAGetVertexBuffers(
+         0,
+         GameDeviceDataGBFR::CutsceneOverlayPrepReplayState::kCapturedVertexBufferCount,
+         &vertex_buffers[0],
+         replay_state.vertex_buffer_strides.data(),
+         replay_state.vertex_buffer_offsets.data());
+
+      for (UINT i = 0; i < GameDeviceDataGBFR::CutsceneOverlayPrepReplayState::kCapturedVertexBufferCount; ++i)
+      {
+         replay_state.vertex_buffers[i] = vertex_buffers[i];
+      }
+      ID3D11DeviceContext1* ctx1 = nullptr;
+      context->QueryInterface(&ctx1);
+
+      ctx1->VSGetConstantBuffers1(1, 1, replay_state.vs_constant_buffer_slot1.buffer.put(), &replay_state.vs_constant_buffer_slot1.first_constant, &replay_state.vs_constant_buffer_slot1.num_constants);
+      replay_state.valid = replay_state.vertex_shader.get() != nullptr && replay_state.pixel_shader.get() != nullptr;
+   }
+
+   static bool ApplyCutsceneOverlayPrepReplayState(ID3D11DeviceContext* context, const DeviceData& device_data, const GameDeviceDataGBFR& game_device_data)
+   {
+      const auto& replay_state = game_device_data.cutscene_overlay_prep_replay_state;
+      if (!replay_state.valid)
+      {
+         return false;
+      }
+
+      context->VSSetShader(replay_state.vertex_shader.get(), nullptr, 0);
+      context->PSSetShader(replay_state.pixel_shader.get(), nullptr, 0);
+      context->IASetInputLayout(replay_state.input_layout.get());
+
+      ID3D11Buffer* vertex_buffers[GameDeviceDataGBFR::CutsceneOverlayPrepReplayState::kCapturedVertexBufferCount] = {};
+      for (UINT i = 0; i < GameDeviceDataGBFR::CutsceneOverlayPrepReplayState::kCapturedVertexBufferCount; ++i)
+      {
+         vertex_buffers[i] = replay_state.vertex_buffers[i].get();
+      }
+      context->IASetVertexBuffers(
+         0,
+         GameDeviceDataGBFR::CutsceneOverlayPrepReplayState::kCapturedVertexBufferCount,
+         &vertex_buffers[0],
+         replay_state.vertex_buffer_strides.data(),
+         replay_state.vertex_buffer_offsets.data());
+
+      ID3D11DeviceContext1* ctx1 = nullptr;
+      context->QueryInterface(&ctx1);
+      ID3D11Buffer* const vs_buffer = replay_state.vs_constant_buffer_slot1.buffer.get();
+      ctx1->VSSetConstantBuffers1(1, 1, &vs_buffer, &replay_state.vs_constant_buffer_slot1.first_constant, &replay_state.vs_constant_buffer_slot1.num_constants);
+
+      D3D11_VIEWPORT viewport = {};
+      viewport.Width = device_data.output_resolution.x;
+      viewport.Height = device_data.output_resolution.y;
+      viewport.MaxDepth = 1.0f;
+      context->RSSetViewports(1, &viewport);
+
+      ID3D11SamplerState* const sampler_state = device_data.sampler_state_linear.get();
+      context->PSSetSamplers(0, 1, &sampler_state);
+      return true;
+   }
+
+   static void CaptureCutsceneOverlayReplayState(ID3D11DeviceContext* context, GameDeviceDataGBFR& game_device_data)
+   {
+      auto& replay_state = game_device_data.cutscene_overlay_replay_state;
+      replay_state.Reset();
+
+      context->VSGetShader(replay_state.vertex_shader.put(), nullptr, nullptr);
+      context->PSGetShader(replay_state.pixel_shader.put(), nullptr, nullptr);
+      context->IAGetInputLayout(replay_state.input_layout.put());
+
+      ID3D11Buffer* vertex_buffers[GameDeviceDataGBFR::CutsceneOverlayReplayState::kCapturedVertexBufferCount] = {};
+      context->IAGetVertexBuffers(
+         0,
+         GameDeviceDataGBFR::CutsceneOverlayReplayState::kCapturedVertexBufferCount,
+         &vertex_buffers[0],
+         replay_state.vertex_buffer_strides.data(),
+         replay_state.vertex_buffer_offsets.data());
+
+      for (UINT i = 0; i < GameDeviceDataGBFR::CutsceneOverlayReplayState::kCapturedVertexBufferCount; ++i)
+      {
+         replay_state.vertex_buffers[i] = vertex_buffers[i];
+      }
+
+      ID3D11DeviceContext1* ctx1 = nullptr;
+      context->QueryInterface(&ctx1);
+
+      ctx1->VSGetConstantBuffers1(1, 1, replay_state.vs_constant_buffer_slot1.buffer.put(), &replay_state.vs_constant_buffer_slot1.first_constant, &replay_state.vs_constant_buffer_slot1.num_constants);
+      ctx1->PSGetConstantBuffers1(1, 1, replay_state.ps_constant_buffer_slot1.buffer.put(), &replay_state.ps_constant_buffer_slot1.first_constant, &replay_state.ps_constant_buffer_slot1.num_constants);
+      context->PSGetShaderResources(1, 1, replay_state.ps_shader_resource_slot1.put());
+      replay_state.valid = replay_state.vertex_shader.get() != nullptr && replay_state.pixel_shader.get() != nullptr;
+   }
+
+   static bool ApplyCutsceneOverlayReplayState(ID3D11DeviceContext* context, const DeviceData& device_data, const GameDeviceDataGBFR& game_device_data)
+   {
+      const auto& replay_state = game_device_data.cutscene_overlay_replay_state;
+      if (!replay_state.valid)
+      {
+         return false;
+      }
+
+      context->VSSetShader(replay_state.vertex_shader.get(), nullptr, 0);
+      context->PSSetShader(replay_state.pixel_shader.get(), nullptr, 0);
+      context->IASetInputLayout(replay_state.input_layout.get());
+
+      ID3D11Buffer* vertex_buffers[GameDeviceDataGBFR::CutsceneOverlayReplayState::kCapturedVertexBufferCount] = {};
+      for (UINT i = 0; i < GameDeviceDataGBFR::CutsceneOverlayReplayState::kCapturedVertexBufferCount; ++i)
+      {
+         vertex_buffers[i] = replay_state.vertex_buffers[i].get();
+      }
+      context->IASetVertexBuffers(
+         0,
+         GameDeviceDataGBFR::CutsceneOverlayReplayState::kCapturedVertexBufferCount,
+         &vertex_buffers[0],
+         replay_state.vertex_buffer_strides.data(),
+         replay_state.vertex_buffer_offsets.data());
+
+      ID3D11DeviceContext1* ctx1 = nullptr;
+      context->QueryInterface(&ctx1);
+
+      ID3D11Buffer* const vs_constant_buffer = replay_state.vs_constant_buffer_slot1.buffer.get();
+      ctx1->VSSetConstantBuffers1(1, 1, &vs_constant_buffer, &replay_state.vs_constant_buffer_slot1.first_constant, &replay_state.vs_constant_buffer_slot1.num_constants);
+
+      ID3D11Buffer* const ps_constant_buffer = replay_state.ps_constant_buffer_slot1.buffer.get();
+      ctx1->PSSetConstantBuffers1(1, 1, &ps_constant_buffer, &replay_state.ps_constant_buffer_slot1.first_constant, &replay_state.ps_constant_buffer_slot1.num_constants);
+
+      D3D11_VIEWPORT viewport = {};
+      viewport.TopLeftX = 0;
+      viewport.TopLeftY = 0;
+      viewport.Width = device_data.output_resolution.x;
+      viewport.Height = device_data.output_resolution.y;
+      context->RSSetViewports(1, &viewport);
+
+      ID3D11SamplerState* const sampler_state = device_data.sampler_state_linear.get();
+      context->PSSetSamplers(1, 1, &sampler_state);
+      return true;
+   }
+
+   static void CaptureMotionBlurReplayState(ID3D11DeviceContext* context, GameDeviceDataGBFR& game_device_data, size_t pass_index)
+   {
+      auto& replay_state = game_device_data.motion_blur_replay_states[pass_index];
+      replay_state.Reset();
+
+      context->VSGetShader(replay_state.vertex_shader.put(), nullptr, nullptr);
+      context->PSGetShader(replay_state.pixel_shader.put(), nullptr, nullptr);
+      context->IAGetInputLayout(replay_state.input_layout.put());
+      context->IAGetPrimitiveTopology(&replay_state.primitive_topology);
+
+      ID3D11Buffer* vertex_buffers[GameDeviceDataGBFR::MotionBlurReplayState::kCapturedVertexBufferCount] = {};
+      context->IAGetVertexBuffers(
+         0,
+         GameDeviceDataGBFR::MotionBlurReplayState::kCapturedVertexBufferCount,
+         &vertex_buffers[0],
+         replay_state.vertex_buffer_strides.data(),
+         replay_state.vertex_buffer_offsets.data());
+
+      for (UINT i = 0; i < GameDeviceDataGBFR::MotionBlurReplayState::kCapturedVertexBufferCount; ++i)
+      {
+         replay_state.vertex_buffers[i] = vertex_buffers[i];
+      }
+
+      ComPtr<ID3D11DeviceContext1> ctx1;
+      context->QueryInterface(ctx1.put());
+      if (ctx1)
+      {
+         ctx1->PSGetConstantBuffers1(
+            10,
+            1,
+            replay_state.ps_cbuffer_b10.buffer.put(),
+            &replay_state.ps_cbuffer_b10.first_constant,
+            &replay_state.ps_cbuffer_b10.num_constants);
+         ctx1->PSGetConstantBuffers1(
+            12,
+            1,
+            replay_state.ps_cbuffer_b12.buffer.put(),
+            &replay_state.ps_cbuffer_b12.first_constant,
+            &replay_state.ps_cbuffer_b12.num_constants);
+      }
+      context->PSGetShaderResources(0, 1, replay_state.ps_srv_t0.put());
+      context->PSGetShaderResources(1, 1, replay_state.ps_srv_t1.put());
+      context->PSGetShaderResources(4, 1, replay_state.ps_srv_t4.put());
+      context->PSGetShaderResources(5, 1, replay_state.ps_srv_t5.put());
+
+      replay_state.valid = replay_state.vertex_shader.get() != nullptr &&
+                           replay_state.pixel_shader.get() != nullptr &&
+                           replay_state.ps_cbuffer_b10.buffer.get() != nullptr &&
+                           replay_state.ps_cbuffer_b12.buffer.get() != nullptr &&
+                           replay_state.ps_srv_t0.get() != nullptr &&
+                           replay_state.ps_srv_t1.get() != nullptr &&
+                           replay_state.ps_srv_t4.get() != nullptr &&
+                           replay_state.ps_srv_t5.get() != nullptr;
+   }
+
+   static bool ApplyMotionBlurReplayState(ID3D11DeviceContext* context, const DeviceData& device_data, const GameDeviceDataGBFR& game_device_data, size_t pass_index)
+   {
+      const auto& replay_state = game_device_data.motion_blur_replay_states[pass_index];
+      if (!replay_state.valid)
+      {
+         return false;
+      }
+
+      context->VSSetShader(replay_state.vertex_shader.get(), nullptr, 0);
+      context->PSSetShader(replay_state.pixel_shader.get(), nullptr, 0);
+      context->IASetInputLayout(replay_state.input_layout.get());
+
+      ID3D11Buffer* vertex_buffers[GameDeviceDataGBFR::MotionBlurReplayState::kCapturedVertexBufferCount] = {};
+      for (UINT i = 0; i < GameDeviceDataGBFR::MotionBlurReplayState::kCapturedVertexBufferCount; ++i)
+      {
+         vertex_buffers[i] = replay_state.vertex_buffers[i].get();
+      }
+      context->IASetVertexBuffers(
+         0,
+         GameDeviceDataGBFR::MotionBlurReplayState::kCapturedVertexBufferCount,
+         &vertex_buffers[0],
+         replay_state.vertex_buffer_strides.data(),
+         replay_state.vertex_buffer_offsets.data());
+
+      context->IASetPrimitiveTopology(replay_state.primitive_topology);
+
+      ComPtr<ID3D11DeviceContext1> ctx1;
+      context->QueryInterface(ctx1.put());
+      if (!ctx1)
+      {
+         return false;
+      }
+
+      ID3D11Buffer* cb10 = replay_state.ps_cbuffer_b10.buffer.get();
+      ctx1->PSSetConstantBuffers1(
+         10,
+         1,
+         &cb10,
+         &replay_state.ps_cbuffer_b10.first_constant,
+         &replay_state.ps_cbuffer_b10.num_constants);
+      ID3D11Buffer* cb12 = replay_state.ps_cbuffer_b12.buffer.get();
+      ctx1->PSSetConstantBuffers1(
+         12,
+         1,
+         &cb12,
+         &replay_state.ps_cbuffer_b12.first_constant,
+         &replay_state.ps_cbuffer_b12.num_constants);
+
+      ID3D11ShaderResourceView* srv_t0 = replay_state.ps_srv_t0.get();
+      context->PSSetShaderResources(0, 1, &srv_t0);
+      ID3D11ShaderResourceView* srv_t1 = replay_state.ps_srv_t1.get();
+      context->PSSetShaderResources(1, 1, &srv_t1);
+      ID3D11ShaderResourceView* srv_t4 = replay_state.ps_srv_t4.get();
+      context->PSSetShaderResources(4, 1, &srv_t4);
+      ID3D11ShaderResourceView* srv_t5 = replay_state.ps_srv_t5.get();
+      context->PSSetShaderResources(5, 1, &srv_t5);
+
+      D3D11_VIEWPORT viewport = {};
+      viewport.TopLeftX = 0;
+      viewport.TopLeftY = 0;
+      viewport.Width = device_data.output_resolution.x;
+      viewport.Height = device_data.output_resolution.y;
+      viewport.MinDepth = 0.0f;
+      viewport.MaxDepth = 1.0f;
+      context->RSSetViewports(1, &viewport);
+
+      return true;
+   }
+
+   static void CaptureCutscenePostPassReplayState(ID3D11DeviceContext* context, GameDeviceDataGBFR::CutscenePostPassReplayState& replay_state)
+   {
+      replay_state.Reset();
+
+      context->VSGetShader(replay_state.vertex_shader.put(), nullptr, nullptr);
+      context->PSGetShader(replay_state.pixel_shader.put(), nullptr, nullptr);
+
+      ComPtr<ID3D11DeviceContext1> ctx1;
+      context->QueryInterface(ctx1.put());
+      if (ctx1)
+      {
+         ctx1->PSGetConstantBuffers1(
+            1,
+            1,
+            replay_state.ps_constant_buffer_slot1.buffer.put(),
+            &replay_state.ps_constant_buffer_slot1.first_constant,
+            &replay_state.ps_constant_buffer_slot1.num_constants);
+      }
+
+      context->PSGetSamplers(0, 1, replay_state.ps_sampler_slot0.put());
+
+      replay_state.valid = replay_state.vertex_shader.get() != nullptr &&
+                 replay_state.pixel_shader.get() != nullptr &&
+                 replay_state.ps_constant_buffer_slot1.buffer.get() != nullptr;
+   }
+
+   static bool ApplyCutscenePostPassReplayState(
+      ID3D11DeviceContext* context,
+      const GameDeviceDataGBFR::CutscenePostPassReplayState& replay_state,
+      ID3D11SamplerState* fallback_sampler)
+   {
+      if (!replay_state.valid)
+      {
+         return false;
+      }
+
+      ComPtr<ID3D11DeviceContext1> ctx1;
+      context->QueryInterface(ctx1.put());
+      if (!ctx1)
+      {
+         return false;
+      }
+
+      ID3D11Buffer* const ps_constant_buffer = replay_state.ps_constant_buffer_slot1.buffer.get();
+      ctx1->PSSetConstantBuffers1(
+         1,
+         1,
+         &ps_constant_buffer,
+         &replay_state.ps_constant_buffer_slot1.first_constant,
+         &replay_state.ps_constant_buffer_slot1.num_constants);
+
+      context->VSSetShader(replay_state.vertex_shader.get(), nullptr, 0);
+      context->PSSetShader(replay_state.pixel_shader.get(), nullptr, 0);
+
+      ID3D11SamplerState* sampler = replay_state.ps_sampler_slot0.get();
+      if (sampler == nullptr)
+      {
+         sampler = fallback_sampler;
+      }
+      context->PSSetSamplers(0, 1, &sampler);
+
+      return true;
    }
 
    void STDMETHODCALLTYPE Hooked_VSSetConstantBuffers1_Immediate(
@@ -206,6 +744,7 @@ namespace
       const UINT* pFirstConstant,
       const UINT* pNumConstants)
    {
+#if PATCH_SCENE_BUFFER
       // Detect VSSetConstantBuffers1 with StartSlot=0 and exactly 48 constants (SceneBuffer).
       // cbSceneBuffer is 544 bytes = 34 constants; the game binds 48 (768 bytes) for this slot —
       // '48' is the unique per-frame fingerprint identifying this bind. We only patch the first
@@ -231,12 +770,13 @@ namespace
                game_device_data.pending_scene_buffer = ppConstantBuffers[0];
                game_device_data.pending_first_constant = current_first_constant;
                game_device_data.pending_num_constants = pNumConstants[0];
-               // Release ensures the three stores above are visible to any thread
+               // Release ensures the stores above are visible to any thread
                // that does an acquire-load of scene_buffer_info_collected.
                game_device_data.scene_buffer_info_collected.store(true, std::memory_order_release);
             }
          }
       }
+#endif
 
       g_VSSetConstantBuffers1_hook_deferred.unsafe_call<void>(
          pContext, StartSlot, NumBuffers, ppConstantBuffers, pFirstConstant, pNumConstants);
@@ -283,7 +823,6 @@ namespace
          return;
       }
 
-      // Cache compute state before our dispatch
       DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
       compute_state_stack.Cache(pContext, device_data->uav_max_count);
 
@@ -373,10 +912,45 @@ public:
       luma_settings_cbuffer_index = 9;
       luma_data_cbuffer_index = 8;
 
-      // Register native compute shader for SceneBuffer patching
+      std::vector<ShaderDefineData> game_shader_defines_data = {
+         {"TONEMAP_AFTER_TAA", '1', true, false, "If set to 1, tonemapping will be applied after TAA", 1},
+      };
+      shader_defines_data.append_range(game_shader_defines_data);
+      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
+
+#if PATCH_SCENE_BUFFER
       native_shaders_definitions.emplace(
          CompileTimeStringHash("GBFR Patch SceneBuffer"),
          ShaderDefinition{"Luma_GBFR_PatchSceneBuffer", reshade::api::pipeline_subobject_type::compute_shader});
+#endif
+
+      native_shaders_definitions.emplace(
+         CompileTimeStringHash("GBFR Post Tonemap"),
+         ShaderDefinition{"Luma_GBFR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader});
+
+      native_shaders_definitions.emplace(
+         CompileTimeStringHash("GBFR Cutscene Gamma"),
+         ShaderDefinition{"Luma_GBFR_CutsceneGamma", reshade::api::pipeline_subobject_type::pixel_shader});
+
+      native_shaders_definitions.emplace(
+         CompileTimeStringHash("GBFR Cutscene ColorGrade"),
+         ShaderDefinition{"Luma_GBFR_CutsceneColorGrade", reshade::api::pipeline_subobject_type::pixel_shader});
+
+      native_shaders_definitions.emplace(
+         CompileTimeStringHash("GBFR Cutscene Overlay PS"),
+         ShaderDefinition{"Luma_GBFR_CutsceneOverlay_PS", reshade::api::pipeline_subobject_type::pixel_shader});
+
+      native_shaders_definitions.emplace(
+         CompileTimeStringHash("GBFR Post SR Encode"),
+         ShaderDefinition{"Luma_GBFR_PostSREncode", reshade::api::pipeline_subobject_type::pixel_shader});
+
+      native_shaders_definitions.emplace(
+         CompileTimeStringHash("GBFR UI Encode"),
+         ShaderDefinition{"Luma_GBFR_UIEncode", reshade::api::pipeline_subobject_type::pixel_shader});
+
+      native_shaders_definitions.emplace(
+         CompileTimeStringHash("GBFR Pre SR Encode"),
+         ShaderDefinition{"Luma_GBFR_PreSREncode", reshade::api::pipeline_subobject_type::pixel_shader});
    }
 
    void OnLoad(std::filesystem::path& file_path, bool failed) override
@@ -384,6 +958,7 @@ public:
       if (!failed)
       {
          reshade::register_event<reshade::addon_event::execute_secondary_command_list>(GranblueFantasyRelink::OnExecuteSecondaryCommandList);
+         LoadConfigs();
       }
    }
 
@@ -399,112 +974,288 @@ public:
       std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
+      bool tonemap_after_taa = *GetShaderDefineData(char_ptr_crc32("TONEMAP_AFTER_TAA")).compiled_data.GetValue() != '0';
 
-      // Capture depth from the outline/edge-detection compute shader (0xDA85F5BB) which
-      // runs right before AA. When the engine switches to <100% scale, depth is
-      // not bound to t5 in the AA pass;
+      // Since MotionBlur runs before TAA the game runs a smaller AA to dejitter the motion blur input
+      // when we reorder the post process effects this is no longer needed and we can use the antialiased output from TAA/SR.
+      if (original_shader_hashes.Contains(shader_hashes_MotionBlurDenoise) && tonemap_after_taa)
+      {
+         return DrawOrDispatchOverrideType::Skip;
+      }
+
+      if (original_shader_hashes.Contains(shader_hashes_MotionBlur) && tonemap_after_taa)
+      {
+         game_device_data.motion_blur_seen = true;
+         // Game runs motion blur shader twice with different parameters.
+         if (game_device_data.motion_blur_invocation_count < 2)
+         {
+            const size_t pass_index = game_device_data.motion_blur_invocation_count;
+            game_device_data.motion_blur_invocation_count++;
+            CaptureMotionBlurReplayState(native_device_context, game_device_data, pass_index);
+
+            if (game_device_data.motion_blur_replay_states[pass_index].valid)
+            {
+               if (pass_index == 0)
+               {
+                  game_device_data.motion_blur_first_pass_seen = true;
+               }
+               else
+               {
+                  game_device_data.motion_blur_second_pass_seen = true;
+                  game_device_data.motion_blur_pending.store(true, std::memory_order_release);
+               }
+               return DrawOrDispatchOverrideType::Skip;
+            }
+         }
+      }
+
+      if (original_shader_hashes.Contains(shader_hashes_Tonemap) && tonemap_after_taa)
+      {
+         game_device_data.exposure_texture = nullptr;
+         game_device_data.exposure_texture_srv = nullptr;
+         game_device_data.bloom_texture_srv = nullptr;
+
+         // Capture the game's AdaptLuminance SRV directly from t2
+         {
+            ComPtr<ID3D11ShaderResourceView> current_exposure_srv;
+            native_device_context->PSGetShaderResources(2, 1, current_exposure_srv.put());
+            if (current_exposure_srv)
+            {
+               game_device_data.exposure_texture_srv = current_exposure_srv;
+
+               // Extract the underlying texture so it can be passed to DLSS as an exposure hint.
+               ComPtr<ID3D11Resource> resource;
+               game_device_data.exposure_texture_srv->GetResource(resource.put());
+               if (resource)
+               {
+                  resource->QueryInterface(game_device_data.exposure_texture.put());
+               }
+            }
+         }
+
+         // get bloom SRV from t3
+         {
+            ComPtr<ID3D11ShaderResourceView> current_bloom_srv;
+            native_device_context->PSGetShaderResources(3, 1, current_bloom_srv.put());
+            if (current_bloom_srv)
+            {
+               game_device_data.bloom_texture_srv = current_bloom_srv;
+            }
+         }
+
+         game_device_data.tonemap_draw_pending.store(true, std::memory_order_release);
+
+         return DrawOrDispatchOverrideType::None;
+      }
+
+      if (original_shader_hashes.Contains(shader_hashes_CutsceneGamma) && tonemap_after_taa)
+      {
+           CaptureCutscenePostPassReplayState(native_device_context, game_device_data.cutscene_gamma_replay_state);
+
+         ComPtr<ID3D11ShaderResourceView> gamma_input_srv;
+         native_device_context->PSGetShaderResources(0, 1, gamma_input_srv.put());
+         game_device_data.cutscene_gamma_input_resource = nullptr;
+         if (gamma_input_srv)
+         {
+            gamma_input_srv->GetResource(game_device_data.cutscene_gamma_input_resource.put());
+         }
+
+         game_device_data.cutscene_gamma_pending.store(true, std::memory_order_release);
+         return DrawOrDispatchOverrideType::Skip;
+      }
+
+      if (original_shader_hashes.Contains(shader_hashes_CutsceneColorGrade) && tonemap_after_taa)
+      {
+         CaptureCutscenePostPassReplayState(native_device_context, game_device_data.cutscene_color_grade_replay_state);
+         game_device_data.cutscene_color_grade_pending.store(true, std::memory_order_release);
+         return DrawOrDispatchOverrideType::Skip;
+      }
+
+      if (original_shader_hashes.Contains(shader_hashes_CutsceneOverlayPrep) && tonemap_after_taa)
+      {
+         CaptureCutsceneOverlayPrepReplayState(native_device_context, game_device_data);
+         game_device_data.cutscene_overlay_prep_pending.store(true, std::memory_order_release);
+         return DrawOrDispatchOverrideType::Skip;
+      }
+
+      if (original_shader_hashes.Contains(shader_hashes_CutsceneOverlay) && tonemap_after_taa)
+      {
+
+         CaptureCutsceneOverlayReplayState(native_device_context, game_device_data);
+         game_device_data.cutscene_overlay_pending.store(true, std::memory_order_release);
+         ComPtr<ID3D11RenderTargetView> current_rtv;
+         native_device_context->OMGetRenderTargets(1, current_rtv.put(), nullptr);
+         if (current_rtv && game_device_data.cutscene_gamma_input_resource)
+         {
+            ComPtr<ID3D11Resource> current_rtv_resource;
+            current_rtv->GetResource(current_rtv_resource.put());
+            if (current_rtv_resource)
+            {
+               native_device_context->CopyResource(current_rtv_resource.get(), game_device_data.cutscene_gamma_input_resource.get());
+            }
+         }
+         return DrawOrDispatchOverrideType::Skip;
+      }
+
       if (original_shader_hashes.Contains(shader_hashes_OutlineCS))
       {
-         com_ptr<ID3D11ShaderResourceView> cs_depth_srv;
-         native_device_context->CSGetShaderResources(2, 1, &cs_depth_srv);
+         ComPtr<ID3D11ShaderResourceView> cs_depth_srv;
+         native_device_context->CSGetShaderResources(2, 1, cs_depth_srv.put());
          if (cs_depth_srv)
          {
-            game_device_data.depth_buffer = nullptr;
-            cs_depth_srv->GetResource(&game_device_data.depth_buffer);
+            cs_depth_srv->GetResource(game_device_data.depth_buffer.put());
          }
          return DrawOrDispatchOverrideType::None;
       }
 
-      if (device_data.sr_type != SR::Type::None &&
-          !device_data.sr_suppressed &&
-          original_shader_hashes.Contains(shader_hashes_TAA))
+      if (original_shader_hashes.Contains(shader_hashes_TAA))
       {
          device_data.taa_detected = true;
-
-         if (!game_device_data.scene_buffer_info_collected.load(std::memory_order_acquire))
+         DrawOrDispatchOverrideType override_type = DrawOrDispatchOverrideType::None;
+         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed)
          {
-            device_data.force_reset_sr = true;
-            return DrawOrDispatchOverrideType::None;
-         }
-
-         if (!ExtractTAAShaderResources(native_device_context, game_device_data))
-         {
-            ASSERT_ONCE(false);
-            return DrawOrDispatchOverrideType::None;
-         }
-
-         device_data.has_drawn_sr = true;
-
-         // Get render targets (TAA writes to RT0 and RT1)
-         com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
-         if (render_target_views[1].get() == nullptr)
-         {
-            device_data.force_reset_sr = true;
-            return DrawOrDispatchOverrideType::None;
-         }
-
-         // Setup SR output texture.
-         render_target_views[1]->GetResource(&game_device_data.taa_rt1_resource);
-
-         if (game_device_data.render_scale == 1.f)
-         {
-            if (!SetupSROutput(native_device, device_data, game_device_data))
+            override_type = [](GameDeviceDataGBFR& game_device_data, ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data) -> DrawOrDispatchOverrideType
             {
-               return DrawOrDispatchOverrideType::None;
-            }
-
-            native_device_context->FinishCommandList(TRUE, &game_device_data.partial_command_list);
-            if (game_device_data.modifiable_index_vertex_buffer)
-            {
-               D3D11_MAPPED_SUBRESOURCE mapped_buffer;
-               native_device_context->Map(game_device_data.modifiable_index_vertex_buffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
-               native_device_context->Unmap(game_device_data.modifiable_index_vertex_buffer.get(), 0);
-            }
-            game_device_data.draw_device_context = native_device_context;
-         }
-         return DrawOrDispatchOverrideType::Replaced;
-      }
-
-      if (device_data.sr_type != SR::Type::None &&
-          !device_data.sr_suppressed &&
-          original_shader_hashes.Contains(shader_hashes_Temporal_Upscale))
-      {
-         com_ptr<ID3D11RenderTargetView> rt;
-         native_device_context->OMGetRenderTargets(1, &rt, nullptr);
-         if (rt.get() != nullptr)
-         {
-            rt->GetResource(&game_device_data.taa_upscale_rt_resource);
-
-            if (game_device_data.render_scale != 1.f)
-            {
-               if (!SetupSROutput(native_device, device_data, game_device_data))
+#if PATCH_SCENE_BUFFER
+               if (!game_device_data.scene_buffer_info_collected.load(std::memory_order_acquire))
                {
+                  device_data.force_reset_sr = true;
+                  return DrawOrDispatchOverrideType::None;
+               }
+#endif
+
+               if (!ExtractTAAShaderResources(native_device_context, game_device_data))
+               {
+                  ASSERT_ONCE(false);
+                  device_data.force_reset_sr = true;
                   return DrawOrDispatchOverrideType::None;
                }
 
-               native_device_context->FinishCommandList(TRUE, &game_device_data.partial_command_list);
-               if (game_device_data.modifiable_index_vertex_buffer)
+               // Get render targets (TAA writes to RT0 and RT1)
+               ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+               ID3D11DepthStencilView* dsv;
+               native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+               if (rtvs[1] == nullptr)
                {
-                  D3D11_MAPPED_SUBRESOURCE mapped_buffer;
-                  native_device_context->Map(game_device_data.modifiable_index_vertex_buffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
-                  native_device_context->Unmap(game_device_data.modifiable_index_vertex_buffer.get(), 0);
+                  device_data.force_reset_sr = true;
+                  return DrawOrDispatchOverrideType::None;
                }
-               game_device_data.draw_device_context = native_device_context;
-            }
+
+               if (render_scale == 1.f)
+               {
+                  if (!SetupSROutput(native_device, device_data, game_device_data, rtvs[1]))
+                  {
+                     return DrawOrDispatchOverrideType::None;
+                  }
+
+                  if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
+                  {
+                     DrawNativePreSREncodePass(native_device, native_device_context, device_data, game_device_data);
+                  }
+
+                  // Split here: partial_command_list captures all draws up to (not including) TAA,
+                  // including the hash-replaced tonemap passthrough.
+                  native_device_context->FinishCommandList(TRUE, game_device_data.partial_command_list.put());
+
+                  if (game_device_data.modifiable_index_vertex_buffer)
+                  {
+                     D3D11_MAPPED_SUBRESOURCE mapped_buffer;
+                     native_device_context->Map(game_device_data.modifiable_index_vertex_buffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
+                     native_device_context->Unmap(game_device_data.modifiable_index_vertex_buffer.get(), 0);
+                  }
+                  game_device_data.draw_device_context = native_device_context;
+               }
+               return DrawOrDispatchOverrideType::Replaced;
+            }(game_device_data, native_device, native_device_context, device_data);
          }
-         return DrawOrDispatchOverrideType::Replaced;
+         else if (render_scale == 1.f)
+         {
+            ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+            ID3D11DepthStencilView* dsv;
+            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+
+            SetupTempTAAOutput(native_device, game_device_data, rtvs[1]);
+
+            rtvs[1] = game_device_data.taa_temp_output_rtv.get();
+            native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], dsv);
+
+            (*original_draw_dispatch_func)();
+            rtvs[1] = game_device_data.taa_output_texture_rtv.get();
+            native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], dsv);
+
+            game_device_data.draw_device_context = native_device_context;
+            native_device_context->FinishCommandList(TRUE, game_device_data.partial_command_list.put());
+            override_type = DrawOrDispatchOverrideType::Replaced;
+         }
+         else
+         {
+            // Run TAA normally and handle DLSS in TUP
+            return DrawOrDispatchOverrideType::None;
+         }
+
+         return override_type;
       }
 
+      if (original_shader_hashes.Contains(shader_hashes_Temporal_Upscale))
+      {
+         DrawOrDispatchOverrideType override_type = DrawOrDispatchOverrideType::Replaced;
+         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed)
+         {
+            override_type = [](GameDeviceDataGBFR& game_device_data, ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data) -> DrawOrDispatchOverrideType
+            {
+               ID3D11RenderTargetView* rt;
+               native_device_context->OMGetRenderTargets(1, &rt, nullptr);
+               if (rt != nullptr)
+               {
+
+                  if (!SetupSROutput(native_device, device_data, game_device_data, rt))
+                  {
+                     return DrawOrDispatchOverrideType::None;
+                  }
+                  if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
+                  {
+                     DrawNativePreSREncodePass(native_device, native_device_context, device_data, game_device_data);
+                  }
+                  if (game_device_data.modifiable_index_vertex_buffer)
+                  {
+                     D3D11_MAPPED_SUBRESOURCE mapped_buffer;
+                     native_device_context->Map(game_device_data.modifiable_index_vertex_buffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
+                     native_device_context->Unmap(game_device_data.modifiable_index_vertex_buffer.get(), 0);
+                  }
+                  game_device_data.draw_device_context = native_device_context;
+                  native_device_context->FinishCommandList(TRUE, game_device_data.partial_command_list.put());
+               }
+
+               return DrawOrDispatchOverrideType::Replaced;
+            }(game_device_data, native_device, native_device_context, device_data);
+         }
+         else
+         {
+            ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+            ID3D11DepthStencilView* dsv;
+            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+            SetupTempTAAOutput(native_device, game_device_data, rtvs[0]);
+
+            rtvs[0] = game_device_data.taa_temp_output_rtv.get();
+            native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], dsv);
+
+            (*original_draw_dispatch_func)();
+            rtvs[0] = game_device_data.taa_output_texture_rtv.get();
+            native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], dsv);
+
+            game_device_data.draw_device_context = native_device_context;
+            native_device_context->FinishCommandList(TRUE, game_device_data.partial_command_list.put());
+         }
+         return override_type;
+      }
       return DrawOrDispatchOverrideType::None;
    }
 
    static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
    {
-      com_ptr<ID3D11DeviceContext> native_device_context;
+      ComPtr<ID3D11DeviceContext> native_device_context;
       ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      HRESULT hr = device_child->QueryInterface(&native_device_context);
+      HRESULT hr = device_child->QueryInterface(native_device_context.put());
 
       auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
@@ -514,13 +1265,14 @@ public:
          // This is an ExecuteCommandList callback — a command list is about to be replayed
          // on the immediate context. Patch the ring buffer before the first one runs
          // (Map/Unmap already happened on the immediate context at start of frame).
-         com_ptr<ID3D11CommandList> native_command_list;
+         ComPtr<ID3D11CommandList> native_command_list;
          {
             ID3D11DeviceChild* secondary_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-            secondary_child->QueryInterface(&native_command_list);
+            secondary_child->QueryInterface(native_command_list.put());
          }
          if (native_command_list)
          {
+#if PATCH_SCENE_BUFFER
             if (!game_device_data.scene_buffer_patched_this_frame.load(std::memory_order_relaxed) &&
                 game_device_data.scene_buffer_info_collected.load(std::memory_order_acquire))
             {
@@ -532,8 +1284,8 @@ public:
                if (!offsets_to_patch.empty())
                {
                   game_device_data.scene_buffer_patched_this_frame.store(true, std::memory_order_release);
-                  com_ptr<ID3D11DeviceContext1> immediate_context1;
-                  if (SUCCEEDED(native_device_context->QueryInterface(IID_PPV_ARGS(&immediate_context1))))
+                  ComPtr<ID3D11DeviceContext1> immediate_context1;
+                  if (SUCCEEDED(native_device_context->QueryInterface(immediate_context1.put())))
                   {
                      for (UINT offset : offsets_to_patch)
                      {
@@ -546,133 +1298,236 @@ public:
                   }
                }
             }
+#endif
          }
-         if (native_command_list.get() == game_device_data.remainder_command_list && game_device_data.partial_command_list.get() != nullptr)
+         if (native_command_list.get() == game_device_data.remainder_command_list.load(std::memory_order_acquire) && game_device_data.partial_command_list.get() != nullptr)
          {
             {
                native_device_context->ExecuteCommandList(game_device_data.partial_command_list.get(), FALSE);
                game_device_data.partial_command_list.reset();
 
                CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-               // Get SR instance data
-               auto* sr_instance_data = device_data.GetSRInstanceData();
+
+               DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
+               DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
+               draw_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
+               compute_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
+
+               bool tonemap_after_taa = *GetShaderDefineData(char_ptr_crc32("TONEMAP_AFTER_TAA")).compiled_data.GetValue() != '0';
+
+               if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed)
                {
-                  SR::SettingsData settings_data;
-                  settings_data.output_width = static_cast<uint>(device_data.output_resolution.x);
-                  settings_data.output_height = static_cast<uint>(device_data.output_resolution.y);
-                  settings_data.render_width = static_cast<uint>(device_data.render_resolution.x);
-                  settings_data.render_height = static_cast<uint>(device_data.render_resolution.y);
-                  settings_data.dynamic_resolution = false;
-                  settings_data.hdr = true;
-                  settings_data.auto_exposure = true;
-                  settings_data.inverted_depth = false;
-                  settings_data.mvs_jittered = false; // Granblue MVs are unjittered (g_ProjectionOffset cancels jitter in the PS)
-                  settings_data.mvs_x_scale = -(float)device_data.render_resolution.x;
-                  settings_data.mvs_y_scale = -(float)device_data.render_resolution.y;
-                  settings_data.render_preset = dlss_render_preset;
-                  sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context.get(), settings_data);
-               }
-               // Prepare SR draw data
-               {
-                  bool reset_sr = device_data.force_reset_sr || game_device_data.output_changed;
-                  device_data.force_reset_sr = false;
-
-                  float jitter_x = -game_device_data.jitter.x;
-                  float jitter_y = -game_device_data.jitter.y;
-                  SR::SuperResolutionImpl::DrawData draw_data;
-                  draw_data.source_color = game_device_data.sr_source_color.get();
-                  draw_data.output_color = device_data.sr_output_color.get();
-                  draw_data.motion_vectors = game_device_data.sr_motion_vectors.get();
-                  draw_data.depth_buffer = game_device_data.depth_buffer.get();
-                  draw_data.pre_exposure = 0.0f;
-                  // Pass the frame jitter tracked by this module.
-                  draw_data.jitter_x = jitter_x;
-                  draw_data.jitter_y = jitter_y;
-                  draw_data.vert_fov = game_device_data.camera_fov;
-                  draw_data.far_plane = game_device_data.camera_far;
-                  draw_data.near_plane = game_device_data.camera_near;
-                  draw_data.reset = reset_sr;
-                  draw_data.render_width = device_data.render_resolution.x;
-                  draw_data.render_height = device_data.render_resolution.y;
-
-                  // Cache and restore state around SR execution
-                  DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
-                  DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
-                  draw_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
-                  compute_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
-
-                  // Execute SR
-                  device_data.has_drawn_sr = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context.get(), draw_data);
-#if DEVELOPMENT
-                  // Add trace info for DLSS/FSR execution
-                  if (device_data.has_drawn_sr)
+                  auto* sr_instance_data = device_data.GetSRInstanceData();
                   {
-                     const std::shared_lock lock_trace(s_mutex_trace);
-                     if (trace_running)
-                     {
-                        const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-                        TraceDrawCallData trace_draw_call_data;
-                        trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
-                        trace_draw_call_data.command_list = native_device_context;
-                        trace_draw_call_data.custom_name = device_data.sr_type == SR::Type::DLSS
-                                                              ? "DLSS-SR"
-                                                              : "FSR-SR";
-                        GetResourceInfo(device_data.sr_output_color.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-                        cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
-                     }
+                     SR::SettingsData settings_data;
+                     settings_data.output_width = static_cast<uint>(device_data.output_resolution.x);
+                     settings_data.output_height = static_cast<uint>(device_data.output_resolution.y);
+                     settings_data.render_width = static_cast<uint>(device_data.render_resolution.x);
+                     settings_data.render_height = static_cast<uint>(device_data.render_resolution.y);
+                     settings_data.dynamic_resolution = false;
+                     settings_data.hdr = cb_luma_global_settings.DisplayMode == DisplayModeType::HDR ? true : false;
+                     settings_data.auto_exposure = true;
+                     settings_data.inverted_depth = false;
+                     // Granblue MVs are unjittered (g_ProjectionOffset cancels jitter in the PS)
+                     settings_data.mvs_jittered = false;
+                     settings_data.mvs_x_scale = -(float)device_data.render_resolution.x;
+                     settings_data.mvs_y_scale = -(float)device_data.render_resolution.y;
+                     settings_data.render_preset = dlss_render_preset;
+                     sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context.get(), settings_data);
                   }
-#endif
-                  draw_state_stack.Restore(native_device_context.get());
-                  compute_state_stack.Restore(native_device_context.get());
-               }
 
-               if (device_data.has_drawn_sr)
-               {
-                  const bool is_dlaa = game_device_data.render_scale == 1.f;
-                  if (!game_device_data.output_supports_uav)
+                  // Prepare SR draw data
                   {
-                     if (is_dlaa)
+                     bool reset_sr = device_data.force_reset_sr || game_device_data.output_changed;
+                     device_data.force_reset_sr = false;
+
+                     float jitter_x = game_device_data.jitter.x;
+                     float jitter_y = -game_device_data.jitter.y;
+                     SR::SuperResolutionImpl::DrawData draw_data;
+                     draw_data.source_color = game_device_data.sr_source_color.get();
+                     draw_data.output_color = game_device_data.sr_output_color.get();
+                     draw_data.motion_vectors = game_device_data.sr_motion_vectors.get();
+                     draw_data.depth_buffer = game_device_data.depth_buffer.get();
+                     draw_data.pre_exposure = 0.0f;
+                     // Pass the engine's AdaptLuminance texture as an exposure hint to DLSS.
+                     // Only set when the tonemap intercept has already captured it this frame.
+                     // Note: DLSS expects pInExposureTexture to be a 1×1 texture; if AdaptLuminance
+                     // is a different size, DLSS may ignore it — auto_exposure=true provides a fallback.
+                     if (tonemap_after_taa)
                      {
-                        if (game_device_data.taa_rt1_resource && device_data.sr_output_color)
-                        {
-                           native_device_context->CopyResource(
-                              game_device_data.taa_rt1_resource.get(),
-                              device_data.sr_output_color.get());
-                        }
+                        draw_data.exposure = game_device_data.exposure_texture.get();
+                     }
+                     // Pass the frame jitter tracked by this module.
+                     draw_data.jitter_x = jitter_x;
+                     draw_data.jitter_y = jitter_y;
+                     draw_data.vert_fov = game_device_data.camera_fov;
+                     draw_data.far_plane = game_device_data.camera_far;
+                     draw_data.near_plane = game_device_data.camera_near;
+                     draw_data.reset = reset_sr;
+                     draw_data.render_width = device_data.render_resolution.x;
+                     draw_data.render_height = device_data.render_resolution.y;
+
+                     // Execute SR
+                     if (sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context.get(), draw_data))
+                     {
+                        device_data.has_drawn_sr = true;
                      }
                      else
                      {
-                        if (game_device_data.taa_upscale_rt_resource && device_data.sr_output_color)
+                        device_data.has_drawn_sr = false;
+                        device_data.force_reset_sr = true;
+                     }
+#if DEVELOPMENT
+                     // Add trace info for DLSS/FSR execution
+                     if (device_data.has_drawn_sr)
+                     {
+                        const std::shared_lock lock_trace(s_mutex_trace);
+                        if (trace_running)
                         {
-                           native_device_context->CopyResource(
-                              game_device_data.taa_upscale_rt_resource.get(),
-                              device_data.sr_output_color.get());
+                           const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+                           TraceDrawCallData trace_draw_call_data;
+                           trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+                           trace_draw_call_data.command_list = native_device_context.get();
+                           trace_draw_call_data.custom_name = device_data.sr_type == SR::Type::DLSS
+                                                                 ? "DLSS-SR"
+                                                                 : "FSR-SR";
+                           GetResourceInfo(game_device_data.sr_output_color.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
+                           cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
                         }
+                     }
+#endif
+                  }
+               }
+
+               // Pipeline chain SRV threaded through late-replay passes (split -> PostSREncode -> MotionBlur -> Tonemap -> Cutscene -> UI)
+               ID3D11ShaderResourceView* pipeline_color_srv = GetPostAAColorInputSRV(device_data, game_device_data);
+
+               // PostSREncode normalizes color space: G→L if no HDR-SR, else L→G if HDR-SR, else skip
+               {
+                  const bool hdr_sr = (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR) &&
+                                      (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.has_drawn_sr);
+                  const bool should_run = tonemap_after_taa ? !hdr_sr : hdr_sr;
+                  if (should_run && pipeline_color_srv)
+                  {
+                     // Use pre-DLSS input for alpha extraction if SR was executed
+                     ID3D11ShaderResourceView* alpha_source_srv = nullptr;
+                     if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.has_drawn_sr)
+                     {
+                        alpha_source_srv = game_device_data.sr_source_color_srv.get();
+                     }
+
+                     if (DrawNativePostSREncodePass(native_device_context.get(), cmd_list_data, device_data, game_device_data, pipeline_color_srv, alpha_source_srv))
+                     {
+                        pipeline_color_srv = game_device_data.post_sr_encode_srv.get();
                      }
                   }
                }
-               else
+
+               if (game_device_data.motion_blur_pending.load(std::memory_order_acquire))
                {
-                  device_data.force_reset_sr = true;
+                  const bool use_sr_input = device_data.sr_type != SR::Type::None && !device_data.sr_suppressed;
+                  const bool after_sr = !use_sr_input || device_data.has_drawn_sr;
+                  if (after_sr && CanDrawNativeMotionBlurPass(pipeline_color_srv, game_device_data))
+                  {
+                     DrawNativeMotionBlurPass(native_device_context.get(), cmd_list_data, device_data, game_device_data, pipeline_color_srv);
+                     if (game_device_data.motion_blur_output_ready)
+                     {
+                        pipeline_color_srv = game_device_data.motion_blur_output_srv.get();
+                     }
+                  }
+                  // Never stall tonemap if motion blur replay is unavailable in this frame.
+                  game_device_data.motion_blur_pending.store(false, std::memory_order_release);
+                  game_device_data.motion_blur_seen = false;
+                  game_device_data.motion_blur_first_pass_seen = false;
+                  game_device_data.motion_blur_second_pass_seen = false;
+                  game_device_data.motion_blur_output_ready = false;
+                  game_device_data.motion_blur_invocation_count = 0;
+                  game_device_data.motion_blur_replay_states[0].Reset();
+                  game_device_data.motion_blur_replay_states[1].Reset();
                }
+
+               // Tonemap writes to cutscene_intermediate_rtv for UIEncode consumption
+               if (game_device_data.tonemap_draw_pending.load(std::memory_order_acquire))
+               {
+                  const bool use_sr_input = device_data.sr_type != SR::Type::None && !device_data.sr_suppressed;
+                  const bool after_sr = !use_sr_input || device_data.has_drawn_sr;
+                  const bool ready = after_sr && CanDrawNativeTonemapPass(pipeline_color_srv, game_device_data);
+                  if (ready)
+                  {
+                     DrawNativeTonemapPass(native_device_context.get(), cmd_list_data, device_data, game_device_data, pipeline_color_srv);
+                     pipeline_color_srv = game_device_data.cutscene_intermediate_srv.get();
+                     game_device_data.tonemap_draw_pending.store(false, std::memory_order_release);
+                     game_device_data.exposure_texture = nullptr;
+                     game_device_data.exposure_texture_srv = nullptr;
+                     game_device_data.bloom_texture_srv = nullptr;
+                  }
+               }
+
+               if (game_device_data.cutscene_gamma_pending.load(std::memory_order_acquire))
+               {
+                  if (CanDrawNativeCutsceneGammaPass(game_device_data))
+                  {
+                     DrawNativeCutsceneGammaPass(native_device_context.get(), cmd_list_data, device_data, game_device_data);
+                     pipeline_color_srv = game_device_data.cutscene_gamma_srv.get();
+                  }
+                  game_device_data.cutscene_gamma_pending.store(false, std::memory_order_release);
+                  game_device_data.cutscene_gamma_replay_state.Reset();
+               }
+
+               if (game_device_data.cutscene_color_grade_pending.load(std::memory_order_acquire))
+               {
+                  if (CanDrawNativeCutsceneColorGradePass(game_device_data))
+                  {
+                     DrawNativeCutsceneColorGradePass(native_device_context.get(), cmd_list_data, device_data, game_device_data);
+                     pipeline_color_srv = game_device_data.cutscene_color_grade_srv.get();
+                  }
+                  game_device_data.cutscene_color_grade_pending.store(false, std::memory_order_release);
+                  game_device_data.cutscene_color_grade_replay_state.Reset();
+               }
+
+               if (game_device_data.cutscene_overlay_prep_pending.load(std::memory_order_acquire) && game_device_data.cutscene_overlay_pending.load(std::memory_order_acquire))
+               {
+                  if (CanDrawNativeCutsceneOverlayPrepPass(game_device_data))
+                  {
+                     DrawNativeCutsceneOverlayPrepPass(native_device_context.get(), cmd_list_data, device_data, game_device_data);
+                     game_device_data.cutscene_overlay_prep_pending.store(false, std::memory_order_release);
+                  }
+
+                  if (CanDrawNativeCutsceneOverlayPass(game_device_data))
+                  {
+                     DrawNativeCutsceneOverlayPass(native_device_context.get(), cmd_list_data, device_data, game_device_data, game_device_data.cutscene_intermediate_rtv.get());
+                     pipeline_color_srv = game_device_data.cutscene_intermediate_srv.get();
+                     game_device_data.cutscene_overlay_pending.store(false, std::memory_order_release);
+                  }
+
+                  game_device_data.cutscene_overlay_prep_replay_state.Reset();
+                  game_device_data.cutscene_overlay_replay_state.Reset();
+                  game_device_data.cutscene_gamma_input_resource = nullptr;
+               }
+
+               if (CanDrawNativeUIEncodePass(pipeline_color_srv, game_device_data))
+               {
+                  DrawNativeUIEncodePass(native_device_context.get(), cmd_list_data, device_data, game_device_data, pipeline_color_srv);
+               }
+
+               draw_state_stack.Restore(native_device_context.get());
+               compute_state_stack.Restore(native_device_context.get());
             }
          }
       }
 
-      // FinishCommandList case: cmd_list is the new ID3D11CommandList,
-      // secondary_cmd_list is the deferred context that produced it.
-      com_ptr<ID3D11CommandList> finish_command_list;
-      hr = device_child->QueryInterface(&finish_command_list);
+      ComPtr<ID3D11CommandList> finish_command_list;
+      hr = device_child->QueryInterface(finish_command_list.put());
       if (finish_command_list)
       {
-         com_ptr<ID3D11DeviceContext> deferred_ctx;
+         ComPtr<ID3D11DeviceContext> deferred_ctx;
          ID3D11DeviceChild* secondary_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         hr = secondary_child->QueryInterface(&deferred_ctx);
+         hr = secondary_child->QueryInterface(deferred_ctx.put());
          if (deferred_ctx)
          {
             if (deferred_ctx.get() == game_device_data.draw_device_context)
             {
-               game_device_data.remainder_command_list = finish_command_list.get();
+               game_device_data.remainder_command_list.store(finish_command_list.get(), std::memory_order_release);
             }
          }
       }
@@ -682,7 +1537,7 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      // Create scratch structured buffer for SceneBuffer patching (sizeof(cbSceneBuffer) = 544 bytes)
+#if PATCH_SCENE_BUFFER
       {
          D3D11_BUFFER_DESC bd = {};
          bd.ByteWidth = CBSceneBuffer_size;
@@ -691,11 +1546,10 @@ public:
          bd.CPUAccessFlags = 0;
          bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
          bd.StructureByteStride = CBSceneBuffer_size;
-         HRESULT hr = native_device->CreateBuffer(&bd, nullptr, &game_device_data.scratch_scene_buffer);
+         HRESULT hr = native_device->CreateBuffer(&bd, nullptr, game_device_data.scratch_scene_buffer.put());
          ASSERT_ONCE(SUCCEEDED(hr));
       }
 
-      // Create UAV for the scratch buffer
       if (game_device_data.scratch_scene_buffer)
       {
          D3D11_UNORDERED_ACCESS_VIEW_DESC uavd = {};
@@ -705,29 +1559,26 @@ public:
          uavd.Buffer.Flags = 0;
          uavd.Buffer.NumElements = 1;
          HRESULT hr = native_device->CreateUnorderedAccessView(
-            game_device_data.scratch_scene_buffer.get(), &uavd, &game_device_data.scratch_scene_buffer_uav);
+            game_device_data.scratch_scene_buffer.get(), &uavd, game_device_data.scratch_scene_buffer_uav.put());
          ASSERT_ONCE(SUCCEEDED(hr));
       }
+#endif
    }
 
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
    {
       device_data.game = new GameDeviceDataGBFR;
 
-      // Seed jitter so current/previous are valid on the first dispatch.
       {
          auto& game_device_data = *static_cast<GameDeviceDataGBFR*>(device_data.game);
-         // Keep Halton samples in module space; convert to NDC offset when uploading instance data.
          game_device_data.jitter.x = precomputed_jitters[0].x;
          game_device_data.jitter.y = precomputed_jitters[0].y;
-         game_device_data.prev_jitter = game_device_data.jitter; // no real previous yet
+         game_device_data.prev_jitter = game_device_data.jitter;
       }
 
-      // Store global pointers for access from vtable hooks
       g_device_data_ptr.store(&device_data, std::memory_order_release);
       g_native_device_ptr.store(native_device, std::memory_order_release);
 
-      // Install render-target creation hook (native output ownership remains in engine call path).
       if (!g_rt_creation_hook)
       {
          const uintptr_t base_addr = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
@@ -752,12 +1603,12 @@ public:
          }
       }
 
-      // Install inline hook on VSSetConstantBuffers1 (immediate context)
-      com_ptr<ID3D11DeviceContext> immediate_context;
-      native_device->GetImmediateContext(&immediate_context);
+#if PATCH_SCENE_BUFFER
+      ComPtr<ID3D11DeviceContext> immediate_context;
+      native_device->GetImmediateContext(immediate_context.put());
 
-      com_ptr<ID3D11DeviceContext1> immediate_context1;
-      if (SUCCEEDED(immediate_context->QueryInterface(IID_PPV_ARGS(&immediate_context1))))
+      ComPtr<ID3D11DeviceContext1> immediate_context1;
+      if (SUCCEEDED(immediate_context->QueryInterface(immediate_context1.put())))
       {
          void* immediate_fn = GetVTableFunction(immediate_context1.get(), kVSSetConstantBuffers1_VTableIndex);
 
@@ -770,11 +1621,11 @@ public:
 
          // Check if the deferred context uses a different function implementation;
          // if so, install a second inline hook for it.
-         com_ptr<ID3D11DeviceContext> deferred_context;
-         if (SUCCEEDED(native_device->CreateDeferredContext(0, &deferred_context)))
+         ComPtr<ID3D11DeviceContext> deferred_context;
+         if (SUCCEEDED(native_device->CreateDeferredContext(0, deferred_context.put())))
          {
-            com_ptr<ID3D11DeviceContext1> deferred_context1;
-            if (SUCCEEDED(deferred_context->QueryInterface(IID_PPV_ARGS(&deferred_context1))))
+            ComPtr<ID3D11DeviceContext1> deferred_context1;
+            if (SUCCEEDED(deferred_context->QueryInterface(deferred_context1.put())))
             {
                void* deferred_fn = GetVTableFunction(deferred_context1.get(), kVSSetConstantBuffers1_VTableIndex);
 
@@ -787,6 +1638,7 @@ public:
             }
          }
       }
+#endif
    }
 
    void OnPresent(ID3D11Device* native_device, DeviceData& device_data) override
@@ -798,13 +1650,45 @@ public:
          device_data.force_reset_sr = true;
       }
       device_data.has_drawn_sr = false;
-      game_device_data.remainder_command_list = nullptr;
+      game_device_data.remainder_command_list.store(nullptr, std::memory_order_relaxed);
       game_device_data.draw_device_context = nullptr;
       game_device_data.sr_source_color = nullptr;
+      game_device_data.sr_source_color_srv = nullptr;
+      game_device_data.pre_sr_encode_texture = nullptr;
+      game_device_data.pre_sr_encode_srv = nullptr;
+      game_device_data.pre_sr_encode_rtv = nullptr;
       game_device_data.depth_buffer = nullptr;
       game_device_data.sr_motion_vectors = nullptr;
-      game_device_data.taa_rt1_resource = nullptr;
-      game_device_data.taa_upscale_rt_resource = nullptr;
+      game_device_data.bloom_texture_srv = nullptr;
+      game_device_data.exposure_texture = nullptr;
+      game_device_data.exposure_texture_srv = nullptr;
+      game_device_data.taa_output_texture = nullptr;
+      game_device_data.taa_output_texture_rtv = nullptr;
+      game_device_data.motion_blur_replay_states[0].Reset();
+      game_device_data.motion_blur_replay_states[1].Reset();
+      game_device_data.motion_blur_pending.store(false, std::memory_order_relaxed);
+      game_device_data.motion_blur_seen = false;
+      game_device_data.motion_blur_first_pass_seen = false;
+      game_device_data.motion_blur_second_pass_seen = false;
+      game_device_data.motion_blur_output_ready = false;
+      game_device_data.motion_blur_invocation_count = 0;
+      game_device_data.cutscene_gamma_input_resource = nullptr;
+      game_device_data.cutscene_gamma_pending.store(false, std::memory_order_relaxed);
+      game_device_data.cutscene_color_grade_pending.store(false, std::memory_order_relaxed);
+      game_device_data.cutscene_gamma_resource = nullptr;
+      game_device_data.cutscene_gamma_srv = nullptr;
+      game_device_data.cutscene_gamma_rtv = nullptr;
+      game_device_data.cutscene_color_grade_resource = nullptr;
+      game_device_data.cutscene_color_grade_srv = nullptr;
+      game_device_data.cutscene_color_grade_rtv = nullptr;
+      game_device_data.cutscene_overlay_replay_state.Reset();
+      game_device_data.cutscene_overlay_prep_replay_state.Reset();
+      game_device_data.cutscene_gamma_replay_state.Reset();
+      game_device_data.cutscene_color_grade_replay_state.Reset();
+      game_device_data.tonemap_draw_pending.store(false, std::memory_order_relaxed);
+      game_device_data.cutscene_overlay_pending.store(false, std::memory_order_relaxed);
+      game_device_data.cutscene_overlay_prep_pending.store(false, std::memory_order_relaxed);
+      // cutscene_intermediate_* is a persistent resource; not reset per-frame.
       game_device_data.scene_buffer_patched_this_frame = false;
       game_device_data.scene_buffer_collect_guard.store(false, std::memory_order_relaxed);
       game_device_data.scene_buffer_info_collected.store(false, std::memory_order_relaxed);
@@ -829,32 +1713,216 @@ public:
          }
       }
 
+      if (render_scale_changed)
+      {
+         const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
+         constexpr uintptr_t kCachedDimsRVA = 0x05FB48E8;
+         *reinterpret_cast<__int64*>(mod_base + kCachedDimsRVA) = 0;
+         *reinterpret_cast<__int64*>(mod_base + kCachedDimsRVA + 8) = 0;
+         device_data.force_reset_sr = true;
+         render_scale_changed = false;
+      }
+      device_data.cb_luma_global_settings_dirty = true;
+      int32_t sr_type = static_cast<int32_t>(device_data.sr_type);
+      cb_luma_global_settings.SRType = static_cast<uint32_t>(sr_type + 1);
+
       game_device_data.prev_jitter = game_device_data.jitter;
-      // OnPresent runs before FrameIndex increments, so +1 advances to the next frame sample.
       const float2& j = precomputed_jitters[(cb_luma_global_settings.FrameIndex + 1) % precomputed_jitters.size()];
       game_device_data.jitter.x = j.x;
       game_device_data.jitter.y = j.y;
    }
 
+   void LoadConfigs() override
+   {
+      reshade::api::effect_runtime* runtime = nullptr;
+      reshade::get_config_value(runtime, NAME, "RenderScale", render_scale);
+      if (render_scale != 1.f)
+      {
+         render_scale_changed = true;
+      }
+      // Load cbuffer values directly from config
+      reshade::get_config_value(runtime, NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
+      reshade::get_config_value(runtime, NAME, "Highlights", cb_luma_global_settings.GameSettings.Highlights);
+      reshade::get_config_value(runtime, NAME, "HighlightContrast", cb_luma_global_settings.GameSettings.HighlightContrast);
+      reshade::get_config_value(runtime, NAME, "Shadows", cb_luma_global_settings.GameSettings.Shadows);
+      reshade::get_config_value(runtime, NAME, "ContrastShadows", cb_luma_global_settings.GameSettings.ShadowContrast);
+      reshade::get_config_value(runtime, NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
+      reshade::get_config_value(runtime, NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
+      reshade::get_config_value(runtime, NAME, "Gamma", cb_luma_global_settings.GameSettings.Gamma);
+      reshade::get_config_value(runtime, NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
+      reshade::get_config_value(runtime, NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
+      reshade::get_config_value(runtime, NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
+   }
+
    void DrawImGuiSettings(DeviceData& device_data) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
+      reshade::api::effect_runtime* runtime = nullptr;
 
       // Render scale slider
       {
-         int scale = static_cast<int>(game_device_data.render_scale * 100.0f);
+         int scale = static_cast<int>(render_scale * 100.0f);
          if (ImGui::SliderInt("Render Scale (%)", &scale, 50, 100, "%d%%", ImGuiSliderFlags_AlwaysClamp))
          {
-            // snap to multiples of 5
             scale = (scale / 5) * 5;
-            game_device_data.render_scale = scale / 100.0f;
-            // Invalidate cached-dims guard to force RT recreation at the new scale.
-            const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-            constexpr uintptr_t kCachedDimsRVA = 0x05FB48E8;
-            *reinterpret_cast<__int64*>(mod_base + kCachedDimsRVA) = 0;
-            *reinterpret_cast<__int64*>(mod_base + kCachedDimsRVA + 8) = 0;
-            device_data.force_reset_sr = true;
+            render_scale = scale / 100.0f;
+            render_scale_changed = true;
+            reshade::set_config_value(runtime, NAME, "RenderScale", render_scale);
          }
+      }
+
+      if (ImGui::TreeNodeEx("Color Grading", ImGuiTreeNodeFlags_DefaultOpen))
+      {
+
+         float contrast_ui = cb_luma_global_settings.GameSettings.Contrast * 50.0f;
+         float highlights_ui = cb_luma_global_settings.GameSettings.Highlights * 50.0f;
+         float highlight_contrast_ui = cb_luma_global_settings.GameSettings.HighlightContrast * 50.0f;
+         float shadows_ui = cb_luma_global_settings.GameSettings.Shadows * 50.0f;
+         float shadow_contrast_ui = cb_luma_global_settings.GameSettings.ShadowContrast * 50.0f;
+         float flare_ui = cb_luma_global_settings.GameSettings.Flare * 100.0f;
+         float saturation_ui = cb_luma_global_settings.GameSettings.Saturation * 50.0f;
+         float dechroma_ui = cb_luma_global_settings.GameSettings.Dechroma * 100.0f;
+         float highlight_saturation_ui = cb_luma_global_settings.GameSettings.HighlightSaturation * 50.0f;
+
+         // Exposure (slider 0-200, stored as cbuffer value)
+         if (ImGui::SliderFloat("Exposure", &cb_luma_global_settings.GameSettings.Exposure, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            reshade::set_config_value(runtime, NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
+         }
+         if (DrawResetButton(cb_luma_global_settings.GameSettings.Exposure, 1.f, "Exposure", runtime))
+         {
+            cb_luma_global_settings.GameSettings.Exposure = 1.f;
+            reshade::set_config_value(runtime, NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
+         }
+
+         // Gamma (slider 75-125, stored as cbuffer value)
+         if (ImGui::SliderFloat("Gamma", &cb_luma_global_settings.GameSettings.Gamma, 0.75f, 1.25f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            reshade::set_config_value(runtime, NAME, "Gamma", cb_luma_global_settings.GameSettings.Gamma);
+         }
+         if (DrawResetButton(cb_luma_global_settings.GameSettings.Gamma, 1.f, "Gamma", runtime))
+         {
+            cb_luma_global_settings.GameSettings.Gamma = 1.f;
+            reshade::set_config_value(runtime, NAME, "Gamma", cb_luma_global_settings.GameSettings.Gamma);
+         }
+
+         // Contrast (slider 0-100, stored as cbuffer value)
+         if (ImGui::SliderFloat("Contrast", &contrast_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            cb_luma_global_settings.GameSettings.Contrast = contrast_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
+         }
+         if (DrawResetButton(contrast_ui, 50.f, "Contrast", runtime))
+         {
+            contrast_ui = 50.f;
+            cb_luma_global_settings.GameSettings.Contrast = contrast_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
+         }
+
+         // Highlights (slider 0-100, stored as cbuffer value)
+         if (ImGui::SliderFloat("Highlights", &highlights_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            cb_luma_global_settings.GameSettings.Highlights = highlights_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "Highlights", cb_luma_global_settings.GameSettings.Highlights);
+         }
+         if (DrawResetButton(highlights_ui, 50.f, "Highlights", runtime))
+         {
+            highlights_ui = 50.f;
+            cb_luma_global_settings.GameSettings.Highlights = highlights_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "Highlights", cb_luma_global_settings.GameSettings.Highlights);
+         }
+
+         // Contrast Highlights (slider 0-100, stored as cbuffer value)
+         if (ImGui::SliderFloat("Highlight Contrast", &highlight_contrast_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            cb_luma_global_settings.GameSettings.HighlightContrast = highlight_contrast_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "HighlightContrast", cb_luma_global_settings.GameSettings.HighlightContrast);
+         }
+         if (DrawResetButton(highlight_contrast_ui, 50.f, "HighlightContrast", runtime))
+         {
+            highlight_contrast_ui = 50.f;
+            cb_luma_global_settings.GameSettings.HighlightContrast = highlight_contrast_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "HighlightContrast", cb_luma_global_settings.GameSettings.HighlightContrast);
+         }
+
+         // Shadows (slider 0-100, stored as cbuffer value)
+         if (ImGui::SliderFloat("Shadows", &shadows_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            cb_luma_global_settings.GameSettings.Shadows = shadows_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "Shadows", cb_luma_global_settings.GameSettings.Shadows);
+         }
+         if (DrawResetButton(shadows_ui, 50.f, "Shadows", runtime))
+         {
+            shadows_ui = 50.f;
+            cb_luma_global_settings.GameSettings.Shadows = shadows_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "Shadows", cb_luma_global_settings.GameSettings.Shadows);
+         }
+
+         // Shadow Contrast (slider 0-100, stored as cbuffer value)
+         if (ImGui::SliderFloat("Shadow Contrast", &shadow_contrast_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            cb_luma_global_settings.GameSettings.ShadowContrast = shadow_contrast_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "ShadowContrast", cb_luma_global_settings.GameSettings.ShadowContrast);
+         }
+         if (DrawResetButton(shadow_contrast_ui, 50.f, "ShadowContrast", runtime))
+         {
+            shadow_contrast_ui = 50.f;
+            cb_luma_global_settings.GameSettings.ShadowContrast = shadow_contrast_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "ShadowContrast", cb_luma_global_settings.GameSettings.ShadowContrast);
+         }
+
+         // Flare (slider 0-100, stored as cbuffer value)
+         if (ImGui::SliderFloat("Flare", &flare_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            cb_luma_global_settings.GameSettings.Flare = flare_ui * 0.01f;
+            reshade::set_config_value(runtime, NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
+         }
+         if (DrawResetButton(flare_ui, 0.f, "Flare", runtime))
+         {
+            flare_ui = 0.f;
+            cb_luma_global_settings.GameSettings.Flare = flare_ui * 0.01f;
+            reshade::set_config_value(runtime, NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
+         }
+
+         // Saturation (slider 0-100, stored as cbuffer value)
+         if (ImGui::SliderFloat("Saturation", &saturation_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            cb_luma_global_settings.GameSettings.Saturation = saturation_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
+         }
+         if (DrawResetButton(saturation_ui, 50.f, "Saturation", runtime))
+         {
+            saturation_ui = 50.f;
+            cb_luma_global_settings.GameSettings.Saturation = saturation_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
+         }
+
+         // Dechroma (slider 0-100, stored as cbuffer value)
+         if (ImGui::SliderFloat("Dechroma", &dechroma_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            cb_luma_global_settings.GameSettings.Dechroma = dechroma_ui * 0.01f;
+            reshade::set_config_value(runtime, NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
+         }
+         if (DrawResetButton(dechroma_ui, 0.f, "Dechroma", runtime))
+         {
+            dechroma_ui = 0.f;
+            cb_luma_global_settings.GameSettings.Dechroma = dechroma_ui * 0.01f;
+            reshade::set_config_value(runtime, NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
+         }
+
+         // Highlight Saturation (slider 0-100, stored as cbuffer value)
+         if (ImGui::SliderFloat("Highlight Saturation", &highlight_saturation_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            cb_luma_global_settings.GameSettings.HighlightSaturation = highlight_saturation_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
+         }
+         if (DrawResetButton(highlight_saturation_ui, 50.f, "HighlightSaturation", runtime))
+         {
+            highlight_saturation_ui = 50.f;
+            cb_luma_global_settings.GameSettings.HighlightSaturation = highlight_saturation_ui * 0.02f;
+            reshade::set_config_value(runtime, NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
+         }
+         ImGui::TreePop();
       }
    }
 
@@ -876,7 +1944,6 @@ public:
       ImGui::PopStyleColor(3);
 
       ImGui::NewLine();
-      // Restore the previous color, otherwise the state we set would persist even if we popped it
       ImGui::PushStyleColor(ImGuiCol_Button, button_color);
       ImGui::PushStyleColor(ImGuiCol_ButtonHovered, button_hovered_color);
       ImGui::PushStyleColor(ImGuiCol_ButtonActive, button_active_color);
@@ -932,33 +1999,25 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_TAA.pixel_shaders.emplace(std::stoul("478E345C", nullptr, 16));
       shader_hashes_TAA.pixel_shaders.emplace(std::stoul("E49E117A", nullptr, 16)); // RenoDX compatibility
       shader_hashes_TAA.pixel_shaders.emplace(std::stoul("14393629", nullptr, 16)); // TAA (engine-native at <100% scale)
+      shader_hashes_Tonemap.pixel_shaders.emplace(std::stoul("60F0256B", nullptr, 16));
+      shader_hashes_MotionBlur.pixel_shaders.emplace(std::stoul("45841F6D", nullptr, 16));
+      shader_hashes_MotionBlurDenoise.pixel_shaders.emplace(std::stoul("199A3FBC", nullptr, 16));
+      shader_hashes_CutsceneGamma.pixel_shaders.emplace(std::stoul("1085E11F", nullptr, 16));
+      shader_hashes_CutsceneColorGrade.pixel_shaders.emplace(std::stoul("50BE35B0", nullptr, 16));
+      shader_hashes_CutsceneOverlay.pixel_shaders.emplace(std::stoul("4517077B", nullptr, 16));
+      shader_hashes_CutsceneOverlay.vertex_shaders.emplace(std::stoul("DAFDA220", nullptr, 16));
+      shader_hashes_CutsceneOverlayPrep.pixel_shaders.emplace(std::stoul("B9AFD904", nullptr, 16));
+      shader_hashes_CutsceneOverlayPrep.vertex_shaders.emplace(std::stoul("4741FB87", nullptr, 16));
 
-#if DEVELOPMENT
-      force_disable_display_composition = false;
       swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
-      texture_format_upgrades_type = TextureFormatUpgradesType::None;
-#else // for RenoDX compatibility
-      force_disable_display_composition = true;
-      swapchain_format_upgrade_type = TextureFormatUpgradesType::None;
-      swapchain_upgrade_type = SwapchainUpgradeType::None;
-      texture_format_upgrades_type = TextureFormatUpgradesType::None;
-#endif
+      texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
 
       texture_upgrade_formats = {
          reshade::api::format::r8g8b8a8_unorm,
-         reshade::api::format::r8g8b8a8_unorm_srgb,
          reshade::api::format::r8g8b8a8_typeless,
-         reshade::api::format::r8g8b8x8_unorm,
-         reshade::api::format::r8g8b8x8_unorm_srgb,
-         reshade::api::format::b8g8r8a8_unorm,
-         reshade::api::format::b8g8r8a8_unorm_srgb,
-         reshade::api::format::b8g8r8a8_typeless,
-         reshade::api::format::b8g8r8x8_unorm,
-         reshade::api::format::b8g8r8x8_unorm_srgb,
-         reshade::api::format::b8g8r8x8_typeless,
          reshade::api::format::r11g11b10_float,
-      };
+         reshade::api::format::r10g10b10a2_unorm};
 
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
 
@@ -968,8 +2027,29 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(std::stoul("14393629", nullptr, 16), "TAA (for <100% scale)");
       forced_shader_names.emplace(std::stoul("478E345C", nullptr, 16), "TAA");
       forced_shader_names.emplace(std::stoul("E49E117A", nullptr, 16), "TAA RenoDX");
+      forced_shader_names.emplace(std::stoul("45841F6D", nullptr, 16), "Motion Blur");
+      forced_shader_names.emplace(std::stoul("1085E11F", nullptr, 16), "Cutscene Gamma");
+      forced_shader_names.emplace(std::stoul("50BE35B0", nullptr, 16), "Cutscene Color Grade");
+      forced_shader_names.emplace(std::stoul("4517077B", nullptr, 16), "Cutscene Overlay");
 #endif
       enable_samplers_upgrade = true;
+
+      // Set default buffer values
+      // cb_luma_global_settings.GameSettings.TonemapAfterSR = true;
+      cb_luma_global_settings.GameSettings.Exposure = 1.f;
+      cb_luma_global_settings.GameSettings.Highlights = 1.f;
+      cb_luma_global_settings.GameSettings.HighlightContrast = 1.f;
+      cb_luma_global_settings.GameSettings.Shadows = 1.f;
+      cb_luma_global_settings.GameSettings.ShadowContrast = 1.f;
+      cb_luma_global_settings.GameSettings.Contrast = 1.f;
+      cb_luma_global_settings.GameSettings.Flare = 0.f;
+      cb_luma_global_settings.GameSettings.Gamma = 1.f;
+      cb_luma_global_settings.GameSettings.Saturation = 1.f;
+      cb_luma_global_settings.GameSettings.Dechroma = 0.f;
+      cb_luma_global_settings.GameSettings.HighlightSaturation = 1.f;
+      cb_luma_global_settings.GameSettings.HueEmulation = 0.f;
+      cb_luma_global_settings.GameSettings.PurityEmulation = 0.f;
+
       game = new GranblueFantasyRelink();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
