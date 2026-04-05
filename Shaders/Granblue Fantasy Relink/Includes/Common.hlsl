@@ -4,3 +4,5 @@
 #include "GameCBuffers.hlsl"
 // Global common
 #include "../../Includes/Common.hlsl"
+
+#include "Settings.hlsl"

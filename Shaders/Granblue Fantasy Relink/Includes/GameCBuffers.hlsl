@@ -7,10 +7,39 @@
 
 namespace CB
 {
+    struct UserGradingConfig {
+        float Exposure;
+        float Highlights;
+        float HighlightContrast;
+        float Shadows;
+        float ShadowContrast;
+        float Contrast;
+        float Flare;
+        float Gamma;
+        float Saturation;
+        float Dechroma;
+        float HighlightSaturation;
+        float HueEmulation;
+        float PurityEmulation;
+    };
+
 	struct LumaGameSettings
-	{
-		float Dummy;
-	};
+    {
+        float GammaCorrection;
+        float Exposure;
+        float Highlights;
+        float HighlightContrast;
+        float Shadows;
+        float ShadowContrast;
+        float Contrast;
+        float Flare;
+        float Gamma;
+        float Saturation;
+        float Dechroma;
+        float HighlightSaturation;
+        float HueEmulation;
+        float PurityEmulation;
+    };
 
 	struct LumaGameData
 	{
