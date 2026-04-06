@@ -214,7 +214,7 @@ namespace
       std::atomic<bool> cutscene_overlay_prep_pending = false;
       std::atomic<bool> cutscene_gamma_pending = false;
       std::atomic<bool> cutscene_color_grade_pending = false;
-      
+
       ComPtr<ID3D11Texture2D> cutscene_intermediate_resource;
       ComPtr<ID3D11ShaderResourceView> cutscene_intermediate_srv;
       ComPtr<ID3D11RenderTargetView> cutscene_intermediate_rtv;
@@ -679,8 +679,8 @@ namespace
       context->PSGetSamplers(0, 1, replay_state.ps_sampler_slot0.put());
 
       replay_state.valid = replay_state.vertex_shader.get() != nullptr &&
-                 replay_state.pixel_shader.get() != nullptr &&
-                 replay_state.ps_constant_buffer_slot1.buffer.get() != nullptr;
+                           replay_state.pixel_shader.get() != nullptr &&
+                           replay_state.ps_constant_buffer_slot1.buffer.get() != nullptr;
    }
 
    static bool ApplyCutscenePostPassReplayState(
@@ -1050,7 +1050,7 @@ public:
 
       if (original_shader_hashes.Contains(shader_hashes_CutsceneGamma) && tonemap_after_taa)
       {
-           CaptureCutscenePostPassReplayState(native_device_context, game_device_data.cutscene_gamma_replay_state);
+         CaptureCutscenePostPassReplayState(native_device_context, game_device_data.cutscene_gamma_replay_state);
 
          ComPtr<ID3D11ShaderResourceView> gamma_input_srv;
          native_device_context->PSGetShaderResources(0, 1, gamma_input_srv.put());

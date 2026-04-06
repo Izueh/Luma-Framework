@@ -7,8 +7,6 @@ Texture2D<float4> g_TextureAdaptLumminance : register(t2);
 Texture2D<float4> g_TextureBloom : register(t3);
 Texture2D<float4> g_TextureSceneColorHDR : register(t4);
 
-
-// 3Dmigoto declarations
 #define cmp -
 
 // float ApplyVanillaToneMap(float untonemapped) {
@@ -41,67 +39,67 @@ Texture2D<float4> g_TextureSceneColorHDR : register(t4);
 //   return r0;
 // }
 
-void main(
-  float4 v0 : SV_Position0,
-  out float4 o0 : SV_Target0)
+void main(float4 v0: SV_Position0, out float4 o0: SV_Target0)
 {
-  float4 r0,r1,r2;
-  uint4 bitmask, uiDest;
-  float4 fDest;
+   float4 r0, r1, r2;
+   uint4 bitmask, uiDest;
+   float4 fDest;
 
-  // Derive UV from SV_Position (Copy VS does not output TEXCOORD0)
-  float2 v1 = v0.xy / LumaSettings.SwapchainSize;
+   // Derive UV from SV_Position (Copy VS does not output TEXCOORD0)
+   float2 v1 = v0.xy / LumaSettings.SwapchainSize;
 
-  r0.xyzw = g_TextureSceneColorHDR.Sample(g_TextureSceneColorHDRSampler_s, v1).xyzw;
-  float alpha = r0.w;
-  r1.xyz = (int3)r0.xyz & int3(0x7f800000,0x7f800000,0x7f800000);
-  r1.xyz = cmp((int3)r1.xyz == int3(0x7f800000,0x7f800000,0x7f800000));
-  r0.w = (int)r1.y | (int)r1.x;
-  r0.w = (int)r1.z | (int)r0.w;
-  
-  r0.xyz = r0.www ? float3(1000000,1000000,1000000) : r0.xyz;
+   r0.xyzw = g_TextureSceneColorHDR.Sample(g_TextureSceneColorHDRSampler_s, v1).xyzw;
+   float alpha = r0.w;
+   r1.xyz = (int3)r0.xyz & int3(0x7f800000, 0x7f800000, 0x7f800000);
+   r1.xyz = cmp((int3)r1.xyz == int3(0x7f800000, 0x7f800000, 0x7f800000));
+   r0.w = (int)r1.y | (int)r1.x;
+   r0.w = (int)r1.z | (int)r0.w;
 
-  r0.w = g_TextureAdaptLumminance.Sample(g_TextureAdaptLumminanceSampler_s, float2(0.5, 0.5)).x;
-  r0.xyz = r0.www * r0.xyz;
+   r0.xyz = r0.www ? float3(1000000, 1000000, 1000000) : r0.xyz;
 
-  [branch]
-  if (LumaSettings.DisplayMode == 0) {
-    r1.xyz = r0.xyz * float3(0.150000006, 0.150000006, 0.150000006) + float3(0.0500000007, 0.0500000007, 0.0500000007);
-    r1.xyz = r0.xyz * r1.xyz + float3(0.00400000019, 0.00400000019, 0.00400000019);
-    r2.xyz = r0.xyz * float3(0.150000006, 0.150000006, 0.150000006) + float3(0.5, 0.5, 0.5);
-    r0.xyz = r0.xyz * r2.xyz + float3(0.0599999987, 0.0599999987, 0.0599999987);
-    r0.xyz = r1.xyz / r0.xyz;
-    r0.xyz = float3(-0.0666666701, -0.0666666701, -0.0666666701) + r0.xyz;
-  }
-  
-  r1.xyz = g_TextureBloom.Sample(g_TextureBloomSampler_s, v1.xy).xyz;
-  r0.xyz += r1.xyz; // additive bloom, matching vanilla post-exposure application
+   r0.w = g_TextureAdaptLumminance.Sample(g_TextureAdaptLumminanceSampler_s, float2(0.5, 0.5)).x;
+   r0.xyz = r0.www * r0.xyz;
 
-  [branch]
-  if (LumaSettings.DisplayMode == 1) 
-  {
-    float3 color = r0.rgb;
+   [branch]
+   if (LumaSettings.DisplayMode == 0)
+   {
+      r1.xyz =
+          r0.xyz * float3(0.150000006, 0.150000006, 0.150000006) + float3(0.0500000007, 0.0500000007, 0.0500000007);
+      r1.xyz = r0.xyz * r1.xyz + float3(0.00400000019, 0.00400000019, 0.00400000019);
+      r2.xyz = r0.xyz * float3(0.150000006, 0.150000006, 0.150000006) + float3(0.5, 0.5, 0.5);
+      r0.xyz = r0.xyz * r2.xyz + float3(0.0599999987, 0.0599999987, 0.0599999987);
+      r0.xyz = r1.xyz / r0.xyz;
+      r0.xyz = float3(-0.0666666701, -0.0666666701, -0.0666666701) + r0.xyz;
+   }
 
-    color.rgb = ApplyUserGradingAndToneMap(color.rgb, float2(0,0));
-    o0 = float4(color.rgb, alpha);
-    return;
-  }
+   r1.xyz = g_TextureBloom.Sample(g_TextureBloomSampler_s, v1.xy).xyz;
+   r0.xyz += r1.xyz; // additive bloom, matching vanilla post-exposure application
 
-  r0.xyz = saturate(r0.xyz * float3(1.37906432, 1.37906432, 1.37906432) + r1.xyz);
+   [branch]
+   if (LumaSettings.DisplayMode == 1)
+   {
+      float3 color = r0.rgb;
 
-  // o0.rgb = renodx::draw::RenderIntermediatePass(r0.rgb);
-  o0.rgb = linear_to_sRGB_gamma(r0.rgb, GCT_SATURATE);
-  o0.w = alpha;
+      color.rgb = ApplyUserGradingAndToneMap(color.rgb, float2(0, 0));
+      o0 = float4(color.rgb, alpha);
+      return;
+   }
 
-  // return;
-  
-  // r1.xyz = log2(r0.xyz);
-  // r1.xyz = float3(0.416666657,0.416666657,0.416666657) * r1.xyz;
-  // r1.xyz = exp2(r1.xyz);
-  // r1.xyz = r1.xyz * float3(1.05499995,1.05499995,1.05499995) + float3(-0.0549999997,-0.0549999997,-0.0549999997);
-  // r2.xyz = cmp(float3(0.00313080009,0.00313080009,0.00313080009) >= r0.xyz);
-  // r0.xyz = float3(12.9200001,12.9200001,12.9200001) * r0.xyz;
-  // o0.xyz = r2.xyz ? r0.xyz : r1.xyz;
-  // o0.w = 1;
-  // return;
+   r0.xyz = saturate(r0.xyz * float3(1.37906432, 1.37906432, 1.37906432) + r1.xyz);
+
+   // o0.rgb = renodx::draw::RenderIntermediatePass(r0.rgb);
+   o0.rgb = linear_to_sRGB_gamma(r0.rgb, GCT_SATURATE);
+   o0.w = alpha;
+
+   // return;
+
+   // r1.xyz = log2(r0.xyz);
+   // r1.xyz = float3(0.416666657,0.416666657,0.416666657) * r1.xyz;
+   // r1.xyz = exp2(r1.xyz);
+   // r1.xyz = r1.xyz * float3(1.05499995,1.05499995,1.05499995) + float3(-0.0549999997,-0.0549999997,-0.0549999997);
+   // r2.xyz = cmp(float3(0.00313080009,0.00313080009,0.00313080009) >= r0.xyz);
+   // r0.xyz = float3(12.9200001,12.9200001,12.9200001) * r0.xyz;
+   // o0.xyz = r2.xyz ? r0.xyz : r1.xyz;
+   // o0.w = 1;
+   // return;
 }
