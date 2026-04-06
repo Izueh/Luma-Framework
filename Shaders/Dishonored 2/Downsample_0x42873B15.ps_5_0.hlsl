@@ -52,26 +52,6 @@ cbuffer PerViewCB : register(b1)
   uint cb_alwayszero : packoffset(c49.w);
 }
 
-// From TAA.
-// Some are renamed (prefix _) cause we already have them.
-cbuffer PerInstanceCB : register(b3)
-{
-  float4 _cb_positiontoviewtexture : packoffset(c0);
-  float4 cb_taatexsize : packoffset(c1);
-  float4 cb_taaditherandviewportsize : packoffset(c2);
-  float4 cb_postfx_tonemapping_tonemappingparms : packoffset(c3);
-  float4 cb_postfx_tonemapping_tonemappingcoeffsinverse1 : packoffset(c4);
-  float4 cb_postfx_tonemapping_tonemappingcoeffsinverse0 : packoffset(c5);
-  float4 cb_postfx_tonemapping_tonemappingcoeffs1 : packoffset(c6);
-  float4 cb_postfx_tonemapping_tonemappingcoeffs0 : packoffset(c7);
-  uint2 _cb_postfx_luminance_exposureindex : packoffset(c8);
-  float2 cb_prevresolutionscale : packoffset(c8.z);
-  float cb_env_tonemapping_white_level : packoffset(c9);
-  float _cb_view_white_level : packoffset(c9.y);
-  float cb_taaamount : packoffset(c9.z);
-  float cb_postfx_luminance_customevbias : packoffset(c9.w);
-}
-
 SamplerState smp_linearclamp_s : register(s0);
 Texture2D<float4> ro_viewcolormap : register(t0);
 StructuredBuffer<postfx_luminance_autoexposure_t> ro_postfx_luminance_buffautoexposure : register(t1);
@@ -80,7 +60,48 @@ StructuredBuffer<postfx_luminance_autoexposure_t> ro_postfx_luminance_buffautoex
 // 3Dmigoto declarations
 #define cmp -
 
+#if 1
+void main(
+  float4 v0 : SV_POSITION0,
+  out float4 o0 : SV_TARGET0)
+{
+  float4 r0,r1,r2,r3;
+  uint4 bitmask, uiDest;
+  float4 fDest;
 
+  // Box downsample from subsequent downsample passes 0xAB0EAF9D.
+  // They all share the same vertex shader.
+  r0.xy = float2(0.5,0.5) * cb_positiontoviewtexture.zw;
+  r0.xy = v0.xy * cb_positiontoviewtexture.zw + -r0.xy;
+  r1.xw = cb_positiontoviewtexture.zw;
+  r1.yz = float2(0,0);
+  r0.zw = r1.xy + r0.xy;
+  r2.xyzw = ro_viewcolormap.Sample(smp_linearclamp_s, r0.xy).xyzw;
+  r0.xy = r0.zw + r1.zw;
+  r3.xyzw = ro_viewcolormap.Sample(smp_linearclamp_s, r0.zw).xyzw;
+  r2.xyzw = r3.xyzw + r2.xyzw;
+  r0.zw = r0.xy + -r1.xy;
+  r1.xyzw = ro_viewcolormap.Sample(smp_linearclamp_s, r0.xy).xyzw;
+  r0.xyzw = ro_viewcolormap.Sample(smp_linearclamp_s, r0.zw).xyzw;
+  r0.xyzw = r2.xyzw + r0.xyzw;
+  r0.xyzw = r0.xyzw + r1.xyzw;
+  //o0.xyzw = float4(0.25,0.25,0.25,0.25) * r0.xyzw;
+  
+  r0.yzw = r0.xyz * 0.25;
+
+  // From the original shader.
+  r0.x = ro_postfx_luminance_buffautoexposure[cb_postfx_luminance_exposureindex.y].EngineLuminanceFactor;
+  r0.x = cb_view_white_level * r0.x;
+  //r0.yz = cb_positiontoviewtexture.zw * v0.xy;
+  //r0.yzw = ro_viewcolormap.Sample(smp_linearclamp_s, r0.yz).xyz;
+  r1.xyz = r0.yzw * r0.xxx;
+  r0.xyz = cb_usecompressedhdrbuffers ? r1.xyz : r0.yzw;
+  r0.xyz = max(float3(0,0,0), r0.xyz);
+  o0.w = dot(r0.xyz, float3(0.212599993,0.715200007,0.0722000003));
+  o0.xyz = r0.xyz;
+  return;
+}
+#else // Experimental.
 void main(
   float4 v0 : SV_POSITION0,
   out float4 o0 : SV_TARGET0)
@@ -89,21 +110,54 @@ void main(
   uint4 bitmask, uiDest;
   float4 fDest;
 
+  // Custom filter, 13 bilinear texture fetches.
+  // https://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare/
+  //
+  // a - b - c
+  // - d - e -
+  // f - g - h
+  // - i - j -
+  // k - l - m
+  //
+
+  // Center.
+  const float3 g = ro_viewcolormap.SampleLevel(smp_linearclamp_s, v0.xy * cb_positiontoviewtexture.zw, 0.0).xyz;
+
+  // Inner ring.
+  const float3 d = ro_viewcolormap.SampleLevel(smp_linearclamp_s, (v0.xy + float2(-0.5, -0.5)) * cb_positiontoviewtexture.zw, 0.0).xyz;
+  const float3 e = ro_viewcolormap.SampleLevel(smp_linearclamp_s, (v0.xy + float2(0.5, -0.5)) * cb_positiontoviewtexture.zw, 0.0).xyz;
+  const float3 i = ro_viewcolormap.SampleLevel(smp_linearclamp_s, (v0.xy + float2(-0.5, 0.5)) * cb_positiontoviewtexture.zw, 0.0).xyz;
+  const float3 j = ro_viewcolormap.SampleLevel(smp_linearclamp_s, (v0.xy + float2(0.5, 0.5)) * cb_positiontoviewtexture.zw, 0.0).xyz;
+
+  // Outer ring.
+  const float3 a = ro_viewcolormap.SampleLevel(smp_linearclamp_s, (v0.xy + float2(-1.5, -1.5)) * cb_positiontoviewtexture.zw, 0.0).xyz;
+  const float3 b = ro_viewcolormap.SampleLevel(smp_linearclamp_s, (v0.xy + float2(0.0, -1.5)) * cb_positiontoviewtexture.zw, 0.0).xyz;
+  const float3 c = ro_viewcolormap.SampleLevel(smp_linearclamp_s, (v0.xy + float2(1.5, -1.5)) * cb_positiontoviewtexture.zw, 0.0).xyz;
+  const float3 f = ro_viewcolormap.SampleLevel(smp_linearclamp_s, (v0.xy + float2(-1.5, 0.0)) * cb_positiontoviewtexture.zw, 0.0).xyz;
+  const float3 h = ro_viewcolormap.SampleLevel(smp_linearclamp_s, (v0.xy + float2(1.5, 0.0)) * cb_positiontoviewtexture.zw, 0.0).xyz;
+  const float3 k = ro_viewcolormap.SampleLevel(smp_linearclamp_s, (v0.xy + float2(-1.5, 1.5)) * cb_positiontoviewtexture.zw, 0.0).xyz;
+  const float3 l = ro_viewcolormap.SampleLevel(smp_linearclamp_s, (v0.xy + float2(0.0, 1.5)) * cb_positiontoviewtexture.zw, 0.0).xyz;
+  const float3 m = ro_viewcolormap.SampleLevel(smp_linearclamp_s, (v0.xy + float2(1.5, 1.5)) * cb_positiontoviewtexture.zw, 0.0).xyz;
+
+  //
+
+  // Apply weighted distribution.
+  r0.yzw = g * 0.125;
+  const float3 inner_ring = (d + e + i + j) * 0.125; // We need this later.
+  r0.yzw += inner_ring;
+  r0.yzw += (b + f + h + l) * 0.0625;
+  r0.yzw += (a + c + k + m) * 0.03125;
+
+  // From the original shader.
   r0.x = ro_postfx_luminance_buffautoexposure[cb_postfx_luminance_exposureindex.y].EngineLuminanceFactor;
   r0.x = cb_view_white_level * r0.x;
-  r0.yz = cb_positiontoviewtexture.zw * v0.xy;
-  r0.yzw = ro_viewcolormap.Sample(smp_linearclamp_s, r0.yz).xyz;
+  //r0.yz = cb_positiontoviewtexture.zw * v0.xy;
+  //r0.yzw = ro_viewcolormap.Sample(smp_linearclamp_s, r0.yz).xyz;
   r1.xyz = r0.yzw * r0.xxx;
   r0.xyz = cb_usecompressedhdrbuffers ? r1.xyz : r0.yzw;
   r0.xyz = max(float3(0,0,0), r0.xyz);
-
-  // Limit colors to cb_env_tonemapping_white_level,
-  // cause after DLSS pass highlihghts explode otherwise.
-  //
-  // We only need to do this in case of DLSS, but it doesnt hurt the native TAA.
-  r0.xyz = min(cb_env_tonemapping_white_level, r0.xyz);
-
-  o0.w = dot(r0.xyz, float3(0.212599993,0.715200007,0.0722000003));
+  o0.w = dot(inner_ring * 2.0, float3(0.212599993,0.715200007,0.0722000003)); // Used to build histogram.
   o0.xyz = r0.xyz;
   return;
 }
+#endif
