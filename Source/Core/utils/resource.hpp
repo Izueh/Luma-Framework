@@ -1017,7 +1017,7 @@ bool CopyBuffer(com_ptr<ID3D11Buffer> cb, ID3D11DeviceContext* native_device_con
          ASSERT_ONCE(false);
          return false;
       }
-      map_context->CopyResource(cb_copy.get(), cb.get());
+      native_device_context->CopyResource(cb_copy.get(), cb.get());
       cb = cb_copy;
    }
 
