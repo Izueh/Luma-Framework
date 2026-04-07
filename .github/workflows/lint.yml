@@ -25,7 +25,7 @@ jobs:
           files-changed-only: true # should be set to true initially, but false for testing
           thread-comments: false
           ignore: |
-            Source/External/**
+            Source/External/** | Source/**/safetyhook.* | Source/**/Zydis.*
       - name: Fail fast?!
         if: steps.linter.outputs.checks-failed > 0
         run: exit 1

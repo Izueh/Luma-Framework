@@ -5,7 +5,7 @@
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
 #define JITTER_PHASES 8
-#define PATCH_SCENE_BUFFER 1
+#define PATCH_SCENE_BUFFER 0
 
 #include <d3d11.h>
 #include "..\..\Core\core.hpp"
@@ -241,6 +241,13 @@ namespace
       float camera_far = 10000.0f;
       float2 jitter = {0, 0};
       float2 prev_jitter = {0, 0};
+#if TEST
+      bool taa_detected_this_frame = false;
+      bool cutscene_gamma_seen_this_frame = false;
+      bool cutscene_color_grade_seen_this_frame = false;
+      bool cutscene_overlay_prep_seen_this_frame = false;
+      bool cutscene_overlay_seen_this_frame = false;
+#endif
 
       // Scene buffer patching resources
       ComPtr<ID3D11Buffer> scratch_scene_buffer;
@@ -272,21 +279,15 @@ namespace
 
    const uint32_t CBSceneBuffer_size = sizeof(cbSceneBuffer);
 
-   constexpr std::array<float2, JITTER_PHASES> precomputed_jitters = []()
-   {
-      std::array<float2, JITTER_PHASES> entries{};
-      for (unsigned int i = 0; i < entries.size(); i++)
-      {
-         entries[i] = float2{SR::HaltonSequence(i, 2), SR::HaltonSequence(i, 3)};
-      }
-      return entries;
-   }();
-
    constexpr size_t kVSSetConstantBuffers1_VTableIndex = 119;
    constexpr uintptr_t kInitializeDX11RenderingPipeline_RVA = 0x00745510;
    constexpr uintptr_t kUpdateScreenResolution_RVA = 0x005F7960;
    constexpr uintptr_t kRenderWidth_RVA = 0x05AA41E8;  // dword_145AA41E8
    constexpr uintptr_t kRenderHeight_RVA = 0x05AA41EC; // dword_145AA41EC
+   constexpr uintptr_t kCameraGlobal_RVA = 0x068B4F90;
+   constexpr uintptr_t kCameraProjectionDataOffset = 0x60;
+   constexpr uintptr_t kProjectionJitterXOffset = 0x940;
+   constexpr uintptr_t kProjectionJitterYOffset = 0x944;
 
    SafetyHookInline g_rt_creation_hook;
    SafetyHookInline g_update_screen_resolution_hook;
@@ -297,6 +298,31 @@ namespace
    // to access Luma device data without going through reshade API.
    std::atomic<DeviceData*> g_device_data_ptr = nullptr;
    std::atomic<ID3D11Device*> g_native_device_ptr = nullptr;
+
+#if TEST
+   static void LogExpectedCustomDrawSkipped(const char* pass_name, const std::string& reason)
+   {
+      std::string msg = "[GBFR][TEST] Expected custom draw skipped: ";
+      msg += pass_name;
+      msg += " | reason: ";
+      msg += reason;
+      reshade::log::message(reshade::log::level::warning, msg.c_str());
+   }
+#endif
+
+   static bool TryReadCameraJitter(float2& out_jitter)
+   {
+      const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
+      if (mod_base == 0) return false;
+
+      const uintptr_t camera          = mod_base + kCameraGlobal_RVA;
+      const uintptr_t projection_ptr  = *reinterpret_cast<const uintptr_t*>(camera + kCameraProjectionDataOffset);
+      if (projection_ptr == 0) return false;
+
+      out_jitter.x = *reinterpret_cast<const float*>(projection_ptr + kProjectionJitterXOffset);
+      out_jitter.y = *reinterpret_cast<const float*>(projection_ptr + kProjectionJitterYOffset);
+      return true;
+   }
 
    static char __fastcall Hooked_InitializeDX11RenderingPipeline(int screen_width, int screen_height)
    {
@@ -1060,6 +1086,9 @@ public:
             gamma_input_srv->GetResource(game_device_data.cutscene_gamma_input_resource.put());
          }
 
+#if TEST
+         game_device_data.cutscene_gamma_seen_this_frame = true;
+#endif
          game_device_data.cutscene_gamma_pending.store(true, std::memory_order_release);
          return DrawOrDispatchOverrideType::Skip;
       }
@@ -1067,6 +1096,9 @@ public:
       if (original_shader_hashes.Contains(shader_hashes_CutsceneColorGrade) && tonemap_after_taa)
       {
          CaptureCutscenePostPassReplayState(native_device_context, game_device_data.cutscene_color_grade_replay_state);
+#if TEST
+         game_device_data.cutscene_color_grade_seen_this_frame = true;
+#endif
          game_device_data.cutscene_color_grade_pending.store(true, std::memory_order_release);
          return DrawOrDispatchOverrideType::Skip;
       }
@@ -1074,6 +1106,9 @@ public:
       if (original_shader_hashes.Contains(shader_hashes_CutsceneOverlayPrep) && tonemap_after_taa)
       {
          CaptureCutsceneOverlayPrepReplayState(native_device_context, game_device_data);
+#if TEST
+         game_device_data.cutscene_overlay_prep_seen_this_frame = true;
+#endif
          game_device_data.cutscene_overlay_prep_pending.store(true, std::memory_order_release);
          return DrawOrDispatchOverrideType::Skip;
       }
@@ -1082,6 +1117,9 @@ public:
       {
 
          CaptureCutsceneOverlayReplayState(native_device_context, game_device_data);
+#if TEST
+         game_device_data.cutscene_overlay_seen_this_frame = true;
+#endif
          game_device_data.cutscene_overlay_pending.store(true, std::memory_order_release);
          ComPtr<ID3D11RenderTargetView> current_rtv;
          native_device_context->OMGetRenderTargets(1, current_rtv.put(), nullptr);
@@ -1111,6 +1149,9 @@ public:
       if (original_shader_hashes.Contains(shader_hashes_TAA))
       {
          device_data.taa_detected = true;
+#if TEST
+         game_device_data.taa_detected_this_frame = true;
+#endif
          DrawOrDispatchOverrideType override_type = DrawOrDispatchOverrideType::None;
          if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed)
          {
@@ -1120,14 +1161,20 @@ public:
                if (!game_device_data.scene_buffer_info_collected.load(std::memory_order_acquire))
                {
                   device_data.force_reset_sr = true;
+#if TEST
+                  LogExpectedCustomDrawSkipped("SR (TAA path)", "force_reset_sr set: scene_buffer_info not collected yet");
+#endif
                   return DrawOrDispatchOverrideType::None;
                }
 #endif
 
                if (!ExtractTAAShaderResources(native_device_context, game_device_data))
                {
-                  ASSERT_ONCE(false);
+                  ASSERT_ONCE_MSG(false, "ExtractTAAShaderResources: t3 (source color) or t23 (motion vectors) SRV not bound");
                   device_data.force_reset_sr = true;
+#if TEST
+                  LogExpectedCustomDrawSkipped("SR (TAA path)", "force_reset_sr set: ExtractTAAShaderResources failed (t3 or t23 not bound)");
+#endif
                   return DrawOrDispatchOverrideType::None;
                }
 
@@ -1138,6 +1185,9 @@ public:
                if (rtvs[1] == nullptr)
                {
                   device_data.force_reset_sr = true;
+#if TEST
+                  LogExpectedCustomDrawSkipped("SR (TAA path)", "rtvs[1]=null: TAA RTV1 not bound");
+#endif
                   return DrawOrDispatchOverrideType::None;
                }
 
@@ -1145,12 +1195,28 @@ public:
                {
                   if (!SetupSROutput(native_device, device_data, game_device_data, rtvs[1]))
                   {
+#if TEST
+                     LogExpectedCustomDrawSkipped("SR (TAA path)", "SetupSROutput failed: TAA output texture QueryInterface or min-resolution check failed");
+#endif
                      return DrawOrDispatchOverrideType::None;
                   }
 
                   if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
                   {
-                     DrawNativePreSREncodePass(native_device, native_device_context, device_data, game_device_data);
+                     const bool pre_sr_ok = DrawNativePreSREncodePass(native_device, native_device_context, device_data, game_device_data);
+#if TEST
+                     if (!pre_sr_ok)
+                     {
+                        std::string reason = "prerequisite missing:";
+                        const auto vs_it = device_data.native_vertex_shaders.find(CompileTimeStringHash("Copy VS"));
+                        const auto ps_it = device_data.native_pixel_shaders.find(CompileTimeStringHash("GBFR Pre SR Encode"));
+                        if (vs_it == device_data.native_vertex_shaders.end() || !vs_it->second) reason += " copy_vs=missing;";
+                        if (ps_it == device_data.native_pixel_shaders.end() || !ps_it->second) reason += " pre_sr_encode_ps=missing;";
+                        if (!game_device_data.sr_source_color.get()) reason += " sr_source_color=null;";
+                        if (!game_device_data.sr_source_color_srv.get()) reason += " sr_source_color_srv=null;";
+                        LogExpectedCustomDrawSkipped("PreSREncode (TAA path)", reason);
+                     }
+#endif
                   }
 
                   // Split here: partial_command_list captures all draws up to (not including) TAA,
@@ -1205,16 +1271,38 @@ public:
             {
                ID3D11RenderTargetView* rt;
                native_device_context->OMGetRenderTargets(1, &rt, nullptr);
+#if TEST
+               if (rt == nullptr)
+               {
+                  LogExpectedCustomDrawSkipped("SR (TUP path)", "rt=null: TUP RTV0 not bound; SR inputs will not be prepared");
+               }
+#endif
                if (rt != nullptr)
                {
 
                   if (!SetupSROutput(native_device, device_data, game_device_data, rt))
                   {
+#if TEST
+                     LogExpectedCustomDrawSkipped("SR (TUP path)", "SetupSROutput failed: TUP output texture QueryInterface or min-resolution check failed");
+#endif
                      return DrawOrDispatchOverrideType::None;
                   }
                   if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
                   {
-                     DrawNativePreSREncodePass(native_device, native_device_context, device_data, game_device_data);
+                     const bool pre_sr_ok = DrawNativePreSREncodePass(native_device, native_device_context, device_data, game_device_data);
+#if TEST
+                     if (!pre_sr_ok)
+                     {
+                        std::string reason = "prerequisite missing:";
+                        const auto vs_it = device_data.native_vertex_shaders.find(CompileTimeStringHash("Copy VS"));
+                        const auto ps_it = device_data.native_pixel_shaders.find(CompileTimeStringHash("GBFR Pre SR Encode"));
+                        if (vs_it == device_data.native_vertex_shaders.end() || !vs_it->second) reason += " copy_vs=missing;";
+                        if (ps_it == device_data.native_pixel_shaders.end() || !ps_it->second) reason += " pre_sr_encode_ps=missing;";
+                        if (!game_device_data.sr_source_color.get()) reason += " sr_source_color=null;";
+                        if (!game_device_data.sr_source_color_srv.get()) reason += " sr_source_color_srv=null;";
+                        LogExpectedCustomDrawSkipped("PreSREncode (TUP path)", reason);
+                     }
+#endif
                   }
                   if (game_device_data.modifiable_index_vertex_buffer)
                   {
@@ -1306,6 +1394,12 @@ public:
                native_device_context->ExecuteCommandList(game_device_data.partial_command_list.get(), FALSE);
                game_device_data.partial_command_list.reset();
 
+               // Read jitter here, mid-frame, after geometry/camera setup but before DLSS and
+               // all custom passes. By the time the partial command list (containing TAA) has
+               // been replayed the game must have written the current-frame projection jitter.
+               game_device_data.prev_jitter = game_device_data.jitter;
+               TryReadCameraJitter(game_device_data.jitter);
+
                CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
 
                DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
@@ -1342,7 +1436,7 @@ public:
                      device_data.force_reset_sr = false;
 
                      float jitter_x = game_device_data.jitter.x;
-                     float jitter_y = -game_device_data.jitter.y;
+                     float jitter_y = game_device_data.jitter.y;
                      SR::SuperResolutionImpl::DrawData draw_data;
                      draw_data.source_color = game_device_data.sr_source_color.get();
                      draw_data.output_color = game_device_data.sr_output_color.get();
@@ -1368,6 +1462,20 @@ public:
                      draw_data.render_height = device_data.render_resolution.y;
 
                      // Execute SR
+#if TEST
+                     {
+                        std::string pre_draw_issues;
+                        if (!draw_data.source_color) pre_draw_issues += " source_color=null;";
+                        if (!draw_data.output_color) pre_draw_issues += " output_color=null;";
+                        if (!draw_data.motion_vectors) pre_draw_issues += " motion_vectors=null;";
+                        if (!draw_data.depth_buffer) pre_draw_issues += " depth_buffer=null;";
+                        if (!sr_instance_data) pre_draw_issues += " sr_instance_data=null;";
+                        if (!pre_draw_issues.empty())
+                        {
+                           LogExpectedCustomDrawSkipped("SR", "null inputs before Draw:" + pre_draw_issues);
+                        }
+                     }
+#endif
                      if (sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context.get(), draw_data))
                      {
                         device_data.has_drawn_sr = true;
@@ -1376,6 +1484,19 @@ public:
                      {
                         device_data.has_drawn_sr = false;
                         device_data.force_reset_sr = true;
+#if TEST
+                        {
+                           std::string reason = "SR::Draw returned false; draw inputs:";
+                           if (!draw_data.source_color) reason += " source_color=null;";
+                           if (!draw_data.output_color) reason += " output_color=null;";
+                           if (!draw_data.motion_vectors) reason += " motion_vectors=null;";
+                           if (!draw_data.depth_buffer) reason += " depth_buffer=null;";
+                           if (!sr_instance_data) reason += " sr_instance_data=null;";
+                           if (draw_data.render_width <= 0.f || draw_data.render_height <= 0.f)
+                              reason += " render_dims_invalid(" + std::to_string(static_cast<int>(draw_data.render_width)) + "x" + std::to_string(static_cast<int>(draw_data.render_height)) + ");";
+                           LogExpectedCustomDrawSkipped("SR", reason);
+                        }
+#endif
                      }
 #if DEVELOPMENT
                      // Add trace info for DLSS/FSR execution
@@ -1407,19 +1528,44 @@ public:
                   const bool hdr_sr = (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR) &&
                                       (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.has_drawn_sr);
                   const bool should_run = tonemap_after_taa ? !hdr_sr : hdr_sr;
-                  if (should_run && pipeline_color_srv)
+                  if (should_run)
                   {
-                     // Use pre-DLSS input for alpha extraction if SR was executed
-                     ID3D11ShaderResourceView* alpha_source_srv = nullptr;
-                     if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.has_drawn_sr)
+                     if (pipeline_color_srv)
                      {
-                        alpha_source_srv = game_device_data.sr_source_color_srv.get();
-                     }
+                        // Use pre-DLSS input for alpha extraction if SR was executed
+                        ID3D11ShaderResourceView* alpha_source_srv = nullptr;
+                        if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.has_drawn_sr)
+                        {
+                           alpha_source_srv = game_device_data.sr_source_color_srv.get();
+                        }
 
-                     if (DrawNativePostSREncodePass(native_device_context.get(), cmd_list_data, device_data, game_device_data, pipeline_color_srv, alpha_source_srv))
-                     {
-                        pipeline_color_srv = game_device_data.post_sr_encode_srv.get();
+                        if (DrawNativePostSREncodePass(native_device_context.get(), cmd_list_data, device_data, game_device_data, pipeline_color_srv, alpha_source_srv))
+                        {
+                           pipeline_color_srv = game_device_data.post_sr_encode_srv.get();
+                        }
+#if TEST
+                        else
+                        {
+                           std::string reason = "DrawNativePostSREncodePass failed:";
+                           {
+                              const auto vs_chk = device_data.native_vertex_shaders.find(CompileTimeStringHash("Copy VS"));
+                              if (vs_chk == device_data.native_vertex_shaders.end() || !vs_chk->second) reason += " copy_vs=missing;";
+                           }
+                           {
+                              const auto ps_chk = device_data.native_pixel_shaders.find(CompileTimeStringHash("GBFR Post SR Encode"));
+                              if (ps_chk == device_data.native_pixel_shaders.end() || !ps_chk->second) reason += " post_sr_encode_ps=missing;";
+                           }
+                           if (!pipeline_color_srv) reason += " input_srv=null;";
+                           LogExpectedCustomDrawSkipped("PostSREncode", reason);
+                        }
+#endif
                      }
+#if TEST
+                     else
+                     {
+                        LogExpectedCustomDrawSkipped("PostSREncode", "should_run=true but pipeline_color_srv is null");
+                     }
+#endif
                   }
                }
 
@@ -1434,7 +1580,34 @@ public:
                      {
                         pipeline_color_srv = game_device_data.motion_blur_output_srv.get();
                      }
+#if TEST
+                     else
+                     {
+                        LogExpectedCustomDrawSkipped("MotionBlur", "DrawNativeMotionBlurPass did not produce output (motion_blur_output_ready=false)");
+                     }
+#endif
                   }
+#if TEST
+                  else
+                  {
+                     std::string reason;
+                     if (!after_sr)
+                     {
+                        reason = "pending replay, but SR output is not ready yet";
+                     }
+                     else
+                     {
+                        reason = "prerequisite missing:";
+                        if (!pipeline_color_srv) reason += " pipeline_color_srv=null;";
+                        if (!game_device_data.motion_blur_first_pass_seen) reason += " first_pass_not_seen;";
+                        if (!game_device_data.motion_blur_second_pass_seen) reason += " second_pass_not_seen;";
+                        if (!game_device_data.motion_blur_replay_states[0].valid) reason += " replay_state0_invalid;";
+                        if (!game_device_data.motion_blur_replay_states[1].valid) reason += " replay_state1_invalid;";
+                        if (!game_device_data.taa_output_texture.get()) reason += " taa_output_texture=null;";
+                     }
+                     LogExpectedCustomDrawSkipped("MotionBlur", reason);
+                  }
+#endif
                   // Never stall tonemap if motion blur replay is unavailable in this frame.
                   game_device_data.motion_blur_pending.store(false, std::memory_order_release);
                   game_device_data.motion_blur_seen = false;
@@ -1461,6 +1634,25 @@ public:
                      game_device_data.exposure_texture_srv = nullptr;
                      game_device_data.bloom_texture_srv = nullptr;
                   }
+#if TEST
+                  else
+                  {
+                     std::string reason;
+                     if (!after_sr)
+                     {
+                        reason = "pending replay, but SR output is not ready yet";
+                     }
+                     else
+                     {
+                        reason = "prerequisite missing:";
+                        if (!pipeline_color_srv) reason += " pipeline_color_srv=null;";
+                        if (!game_device_data.exposure_texture_srv.get()) reason += " exposure_texture_srv=null;";
+                        if (!game_device_data.bloom_texture_srv.get()) reason += " bloom_texture_srv=null;";
+                        if (!game_device_data.taa_output_texture.get()) reason += " taa_output_texture=null;";
+                     }
+                     LogExpectedCustomDrawSkipped("Tonemap", reason);
+                  }
+#endif
                }
 
                if (game_device_data.cutscene_gamma_pending.load(std::memory_order_acquire))
@@ -1470,6 +1662,16 @@ public:
                      DrawNativeCutsceneGammaPass(native_device_context.get(), cmd_list_data, device_data, game_device_data);
                      pipeline_color_srv = game_device_data.cutscene_gamma_srv.get();
                   }
+#if TEST
+                  else
+                  {
+                     std::string reason = "prerequisite missing:";
+                     if (!game_device_data.cutscene_intermediate_srv.get()) reason += " cutscene_intermediate_srv=null;";
+                     if (!game_device_data.taa_output_texture.get()) reason += " taa_output_texture=null;";
+                     if (!game_device_data.cutscene_gamma_replay_state.valid) reason += " cutscene_gamma_replay_state_invalid;";
+                     LogExpectedCustomDrawSkipped("CutsceneGamma", reason);
+                  }
+#endif
                   game_device_data.cutscene_gamma_pending.store(false, std::memory_order_release);
                   game_device_data.cutscene_gamma_replay_state.Reset();
                }
@@ -1481,6 +1683,16 @@ public:
                      DrawNativeCutsceneColorGradePass(native_device_context.get(), cmd_list_data, device_data, game_device_data);
                      pipeline_color_srv = game_device_data.cutscene_color_grade_srv.get();
                   }
+#if TEST
+                  else
+                  {
+                     std::string reason = "prerequisite missing:";
+                     if (!game_device_data.cutscene_gamma_srv.get()) reason += " cutscene_gamma_srv=null;";
+                     if (!game_device_data.taa_output_texture.get()) reason += " taa_output_texture=null;";
+                     if (!game_device_data.cutscene_color_grade_replay_state.valid) reason += " cutscene_color_grade_replay_state_invalid;";
+                     LogExpectedCustomDrawSkipped("CutsceneColorGrade", reason);
+                  }
+#endif
                   game_device_data.cutscene_color_grade_pending.store(false, std::memory_order_release);
                   game_device_data.cutscene_color_grade_replay_state.Reset();
                }
@@ -1492,6 +1704,12 @@ public:
                      DrawNativeCutsceneOverlayPrepPass(native_device_context.get(), cmd_list_data, device_data, game_device_data);
                      game_device_data.cutscene_overlay_prep_pending.store(false, std::memory_order_release);
                   }
+#if TEST
+                  else
+                  {
+                     LogExpectedCustomDrawSkipped("CutsceneOverlayPrep", "prerequisite missing: cutscene_overlay_prep_replay_state_invalid");
+                  }
+#endif
 
                   if (CanDrawNativeCutsceneOverlayPass(game_device_data))
                   {
@@ -1499,15 +1717,51 @@ public:
                      pipeline_color_srv = game_device_data.cutscene_intermediate_srv.get();
                      game_device_data.cutscene_overlay_pending.store(false, std::memory_order_release);
                   }
+#if TEST
+                  else
+                  {
+                     std::string reason = "prerequisite missing:";
+                     if (!game_device_data.cutscene_overlay_prep_srv.get()) reason += " cutscene_overlay_prep_srv=null;";
+                     if (!game_device_data.cutscene_overlay_replay_state.valid) reason += " cutscene_overlay_replay_state_invalid;";
+                     LogExpectedCustomDrawSkipped("CutsceneOverlay", reason);
+                  }
+#endif
 
                   game_device_data.cutscene_overlay_prep_replay_state.Reset();
                   game_device_data.cutscene_overlay_replay_state.Reset();
                   game_device_data.cutscene_gamma_input_resource = nullptr;
                }
 
-               if (CanDrawNativeUIEncodePass(pipeline_color_srv, game_device_data))
                {
-                  DrawNativeUIEncodePass(native_device_context.get(), cmd_list_data, device_data, game_device_data, pipeline_color_srv);
+                  bool can_draw_ui_encode = CanDrawNativeUIEncodePass(pipeline_color_srv, game_device_data);
+                  const bool sr_enabled = device_data.sr_type != SR::Type::None && !device_data.sr_suppressed;
+#if TEST
+                  if (sr_enabled)
+                  {
+                     if (!game_device_data.pre_sr_encode_srv.get() || !device_data.has_drawn_sr)
+                     {
+                        std::string reason = "SR enabled but prerequisite missing:";
+                        if (!game_device_data.pre_sr_encode_srv.get()) reason += " pre_sr_encode_srv=null;";
+                        if (!device_data.has_drawn_sr) reason += " sr_not_drawn;";
+                        LogExpectedCustomDrawSkipped("UIEncode (SR composite inputs)", reason);
+                     }
+                  }
+#endif
+
+#if TEST
+                  if (!can_draw_ui_encode)
+                  {
+                     std::string reason = "prerequisite missing:";
+                     if (!pipeline_color_srv) reason += " pipeline_color_srv=null;";
+                     if (!game_device_data.taa_output_texture_rtv.get()) reason += " taa_output_texture_rtv=null;";
+                     LogExpectedCustomDrawSkipped("UIEncode", reason);
+                  }
+#endif
+
+                  if (can_draw_ui_encode)
+                  {
+                     DrawNativeUIEncodePass(native_device_context.get(), cmd_list_data, device_data, game_device_data, pipeline_color_srv);
+                  }
                }
 
                draw_state_stack.Restore(native_device_context.get());
@@ -1571,8 +1825,7 @@ public:
 
       {
          auto& game_device_data = *static_cast<GameDeviceDataGBFR*>(device_data.game);
-         game_device_data.jitter.x = precomputed_jitters[0].x;
-         game_device_data.jitter.y = precomputed_jitters[0].y;
+         game_device_data.jitter = float2{0.0f, 0.0f};
          game_device_data.prev_jitter = game_device_data.jitter;
       }
 
@@ -1648,8 +1901,54 @@ public:
       if (!device_data.has_drawn_sr)
       {
          device_data.force_reset_sr = true;
+#if TEST
+         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && game_device_data.taa_detected_this_frame)
+         {
+            reshade::log::message(reshade::log::level::warning,
+               "[GBFR][TEST] SR not drawn this frame (sr enabled, not suppressed, TAA was seen); force_reset_sr set");
+         }
+#endif
       }
       device_data.has_drawn_sr = false;
+#if TEST
+      game_device_data.taa_detected_this_frame = false;
+#endif
+#if TEST
+      {
+         const bool any_cutscene = game_device_data.cutscene_gamma_seen_this_frame ||
+                                   game_device_data.cutscene_color_grade_seen_this_frame ||
+                                   game_device_data.cutscene_overlay_prep_seen_this_frame ||
+                                   game_device_data.cutscene_overlay_seen_this_frame;
+         if (any_cutscene)
+         {
+            std::string issues;
+            // All 4 shaders run as part of the cutscene grading pipeline each frame.
+            // If any one was seen but others were not, the pipeline ran incomplete.
+            if (!game_device_data.cutscene_gamma_seen_this_frame) issues += " gamma=not_seen;";
+            if (!game_device_data.cutscene_color_grade_seen_this_frame) issues += " color_grade=not_seen;";
+            if (!game_device_data.cutscene_overlay_prep_seen_this_frame) issues += " overlay_prep=not_seen;";
+            if (!game_device_data.cutscene_overlay_seen_this_frame) issues += " overlay=not_seen;";
+            // Seen-but-not-drawn: _pending flags are cleared in the draw phase,
+            // so any that remain true here were captured but never replayed.
+            if (game_device_data.cutscene_gamma_pending.load(std::memory_order_relaxed)) issues += " gamma=seen_not_drawn;";
+            if (game_device_data.cutscene_color_grade_pending.load(std::memory_order_relaxed)) issues += " color_grade=seen_not_drawn;";
+            if (game_device_data.cutscene_overlay_prep_pending.load(std::memory_order_relaxed)) issues += " overlay_prep=seen_not_drawn;";
+            if (game_device_data.cutscene_overlay_pending.load(std::memory_order_relaxed)) issues += " overlay=seen_not_drawn;";
+            if (!issues.empty())
+            {
+               std::string msg = "[GBFR][TEST] Cutscene incomplete pipeline this frame:";
+               msg += issues;
+               reshade::log::message(reshade::log::level::warning, msg.c_str());
+            }
+         }
+      }
+#endif
+#if TEST
+      game_device_data.cutscene_gamma_seen_this_frame = false;
+      game_device_data.cutscene_color_grade_seen_this_frame = false;
+      game_device_data.cutscene_overlay_prep_seen_this_frame = false;
+      game_device_data.cutscene_overlay_seen_this_frame = false;
+#endif
       game_device_data.remainder_command_list.store(nullptr, std::memory_order_relaxed);
       game_device_data.draw_device_context = nullptr;
       game_device_data.sr_source_color = nullptr;
@@ -1720,16 +2019,15 @@ public:
          *reinterpret_cast<__int64*>(mod_base + kCachedDimsRVA) = 0;
          *reinterpret_cast<__int64*>(mod_base + kCachedDimsRVA + 8) = 0;
          device_data.force_reset_sr = true;
+#if TEST
+         reshade::log::message(reshade::log::level::warning, "[GBFR][TEST] force_reset_sr set: render_scale_changed");
+#endif
          render_scale_changed = false;
       }
       device_data.cb_luma_global_settings_dirty = true;
       int32_t sr_type = static_cast<int32_t>(device_data.sr_type);
       cb_luma_global_settings.SRType = static_cast<uint32_t>(sr_type + 1);
 
-      game_device_data.prev_jitter = game_device_data.jitter;
-      const float2& j = precomputed_jitters[(cb_luma_global_settings.FrameIndex + 1) % precomputed_jitters.size()];
-      game_device_data.jitter.x = j.x;
-      game_device_data.jitter.y = j.y;
    }
 
    void LoadConfigs() override

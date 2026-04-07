@@ -52,8 +52,8 @@ void main(float4 v0: SV_Position0, out float4 o0: SV_Target0)
    float alpha = r0.w;
    r1.xyz = (int3)r0.xyz & int3(0x7f800000, 0x7f800000, 0x7f800000);
    r1.xyz = cmp((int3)r1.xyz == int3(0x7f800000, 0x7f800000, 0x7f800000));
-   r0.w = (int)r1.y | (int)r1.x;
-   r0.w = (int)r1.z | (int)r0.w;
+   r0.w = asfloat(asint(r1.y) | asint(r1.x));
+   r0.w = asfloat(asint(r1.z) | asint(r0.w));
 
    r0.xyz = r0.www ? float3(1000000, 1000000, 1000000) : r0.xyz;
 
