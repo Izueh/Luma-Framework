@@ -73,19 +73,17 @@ void main(float4 v0: SV_Position0, out float4 o0: SV_Target0)
    }
 
    r1.xyz = g_TextureBloom.Sample(g_TextureBloomSampler_s, v1.xy).xyz;
-   r0.xyz += r1.xyz; // additive bloom, matching vanilla post-exposure application
 
    [branch]
    if (LumaSettings.DisplayMode == 1)
    {
       float3 color = r0.rgb;
-
-      color.rgb = ApplyUserGradingAndToneMap(color.rgb, float2(0, 0));
+      color.rgb = ApplyUserGradingAndToneMap(color.rgb, r1.xyz, float2(0, 0));
       o0 = float4(color.rgb, alpha);
       return;
    }
 
-   r0.xyz = saturate(r0.xyz * float3(1.37906432, 1.37906432, 1.37906432) + r1.xyz);
+   r0.xyz = saturate(r0.xyz * float3(1.37906432, 1.37906432, 1.37906432) + r1.xyz * BLOOM_STRENGTH);
 
    // o0.rgb = renodx::draw::RenderIntermediatePass(r0.rgb);
    o0.rgb = linear_to_sRGB_gamma(r0.rgb, GCT_SATURATE);

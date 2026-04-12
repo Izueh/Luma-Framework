@@ -16,7 +16,7 @@ void main(float4 v0: SV_Position0, float2 v1: TEXCOORD0, out float4 o0: SV_Targe
    float4 r0, r1, r2, r3;
    float4 texSample = g_Texture0.Sample(g_Texture0Sampler_s, v1.xy);
 
-#if TONEMAP_AFTER_TAA
+#if 0
    // The late native cutscene gamma + color grade path handles this work after TAA/DLSS.
    o0 = texSample;
    return;

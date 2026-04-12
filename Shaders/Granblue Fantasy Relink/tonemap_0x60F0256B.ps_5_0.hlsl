@@ -45,13 +45,16 @@ void main(float4 v0: SV_Position0, float2 v1: TEXCOORD0, out float4 o0: SV_Targe
 
    r0.xyz = g_TextureSceneColorHDR.Sample(g_TextureSceneColorHDRSampler_s, v1).xyz;
 #if TONEMAP_AFTER_TAA
-   o0.xyzw = float4(linear_to_sRGB_gamma(r0.xyz, GCT_MIRROR), 1);
-   return;
+   if (LumaSettings.GameSettings.IsTAARunning)
+   {
+      o0.xyzw = float4(linear_to_sRGB_gamma(r0.xyz, GCT_MIRROR), 1);
+      return;
+   }
 #endif
    r1.xyz = (int3)r0.xyz & int3(0x7f800000, 0x7f800000, 0x7f800000);
    r1.xyz = cmp((int3)r1.xyz == int3(0x7f800000, 0x7f800000, 0x7f800000));
-   r0.w = (int)r1.y | (int)r1.x;
-   r0.w = (int)r1.z | (int)r0.w;
+   r0.w = asfloat(asint(r1.y) | asint(r1.x));
+   r0.w = asfloat(asint(r1.z) | asint(r0.w));
 
    r0.xyz = r0.www ? float3(1000000, 1000000, 1000000) : r0.xyz;
 
@@ -71,20 +74,17 @@ void main(float4 v0: SV_Position0, float2 v1: TEXCOORD0, out float4 o0: SV_Targe
    }
 
    r1.xyz = g_TextureBloom.Sample(g_TextureBloomSampler_s, v1.xy).xyz;
-   r0.xyz += r1.xyz; // additive bloom, matching vanilla post-exposure application
 
    [branch]
    if (LumaSettings.DisplayMode == 1)
    {
       float3 color = r0.rgb;
+      color.rgb = ApplyUserGradingAndToneMap(color.rgb, r1.xyz, float2(0, 0));
 
-      color.rgb = ApplyUserGradingAndToneMap(color.rgb, float2(0, 0));
       o0 = float4(color.rgb, 1.0);
       return;
    }
-
-   r0.xyz = saturate(r0.xyz * float3(1.37906432, 1.37906432, 1.37906432) + r1.xyz);
-
+   r0.xyz = saturate(r0.xyz * float3(1.37906432, 1.37906432, 1.37906432) + r1.xyz * BLOOM_STRENGTH);
    // o0.rgb = renodx::draw::RenderIntermediatePass(r0.rgb);
    o0.rgb = r0.rgb;
 

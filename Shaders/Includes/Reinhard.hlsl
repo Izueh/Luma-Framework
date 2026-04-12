@@ -109,6 +109,22 @@ namespace Reinhard
     float3 extended = ReinhardExtended(x * exposure, white_max * exposure, x_max);
     return min(extended, x_max);
   }
+
+  float ReinhardPiecewise(float x, float x_max = 1.f, float shoulder = 0.18f) {
+      const float x_min = 0.f;
+      float exposure = ComputeReinhardScale(x_max, x_min, shoulder, shoulder);
+      float tonemapped = mad(x, exposure, x_min) / mad(x, exposure / x_max, 1.f - x_min);
+
+      return lerp(x, tonemapped, step(shoulder, x));
+  }
+
+  float3 ReinhardPiecewise(float3 x, float x_max = 1.f, float shoulder = 0.18f) {
+      const float x_min = 0.f;
+      float exposure = ComputeReinhardScale(x_max, x_min, shoulder, shoulder);
+      float3 tonemapped = mad(x, exposure, x_min) / mad(x, exposure / x_max, 1.f - x_min);
+
+      return lerp(x, tonemapped, step(shoulder, x));
+  }
 }
 
 struct ReinhardSettings

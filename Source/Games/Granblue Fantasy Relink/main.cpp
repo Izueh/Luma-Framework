@@ -208,8 +208,6 @@ namespace
       bool motion_blur_output_ready = false;
       uint32_t motion_blur_invocation_count = 0;
 
-      ComPtr<ID3D11Resource> cutscene_gamma_input_resource;
-
       std::atomic<bool> cutscene_overlay_pending = false;
       std::atomic<bool> cutscene_overlay_prep_pending = false;
       std::atomic<bool> cutscene_gamma_pending = false;
@@ -241,12 +239,39 @@ namespace
       float camera_far = 10000.0f;
       float2 jitter = {0, 0};
       float2 prev_jitter = {0, 0};
-#if TEST
+      float2 table_jitter = {0, 0};
+      float2 prev_table_jitter = {0, 0};
+      // Stores the deferred context on which the Tonemap intercept fired this frame.
+      // Cutscene intercepts compare against native_device_context so that a parallel
+      // command list recording the same shaders before tonemap is never incorrectly gated.
+      std::atomic<ID3D11DeviceContext*> tonemap_detected_context = nullptr;
+#if TEST || DEVELOPMENT
       bool taa_detected_this_frame = false;
-      bool cutscene_gamma_seen_this_frame = false;
-      bool cutscene_color_grade_seen_this_frame = false;
-      bool cutscene_overlay_prep_seen_this_frame = false;
-      bool cutscene_overlay_seen_this_frame = false;
+      // This is better since it reads the current frame jitter from the TAA Component
+      // this value then gets applie to all projection matrices in all relevant camera objects.
+      bool use_table_jitter_for_dlss = true;
+#endif
+#if DEVELOPMENT
+      struct PausedFrameSnapshot
+      {
+         bool valid = false;
+         float2 render_resolution = {0, 0};
+         float2 output_resolution = {0, 0};
+         float render_scale_pct = 0.0f;
+         float2 jitter = {0, 0};
+         float2 prev_jitter = {0, 0};
+         float2 table_jitter = {0, 0};
+         float2 prev_table_jitter = {0, 0};
+         bool taa_enabled = false;
+         bool upscaling_disabled = false;
+         bool drs_active = false;
+         bool taa_output_ready = false;
+         bool settings_obj_valid = false;
+      };
+      PausedFrameSnapshot pause_snapshot;
+      bool pause_trace_key_down = false;
+      int pause_trace_delay_frames = 0;     // 0 = immediate, configurable via dev settings
+      int pause_trace_delay_countdown = -1; // -1 = idle
 #endif
 
       // Scene buffer patching resources
@@ -288,18 +313,39 @@ namespace
    constexpr uintptr_t kCameraProjectionDataOffset = 0x60;
    constexpr uintptr_t kProjectionJitterXOffset = 0x940;
    constexpr uintptr_t kProjectionJitterYOffset = 0x944;
+   constexpr uintptr_t kTAASettingsGlobal_RVA = 0x05E55EA0;          // qword_145E55EA0: TAA settings object pointer
+   constexpr uintptr_t kPauseCandidate_GlobalBit_RVA = 0x061720A4;   // byte_1461720A4, tested with bit 0 in multiple framegraph branches
+   constexpr uintptr_t kPauseCandidate_TonemapGate_RVA = 0x05E5CABD; // byte_145E5CABD, tonemap gate cmp == 1
+   constexpr uintptr_t kPauseCandidate_DofGateA_RVA = 0x06130C5C;    // byte_146130C5C, repeated DoF/Bloom branch gate
+   constexpr uintptr_t kPauseCandidate_DofGateB_RVA = 0x06130E13;    // byte_146130E13, repeated DoF/Bloom branch gate
+
+   // Jitter phase table: TemporalAntiAliasingComponent_Trans (0x141a9e790) reads qword_145E61790 & 0x3F
+   // as the phase index into a 64-entry {float x, float y} table at TAA component +0x28.
+   // The two `and ..., 3Fh` immediates below are the phase-wrap mask; patching them changes the sequence length.
+   constexpr uintptr_t kJitterPhaseCounter_RVA = 0x05E61790;  // qword_145E61790: per-frame phase counter (low byte)
+   constexpr uintptr_t kJitterPhaseMask_CL_RVA = 0x01A9EB76;  // imm8 of `and cl,  3Fh` in TemporalAntiAliasingComponent_Trans
+   constexpr uintptr_t kJitterPhaseMask_EAX_RVA = 0x01A9EB7C; // imm8 of `and eax, 3Fh` in TemporalAntiAliasingComponent_Trans
+   // Mid-function hook at `mov [rdx+940h], ecx` (0x141a9eb9b) — the exact instruction that writes
+   // TAA jitter X to proj_data. At this point: ecx = jitter X bits, eax = jitter Y bits, rsi = TAA component.
+   constexpr uintptr_t kJitterWrite_RVA = 0x01A9EB9B; // TemporalAntiAliasingComponent_Trans: mov [rdx+940h], ecx
 
    SafetyHookInline g_rt_creation_hook;
    SafetyHookInline g_update_screen_resolution_hook;
    SafetyHookInline g_VSSetConstantBuffers1_hook_immediate;
    SafetyHookInline g_VSSetConstantBuffers1_hook_deferred;
+   safetyhook::MidHook g_jitter_write_hook;
 
    // Global pointers set during OnCreateDevice, used by the hook functions
    // to access Luma device data without going through reshade API.
    std::atomic<DeviceData*> g_device_data_ptr = nullptr;
    std::atomic<ID3D11Device*> g_native_device_ptr = nullptr;
+   // Live jitter values captured by the mid-function hook at the TAA jitter write site.
+   // Set atomically each frame when TemporalAntiAliasingComponent_Trans writes to proj_data.
+   std::atomic<uint32_t> g_table_jitter_x_bits{0};
+   std::atomic<uint32_t> g_table_jitter_y_bits{0};
+   std::atomic<bool> g_table_jitter_valid{false};
 
-#if TEST
+#if TEST || DEVELOPMENT
    static void LogExpectedCustomDrawSkipped(const char* pass_name, const std::string& reason)
    {
       std::string msg = "[GBFR][TEST] Expected custom draw skipped: ";
@@ -313,41 +359,123 @@ namespace
    static bool TryReadCameraJitter(float2& out_jitter)
    {
       const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-      if (mod_base == 0) return false;
+      if (mod_base == 0)
+         return false;
 
-      const uintptr_t camera          = mod_base + kCameraGlobal_RVA;
-      const uintptr_t projection_ptr  = *reinterpret_cast<const uintptr_t*>(camera + kCameraProjectionDataOffset);
-      if (projection_ptr == 0) return false;
+      const uintptr_t camera = mod_base + kCameraGlobal_RVA;
+      const uintptr_t projection_ptr = *reinterpret_cast<const uintptr_t*>(camera + kCameraProjectionDataOffset);
+      if (projection_ptr == 0)
+         return false;
 
       out_jitter.x = *reinterpret_cast<const float*>(projection_ptr + kProjectionJitterXOffset);
       out_jitter.y = *reinterpret_cast<const float*>(projection_ptr + kProjectionJitterYOffset);
       return true;
    }
 
+   // Mid-function hook at the TAA jitter write site (mov [rdx+940h], ecx).
+   // At this point ecx = jitter X float bits, eax = jitter Y float bits.
+   // Simply records the values being written; the instruction executes normally.
+   static void OnJitterWrite(safetyhook::Context& ctx)
+   {
+      g_table_jitter_x_bits.store(static_cast<uint32_t>(ctx.rcx), std::memory_order_release);
+      g_table_jitter_y_bits.store(static_cast<uint32_t>(ctx.rax), std::memory_order_release);
+      g_table_jitter_valid.store(true, std::memory_order_release);
+   }
+
+   // Returns the jitter value last written by TemporalAntiAliasingComponent_Trans to proj_data.
+   // Returns false until the hook has fired at least once.
+   static bool TryReadTableJitter(float2& out_jitter)
+   {
+      if (!g_table_jitter_valid.load(std::memory_order_acquire))
+         return false;
+      const uint32_t x_bits = g_table_jitter_x_bits.load(std::memory_order_relaxed);
+      const uint32_t y_bits = g_table_jitter_y_bits.load(std::memory_order_relaxed);
+      std::memcpy(&out_jitter.x, &x_bits, sizeof(float));
+      std::memcpy(&out_jitter.y, &y_bits, sizeof(float));
+      return true;
+   }
+
+   // Patches both `and ..., 3Fh` immediates in TemporalAntiAliasingComponent_Trans to limit the jitter
+   // phase sequence to JITTER_PHASES instead of the default 64. JITTER_PHASES must be a power of 2 <= 64.
+   static void PatchJitterPhases()
+   {
+      static_assert((JITTER_PHASES & (JITTER_PHASES - 1)) == 0, "JITTER_PHASES must be a power of 2");
+      static_assert(JITTER_PHASES >= 1 && JITTER_PHASES <= 64, "JITTER_PHASES must be between 1 and 64");
+
+      const uintptr_t base_addr = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
+      if (base_addr == 0)
+         return;
+
+      constexpr uint8_t mask = static_cast<uint8_t>(JITTER_PHASES - 1);
+      const uintptr_t patch_addrs[2] = {
+         base_addr + kJitterPhaseMask_CL_RVA,
+         base_addr + kJitterPhaseMask_EAX_RVA,
+      };
+      for (uintptr_t addr : patch_addrs)
+      {
+         auto* byte_ptr = reinterpret_cast<uint8_t*>(addr);
+         DWORD old_protect;
+         VirtualProtect(byte_ptr, 1, PAGE_EXECUTE_READWRITE, &old_protect);
+         *byte_ptr = mask;
+         VirtualProtect(byte_ptr, 1, old_protect, &old_protect);
+      }
+   }
+
+   // Returns true when the engine's TAA frame-graph pass is enabled this frame.
+   // Reads bit 0 of byte +22 on the TAA settings object (qword_145E55EA0 + 22).
+   static bool IsTAARunningThisFrame()
+   {
+      const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
+      if (mod_base == 0)
+         return false;
+      const uintptr_t settings_obj = *reinterpret_cast<const uintptr_t*>(mod_base + kTAASettingsGlobal_RVA);
+      if (settings_obj == 0)
+         return false;
+      return (*reinterpret_cast<const uint8_t*>(settings_obj + 22) & 1) != 0;
+   }
+
+   static float GetEffectiveRenderScale(bool taa_running)
+   {
+      // When TAA/TUP is not running, force native internal resolution so UI stays at output resolution.
+      if (!taa_running && render_scale < 1.0f)
+      {
+         return 1.0f;
+      }
+      return render_scale;
+   }
+
    static char __fastcall Hooked_InitializeDX11RenderingPipeline(int screen_width, int screen_height)
    {
+      bool taa_running = IsTAARunningThisFrame();
+      int init_width = screen_width;
+      int init_height = screen_height;
+
       DeviceData* device_data = g_device_data_ptr.load(std::memory_order_acquire);
       if (device_data && device_data->game && screen_width > 0 && screen_height > 0)
       {
          auto& game_device_data = *static_cast<GameDeviceDataGBFR*>(device_data->game);
 
-         float scale = render_scale;
+         float scale = GetEffectiveRenderScale(taa_running);
          {
-            const double aspect_ratio = static_cast<double>(device_data->output_resolution.x) / device_data->output_resolution.y;
+            const float output_w = device_data->output_resolution.x > 0.f ? device_data->output_resolution.x : static_cast<float>(screen_width);
+            const float output_h = device_data->output_resolution.y > 0.f ? device_data->output_resolution.y : static_cast<float>(screen_height);
+            const double aspect_ratio = static_cast<double>(output_w) / output_h;
             auto render_dims = Math::FindClosestIntegerResolutionForAspectRatio(
-               device_data->output_resolution.x * static_cast<double>(scale),
-               device_data->output_resolution.y * static_cast<double>(scale),
+               output_w * static_cast<double>(scale),
+               output_h * static_cast<double>(scale),
                aspect_ratio);
             device_data->render_resolution.x = static_cast<float>(render_dims[0]);
             device_data->render_resolution.y = static_cast<float>(render_dims[1]);
+            init_width = static_cast<int>((std::max)(1u, render_dims[0]));
+            init_height = static_cast<int>((std::max)(1u, render_dims[1]));
 
             const uintptr_t mod_base_rt = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-            *reinterpret_cast<uint32_t*>(mod_base_rt + kRenderWidth_RVA) = static_cast<uint32_t>(render_dims[0]);
-            *reinterpret_cast<uint32_t*>(mod_base_rt + kRenderHeight_RVA) = static_cast<uint32_t>(render_dims[1]);
+            *reinterpret_cast<uint32_t*>(mod_base_rt + kRenderWidth_RVA) = static_cast<uint32_t>(init_width);
+            *reinterpret_cast<uint32_t*>(mod_base_rt + kRenderHeight_RVA) = static_cast<uint32_t>(init_height);
          }
       }
 
-      char result = g_rt_creation_hook.unsafe_call<char>(screen_width, screen_height);
+      char result = g_rt_creation_hook.unsafe_call<char>(init_width, init_height);
 
       if (device_data && device_data->game)
       {
@@ -385,7 +513,7 @@ namespace
             device_data->output_resolution.x = static_cast<float>(native_w);
             device_data->output_resolution.y = static_cast<float>(native_h);
 
-            float scale = render_scale;
+            float scale = GetEffectiveRenderScale(IsTAARunningThisFrame());
             {
                const double aspect_ratio = static_cast<double>(device_data->output_resolution.x) / device_data->output_resolution.y;
                auto render_dims = Math::FindClosestIntegerResolutionForAspectRatio(
@@ -399,10 +527,6 @@ namespace
             // Write scaled dims back so CreateRenderTargets reads the correct resolution.
             *reinterpret_cast<uint32_t*>(mod_base + kRenderWidth_RVA) = static_cast<uint32_t>(device_data->render_resolution.x);
             *reinterpret_cast<uint32_t*>(mod_base + kRenderHeight_RVA) = static_cast<uint32_t>(device_data->render_resolution.y);
-
-            constexpr uintptr_t kCachedDimsRVA = 0x05FB48E8; // xmmword_145FB48E8
-            *reinterpret_cast<__int64*>(mod_base + kCachedDimsRVA) = 0;
-            *reinterpret_cast<__int64*>(mod_base + kCachedDimsRVA + 8) = 0;
          }
       }
 
@@ -683,6 +807,32 @@ namespace
       return true;
    }
 
+   // Copies t0 into the currently-bound RTV so downstream game passes that read the output
+   // of a skipped shader see valid data instead of a stale buffer.  All intercepted cutscene
+   // post-process shaders are fullscreen quads: they read t0 and write to a single RTV.
+   // When TONEMAP_AFTER_TAA is active the game's gamma/colorgrade shaders are pure pass-throughs
+   // (output = sample(t0)), so this copy IS the correct result for those passes.
+   static void PassThroughToRenderTarget(ID3D11DeviceContext* context, UINT src_srv_slot = 0)
+   {
+      ComPtr<ID3D11RenderTargetView> rtv;
+      context->OMGetRenderTargets(1, rtv.put(), nullptr);
+      if (!rtv)
+         return;
+
+      ComPtr<ID3D11ShaderResourceView> src_srv;
+      context->PSGetShaderResources(src_srv_slot, 1, src_srv.put());
+      if (!src_srv)
+         return;
+
+      ComPtr<ID3D11Resource> dst, src;
+      rtv->GetResource(dst.put());
+      src_srv->GetResource(src.put());
+      if (dst && src && dst != src)
+      {
+         context->CopyResource(dst.get(), src.get());
+      }
+   }
+
    static void CaptureCutscenePostPassReplayState(ID3D11DeviceContext* context, GameDeviceDataGBFR::CutscenePostPassReplayState& replay_state)
    {
       replay_state.Reset();
@@ -913,6 +1063,10 @@ class GranblueFantasyRelink final : public Game
    {
       return *static_cast<GameDeviceDataGBFR*>(device_data.game);
    }
+   static const GameDeviceDataGBFR& GetGameDeviceData(const DeviceData& device_data)
+   {
+      return *static_cast<const GameDeviceDataGBFR*>(device_data.game);
+   }
 
 #include "includes\dlss_helpers.hpp"
 
@@ -931,8 +1085,8 @@ public:
          data.GameData.PrevJitterOffset.x = game_device_data.prev_jitter.x * 2.0f / resX;
          data.GameData.PrevJitterOffset.y = game_device_data.prev_jitter.y * -2.0f / resY;
       }
+      data.GameData.IsTAARunning = IsTAARunningThisFrame() ? 1 : 0;
    }
-
    void OnInit(bool async) override
    {
       luma_settings_cbuffer_index = 9;
@@ -1000,6 +1154,13 @@ public:
       std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
+      bool is_taa_running = IsTAARunningThisFrame();
+      if (is_taa_running && cb_luma_global_settings.GameSettings.IsTAARunning == 0)
+      {
+         cb_luma_global_settings.GameSettings.IsTAARunning = 1;
+         device_data.cb_luma_global_settings_dirty = true;
+      }
+
       bool tonemap_after_taa = *GetShaderDefineData(char_ptr_crc32("TONEMAP_AFTER_TAA")).compiled_data.GetValue() != '0';
 
       // Since MotionBlur runs before TAA the game runs a smaller AA to dejitter the motion blur input
@@ -1070,68 +1231,40 @@ public:
          }
 
          game_device_data.tonemap_draw_pending.store(true, std::memory_order_release);
+         game_device_data.tonemap_detected_context.store(native_device_context, std::memory_order_release);
 
          return DrawOrDispatchOverrideType::None;
       }
 
-      if (original_shader_hashes.Contains(shader_hashes_CutsceneGamma) && tonemap_after_taa)
+      if (original_shader_hashes.Contains(shader_hashes_CutsceneGamma) && tonemap_after_taa && game_device_data.tonemap_detected_context.load(std::memory_order_acquire) == native_device_context)
       {
          CaptureCutscenePostPassReplayState(native_device_context, game_device_data.cutscene_gamma_replay_state);
-
-         ComPtr<ID3D11ShaderResourceView> gamma_input_srv;
-         native_device_context->PSGetShaderResources(0, 1, gamma_input_srv.put());
-         game_device_data.cutscene_gamma_input_resource = nullptr;
-         if (gamma_input_srv)
-         {
-            gamma_input_srv->GetResource(game_device_data.cutscene_gamma_input_resource.put());
-         }
-
-#if TEST
-         game_device_data.cutscene_gamma_seen_this_frame = true;
-#endif
+         PassThroughToRenderTarget(native_device_context);
          game_device_data.cutscene_gamma_pending.store(true, std::memory_order_release);
          return DrawOrDispatchOverrideType::Skip;
       }
 
-      if (original_shader_hashes.Contains(shader_hashes_CutsceneColorGrade) && tonemap_after_taa)
+      if (original_shader_hashes.Contains(shader_hashes_CutsceneColorGrade) && tonemap_after_taa && game_device_data.tonemap_detected_context.load(std::memory_order_acquire) == native_device_context)
       {
          CaptureCutscenePostPassReplayState(native_device_context, game_device_data.cutscene_color_grade_replay_state);
-#if TEST
-         game_device_data.cutscene_color_grade_seen_this_frame = true;
-#endif
+         PassThroughToRenderTarget(native_device_context);
          game_device_data.cutscene_color_grade_pending.store(true, std::memory_order_release);
          return DrawOrDispatchOverrideType::Skip;
       }
 
-      if (original_shader_hashes.Contains(shader_hashes_CutsceneOverlayPrep) && tonemap_after_taa)
+      if (original_shader_hashes.Contains(shader_hashes_CutsceneOverlayPrep) && tonemap_after_taa && game_device_data.tonemap_detected_context.load(std::memory_order_acquire) == native_device_context)
       {
          CaptureCutsceneOverlayPrepReplayState(native_device_context, game_device_data);
-#if TEST
-         game_device_data.cutscene_overlay_prep_seen_this_frame = true;
-#endif
+         PassThroughToRenderTarget(native_device_context);
          game_device_data.cutscene_overlay_prep_pending.store(true, std::memory_order_release);
          return DrawOrDispatchOverrideType::Skip;
       }
 
-      if (original_shader_hashes.Contains(shader_hashes_CutsceneOverlay) && tonemap_after_taa)
+      if (original_shader_hashes.Contains(shader_hashes_CutsceneOverlay) && tonemap_after_taa && game_device_data.tonemap_detected_context.load(std::memory_order_acquire) == native_device_context)
       {
-
          CaptureCutsceneOverlayReplayState(native_device_context, game_device_data);
-#if TEST
-         game_device_data.cutscene_overlay_seen_this_frame = true;
-#endif
+         PassThroughToRenderTarget(native_device_context);
          game_device_data.cutscene_overlay_pending.store(true, std::memory_order_release);
-         ComPtr<ID3D11RenderTargetView> current_rtv;
-         native_device_context->OMGetRenderTargets(1, current_rtv.put(), nullptr);
-         if (current_rtv && game_device_data.cutscene_gamma_input_resource)
-         {
-            ComPtr<ID3D11Resource> current_rtv_resource;
-            current_rtv->GetResource(current_rtv_resource.put());
-            if (current_rtv_resource)
-            {
-               native_device_context->CopyResource(current_rtv_resource.get(), game_device_data.cutscene_gamma_input_resource.get());
-            }
-         }
          return DrawOrDispatchOverrideType::Skip;
       }
 
@@ -1149,7 +1282,7 @@ public:
       if (original_shader_hashes.Contains(shader_hashes_TAA))
       {
          device_data.taa_detected = true;
-#if TEST
+#if TEST || DEVELOPMENT
          game_device_data.taa_detected_this_frame = true;
 #endif
          DrawOrDispatchOverrideType override_type = DrawOrDispatchOverrideType::None;
@@ -1161,7 +1294,7 @@ public:
                if (!game_device_data.scene_buffer_info_collected.load(std::memory_order_acquire))
                {
                   device_data.force_reset_sr = true;
-#if TEST
+#if TEST || DEVELOPMENT
                   LogExpectedCustomDrawSkipped("SR (TAA path)", "force_reset_sr set: scene_buffer_info not collected yet");
 #endif
                   return DrawOrDispatchOverrideType::None;
@@ -1172,30 +1305,30 @@ public:
                {
                   ASSERT_ONCE_MSG(false, "ExtractTAAShaderResources: t3 (source color) or t23 (motion vectors) SRV not bound");
                   device_data.force_reset_sr = true;
-#if TEST
+#if TEST || DEVELOPMENT
                   LogExpectedCustomDrawSkipped("SR (TAA path)", "force_reset_sr set: ExtractTAAShaderResources failed (t3 or t23 not bound)");
-#endif
-                  return DrawOrDispatchOverrideType::None;
-               }
-
-               // Get render targets (TAA writes to RT0 and RT1)
-               ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-               ID3D11DepthStencilView* dsv;
-               native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
-               if (rtvs[1] == nullptr)
-               {
-                  device_data.force_reset_sr = true;
-#if TEST
-                  LogExpectedCustomDrawSkipped("SR (TAA path)", "rtvs[1]=null: TAA RTV1 not bound");
 #endif
                   return DrawOrDispatchOverrideType::None;
                }
 
                if (render_scale == 1.f)
                {
+                  // Get render targets (TAA writes to RT0 and RT1)
+                  ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+                  ID3D11DepthStencilView* dsv;
+                  native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+                  if (rtvs[1] == nullptr)
+                  {
+                     device_data.force_reset_sr = true;
+#if TEST || DEVELOPMENT
+                     LogExpectedCustomDrawSkipped("SR (TAA path)", "rtvs[1]=null: TAA RTV1 not bound");
+#endif
+                     return DrawOrDispatchOverrideType::None;
+                  }
+
                   if (!SetupSROutput(native_device, device_data, game_device_data, rtvs[1]))
                   {
-#if TEST
+#if TEST || DEVELOPMENT
                      LogExpectedCustomDrawSkipped("SR (TAA path)", "SetupSROutput failed: TAA output texture QueryInterface or min-resolution check failed");
 #endif
                      return DrawOrDispatchOverrideType::None;
@@ -1204,16 +1337,20 @@ public:
                   if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
                   {
                      const bool pre_sr_ok = DrawNativePreSREncodePass(native_device, native_device_context, device_data, game_device_data);
-#if TEST
+#if TEST || DEVELOPMENT
                      if (!pre_sr_ok)
                      {
                         std::string reason = "prerequisite missing:";
                         const auto vs_it = device_data.native_vertex_shaders.find(CompileTimeStringHash("Copy VS"));
                         const auto ps_it = device_data.native_pixel_shaders.find(CompileTimeStringHash("GBFR Pre SR Encode"));
-                        if (vs_it == device_data.native_vertex_shaders.end() || !vs_it->second) reason += " copy_vs=missing;";
-                        if (ps_it == device_data.native_pixel_shaders.end() || !ps_it->second) reason += " pre_sr_encode_ps=missing;";
-                        if (!game_device_data.sr_source_color.get()) reason += " sr_source_color=null;";
-                        if (!game_device_data.sr_source_color_srv.get()) reason += " sr_source_color_srv=null;";
+                        if (vs_it == device_data.native_vertex_shaders.end() || !vs_it->second)
+                           reason += " copy_vs=missing;";
+                        if (ps_it == device_data.native_pixel_shaders.end() || !ps_it->second)
+                           reason += " pre_sr_encode_ps=missing;";
+                        if (!game_device_data.sr_source_color.get())
+                           reason += " sr_source_color=null;";
+                        if (!game_device_data.sr_source_color_srv.get())
+                           reason += " sr_source_color_srv=null;";
                         LogExpectedCustomDrawSkipped("PreSREncode (TAA path)", reason);
                      }
 #endif
@@ -1271,7 +1408,7 @@ public:
             {
                ID3D11RenderTargetView* rt;
                native_device_context->OMGetRenderTargets(1, &rt, nullptr);
-#if TEST
+#if TEST || DEVELOPMENT
                if (rt == nullptr)
                {
                   LogExpectedCustomDrawSkipped("SR (TUP path)", "rt=null: TUP RTV0 not bound; SR inputs will not be prepared");
@@ -1279,41 +1416,26 @@ public:
 #endif
                if (rt != nullptr)
                {
-
                   if (!SetupSROutput(native_device, device_data, game_device_data, rt))
                   {
-#if TEST
+#if TEST || DEVELOPMENT
                      LogExpectedCustomDrawSkipped("SR (TUP path)", "SetupSROutput failed: TUP output texture QueryInterface or min-resolution check failed");
 #endif
                      return DrawOrDispatchOverrideType::None;
                   }
-                  if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
-                  {
-                     const bool pre_sr_ok = DrawNativePreSREncodePass(native_device, native_device_context, device_data, game_device_data);
-#if TEST
-                     if (!pre_sr_ok)
-                     {
-                        std::string reason = "prerequisite missing:";
-                        const auto vs_it = device_data.native_vertex_shaders.find(CompileTimeStringHash("Copy VS"));
-                        const auto ps_it = device_data.native_pixel_shaders.find(CompileTimeStringHash("GBFR Pre SR Encode"));
-                        if (vs_it == device_data.native_vertex_shaders.end() || !vs_it->second) reason += " copy_vs=missing;";
-                        if (ps_it == device_data.native_pixel_shaders.end() || !ps_it->second) reason += " pre_sr_encode_ps=missing;";
-                        if (!game_device_data.sr_source_color.get()) reason += " sr_source_color=null;";
-                        if (!game_device_data.sr_source_color_srv.get()) reason += " sr_source_color_srv=null;";
-                        LogExpectedCustomDrawSkipped("PreSREncode (TUP path)", reason);
-                     }
-#endif
-                  }
-                  if (game_device_data.modifiable_index_vertex_buffer)
-                  {
-                     D3D11_MAPPED_SUBRESOURCE mapped_buffer;
-                     native_device_context->Map(game_device_data.modifiable_index_vertex_buffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
-                     native_device_context->Unmap(game_device_data.modifiable_index_vertex_buffer.get(), 0);
-                  }
-                  game_device_data.draw_device_context = native_device_context;
-                  native_device_context->FinishCommandList(TRUE, game_device_data.partial_command_list.put());
+                  // DrawNativePreSREncodePass reads sr_source_color which is written by TAA.
+                  // TAA and TUP record on parallel deferred contexts so sr_source_color is not
+                  // guaranteed valid here. Deferred to OnExecuteSecondaryCommandList where
+                  // the TAA command list has already executed on the immediate context.
                }
-
+               game_device_data.draw_device_context = native_device_context;
+               native_device_context->FinishCommandList(TRUE, game_device_data.partial_command_list.put());
+               if (game_device_data.modifiable_index_vertex_buffer)
+               {
+                  D3D11_MAPPED_SUBRESOURCE mapped_buffer;
+                  native_device_context->Map(game_device_data.modifiable_index_vertex_buffer.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer);
+                  native_device_context->Unmap(game_device_data.modifiable_index_vertex_buffer.get(), 0);
+               }
                return DrawOrDispatchOverrideType::Replaced;
             }(game_device_data, native_device, native_device_context, device_data);
          }
@@ -1397,9 +1519,13 @@ public:
                // Read jitter here, mid-frame, after geometry/camera setup but before DLSS and
                // all custom passes. By the time the partial command list (containing TAA) has
                // been replayed the game must have written the current-frame projection jitter.
+
+               game_device_data.prev_table_jitter = game_device_data.table_jitter;
+               TryReadTableJitter(game_device_data.table_jitter);
+#if TEST || DEVELOPMENT
                game_device_data.prev_jitter = game_device_data.jitter;
                TryReadCameraJitter(game_device_data.jitter);
-
+#endif
                CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
 
                DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
@@ -1407,7 +1533,35 @@ public:
                draw_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
                compute_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
 
-               bool tonemap_after_taa = *GetShaderDefineData(char_ptr_crc32("TONEMAP_AFTER_TAA")).compiled_data.GetValue() != '0';
+               bool tonemap_after_taa = *GetShaderDefineData(char_ptr_crc32("TONEMAP_AFTER_TAA")).compiled_data.GetValue() != '0' && IsTAARunningThisFrame();
+
+               // TUP path: TAA partial_command_list has just executed so sr_source_color is valid.
+               // DrawNativePreSREncodePass was intentionally deferred from recording time to here.
+               if (render_scale != 1.f && device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
+               {
+                  ID3D11Device* native_device_tup = g_native_device_ptr.load(std::memory_order_acquire);
+                  if (native_device_tup)
+                  {
+                     const bool pre_sr_ok = DrawNativePreSREncodePass(native_device_tup, native_device_context.get(), device_data, game_device_data);
+#if TEST || DEVELOPMENT
+                     if (!pre_sr_ok)
+                     {
+                        std::string reason = "prerequisite missing:";
+                        const auto vs_it = device_data.native_vertex_shaders.find(CompileTimeStringHash("Copy VS"));
+                        const auto ps_it = device_data.native_pixel_shaders.find(CompileTimeStringHash("GBFR Pre SR Encode"));
+                        if (vs_it == device_data.native_vertex_shaders.end() || !vs_it->second)
+                           reason += " copy_vs=missing;";
+                        if (ps_it == device_data.native_pixel_shaders.end() || !ps_it->second)
+                           reason += " pre_sr_encode_ps=missing;";
+                        if (!game_device_data.sr_source_color.get())
+                           reason += " sr_source_color=null;";
+                        if (!game_device_data.sr_source_color_srv.get())
+                           reason += " sr_source_color_srv=null;";
+                        LogExpectedCustomDrawSkipped("PreSREncode (TUP path)", reason);
+                     }
+#endif
+                  }
+               }
 
                if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed)
                {
@@ -1434,9 +1588,15 @@ public:
                   {
                      bool reset_sr = device_data.force_reset_sr || game_device_data.output_changed;
                      device_data.force_reset_sr = false;
-
-                     float jitter_x = game_device_data.jitter.x;
-                     float jitter_y = game_device_data.jitter.y;
+                     float jitter_x = game_device_data.table_jitter.x;
+                     float jitter_y = game_device_data.table_jitter.y;
+#if TEST || DEVELOPMENT
+                     if (!use_table_jitter_for_dlss)
+                     {
+                        jitter_x = game_device_data.jitter.x;
+                        jitter_y = game_device_data.jitter.y;
+                     }
+#endif
                      SR::SuperResolutionImpl::DrawData draw_data;
                      draw_data.source_color = game_device_data.sr_source_color.get();
                      draw_data.output_color = game_device_data.sr_output_color.get();
@@ -1462,14 +1622,19 @@ public:
                      draw_data.render_height = device_data.render_resolution.y;
 
                      // Execute SR
-#if TEST
+#if TEST || DEVELOPMENT
                      {
                         std::string pre_draw_issues;
-                        if (!draw_data.source_color) pre_draw_issues += " source_color=null;";
-                        if (!draw_data.output_color) pre_draw_issues += " output_color=null;";
-                        if (!draw_data.motion_vectors) pre_draw_issues += " motion_vectors=null;";
-                        if (!draw_data.depth_buffer) pre_draw_issues += " depth_buffer=null;";
-                        if (!sr_instance_data) pre_draw_issues += " sr_instance_data=null;";
+                        if (!draw_data.source_color)
+                           pre_draw_issues += " source_color=null;";
+                        if (!draw_data.output_color)
+                           pre_draw_issues += " output_color=null;";
+                        if (!draw_data.motion_vectors)
+                           pre_draw_issues += " motion_vectors=null;";
+                        if (!draw_data.depth_buffer)
+                           pre_draw_issues += " depth_buffer=null;";
+                        if (!sr_instance_data)
+                           pre_draw_issues += " sr_instance_data=null;";
                         if (!pre_draw_issues.empty())
                         {
                            LogExpectedCustomDrawSkipped("SR", "null inputs before Draw:" + pre_draw_issues);
@@ -1484,14 +1649,19 @@ public:
                      {
                         device_data.has_drawn_sr = false;
                         device_data.force_reset_sr = true;
-#if TEST
+#if TEST || DEVELOPMENT
                         {
                            std::string reason = "SR::Draw returned false; draw inputs:";
-                           if (!draw_data.source_color) reason += " source_color=null;";
-                           if (!draw_data.output_color) reason += " output_color=null;";
-                           if (!draw_data.motion_vectors) reason += " motion_vectors=null;";
-                           if (!draw_data.depth_buffer) reason += " depth_buffer=null;";
-                           if (!sr_instance_data) reason += " sr_instance_data=null;";
+                           if (!draw_data.source_color)
+                              reason += " source_color=null;";
+                           if (!draw_data.output_color)
+                              reason += " output_color=null;";
+                           if (!draw_data.motion_vectors)
+                              reason += " motion_vectors=null;";
+                           if (!draw_data.depth_buffer)
+                              reason += " depth_buffer=null;";
+                           if (!sr_instance_data)
+                              reason += " sr_instance_data=null;";
                            if (draw_data.render_width <= 0.f || draw_data.render_height <= 0.f)
                               reason += " render_dims_invalid(" + std::to_string(static_cast<int>(draw_data.render_width)) + "x" + std::to_string(static_cast<int>(draw_data.render_height)) + ");";
                            LogExpectedCustomDrawSkipped("SR", reason);
@@ -1525,10 +1695,10 @@ public:
 
                // PostSREncode normalizes color space: G→L if no HDR-SR, else L→G if HDR-SR, else skip
                {
-                  const bool hdr_sr = (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR) &&
-                                      (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.has_drawn_sr);
-                  const bool should_run = tonemap_after_taa ? !hdr_sr : hdr_sr;
-                  if (should_run)
+                  // const bool hdr_sr = (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR) &&
+                  //                     (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.has_drawn_sr);
+                  // const bool should_run = tonemap_after_taa ? !hdr_sr : hdr_sr;
+                  // if (should_run)
                   {
                      if (pipeline_color_srv)
                      {
@@ -1543,24 +1713,27 @@ public:
                         {
                            pipeline_color_srv = game_device_data.post_sr_encode_srv.get();
                         }
-#if TEST
+#if TEST || DEVELOPMENT
                         else
                         {
                            std::string reason = "DrawNativePostSREncodePass failed:";
                            {
                               const auto vs_chk = device_data.native_vertex_shaders.find(CompileTimeStringHash("Copy VS"));
-                              if (vs_chk == device_data.native_vertex_shaders.end() || !vs_chk->second) reason += " copy_vs=missing;";
+                              if (vs_chk == device_data.native_vertex_shaders.end() || !vs_chk->second)
+                                 reason += " copy_vs=missing;";
                            }
                            {
                               const auto ps_chk = device_data.native_pixel_shaders.find(CompileTimeStringHash("GBFR Post SR Encode"));
-                              if (ps_chk == device_data.native_pixel_shaders.end() || !ps_chk->second) reason += " post_sr_encode_ps=missing;";
+                              if (ps_chk == device_data.native_pixel_shaders.end() || !ps_chk->second)
+                                 reason += " post_sr_encode_ps=missing;";
                            }
-                           if (!pipeline_color_srv) reason += " input_srv=null;";
+                           if (!pipeline_color_srv)
+                              reason += " input_srv=null;";
                            LogExpectedCustomDrawSkipped("PostSREncode", reason);
                         }
 #endif
                      }
-#if TEST
+#if TEST || DEVELOPMENT
                      else
                      {
                         LogExpectedCustomDrawSkipped("PostSREncode", "should_run=true but pipeline_color_srv is null");
@@ -1580,14 +1753,14 @@ public:
                      {
                         pipeline_color_srv = game_device_data.motion_blur_output_srv.get();
                      }
-#if TEST
+#if TEST || DEVELOPMENT
                      else
                      {
                         LogExpectedCustomDrawSkipped("MotionBlur", "DrawNativeMotionBlurPass did not produce output (motion_blur_output_ready=false)");
                      }
 #endif
                   }
-#if TEST
+#if TEST || DEVELOPMENT
                   else
                   {
                      std::string reason;
@@ -1598,12 +1771,18 @@ public:
                      else
                      {
                         reason = "prerequisite missing:";
-                        if (!pipeline_color_srv) reason += " pipeline_color_srv=null;";
-                        if (!game_device_data.motion_blur_first_pass_seen) reason += " first_pass_not_seen;";
-                        if (!game_device_data.motion_blur_second_pass_seen) reason += " second_pass_not_seen;";
-                        if (!game_device_data.motion_blur_replay_states[0].valid) reason += " replay_state0_invalid;";
-                        if (!game_device_data.motion_blur_replay_states[1].valid) reason += " replay_state1_invalid;";
-                        if (!game_device_data.taa_output_texture.get()) reason += " taa_output_texture=null;";
+                        if (!pipeline_color_srv)
+                           reason += " pipeline_color_srv=null;";
+                        if (!game_device_data.motion_blur_first_pass_seen)
+                           reason += " first_pass_not_seen;";
+                        if (!game_device_data.motion_blur_second_pass_seen)
+                           reason += " second_pass_not_seen;";
+                        if (!game_device_data.motion_blur_replay_states[0].valid)
+                           reason += " replay_state0_invalid;";
+                        if (!game_device_data.motion_blur_replay_states[1].valid)
+                           reason += " replay_state1_invalid;";
+                        if (!game_device_data.taa_output_texture.get())
+                           reason += " taa_output_texture=null;";
                      }
                      LogExpectedCustomDrawSkipped("MotionBlur", reason);
                   }
@@ -1634,7 +1813,7 @@ public:
                      game_device_data.exposure_texture_srv = nullptr;
                      game_device_data.bloom_texture_srv = nullptr;
                   }
-#if TEST
+#if TEST || DEVELOPMENT
                   else
                   {
                      std::string reason;
@@ -1645,10 +1824,14 @@ public:
                      else
                      {
                         reason = "prerequisite missing:";
-                        if (!pipeline_color_srv) reason += " pipeline_color_srv=null;";
-                        if (!game_device_data.exposure_texture_srv.get()) reason += " exposure_texture_srv=null;";
-                        if (!game_device_data.bloom_texture_srv.get()) reason += " bloom_texture_srv=null;";
-                        if (!game_device_data.taa_output_texture.get()) reason += " taa_output_texture=null;";
+                        if (!pipeline_color_srv)
+                           reason += " pipeline_color_srv=null;";
+                        if (!game_device_data.exposure_texture_srv.get())
+                           reason += " exposure_texture_srv=null;";
+                        if (!game_device_data.bloom_texture_srv.get())
+                           reason += " bloom_texture_srv=null;";
+                        if (!game_device_data.taa_output_texture.get())
+                           reason += " taa_output_texture=null;";
                      }
                      LogExpectedCustomDrawSkipped("Tonemap", reason);
                   }
@@ -1662,13 +1845,16 @@ public:
                      DrawNativeCutsceneGammaPass(native_device_context.get(), cmd_list_data, device_data, game_device_data);
                      pipeline_color_srv = game_device_data.cutscene_gamma_srv.get();
                   }
-#if TEST
+#if TEST || DEVELOPMENT
                   else
                   {
                      std::string reason = "prerequisite missing:";
-                     if (!game_device_data.cutscene_intermediate_srv.get()) reason += " cutscene_intermediate_srv=null;";
-                     if (!game_device_data.taa_output_texture.get()) reason += " taa_output_texture=null;";
-                     if (!game_device_data.cutscene_gamma_replay_state.valid) reason += " cutscene_gamma_replay_state_invalid;";
+                     if (!game_device_data.cutscene_intermediate_srv.get())
+                        reason += " cutscene_intermediate_srv=null;";
+                     if (!game_device_data.taa_output_texture.get())
+                        reason += " taa_output_texture=null;";
+                     if (!game_device_data.cutscene_gamma_replay_state.valid)
+                        reason += " cutscene_gamma_replay_state_invalid;";
                      LogExpectedCustomDrawSkipped("CutsceneGamma", reason);
                   }
 #endif
@@ -1683,13 +1869,16 @@ public:
                      DrawNativeCutsceneColorGradePass(native_device_context.get(), cmd_list_data, device_data, game_device_data);
                      pipeline_color_srv = game_device_data.cutscene_color_grade_srv.get();
                   }
-#if TEST
+#if TEST || DEVELOPMENT
                   else
                   {
                      std::string reason = "prerequisite missing:";
-                     if (!game_device_data.cutscene_gamma_srv.get()) reason += " cutscene_gamma_srv=null;";
-                     if (!game_device_data.taa_output_texture.get()) reason += " taa_output_texture=null;";
-                     if (!game_device_data.cutscene_color_grade_replay_state.valid) reason += " cutscene_color_grade_replay_state_invalid;";
+                     if (!game_device_data.cutscene_gamma_srv.get())
+                        reason += " cutscene_gamma_srv=null;";
+                     if (!game_device_data.taa_output_texture.get())
+                        reason += " taa_output_texture=null;";
+                     if (!game_device_data.cutscene_color_grade_replay_state.valid)
+                        reason += " cutscene_color_grade_replay_state_invalid;";
                      LogExpectedCustomDrawSkipped("CutsceneColorGrade", reason);
                   }
 #endif
@@ -1697,63 +1886,71 @@ public:
                   game_device_data.cutscene_color_grade_replay_state.Reset();
                }
 
-               if (game_device_data.cutscene_overlay_prep_pending.load(std::memory_order_acquire) && game_device_data.cutscene_overlay_pending.load(std::memory_order_acquire))
+               if (game_device_data.cutscene_overlay_prep_pending.load(std::memory_order_acquire))
                {
                   if (CanDrawNativeCutsceneOverlayPrepPass(game_device_data))
                   {
                      DrawNativeCutsceneOverlayPrepPass(native_device_context.get(), cmd_list_data, device_data, game_device_data);
                      game_device_data.cutscene_overlay_prep_pending.store(false, std::memory_order_release);
                   }
-#if TEST
+#if TEST || DEVELOPMENT
                   else
                   {
                      LogExpectedCustomDrawSkipped("CutsceneOverlayPrep", "prerequisite missing: cutscene_overlay_prep_replay_state_invalid");
                   }
 #endif
+                  game_device_data.cutscene_overlay_prep_replay_state.Reset();
+               }
 
+               if (game_device_data.cutscene_overlay_pending.load(std::memory_order_acquire))
+               {
                   if (CanDrawNativeCutsceneOverlayPass(game_device_data))
                   {
                      DrawNativeCutsceneOverlayPass(native_device_context.get(), cmd_list_data, device_data, game_device_data, game_device_data.cutscene_intermediate_rtv.get());
                      pipeline_color_srv = game_device_data.cutscene_intermediate_srv.get();
                      game_device_data.cutscene_overlay_pending.store(false, std::memory_order_release);
                   }
-#if TEST
+#if TEST || DEVELOPMENT
                   else
                   {
                      std::string reason = "prerequisite missing:";
-                     if (!game_device_data.cutscene_overlay_prep_srv.get()) reason += " cutscene_overlay_prep_srv=null;";
-                     if (!game_device_data.cutscene_overlay_replay_state.valid) reason += " cutscene_overlay_replay_state_invalid;";
+                     if (!game_device_data.cutscene_overlay_prep_srv.get())
+                        reason += " cutscene_overlay_prep_srv=null;";
+                     if (!game_device_data.cutscene_overlay_replay_state.valid)
+                        reason += " cutscene_overlay_replay_state_invalid;";
                      LogExpectedCustomDrawSkipped("CutsceneOverlay", reason);
                   }
 #endif
 
-                  game_device_data.cutscene_overlay_prep_replay_state.Reset();
                   game_device_data.cutscene_overlay_replay_state.Reset();
-                  game_device_data.cutscene_gamma_input_resource = nullptr;
                }
 
                {
                   bool can_draw_ui_encode = CanDrawNativeUIEncodePass(pipeline_color_srv, game_device_data);
                   const bool sr_enabled = device_data.sr_type != SR::Type::None && !device_data.sr_suppressed;
-#if TEST
+#if TEST || DEVELOPMENT
                   if (sr_enabled)
                   {
                      if (!game_device_data.pre_sr_encode_srv.get() || !device_data.has_drawn_sr)
                      {
                         std::string reason = "SR enabled but prerequisite missing:";
-                        if (!game_device_data.pre_sr_encode_srv.get()) reason += " pre_sr_encode_srv=null;";
-                        if (!device_data.has_drawn_sr) reason += " sr_not_drawn;";
+                        if (!game_device_data.pre_sr_encode_srv.get())
+                           reason += " pre_sr_encode_srv=null;";
+                        if (!device_data.has_drawn_sr)
+                           reason += " sr_not_drawn;";
                         LogExpectedCustomDrawSkipped("UIEncode (SR composite inputs)", reason);
                      }
                   }
 #endif
 
-#if TEST
+#if TEST || DEVELOPMENT
                   if (!can_draw_ui_encode)
                   {
                      std::string reason = "prerequisite missing:";
-                     if (!pipeline_color_srv) reason += " pipeline_color_srv=null;";
-                     if (!game_device_data.taa_output_texture_rtv.get()) reason += " taa_output_texture_rtv=null;";
+                     if (!pipeline_color_srv)
+                        reason += " pipeline_color_srv=null;";
+                     if (!game_device_data.taa_output_texture_rtv.get())
+                        reason += " taa_output_texture_rtv=null;";
                      LogExpectedCustomDrawSkipped("UIEncode", reason);
                   }
 #endif
@@ -1856,6 +2053,19 @@ public:
          }
       }
 
+      PatchJitterPhases();
+
+      if (!g_jitter_write_hook)
+      {
+         const uintptr_t base_addr = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
+         if (base_addr != 0)
+         {
+            g_jitter_write_hook = safetyhook::create_mid(
+               reinterpret_cast<void*>(base_addr + kJitterWrite_RVA),
+               &OnJitterWrite);
+         }
+      }
+
 #if PATCH_SCENE_BUFFER
       ComPtr<ID3D11DeviceContext> immediate_context;
       native_device->GetImmediateContext(immediate_context.put());
@@ -1898,10 +2108,53 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
+#if DEVELOPMENT
+      {
+         const bool was_down = game_device_data.pause_trace_key_down;
+         game_device_data.pause_trace_key_down = (GetAsyncKeyState(VK_ESCAPE) & 0x8000) != 0;
+         if (game_device_data.pause_trace_key_down && !was_down)
+         {
+            game_device_data.pause_trace_delay_countdown = game_device_data.pause_trace_delay_frames;
+         }
+         if (game_device_data.pause_trace_delay_countdown >= 0)
+         {
+            if (game_device_data.pause_trace_delay_countdown == 0)
+            {
+               trace_scheduled = true;
+               game_device_data.pause_trace_delay_countdown = -1;
+
+               const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
+               const uintptr_t settings_obj = (mod_base != 0)
+                                                 ? *reinterpret_cast<const uintptr_t*>(mod_base + kTAASettingsGlobal_RVA)
+                                                 : 0;
+
+               auto& snap = game_device_data.pause_snapshot;
+               snap.valid = true;
+               snap.render_resolution = device_data.render_resolution;
+               snap.output_resolution = device_data.output_resolution;
+               snap.render_scale_pct = render_scale * 100.0f;
+               snap.jitter = game_device_data.jitter;
+               snap.prev_jitter = game_device_data.prev_jitter;
+               snap.prev_table_jitter = game_device_data.prev_table_jitter;
+               snap.table_jitter = game_device_data.table_jitter;
+               snap.taa_enabled = IsTAARunningThisFrame();
+               snap.settings_obj_valid = (settings_obj != 0);
+               snap.upscaling_disabled = (settings_obj != 0) && ((*reinterpret_cast<const uint8_t*>(settings_obj + 63) & 1) != 0);
+               snap.drs_active = (settings_obj != 0) && ((*reinterpret_cast<const uint8_t*>(settings_obj + 101) & 1) != 0);
+               snap.taa_output_ready = game_device_data.taa_output_texture.get() != nullptr;
+            }
+            else
+            {
+               --game_device_data.pause_trace_delay_countdown;
+            }
+         }
+      }
+#endif
+
       if (!device_data.has_drawn_sr)
       {
          device_data.force_reset_sr = true;
-#if TEST
+#if TEST || DEVELOPMENT
          if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && game_device_data.taa_detected_this_frame)
          {
             reshade::log::message(reshade::log::level::warning,
@@ -1910,44 +2163,9 @@ public:
 #endif
       }
       device_data.has_drawn_sr = false;
-#if TEST
+      game_device_data.tonemap_detected_context.store(nullptr, std::memory_order_relaxed);
+#if TEST || DEVELOPMENT
       game_device_data.taa_detected_this_frame = false;
-#endif
-#if TEST
-      {
-         const bool any_cutscene = game_device_data.cutscene_gamma_seen_this_frame ||
-                                   game_device_data.cutscene_color_grade_seen_this_frame ||
-                                   game_device_data.cutscene_overlay_prep_seen_this_frame ||
-                                   game_device_data.cutscene_overlay_seen_this_frame;
-         if (any_cutscene)
-         {
-            std::string issues;
-            // All 4 shaders run as part of the cutscene grading pipeline each frame.
-            // If any one was seen but others were not, the pipeline ran incomplete.
-            if (!game_device_data.cutscene_gamma_seen_this_frame) issues += " gamma=not_seen;";
-            if (!game_device_data.cutscene_color_grade_seen_this_frame) issues += " color_grade=not_seen;";
-            if (!game_device_data.cutscene_overlay_prep_seen_this_frame) issues += " overlay_prep=not_seen;";
-            if (!game_device_data.cutscene_overlay_seen_this_frame) issues += " overlay=not_seen;";
-            // Seen-but-not-drawn: _pending flags are cleared in the draw phase,
-            // so any that remain true here were captured but never replayed.
-            if (game_device_data.cutscene_gamma_pending.load(std::memory_order_relaxed)) issues += " gamma=seen_not_drawn;";
-            if (game_device_data.cutscene_color_grade_pending.load(std::memory_order_relaxed)) issues += " color_grade=seen_not_drawn;";
-            if (game_device_data.cutscene_overlay_prep_pending.load(std::memory_order_relaxed)) issues += " overlay_prep=seen_not_drawn;";
-            if (game_device_data.cutscene_overlay_pending.load(std::memory_order_relaxed)) issues += " overlay=seen_not_drawn;";
-            if (!issues.empty())
-            {
-               std::string msg = "[GBFR][TEST] Cutscene incomplete pipeline this frame:";
-               msg += issues;
-               reshade::log::message(reshade::log::level::warning, msg.c_str());
-            }
-         }
-      }
-#endif
-#if TEST
-      game_device_data.cutscene_gamma_seen_this_frame = false;
-      game_device_data.cutscene_color_grade_seen_this_frame = false;
-      game_device_data.cutscene_overlay_prep_seen_this_frame = false;
-      game_device_data.cutscene_overlay_seen_this_frame = false;
 #endif
       game_device_data.remainder_command_list.store(nullptr, std::memory_order_relaxed);
       game_device_data.draw_device_context = nullptr;
@@ -1971,7 +2189,6 @@ public:
       game_device_data.motion_blur_second_pass_seen = false;
       game_device_data.motion_blur_output_ready = false;
       game_device_data.motion_blur_invocation_count = 0;
-      game_device_data.cutscene_gamma_input_resource = nullptr;
       game_device_data.cutscene_gamma_pending.store(false, std::memory_order_relaxed);
       game_device_data.cutscene_color_grade_pending.store(false, std::memory_order_relaxed);
       game_device_data.cutscene_gamma_resource = nullptr;
@@ -2014,12 +2231,8 @@ public:
 
       if (render_scale_changed)
       {
-         const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-         constexpr uintptr_t kCachedDimsRVA = 0x05FB48E8;
-         *reinterpret_cast<__int64*>(mod_base + kCachedDimsRVA) = 0;
-         *reinterpret_cast<__int64*>(mod_base + kCachedDimsRVA + 8) = 0;
          device_data.force_reset_sr = true;
-#if TEST
+#if TEST || DEVELOPMENT
          reshade::log::message(reshade::log::level::warning, "[GBFR][TEST] force_reset_sr set: render_scale_changed");
 #endif
          render_scale_changed = false;
@@ -2027,7 +2240,7 @@ public:
       device_data.cb_luma_global_settings_dirty = true;
       int32_t sr_type = static_cast<int32_t>(device_data.sr_type);
       cb_luma_global_settings.SRType = static_cast<uint32_t>(sr_type + 1);
-
+      cb_luma_global_settings.GameSettings.IsTAARunning = 0;
    }
 
    void LoadConfigs() override
@@ -2050,6 +2263,8 @@ public:
       reshade::get_config_value(runtime, NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
       reshade::get_config_value(runtime, NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
       reshade::get_config_value(runtime, NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
+      reshade::get_config_value(runtime, NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
+      reshade::get_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
@@ -2072,17 +2287,18 @@ public:
       if (ImGui::TreeNodeEx("Color Grading", ImGuiTreeNodeFlags_DefaultOpen))
       {
 
-         float contrast_ui = cb_luma_global_settings.GameSettings.Contrast * 50.0f;
-         float highlights_ui = cb_luma_global_settings.GameSettings.Highlights * 50.0f;
-         float highlight_contrast_ui = cb_luma_global_settings.GameSettings.HighlightContrast * 50.0f;
-         float shadows_ui = cb_luma_global_settings.GameSettings.Shadows * 50.0f;
-         float shadow_contrast_ui = cb_luma_global_settings.GameSettings.ShadowContrast * 50.0f;
-         float flare_ui = cb_luma_global_settings.GameSettings.Flare * 100.0f;
-         float saturation_ui = cb_luma_global_settings.GameSettings.Saturation * 50.0f;
-         float dechroma_ui = cb_luma_global_settings.GameSettings.Dechroma * 100.0f;
-         float highlight_saturation_ui = cb_luma_global_settings.GameSettings.HighlightSaturation * 50.0f;
+         float contrast = cb_luma_global_settings.GameSettings.Contrast * 50.0f;
+         float highlights = cb_luma_global_settings.GameSettings.Highlights * 50.0f;
+         float highlight_contrast = cb_luma_global_settings.GameSettings.HighlightContrast * 50.0f;
+         float shadows = cb_luma_global_settings.GameSettings.Shadows * 50.0f;
+         float shadow_contrast = cb_luma_global_settings.GameSettings.ShadowContrast * 50.0f;
+         float flare = cb_luma_global_settings.GameSettings.Flare * 100.0f;
+         float saturation = cb_luma_global_settings.GameSettings.Saturation * 50.0f;
+         float dechroma = cb_luma_global_settings.GameSettings.Dechroma * 100.0f;
+         float highlight_saturation = cb_luma_global_settings.GameSettings.HighlightSaturation * 50.0f;
+         int bloom_type = cb_luma_global_settings.GameSettings.BloomType;
+         float blooom_strength = cb_luma_global_settings.GameSettings.BloomStrength * 50.0f;
 
-         // Exposure (slider 0-200, stored as cbuffer value)
          if (ImGui::SliderFloat("Exposure", &cb_luma_global_settings.GameSettings.Exposure, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
             reshade::set_config_value(runtime, NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
@@ -2093,7 +2309,6 @@ public:
             reshade::set_config_value(runtime, NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
          }
 
-         // Gamma (slider 75-125, stored as cbuffer value)
          if (ImGui::SliderFloat("Gamma", &cb_luma_global_settings.GameSettings.Gamma, 0.75f, 1.25f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
             reshade::set_config_value(runtime, NAME, "Gamma", cb_luma_global_settings.GameSettings.Gamma);
@@ -2104,125 +2319,417 @@ public:
             reshade::set_config_value(runtime, NAME, "Gamma", cb_luma_global_settings.GameSettings.Gamma);
          }
 
-         // Contrast (slider 0-100, stored as cbuffer value)
-         if (ImGui::SliderFloat("Contrast", &contrast_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         if (ImGui::SliderFloat("Highlights", &highlights, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
-            cb_luma_global_settings.GameSettings.Contrast = contrast_ui * 0.02f;
-            reshade::set_config_value(runtime, NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
-         }
-         if (DrawResetButton(contrast_ui, 50.f, "Contrast", runtime))
-         {
-            contrast_ui = 50.f;
-            cb_luma_global_settings.GameSettings.Contrast = contrast_ui * 0.02f;
-            reshade::set_config_value(runtime, NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
-         }
-
-         // Highlights (slider 0-100, stored as cbuffer value)
-         if (ImGui::SliderFloat("Highlights", &highlights_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
-         {
-            cb_luma_global_settings.GameSettings.Highlights = highlights_ui * 0.02f;
+            cb_luma_global_settings.GameSettings.Highlights = highlights * 0.02f;
             reshade::set_config_value(runtime, NAME, "Highlights", cb_luma_global_settings.GameSettings.Highlights);
          }
-         if (DrawResetButton(highlights_ui, 50.f, "Highlights", runtime))
+         if (DrawResetButton(highlights, 50.f, "Highlights", runtime))
          {
-            highlights_ui = 50.f;
-            cb_luma_global_settings.GameSettings.Highlights = highlights_ui * 0.02f;
+            highlights = 50.f;
+            cb_luma_global_settings.GameSettings.Highlights = highlights * 0.02f;
             reshade::set_config_value(runtime, NAME, "Highlights", cb_luma_global_settings.GameSettings.Highlights);
          }
 
-         // Contrast Highlights (slider 0-100, stored as cbuffer value)
-         if (ImGui::SliderFloat("Highlight Contrast", &highlight_contrast_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         if (ImGui::SliderFloat("Highlight Contrast", &highlight_contrast, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
-            cb_luma_global_settings.GameSettings.HighlightContrast = highlight_contrast_ui * 0.02f;
+            cb_luma_global_settings.GameSettings.HighlightContrast = highlight_contrast * 0.02f;
             reshade::set_config_value(runtime, NAME, "HighlightContrast", cb_luma_global_settings.GameSettings.HighlightContrast);
          }
-         if (DrawResetButton(highlight_contrast_ui, 50.f, "HighlightContrast", runtime))
+         if (DrawResetButton(highlight_contrast, 50.f, "HighlightContrast", runtime))
          {
-            highlight_contrast_ui = 50.f;
-            cb_luma_global_settings.GameSettings.HighlightContrast = highlight_contrast_ui * 0.02f;
+            highlight_contrast = 50.f;
+            cb_luma_global_settings.GameSettings.HighlightContrast = highlight_contrast * 0.02f;
             reshade::set_config_value(runtime, NAME, "HighlightContrast", cb_luma_global_settings.GameSettings.HighlightContrast);
          }
 
-         // Shadows (slider 0-100, stored as cbuffer value)
-         if (ImGui::SliderFloat("Shadows", &shadows_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         if (ImGui::SliderFloat("Shadows", &shadows, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
-            cb_luma_global_settings.GameSettings.Shadows = shadows_ui * 0.02f;
+            cb_luma_global_settings.GameSettings.Shadows = shadows * 0.02f;
             reshade::set_config_value(runtime, NAME, "Shadows", cb_luma_global_settings.GameSettings.Shadows);
          }
-         if (DrawResetButton(shadows_ui, 50.f, "Shadows", runtime))
+         if (DrawResetButton(shadows, 50.f, "Shadows", runtime))
          {
-            shadows_ui = 50.f;
-            cb_luma_global_settings.GameSettings.Shadows = shadows_ui * 0.02f;
+            shadows = 50.f;
+            cb_luma_global_settings.GameSettings.Shadows = shadows * 0.02f;
             reshade::set_config_value(runtime, NAME, "Shadows", cb_luma_global_settings.GameSettings.Shadows);
          }
 
-         // Shadow Contrast (slider 0-100, stored as cbuffer value)
-         if (ImGui::SliderFloat("Shadow Contrast", &shadow_contrast_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         if (ImGui::SliderFloat("Shadow Contrast", &shadow_contrast, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
-            cb_luma_global_settings.GameSettings.ShadowContrast = shadow_contrast_ui * 0.02f;
+            cb_luma_global_settings.GameSettings.ShadowContrast = shadow_contrast * 0.02f;
             reshade::set_config_value(runtime, NAME, "ShadowContrast", cb_luma_global_settings.GameSettings.ShadowContrast);
          }
-         if (DrawResetButton(shadow_contrast_ui, 50.f, "ShadowContrast", runtime))
+         if (DrawResetButton(shadow_contrast, 50.f, "ShadowContrast", runtime))
          {
-            shadow_contrast_ui = 50.f;
-            cb_luma_global_settings.GameSettings.ShadowContrast = shadow_contrast_ui * 0.02f;
+            shadow_contrast = 50.f;
+            cb_luma_global_settings.GameSettings.ShadowContrast = shadow_contrast * 0.02f;
             reshade::set_config_value(runtime, NAME, "ShadowContrast", cb_luma_global_settings.GameSettings.ShadowContrast);
          }
 
-         // Flare (slider 0-100, stored as cbuffer value)
-         if (ImGui::SliderFloat("Flare", &flare_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         if (ImGui::SliderFloat("Contrast", &contrast, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
-            cb_luma_global_settings.GameSettings.Flare = flare_ui * 0.01f;
-            reshade::set_config_value(runtime, NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
+            cb_luma_global_settings.GameSettings.Contrast = contrast * 0.02f;
+            reshade::set_config_value(runtime, NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
          }
-         if (DrawResetButton(flare_ui, 0.f, "Flare", runtime))
+         if (DrawResetButton(contrast, 50.f, "Contrast", runtime))
          {
-            flare_ui = 0.f;
-            cb_luma_global_settings.GameSettings.Flare = flare_ui * 0.01f;
-            reshade::set_config_value(runtime, NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
+            contrast = 50.f;
+            cb_luma_global_settings.GameSettings.Contrast = contrast * 0.02f;
+            reshade::set_config_value(runtime, NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
          }
 
-         // Saturation (slider 0-100, stored as cbuffer value)
-         if (ImGui::SliderFloat("Saturation", &saturation_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         if (ImGui::SliderFloat("Saturation", &saturation, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
-            cb_luma_global_settings.GameSettings.Saturation = saturation_ui * 0.02f;
+            cb_luma_global_settings.GameSettings.Saturation = saturation * 0.02f;
             reshade::set_config_value(runtime, NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
          }
-         if (DrawResetButton(saturation_ui, 50.f, "Saturation", runtime))
+         if (DrawResetButton(saturation, 50.f, "Saturation", runtime))
          {
-            saturation_ui = 50.f;
-            cb_luma_global_settings.GameSettings.Saturation = saturation_ui * 0.02f;
+            saturation = 50.f;
+            cb_luma_global_settings.GameSettings.Saturation = saturation * 0.02f;
             reshade::set_config_value(runtime, NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
          }
 
-         // Dechroma (slider 0-100, stored as cbuffer value)
-         if (ImGui::SliderFloat("Dechroma", &dechroma_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         if (ImGui::SliderFloat("Highlight Saturation", &highlight_saturation, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
-            cb_luma_global_settings.GameSettings.Dechroma = dechroma_ui * 0.01f;
+            cb_luma_global_settings.GameSettings.HighlightSaturation = highlight_saturation * 0.02f;
+            reshade::set_config_value(runtime, NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
+         }
+         if (DrawResetButton(highlight_saturation, 50.f, "HighlightSaturation", runtime))
+         {
+            highlight_saturation = 50.f;
+            cb_luma_global_settings.GameSettings.HighlightSaturation = highlight_saturation * 0.02f;
+            reshade::set_config_value(runtime, NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
+         }
+
+         if (ImGui::SliderFloat("Dechroma", &dechroma, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            cb_luma_global_settings.GameSettings.Dechroma = dechroma * 0.01f;
             reshade::set_config_value(runtime, NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
          }
-         if (DrawResetButton(dechroma_ui, 0.f, "Dechroma", runtime))
+         if (DrawResetButton(dechroma, 0.f, "Dechroma", runtime))
          {
-            dechroma_ui = 0.f;
-            cb_luma_global_settings.GameSettings.Dechroma = dechroma_ui * 0.01f;
+            dechroma = 0.f;
+            cb_luma_global_settings.GameSettings.Dechroma = dechroma * 0.01f;
             reshade::set_config_value(runtime, NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
          }
 
-         // Highlight Saturation (slider 0-100, stored as cbuffer value)
-         if (ImGui::SliderFloat("Highlight Saturation", &highlight_saturation_ui, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         if (ImGui::SliderFloat("Flare", &flare, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
-            cb_luma_global_settings.GameSettings.HighlightSaturation = highlight_saturation_ui * 0.02f;
-            reshade::set_config_value(runtime, NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
+            cb_luma_global_settings.GameSettings.Flare = flare * 0.01f;
+            reshade::set_config_value(runtime, NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
          }
-         if (DrawResetButton(highlight_saturation_ui, 50.f, "HighlightSaturation", runtime))
+         if (DrawResetButton(flare, 0.f, "Flare", runtime))
          {
-            highlight_saturation_ui = 50.f;
-            cb_luma_global_settings.GameSettings.HighlightSaturation = highlight_saturation_ui * 0.02f;
-            reshade::set_config_value(runtime, NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
+            flare = 0.f;
+            cb_luma_global_settings.GameSettings.Flare = flare * 0.01f;
+            reshade::set_config_value(runtime, NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
          }
+
+         // Bloom settings
+         const char* bloom_type_names[] = {"Vanilla", "HDR"};
+         if (ImGui::SliderInt("Bloom Type", &bloom_type, 0, 1, bloom_type_names[bloom_type], ImGuiSliderFlags_AlwaysClamp))
+         {
+            cb_luma_global_settings.GameSettings.BloomType = bloom_type;
+            reshade::set_config_value(runtime, NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
+         }
+         if (DrawResetButton(bloom_type, 1, "BloomType", runtime))
+         {
+            bloom_type = 1;
+            cb_luma_global_settings.GameSettings.BloomType = bloom_type;
+            reshade::set_config_value(runtime, NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
+         }
+
+         if (ImGui::SliderFloat("Bloom Strength", &blooom_strength, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            cb_luma_global_settings.GameSettings.BloomStrength = blooom_strength * 0.02f;
+            reshade::set_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
+         }
+         if (DrawResetButton(blooom_strength, 100.f, "BloomStrength", runtime))
+         {
+            blooom_strength = 50.f;
+            cb_luma_global_settings.GameSettings.BloomStrength = blooom_strength * 0.02f;
+            reshade::set_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
+         }
+
          ImGui::TreePop();
       }
    }
+
+#if DEVELOPMENT
+   void DrawImGuiDevSettings(DeviceData& device_data) override
+   {
+      auto& game_device_data = GetGameDeviceData(device_data);
+      reshade::api::effect_runtime* runtime = nullptr;
+
+      ImGui::SliderInt("Pause Trace Delay (frames)", &game_device_data.pause_trace_delay_frames, 0, 10);
+      ImGui::Checkbox("Use Table Jitter for DLSS", &use_table_jitter_for_dlss);
+   }
+#endif // DEVELOPMENT
+
+#if DEVELOPMENT || TEST
+   void PrintImGuiInfo(const DeviceData& device_data) override
+   {
+      auto& game_device_data = GetGameDeviceData(device_data);
+      const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
+
+      // Read TAA settings object for per-bit queries beyond the TAA-enabled flag
+      const uintptr_t settings_obj = (mod_base != 0)
+                                        ? *reinterpret_cast<const uintptr_t*>(mod_base + kTAASettingsGlobal_RVA)
+                                        : 0;
+
+      ImGui::NewLine();
+      if (ImGui::BeginTable("gbfr_info", 2, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+      {
+         ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthStretch);
+         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+         ImGui::TableHeadersRow();
+
+         // Resolution
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("Render Resolution");
+         ImGui::TableSetColumnIndex(1);
+         ImGui::Text("%dx%d", (int)device_data.render_resolution.x, (int)device_data.render_resolution.y);
+
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("Output Resolution");
+         ImGui::TableSetColumnIndex(1);
+         ImGui::Text("%dx%d", (int)device_data.output_resolution.x, (int)device_data.output_resolution.y);
+
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("Render Scale");
+         ImGui::TableSetColumnIndex(1);
+         ImGui::Text("%.0f%%", render_scale * 100.0f);
+
+         // Camera jitter
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("Jitter (NDC)");
+         ImGui::TableSetColumnIndex(1);
+         ImGui::Text("%.6f, %.6f", game_device_data.jitter.x, game_device_data.jitter.y);
+
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("Prev Jitter (NDC)");
+         ImGui::TableSetColumnIndex(1);
+         ImGui::Text("%.6f, %.6f", game_device_data.prev_jitter.x, game_device_data.prev_jitter.y);
+
+         // Jitter phase and direct table read
+         {
+            const uint8_t phase = (mod_base != 0)
+                                     ? (*reinterpret_cast<const uint8_t*>(mod_base + kJitterPhaseCounter_RVA) & static_cast<uint8_t>(JITTER_PHASES - 1))
+                                     : 0u;
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Jitter Phase");
+            ImGui::TableSetColumnIndex(1);
+            if (mod_base != 0)
+               ImGui::Text("%u / %u", static_cast<unsigned>(phase), static_cast<unsigned>(JITTER_PHASES));
+            else
+               ImGui::TextUnformatted("N/A");
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Jitter Table (NDC)");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%.6f, %.6f", game_device_data.table_jitter.x, game_device_data.table_jitter.y);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Prev Jitter Table (NDC)");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%.6f, %.6f", game_device_data.prev_table_jitter.x, game_device_data.prev_table_jitter.y);
+
+#if DEVELOPMENT
+            {
+               {
+                  ASSERT_ONCE_MSG(
+                     fabsf(game_device_data.table_jitter.x - game_device_data.jitter.x) < 1e-4f &&
+                        fabsf(game_device_data.table_jitter.y - game_device_data.jitter.y) < 1e-4f,
+                     "Jitter table value does not match camera projection jitter");
+               }
+            }
+#endif
+         }
+
+         // TAA state (read from engine globals at runtime)
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("TAA Enabled");
+         ImGui::TableSetColumnIndex(1);
+         ImGui::TextUnformatted(IsTAARunningThisFrame() ? "Yes" : "No");
+
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("Upscaling (TUP)");
+         ImGui::TableSetColumnIndex(1);
+         if (settings_obj != 0)
+            ImGui::TextUnformatted((*reinterpret_cast<const uint8_t*>(settings_obj + 63) & 1) ? "Disabled" : "Enabled");
+         else
+            ImGui::TextUnformatted("N/A");
+
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("DRS Active");
+         ImGui::TableSetColumnIndex(1);
+         if (settings_obj != 0)
+            ImGui::TextUnformatted((*reinterpret_cast<const uint8_t*>(settings_obj + 101) & 1) ? "Yes" : "No");
+         else
+            ImGui::TextUnformatted("N/A");
+
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("TAA Output Texture");
+         ImGui::TableSetColumnIndex(1);
+         ImGui::TextUnformatted(game_device_data.taa_output_texture.get() ? "Ready" : "Null");
+
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("Likely Pause Branch: byte_1461720A4 bit0");
+         ImGui::TableSetColumnIndex(1);
+         if (mod_base != 0)
+         {
+            const uint8_t v = *reinterpret_cast<const uint8_t*>(mod_base + kPauseCandidate_GlobalBit_RVA);
+            ImGui::Text("%s (0x%02X)", (v & 1) ? "1/true" : "0/false", static_cast<unsigned>(v));
+         }
+         else
+         {
+            ImGui::TextUnformatted("N/A");
+         }
+
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("Candidate: byte_145E5CABD (Tonemap gate)");
+         ImGui::TableSetColumnIndex(1);
+         if (mod_base != 0)
+         {
+            const uint8_t v = *reinterpret_cast<const uint8_t*>(mod_base + kPauseCandidate_TonemapGate_RVA);
+            ImGui::Text("%s (0x%02X)", (v == 1) ? "1/enabled" : "!=1/disabled", static_cast<unsigned>(v));
+         }
+         else
+         {
+            ImGui::TextUnformatted("N/A");
+         }
+
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("Candidate: byte_146130C5C (DoF/Bloom)");
+         ImGui::TableSetColumnIndex(1);
+         if (mod_base != 0)
+         {
+            const uint8_t v = *reinterpret_cast<const uint8_t*>(mod_base + kPauseCandidate_DofGateA_RVA);
+            ImGui::Text("%s (0x%02X)", (v == 0) ? "0/branch-taken" : "!=0/branch-skipped", static_cast<unsigned>(v));
+         }
+         else
+         {
+            ImGui::TextUnformatted("N/A");
+         }
+
+         ImGui::TableNextRow();
+         ImGui::TableSetColumnIndex(0);
+         ImGui::TextUnformatted("Candidate: byte_146130E13 (DoF/Bloom)");
+         ImGui::TableSetColumnIndex(1);
+         if (mod_base != 0)
+         {
+            const uint8_t v = *reinterpret_cast<const uint8_t*>(mod_base + kPauseCandidate_DofGateB_RVA);
+            ImGui::Text("%s (0x%02X)", (v == 0) ? "0/branch-taken" : "!=0/branch-skipped", static_cast<unsigned>(v));
+         }
+         else
+         {
+            ImGui::TextUnformatted("N/A");
+         }
+
+         ImGui::EndTable();
+      }
+#if DEVELOPMENT
+      if (game_device_data.pause_snapshot.valid)
+      {
+         const auto& snap = game_device_data.pause_snapshot;
+         ImGui::NewLine();
+         ImGui::TextUnformatted("Snapshot at last ESC press:");
+         if (ImGui::BeginTable("gbfr_pause_snapshot", 2, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+         {
+            ImGui::TableSetupColumn("Property", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableHeadersRow();
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Render Resolution");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%dx%d", (int)snap.render_resolution.x, (int)snap.render_resolution.y);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Output Resolution");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%dx%d", (int)snap.output_resolution.x, (int)snap.output_resolution.y);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Render Scale");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%.0f%%", snap.render_scale_pct);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Jitter (NDC)");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%.6f, %.6f", snap.jitter.x, snap.jitter.y);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Jitter from Table (NDC)");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%.6f, %.6f", snap.table_jitter.x, snap.table_jitter.y);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Prev Jitter (NDC)");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%.6f, %.6f", snap.prev_jitter.x, snap.prev_jitter.y);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Prev Jitter from Table (NDC)");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::Text("%.6f, %.6f", snap.prev_table_jitter.x, snap.prev_table_jitter.y);
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("TAA Enabled");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(snap.taa_enabled ? "Yes" : "No");
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("Upscaling (TUP)");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(!snap.settings_obj_valid ? "N/A" : (snap.upscaling_disabled ? "Disabled" : "Enabled"));
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("DRS Active");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(!snap.settings_obj_valid ? "N/A" : (snap.drs_active ? "Yes" : "No"));
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted("TAA Output Texture");
+            ImGui::TableSetColumnIndex(1);
+            ImGui::TextUnformatted(snap.taa_output_ready ? "Ready" : "Null");
+
+            ImGui::EndTable();
+         }
+      }
+#endif
+   }
+#endif // DEVELOPMENT || TEST
 
    void PrintImGuiAbout() override
    {
@@ -2328,6 +2835,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(std::stoul("45841F6D", nullptr, 16), "Motion Blur");
       forced_shader_names.emplace(std::stoul("1085E11F", nullptr, 16), "Cutscene Gamma");
       forced_shader_names.emplace(std::stoul("50BE35B0", nullptr, 16), "Cutscene Color Grade");
+      forced_shader_names.emplace(std::stoul("B9AFD904", nullptr, 16), "Cutscene Prep Overlay");
       forced_shader_names.emplace(std::stoul("4517077B", nullptr, 16), "Cutscene Overlay");
 #endif
       enable_samplers_upgrade = true;
@@ -2347,6 +2855,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       cb_luma_global_settings.GameSettings.HighlightSaturation = 1.f;
       cb_luma_global_settings.GameSettings.HueEmulation = 0.f;
       cb_luma_global_settings.GameSettings.PurityEmulation = 0.f;
+      cb_luma_global_settings.GameSettings.BloomType = 1; // Default to HDR bloom
+      cb_luma_global_settings.GameSettings.BloomStrength = 1.f;
 
       game = new GranblueFantasyRelink();
    }

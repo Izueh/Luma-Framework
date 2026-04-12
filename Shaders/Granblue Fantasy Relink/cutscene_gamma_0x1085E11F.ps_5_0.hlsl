@@ -19,7 +19,7 @@ void main(float4 v0: SV_Position0, float2 v1: TEXCOORD0, out float4 o0: SV_Targe
    r0.x = 1.01171875 * r0.x;
    r1.xyzw = g_Texture0.Sample(g_Texture0Sampler_s, v1.xy).xyzw;
 
-#if TONEMAP_AFTER_TAA
+#if 0
    o0 = r1;
    return;
 #endif
