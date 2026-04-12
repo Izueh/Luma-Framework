@@ -5,6 +5,7 @@
 #include "./macleod_boynton.hlsli"
 #include "./neutwo.hlsl"
 #include "../../Includes/Tonemap.hlsl"
+#include "../../Includes/Reinhard.hlsl"
 
 struct ColorGradingConfig
 {

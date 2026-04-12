@@ -26,6 +26,7 @@ struct LumaGameSettings
    int BloomType;
    float BloomStrength;
    int IsTAARunning; // 1 when the engine's TAA frame-graph pass is active this frame
+   float RenderScale;
 };
 
 struct LumaGameData
