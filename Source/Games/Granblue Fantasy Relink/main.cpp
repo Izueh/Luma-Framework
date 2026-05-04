@@ -5,6 +5,7 @@
 #define JITTER_PHASES 8
 #define PATCH_JITTER_TABLE_INIT
 #define PATCH_SCENE_BUFFER 0
+#define ENABLE_UI_VIEWPORT_SCALING_HOOK 0
 #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
 #define CHECK_GRAPHICS_API_COMPATIBILITY 1
 
@@ -13,8 +14,10 @@
 #include "includes\cbuffers.h"
 #include "includes\common.hpp"
 #include "includes\hooks.hpp"
+#include "includes\sigscan.hpp"
 #include "includes\safetyhook.hpp"
 #include "includes\common.cpp"
+#include "includes\sigscan.cpp"
 #include "includes\hooks.cpp"
 
 namespace
@@ -63,6 +66,7 @@ public:
       };
       shader_defines_data.append_range(game_shader_defines_data);
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
+      GetShaderDefineData(GAMUT_MAPPING_TYPE_HASH).SetDefaultValue('3');
 
       native_shaders_definitions.emplace(
          CompileTimeStringHash("GBFR Post Tonemap"),
@@ -671,50 +675,61 @@ public:
       g_device_data_ptr.store(&device_data, std::memory_order_release);
       g_native_device_ptr.store(native_device, std::memory_order_release);
 
+      ResolveGBFRAddresses();
+
       if (!g_rt_creation_hook)
       {
-         const uintptr_t base_addr = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-         if (base_addr != 0)
+         void* rt_creation_fn = ResolveGBFRCodeOrFallback(
+            g_resolved_addresses.initialize_dx11_rendering_pipeline,
+            kInitializeDX11RenderingPipeline_RVA);
+         if (rt_creation_fn)
          {
-            void* rt_creation_fn = reinterpret_cast<void*>(base_addr + kInitializeDX11RenderingPipeline_RVA);
             g_rt_creation_hook = safetyhook::create_inline(
                rt_creation_fn,
                reinterpret_cast<void*>(&Hooked_InitializeDX11RenderingPipeline));
          }
       }
 
+#if ENABLE_UI_VIEWPORT_SCALING_HOOK
       if (!g_dispatch_viewport_hook)
       {
-         const uintptr_t base_addr = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-         if (base_addr != 0)
+         void* dispatch_fn = ResolveGBFRCodeOrFallback(
+            g_resolved_addresses.dispatch_render_pass_viewport,
+            kDispatchRenderPassViewport_RVA);
+         if (dispatch_fn)
          {
             g_dispatch_viewport_hook = safetyhook::create_inline(
-               reinterpret_cast<void*>(base_addr + kDispatchRenderPassViewport_RVA),
+               dispatch_fn,
                reinterpret_cast<void*>(&Hooked_DispatchRenderPassViewport));
          }
       }
 
       if (!g_ui_orchestrator_hook)
       {
-         const uintptr_t base_addr = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-         if (base_addr != 0)
+         void* ui_orchestrator_fn = ResolveGBFRCodeOrFallback(
+            g_resolved_addresses.ui_render_orchestrator,
+            kUIRenderOrchestrator_RVA);
+         if (ui_orchestrator_fn)
          {
             g_ui_orchestrator_hook = safetyhook::create_mid(
-               reinterpret_cast<void*>(base_addr + kUIRenderOrchestrator_RVA),
+               ui_orchestrator_fn,
                &OnUIRenderOrchestratorEntry);
          }
       }
+#endif
 
       PatchJitterPhases();
 
 #ifdef PATCH_JITTER_TABLE_INIT
       if (!g_taa_init_hook)
       {
-         const uintptr_t base_addr = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-         if (base_addr != 0)
+         void* taa_init_fn = ResolveGBFRCodeOrFallback(
+            g_resolved_addresses.temporal_aa_component_init,
+            kTemporalAntiAliasingComponent_Init_RVA);
+         if (taa_init_fn)
          {
             g_taa_init_hook = safetyhook::create_inline(
-               reinterpret_cast<void*>(base_addr + kTemporalAntiAliasingComponent_Init_RVA),
+               taa_init_fn,
                reinterpret_cast<void*>(&Hooked_TemporalAntiAliasingComponentInit));
          }
       }
@@ -722,11 +737,13 @@ public:
 
       if (!g_jitter_write_hook)
       {
-         const uintptr_t base_addr = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-         if (base_addr != 0)
+         void* jitter_write_site = ResolveGBFRCodeOrFallback(
+            g_resolved_addresses.jitter_write_site,
+            kJitterWrite_RVA);
+         if (jitter_write_site)
          {
             g_jitter_write_hook = safetyhook::create_mid(
-               reinterpret_cast<void*>(base_addr + kJitterWrite_RVA),
+               jitter_write_site,
                &OnJitterWrite);
          }
       }
@@ -751,9 +768,11 @@ public:
                trace_scheduled = true;
                game_device_data.pause_trace_delay_countdown = -1;
 
-               const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-               const uintptr_t settings_obj = (mod_base != 0)
-                                                 ? *reinterpret_cast<const uintptr_t*>(mod_base + kTAASettingsGlobal_RVA)
+               const uintptr_t settings_ptr_addr = ResolveGBFRDataOrFallback(
+                  g_resolved_addresses.taa_settings_global,
+                  kTAASettingsGlobal_RVA);
+               const uintptr_t settings_obj = (settings_ptr_addr != 0)
+                                                 ? *reinterpret_cast<const uintptr_t*>(settings_ptr_addr)
                                                  : 0;
 
                auto& snap = game_device_data.pause_snapshot;
@@ -1107,11 +1126,13 @@ public:
    void PrintImGuiInfo(const DeviceData& device_data) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
-      const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
 
       // Read TAA settings object for per-bit queries beyond the TAA-enabled flag
-      const uintptr_t settings_obj = (mod_base != 0)
-                                        ? *reinterpret_cast<const uintptr_t*>(mod_base + kTAASettingsGlobal_RVA)
+      const uintptr_t settings_ptr_addr = ResolveGBFRDataOrFallback(
+         g_resolved_addresses.taa_settings_global,
+         kTAASettingsGlobal_RVA);
+      const uintptr_t settings_obj = (settings_ptr_addr != 0)
+                                        ? *reinterpret_cast<const uintptr_t*>(settings_ptr_addr)
                                         : 0;
 
       ImGui::NewLine();
@@ -1155,15 +1176,18 @@ public:
 
          // Jitter phase and direct table read
          {
-            const uint8_t phase = (mod_base != 0)
-                                     ? (*reinterpret_cast<const uint8_t*>(mod_base + kJitterPhaseCounter_RVA) & static_cast<uint8_t>(JITTER_PHASES - 1))
+            const uintptr_t phase_counter_addr = ResolveGBFRDataOrFallback(
+               g_resolved_addresses.jitter_phase_counter,
+               kJitterPhaseCounter_RVA);
+            const uint8_t phase = (phase_counter_addr != 0)
+                                     ? (*reinterpret_cast<const uint8_t*>(phase_counter_addr) & static_cast<uint8_t>(JITTER_PHASES - 1))
                                      : 0u;
 
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::TextUnformatted("Jitter Phase");
             ImGui::TableSetColumnIndex(1);
-            if (mod_base != 0)
+            if (phase_counter_addr != 0)
                ImGui::Text("%u / %u", static_cast<unsigned>(phase), static_cast<unsigned>(JITTER_PHASES));
             else
                ImGui::TextUnformatted("N/A");
@@ -1223,61 +1247,67 @@ public:
          ImGui::TableSetColumnIndex(1);
          ImGui::TextUnformatted(game_device_data.taa_output_texture.get() ? "Ready" : "Null");
 
-         ImGui::TableNextRow();
-         ImGui::TableSetColumnIndex(0);
-         ImGui::TextUnformatted("Likely Pause Branch: byte_1461720A4 bit0");
-         ImGui::TableSetColumnIndex(1);
-         if (mod_base != 0)
-         {
-            const uint8_t v = *reinterpret_cast<const uint8_t*>(mod_base + kPauseCandidate_GlobalBit_RVA);
-            ImGui::Text("%s (0x%02X)", (v & 1) ? "1/true" : "0/false", static_cast<unsigned>(v));
-         }
-         else
-         {
-            ImGui::TextUnformatted("N/A");
-         }
+         ImGui::EndTable();
+      }
 
-         ImGui::TableNextRow();
-         ImGui::TableSetColumnIndex(0);
-         ImGui::TextUnformatted("Candidate: byte_145E5CABD (Tonemap gate)");
-         ImGui::TableSetColumnIndex(1);
-         if (mod_base != 0)
-         {
-            const uint8_t v = *reinterpret_cast<const uint8_t*>(mod_base + kPauseCandidate_TonemapGate_RVA);
-            ImGui::Text("%s (0x%02X)", (v == 1) ? "1/enabled" : "!=1/disabled", static_cast<unsigned>(v));
-         }
-         else
-         {
-            ImGui::TextUnformatted("N/A");
-         }
+      if (ImGui::BeginTable("gbfr_address_info", 3, ImGuiTableFlags_BordersInnerH | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+      {
+         ImGui::TableSetupColumn("Address", ImGuiTableColumnFlags_WidthStretch);
+         ImGui::TableSetupColumn("Active", ImGuiTableColumnFlags_WidthStretch);
+         ImGui::TableSetupColumn("Source", ImGuiTableColumnFlags_WidthStretch);
+         ImGui::TableHeadersRow();
 
-         ImGui::TableNextRow();
-         ImGui::TableSetColumnIndex(0);
-         ImGui::TextUnformatted("Candidate: byte_146130C5C (DoF/Bloom)");
-         ImGui::TableSetColumnIndex(1);
-         if (mod_base != 0)
+         const auto draw_data_addr_row = [](const char* label, uintptr_t resolved_abs, uintptr_t fallback_rva)
          {
-            const uint8_t v = *reinterpret_cast<const uint8_t*>(mod_base + kPauseCandidate_DofGateA_RVA);
-            ImGui::Text("%s (0x%02X)", (v == 0) ? "0/branch-taken" : "!=0/branch-skipped", static_cast<unsigned>(v));
-         }
-         else
-         {
-            ImGui::TextUnformatted("N/A");
-         }
+            const uintptr_t active_addr = ResolveGBFRDataOrFallback(resolved_abs, fallback_rva);
+            const bool from_signature = resolved_abs != 0;
 
-         ImGui::TableNextRow();
-         ImGui::TableSetColumnIndex(0);
-         ImGui::TextUnformatted("Candidate: byte_146130E13 (DoF/Bloom)");
-         ImGui::TableSetColumnIndex(1);
-         if (mod_base != 0)
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(label);
+            ImGui::TableSetColumnIndex(1);
+            if (active_addr != 0)
+               ImGui::Text("0x%llX", static_cast<unsigned long long>(active_addr));
+            else
+               ImGui::TextUnformatted("N/A");
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(from_signature ? "Signature" : "RVA fallback");
+         };
+
+         const auto draw_code_addr_row = [](const char* label, void* resolved_abs, uintptr_t fallback_rva)
          {
-            const uint8_t v = *reinterpret_cast<const uint8_t*>(mod_base + kPauseCandidate_DofGateB_RVA);
-            ImGui::Text("%s (0x%02X)", (v == 0) ? "0/branch-taken" : "!=0/branch-skipped", static_cast<unsigned>(v));
-         }
-         else
-         {
-            ImGui::TextUnformatted("N/A");
-         }
+            const uintptr_t active_addr = reinterpret_cast<uintptr_t>(ResolveGBFRCodeOrFallback(resolved_abs, fallback_rva));
+            const bool from_signature = resolved_abs != nullptr;
+
+            ImGui::TableNextRow();
+            ImGui::TableSetColumnIndex(0);
+            ImGui::TextUnformatted(label);
+            ImGui::TableSetColumnIndex(1);
+            if (active_addr != 0)
+               ImGui::Text("0x%llX", static_cast<unsigned long long>(active_addr));
+            else
+               ImGui::TextUnformatted("N/A");
+            ImGui::TableSetColumnIndex(2);
+            ImGui::TextUnformatted(from_signature ? "Signature" : "RVA fallback");
+         };
+
+         draw_code_addr_row("InitializeDX11RenderingPipeline", g_resolved_addresses.initialize_dx11_rendering_pipeline, kInitializeDX11RenderingPipeline_RVA);
+         draw_code_addr_row("DispatchRenderPassViewport", g_resolved_addresses.dispatch_render_pass_viewport, kDispatchRenderPassViewport_RVA);
+         draw_code_addr_row("UIRenderOrchestrator", g_resolved_addresses.ui_render_orchestrator, kUIRenderOrchestrator_RVA);
+         draw_code_addr_row("Jitter Write Site", g_resolved_addresses.jitter_write_site, kJitterWrite_RVA);
+#ifdef PATCH_JITTER_TABLE_INIT
+         draw_code_addr_row("TemporalAAComponentInit", g_resolved_addresses.temporal_aa_component_init, kTemporalAntiAliasingComponent_Init_RVA);
+#endif
+
+         draw_data_addr_row("g_outputWidth", g_resolved_addresses.output_width, kOutputWidth_RVA);
+         draw_data_addr_row("g_outputHeight", g_resolved_addresses.output_height, kOutputHeight_RVA);
+         draw_data_addr_row("g_renderWidth", g_resolved_addresses.render_width, kRenderWidth_RVA);
+         draw_data_addr_row("g_renderHeight", g_resolved_addresses.render_height, kRenderHeight_RVA);
+         draw_data_addr_row("g_camera", g_resolved_addresses.camera_global, kCameraGlobal_RVA);
+         draw_data_addr_row("g_taa_settings_obj", g_resolved_addresses.taa_settings_global, kTAASettingsGlobal_RVA);
+         draw_data_addr_row("g_frame_counter", g_resolved_addresses.jitter_phase_counter, kJitterPhaseCounter_RVA);
+         draw_data_addr_row("JitterPhaseMask CL imm", g_resolved_addresses.jitter_phase_mask_cl_imm, kJitterPhaseMask_CL_RVA);
+         draw_data_addr_row("JitterPhaseMask EAX imm", g_resolved_addresses.jitter_phase_mask_eax_imm, kJitterPhaseMask_EAX_RVA);
 
          ImGui::EndTable();
       }
@@ -1417,6 +1447,7 @@ public:
                   "\nReShade"
                   "\nImGui"
                   "\nSafetyHook"
+                  "\nGBFRelinkFix (helper pattern scanner, MIT)"
                   "");
    }
 };

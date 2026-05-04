@@ -171,11 +171,13 @@ static void RedirectUIDrawToScaledTarget(
    if (!ui_scale.ui_scaled_needed)
       return;
 
+   com_ptr<ID3D11RenderTargetView> current_rtv;
+   ctx->OMGetRenderTargets(1, &current_rtv, nullptr);
+   const bool is_detected_ui_rtv = AreViewsOfSameResource(ui_scale.original_ui_rtv.get(), current_rtv.get());
+
    // --- Render target redirect ---
    {
-      com_ptr<ID3D11RenderTargetView> current_rtv;
-      ctx->OMGetRenderTargets(1, &current_rtv, nullptr);
-      if (AreViewsOfSameResource(ui_scale.original_ui_rtv.get(), current_rtv.get()))
+      if (is_detected_ui_rtv)
       {
          ID3D11RenderTargetView* const scaled_rtv = ui_scale.scaled_texture_rtv.get();
          ctx->OMSetRenderTargets(1, &scaled_rtv, nullptr);
@@ -184,16 +186,20 @@ static void RedirectUIDrawToScaledTarget(
 
    // --- Viewport redirect ---
    {
-      D3D11_VIEWPORT vp;
-      UINT num_vp = 1;
-      ctx->RSGetViewports(&num_vp, &vp);
-      const UINT render_w = static_cast<UINT>(device_data.render_resolution.x);
-      const UINT render_h = static_cast<UINT>(device_data.render_resolution.y);
-      if (static_cast<UINT>(vp.Width) == render_w && static_cast<UINT>(vp.Height) == render_h)
+      // Only rewrite viewport when drawing to the same RTV detected at UI-phase entry.
+      if (is_detected_ui_rtv)
       {
-         vp.Width = device_data.output_resolution.x;
-         vp.Height = device_data.output_resolution.y;
-         ctx->RSSetViewports(1, &vp);
+         D3D11_VIEWPORT vp;
+         UINT num_vp = 1;
+         ctx->RSGetViewports(&num_vp, &vp);
+         const UINT render_w = static_cast<UINT>(device_data.render_resolution.x);
+         const UINT render_h = static_cast<UINT>(device_data.render_resolution.y);
+         if (static_cast<UINT>(vp.Width) == render_w && static_cast<UINT>(vp.Height) == render_h)
+         {
+            vp.Width = device_data.output_resolution.x;
+            vp.Height = device_data.output_resolution.y;
+            ctx->RSSetViewports(1, &vp);
+         }
       }
    }
 

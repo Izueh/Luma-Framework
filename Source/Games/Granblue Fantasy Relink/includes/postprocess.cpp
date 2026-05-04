@@ -1079,7 +1079,7 @@ static void RunLatePostProcessPasses(
          settings_data.render_width = static_cast<uint>(device_data.render_resolution.x);
          settings_data.render_height = static_cast<uint>(device_data.render_resolution.y);
          settings_data.dynamic_resolution = false;
-         settings_data.hdr = cb_luma_global_settings.DisplayMode == DisplayModeType::HDR ? true : false;
+         settings_data.hdr = cb_luma_global_settings.DisplayMode == DisplayModeType::HDR ? true : tonemap_after_taa;
          settings_data.auto_exposure = true;
          settings_data.inverted_depth = false;
          // Granblue MVs are unjittered (g_ProjectionOffset cancels jitter in the PS)

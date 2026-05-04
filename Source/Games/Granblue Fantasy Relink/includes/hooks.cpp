@@ -5,11 +5,12 @@
 
 bool TryReadCameraJitter(float2& out_jitter)
 {
-   const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-   if (mod_base == 0)
+   const uintptr_t camera = ResolveGBFRDataOrFallback(
+      g_resolved_addresses.camera_global,
+      kCameraGlobal_RVA);
+   if (camera == 0)
       return false;
 
-   const uintptr_t camera = mod_base + kCameraGlobal_RVA;
    const uintptr_t projection_ptr = *reinterpret_cast<const uintptr_t*>(camera + kCameraProjectionDataOffset);
    if (projection_ptr == 0)
       return false;
@@ -82,17 +83,15 @@ void PatchJitterPhases()
    static_assert(JITTER_PHASES >= 1 && JITTER_PHASES <= 64, "JITTER_PHASES must be between 1 and 64");
 
 #ifndef PATCH_JITTER_TABLE_INIT
-   const uintptr_t base_addr = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-   if (base_addr == 0)
-      return;
-
    constexpr uint8_t mask = static_cast<uint8_t>(JITTER_PHASES - 1);
    const uintptr_t patch_addrs[2] = {
-      base_addr + kJitterPhaseMask_CL_RVA,
-      base_addr + kJitterPhaseMask_EAX_RVA,
+      ResolveGBFRDataOrFallback(g_resolved_addresses.jitter_phase_mask_cl_imm, kJitterPhaseMask_CL_RVA),
+      ResolveGBFRDataOrFallback(g_resolved_addresses.jitter_phase_mask_eax_imm, kJitterPhaseMask_EAX_RVA),
    };
    for (uintptr_t addr : patch_addrs)
    {
+      if (addr == 0)
+         continue;
       auto* byte_ptr = reinterpret_cast<uint8_t*>(addr);
       DWORD old_protect;
       VirtualProtect(byte_ptr, 1, PAGE_EXECUTE_READWRITE, &old_protect);
@@ -109,13 +108,15 @@ bool IsTAARunningThisFrame()
    static std::atomic<bool> s_last_taa_running{false};
 
    const bool last_known = s_last_taa_running.load(std::memory_order_acquire);
-   const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-   if (mod_base == 0)
+   const uintptr_t settings_ptr_addr = ResolveGBFRDataOrFallback(
+      g_resolved_addresses.taa_settings_global,
+      kTAASettingsGlobal_RVA);
+   if (settings_ptr_addr == 0)
       return last_known;
 
    __try
    {
-      const uintptr_t settings_obj = *reinterpret_cast<const uintptr_t*>(mod_base + kTAASettingsGlobal_RVA);
+      const uintptr_t settings_obj = *reinterpret_cast<const uintptr_t*>(settings_ptr_addr);
       if (settings_obj == 0)
          return last_known;
 
@@ -173,9 +174,17 @@ static char __fastcall Hooked_InitializeDX11RenderingPipeline(int screen_width, 
       // CreateRenderTargets initialises these from g_outputWidth/g_outputHeight (always output
       // dims) and never applies a scale, so without this write the frame graph sees
       // render == output and skips the temporal upscale path every frame.
-      const uintptr_t mod_base = reinterpret_cast<uintptr_t>(GetModuleHandleA(NULL));
-      *reinterpret_cast<int*>(mod_base + kRenderWidth_RVA) = render_w;
-      *reinterpret_cast<int*>(mod_base + kRenderHeight_RVA) = render_h;
+      const uintptr_t render_w_addr = ResolveGBFRDataOrFallback(
+         g_resolved_addresses.render_width,
+         kRenderWidth_RVA);
+      const uintptr_t render_h_addr = ResolveGBFRDataOrFallback(
+         g_resolved_addresses.render_height,
+         kRenderHeight_RVA);
+      if (render_w_addr != 0 && render_h_addr != 0)
+      {
+         *reinterpret_cast<int*>(render_w_addr) = render_w;
+         *reinterpret_cast<int*>(render_h_addr) = render_h;
+      }
    }
 
    // Pass render dims to the game — g_outputWidth/g_outputHeight are not touched.

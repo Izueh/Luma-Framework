@@ -2,6 +2,30 @@
 
 #include "safetyhook.hpp"
 
+struct GBFRResolvedAddresses
+{
+   void* initialize_dx11_rendering_pipeline = nullptr;
+   void* dispatch_render_pass_viewport = nullptr;
+   void* ui_render_orchestrator = nullptr;
+   void* jitter_write_site = nullptr;
+#ifdef PATCH_JITTER_TABLE_INIT
+   void* temporal_aa_component_init = nullptr;
+#endif
+
+   uintptr_t output_width = 0;
+   uintptr_t output_height = 0;
+   uintptr_t render_width = 0;
+   uintptr_t render_height = 0;
+   uintptr_t camera_global = 0;
+   uintptr_t taa_settings_global = 0;
+   uintptr_t jitter_phase_counter = 0;
+   uintptr_t jitter_phase_mask_cl_imm = 0;
+   uintptr_t jitter_phase_mask_eax_imm = 0;
+
+   bool resolve_attempted = false;
+   bool ready = false;
+};
+
 struct GBFRHookGlobals
 {
    SafetyHookInline rt_creation_hook;
@@ -45,10 +69,6 @@ constexpr uintptr_t kCameraProjectionDataOffset = 0x60;
 constexpr uintptr_t kProjectionJitterXOffset = 0x940;
 constexpr uintptr_t kProjectionJitterYOffset = 0x944;
 constexpr uintptr_t kTAASettingsGlobal_RVA = 0x05E55EA0;
-constexpr uintptr_t kPauseCandidate_GlobalBit_RVA = 0x061720A4;
-constexpr uintptr_t kPauseCandidate_TonemapGate_RVA = 0x05E5CABD;
-constexpr uintptr_t kPauseCandidate_DofGateA_RVA = 0x06130C5C;
-constexpr uintptr_t kPauseCandidate_DofGateB_RVA = 0x06130E13;
 constexpr uintptr_t kJitterPhaseCounter_RVA = 0x05E61790;
 constexpr uintptr_t kJitterPhaseMask_CL_RVA = 0x01A9EB76;
 constexpr uintptr_t kJitterPhaseMask_EAX_RVA = 0x01A9EB7C;
@@ -71,6 +91,11 @@ inline auto& g_taa_init_hook = g_hook_globals.taa_init_hook;
 #endif
 inline auto& g_device_data_ptr = g_hook_globals.device_data_ptr;
 inline auto& g_native_device_ptr = g_hook_globals.native_device_ptr;
+inline GBFRResolvedAddresses g_resolved_addresses;
+
+bool ResolveGBFRAddresses();
+uintptr_t ResolveGBFRDataOrFallback(uintptr_t resolved_absolute, uintptr_t fallback_rva);
+void* ResolveGBFRCodeOrFallback(void* resolved_absolute, uintptr_t fallback_rva);
 
 bool TryReadCameraJitter(float2& out_jitter);
 void OnJitterWrite(safetyhook::Context& ctx);
