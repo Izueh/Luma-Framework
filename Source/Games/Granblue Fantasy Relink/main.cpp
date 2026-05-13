@@ -917,7 +917,7 @@ public:
       reshade::get_config_value(runtime, NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
       reshade::get_config_value(runtime, NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
       reshade::get_config_value(runtime, NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
-      reshade::get_config_value(runtime, NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
+      // reshade::get_config_value(runtime, NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
       reshade::get_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
    }
 
@@ -1081,19 +1081,19 @@ public:
             reshade::set_config_value(runtime, NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
          }
 
-         // Bloom settings
-         const char* bloom_type_names[] = {"Vanilla", "HDR"};
-         if (ImGui::SliderInt("Bloom Type", &bloom_type, 0, 1, bloom_type_names[bloom_type], ImGuiSliderFlags_AlwaysClamp))
-         {
-            cb_luma_global_settings.GameSettings.BloomType = bloom_type;
-            reshade::set_config_value(runtime, NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
-         }
-         if (DrawResetButton(bloom_type, 1, "BloomType", runtime))
-         {
-            bloom_type = 1;
-            cb_luma_global_settings.GameSettings.BloomType = bloom_type;
-            reshade::set_config_value(runtime, NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
-         }
+         // // Bloom settings
+         // const char* bloom_type_names[] = {"Vanilla", "HDR"};
+         // if (ImGui::SliderInt("Bloom Type", &bloom_type, 0, 1, bloom_type_names[bloom_type], ImGuiSliderFlags_AlwaysClamp))
+         // {
+         //    cb_luma_global_settings.GameSettings.BloomType = bloom_type;
+         //    reshade::set_config_value(runtime, NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
+         // }
+         // if (DrawResetButton(bloom_type, 1, "BloomType", runtime))
+         // {
+         //    bloom_type = 1;
+         //    cb_luma_global_settings.GameSettings.BloomType = bloom_type;
+         //    reshade::set_config_value(runtime, NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
+         // }
 
          if (ImGui::SliderFloat("Bloom Strength", &blooom_strength, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
@@ -1474,6 +1474,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_Tonemap.pixel_shaders.emplace(std::stoul("60F0256B", nullptr, 16));
       shader_hashes_MotionBlur.pixel_shaders.emplace(std::stoul("45841F6D", nullptr, 16));
       shader_hashes_MotionBlurDenoise.pixel_shaders.emplace(std::stoul("199A3FBC", nullptr, 16));
+      shader_hashes_DoFCoCPrefilter.pixel_shaders.emplace(std::stoul("0BB781D8", nullptr, 16));
+      shader_hashes_DoFBokehGather.pixel_shaders.emplace(std::stoul("AA6346F2", nullptr, 16));
+      shader_hashes_DoFTemporalResolve.pixel_shaders.emplace(std::stoul("560B601E", nullptr, 16));
+      shader_hashes_DoFFinalComposite.pixel_shaders.emplace(std::stoul("F041F90A", nullptr, 16));
       shader_hashes_CutsceneGamma.pixel_shaders.emplace(std::stoul("1085E11F", nullptr, 16));
       shader_hashes_CutsceneColorGrade.pixel_shaders.emplace(std::stoul("50BE35B0", nullptr, 16));
       shader_hashes_CutsceneOverlayBlend.pixel_shaders.emplace(std::stoul("4517077B", nullptr, 16));
@@ -1504,6 +1508,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(std::stoul("478E345C", nullptr, 16), "TAA");
       forced_shader_names.emplace(std::stoul("E49E117A", nullptr, 16), "TAA RenoDX");
       forced_shader_names.emplace(std::stoul("45841F6D", nullptr, 16), "Motion Blur");
+      forced_shader_names.emplace(std::stoul("0BB781D8", nullptr, 16), "DoF CoC Prefilter");
+      forced_shader_names.emplace(std::stoul("AA6346F2", nullptr, 16), "DoF Bokeh Gather");
+      forced_shader_names.emplace(std::stoul("560B601E", nullptr, 16), "DoF Temporal Resolve");
+      forced_shader_names.emplace(std::stoul("F041F90A", nullptr, 16), "DoF Final Composite");
       forced_shader_names.emplace(std::stoul("1085E11F", nullptr, 16), "Cutscene Gamma");
       forced_shader_names.emplace(std::stoul("50BE35B0", nullptr, 16), "Cutscene Color Grade");
       forced_shader_names.emplace(std::stoul("B9AFD904", nullptr, 16), "Cutscene Overlay Modulate");
@@ -1533,7 +1541,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       cb_luma_global_settings.GameSettings.HighlightSaturation = 1.f;
       cb_luma_global_settings.GameSettings.HueEmulation = 0.f;
       cb_luma_global_settings.GameSettings.PurityEmulation = 0.f;
-      cb_luma_global_settings.GameSettings.BloomType = 1; // Default to HDR bloom
+      cb_luma_global_settings.GameSettings.BloomType = 0; // Default to HDR bloom
       cb_luma_global_settings.GameSettings.BloomStrength = 1.f;
 
       game = new GranblueFantasyRelink();

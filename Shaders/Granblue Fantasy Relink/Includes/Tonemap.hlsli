@@ -539,7 +539,9 @@ float3 ApplyUserGradingAndToneMap(float3 color_bt709, float3 bloom, float2 grain
                                                  true);
    const float peakRatioCorrected = gammaCorrectedPeakRatio.x;
 
-   bloom = ApplyCustomBloom(color_bt709, bloom, 0.5f);
+   // bloom = ApplyCustomBloom(color_bt709, bloom, 0.5f);
+   if (BLOOM_TYPE == 0 && LumaSettings.DisplayMode != 0)
+      bloom = FakeHDR(bloom, 0.05, 0.33f);
    // blow out and hue shift
 
    float3 purity_and_hue_source = Reinhard::ReinhardPiecewise(color_bt709, 8.f, 0.18f);
