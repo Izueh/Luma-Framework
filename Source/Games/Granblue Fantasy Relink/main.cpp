@@ -1447,7 +1447,6 @@ public:
                   "\nReShade"
                   "\nImGui"
                   "\nSafetyHook"
-                  "\nGBFRelinkFix (helper pattern scanner, MIT)"
                   "");
    }
 };
