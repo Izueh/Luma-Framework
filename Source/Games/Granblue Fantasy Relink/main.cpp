@@ -8,6 +8,7 @@
 #define ENABLE_UI_VIEWPORT_SCALING_HOOK 0
 #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
 #define CHECK_GRAPHICS_API_COMPATIBILITY 1
+#define V2_0_3
 
 #include <d3d11.h>
 #include "..\..\Core\core.hpp"
@@ -682,22 +683,6 @@ public:
             reinterpret_cast<void*>(&Hooked_InitializeDX11RenderingPipeline));
       }
 
-#if ENABLE_UI_VIEWPORT_SCALING_HOOK
-      if (!g_dispatch_viewport_hook)
-      {
-         g_dispatch_viewport_hook = safetyhook::create_inline(
-            g_resolved_addresses.dispatch_render_pass_viewport,
-            reinterpret_cast<void*>(&Hooked_DispatchRenderPassViewport));
-      }
-
-      if (!g_ui_orchestrator_hook)
-      {
-         g_ui_orchestrator_hook = safetyhook::create_mid(
-            g_resolved_addresses.ui_render_orchestrator,
-            &OnUIRenderOrchestratorEntry);
-      }
-#endif
-
       PatchJitterPhases();
 
 #ifdef PATCH_JITTER_TABLE_INIT
@@ -1244,24 +1229,23 @@ public:
          };
 
          draw_code_addr_row("InitializeDX11RenderingPipeline", g_resolved_addresses.initialize_dx11_rendering_pipeline);
-         draw_code_addr_row("DispatchRenderPassViewport", g_resolved_addresses.dispatch_render_pass_viewport);
-         draw_code_addr_row("UIRenderOrchestrator", g_resolved_addresses.ui_render_orchestrator);
          draw_code_addr_row("Jitter Write Site", g_resolved_addresses.jitter_write_site);
 #ifdef PATCH_JITTER_TABLE_INIT
          draw_code_addr_row("TemporalAAComponentInit", g_resolved_addresses.temporal_aa_component_init);
 #endif
 
-         draw_data_addr_row("g_outputWidth", g_resolved_addresses.output_width);
-         draw_data_addr_row("g_outputHeight", g_resolved_addresses.output_height);
          draw_data_addr_row("g_renderWidth", g_resolved_addresses.render_width);
          draw_data_addr_row("g_renderHeight", g_resolved_addresses.render_height);
 #ifdef V1_3_2
          draw_data_addr_row("g_camera", g_resolved_addresses.camera_global);
 #endif
+         draw_data_addr_row("g_camera_index", g_resolved_addresses.camera_index);
+         draw_data_addr_row("g_camera_table", g_resolved_addresses.camera_table);
+         draw_data_addr_row("g_taa_running_flag", g_resolved_addresses.taa_running_flag);
+         draw_data_addr_row("g_taa_render_scale_flag_ptr", g_resolved_addresses.taa_render_scale_flag_ptr);
          draw_data_addr_row("g_taa_settings_obj", g_resolved_addresses.taa_settings_global);
-         draw_data_addr_row("g_frame_counter", g_resolved_addresses.jitter_phase_counter);
-         draw_data_addr_row("JitterPhaseMask CL imm", g_resolved_addresses.jitter_phase_mask_cl_imm);
-         draw_data_addr_row("JitterPhaseMask EAX imm", g_resolved_addresses.jitter_phase_mask_eax_imm);
+         draw_data_addr_row("g_jitter_phase_counter", g_resolved_addresses.jitter_phase_counter);
+         draw_data_addr_row("TAA Reset Flag", g_resolved_addresses.taa_reset_flag);
 
          ImGui::EndTable();
       }
@@ -1498,11 +1482,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
       g_rt_creation_hook.reset();
-      g_update_screen_resolution_hook.reset();
-      g_dispatch_viewport_hook.reset();
-      g_ui_orchestrator_hook.reset();
-      g_VSSetConstantBuffers1_hook_immediate.reset();
-      g_VSSetConstantBuffers1_hook_deferred.reset();
+
+
+
       reshade::unregister_event<reshade::addon_event::execute_secondary_command_list>(GranblueFantasyRelink::OnExecuteSecondaryCommandList);
    }
 

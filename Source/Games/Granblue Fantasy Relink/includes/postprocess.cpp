@@ -1090,10 +1090,12 @@ static void RunLatePostProcessPasses(
          sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
       }
 
-      // Prepare SR draw data
-      {
-         bool reset_sr = device_data.force_reset_sr || game_device_data.output_changed;
-         device_data.force_reset_sr = false;
+       // Prepare SR draw data
+       {
+           // v2.0.3+: check the dedicated TAA reset flag via TryReadTAAResetFlag (SEH-safe)
+           bool taa_reset_flag = TryReadTAAResetFlag();
+          bool reset_sr = device_data.force_reset_sr || game_device_data.output_changed || taa_reset_flag;
+          device_data.force_reset_sr = false;
          float jitter_x = game_device_data.table_jitter.x;
          float jitter_y = game_device_data.table_jitter.y;
 #if TEST || DEVELOPMENT
