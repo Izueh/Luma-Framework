@@ -22,7 +22,8 @@ struct GBFRResolvedAddresses
    uintptr_t camera_global = 0;
 #endif
    uintptr_t taa_settings_global = 0;
-   // v2.0.3: Direct byte global for TAA running check (NOT a pointer)
+   // v2.0.3: Pointer address (qword) — double-deref to read TAA running flag byte.
+   // qword_147371338 at RVA 0x7371338 → target byte address → byte & 1
    uintptr_t taa_running_flag = 0;
    // v2.0.3: Pointer to struct with render scale flag at +0x65
    uintptr_t taa_render_scale_flag_ptr = 0;
@@ -70,6 +71,7 @@ bool TryReadTableJitterFromCounter(float2& out_jitter);
 void __fastcall Hooked_TemporalAntiAliasingComponentInit(void* self);
 #endif
 bool IsTAARunningThisFrame();
+bool TryGetSettingsObject(uintptr_t& out_settings_obj);
 void* GetVTableFunction(void* obj, size_t index);
 bool TryReadTAAResetFlag();
 

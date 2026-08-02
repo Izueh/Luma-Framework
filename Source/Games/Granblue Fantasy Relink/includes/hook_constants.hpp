@@ -45,9 +45,10 @@ constexpr uintptr_t kCameraTable_RVA = 0x054BB3A0;
 //   v2.0.2: 0x7032DE0 (pointer) | v2.0.3: 0x703CA90 (xmmword buffer)
 //   Non-trivial: changed from pointer to inline buffer
 constexpr uintptr_t kTAASettingsGlobal_RVA = 0x0703CA90;
-// TAARunningFlag: Direct byte global — TAA is running when non-zero
-//   v2.0.2: 0x7032E45 (offset 0x65 from pointer) | v2.0.3: 0x7371338 (standalone byte)
-//   Non-trivial: changed from pointer+offset to standalone byte global
+// TAARunningFlag: Pointer (qword) to the TAA running flag byte.
+//   Double-dereference: load pointer from 0x7371338, then read byte at target.
+//   v2.0.2: 0x7032E45 (offset 0x65 from pointer) | v2.0.3: 0x7371338 (pointer to byte)
+//   Non-trivial: changed from pointer+offset to pointer-to-byte (requires double-deref)
 constexpr uintptr_t kTAARunningFlag_RVA = 0x07371338;
 // TAARenderScaleFlagPointer: Pointer to struct with render scale flag at +0x65
 //   v2.0.2: 0x7032DE0 | v2.0.3: 0x702FDA0

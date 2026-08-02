@@ -178,19 +178,20 @@ bool IsTAARunningThisFrame()
    const bool last_known = s_last_taa_running.load(std::memory_order_acquire);
 
 #ifdef V2_0_3
-   // v2.0.3: TAA running flag is a direct byte global at kTAARunningFlag_RVA.
+   // v2.0.3: qword_147371338 (RVA 0x7371338) is a POINTER to the TAA running flag byte.
    // Verified in TemporalAntiAliasingComponent::trans (RVA 0x215F9C0):
-   //   mov rax, cs:qword_147371338  (RVA 0x7371338)
-   //   cmp byte ptr [rax], 0        → if zero, skip all TAA work
-   //   cmp byte ptr [rax], 1        → if not 1, skip render scale adjustment
-   // This is a standalone byte, NOT a pointer-to-struct.
-   const uintptr_t flag_addr = g_resolved_addresses.taa_running_flag;
-   if (flag_addr == 0)
+   //   mov rax, cs:qword_147371338  (RVA 0x7371338) — load pointer
+   //   cmp byte ptr [rax], 0        — read byte at target address
+   //   cmp byte ptr [rax], 1        — if not 1, skip render scale adjustment
+   // Requires double-dereference: load pointer, then read byte.
+   const uintptr_t pointer_addr = g_resolved_addresses.taa_running_flag;
+   if (pointer_addr == 0)
       return last_known;
 
    __try
    {
-      const bool taa_running = (*reinterpret_cast<const uint8_t*>(flag_addr) & 1) != 0;
+      const uintptr_t target_addr = *reinterpret_cast<const uintptr_t*>(pointer_addr);
+      const bool taa_running = (*reinterpret_cast<const uint8_t*>(target_addr) & 1) != 0;
       s_last_taa_running.store(taa_running, std::memory_order_release);
       return taa_running;
    }
@@ -220,6 +221,35 @@ bool IsTAARunningThisFrame()
    __except (EXCEPTION_EXECUTE_HANDLER)
    {
       return last_known;
+   }
+#endif
+}
+
+bool TryGetSettingsObject(uintptr_t& out_settings_obj)
+{
+#ifdef V2_0_3
+   // v2.0.3: kTAASettingsGlobal_RVA is a 16-byte xmmword buffer, not a pointer.
+   // No settings object to dereference.
+   out_settings_obj = 0;
+   return false;
+#else
+   // v2.0.2/v1.3.2: kTAASettingsGlobal_RVA is a pointer-to-struct.
+   const uintptr_t settings_ptr_addr = g_resolved_addresses.taa_settings_global;
+   if (settings_ptr_addr == 0)
+   {
+      out_settings_obj = 0;
+      return false;
+   }
+
+   __try
+   {
+      out_settings_obj = *reinterpret_cast<const uintptr_t*>(settings_ptr_addr);
+      return out_settings_obj != 0;
+   }
+   __except (EXCEPTION_EXECUTE_HANDLER)
+   {
+      out_settings_obj = 0;
+      return false;
    }
 #endif
 }
