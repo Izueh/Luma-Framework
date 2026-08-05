@@ -1,28 +1,241 @@
+#include <d3d11.h>
+#include <memory>
 #define GAME_FINALFANTASYXV 1
 
 #define ALLOW_SHADERS_DUMPING 1
-#define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
+#define ENABLE_BLOOM 1
+#define ENABLE_DXP_SHADER_PATCHING 1
+#define DXP_SHADER_PATCHING_SYNC 0
+#define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 0
+
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
 #define DEBUG_LOG 0
 
 #include <cstddef>
+#include <cstring>
 #include <mutex>
+#include <optional>
 #include "../../Core/core.hpp"
 #include "includes/common.hpp"
-#include "includes/dither_patch.hpp"
 #include "includes/sr_helpers.hpp"
+
+#if ENABLE_DXP_SHADER_PATCHING
+static constexpr uint32_t kFFXVDepthDitheringRecipeHash = CompileTimeStringHash("FFXV Depth Dithering");
+#endif
+
+#if ENABLE_FAST_NOISE_TEXTURES
+static constexpr uint32_t kCoreFastNoiseTextureHash = CompileTimeStringHash("FAST Noise");
+#endif
 
 namespace
 {
    ShaderHashesList shader_hashes_tonemap;
    ShaderHashesList shader_hashes_autoexposure;
    ShaderHashesList shader_hashes_TAA;
-   ShaderHashesList shader_hashes_upscale;
-   ShaderHashesList shader_hashes_dither_frame_cb13;
-   std::mutex shader_hashes_dither_frame_cb13_mutex;
+   ShaderHashesList shader_hashes_OutputScaled;
+   ShaderHashesList shader_hashes_dither_depth2;
+   ShaderHashesList shader_hashes_bloom_highpass;
+   ShaderHashesList shader_hashes_bloom_skip;
+   ShaderHashesList shader_hashes_bloom_glare_vignette;
+   ShaderHashesList shader_hashes_attach_fast_noise;
+   std::mutex shader_hashes_dither_depth2_mutex;
    const uint32_t CBTemporalAA_buffer_size = 256;
+   const uint32_t CBExposure_buffer_size = 24;
    const uint32_t CBView_buffer_size = 768;
+
+#if ENABLE_FAST_NOISE_TEXTURES
+   ID3D11ShaderResourceView* GetFastNoiseSrv(DeviceData& device_data)
+   {
+      const std::shared_lock lock_device(device_data.mutex);
+      const auto fast_noise_it = device_data.native_texture2d_arrays.find(kCoreFastNoiseTextureHash);
+      if (fast_noise_it == device_data.native_texture2d_arrays.end() || !fast_noise_it->second.srv)
+      {
+         return nullptr;
+      }
+
+      return fast_noise_it->second.srv.get();
+   }
+#endif
+
+#if DEVELOPMENT
+   void VerifyFastNoiseBinding(ID3D11DeviceContext* native_device_context, uint32_t bind_point, ID3D11ShaderResourceView* expected_srv, const char* path_label)
+   {
+      if (!native_device_context || !expected_srv)
+      {
+         ASSERT_ONCE(false);
+         return;
+      }
+
+      ID3D11ShaderResourceView* bound_srv = nullptr;
+      native_device_context->PSGetShaderResources(bind_point, 1, &bound_srv);
+
+      if (bound_srv != expected_srv)
+      {
+         char log_buf[256];
+         snprintf(log_buf, sizeof(log_buf),
+            "FFXV: FAST noise bind verify failed (%s) slot=%u expected=%p got=%p",
+            path_label, bind_point, expected_srv, bound_srv);
+         Log_Debug(reshade::log::level::error, log_buf);
+         ASSERT_ONCE(false);
+      }
+
+      if (bound_srv)
+      {
+         bound_srv->Release();
+      }
+   }
+#endif
+
+#if ENABLE_BLOOM
+   bool g_luma_bloom_enable = true;
+   int g_bloom_nmips = 6;
+   std::vector<float> g_bloom_sigmas;
+#endif
+
+#if ENABLE_DXP_SHADER_PATCHING
+   struct FFXVDxpFrameConstants
+   {
+      uint32_t FrameIndex = 0;
+      uint32_t Padding[3] = {};
+   };
+
+   bool UpdatePatchedCB(ID3D11DeviceContext* native_device_context, GameDeviceDataFFXV& game_device_data)
+   {
+      if (!game_device_data.dxp_frame_constants_cb)
+      {
+         return false;
+      }
+
+      const uint32_t frame_index = cb_luma_global_settings.FrameIndex;
+      if (game_device_data.dxp_frame_constants_frame_index == frame_index)
+      {
+         return true;
+      }
+
+      D3D11_MAPPED_SUBRESOURCE mapped_buffer = {};
+      if (FAILED(native_device_context->Map(game_device_data.dxp_frame_constants_cb.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer)))
+      {
+         return false;
+      }
+
+      auto* frame_constants = static_cast<FFXVDxpFrameConstants*>(mapped_buffer.pData);
+      frame_constants->FrameIndex = frame_index;
+      frame_constants->Padding[0] = 0;
+      frame_constants->Padding[1] = 0;
+      frame_constants->Padding[2] = 0;
+      native_device_context->Unmap(game_device_data.dxp_frame_constants_cb.get(), 0);
+
+      game_device_data.dxp_frame_constants_frame_index = frame_index;
+      return true;
+   }
+
+   bool BindPatchedResources(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, reshade::api::shader_stage stages, bool& updated_cbuffers)
+   {
+      if ((stages & reshade::api::shader_stage::pixel) == 0 || original_shader_hashes.pixel_shaders[0] == UINT64_MAX)
+      {
+         return false;
+      }
+
+      uint32_t fast_noise_bind_point = UINT32_MAX;
+      uint32_t frame_constants_bind_point = UINT32_MAX;
+      {
+         std::shared_ptr<Patch::DxpPatchedShaderData> patched_shader = device_data.patch_context.GetShaderData(static_cast<uint32_t>(original_shader_hashes.pixel_shaders[0]));
+         if (!patched_shader)
+         {
+            return false;
+         }
+
+         for (const auto& binding_pair : patched_shader->report.new_bindings)
+         {
+            const auto& handle = binding_pair.first;
+            const auto& binding = binding_pair.second;
+            if (handle == "fast_noise" && binding.resource_kind == dxp::ResourceKind::Texture)
+            {
+               fast_noise_bind_point = binding.register_index;
+            }
+            else if (handle == "frame_constants" && binding.resource_kind == dxp::ResourceKind::CBuffer)
+            {
+               frame_constants_bind_point = binding.register_index;
+            }
+         }
+      }
+
+      auto& game_device_data = *static_cast<GameDeviceDataFFXV*>(device_data.game);
+      bool any_bound = false;
+
+      if (fast_noise_bind_point != UINT32_MAX)
+      {
+         ID3D11ShaderResourceView* fast_noise_srv = GetFastNoiseSrv(device_data);
+         if (fast_noise_srv)
+         {
+            native_device_context->PSSetShaderResources(fast_noise_bind_point, 1, &fast_noise_srv);
+#if DEVELOPMENT
+            VerifyFastNoiseBinding(native_device_context, fast_noise_bind_point, fast_noise_srv, "DXP");
+#endif
+            any_bound = true;
+         }
+      }
+
+      if (frame_constants_bind_point != UINT32_MAX && UpdatePatchedCB(native_device_context, game_device_data))
+      {
+         ID3D11Buffer* frame_constants_cb = game_device_data.dxp_frame_constants_cb.get();
+         native_device_context->PSSetConstantBuffers(frame_constants_bind_point, 1, &frame_constants_cb);
+         updated_cbuffers = true;
+         any_bound = true;
+      }
+
+      return any_bound;
+   }
+
+   std::optional<dxp::RecipeReport> ApplyDepthDitheringShaderPatch(DeviceData& device_data, const DxpShaderPatchRequest& request)
+   {
+      std::shared_ptr<dxp::sm5::Recipe> recipe = device_data.managed_assets.GetRecipe(kFFXVDepthDitheringRecipeHash);
+      if (recipe == nullptr
+         || request.shader_container == nullptr
+         || request.shader_container_size < sizeof(DXBCHeader))
+      {
+         return std::nullopt;
+      }
+
+      if (request.type != reshade::api::pipeline_subobject_type::pixel_shader)
+      {
+         return std::nullopt;
+      }
+
+      const auto* bytes = reinterpret_cast<const uint8_t*>(request.shader_container);
+      dxp::PatchOptions options;
+      options.logger = [](dxp::LogLevel level, const std::string& message) {
+         reshade::log::level reshade_level = reshade::log::level::info;
+         switch (level) {
+            case dxp::LogLevel::Error: reshade_level = reshade::log::level::error; break;
+            case dxp::LogLevel::Warning: reshade_level = reshade::log::level::warning; break;
+            case dxp::LogLevel::Trace: reshade_level = reshade::log::level::debug; break;
+            case dxp::LogLevel::Info: break;
+         }
+         reshade::log::message(reshade_level, ("[DXP] " + message).c_str());
+      };
+      options.log_level = dxp::LogLevel::Trace;
+      auto result = recipe->Execute(std::vector<uint8_t>(bytes, bytes + request.shader_container_size), options);
+      if (!result || result->output_bytes.empty())
+      {
+         reshade::log::message(reshade::log::level::warning,
+            std::format("DXP: recipe execution failed for shader {:08X}", request.shader_hash).c_str());
+         return std::nullopt;
+      }
+
+      // Only hand back the patched bytes when the recipe actually modified the
+      // shader; otherwise the Core would recompile the identical input bytes.
+      if (!result->modified)
+      {
+         return std::nullopt;
+      }
+
+      reshade::log::message(reshade::log::level::info,
+         std::format("DXP: patched shader {:08X} ({} bytes, {} new bindings)", request.shader_hash, result->output_bytes.size(), result->new_bindings.size()).c_str());
+      return std::move(*result);
+   }
+#endif
 
 } // namespace
 
@@ -45,11 +258,23 @@ public:
       GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetDefaultValue('0');
       GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('0');
-      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('0');
+      GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs CS"), ShaderDefinition{"Luma_FFXV_MotionVec_Decode", reshade::api::pipeline_subobject_type::compute_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Output Scaled PS"), ShaderDefinition{"Luma_FFXV_Output_Scaled", reshade::api::pipeline_subobject_type::pixel_shader});
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12; // #w## Update this (find the right value) ###
+
+#if ENABLE_BLOOM
+      g_bloom_sigmas.resize(g_bloom_nmips);
+      g_bloom_sigmas[0] = 1.5f;
+      g_bloom_sigmas[1] = 2.0f;
+      g_bloom_sigmas[2] = 2.0f;
+      g_bloom_sigmas[3] = 2.0f;
+      g_bloom_sigmas[4] = 1.0f;
+      g_bloom_sigmas[5] = 1.0f;
+#endif
    }
+
    void OnLoad(std::filesystem::path& file_path, bool failed) override
    {
       if (!failed)
@@ -60,6 +285,91 @@ public:
       }
    }
 
+   void OnInitDevice(ID3D11Device* native_device, DeviceData& device_data) override
+   {
+      auto& game_device_data = GetGameDeviceData(device_data);
+
+#if ENABLE_DXP_SHADER_PATCHING
+      reshade::log::message(reshade::log::level::info, std::format("Recipe directory: {}", device_data.managed_assets.GetRootPath().string()).c_str());
+      bool loaded = device_data.managed_assets.LoadFromFile(kFFXVDepthDitheringRecipeHash, "FFXV_depth_dithering_dirt");
+      ASSERT_ONCE_MSG(loaded, "Failed to load FFXV depth dithering DXP recipe");
+
+      D3D11_BUFFER_DESC frame_constants_desc = {};
+      frame_constants_desc.ByteWidth = sizeof(FFXVDxpFrameConstants);
+      frame_constants_desc.Usage = D3D11_USAGE_DYNAMIC;
+      frame_constants_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+      frame_constants_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+      ComPtr<ID3D11Buffer> frame_constants_cb;
+      if (FAILED(native_device->CreateBuffer(&frame_constants_desc, nullptr, frame_constants_cb.put())))
+      {
+         Log_Debug(reshade::log::level::error, "FFXV: CreateBuffer failed for DXP frame constants");
+         return;
+      }
+#endif
+
+#if ENABLE_DXP_SHADER_PATCHING
+      game_device_data.dxp_frame_constants_cb = std::move(frame_constants_cb);
+      game_device_data.dxp_frame_constants_frame_index = UINT32_MAX;
+#endif
+   }
+
+   void LoadConfigs() override
+   {
+      reshade::api::effect_runtime* runtime = nullptr;
+      reshade::get_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
+      reshade::get_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
+   }
+
+   void DrawImGuiSettings(DeviceData& device_data) override
+   {
+      reshade::api::effect_runtime* runtime = nullptr;
+
+      if (ImGui::TreeNodeEx("Post Process", ImGuiTreeNodeFlags_DefaultOpen))
+      {
+         if (ImGui::SliderFloat("Bloom Strength", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            reshade::set_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
+         }
+         if (DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, 1.f, "BloomStrenght", runtime))
+         {
+            cb_luma_global_settings.GameSettings.BloomStrength = 1.f;
+            reshade::set_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
+         }
+
+         if(ImGui::SliderFloat("Sharpness", &cb_luma_global_settings.GameSettings.Sharpness, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            reshade::set_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
+         }
+         if (DrawResetButton(cb_luma_global_settings.GameSettings.Sharpness, 0.f, "Sharpness", runtime))
+         {
+            cb_luma_global_settings.GameSettings.Sharpness = 0.f;
+            reshade::set_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
+         }
+      }
+
+#if DEVELOPMENT
+   ImGui::NewLine();
+#if ENABLE_BLOOM
+      ImGui::Checkbox("Luma Bloom Enable", &g_luma_bloom_enable);
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+         ImGui::SetTooltip("Replaces the game's bloom with Luma's separable Gaussian bloom, which is higher quality and resolution-independent.");
+
+      if (ImGui::SliderInt("Luma Bloom Mips", &g_bloom_nmips, 1, 10))
+         g_bloom_sigmas.resize(g_bloom_nmips, 2.0f);
+      for (int i = 0; i < g_bloom_nmips; ++i)
+      {
+         const std::string name = "Luma Bloom Sigma " + std::to_string(i);
+         ImGui::SliderFloat(name.c_str(), &g_bloom_sigmas[i], 0.0f, 15.0f, "%.3f");
+      }
+#endif
+
+      auto& game_device_data_settings = GetGameDeviceData(device_data);
+      ImGui::Checkbox("FFXV DLSS Pre-Exposure Use Reciprocal", &game_device_data_settings.dlss_use_inverse_pre_exposure);
+#endif
+   }
+
+#if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
    std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) override
    {
       if (code == nullptr || size == 0)
@@ -85,21 +395,38 @@ public:
       }
 
       {
-         const std::lock_guard lock(shader_hashes_dither_frame_cb13_mutex);
-         shader_hashes_dither_frame_cb13.pixel_shaders.emplace(static_cast<uint32_t>(shader_hash));
+         const std::lock_guard lock(shader_hashes_dither_depth2_mutex);
+         shader_hashes_dither_depth2.pixel_shaders.emplace(static_cast<uint32_t>(shader_hash));
       }
 
       return modified_code;
    }
+#endif // ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
+#if ENABLE_DXP_SHADER_PATCHING
+#if DXP_SHADER_PATCHING_SYNC
+   std::optional<dxp::RecipeReport> PatchShaderSync(DeviceData& device_data, const DxpShaderPatchRequest& request) override
+   {
+      return ApplyDepthDitheringShaderPatch(device_data, request);
+   }
+#else
+   std::optional<dxp::RecipeReport> PatchShaderAsync(DeviceData& device_data, const DxpShaderPatchRequest& request) override
+   {
+      return ApplyDepthDitheringShaderPatch(device_data, request);
+   }
+#endif
+#endif
 
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
+#if ENABLE_DXP_SHADER_PATCHING
+      BindPatchedResources(native_device_context, device_data, original_shader_hashes, stages, updated_cbuffers);
+#else
       bool should_bind_dither_frame_counter = false;
       {
-         const std::lock_guard lock(shader_hashes_dither_frame_cb13_mutex);
-         should_bind_dither_frame_counter = original_shader_hashes.Contains(shader_hashes_dither_frame_cb13);
+         const std::lock_guard lock(shader_hashes_dither_depth2_mutex);
+         should_bind_dither_frame_counter = original_shader_hashes.Contains(shader_hashes_dither_depth2);
       }
 
       if (should_bind_dither_frame_counter && (stages & reshade::api::shader_stage::pixel) != 0)
@@ -108,6 +435,7 @@ public:
          native_device_context->PSSetConstantBuffers(luma_settings_cbuffer_index, 1, &luma_settings_cb);
          updated_cbuffers = true;
       }
+#endif
 
       // Extract exposure texture from autoexposure pass
       if (original_shader_hashes.Contains(shader_hashes_autoexposure))
@@ -117,7 +445,23 @@ public:
             "FFXV Autoexposure pass detected - extracting exposure texture");
          game_device_data.has_drawn_autoexposure = true;
          game_device_data.use_exposure_texture = ExtractExposureTexture(native_device, native_device_context, game_device_data);
-         game_device_data.use_exposure_texture = true;
+         game_device_data.use_exposure_texture = false;
+         return DrawOrDispatchOverrideType::None;
+      }
+
+      if (original_shader_hashes.Contains(shader_hashes_attach_fast_noise))
+      {
+         // This shader is used in the game's TAA pass, which runs before our TAA handling, so it's a good place to bind our FAST noise texture for use in the TAA shader (as an alternative to the Bayer matrix dithering the game uses by default, which can cause banding with TAA).
+         ID3D11ShaderResourceView* fast_noise_srv = GetFastNoiseSrv(device_data);
+         if (fast_noise_srv)
+         {
+            native_device_context->PSSetShaderResources(20, 1, &fast_noise_srv);
+#if DEVELOPMENT
+            VerifyFastNoiseBinding(native_device_context, 20, fast_noise_srv, "AttachFastNoise");
+#endif
+         }
+         ID3D11SamplerState* const sampler = device_data.sampler_state_point.get();
+         native_device_context->PSSetSamplers(4, 1, &sampler);
          return DrawOrDispatchOverrideType::None;
       }
 
@@ -175,7 +519,7 @@ public:
             }
          };
 
-         if (original_shader_hashes.Contains(shader_hashes_upscale))
+         if (original_shader_hashes.Contains(shader_hashes_OutputScaled))
          {
             // Upscale shader detected - this is the terminal pass, log and reset flag
             log_state("[terminal]");
@@ -281,8 +625,8 @@ public:
                   "Failed to prepare pooled upscaled output for TAA pass - skipping TAA pass handling");
                return DrawOrDispatchOverrideType::None;
             }
-
             device_data.sr_output_color = taa_upscaled->texture.get();
+            game_device_data.sr_output_srv = taa_upscaled->srv.get();
             taa_output_key = reinterpret_cast<uintptr_t>(output_resource.get());
             game_device_data.upscale_tracking.post_taa_upscale_active = true;
             taa_upscaled_mapping_ready = true;
@@ -386,7 +730,10 @@ public:
          {
             ASSERT_ONCE(false);
             if (output_supports_uav)
+            {
+               game_device_data.sr_output_srv = nullptr;
                device_data.sr_output_color = nullptr;
+            }
             // Roll back tracking activation: SR never ran so the pool texture has no valid data.
             if (taa_upscaled_mapping_ready)
             {
@@ -404,7 +751,7 @@ public:
          settings_data.render_height = static_cast<uint>(device_data.render_resolution.y);
          settings_data.dynamic_resolution = false;
          settings_data.hdr = true;
-         settings_data.auto_exposure = true;
+         settings_data.auto_exposure = false;
          settings_data.inverted_depth = false;
          settings_data.mvs_jittered = false;
          settings_data.render_preset = dlss_render_preset;
@@ -414,16 +761,18 @@ public:
          bool reset_sr = device_data.force_reset_sr || output_changed;
          device_data.force_reset_sr = false;
 
+         float2 jitters = game_device_data.taa_jitters;
+
          SR::SuperResolutionImpl::DrawData draw_data;
          draw_data.source_color = game_device_data.sr_source_color.get();
          draw_data.output_color = device_data.sr_output_color.get();
          draw_data.motion_vectors = game_device_data.sr_motion_vectors.get();
          draw_data.depth_buffer = game_device_data.depth_buffer.get();
-         if (game_device_data.use_exposure_texture)
+         if (device_data.sr_type != SR::Type::DLSS && game_device_data.use_exposure_texture)
             draw_data.exposure = game_device_data.exposure_texture.get();
-         // draw_data.pre_exposure = 0.0f;
-         draw_data.jitter_x = game_device_data.projection_jitters.x;
-         draw_data.jitter_y = game_device_data.projection_jitters.y;
+
+         draw_data.jitter_x = jitters.x;
+         draw_data.jitter_y = jitters.y;
          draw_data.vert_fov = game_device_data.camera_fov;
          draw_data.far_plane = game_device_data.camera_far;
          draw_data.near_plane = game_device_data.camera_near;
@@ -443,8 +792,7 @@ public:
          // Execute SR
          device_data.has_drawn_sr = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
 
-         draw_state_stack.Restore(native_device_context);
-         compute_state_stack.Restore(native_device_context);
+
 
 #if DEVELOPMENT
          // Add trace info for DLSS/FSR execution
@@ -476,8 +824,28 @@ public:
 #if DEVELOPMENT || TEST
                Log_Debug(reshade::log::level::info, "[FFXV UpscaleChain] Pooled TAA mapping ready - tracking active until Upscale shader (1B6C8C68)");
 #endif
-               device_data.sr_output_color = nullptr; // SR output is the pooled texture linked to TAA output, so clear the main SR output reference to avoid confusion. The pooled texture is accessed via the upscale tracking system, not the main SR output slot.
+               // need to copyback the upscaled result to the original TAA output. It is used as previous frame input for SSR.
 
+               native_device_context->OMSetRenderTargets(0, nullptr, nullptr);
+               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
+
+               DrawCustomPixelShader(
+                  native_device_context,
+                  device_data.default_depth_stencil_state.get(),
+                  device_data.default_blend_state.get(),
+                  device_data.sampler_state_linear.get(),
+                  device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(),
+                  device_data.native_pixel_shaders[CompileTimeStringHash("Output Scaled PS")].get(),
+                  game_device_data.sr_output_srv.get(),
+                  output_rtv,
+                  output_texture_desc.Width,
+                  output_texture_desc.Height);
+
+               device_data.sr_output_color = nullptr; // SR output is the pooled texture linked to TAA output, so clear the main SR output reference to avoid confusion. The pooled texture is accessed via the upscale tracking system, not the main SR output slot.
+               game_device_data.sr_output_srv = nullptr;
+
+               draw_state_stack.Restore(native_device_context);
+               compute_state_stack.Restore(native_device_context);
                return DrawOrDispatchOverrideType::Replaced;
             }
             else
@@ -486,11 +854,15 @@ public:
                if (!output_supports_uav)
                {
                   native_device_context->CopyResource(output_color.get(), device_data.sr_output_color.get());
+
                }
                else
                {
                   device_data.sr_output_color = nullptr;
+                  game_device_data.sr_output_srv = nullptr;
                }
+               draw_state_stack.Restore(native_device_context);
+               compute_state_stack.Restore(native_device_context);
                return DrawOrDispatchOverrideType::Replaced;
             }
          }
@@ -510,22 +882,82 @@ public:
          if (output_supports_uav)
          {
             device_data.sr_output_color = nullptr;
+            game_device_data.sr_output_srv = nullptr;
+
          }
+         draw_state_stack.Restore(native_device_context);
+         compute_state_stack.Restore(native_device_context);
       }
 
+      
+      // Luma bloom: at the highpass pass capture the pre-bloom scene SRV, skip all intermediate
+      // passes, and at the final glare/vignette pass substitute the game's composite bloom with
+      // Luma's separable Gaussian bloom so the original shader applies its glare/vignette on top.
+#if ENABLE_BLOOM
+      if (g_luma_bloom_enable)
+      {
+         if (original_shader_hashes.Contains(shader_hashes_bloom_highpass))
+         {
+            native_device_context->PSGetShaderResources(0, 1, game_device_data.bloom_scene_srv.put());
+            native_device_context->PSGetConstantBuffers(0, 1, game_device_data.bloom_globals_cb.put());
+            game_device_data.captured_bloom_scene = true;
+            return DrawOrDispatchOverrideType::Skip;
+         }
+
+         if (original_shader_hashes.Contains(shader_hashes_bloom_skip))
+            return DrawOrDispatchOverrideType::Skip;
+
+         if (original_shader_hashes.Contains(shader_hashes_bloom_glare_vignette) && game_device_data.captured_bloom_scene)
+         {
+            // Rebind the highpass cbuffer to b0 so bloom_prefilter_ps can read
+            // highpass_gamma and highpass_threshold directly from the game's data.
+            ComPtr<ID3D11Buffer> prev_cb;
+            native_device_context->PSGetConstantBuffers(0, 1, prev_cb.put());
+            native_device_context->PSSetConstantBuffers(0, 1, &game_device_data.bloom_globals_cb);
+
+            // If upscaling is active, prefer the upscaled version of the captured scene SRV
+            // so bloom operates at output resolution rather than render resolution.
+            ID3D11ShaderResourceView* bloom_input_srv = game_device_data.bloom_scene_srv.get();
+            if (game_device_data.upscale_tracking.post_taa_upscale_active && bloom_input_srv)
+            {
+               ComPtr<ID3D11Resource> srv_resource;
+               bloom_input_srv->GetResource(srv_resource.put());
+               if (srv_resource)
+               {
+                  const uintptr_t key = reinterpret_cast<uintptr_t>(srv_resource.get());
+                  UpscaledResource* upscaled = GetLinkedUpscaled(game_device_data.upscale_tracking, key);
+                  if (upscaled && upscaled->srv)
+                     bloom_input_srv = upscaled->srv.get();
+               }
+            }
+
+            ComPtr<ID3D11ShaderResourceView> srv_bloom;
+            DrawBloom(native_device, native_device_context, device_data,
+               bloom_input_srv, g_bloom_nmips, g_bloom_sigmas.data(), srv_bloom.put());
+
+            native_device_context->PSSetConstantBuffers(0, 1, &prev_cb);
+
+            if (srv_bloom)
+            {
+               ID3D11ShaderResourceView* p = srv_bloom.get();
+               native_device_context->PSSetShaderResources(0, 1, &p);
+            }
+         }
+      }
+#endif
       // Post-TAA upscale tracking: replace inputs/outputs/viewports for all passes
       // between TAA and the Upscale shader (1B6C8C68) when DLSS upscaling is active.
       // Chain propagation is restricted to render-resolution RTV replacements.
       if (game_device_data.upscale_tracking.post_taa_upscale_active)
       {
          const bool is_tonemap = original_shader_hashes.Contains(shader_hashes_tonemap);
-         const bool is_upscale_pass = original_shader_hashes.Contains(shader_hashes_upscale);
+         const bool is_upscale_pass = original_shader_hashes.Contains(shader_hashes_OutputScaled);
          const bool is_compute = (stages == reshade::api::shader_stage::compute);
 
          // Always check the terminal pass first, even for compute dispatches, so the tracking
          // window is closed regardless of shader stage. The upscale shader is a pixel shader
          // in practice, but ordering this first prevents a future regression.
-         if (is_upscale_pass)
+         if (is_upscale_pass && game_device_data.has_drawn_tonemap)
          {
             game_device_data.upscale_tracking.post_taa_upscale_active = false;
 
@@ -560,7 +992,27 @@ public:
                native_device_context, game_device_data.upscale_tracking,
                is_compute, &upscale_srv_swapped);
 #endif
+#if DEVELOPMENT
+            {
+               const std::shared_lock lock_trace(s_mutex_trace);
+               if (trace_running)
+               {
+                  const std::shared_lock lock_generic(s_mutex_generic);
+                  const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+                  const std::lock_guard<std::recursive_mutex> lock_dumping(s_mutex_dumping);
+                  const std::shared_lock lock_device(device_data.mutex);
+                  AddTraceDrawCallData(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_vertex_shader.handle, shader_cache, last_draw_dispatch_data, device_data.original_resource_views_to_mirrored_upgraded_resource_views);
+                  if (cmd_list_data.pipeline_state_original_pixel_shader.handle != 0)
+                     AddTraceDrawCallData(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_pixel_shader.handle, shader_cache, last_draw_dispatch_data, device_data.original_resource_views_to_mirrored_upgraded_resource_views);
+               }
+            }
+#endif
             return DrawOrDispatchOverrideType::None;
+         }
+
+         if (is_tonemap)
+         {
+            game_device_data.has_drawn_tonemap = true;
          }
 
          if (is_compute)
@@ -573,6 +1025,7 @@ public:
          uint32_t srv_swapped = 0;
 #if DEVELOPMENT || TEST
          std::vector<UpscaleSwapDetail> swap_details;
+         UpscaleRtvDecisionDebug rtv_debug;
          uint32_t chain_hits = ReplaceUpscaledInputs(native_device_context, game_device_data.upscale_tracking, is_compute, &srv_swapped, &swap_details);
 #else
          uint32_t chain_hits = ReplaceUpscaledInputs(native_device_context, game_device_data.upscale_tracking, is_compute, &srv_swapped);
@@ -587,9 +1040,32 @@ public:
          // (e.g. 0xBBC1036C) that write to a tracked target without reading any
          // tracked SRV input. rtv_count == 0 when nothing is tracked.
 #if DEVELOPMENT || TEST
-         rtv_count = ReplaceUpscaledOutputs(native_device, native_device_context, game_device_data.upscale_tracking, device_data.render_resolution, device_data.output_resolution, &swap_details);
+         rtv_count = ReplaceUpscaledOutputs(native_device, native_device_context, game_device_data.upscale_tracking, device_data.render_resolution, device_data.output_resolution, &swap_details, &rtv_debug);
 #else
          rtv_count = ReplaceUpscaledOutputs(native_device, native_device_context, game_device_data.upscale_tracking, device_data.render_resolution, device_data.output_resolution);
+#endif
+
+#if DEVELOPMENT || TEST
+         {
+            const uint32_t active_hash = static_cast<uint32_t>(original_shader_hashes.pixel_shaders[0]);
+            if (rtv_count == 0)
+            {
+               char log_buf[512];
+               snprintf(log_buf, sizeof(log_buf),
+                  "[FFXV UpscaleChain] [shader=%08X] RTV not replaced: reason=%s src=%ux%u fmt=%u view_fmt=%u render=%ux%u output=%ux%u target=%ux%u ar=%.6f render_ar=%.6f res=%p",
+                  active_hash,
+                  UpscaleRtvDecisionToString(rtv_debug.decision),
+                  rtv_debug.source_width, rtv_debug.source_height,
+                  static_cast<uint32_t>(rtv_debug.source_format),
+                  static_cast<uint32_t>(rtv_debug.view_format),
+                  rtv_debug.render_width, rtv_debug.render_height,
+                  rtv_debug.output_width, rtv_debug.output_height,
+                  rtv_debug.target_width, rtv_debug.target_height,
+                  rtv_debug.source_aspect_ratio, rtv_debug.render_aspect_ratio,
+                  reinterpret_cast<void*>(rtv_debug.source_key));
+               Log_Debug(reshade::log::level::info, log_buf);
+            }
+         }
 #endif
 
          if (chain_hits > 0 || rtv_count > 0)
@@ -686,6 +1162,31 @@ public:
                      pre_draw_rtvs[j]->Release();
                }
                Log_Debug(reshade::log::level::debug, pre_draw_log);
+            }
+#endif
+#if DEVELOPMENT
+            {
+               const std::shared_lock lock_trace(s_mutex_trace);
+               if (trace_running)
+               {
+                  const std::shared_lock lock_generic(s_mutex_generic);
+                  const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+                  const std::lock_guard<std::recursive_mutex> lock_dumping(s_mutex_dumping);
+                  const std::shared_lock lock_device(device_data.mutex);
+                  AddTraceDrawCallData(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_vertex_shader.handle, shader_cache, last_draw_dispatch_data, device_data.original_resource_views_to_mirrored_upgraded_resource_views);
+                  if (cmd_list_data.pipeline_state_original_pixel_shader.handle != 0)
+                     AddTraceDrawCallData(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_pixel_shader.handle, shader_cache, last_draw_dispatch_data, device_data.original_resource_views_to_mirrored_upgraded_resource_views);
+               }
+            }
+#endif
+#if DEVELOPMENT || TEST
+            {
+               const uint32_t active_hash = static_cast<uint32_t>(original_shader_hashes.pixel_shaders[0]);
+               char log_buf[256];
+               snprintf(log_buf, sizeof(log_buf),
+                  "[FFXV UpscaleChain] [shader=%08X] pass applied: hits=%u srv_swapped=%u rtv_replaced=%u vp_replaced=%u",
+                  active_hash, chain_hits, srv_swapped, rtv_count, vp_count);
+               Log_Debug(reshade::log::level::info, log_buf);
             }
 #endif
             return DrawOrDispatchOverrideType::None;
@@ -869,11 +1370,14 @@ public:
       if (!native_context)
          return false;
 
+      D3D11_TEXTURE2D_DESC src_upscaled_desc;
+      upscaled_source->texture->GetDesc(&src_upscaled_desc);
+      const float2 src_target_res = { static_cast<float>(src_upscaled_desc.Width), static_cast<float>(src_upscaled_desc.Height) };
       UpscaledResource* upscaled_dest = LinkUpscaledResource(
          native_device, native_context.get(),
          dest_resource,
          tracking,
-         device_data.output_resolution);
+         src_target_res);
       if (!upscaled_dest || !upscaled_dest->texture)
       {
 #if DEVELOPMENT || TEST
@@ -1055,8 +1559,46 @@ public:
       DeviceData& device_data = *device->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      if (game_device_data.found_taa_cb || !game_device_data.has_drawn_autoexposure)
+      if ((game_device_data.found_taa_cb && game_device_data.found_exposure_cb) || !game_device_data.has_drawn_autoexposure)
          return;
+
+      if (access == reshade::api::map_access::read_only)
+      {
+         D3D11_BUFFER_DESC buffer_desc;
+         buffer->GetDesc(&buffer_desc);
+         if (buffer_desc.ByteWidth == CBExposure_buffer_size)
+         {
+            if (data != nullptr && *data != nullptr && offset < buffer_desc.ByteWidth)
+            {
+               const uint64_t max_read = buffer_desc.ByteWidth - offset;
+               const uint64_t requested_size = (size == 0 || size > max_read) ? max_read : size;
+
+               if (requested_size >= sizeof(cbExposure))
+               {
+                  if (!game_device_data.exposure_cb_data)
+                  {
+                     game_device_data.exposure_cb_data = std::make_unique<cbExposure>();
+                  }
+
+                  std::memcpy(game_device_data.exposure_cb_data.get(), *data, sizeof(cbExposure));
+                  game_device_data.found_exposure_cb = true;
+
+#if DEVELOPMENT || TEST
+                  char log_buf[256];
+                  snprintf(log_buf, sizeof(log_buf),
+                     "Found exposure CB: offset=%llu size=%llu exposure=%f scale=%f max=%f",
+                     static_cast<unsigned long long>(offset),
+                     static_cast<unsigned long long>(requested_size),
+                     game_device_data.exposure_cb_data->exposure,
+                     game_device_data.exposure_cb_data->exposureScale,
+                     game_device_data.exposure_cb_data->maxExposure);
+                  Log_Debug(reshade::log::level::info, log_buf);
+#endif
+               }
+            }
+         }
+      }
+         
 
       // No need to convert to native DX11 flags
       if (access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write)
@@ -1084,6 +1626,8 @@ public:
          if (!game_device_data.found_taa_cb && game_device_data.cb_taa_buffer == buffer && game_device_data.cb_taa_buffer_map_data != nullptr)
          {
             CheckAndExtractTAABuffer(device, resource);
+            cb_luma_global_settings.GameSettings.RenderResolution = float4(device_data.render_resolution.x, device_data.render_resolution.y, 1.f / device_data.render_resolution.x, 1.f / device_data.render_resolution.y);
+            device_data.cb_luma_global_settings_dirty = true;
             UpdateLODBias(device);
          }
       }
@@ -1137,7 +1681,7 @@ public:
 
       // Copy the motion matrix byte-for-byte - the game's cbuffer already has the matrix
       // in the correct format for the shader (we're just replicating what the game does)
-      data.GameData.isUpscaling = game_device_data.upscale_tracking.post_taa_upscale_active ? 1 : 0;
+      data.GameData.IsUpscaling = game_device_data.upscale_tracking.post_taa_upscale_active ? 1 : 0;
    }
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
    {
@@ -1148,23 +1692,14 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      game_device_data.upscale_tracking.InvalidatePoolIfOutputResolutionChanged(device_data.output_resolution);
+      game_device_data.upscale_tracking.InvalidatePoolIfScaleChanged(device_data.output_resolution, device_data.render_resolution);
 
-      // Clear per-frame source links while keeping persistent pooled allocations.
-      game_device_data.upscale_tracking.ResetFrame();
-
-#if DEVELOPMENT || TEST
-      game_device_data.dbg_replaced_srvs = 0;
-      game_device_data.dbg_replaced_rtvs = 0;
-      game_device_data.dbg_replaced_viewports = 0;
-      game_device_data.dbg_replaced_scissors = 0;
-#endif
-
-      game_device_data.has_drawn_upscaling = false;
-      game_device_data.has_drawn_autoexposure = false;
-      game_device_data.found_taa_cb = false;
-      game_device_data.has_processed_view_buffer = false;
-      game_device_data.found_per_view_globals = false;
+      game_device_data.ResetPerFrameData();
+      if(device_data.sr_type != SR::Type::None && (device_data.sr_suppressed || !device_data.has_drawn_sr))
+      {
+         device_data.force_reset_sr = true;
+      }
+      device_data.has_drawn_sr = false;
    }
 
 #if DEVELOPMENT || TEST
@@ -1253,6 +1788,47 @@ public:
 
          ImGui::EndTable();
       }
+
+      if (ImGui::BeginTable("FFXV Exposure CB Table", 2, ImGuiTableFlags_Borders))
+      {
+         if (game_device_data.exposure_cb_data)
+         {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Exposure");
+            ImGui::TableNextColumn();
+            ImGui::Text("%.6f", game_device_data.exposure_cb_data->exposure);
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Exposure Scale");
+            ImGui::TableNextColumn();
+            ImGui::Text("%.6f", game_device_data.exposure_cb_data->exposureScale);
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Max Exposure");
+            ImGui::TableNextColumn();
+            ImGui::Text("%.6f", game_device_data.exposure_cb_data->maxExposure);
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("DLSS Mode");
+            ImGui::TableNextColumn();
+            ImGui::Text("%s", game_device_data.dlss_use_inverse_pre_exposure ? "Reciprocal (1/exposureScale)" : "Direct (exposureScale)");
+         }
+         else
+         {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("Exposure CB");
+            ImGui::TableNextColumn();
+            ImGui::Text("Not captured");
+         }
+
+         ImGui::EndTable();
+      }
+
    }
 #endif
 
@@ -1275,9 +1851,27 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_tonemap.pixel_shaders.emplace(std::stoul("DD4C5B74", nullptr, 16)); // Post-processing / swapchain
       shader_hashes_autoexposure.compute_shaders.emplace(std::stoul("42D0E27F", nullptr, 16));
       shader_hashes_autoexposure.compute_shaders.emplace(std::stoul("0E10B96C", nullptr, 16));
-      shader_hashes_upscale.pixel_shaders.emplace(std::stoul("1B6C8C68", nullptr, 16));
+      shader_hashes_OutputScaled.pixel_shaders.emplace(std::stoul("1B6C8C68", nullptr, 16));
       shader_hashes_TAA.pixel_shaders.emplace(std::stoul("0DF0A97D", nullptr, 16));
 
+      // Bloom: highpass captures the pre-bloom scene, all intermediate passes are skipped,
+      // and the glare/vignette pass is the final combine that receives the Luma bloom.
+      shader_hashes_bloom_highpass.pixel_shaders.emplace(0xFF665135u);     // Highpass
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0xD1F0305Eu);         // Blur3Tap
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0xDB66D833u);         // Blur5Tap
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0x2558DE2Fu);         // Blur9Tap
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0x6150AEF2u);         // Blur17Tap
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0x1B5AC203u);         // Blur33Tap
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0x635313E0u);         // Blur65Tap
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0xA6FC2BA8u);         // Copy
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0x22F93AE1u);         // ConstantColor
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0xDDF4077Eu);         // Composite
+      shader_hashes_bloom_glare_vignette.pixel_shaders.emplace(0xBBC1036Cu); // GlareVignette
+      shader_hashes_attach_fast_noise.pixel_shaders.emplace(std::stoul("44E818B0", nullptr, 16));
+      shader_hashes_attach_fast_noise.pixel_shaders.emplace(std::stoul("3E3E40BE", nullptr, 16));
+      shader_hashes_attach_fast_noise.pixel_shaders.emplace(std::stoul("850830F0", nullptr, 16));
+      shader_hashes_attach_fast_noise.pixel_shaders.emplace(std::stoul("7E0FB904", nullptr, 16));
+      shader_hashes_attach_fast_noise.pixel_shaders.emplace(std::stoul("B064A20F", nullptr, 16));
 #if DEVELOPMENT
       swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled; // We don't need swapchain upgrade for this game
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;                      // 1 = scrgb
@@ -1301,8 +1895,19 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(std::stoul("1040DAB1", nullptr, 16), "MotionVectorDecode");
       forced_shader_names.emplace(std::stoul("42D0E27F", nullptr, 16), "AutoExposure");
       forced_shader_names.emplace(std::stoul("0E10B96C", nullptr, 16), "AutoExposure (Nights)");
-      forced_shader_names.emplace(std::stoul("1B6C8C68", nullptr, 16), "Upscale");
+      forced_shader_names.emplace(std::stoul("1B6C8C68", nullptr, 16), "Output Scaled");
       forced_shader_names.emplace(std::stoul("850830F0", nullptr, 16), "Dirt");
+      forced_shader_names.emplace(0xFF665135u, "Bloom Highpass");
+      forced_shader_names.emplace(0xD1F0305Eu, "Bloom Blur3Tap");
+      forced_shader_names.emplace(0xDB66D833u, "Bloom Blur5Tap");
+      forced_shader_names.emplace(0x2558DE2Fu, "Bloom Blur9Tap");
+      forced_shader_names.emplace(0x6150AEF2u, "Bloom Blur17Tap");
+      forced_shader_names.emplace(0x1B5AC203u, "Bloom Blur33Tap");
+      forced_shader_names.emplace(0x635313E0u, "Bloom Blur65Tap");
+      forced_shader_names.emplace(0xA6FC2BA8u, "Bloom Copy");
+      forced_shader_names.emplace(0x22F93AE1u, "Bloom ConstantColor");
+      forced_shader_names.emplace(0xDDF4077Eu, "Bloom Composite");
+      forced_shader_names.emplace(0xBBC1036Cu, "Bloom GlareVignette");
 #endif
 
       texture_upgrade_formats = {

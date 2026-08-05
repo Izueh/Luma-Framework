@@ -57,3 +57,9 @@ deploy-*.ps1
 *.log
 
 # Forced not ignored (e.g. !./Source/Core/Luma.vcxproj)
+
+# Visual Studio per-user files
+*.vcxproj.user
+
+# Shader disassembly dumps
+*.asm

@@ -9,18 +9,15 @@ namespace CB
 {
 struct LumaGameSettings
 {
+   float4 RenderResolution; // xy = dimensions, zw = 1/dimensions
    float tonemap_type;
+   float BloomStrength;
+   float Sharpness;
 };
-// struct MotMat
-// {
-//     float4x4 g_motionMatrix;           // Offset:    0 Size:    64
-//     float4 g_jitterOfs;                // Offset:   64 Size:    16
-// };
 
 struct LumaGameData
 {
-   // MotMat motMat;
-   int isUpscaling;
+   int IsUpscaling;
 };
 }
 

@@ -1,0 +1,109 @@
+version: 1
+steps:
+  # Probe: detect the original 16-phase dither discard sequence without
+  # mutating. Publishes state[detect_original_16phase_discard] = matched,
+  # which gates every step below.
+  - kind: apply_rule
+    name: detect_original_16phase_discard_probe
+    required: false
+    rewrite_mode: none
+    rule:
+      match:
+        - opcode: mul
+        - opcode: round_ne
+        - opcode: ftou
+        - opcode: ult
+
+  - kind: add_resource
+    name: add_noise_resources
+    condition:
+      is: detect_original_16phase_discard_probe
+    temps: [sampled_noise, noise_uv]
+    textures:
+      - handle: fast_noise
+        dimension: 8
+    cbuffers:
+      - handle: frame_constants
+        elements: 1
+
+  - kind: apply_rule
+    name: replace_discard_noise_tail
+    match_mode: match_all
+    rewrite_mode: replace
+    condition:
+      is: detect_original_16phase_discard_probe
+    rule:
+      match:
+        - opcode: mul
+          operands:
+            - capture: mul_dest
+            - capture: mul_src0
+        - opcode: round_ne
+        - opcode: ftou
+        - opcode: ult
+          operands:
+            - type: temp
+              capture: discard_target
+            - type: temp
+              capture: noise_value
+            - type: temp
+              capture: alpha_test
+      emit:
+        - opcode: ftou
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: xy }
+            - type: input
+              indices:
+                - { representation: immediate32, immediate_lo: 0 }
+              components: { selection_mode: swizzle, value: xyxx }
+        - opcode: mov
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: w }
+            - type: immediate32
+              immediates_u32: [0]
+        - opcode: and
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: z }
+            - type: immediate32
+              immediates_u32: [31]
+            - type: constant_buffer
+              handle: frame_constants
+              components: { selection_mode: select, value: x }
+        - opcode: and
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: xy }
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: swizzle, value: xyxx }
+            - type: immediate32
+              immediates_u32: [127, 127, 0, 0]
+        - opcode: ld
+          operands:
+            - type: temp
+              handle: sampled_noise
+              components: { selection_mode: mask, value: x }
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: swizzle, value: xyzw }
+            - type: resource
+              handle: fast_noise
+              components: { selection_mode: swizzle, value: xyzw }
+        - opcode: mov
+          operands:
+            - capture: noise_value
+            - type: temp
+              handle: sampled_noise
+              components: { selection_mode: select, value: x }
+        - opcode: ge
+          operands:
+            - capture: discard_target
+            - capture: mul_src0
+            - capture: noise_value

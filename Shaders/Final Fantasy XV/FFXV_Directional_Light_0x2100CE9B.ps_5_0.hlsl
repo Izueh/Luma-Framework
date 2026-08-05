@@ -711,7 +711,8 @@ float Uncharted4_MicroShadowing(float AO, float NdotL, float opacity)
 	return lerp(1.0f, microshadow, opacity);
 }
 
-OutputStruct EditedShaderPS(in InputStruct IN)
+// EditedShaderPS
+OutputStruct main(in InputStruct IN)
 {
     OutputStruct OUT = (OutputStruct)0;
 

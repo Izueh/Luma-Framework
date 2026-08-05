@@ -17,6 +17,10 @@
 #include <vector>
 
 #include "managed_resources.h"
+#if ENABLE_DXP_SHADER_PATCHING
+#include "managed_assets.h"
+#include "patch.hpp"
+#endif
 
 // Forward declarations
 struct GameDeviceData;
@@ -377,6 +381,15 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
 
 struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 {
+   struct NativeTexture2DArrayResource
+   {
+      com_ptr<ID3D11Texture2D> texture;
+      com_ptr<ID3D11ShaderResourceView> srv;
+      uint32_t width = 0;
+      uint32_t height = 0;
+      uint32_t frame_count = 0;
+   };
+
    // Only for "swapchains", "back_buffers" and "upgraded_resources" (and related) and "modified_shaders_byte_code".
    // Device object creation etc is usually single threaded anyway, except for the destructor.
    std::shared_mutex mutex;
@@ -397,6 +410,11 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    // We cache these in memory forever just because with ReShade handling their destruction on the spot between the pipeline (shader) creation and init function isn't "possible",
    // and it can be called from multiple threads so we need to protect it.
    std::unordered_map<uint32_t, std::tuple<std::unique_ptr<std::byte[]>, size_t, Hash::MD5::Digest>> modified_shaders_byte_code;
+#endif
+
+#if ENABLE_DXP_SHADER_PATCHING
+   Patch::PatchContext patch_context;
+   ManagedAssets managed_assets;
 #endif
 
    std::unordered_set<reshade::api::swapchain*> swapchains;
@@ -464,6 +482,8 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 #endif
    std::unordered_map<uint32_t, com_ptr<ID3D11PixelShader>> native_pixel_shaders;
    std::unordered_map<uint32_t, com_ptr<ID3D11ComputeShader>> native_compute_shaders;
+
+   std::unordered_map<uint32_t, NativeTexture2DArrayResource> native_texture2d_arrays;
 
 #if DEVELOPMENT
    std::unordered_map<const ID3D11InputLayout*, std::vector<D3D11_INPUT_ELEMENT_DESC>> input_layouts_descs;
