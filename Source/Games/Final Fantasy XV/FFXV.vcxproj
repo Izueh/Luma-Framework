@@ -54,10 +54,24 @@
     <PlatformToolset>v145</PlatformToolset>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ItemGroup>
+    <!-- Luma per-game feature toggles shown in Project Properties -> Configuration
+         Properties -> Luma Properties (schema: ..\Luma.Properties.xml). -->
+    <PropertyPageSchema Include="$(MSBuildThisFileDirectory)..\Luma.Properties.xml">
+      <Context>Project</Context>
+    </PropertyPageSchema>
+  </ItemGroup>
+  <PropertyGroup>
+    <UseLumaDXP>true</UseLumaDXP>
+    <UseLumaNGX>true</UseLumaNGX>
+    <UseLumaFSR>true</UseLumaFSR>
+    <UseLumaFastNoise>true</UseLumaFastNoise>
+  </PropertyGroup>
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
   <ImportGroup Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+    <Import Project="..\Luma.DXP.props" Condition="Exists('..\Luma.DXP.props')" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
@@ -82,18 +96,22 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
+    <LumaPackage>true</LumaPackage>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
+    <LumaPackage>true</LumaPackage>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
+    <LumaPackage>true</LumaPackage>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
+    <LumaPackage>true</LumaPackage>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>false</VcpkgEnableManifest>
@@ -105,7 +123,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'" Label="Vcpkg" />
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\NGX;..\..\External\WDK\includes;$(SolutionDir)\Source\External\FidelityFX;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\WDK\includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <BasicRuntimeChecks>EnableFastChecks</BasicRuntimeChecks>
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <ExceptionHandling>Sync</ExceptionHandling>
@@ -122,7 +140,7 @@
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
-      <ForcedIncludeFiles>../../../Shaders/$(ProjectName)/GameCBuffers.hlsl;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <ForcedIncludeFiles>../../../Shaders/$(ProjectName)/Includes/GameCBuffers.hlsl;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);_DEBUG;_WINDOWS</PreprocessorDefinitions>
@@ -137,8 +155,6 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>nvsdk_ngx_d_dbg.lib;ffx_backend_dx11_x64d.lib;ffx_fsr3_x64d.lib;ffx_frameinterpolation_x64d.lib;ffx_fsr3upscaler_x64d.lib;ffx_opticalflow_x64d.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ImportLibrary>
@@ -156,7 +172,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\NGX;..\..\External\WDK\includes;$(SolutionDir)\Source\External\FidelityFX;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\WDK\includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
       <LanguageStandard>stdcpplatest</LanguageStandard>
@@ -171,7 +187,7 @@
       <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
-      <ForcedIncludeFiles>../../../Shaders/$(ProjectName)/GameCBuffers.hlsl;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <ForcedIncludeFiles>../../../Shaders/$(ProjectName)/Includes/GameCBuffers.hlsl;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);_WINDOWS;NDEBUG</PreprocessorDefinitions>
@@ -186,8 +202,6 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <ImportLibrary>
@@ -203,7 +217,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\NGX;..\..\External\WDK\includes;$(SolutionDir)\Source\External\FidelityFX;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\WDK\includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
       <LanguageStandard>stdcpplatest</LanguageStandard>
@@ -218,7 +232,7 @@
       <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
-      <ForcedIncludeFiles>../../../Shaders/$(ProjectName)/GameCBuffers.hlsl;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <ForcedIncludeFiles>../../../Shaders/$(ProjectName)/Includes/GameCBuffers.hlsl;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);_WINDOWS;NDEBUG</PreprocessorDefinitions>
@@ -233,8 +247,6 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>false</GenerateDebugInformation>
       <ImportLibrary>
@@ -250,7 +262,7 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">
     <ClCompile>
-      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\NGX;..\..\External\WDK\includes;$(SolutionDir)\Source\External\FidelityFX;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>..\..\External\reshade;..\..\External\WDK\includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <ExceptionHandling>Sync</ExceptionHandling>
       <InlineFunctionExpansion>Default</InlineFunctionExpansion>
       <LanguageStandard>stdcpplatest</LanguageStandard>
@@ -265,7 +277,7 @@
       <EnforceTypeConversionRules>true</EnforceTypeConversionRules>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
       <LanguageStandard_C>stdclatest</LanguageStandard_C>
-      <ForcedIncludeFiles>../../../Shaders/$(ProjectName)/GameCBuffers.hlsl;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+      <ForcedIncludeFiles>../../../Shaders/$(ProjectName)/Includes/GameCBuffers.hlsl;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
     <ResourceCompile>
       <PreprocessorDefinitions>%(PreprocessorDefinitions);_WINDOWS;NDEBUG</PreprocessorDefinitions>
@@ -280,8 +292,6 @@
       <ProxyFileName>%(Filename)_p.c</ProxyFileName>
     </Midl>
     <Link>
-      <AdditionalDependencies>nvsdk_ngx_d.lib;ffx_backend_dx11_x64.lib;ffx_fsr3_x64.lib;ffx_frameinterpolation_x64.lib;ffx_fsr3upscaler_x64.lib;ffx_opticalflow_x64.lib</AdditionalDependencies>
-      <AdditionalLibraryDirectories>..\..\External\NGX\libs;..\..\External\FidelityFX\libs</AdditionalLibraryDirectories>
       <AdditionalOptions>%(AdditionalOptions) /machine:x64</AdditionalOptions>
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
       <ImportLibrary>

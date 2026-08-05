@@ -17,14 +17,22 @@ struct GameDeviceDataFFXV final : public GameDeviceData
    ComPtr<ID3D11UnorderedAccessView> sr_motion_vectors_uav;
    ComPtr<ID3D11Texture2D> exposure_texture;
    ComPtr<ID3D11Texture2D> sr_depth_backup;
-
+   ComPtr<ID3D11ShaderResourceView> sr_output_srv;
 #endif // ENABLE_SR
    std::atomic<bool> has_drawn_upscaling = false;
    std::atomic<bool> has_drawn_autoexposure = false;
+   std::atomic<bool> has_drawn_tonemap = false;
    std::atomic<bool> found_taa_cb = false;
+   std::atomic<bool> found_exposure_cb = false;
    std::atomic<bool> found_per_view_globals = false;
    std::atomic<bool> use_exposure_texture = false;
    std::unique_ptr<cbTemporalAA> taa_cb_data;
+   std::unique_ptr<cbExposure> exposure_cb_data;
+   float dlss_pre_exposure_raw = 1.f;
+   float dlss_pre_exposure_smoothed = 1.f;
+   float dlss_pre_exposure_smoothing = 0.15f;
+   bool has_dlss_pre_exposure_history = false;
+   bool dlss_use_inverse_pre_exposure = true;
 
    ComPtr<ID3D11Buffer> cb_taa_buffer;
    void* cb_taa_buffer_map_data = nullptr;
@@ -44,6 +52,15 @@ struct GameDeviceDataFFXV final : public GameDeviceData
 
    // Post-TAA upscale tracking
    UpscaleTrackingState upscale_tracking;
+
+   ComPtr<ID3D11Buffer> dxp_frame_constants_cb;
+   uint32_t dxp_frame_constants_frame_index = UINT32_MAX;
+
+   // Luma bloom
+   ComPtr<ID3D11ShaderResourceView> bloom_scene_srv;
+   ComPtr<ID3D11Buffer> bloom_globals_cb;   // game's _Globals b0 captured at highpass
+   bool captured_bloom_scene = false;
+
 #if DEVELOPMENT || TEST
    uint32_t dbg_replaced_srvs = 0;
    uint32_t dbg_replaced_rtvs = 0;
@@ -52,4 +69,29 @@ struct GameDeviceDataFFXV final : public GameDeviceData
    // When true, log unmodified viewport/scissor state for intermediate passes between TAA and Upscale
    bool dbg_log_baseline_state = false;
 #endif
+
+   void ResetPerFrameData()
+   {
+
+      // Clear per-frame source links while keeping persistent pooled allocations.
+      upscale_tracking.ResetFrame();
+
+#if DEVELOPMENT || TEST
+      dbg_replaced_srvs = 0;
+      dbg_replaced_rtvs = 0;
+      dbg_replaced_viewports = 0;
+      dbg_replaced_scissors = 0;
+#endif
+
+      has_drawn_upscaling = false;
+      has_drawn_autoexposure = false;
+      has_drawn_tonemap = false;
+      found_taa_cb = false;
+      has_processed_view_buffer = false;
+      found_per_view_globals = false;
+
+      captured_bloom_scene = false;
+      bloom_scene_srv.reset();
+      bloom_globals_cb.reset();
+   }
 };
