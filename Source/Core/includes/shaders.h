@@ -148,6 +148,8 @@ namespace Shader
       // Unordered Access Views
       bool uavs[D3D11_1_UAV_SLOT_COUNT] = {};
 
+      // Own storage for live patched shader bytes (e.g. DXP clone injection), so debug UI pointers stay valid.
+      std::vector<uint8_t> live_patched_owned_data;
       const void* live_patched_data = nullptr; // Usually nullptr. Valid if we edited the byte code of the shader live when it was created (including shader debug data stripped)
       size_t live_patched_size = 0;
 #endif

@@ -2,6 +2,11 @@
 
 #include "shaders.h"
 
+#if ENABLE_DXP_SHADER_PATCHING
+#include <optional>
+#include "dxp/RecipeReport.hpp"
+#endif
+
 using namespace Shader;
 
 // "Sub" device data per game, subclassable.
@@ -22,6 +27,16 @@ struct GameInfo
 
 // Macro to take the "id" variable name and store it as a shader define name (to avoid defining them twice)
 #define MAKE_GAME_INFO(title, internal_name, id, mod_authors) { title, internal_name, id, #id, mod_authors }
+
+#if ENABLE_DXP_SHADER_PATCHING
+struct DxpShaderPatchRequest
+{
+   reshade::api::pipeline_subobject_type type = reshade::api::pipeline_subobject_type::unknown;
+   uint64_t shader_hash = uint64_t(-1);
+   const std::byte* shader_container = nullptr;
+   size_t shader_container_size = 0;
+};
+#endif
 
 // Per game implementation
 class Game
@@ -55,6 +70,11 @@ public:
    // Requires "ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS" to be enabled.
    // "shader_hash" is 32bit, will be set to -1 if it's not specified.
    virtual std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) { return nullptr; }
+
+#if ENABLE_DXP_SHADER_PATCHING
+   virtual std::optional<dxp::RecipeReport> PatchShaderSync(DeviceData& device_data, const DxpShaderPatchRequest& request) { return std::nullopt; }
+   virtual std::optional<dxp::RecipeReport> PatchShaderAsync(DeviceData& device_data, const DxpShaderPatchRequest& request) { return std::nullopt; }
+#endif
 
    // Called for every game's valid draw call (any type),
    // this is where you can override passes, add new ones, cancel other ones etc.
