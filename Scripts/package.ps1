@@ -80,13 +80,9 @@ if ($Platform -eq "Win32") { $zipName += "-x32" }
 $zipName = $zipName -replace ' ', '_'
 $zipName += ".zip"
 
-# Temp staging dir
-$tempDir = Join-Path $repoRoot "temp_package"
-Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
-if (Test-Path $tempDir) {
-    Write-Error "Could not remove the previous staging dir (a file may be locked): $tempDir"
-    exit 1
-}
+# Temp staging dir (unique per run, in the system temp so interrupted builds
+# don't pollute the repo tree)
+$tempDir = Join-Path $env:TEMP ("Luma-Package-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path "$tempDir\Luma" -Force | Out-Null
 
 # 1. Copy the shaders mount (which now also carries the textures)
@@ -149,7 +145,9 @@ if ([string]::IsNullOrEmpty($OutDir)) { $OutDir = $addonFile.DirectoryName }
 $OutDir = $OutDir.TrimEnd('\')
 New-Item -ItemType Directory -Path $OutDir -Force | Out-Null
 $zipPath = Join-Path $OutDir $zipName
-Compress-Archive -Path "$tempDir\*" -DestinationPath $zipPath -Force
-Remove-Item -Recurse -Force $tempDir
-
-Write-Host "Packaged: $zipPath"
+try {
+    Compress-Archive -Path "$tempDir\*" -DestinationPath $zipPath -Force
+    Write-Host "Packaged: $zipPath"
+} finally {
+    Remove-Item -Recurse -Force $tempDir -ErrorAction SilentlyContinue
+}
