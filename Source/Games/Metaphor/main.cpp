@@ -64,11 +64,25 @@ struct GFD_VSCONST_OUTLINE_PREV_DATA
    uint skinned_mesh;
 };
 
+struct CB_PREPARE_OCEAN
+{
+    float4x4 mtxLocalToWorldPrev;
+    float4x4 mtxViewProjPrev;
+    bool useCurrentTexShift;
+    uint TexShiftOffset;
+};
+
 struct TransformCacheEntry
 {
    uint64_t transform_hash;
    float4x4 mtxLocalToWorldViewProj;
    float4x4 mtxLocalToWorld;
+};
+
+struct OceanCacheEntry
+{
+   float4x4 mtxLocalToWorld;
+   uint32_t TexShiftOffset;
 };
 
 struct SkinCacheEntry
@@ -97,6 +111,7 @@ namespace
    ShaderHashesList shader_hashes_smaa_blending;
    ShaderHashesList shader_hashes_lut;
    ShaderHashesList shader_hashes_outline;
+   ShaderHashesList shader_hashes_ocean;
 } // namespace
 
 struct GameDeviceDataMetaphor final : public GameDeviceData
@@ -135,6 +150,8 @@ struct GameDeviceDataMetaphor final : public GameDeviceData
 
    // constant buffers
    com_ptr<ID3D11Buffer> cbuffer_outline_prev_data;
+   com_ptr<ID3D11Buffer> cbuffer_prepare_ocean_data;
+   com_ptr<ID3D11Buffer> cbuffer_ocean_prev_data;
    com_ptr<ID3D11Buffer> cbuffer_skin_cache;
    com_ptr<ID3D11Buffer> cbuffer_motion_vector;
 
@@ -152,14 +169,14 @@ struct GameDeviceDataMetaphor final : public GameDeviceData
    float4x4 proj;
    float4x4 proj_with_jitter;
    float4x4 view;
-   float3 eye_pos;
-   float fov;
+   float3 eye_pos = {};
+   float fov = 0.0f;
 
    // cached values
    float4x4 prev_inv_proj;
    float4x4 prev_proj_with_current_jitter;
    float4x4 prev_view_proj;
-   float3 prev_eye_pos;
+   float3 prev_eye_pos = {};
 
    // duplicates of their counter parts with sr_ needed until SR finished
    // created when command list finishes, so they aren't
@@ -176,12 +193,20 @@ struct GameDeviceDataMetaphor final : public GameDeviceData
    std::unordered_map<uint64_t, std::vector<TransformCacheEntry>> prev_transform_lookup;
    std::unordered_map<uint64_t, std::vector<TransformCacheEntry>> transform_lookup;
 
+   // cache ocean data, swapped each frame
+   std::unique_ptr<StretchyBuffer> prev_ocean_buffer;
+   std::unique_ptr<StretchyBuffer> ocean_buffer;
+   std::vector<OceanCacheEntry> prev_ocean_lookup;
+   std::vector<OceanCacheEntry> ocean_lookup;
+
    // cache skinning data, swapped each frame
    std::unique_ptr<StretchyBuffer> prev_skin_buffer;
    std::unique_ptr<StretchyBuffer> skin_buffer;
    std::unordered_map<ID3D11Buffer*, SkinCacheEntry> prev_skin_lookup;
    std::unordered_map<ID3D11Buffer*, SkinCacheEntry> skin_lookup;
 #endif // ENABLE_SR
+   com_ptr<ID3D11Buffer> scratch_constant_buffer;
+   com_ptr<ID3D11UnorderedAccessView> scratch_constant_buffer_uav;
    FramePhase frame_phase = FramePhase::OPAQUE_RENDERING;
 
    std::unordered_map<uint32_t, std::array<uint32_t, 2>> vertex_shader_ndc_coord_indices;
@@ -206,7 +231,8 @@ class Metaphor final : public Game
 public:
    void OnInit(bool async) override
    {
-      native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Motion Vector"), ShaderDefinition{"Luma_PrepareMotionVector", reshade::api::pipeline_subobject_type::compute_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Motion Vector"), ShaderDefinition{ "Luma_PrepareMotionVector", reshade::api::pipeline_subobject_type::compute_shader });
+      native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Ocean Data"), ShaderDefinition{"Luma_PrepareOceanData", reshade::api::pipeline_subobject_type::compute_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Create Bias Mask"), ShaderDefinition{"Luma_CreateBiasMask", reshade::api::pipeline_subobject_type::compute_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Merge"), ShaderDefinition{"Luma_CopyDsrResult", reshade::api::pipeline_subobject_type::compute_shader});
 
@@ -242,6 +268,28 @@ public:
       }
 
       {
+          D3D11_BUFFER_DESC bd;
+          bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+          bd.ByteWidth = 144;
+          bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+          bd.MiscFlags = 0;
+          bd.StructureByteStride = 0;
+          bd.Usage = D3D11_USAGE_DYNAMIC;
+          native_device->CreateBuffer(&bd, nullptr, &game_device_data.cbuffer_prepare_ocean_data);
+      }
+
+      {
+          D3D11_BUFFER_DESC bd;
+          bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+          bd.ByteWidth = 144;
+          bd.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+          bd.MiscFlags = 0;
+          bd.StructureByteStride = 0;
+          bd.Usage = D3D11_USAGE_DYNAMIC;
+          native_device->CreateBuffer(&bd, nullptr, &game_device_data.cbuffer_ocean_prev_data);
+      }
+
+      {
          D3D11_BUFFER_DESC bd;
          bd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
          bd.ByteWidth = 16;
@@ -263,11 +311,35 @@ public:
          native_device->CreateBuffer(&bd, nullptr, &game_device_data.cbuffer_motion_vector);
       }
 
+      {
+          D3D11_BUFFER_DESC bd;
+          bd.ByteWidth = 144;
+          bd.Usage = D3D11_USAGE_DEFAULT;
+          bd.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+          bd.CPUAccessFlags = 0;
+          bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+          bd.StructureByteStride = 144;
+          native_device->CreateBuffer(&bd, nullptr, &game_device_data.scratch_constant_buffer);
+      }
+
+      {
+          D3D11_UNORDERED_ACCESS_VIEW_DESC uavd;
+          uavd.Format = DXGI_FORMAT_UNKNOWN;
+          uavd.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+          uavd.Buffer.FirstElement = 0;
+          uavd.Buffer.Flags = 0;
+          uavd.Buffer.NumElements = 1;
+          native_device->CreateUnorderedAccessView(game_device_data.scratch_constant_buffer.get(), &uavd, &game_device_data.scratch_constant_buffer_uav);
+      }
+
       com_ptr<ID3D11DeviceContext> context;
       native_device->GetImmediateContext(&context);
       // walking around Grand Trad 28 MB seems to be the max used
       game_device_data.skin_buffer = std::make_unique<StretchyBuffer>(native_device, context.get(), 32 * 1024 * 1024);
       game_device_data.prev_skin_buffer = std::make_unique<StretchyBuffer>(native_device, context.get(), 32 * 1024 * 1024);
+
+      game_device_data.ocean_buffer = std::make_unique<StretchyBuffer>(native_device, context.get(), 32);
+      game_device_data.prev_ocean_buffer = std::make_unique<StretchyBuffer>(native_device, context.get(), 32);
    }
 
    void SetupMotionVectorTexture(ID3D11Device* device, GameDeviceDataMetaphor& game_device_data, uint32_t width, uint32_t height)
@@ -705,9 +777,9 @@ public:
                      auto it = game_device_data.cbuffer_cache.find(transform_constant_buffer.get());
                      if (it != game_device_data.cbuffer_cache.cend())
                      {
+                        // not used for motion vectors so no point in updating mtxLocalToWorldViewProjPrev
                         GFD_VSCONST_TRANSFORM vs_consts = *(GFD_VSCONST_TRANSFORM*)it->second.data();
                         vs_consts.mtxLocalToWorldViewProj = proj_with_jitter * inv_proj * vs_consts.mtxLocalToWorldViewProj;
-                        vs_consts.mtxLocalToWorldViewProjPrev = proj_with_jitter * inv_proj * vs_consts.mtxLocalToWorldViewProjPrev;
 
                         if (transform_constant_buffer)
                         {
@@ -761,7 +833,7 @@ public:
                cache_entry.offset = game_device_data.skin_buffer->size;
                cache_entry.stride = stride;
 
-               game_device_data.skin_buffer->CopyFromBuffer(native_device_context, vertex_buffer.get(), bd.ByteWidth);
+               game_device_data.skin_buffer->CopyFromBuffer(native_device_context, vertex_buffer.get(), 0, bd.ByteWidth);
 
                game_device_data.skin_lookup[vertex_buffer.get()] = cache_entry;
             }
@@ -778,6 +850,113 @@ public:
                }
             }
          };
+
+         if (original_shader_hashes.Contains(shader_hashes_ocean))
+         {
+             GFD_VSCONST_TRANSFORM vs_consts = game_device_data.vsconst_transform_data;
+
+             if (game_device_data.prev_ocean_lookup.size())
+             {
+                 OceanCacheEntry* cache_data = nullptr;
+                 float shortest_distance = FLT_MAX;
+                 float3 a = TransformPoint(vs_consts.mtxLocalToWorld, float3(1.0f, 1.0f, 1.0f));
+                 for (uint32_t i = 0; i < game_device_data.prev_ocean_lookup.size(); ++i)
+                 {
+                     float3 b = TransformPoint(game_device_data.prev_ocean_lookup[i].mtxLocalToWorld, float3(1.0f, 1.0f, 1.0f));
+                     float dist = (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z);
+                     if (dist < shortest_distance)
+                     {
+                         cache_data = &game_device_data.prev_ocean_lookup[i];
+                         shortest_distance = dist;
+                     }
+                 }
+
+                 D3D11_MAPPED_SUBRESOURCE mapped_cbuffer;
+                 native_device_context->Map(game_device_data.cbuffer_prepare_ocean_data.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_cbuffer);
+                 CB_PREPARE_OCEAN* cb_prepare_ocean_data = (CB_PREPARE_OCEAN*)mapped_cbuffer.pData;
+                 cb_prepare_ocean_data->mtxLocalToWorldPrev = cache_data->mtxLocalToWorld;
+                 cb_prepare_ocean_data->mtxViewProjPrev = game_device_data.prev_view_proj;
+                 cb_prepare_ocean_data->useCurrentTexShift = false;
+                 cb_prepare_ocean_data->TexShiftOffset = cache_data->TexShiftOffset;
+                 native_device_context->Unmap(game_device_data.cbuffer_prepare_ocean_data.get(), 0);
+             }
+             else
+             {
+                 D3D11_MAPPED_SUBRESOURCE mapped_cbuffer;
+                 native_device_context->Map(game_device_data.cbuffer_prepare_ocean_data.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_cbuffer);
+                 CB_PREPARE_OCEAN* cb_prepare_ocean_data = (CB_PREPARE_OCEAN*)mapped_cbuffer.pData;
+                 cb_prepare_ocean_data->mtxLocalToWorldPrev = vs_consts.mtxLocalToWorld;
+                 cb_prepare_ocean_data->mtxViewProjPrev = game_device_data.prev_view_proj;
+                 cb_prepare_ocean_data->useCurrentTexShift = true;
+                 native_device_context->Unmap(game_device_data.cbuffer_prepare_ocean_data.get(), 0);
+             }
+
+             com_ptr<ID3D11Buffer> ocean_constant_buffer;
+             native_device_context->VSGetConstantBuffers(7, 1, &ocean_constant_buffer);
+
+             {
+                 ID3D11Buffer* cbs[] = { game_device_data.cbuffer_prepare_ocean_data.get(), ocean_constant_buffer.get() };
+                 ID3D11ShaderResourceView* srvs[] = { game_device_data.prev_ocean_buffer->srv.get() };
+                 ID3D11UnorderedAccessView* uavs[] = { game_device_data.scratch_constant_buffer_uav.get() };
+
+                 native_device_context->CSSetShader(device_data.native_compute_shaders[CompileTimeStringHash("Prepare Ocean Data")].get(), 0, 0);
+                 native_device_context->CSSetConstantBuffers(0, 2, cbs);
+                 native_device_context->CSSetShaderResources(0, 1, srvs);
+                 native_device_context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+                 native_device_context->Dispatch(1, 1, 1);
+             }
+             native_device_context->CopySubresourceRegion(game_device_data.cbuffer_ocean_prev_data.get(), 0, 0, 0, 0, game_device_data.scratch_constant_buffer.get(), 0, nullptr);
+
+             com_ptr<ID3D11DepthStencilView> depth_stencil_view;
+             com_ptr<ID3D11RenderTargetView> render_target_views[6];
+             native_device_context->OMGetRenderTargets(6, &render_target_views[0], &depth_stencil_view);
+             if (render_target_views[5] != game_device_data.motion_vectors_rtv)
+             {
+                 ID3D11RenderTargetView* updated_render_target_views[] = { render_target_views[0].get(),
+                    render_target_views[1].get(),
+                    render_target_views[2].get(),
+                    render_target_views[3].get(),
+                    render_target_views[4].get(),
+                    game_device_data.motion_vectors_rtv.get() };
+                 native_device_context->OMSetRenderTargets(6, updated_render_target_views, depth_stencil_view.get());
+             }
+
+             vs_consts.mtxLocalToWorldViewProj = game_device_data.proj_with_jitter * game_device_data.inv_proj * vs_consts.mtxLocalToWorldViewProj;
+             vs_consts.mtxLocalToWorldViewProjPrev = game_device_data.prev_proj_with_current_jitter * game_device_data.prev_inv_proj * vs_consts.mtxLocalToWorldViewProjPrev;
+
+             if (game_device_data.cb_transform)
+             {
+                 native_device_context->UpdateSubresource(game_device_data.cb_transform, 0, nullptr, &vs_consts, 0, 0);
+             }
+             ID3D11Buffer* cb = game_device_data.cbuffer_ocean_prev_data.get();
+             native_device_context->VSSetConstantBuffers(4, 1, &cb);
+
+             {
+                 bool addToCache = true;
+                 for (uint32_t i = 0; i < game_device_data.ocean_lookup.size(); ++i)
+                 {
+                     if (memcmp(&game_device_data.ocean_lookup[i].mtxLocalToWorld, &vs_consts.mtxLocalToWorld, sizeof(vs_consts.mtxLocalToWorld)) == 0)
+                     {
+                         addToCache = false;
+                         break;
+                     }
+                 }
+
+                 if (addToCache)
+                 {
+                     OceanCacheEntry cache_entry = {};
+                     cache_entry.mtxLocalToWorld = vs_consts.mtxLocalToWorld;
+                     cache_entry.TexShiftOffset = game_device_data.ocean_buffer->size;
+
+                     game_device_data.ocean_buffer->CopyFromBuffer(native_device_context, ocean_constant_buffer.get(), 64, 16);
+
+                     game_device_data.ocean_lookup.push_back(cache_entry);
+                 }
+             }
+
+             return DrawOrDispatchOverrideType::None;
+         }
+
          bool previous_skin_set = false;
          if (is_skinned_mesh)
          {
@@ -1322,6 +1501,10 @@ public:
             game_device_data.cbuffer_cache.clear();
             std::swap(game_device_data.prev_transform_lookup, game_device_data.transform_lookup);
             game_device_data.transform_lookup.clear();
+            std::swap(game_device_data.prev_ocean_lookup, game_device_data.ocean_lookup);
+            game_device_data.ocean_lookup.clear();
+            std::swap(game_device_data.prev_ocean_buffer, game_device_data.ocean_buffer);
+            game_device_data.ocean_buffer->Reset();
             std::swap(game_device_data.prev_skin_lookup, game_device_data.skin_lookup);
             game_device_data.skin_lookup.clear();
             std::swap(game_device_data.prev_skin_buffer, game_device_data.skin_buffer);
@@ -1599,6 +1782,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_outline.vertex_shaders.emplace(0xE30ADBA6);
       shader_hashes_outline.vertex_shaders.emplace(0x5BD11C4A);
       shader_hashes_outline.vertex_shaders.emplace(0x83245268);
+
+      shader_hashes_ocean.vertex_shaders.emplace(0x43A6029F);
+      shader_hashes_ocean.vertex_shaders.emplace(0x90D867D7);
+      shader_hashes_ocean.vertex_shaders.emplace(0x10401BC4);
+      shader_hashes_ocean.vertex_shaders.emplace(0xA74FE1E5);
+      shader_hashes_ocean.vertex_shaders.emplace(0xB2510239);
 
       // unused cbuffer slots by type
       // VS - 4, 5, 8, 9, 13(not used by shader but set by the game)

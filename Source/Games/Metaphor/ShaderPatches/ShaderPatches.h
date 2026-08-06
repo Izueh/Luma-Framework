@@ -881,7 +881,7 @@ void PatchVertexShader(std::vector<std::byte>& shader_code, uint32_t& prev_coord
                            shader_patch.insert(shader_patch.end(), {
                                                                       opcode_token,
                                                                       dest_operand_token, 1,
-                                                                      src_operand_token, 1065353216 // float-value 1.0f
+                                                                      src_operand_token, 0x3F800000 // float-value 1.0f
                                                                    });
                         }
 

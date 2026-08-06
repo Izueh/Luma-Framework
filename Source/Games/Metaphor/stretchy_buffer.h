@@ -11,25 +11,25 @@ public:
       Resize(context, initial_capacity);
    }
 
-   void CopyFromBuffer(ID3D11DeviceContext* context, ID3D11Buffer* srcBuffer, uint32_t byteCount)
+   void CopyFromBuffer(ID3D11DeviceContext* context, ID3D11Buffer* srcBuffer, uint32_t offset, uint32_t byte_count)
    {
-      while (size + byteCount > capacity)
+      while (size + byte_count > capacity)
       {
          Resize(context, capacity * 2);
       }
 
       {
           D3D11_BOX srcBox = {};
-          srcBox.left = 0;
+          srcBox.left = offset;
           srcBox.top = 0;
           srcBox.front = 0;
-          srcBox.right = byteCount;
+          srcBox.right = offset + byte_count;
           srcBox.bottom = 1;
           srcBox.back = 1;
           context->CopySubresourceRegion(buffer.get(), 0, size, 0, 0, srcBuffer, 0, &srcBox);
       }
 
-      size += byteCount;
+      size += byte_count;
    }
 
    void Reset()
