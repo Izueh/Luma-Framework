@@ -1,6 +1,5 @@
 #define GAME_WATCH_DOGS_2 1
 
-#define ENABLE_NGX 1
 // Hooking a debugger is forbidden
 #define DISABLE_AUTO_DEBUGGER 1
 #define DEBUG_LOG 0

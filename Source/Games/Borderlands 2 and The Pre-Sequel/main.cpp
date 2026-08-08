@@ -16,8 +16,7 @@
 // invisible and blocks the loader (ReShade times out the addon load -> error 1114).
 #define DISABLE_AUTO_DEBUGGER 1
 
-#define ENABLE_NGX 0 // no DLSS/DLAA: UE3 has no usable motion vectors, and NGX is x64-only (game is 32-bit)
-#define ENABLE_FIDELITY_SK 0
+// No DLSS/DLAA: UE3 has no usable motion vectors, and NGX is x64-only (game is 32-bit)
 #define GEOMETRY_SHADER_SUPPORT 0
 #define ENABLE_SMAA 1  // replaces the FXAA resolve PS with SMAA ULTRA (+RCAS); core auto-registers the 6 "SMAA ..." passes from Luma_SMAA_impl
 #define ENABLE_BLOOM 1 // core auto-registers the Bloom VS/Prefilter/Downsample/Upsample passes -> Luma_Bloom_impl
