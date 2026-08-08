@@ -32,7 +32,7 @@ namespace
       bool sr_auto_exposure = true;
 
       bool first_boot = true; // Automatic setting
-      bool enable_hdr = false;
+      bool enable_hdr = true;
       bool next_enable_hdr = enable_hdr; // The value we serialize, that will be ignored until reboot
 
       CB::LumaGameSettings cb_default_game_settings;

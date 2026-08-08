@@ -404,6 +404,10 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 #endif
    std::unordered_map<uint64_t, uint64_t> original_resources_to_mirrored_upgraded_resources; // TODO: convert/copy the initial/current data from the source texture when created. Also rename to "indirect_upgraded"
    std::unordered_map<uint64_t, uint64_t> original_resource_views_to_mirrored_upgraded_resource_views;
+   // Mirror views grouped by their mirror resource. Lets OnDestroyResource unlink a destroyed mirror's views by
+   // iterating only that mirror's (small) set with plain hash lookups, instead of scanning the whole view map with
+   // a device call (get_resource_from_view) per entry while holding the lock.
+   std::unordered_map<uint64_t, std::unordered_set<uint64_t>> mirror_views_by_mirror_resource;
 
 #if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
    // Edited shaders byte code + size + MD5 hash by (original) shader hash.
