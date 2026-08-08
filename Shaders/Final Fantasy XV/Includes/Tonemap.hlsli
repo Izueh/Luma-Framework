@@ -176,8 +176,6 @@ float3 FFXV_Extended(float3 color, float3 base, float ZeroSlope, float InvLog, f
 
 float3 ApplyTonemapAndGrading(float3 color)
 {
-    SpectreSettings settings = GetTonemapSpectreLMSDefaultSettings();
-    settings.colorSpace = 0;
     float3 tonemapped_color = renodx::tonemap::neutwo::PerChannel(color, PEAK_NITS/GAME_NITS);
  #if UI_DRAW_TYPE == 2
    ColorGradingLUTTransferFunctionInOutCorrected(tonemapped_color, VANILLA_ENCODING_TYPE, GAMMA_CORRECTION_TYPE, true);
