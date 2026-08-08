@@ -1,4 +1,3 @@
-#include "Spectre.hlsl"
 #include "neutwo.hlsl"
 #include "Common.hlsl"
 #include "../../Includes/ColorGradingLUT.hlsl"
@@ -179,7 +178,6 @@ float3 ApplyTonemapAndGrading(float3 color)
 {
     SpectreSettings settings = GetTonemapSpectreLMSDefaultSettings();
     settings.colorSpace = 0;
-    // float3 tonemapped_color = TonemapSpectreLMS(color, PEAK_NITS/GAME_NITS, settings);
     float3 tonemapped_color = renodx::tonemap::neutwo::PerChannel(color, PEAK_NITS/GAME_NITS);
  #if UI_DRAW_TYPE == 2
    ColorGradingLUTTransferFunctionInOutCorrected(tonemapped_color, VANILLA_ENCODING_TYPE, GAMMA_CORRECTION_TYPE, true);

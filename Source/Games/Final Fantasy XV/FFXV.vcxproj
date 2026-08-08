@@ -62,7 +62,7 @@
     </PropertyPageSchema>
   </ItemGroup>
   <PropertyGroup>
-    <UseLumaDXP>true</UseLumaDXP>
+    <UseLumaDXP>false</UseLumaDXP>
     <UseLumaNGX>true</UseLumaNGX>
     <UseLumaFSR>true</UseLumaFSR>
     <UseLumaFastNoise>true</UseLumaFastNoise>
@@ -96,22 +96,22 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
-    <LumaPackage>true</LumaPackage>
+    <LumaPackage>false</LumaPackage>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
-    <LumaPackage>true</LumaPackage>
+    <LumaPackage>false</LumaPackage>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
-    <LumaPackage>true</LumaPackage>
+    <LumaPackage>false</LumaPackage>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
     <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
-    <LumaPackage>true</LumaPackage>
+    <LumaPackage>false</LumaPackage>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>false</VcpkgEnableManifest>

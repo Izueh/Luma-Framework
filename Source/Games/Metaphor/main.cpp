@@ -2,8 +2,6 @@
 
 #define ALLOW_SHADERS_DUMPING 0
 #define DISABLE_DISPLAY_COMPOSITION 1
-#define ENABLE_NGX 1
-#define ENABLE_FIDELITY_SK 1
 #define ENABLE_DRAW_DISPATCH_DATA_CACHE 1
 
 #include "..\..\Core\core.hpp"
