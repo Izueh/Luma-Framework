@@ -61,10 +61,14 @@
       <PreprocessorDefinitions>UNICODE;_UNICODE;_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH;ENABLE_DXP_SHADER_PATCHING=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Condition="'$(UseLumaNGX)'=='true'">
+      <!-- PreprocessorDefinitions metadata overrides the CharacterSet-derived
+           UNICODE defines, so restore them explicitly (same as above). -->
       <AdditionalIncludeDirectories>$(LumaNGXRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_NGX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Condition="'$(UseLumaFSR)'=='true'">
       <AdditionalIncludeDirectories>$(LumaFSRRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_FIDELITY_SK=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Condition="'$(UseLumaFastNoise)'=='true'">
       <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_FAST_NOISE_TEXTURES=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>

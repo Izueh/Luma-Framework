@@ -1,7 +1,6 @@
 #define GAME_JUST_CAUSE_3 1
 
 // TODO: move SR to run before the final screen space stuff starts happening (e.g. heat distortion, bloom, blur, tonemap, etc)! Alternatively, dejitter the image before calculating bloom and dof etc?
-#define ENABLE_NGX 1
 // FSR is disabled in publishing builds, JC3 has no proper motion vectors on vegetation nor skinned meshes, hence it looks terrible on them (DLSS looks fine with them!).
 #define ENABLE_FIDELITY_SK ((DEVELOPMENT || TEST) ? 1 : 0)
 #define AUTO_ENABLE_SR 1

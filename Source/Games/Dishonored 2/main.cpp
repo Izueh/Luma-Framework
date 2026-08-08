@@ -1,8 +1,5 @@
 #define GAME_DISHONORED_2 1
 
-#define ENABLE_NGX 1
-#define ENABLE_FIDELITY_SK 1
-
 // Hangs on boot
 #define DISABLE_AUTO_DEBUGGER
 // Previously disabled as it made boot extremely slow, it should now be fine as we optimized the code

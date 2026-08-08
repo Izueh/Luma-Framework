@@ -1,9 +1,7 @@
 // TODO: rename mod to "Prey (2017)" if possible (VS project, shaders and code folder, define, mod name in c++ etc)
 #define GAME_PREY 1
 
-#define ENABLE_NGX 1
 #define ENABLE_NVAPI 0
-#define ENABLE_FIDELITY_SK 1
 
 #include "..\..\Core\core.hpp"
 
