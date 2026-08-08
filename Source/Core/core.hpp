@@ -414,6 +414,10 @@ namespace
       // Redirect incompatible copies between UNORM and FLOAT textures to a custom pixel shader that would do the same (not globally compatible).
       // This can happen if the game uses a temp texture that isn't either a render target nor is unordered access, so we don't upgrade it.
       bool enable_upgraded_texture_resource_copy_redirection = true; // TODO: delete given that we now have "enable_indirect_texture_format_upgrades"
+      // Initialize freshly created mirrors with the original's current content (converted when needed).
+      // Mirrors created without content contain undefined memory (NaN/garbage), which the game's shaders can
+      // sample before the mirror is fully written -> corrupted visuals and GPU-side hangs.
+      PUBLISHING_CONSTEXPR bool enable_mirror_content_init = true;
       // TODO: Add a warning for textures we missed upgrading if the swapchain resolution changed later.
       enum class TextureFormatUpgrades2DSizeFilters : uint32_t
       {
@@ -4738,6 +4742,113 @@ namespace
    }
 
    // This function takes a "source resource", which would be the reason we are creating this new resource, because a copy (or anything else like that) from a source to a target had the target not upgraded to the same format
+   // Copies the original's current content into a freshly created mirror (converting format when needed),
+   // so the game never samples undefined memory from a mirror that hasn't been fully written yet.
+   // Fast path: same typeless family -> native CopyResource (full mip chain, all slices, no conversion).
+   // Slow path: per-mip Copy-PS conversion (2D, non-MSAA, single slice; source needs SRV, target needs RTV).
+   // Runs on the immediate context; caller must NOT hold any luma lock. Must be called on the render thread.
+   static void InitMirrorContent(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, const DeviceData& device_data, ID3D11Resource* original, ID3D11Resource* mirror)
+   {
+      com_ptr<ID3D11Texture2D> original_texture;
+      com_ptr<ID3D11Texture2D> mirror_texture;
+      if (FAILED(original->QueryInterface(&original_texture)) || FAILED(mirror->QueryInterface(&mirror_texture)))
+      {
+         // 3D/1D mirrors (e.g. the 3D tonemap LUT) are not supported: they get filled by the game's own draws anyway
+         return;
+      }
+
+      D3D11_TEXTURE2D_DESC original_desc;
+      D3D11_TEXTURE2D_DESC mirror_desc;
+      original_texture->GetDesc(&original_desc);
+      mirror_texture->GetDesc(&mirror_desc);
+      const uint32_t mip_count = min(original_desc.MipLevels, mirror_desc.MipLevels);
+
+      // Fast path: same typeless family -> plain memory copy (all mips/slices at once, no conversion needed)
+      if (AreFormatsCopyCompatible(original_desc.Format, mirror_desc.Format))
+      {
+         native_device_context->CopyResource(mirror, original);
+         return;
+      }
+
+      // Slow path: conversion via the Copy PS. Only supports 2D non-MSAA single-slice textures with
+      // SRV (source) and RTV (target) bind flags. Anything else is skipped (mirror left as-is).
+      if (original_desc.SampleDesc.Count != 1 || mirror_desc.SampleDesc.Count != 1 || original_desc.ArraySize != 1 || mirror_desc.ArraySize != 1
+         || (original_desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) == 0 || (mirror_desc.BindFlags & D3D11_BIND_RENDER_TARGET) == 0)
+      {
+         return;
+      }
+
+      // The Copy PS samples float4 and the output merger converts to the RTV format, so any renderable
+      // non-integer pair works. Integer formats are excluded: the float write to an INT RTV is undefined.
+      if (IsIntFormat(original_desc.Format) || IsIntFormat(mirror_desc.Format))
+      {
+         return;
+      }
+
+      const std::shared_lock lock(s_mutex_shader_objects);
+      const auto vs_it = device_data.native_vertex_shaders.find(CompileTimeStringHash("Copy VS"));
+      const auto ps_it = device_data.native_pixel_shaders.find(CompileTimeStringHash("Copy PS"));
+      if (vs_it == device_data.native_vertex_shaders.end() || !vs_it->second.get() || ps_it == device_data.native_pixel_shaders.end() || !ps_it->second.get())
+      {
+         reshade::log::message(reshade::log::level::warning, "Luma: mirror content init skipped, Copy VS/PS shaders missing");
+         return;
+      }
+
+      DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
+      draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
+      // Clear the previous render target in case it was still set to the SRV we are using as source,
+      // otherwise DX11 will force ignore the attempted SRV binding, to avoid read/write conflicts.
+      native_device_context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, 0, nullptr, nullptr);
+
+      for (uint32_t mip = 0; mip < mip_count; mip++)
+      {
+         D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+         srv_desc.Format = original_desc.Format;
+         switch (srv_desc.Format) // Redirect typeless and sRGB formats to classic UNORM (the Copy PS doesn't distinguish them)
+         {
+         case DXGI_FORMAT_R10G10B10A2_TYPELESS: srv_desc.Format = DXGI_FORMAT_R10G10B10A2_UNORM; break;
+         case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+         case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: srv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+         case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+         case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: srv_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+         case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+         case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB: srv_desc.Format = DXGI_FORMAT_B8G8R8X8_UNORM; break;
+         case DXGI_FORMAT_R16G16B16A16_TYPELESS: srv_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; break;
+         }
+         srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+         srv_desc.Texture2D.MostDetailedMip = mip;
+         srv_desc.Texture2D.MipLevels = 1;
+         com_ptr<ID3D11ShaderResourceView> srv;
+         if (FAILED(native_device->CreateShaderResourceView(original_texture.get(), &srv_desc, &srv)))
+            break;
+
+         D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
+         rtv_desc.Format = mirror_desc.Format;
+         switch (rtv_desc.Format)
+         {
+         case DXGI_FORMAT_R10G10B10A2_TYPELESS: rtv_desc.Format = DXGI_FORMAT_R10G10B10A2_UNORM; break;
+         case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+         case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: rtv_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM; break;
+         case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+         case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB: rtv_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM; break;
+         case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+         case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB: rtv_desc.Format = DXGI_FORMAT_B8G8R8X8_UNORM; break;
+         case DXGI_FORMAT_R16G16B16A16_TYPELESS: rtv_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; break;
+         }
+         rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+         rtv_desc.Texture2D.MipSlice = mip;
+         com_ptr<ID3D11RenderTargetView> rtv;
+         if (FAILED(native_device->CreateRenderTargetView(mirror_texture.get(), &rtv_desc, &rtv)))
+            break;
+
+         const uint32_t mip_width = max(original_desc.Width >> mip, 1u);
+         const uint32_t mip_height = max(original_desc.Height >> mip, 1u);
+         DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), device_data.sampler_state_point.get(), vs_it->second.get(), ps_it->second.get(), srv.get(), rtv.get(), mip_width, mip_height, true);
+      }
+
+      draw_state_stack.Restore(native_device_context);
+   }
+
    bool FindOrCreateIndirectUpgradedResource(reshade::api::device* device, const uint64_t in_source_resource, const uint64_t in_resource, uint64_t& out_resource, DeviceData& device_data, bool allow_create, reshade::api::resource_usage initial_state, std::shared_lock<std::shared_mutex>& lock_device_read, bool leave_locked = true)
    {
       bool replaced = false;
@@ -4792,10 +4903,15 @@ namespace
             target_desc.texture.format = GetBestResourceUpgradeFormat(source_desc);
             needs_upgraded_resource = source_desc.texture.format != target_desc.texture.format;
          }
-         needs_upgraded_resource &= target_desc.type != reshade::api::resource_type::buffer; // Filter out false positives (UAVs can be buffers)
-         // TODO: optionally copy the content of "in_resource"?
+         needs_upgraded_resource &= target_desc.type == reshade::api::resource_type::texture_2d; // Only 2D mirrors: 3D/1D resources (e.g. the 3D tonemap LUT) can't be converted by the copy shader, and mirroring them only corrupts the pipeline (the game writes through format-mismatched views, the addon reads stale/garbage data)
          if (needs_upgraded_resource && device->create_resource(target_desc, nullptr, initial_state, &mirrored_upgraded_resource))
          {
+            // Content init: copy the original's current content into the fresh mirror so no pass ever
+            // samples undefined memory (garbage/NaN -> corrupted visuals and GPU hangs). No locks held here.
+            if (enable_mirror_content_init && device_data.primary_command_list && in_resource)
+            {
+               InitMirrorContent((ID3D11Device*)device->get_native(), device_data.primary_command_list.get(), device_data, reinterpret_cast<ID3D11Resource*>(in_resource), reinterpret_cast<ID3D11Resource*>(mirrored_upgraded_resource.handle));
+            }
             std::unique_lock lock_device_write(device_data.mutex);
             if (!device_data.original_resources_to_mirrored_upgraded_resources.contains(in_resource))
             {
@@ -4866,6 +4982,7 @@ namespace
                if (!device_data.original_resource_views_to_mirrored_upgraded_resource_views.contains(in_rv))
                {
                   device_data.original_resource_views_to_mirrored_upgraded_resource_views[in_rv] = mirrored_upgraded_resource_view.handle;
+                  device_data.mirror_views_by_mirror_resource[original_resource_to_mirrored_upgraded_resource_ptr].emplace(mirrored_upgraded_resource_view.handle);
                   out_rv = mirrored_upgraded_resource_view.handle;
                }
                else // Destroy it if it was accidentally created at the same time by another thread
@@ -7935,7 +8052,39 @@ namespace
       {
          const auto original_resource_to_mirrored_upgraded_resource_ptr = original_resource_to_mirrored_upgraded_resource->second;
          device_data.original_resources_to_mirrored_upgraded_resources.erase(original_resource_to_mirrored_upgraded_resource);
+
+         // Invalidate stale view mappings for this mirror while the lock is held. UE's texture pool reuses COM
+         // pointers across generations: if the game destroys a resource WITHOUT destroying all of its views (legal),
+         // the view map keeps (original view -> mirror view) entries pointing at the mirror we are about to destroy.
+         // The game can then re-allocate the same view handle and Luma would redirect it to the dead mirror view,
+         // propagating stale/dangling pointers into the game's own view->resource logic (null derefs in game code).
+         // Uses the per-mirror view registry (hash lookups only, no device calls under the lock).
+         std::vector<uint64_t> unlinked_mirror_views;
+         if (auto mirror_views_it = device_data.mirror_views_by_mirror_resource.find(original_resource_to_mirrored_upgraded_resource_ptr); mirror_views_it != device_data.mirror_views_by_mirror_resource.end())
+         {
+            const auto& mirror_views = mirror_views_it->second;
+            for (auto view_map_it = device_data.original_resource_views_to_mirrored_upgraded_resource_views.begin(); view_map_it != device_data.original_resource_views_to_mirrored_upgraded_resource_views.end();)
+            {
+               if (mirror_views.contains(view_map_it->second))
+               {
+                  unlinked_mirror_views.push_back(view_map_it->second);
+                  view_map_it = device_data.original_resource_views_to_mirrored_upgraded_resource_views.erase(view_map_it);
+               }
+               else
+               {
+                  ++view_map_it;
+               }
+            }
+            device_data.mirror_views_by_mirror_resource.erase(mirror_views_it);
+         }
+
          lock.unlock(); // Avoids deadlocks with the device
+         // Destroy the unlinked mirror views too: they were only referenced by our bookkeeping (and any context
+         // bindings, which keep them alive until unbound), so release our reference here instead of leaking them.
+         for (const uint64_t unlinked_mirror_view : unlinked_mirror_views)
+         {
+            device->destroy_resource_view({ unlinked_mirror_view });
+         }
          device->destroy_resource({ original_resource_to_mirrored_upgraded_resource_ptr });
          lock.lock();
       }
@@ -8249,6 +8398,7 @@ namespace
          {
             lock.lock();
             device_data.original_resource_views_to_mirrored_upgraded_resource_views[view.handle] = mirrored_upgraded_resource_view.handle;
+            device_data.mirror_views_by_mirror_resource[original_resource_to_mirrored_upgraded_resource_ptr].emplace(mirrored_upgraded_resource_view.handle);
          }
       }
    }
@@ -8260,9 +8410,10 @@ namespace
    {
       SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
 
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
-      if (&device_data == nullptr) // TODO: this can happen if DX destroyed the device before any of its resource views. We should store a list of devices that have had their destructor called, and thus have lost the device data.
+      DeviceData* device_data_ptr = device->get_private_data<DeviceData>();
+      if (!device_data_ptr) // Can happen if DX destroyed the device before any of its resource views. We should store a list of devices that have had their destructor called, and thus have lost the device data.
          return;
+      DeviceData& device_data = *device_data_ptr;
       std::unique_lock lock(device_data.mutex);
 
 #if DEVELOPMENT
@@ -8274,6 +8425,14 @@ namespace
       {
          const auto mirrored_upgraded_resource_view = original_resource_view_to_mirrored_upgraded_resource_view->second;
          device_data.original_resource_views_to_mirrored_upgraded_resource_views.erase(original_resource_view_to_mirrored_upgraded_resource_view);
+         // Remove from the per-mirror view registry (one device call; view destruction is not a hot path)
+         const reshade::api::resource mirror_resource = device->get_resource_from_view({ mirrored_upgraded_resource_view });
+         if (auto mirror_views_it = device_data.mirror_views_by_mirror_resource.find(mirror_resource.handle); mirror_views_it != device_data.mirror_views_by_mirror_resource.end())
+         {
+            mirror_views_it->second.erase(mirrored_upgraded_resource_view);
+            if (mirror_views_it->second.empty())
+               device_data.mirror_views_by_mirror_resource.erase(mirror_views_it);
+         }
          lock.unlock(); // Avoids deadlocks with the device
          device->destroy_resource_view({ mirrored_upgraded_resource_view });
       }
@@ -9154,7 +9313,6 @@ namespace
                   }
                }
 
-               // These are not supported at the moment
                if (target_desc.ArraySize != 1 || target_desc.SampleDesc.Count != 1 || target_desc.MipLevels != 1)
                {
                   ASSERT_ONCE_MSG(false, "Unsupported resource desc in redirected resource copy");
@@ -14296,6 +14454,7 @@ namespace
                            original_resources_to_mirrored_upgraded_resources = device_data.original_resources_to_mirrored_upgraded_resources;
                            device_data.original_resource_views_to_mirrored_upgraded_resource_views.clear();
                            device_data.original_resources_to_mirrored_upgraded_resources.clear();
+                           device_data.mirror_views_by_mirror_resource.clear();
                         }
                         for (const auto& original_resource_view_to_mirrored_upgraded_resource_view : original_resource_views_to_mirrored_upgraded_resource_views)
                         {
