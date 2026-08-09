@@ -58,7 +58,7 @@
     <ClCompile Condition="'$(UseLumaDXP)'=='true'">
       <!-- PreprocessorDefinitions metadata overrides the CharacterSet-derived
            UNICODE defines, so restore them explicitly. -->
-      <PreprocessorDefinitions>UNICODE;_UNICODE;_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH;ENABLE_DXP_SHADER_PATCHING=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH;LUMA_USE_DXP=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Condition="'$(UseLumaNGX)'=='true'">
       <!-- PreprocessorDefinitions metadata overrides the CharacterSet-derived

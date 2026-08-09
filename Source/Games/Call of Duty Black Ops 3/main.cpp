@@ -12,7 +12,7 @@
 // if DLSS, do DLSS right before final shader.
 #define CUSTOM_DLSS_KMS_1
 
-// #define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
+// #define LUMA_PATCH_BYTECODE_SYNC 1
 
 #include "..\..\Core\core.hpp"
 

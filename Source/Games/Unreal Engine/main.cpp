@@ -1,6 +1,6 @@
 #define GAME_UNREAL_ENGINE 1
 
-#define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
+#define LUMA_PATCH_BYTECODE_SYNC 1
 #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
 #define CHECK_GRAPHICS_API_COMPATIBILITY 1
 
@@ -282,7 +282,7 @@ public:
       game_device_data.viewport_rect = {0.0f, 0.0f, device_data.render_resolution.x, device_data.render_resolution.y};
    }
 
-   std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) override
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) override
    {
       // Only process pixel/compute shaders
       if (type != reshade::api::pipeline_subobject_type::pixel_shader && type != reshade::api::pipeline_subobject_type::compute_shader)

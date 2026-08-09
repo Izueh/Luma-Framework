@@ -1,0 +1,330 @@
+version: 1
+steps:
+  # Probe: detect the original 16-phase dither discard sequence without
+  # mutating. Publishes state[detect_original_16phase_discard] = matched,
+  # which gates every step below.
+  - kind: apply_rule
+    name: detect_original_16phase_discard_probe
+    required: false
+    rewrite_mode: none
+    rule:
+      match:
+        - opcode: mul
+        - opcode: round_ne
+        - opcode: ftou
+        - opcode: ult
+
+  # Probe: detect hair-style dithering (8x8 bayer DitherTex sample) without
+  # mutating. Fingerprint is the consecutive round_z -> mad -> sample window;
+  # in the FFXV corpus this window only appears at DitherTex discard sites
+  # (the texture/sampler register varies across shaders, so it stays
+  # unconstrained). Publishes state[detect_hair_dither] = matched, which
+  # gates the hair branch below.
+  - kind: apply_rule
+    name: detect_hair_dither_probe
+    required: false
+    rewrite_mode: none
+    rule:
+      match:
+        - opcode: round_z
+        - opcode: mad
+        - opcode: sample
+
+  # Probe: detect the clamped bayer variant (hair fade materials) without
+  # mutating. Same 16-phase discard but with a distance-fade clamp: an extra
+  # ge + movc pin the threshold to full opacity once alpha crosses cb[].z,
+  # which breaks the plain mul/round_ne/ftou/ult window above. In the FFXV
+  # corpus this 6-opcode shape appears only at these discard sites
+  # (0x3BA586F1, 0x3BBCBAA8). Gates the clamped-bayer branch below.
+  - kind: apply_rule
+    name: detect_clamped_bayer_discard_probe
+    required: false
+    rewrite_mode: none
+    rule:
+      match:
+        - opcode: mul
+        - opcode: ge
+        - opcode: round_ne
+        - opcode: ftou
+        - opcode: movc
+        - opcode: ult
+
+  # Shared resource declarations for all branches: only added when at least
+  # one probe matched, so non-dithering shaders stay byte-identical.
+  - kind: add_resource
+    name: add_noise_resources
+    condition:
+      or:
+        - is: detect_original_16phase_discard_probe
+        - is: detect_hair_dither_probe
+        - is: detect_clamped_bayer_discard_probe
+    temps: [sampled_noise, noise_uv]
+    textures:
+      - handle: fast_noise
+        dimension: 8
+    cbuffers:
+      - handle: frame_constants
+        elements: 1
+
+  # Branch 1: 16-phase procedural dither discard. Replaces the
+  # mul/round_ne/ftou/ult tail with the fast noise load; the trailing
+  # movc/min/lt/discard sequence keeps working against the noise value.
+  - kind: apply_rule
+    name: replace_discard_noise_tail
+    match_mode: match_all
+    rewrite_mode: replace
+    condition:
+      is: detect_original_16phase_discard_probe
+    rule:
+      match:
+        - opcode: mul
+          operands:
+            - capture: mul_dest
+            - capture: mul_src0
+        - opcode: round_ne
+        - opcode: ftou
+        - opcode: ult
+          operands:
+            - type: temp
+              capture: discard_target
+            - type: temp
+              capture: noise_value
+            - type: temp
+              capture: alpha_test
+      emit:
+        - opcode: ftou
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: xy }
+            - type: input
+              indices:
+                - { representation: immediate32, immediate_lo: 0 }
+              components: { selection_mode: swizzle, value: xyxx }
+        - opcode: mov
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: w }
+            - type: immediate32
+              immediates_u32: [0]
+        - opcode: and
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: z }
+            - type: immediate32
+              immediates_u32: [31]
+            - type: constant_buffer
+              handle: frame_constants
+              components: { selection_mode: select, value: x }
+        - opcode: and
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: xy }
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: swizzle, value: xyxx }
+            - type: immediate32
+              immediates_u32: [127, 127, 0, 0]
+        - opcode: ld
+          operands:
+            - type: temp
+              handle: sampled_noise
+              components: { selection_mode: mask, value: x }
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: swizzle, value: xyzw }
+            - type: resource
+              handle: fast_noise
+              components: { selection_mode: swizzle, value: xyzw }
+        - opcode: mov
+          operands:
+            - capture: noise_value
+            - type: temp
+              handle: sampled_noise
+              components: { selection_mode: select, value: x }
+        - opcode: ge
+          operands:
+            - capture: discard_target
+            - capture: mul_src0
+            - capture: noise_value
+
+  # Branch 2: hair-style dither discard. Replaces the round_z/mad/sample
+  # DitherTex load with the same fast noise load, writing the noise value
+  # into the original sample destination register. The shader's own
+  # lt/movc/min/discard sequence then compares noise against alpha unchanged.
+  - kind: apply_rule
+    name: replace_hair_dither_sample
+    match_mode: match_all
+    rewrite_mode: replace
+    condition:
+      is: detect_hair_dither_probe
+    rule:
+      match:
+        - opcode: round_z
+        - opcode: mad
+        - opcode: sample
+          operands:
+            - type: temp
+              capture: hair_dither_dst
+      emit:
+        - opcode: ftou
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: xy }
+            - type: input
+              indices:
+                - { representation: immediate32, immediate_lo: 0 }
+              components: { selection_mode: swizzle, value: xyxx }
+        - opcode: mov
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: w }
+            - type: immediate32
+              immediates_u32: [0]
+        - opcode: and
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: z }
+            - type: immediate32
+              immediates_u32: [31]
+            - type: constant_buffer
+              handle: frame_constants
+              components: { selection_mode: select, value: x }
+        - opcode: and
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: xy }
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: swizzle, value: xyxx }
+            - type: immediate32
+              immediates_u32: [127, 127, 0, 0]
+        - opcode: ld
+          operands:
+            - type: temp
+              handle: sampled_noise
+              components: { selection_mode: mask, value: x }
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: swizzle, value: xyzw }
+            - type: resource
+              handle: fast_noise
+              components: { selection_mode: swizzle, value: xyzw }
+        - opcode: mov
+          operands:
+            - capture: hair_dither_dst
+            - type: temp
+              handle: sampled_noise
+              components: { selection_mode: select, value: x }
+
+  # Branch 3: clamped 16-phase bayer discard (hair fade materials). The
+  # original clamps the threshold to full opacity when alpha >= clamp_z:
+  #   mul rZ, rY, l(16)          ; alpha*16
+  #   ge  rY, rY, cb[].z         ; alpha >= clamp_z
+  #   round_ne/ftou rZ
+  #   movc rY, rY, l(16), rZ     ; threshold = alpha>=z ? 16 : round(16*alpha)
+  #   ult rX, rX, rY
+  # Replacement keeps the same semantics: keep iff alpha >= z OR alpha >= noise
+  # == alpha >= min(z, noise). The noise load reuses the shared branch emit;
+  # noise_uv.x is the scratch for the min.
+  - kind: apply_rule
+    name: replace_clamped_bayer_discard
+    match_mode: match_all
+    rewrite_mode: replace
+    condition:
+      is: detect_clamped_bayer_discard_probe
+    rule:
+      match:
+        - opcode: mul
+          operands:
+            - type: temp
+            - capture: clamped_alpha
+            - type: immediate32
+        - opcode: ge
+          operands:
+            - type: temp
+            - type: temp
+            - capture: clamped_clamp_z
+        - opcode: round_ne
+        - opcode: ftou
+        - opcode: movc
+        - opcode: ult
+          operands:
+            - capture: clamped_discard_target
+            - capture: clamped_phase
+            - type: temp
+      emit:
+        - opcode: ftou
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: xy }
+            - type: input
+              indices:
+                - { representation: immediate32, immediate_lo: 0 }
+              components: { selection_mode: swizzle, value: xyxx }
+        - opcode: mov
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: w }
+            - type: immediate32
+              immediates_u32: [0]
+        - opcode: and
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: z }
+            - type: immediate32
+              immediates_u32: [31]
+            - type: constant_buffer
+              handle: frame_constants
+              components: { selection_mode: select, value: x }
+        - opcode: and
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: xy }
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: swizzle, value: xyxx }
+            - type: immediate32
+              immediates_u32: [127, 127, 0, 0]
+        - opcode: ld
+          operands:
+            - type: temp
+              handle: sampled_noise
+              components: { selection_mode: mask, value: x }
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: swizzle, value: xyzw }
+            - type: resource
+              handle: fast_noise
+              components: { selection_mode: swizzle, value: xyzw }
+        - opcode: mov
+          operands:
+            - capture: clamped_phase
+            - type: temp
+              handle: sampled_noise
+              components: { selection_mode: select, value: x }
+        - opcode: min
+          operands:
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: mask, value: x }
+            - capture: clamped_clamp_z
+            - capture: clamped_phase
+        - opcode: ge
+          operands:
+            - capture: clamped_discard_target
+            - capture: clamped_alpha
+            - type: temp
+              handle: noise_uv
+              components: { selection_mode: select, value: x }
