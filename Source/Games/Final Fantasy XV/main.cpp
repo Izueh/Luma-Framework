@@ -2,8 +2,7 @@
 
 #define ALLOW_SHADERS_DUMPING 1
 #define ENABLE_BLOOM 1
-#define DXP_SHADER_PATCHING_SYNC 0
-#define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 0
+#define LUMA_PATCH_RECIPE_ASYNC 1
 
 #define DEBUG_LOG 0
 
@@ -13,12 +12,14 @@
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <span>
+#include <vector>
 #include "../../Core/core.hpp"
 #include "includes/common.hpp"
 #include "includes/sr_helpers.hpp"
 
-#if ENABLE_DXP_SHADER_PATCHING
-static constexpr uint32_t kFFXVDepthDitheringRecipeHash = CompileTimeStringHash("FFXV Depth Dithering");
+#if LUMA_HAS_RECIPE_PROVIDERS
+static constexpr uint32_t FFXV_DEPTH_DITHERING_RECIPE_HASH = CompileTimeStringHash("FFXV Depth Dithering");
 #endif
 
 #if ENABLE_FAST_NOISE_TEXTURES
@@ -31,12 +32,10 @@ namespace
    ShaderHashesList shader_hashes_autoexposure;
    ShaderHashesList shader_hashes_TAA;
    ShaderHashesList shader_hashes_OutputScaled;
-   ShaderHashesList shader_hashes_dither_depth2;
    ShaderHashesList shader_hashes_bloom_highpass;
    ShaderHashesList shader_hashes_bloom_skip;
    ShaderHashesList shader_hashes_bloom_glare_vignette;
    ShaderHashesList shader_hashes_attach_fast_noise;
-   std::mutex shader_hashes_dither_depth2_mutex;
    const uint32_t CBTemporalAA_buffer_size = 256;
    const uint32_t CBExposure_buffer_size = 24;
    const uint32_t CBView_buffer_size = 768;
@@ -90,7 +89,7 @@ namespace
    std::vector<float> g_bloom_sigmas;
 #endif
 
-#if ENABLE_DXP_SHADER_PATCHING
+#if LUMA_HAS_RECIPE_PROVIDERS
    struct FFXVDxpFrameConstants
    {
       uint32_t FrameIndex = 0;
@@ -134,31 +133,26 @@ namespace
          return false;
       }
 
+      // Resolved once per shader at patch-apply time (provider thread:
+      // game-creation for sync, worker for async); read every draw on the
+      // render threads — hence the mutex around this tiny vector scan.
+      auto& game_device_data = *static_cast<GameDeviceDataFFXV*>(device_data.game);
       uint32_t fast_noise_bind_point = UINT32_MAX;
       uint32_t frame_constants_bind_point = UINT32_MAX;
       {
-         std::shared_ptr<Patch::DxpPatchedShaderData> patched_shader = device_data.patch_context.GetShaderData(static_cast<uint32_t>(original_shader_hashes.pixel_shaders[0]));
-         if (!patched_shader)
+         const std::lock_guard lock(game_device_data.dxp_bindings_mutex);
+         const uint32_t shader_hash = static_cast<uint32_t>(original_shader_hashes.pixel_shaders[0]);
+         for (const auto& binding_set : game_device_data.dxp_binding_sets)
          {
-            return false;
-         }
-
-         for (const auto& binding_pair : patched_shader->report.new_bindings)
-         {
-            const auto& handle = binding_pair.first;
-            const auto& binding = binding_pair.second;
-            if (handle == "fast_noise" && binding.resource_kind == dxp::ResourceKind::Texture)
+            if (binding_set.shader_hash == shader_hash)
             {
-               fast_noise_bind_point = binding.register_index;
-            }
-            else if (handle == "frame_constants" && binding.resource_kind == dxp::ResourceKind::CBuffer)
-            {
-               frame_constants_bind_point = binding.register_index;
+               fast_noise_bind_point = binding_set.fast_noise_bind_point;
+               frame_constants_bind_point = binding_set.frame_constants_bind_point;
+               break;
             }
          }
       }
 
-      auto& game_device_data = *static_cast<GameDeviceDataFFXV*>(device_data.game);
       bool any_bound = false;
 
       if (fast_noise_bind_point != UINT32_MAX)
@@ -185,9 +179,9 @@ namespace
       return any_bound;
    }
 
-   std::optional<dxp::RecipeReport> ApplyDepthDitheringShaderPatch(DeviceData& device_data, const DxpShaderPatchRequest& request)
+   std::optional<dxp::RecipeReport> ApplyDepthDitheringShaderPatch(DeviceData& device_data, const Patch::ShaderPatchRequest& request)
    {
-      std::shared_ptr<dxp::sm5::Recipe> recipe = device_data.managed_assets.GetRecipe(kFFXVDepthDitheringRecipeHash);
+      std::shared_ptr<dxp::sm5::Recipe> recipe = device_data.recipes.GetRecipe(FFXV_DEPTH_DITHERING_RECIPE_HASH);
       if (recipe == nullptr
          || request.shader_container == nullptr
          || request.shader_container_size < sizeof(DXBCHeader))
@@ -200,7 +194,6 @@ namespace
          return std::nullopt;
       }
 
-      const auto* bytes = reinterpret_cast<const uint8_t*>(request.shader_container);
       dxp::PatchOptions options;
       options.logger = [](dxp::LogLevel level, const std::string& message) {
          reshade::log::level reshade_level = reshade::log::level::info;
@@ -210,14 +203,28 @@ namespace
             case dxp::LogLevel::Debug: reshade_level = reshade::log::level::debug; break;
             case dxp::LogLevel::Info: break;
          }
-         reshade::log::message(reshade_level, ("[DXP] " + message).c_str());
+         reshade::log::message(reshade_level, ("[Luma] [Patch] " + message).c_str());
       };
       options.log_level = dxp::LogLevel::Warning;
-      auto result = recipe->Execute(std::vector<uint8_t>(bytes, bytes + request.shader_container_size), options);
+
+      // Borrowed view over the caller's container: the async job's owned
+      // vector when available, otherwise the raw container pointer. Execute
+      // takes a span, so no copy is needed in either case.
+      std::span<const uint8_t> input_container;
+      if (request.shader_container_owned != nullptr)
+      {
+         input_container = *request.shader_container_owned;
+      }
+      else
+      {
+         input_container = { reinterpret_cast<const uint8_t*>(request.shader_container), request.shader_container_size };
+      }
+
+      auto result = recipe->Execute(input_container, options);
       if (!result || result->output_bytes.empty())
       {
          reshade::log::message(reshade::log::level::warning,
-            std::format("DXP: recipe execution failed for shader {:08X}", request.shader_hash).c_str());
+            std::format("[Patch] recipe execution failed for shader {:08X}", request.shader_hash).c_str());
          return std::nullopt;
       }
 
@@ -228,8 +235,31 @@ namespace
          return std::nullopt;
       }
 
-      reshade::log::message(reshade::log::level::info,
-         std::format("DXP: patched shader {:08X} ({} bytes, {} new bindings)", request.shader_hash, result->output_bytes.size(), result->new_bindings.size()).c_str());
+      // Cache the resolved bindings at store time so the per-draw path doesn't
+      // query patch_context or scan new_bindings on every draw.
+      {
+         auto& game_device_data = *static_cast<GameDeviceDataFFXV*>(device_data.game);
+         GameDeviceDataFFXV::FFXVDxpBindingSet binding_set{};
+         binding_set.shader_hash = request.shader_hash;
+         for (const auto& binding_pair : result->new_bindings)
+         {
+            const auto& handle = binding_pair.first;
+            const auto& binding = binding_pair.second;
+            if (handle == "fast_noise" && binding.resource_kind == dxp::ResourceKind::Texture)
+            {
+               binding_set.fast_noise_bind_point = binding.register_index;
+            }
+            else if (handle == "frame_constants" && binding.resource_kind == dxp::ResourceKind::CBuffer)
+            {
+               binding_set.frame_constants_bind_point = binding.register_index;
+            }
+         }
+         const std::lock_guard lock(game_device_data.dxp_bindings_mutex);
+         game_device_data.dxp_binding_sets.push_back(std::move(binding_set));
+      }
+
+      reshade::log::message(reshade::log::level::debug,
+         std::format("[Patch] patched shader {:08X} ({} bytes, {} new bindings)", request.shader_hash, result->output_bytes.size(), result->new_bindings.size()).c_str());
       return std::move(*result);
    }
 #endif
@@ -286,9 +316,9 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
-#if ENABLE_DXP_SHADER_PATCHING
-      reshade::log::message(reshade::log::level::info, std::format("Recipe directory: {}", device_data.managed_assets.GetRootPath().string()).c_str());
-      bool loaded = device_data.managed_assets.LoadFromFile(kFFXVDepthDitheringRecipeHash, "FFXV_depth_dithering_dirt");
+#if LUMA_HAS_RECIPE_PROVIDERS
+      reshade::log::message(reshade::log::level::info, std::format("Recipe directory: {}", device_data.recipes.GetRootPath().string()).c_str());
+      bool loaded = device_data.recipes.LoadFromFile(FFXV_DEPTH_DITHERING_RECIPE_HASH, "FFXV_Dithering_Fixes");
       ASSERT_ONCE_MSG(loaded, "Failed to load FFXV depth dithering DXP recipe");
 
       D3D11_BUFFER_DESC frame_constants_desc = {};
@@ -305,7 +335,7 @@ public:
       }
 #endif
 
-#if ENABLE_DXP_SHADER_PATCHING
+#if LUMA_HAS_RECIPE_PROVIDERS
       game_device_data.dxp_frame_constants_cb = std::move(frame_constants_cb);
       game_device_data.dxp_frame_constants_frame_index = UINT32_MAX;
 #endif
@@ -343,6 +373,7 @@ public:
             cb_luma_global_settings.GameSettings.Sharpness = 0.f;
             reshade::set_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
          }
+         ImGui::TreePop();
       }
 
 #if DEVELOPMENT
@@ -366,72 +397,23 @@ public:
 #endif
    }
 
-#if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
-   std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) override
-   {
-      if (code == nullptr || size == 0)
-      {
-         return nullptr;
-      }
-
-      if (type != reshade::api::pipeline_subobject_type::pixel_shader)
-      {
-         return nullptr;
-      }
-
-      FFXVDitheringShaderInfo dither_info = {};
-      if (!IsFFXVDitheringShader(reinterpret_cast<const uint8_t*>(code), size, dither_info, shader_hash))
-      {
-         return nullptr;
-      }
-
-      auto modified_code = ModifyFFXVDitheringShader(reinterpret_cast<const uint8_t*>(code), size, dither_info, shader_hash);
-      if (!modified_code)
-      {
-         return nullptr;
-      }
-
-      {
-         const std::lock_guard lock(shader_hashes_dither_depth2_mutex);
-         shader_hashes_dither_depth2.pixel_shaders.emplace(static_cast<uint32_t>(shader_hash));
-      }
-
-      return modified_code;
-   }
-#endif // ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
-#if ENABLE_DXP_SHADER_PATCHING
-#if DXP_SHADER_PATCHING_SYNC
-   std::optional<dxp::RecipeReport> PatchShaderSync(DeviceData& device_data, const DxpShaderPatchRequest& request) override
+#if LUMA_PATCH_RECIPE_ASYNC
+   // Recipe provider (DXP), asynchronous: runs on the background thread; the
+   // patched container is applied via a pipeline clone (bind-time swap).
+   std::optional<dxp::RecipeReport> PatchShaderRecipeAsync(DeviceData& device_data, const Patch::ShaderPatchRequest& request) override
    {
       return ApplyDepthDitheringShaderPatch(device_data, request);
    }
-#else
-   std::optional<dxp::RecipeReport> PatchShaderAsync(DeviceData& device_data, const DxpShaderPatchRequest& request) override
-   {
-      return ApplyDepthDitheringShaderPatch(device_data, request);
-   }
-#endif
 #endif
 
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
-#if ENABLE_DXP_SHADER_PATCHING
+#if LUMA_HAS_RECIPE_PROVIDERS
+      // Recipe-patched shaders: bind the resources the recipe introduced
+      // (fast noise texture + frame constants cbuffer).
       BindPatchedResources(native_device_context, device_data, original_shader_hashes, stages, updated_cbuffers);
-#else
-      bool should_bind_dither_frame_counter = false;
-      {
-         const std::lock_guard lock(shader_hashes_dither_depth2_mutex);
-         should_bind_dither_frame_counter = original_shader_hashes.Contains(shader_hashes_dither_depth2);
-      }
-
-      if (should_bind_dither_frame_counter && (stages & reshade::api::shader_stage::pixel) != 0)
-      {
-         ID3D11Buffer* const luma_settings_cb = device_data.luma_global_settings.get();
-         native_device_context->PSSetConstantBuffers(luma_settings_cbuffer_index, 1, &luma_settings_cb);
-         updated_cbuffers = true;
-      }
 #endif
 
       // Extract exposure texture from autoexposure pass

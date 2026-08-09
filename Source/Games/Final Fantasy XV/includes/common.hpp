@@ -56,6 +56,19 @@ struct GameDeviceDataFFXV final : public GameDeviceData
    ComPtr<ID3D11Buffer> dxp_frame_constants_cb;
    uint32_t dxp_frame_constants_frame_index = UINT32_MAX;
 
+   // Recipe patch bindings resolved once at patch-apply time (see
+   // ApplyDepthDitheringShaderPatch). Read per-draw under dxp_bindings_mutex;
+   // written by whichever provider applied the patch (sync: creation thread,
+   // async: worker thread).
+   struct FFXVDxpBindingSet
+   {
+      uint32_t shader_hash = 0;
+      uint32_t fast_noise_bind_point = UINT32_MAX;
+      uint32_t frame_constants_bind_point = UINT32_MAX;
+   };
+   std::vector<FFXVDxpBindingSet> dxp_binding_sets;
+   mutable std::mutex dxp_bindings_mutex;
+
    // Luma bloom
    ComPtr<ID3D11ShaderResourceView> bloom_scene_srv;
    ComPtr<ID3D11Buffer> bloom_globals_cb;   // game's _Globals b0 captured at highpass

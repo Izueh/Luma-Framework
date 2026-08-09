@@ -62,7 +62,7 @@
     </PropertyPageSchema>
   </ItemGroup>
   <PropertyGroup>
-    <UseLumaDXP>false</UseLumaDXP>
+    <UseLumaDXP>true</UseLumaDXP>
     <UseLumaNGX>true</UseLumaNGX>
     <UseLumaFSR>true</UseLumaFSR>
     <UseLumaFastNoise>true</UseLumaFastNoise>
