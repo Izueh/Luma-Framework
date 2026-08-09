@@ -1,6 +1,6 @@
 #define GAME_FF7_REMAKE 1
 
-#define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
+#define LUMA_PATCH_BYTECODE_SYNC 1
 #define CHECK_GRAPHICS_API_COMPATIBILITY 1
 #ifdef NDEBUG
 #define ALLOW_SHADERS_DUMPING 1
@@ -588,7 +588,7 @@ public:
       auto& game_device_data = GetGameDeviceData(device_data);
    }
 
-   std::unique_ptr<std::byte[]> ModifyShaderByteCode(const std::byte* code, size_t& size,
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size,
       reshade::api::pipeline_subobject_type type,
       uint64_t shader_hash = -1,
       const std::byte* shader_object = nullptr,

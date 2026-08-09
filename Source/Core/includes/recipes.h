@@ -15,7 +15,7 @@
 // only; add new non-COM asset types (settings documents, raw data) here when
 // they exist — do not expand this for COM resources (those belong in
 // managed_resources.h).
-struct ManagedAssets
+struct Recipes
 {
    // Parsed DXP recipes, keyed by CompileTimeStringHash(recipe name). Recipes
    // are immutable once parsed and safe to share across threads (Execute is

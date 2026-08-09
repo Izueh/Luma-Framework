@@ -169,12 +169,6 @@ UINT GetUAVMipLevel(const D3D11_UNORDERED_ACCESS_VIEW_DESC& desc)
    }
 }
 
-#if ENABLE_DXP_SHADER_PATCHING
-namespace dxp::sm5
-{
-}
-#endif
-
 inline bool LoadTexture2DArraySequenceIntoMap(std::unordered_map<uint32_t, DeviceData::NativeTexture2DArrayResource>& texture_map, ID3D11Device* native_device, uint32_t texture_hash, const std::filesystem::path& texture_directory, const char* texture_file_prefix, std::string* error = nullptr)
 {
    if (!native_device)

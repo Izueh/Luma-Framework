@@ -27,6 +27,18 @@ namespace Shader
    static const std::string template_pixel_shader_name = "ps_";
    static const std::string template_compute_shader_name = "cs_";
 
+   // How a shader patch was applied to this pipeline (see the Patch module).
+   // TODO(Patch module): could move to patch.hpp later (scoped enums with a
+   // fixed underlying type are forward-declarable, so shaders.h could keep the
+   // field with just a forward declaration) once headers are self-contained.
+   enum class PatchApplicationMode : uint8_t
+   {
+      None = 0,      // No patch applied
+      Inplace = 1,   // Applied in-place at shader creation (sync, INPLACE mode)
+      SyncClone = 2, // Applied via a pipeline clone created synchronously at pipeline init (CLONE mode)
+      AsyncClone = 3, // Applied via a pipeline clone created on the background thread
+   };
+
    // Mostly hardcoded to match a shader object, but it can work for other ReShade pipelines as well
    struct CachedPipeline
    {
@@ -46,6 +58,8 @@ namespace Shader
       bool cloned = false;
       // Needs to be destroyed when the original pipeline is.
       reshade::api::pipeline pipeline_clone;
+      // How the patch was applied to this pipeline (for the frame capture view: "#", "#S", "#A")
+      PatchApplicationMode patch_application_mode = PatchApplicationMode::None;
       // Original shaders hash (there should only be one except in DX12)
 #if DX12
       std::vector<uint32_t> shader_hashes;

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -17,9 +18,9 @@
 #include <vector>
 
 #include "managed_resources.h"
-#if ENABLE_DXP_SHADER_PATCHING
-#include "managed_assets.h"
 #include "patch.hpp"
+#if LUMA_USE_DXP
+#include "recipes.h"
 #endif
 
 // Forward declarations
@@ -390,12 +391,35 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
       uint32_t frame_count = 0;
    };
 
-   // Only for "swapchains", "back_buffers" and "upgraded_resources" (and related) and "modified_shaders_byte_code".
+   // Only for "swapchains", "back_buffers" and "upgraded_resources" (and related) and "patch_context".
    // Device object creation etc is usually single threaded anyway, except for the destructor.
    std::shared_mutex mutex;
 
    std::thread thread_auto_loading;
    std::atomic<bool> thread_auto_loading_running = false;
+
+#if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
+   // Persistent async clone machinery: a long-lived worker compiles clones
+   // from copied subobject data (never holding raw pipeline pointers across
+   // locks), hands the finished clones to the ready queue, and the present
+   // boundary publishes them (never mid-frame). Guarded as follows:
+   //   async_jobs_mutex/cv + async_queue_version: job-queue wakeups.
+   //   async_ready_mutex: the ready queue (worker writes, present drains).
+   //   async_shutdown: set at device destroy before joining the worker.
+   std::mutex async_jobs_mutex;
+   std::condition_variable async_jobs_cv;
+   uint64_t async_queue_version = 0;
+   bool async_shutdown = false;
+   std::mutex async_ready_mutex;
+   struct ReadyAsyncClone
+   {
+      uint64_t pipeline_handle = 0;
+      reshade::api::pipeline clone = {};
+      reshade::api::device* device = nullptr;
+      uint32_t shader_hash = 0; // shader the clone was compiled for (verify at publish)
+   };
+   std::vector<ReadyAsyncClone> async_ready;
+#endif // async providers
 
    std::unordered_set<uint64_t> upgraded_resources; // All the directly upgraded resources, excluding the swapchains backbuffers, as they are created internally by DX
 #if DEVELOPMENT
@@ -409,16 +433,14 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    // a device call (get_resource_from_view) per entry while holding the lock.
    std::unordered_map<uint64_t, std::unordered_set<uint64_t>> mirror_views_by_mirror_resource;
 
-#if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
-   // Edited shaders byte code + size + MD5 hash by (original) shader hash.
-   // We cache these in memory forever just because with ReShade handling their destruction on the spot between the pipeline (shader) creation and init function isn't "possible",
-   // and it can be called from multiple threads so we need to protect it.
-   std::unordered_map<uint32_t, std::tuple<std::unique_ptr<std::byte[]>, size_t, Hash::MD5::Digest>> modified_shaders_byte_code;
+#if LUMA_PATCH_PROVIDERS != 0
+   // Stored shader patches (both bytecode and recipe methods) + per-method
+   // processed markers. See Patch::PatchContext.
+   Patch::PatchContext patch_context;
 #endif
 
-#if ENABLE_DXP_SHADER_PATCHING
-   Patch::PatchContext patch_context;
-   ManagedAssets managed_assets;
+#if LUMA_USE_DXP
+   Recipes recipes;
 #endif
 
    std::unordered_set<reshade::api::swapchain*> swapchains;

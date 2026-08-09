@@ -11,7 +11,7 @@
 // FSR is enabled to force feature level 11.1
 #define DEBUG_LOG 0
 
-//#define ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS 1
+//#define LUMA_PATCH_BYTECODE_SYNC 1
 
 #include "..\..\Core\core.hpp"
 
