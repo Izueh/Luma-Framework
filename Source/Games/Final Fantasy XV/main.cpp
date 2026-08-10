@@ -394,6 +394,17 @@ public:
 
       auto& game_device_data_settings = GetGameDeviceData(device_data);
       ImGui::Checkbox("FFXV DLSS Pre-Exposure Use Reciprocal", &game_device_data_settings.dlss_use_inverse_pre_exposure);
+#if LUMA_HAS_RECIPE_PROVIDERS
+      bool dithering_patch_enabled = game_device_data_settings.dithering_patch_enabled.load(std::memory_order_relaxed);
+      if (ImGui::Checkbox("Depth Dithering Patch Enabled (runtime toggle reference)", &dithering_patch_enabled))
+      {
+         game_device_data_settings.dithering_patch_enabled.store(dithering_patch_enabled, std::memory_order_relaxed);
+      }
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      {
+         ImGui::SetTooltip("Toggleable at draw-call granularity via CommandListData::EnsureShaderVariant (clone patches only; the original variant runs without the recipe's resource bindings).");
+      }
+#endif
 #endif
    }
 
@@ -411,9 +422,20 @@ public:
       auto& game_device_data = GetGameDeviceData(device_data);
 
 #if LUMA_HAS_RECIPE_PROVIDERS
-      // Recipe-patched shaders: bind the resources the recipe introduced
-      // (fast noise texture + frame constants cbuffer).
-      BindPatchedResources(native_device_context, device_data, original_shader_hashes, stages, updated_cbuffers);
+      // Runtime patch toggle: patch stays ON by default, disabled per draw here
+      // (idempotent, no-ops without a toggleable clone).
+      const bool use_dithering_patch = game_device_data.dithering_patch_enabled.load(std::memory_order_relaxed)
+         && cmd_list_data.IsPatchToggleable(reshade::api::shader_stage::pixel); // false while patches are disallowed or unloaded
+      cmd_list_data.EnsureShaderVariant(native_device_context, stages,
+         use_dithering_patch ? Shader::PatchVariant::Patched
+                             : Shader::PatchVariant::Original);
+
+      // Recipe resources only make sense with the patched variant bound (the
+      // original shader ignores its bind points).
+      if (use_dithering_patch)
+      {
+         BindPatchedResources(native_device_context, device_data, original_shader_hashes, stages, updated_cbuffers);
+      }
 #endif
 
       // Extract exposure texture from autoexposure pass
