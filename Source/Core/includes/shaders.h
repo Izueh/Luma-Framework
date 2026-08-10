@@ -39,6 +39,25 @@ namespace Shader
       AsyncClone = 3, // Applied via a pipeline clone created on the background thread
    };
 
+   // Which variant of a patched pipeline is (or should be) bound. None = no patch involved.
+   enum class PatchVariant : uint8_t
+   {
+      None = 0,
+      Original = 1,  // the game's original object (patch disabled)
+      Patched = 2,   // the pipeline clone (patch applied)
+   };
+
+   // What a pipeline's clone was built from (set at clone creation, reset before
+   // each re-clone). Exactly one source per clone: a file wins over a patch on
+   // the same hash. Used to preserve patch clones across unloads and to tell
+   // patch toggles from file swaps.
+   enum class CloneOrigin : uint8_t
+   {
+      None = 0,
+      File = 1,
+      Patch = 2,
+   };
+
    // Mostly hardcoded to match a shader object, but it can work for other ReShade pipelines as well
    struct CachedPipeline
    {
@@ -60,6 +79,10 @@ namespace Shader
       reshade::api::pipeline pipeline_clone;
       // How the patch was applied to this pipeline (for the frame capture view: "#", "#S", "#A")
       PatchApplicationMode patch_application_mode = PatchApplicationMode::None;
+      // What the current clone was built from (set at clone creation, reset
+      // before each re-clone). Preserves patch clones across unloads; a file
+      // wins over a patch on the same clone.
+      CloneOrigin clone_origin = CloneOrigin::None;
       // Original shaders hash (there should only be one except in DX12)
 #if DX12
       std::vector<uint32_t> shader_hashes;

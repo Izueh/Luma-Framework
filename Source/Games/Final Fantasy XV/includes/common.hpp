@@ -69,6 +69,10 @@ struct GameDeviceDataFFXV final : public GameDeviceData
    std::vector<FFXVDxpBindingSet> dxp_binding_sets;
    mutable std::mutex dxp_bindings_mutex;
 
+   // Runtime patch toggle (reference): ON by default, disabled per draw via
+   // EnsureShaderVariant. Atomic (UI writes, render reads).
+   std::atomic<bool> dithering_patch_enabled = true;
+
    // Luma bloom
    ComPtr<ID3D11ShaderResourceView> bloom_scene_srv;
    ComPtr<ID3D11Buffer> bloom_globals_cb;   // game's _Globals b0 captured at highpass

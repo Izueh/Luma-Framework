@@ -28,7 +28,6 @@
 
 // ============================================================================
 // Shader patching module configuration.
-//
 // Provider code paths, selected per game (plain 0/1) BEFORE including core.hpp:
 //   LUMA_PATCH_BYTECODE_SYNC / _ASYNC  - manual bytecode manipulation
 //   LUMA_PATCH_RECIPE_SYNC / _ASYNC    - DXP recipe patching
@@ -36,9 +35,12 @@
 //                                        shader creation; 1: pipeline clone
 //                                        swapped in at bind time
 //
-// Library availability is separate (LUMA_USE_DXP): the Luma props define it
-// when UseLumaDXP=true; recipe provider flags imply it as well. It never
-// enables provider code by itself.
+// Runtime toggling (original <-> patched per draw, EnsureShaderVariant) needs a
+// clone-based mode (CLONE=1 or an async provider); INPLACE patches are always-on.
+//
+// Library availability is separate (LUMA_USE_DXP, from the Luma props when
+// UseLumaDXP=true; recipe provider flags imply it as well). It never enables
+// provider code by itself.
 // ============================================================================
 
 #ifndef LUMA_PATCH_BYTECODE_SYNC
@@ -73,16 +75,14 @@
 #define LUMA_USE_DXP 0
 #endif
 
-// Recipe providers use the library — fail early instead of a confusing
+// Recipe providers need the library — fail early instead of a confusing
 // "cannot open include file: dxp/RecipeReport.hpp" error.
 #if LUMA_HAS_RECIPE_PROVIDERS && !LUMA_USE_DXP
 #error "LUMA_PATCH_RECIPE_SYNC/_ASYNC require UseLumaDXP=true in the project (defines LUMA_USE_DXP)"
 #endif
 
-// Provider modes are mutually exclusive: only one sync provider and one async
-// provider may be enabled at a time. The dispatch code compiles only the
-// enabled provider's branches, so enabling both would leave conflicting
-// code paths and unused machinery — fail early instead.
+// Only one sync and one async provider may be enabled: the dispatch compiles
+// only the enabled branches.
 #if LUMA_PATCH_BYTECODE_SYNC && LUMA_PATCH_RECIPE_SYNC
 #error "Only one sync provider may be enabled: LUMA_PATCH_BYTECODE_SYNC XOR LUMA_PATCH_RECIPE_SYNC"
 #endif
@@ -99,9 +99,9 @@ class DeviceData; // Global device data (instance_data.h)
 
 namespace Patch
 {
-   // The two patch providers. Processed/patch tracking is per method: a "no
-   // patch deemed necessary" outcome is deterministic per (method, shader hash)
-   // and must never suppress the other method's attempt on the same shader.
+   // The two patch providers; tracking is per method: a "no patch needed"
+   // outcome is deterministic per (method, hash) and must not suppress the
+   // other method's attempt on the same shader.
    enum class Method : uint8_t
    {
       Bytecode = 0,
@@ -110,7 +110,7 @@ namespace Patch
 
    constexpr size_t METHOD_COUNT = 2;
 
-   // One stored patch: the patched container bytes plus provider metadata.
+   // A stored patch: patched container bytes + provider metadata.
    struct PatchedShaderData
    {
       std::vector<uint8_t> code;
@@ -129,6 +129,9 @@ namespace Patch
       // Debug-data-stripped containers by pre-strip hash (Heavy Rain-style
       // unification). Kept separately from patches: stripping is not a patch.
       std::unordered_map<uint32_t, std::shared_ptr<const std::vector<uint8_t>>> stripped_containers;
+      // Bind-time default per shader (absent = enabled). Per-draw
+      // EnsureShaderVariant overrides this; never re-runs providers.
+      std::unordered_map<uint32_t, bool> patch_enabled_by_default;
       mutable std::shared_mutex mutex;
 
       bool HasPatch(uint32_t shader_hash) const
@@ -137,8 +140,37 @@ namespace Patch
          return patched_shaders.contains(shader_hash);
       }
 
-      // Whether a definitive outcome (patched or no-patch-needed) was already
-      // determined for this (method, shader). No-match is terminal per hash.
+      // Bind-time default for this shader. Not "is the patch applied now" —
+      // that's CommandListData::IsPatchToggleable.
+      bool IsPatchEnabled(uint32_t shader_hash) const
+      {
+         const std::shared_lock lock(mutex);
+         auto it = patch_enabled_by_default.find(shader_hash);
+         return it == patch_enabled_by_default.end() || it->second;
+      }
+
+      // Sets the bind-time default; returns true if changed.
+      bool SetPatchEnabled(uint32_t shader_hash, bool enabled)
+      {
+         const std::unique_lock lock(mutex);
+         auto [it, inserted] = patch_enabled_by_default.try_emplace(shader_hash, enabled);
+         if (!inserted && it->second == enabled)
+         {
+            return false;
+         }
+         it->second = enabled;
+         return true;
+      }
+
+      // Clears all bind-time defaults.
+      void ResetPatchToggles()
+      {
+         const std::unique_lock lock(mutex);
+         patch_enabled_by_default.clear();
+      }
+
+      // Definitive outcome (patched or no-patch-needed) already determined for
+      // this (method, shader); no-match is terminal per hash.
       bool IsProcessed(Method method, uint32_t shader_hash) const
       {
          const std::shared_lock lock(mutex);
@@ -207,8 +239,8 @@ namespace Patch
       uint32_t shader_hash = uint32_t(-1);
       const std::byte* shader_container = nullptr;
       size_t shader_container_size = 0;
-      // Async path only: points to the job's owned container, so games can pass
-      // it straight to Recipe::Execute without making a second copy.
+      // Async path only: the job's owned container, so games can pass it
+      // straight to Recipe::Execute without copying.
       const std::vector<uint8_t>* shader_container_owned = nullptr;
    };
 
@@ -262,7 +294,7 @@ namespace Patch
 
             const auto* chunk_byte_code = reinterpret_cast<const Shader::DXBCByteCodeChunk*>(chunk->chunk_data);
             const size_t bytecode_offset = header->chunk_offsets[i] + sizeof(Shader::DXBCChunk) + offsetof(Shader::DXBCByteCodeChunk, byte_code);
-            const uint32_t bytecode_size = (chunk_byte_code->chunk_size_dword * sizeof(uint32_t)) - sizeof(Shader::DXBCByteCodeChunk); // The size is stored in "DWORD" elements and counted the size and program version/type in its count, so we remove them
+            const uint32_t bytecode_size = (chunk_byte_code->chunk_size_dword * sizeof(uint32_t)) - sizeof(Shader::DXBCByteCodeChunk); // Stored in DWORDs and counts the size and program version/type in its count, so we remove them
 
             if (bytecode_offset + bytecode_size > container_size)
             {
@@ -328,12 +360,12 @@ namespace Patch
       const size_t new_container_size = container_size + bytecode_size_diff;
       out.resize(new_container_size);
 
-      // Copy everything until the byte code (the actual byte code "body" is copied below)
+      // Copy everything up to the byte code (the body itself is copied below)
       std::memcpy(out.data(), container, bytecode_offset);
 
-      // Copy anything after this chunk. Note: "chunk_size" counts the bytecode
-      // chunk header (8 bytes), so the tail starts 8 bytes into the bytecode,
-      // which the new bytecode copy below overwrites.
+      // Copy anything after this chunk (chunk_size counts the 8-byte chunk
+      // header, so the tail starts 8 bytes into the bytecode, which the copy
+      // below overwrites).
       const size_t old_tail_offset = header->chunk_offsets[chunk_index] + chunk->chunk_size;
       const size_t new_tail_offset = old_tail_offset + bytecode_size_diff;
       const size_t tail_size = container_size - old_tail_offset;
@@ -359,9 +391,8 @@ namespace Patch
          new_header->chunk_offsets[j] += bytecode_size_diff;
       }
 
-      // Recalculate and set the container MD5, otherwise the shader might fail to load.
-      // Official implementation is here: https://github.com/doitsujin/dxbc-spirv/blob/32866c0d0a0236b93681d25405e57a3e9d6868d3/dxbc/dxbc_container.cpp#L11
-      // This implementation should match it 100%
+      // Recalculate and set the container MD5, or the shader might fail to load.
+      // Official implementation: https://github.com/doitsujin/dxbc-spirv/blob/32866c0d0a0236b93681d25405e57a3e9d6868d3/dxbc/dxbc_container.cpp#L11 (should match 100%)
       Hash::MD5::Digest md5_digest = Shader::CalcDXBCHash(out.data(), out.size());
       std::memcpy(new_header->hash, &md5_digest.data, Shader::DXBCHeader::hash_size);
 
@@ -369,10 +400,8 @@ namespace Patch
    }
 
    // Clones the pipeline replacing shader subobjects via "find_patch" (same
-   // lookup order as LoadCustomShaders: custom file shaders first, then stored
-   // patches). Note: addon-created pipelines bypass ReShade's event dispatch
-   // (device_impl::create_pipeline calls the original device directly), so no
-   // re-entry guard is needed.
+   // lookup order as LoadCustomShaders: files first, then patches). No re-entry
+   // guard needed: addon-created pipelines bypass ReShade's event dispatch.
    inline std::pair<reshade::api::pipeline, bool> ClonePipelineWithPatches(
       reshade::api::device* device,
       reshade::api::pipeline_layout layout,
@@ -428,18 +457,14 @@ namespace Patch
       return {pipeline_clone, ok};
    }
 
-   // Runs the sync providers for one shader and stores any patch produced.
-   // Returns the stored patch (reused or fresh), or nullptr if none. Attempted
-   // providers are marked processed on any definitive outcome (patched or
-   // no-patch-needed — deterministic per method+hash, so they are never re-run
-   // for the same shader). Implemented in core.hpp (needs the full Game and
-   // DeviceData types).
+   // Runs the sync providers for one shader and stores any patch produced
+   // (returns it, or nullptr). Providers are marked processed on any definitive
+   // outcome, so they never re-run. Implemented in core.hpp (needs the full
+   // Game/DeviceData types).
    std::shared_ptr<PatchedShaderData> TrySyncPatch(Game& game, DeviceData& device_data, const ShaderPatchRequest& request, const ByteCodeView& view, uint32_t providers);
 
-   // Runs the declared async providers for one job (bytecode first, then
-   // recipe: manual wins on conflicts). Stores the result and marks the
-   // provider processed on any definitive outcome. Returns true if a patch
-   // was stored. Implemented in core.hpp (needs the full Game and DeviceData
-   // types).
+   // Runs the async providers for one job (bytecode first: manual wins on
+   // conflicts). Stores the result, marks processed on any definitive outcome.
+   // Returns true if a patch was stored. Implemented in core.hpp.
    bool ProcessAsyncPatchJob(Game& game, DeviceData& device_data, PatchJob& job, uint32_t providers);
 } // namespace Patch
