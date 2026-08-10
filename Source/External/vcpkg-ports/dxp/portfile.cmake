@@ -8,7 +8,7 @@
 vcpkg_download_distfile(DXP_ARCHIVE
     URLS "https://github.com/Izueh/DirectXShaderPatcher/releases/download/v${VERSION}/DirectXShaderPatcher-${VERSION}-ninja-x64.zip"
     FILENAME "dxp-${VERSION}-ninja-x64.zip"
-    SHA512 d67847492b287a11bc18b5b452f8b33c42fec127ac435e7e51280a2adf4caf8d8bf9f581b4c2e40b53a22098ef6a8ec20212a5f9ed9784d2c4a6c541978145f0
+    SHA512 18c4f478a64b8bad295e987d213476838068e9d8e42f8ba3f7b0d85ad3464865c3a93f56d8fcfcc49889f792c48de004558dc65bb40eda26106ccd77d0176cc7
 )
 
 vcpkg_extract_source_archive(DXP_SRC ARCHIVE "${DXP_ARCHIVE}" NO_REMOVE_ONE_LEVEL)
