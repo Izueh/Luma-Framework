@@ -47,8 +47,7 @@ if (-not $projectDir) {
     Write-Error "Project folder not found (or no vcxproj): Source\Games\$Project"
     exit 1
 }
-# The vcxproj filename doesn't always match the display name (e.g. the kept
-# underscore-prefixed exceptions _Template and _Generic Mod)
+# The vcxproj filename doesn't always match the display name (e.g. _Template, _Generic Mod)
 $vcxproj = Get-ChildItem -Path $projectDir -Filter "*.vcxproj" -File -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $vcxproj) {
     Write-Error "Project folder not found (or no vcxproj): $projectDir"
