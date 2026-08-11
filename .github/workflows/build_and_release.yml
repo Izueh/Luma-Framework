@@ -24,25 +24,9 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1.2
 
-    - name: Install vcpkg packages
-      shell: pwsh
-      run: |
-        $vcpkg = if ($env:VCPKG_INSTALLATION_ROOT -and (Test-Path "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe")) { "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" }
-                 elseif ($env:VCPKG_ROOT -and (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) { "$env:VCPKG_ROOT\vcpkg.exe" }
-                 else { "vcpkg" }
-        Write-Host "Using vcpkg: $vcpkg"
-        $manifests = Get-ChildItem -Path "Source/Games" -Filter "vcpkg.json" -Recurse | Where-Object { $_.FullName -notmatch 'vcpkg_installed' }
-        foreach ($manifest in $manifests) {
-          Write-Host "Installing vcpkg packages for $($manifest.Directory.Name)"
-          & $vcpkg install --triplet x64-windows --x-manifest-root="$($manifest.DirectoryName)"
-        }
-      continue-on-error: true
-
-    # Projects with VcpkgEnabled=true (Prey, BioShock Series) auto-install their
-    # manifest at build time through this MSBuild integration.
     - name: Integrate vcpkg with MSBuild
       shell: pwsh
-      run: $env:VCPKG_INSTALLATION_ROOT\vcpkg.exe integrate install
+      run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" integrate install'
 
     # This requires the git directory to be added to the PATH Windows environment variables, to properly set up versioning information
     - name: Build ReShade.sln Release
