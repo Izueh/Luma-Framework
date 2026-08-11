@@ -5092,11 +5092,53 @@ namespace
       mirror_texture->GetDesc(&mirror_desc);
       const uint32_t mip_count = min(original_desc.MipLevels, mirror_desc.MipLevels);
 
-      // Fast path: same typeless family -> plain memory copy (all mips/slices at once, no conversion needed)
+      // Fast path: same typeless family -> plain memory copy (all mips/slices at once, no conversion needed).
+      // Note: CopyResource FROM a resource currently bound as RTV/DSV/UAV on the same context is undefined
+      // usage (the debug layer flags it; drivers usually tolerate it, but it's a gamble). Detect that case and
+      // use the Copy-PS path below (which unbinds all outputs first) when it can handle the pair; otherwise
+      // fall back to the plain copy (old behavior).
+      const bool slow_path_viable = original_desc.SampleDesc.Count == 1 && mirror_desc.SampleDesc.Count == 1 && original_desc.ArraySize == 1 && mirror_desc.ArraySize == 1
+         && (original_desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) != 0 && (mirror_desc.BindFlags & D3D11_BIND_RENDER_TARGET) != 0
+         && !IsIntFormat(original_desc.Format) && !IsIntFormat(mirror_desc.Format);
       if (AreFormatsCopyCompatible(original_desc.Format, mirror_desc.Format))
       {
-         native_device_context->CopyResource(mirror, original);
-         return;
+         bool use_slow_path = false;
+         if (slow_path_viable)
+         {
+            com_ptr<ID3D11RenderTargetView> bound_rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+            com_ptr<ID3D11DepthStencilView> bound_dsv;
+            com_ptr<ID3D11UnorderedAccessView> bound_uavs[D3D11_PS_CS_UAV_REGISTER_COUNT];
+            native_device_context->OMGetRenderTargetsAndUnorderedAccessViews(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &bound_rtvs[0], &bound_dsv, 0, D3D11_PS_CS_UAV_REGISTER_COUNT, &bound_uavs[0]);
+            for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT && !use_slow_path; i++)
+            {
+               if (bound_rtvs[i])
+               {
+                  com_ptr<ID3D11Resource> bound_resource;
+                  bound_rtvs[i]->GetResource(&bound_resource);
+                  use_slow_path = bound_resource.get() == original;
+               }
+            }
+            if (!use_slow_path && bound_dsv)
+            {
+               com_ptr<ID3D11Resource> bound_resource;
+               bound_dsv->GetResource(&bound_resource);
+               use_slow_path = bound_resource.get() == original;
+            }
+            for (UINT i = 0; i < D3D11_PS_CS_UAV_REGISTER_COUNT && !use_slow_path; i++)
+            {
+               if (bound_uavs[i])
+               {
+                  com_ptr<ID3D11Resource> bound_resource;
+                  bound_uavs[i]->GetResource(&bound_resource);
+                  use_slow_path = bound_resource.get() == original;
+               }
+            }
+         }
+         if (!use_slow_path)
+         {
+            native_device_context->CopyResource(mirror, original);
+            return;
+         }
       }
 
       // Slow path: conversion via the Copy PS. Only supports 2D non-MSAA single-slice textures with
@@ -5143,6 +5185,16 @@ namespace
          case DXGI_FORMAT_B8G8R8X8_TYPELESS:
          case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB: srv_desc.Format = DXGI_FORMAT_B8G8R8X8_UNORM; break;
          case DXGI_FORMAT_R16G16B16A16_TYPELESS: srv_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; break;
+         // Additional typeless formats: previously the view creation silently failed (E_INVALIDARG),
+         // leaving the mirror with undefined content.
+         case DXGI_FORMAT_R32G32B32A32_TYPELESS: srv_desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; break;
+         case DXGI_FORMAT_R32G32B32_TYPELESS: srv_desc.Format = DXGI_FORMAT_R32G32B32_FLOAT; break;
+         case DXGI_FORMAT_R32G32_TYPELESS: srv_desc.Format = DXGI_FORMAT_R32G32_FLOAT; break;
+         case DXGI_FORMAT_R32_TYPELESS: srv_desc.Format = DXGI_FORMAT_R32_FLOAT; break;
+         case DXGI_FORMAT_R16G16_TYPELESS: srv_desc.Format = DXGI_FORMAT_R16G16_FLOAT; break;
+         case DXGI_FORMAT_R16_TYPELESS: srv_desc.Format = DXGI_FORMAT_R16_FLOAT; break;
+         case DXGI_FORMAT_R8G8_TYPELESS: srv_desc.Format = DXGI_FORMAT_R8G8_UNORM; break;
+         case DXGI_FORMAT_R8_TYPELESS: srv_desc.Format = DXGI_FORMAT_R8_UNORM; break;
          }
          srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
          srv_desc.Texture2D.MostDetailedMip = mip;
@@ -5163,6 +5215,16 @@ namespace
          case DXGI_FORMAT_B8G8R8X8_TYPELESS:
          case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB: rtv_desc.Format = DXGI_FORMAT_B8G8R8X8_UNORM; break;
          case DXGI_FORMAT_R16G16B16A16_TYPELESS: rtv_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT; break;
+         // Additional typeless formats: previously the view creation silently failed (E_INVALIDARG),
+         // leaving the mirror with undefined content.
+         case DXGI_FORMAT_R32G32B32A32_TYPELESS: rtv_desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT; break;
+         case DXGI_FORMAT_R32G32B32_TYPELESS: rtv_desc.Format = DXGI_FORMAT_R32G32B32_FLOAT; break;
+         case DXGI_FORMAT_R32G32_TYPELESS: rtv_desc.Format = DXGI_FORMAT_R32G32_FLOAT; break;
+         case DXGI_FORMAT_R32_TYPELESS: rtv_desc.Format = DXGI_FORMAT_R32_FLOAT; break;
+         case DXGI_FORMAT_R16G16_TYPELESS: rtv_desc.Format = DXGI_FORMAT_R16G16_FLOAT; break;
+         case DXGI_FORMAT_R16_TYPELESS: rtv_desc.Format = DXGI_FORMAT_R16_FLOAT; break;
+         case DXGI_FORMAT_R8G8_TYPELESS: rtv_desc.Format = DXGI_FORMAT_R8G8_UNORM; break;
+         case DXGI_FORMAT_R8_TYPELESS: rtv_desc.Format = DXGI_FORMAT_R8_UNORM; break;
          }
          rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
          rtv_desc.Texture2D.MipSlice = mip;
@@ -5176,6 +5238,18 @@ namespace
       }
 
       draw_state_stack.Restore(native_device_context);
+   }
+
+   // View handle -> resource handle from our caches (no device call under the luma lock).
+   // Returns 0 for views we don't know about (e.g. created before the addon loaded): callers must
+   // fall back to get_resource_from_view outside the lock.
+   uint64_t GetCachedResourceFromView(const DeviceData& device_data, uint64_t view_handle)
+   {
+      if (auto it = device_data.mirror_views_to_mirror_resources.find(view_handle); it != device_data.mirror_views_to_mirror_resources.end())
+         return it->second;
+      if (auto it = device_data.original_views_to_resources.find(view_handle); it != device_data.original_views_to_resources.end())
+         return it->second;
+      return 0;
    }
 
    bool FindOrCreateIndirectUpgradedResource(reshade::api::device* device, const uint64_t in_source_resource, const uint64_t in_resource, uint64_t& out_resource, DeviceData& device_data, bool allow_create, reshade::api::resource_usage initial_state, std::shared_lock<std::shared_mutex>& lock_device_read, bool leave_locked = true)
@@ -5293,41 +5367,59 @@ namespace
       // TODO: just cache all the views for any resource we might ever upgrade later (e.g. through "auto_texture_format_upgrade_shader_hashes"), as mentioned above, so we could skip many of these checks.
       else if (allow_create && in_rv != 0 && !device_data.original_resources_to_mirrored_upgraded_resources.empty())
       {
-         reshade::api::resource resource = device->get_resource_from_view({ in_rv }); // Note: this is likely fine to be done under a luma mutex... but it's a risk, as all device calls are
-         auto original_resource_to_mirrored_upgraded_resource = device_data.original_resources_to_mirrored_upgraded_resources.find(resource.handle);
-         if (original_resource_to_mirrored_upgraded_resource != device_data.original_resources_to_mirrored_upgraded_resources.end())
+         reshade::api::resource resource;
+         resource.handle = GetCachedResourceFromView(device_data, in_rv);
+         if (resource.handle == 0) // Unknown view (e.g. created before the addon loaded): query the device outside the lock
          {
-            const auto original_resource_to_mirrored_upgraded_resource_ptr = original_resource_to_mirrored_upgraded_resource->second;
-
             lock_device_read.unlock(); // Avoids deadlocks with the device
-
-            reshade::api::resource_view_desc resource_view_desc = device->get_resource_view_desc({ in_rv });
-            resource_view_desc.format = reshade::api::format::unknown; // Null the format so it's determined automatically. All the formats returned by "GetBestResourceUpgradeFormat()" are not typeless, so we can make views of (almost) all of them directly.
-
-            reshade::api::resource_view mirrored_upgraded_resource_view;
-            if (device->create_resource_view({original_resource_to_mirrored_upgraded_resource_ptr}, usage, resource_view_desc, &mirrored_upgraded_resource_view))
-            {
-               std::unique_lock lock_device_write(device_data.mutex);
-               if (!device_data.original_resource_views_to_mirrored_upgraded_resource_views.contains(in_rv))
-               {
-                  device_data.original_resource_views_to_mirrored_upgraded_resource_views[in_rv] = mirrored_upgraded_resource_view.handle;
-                  device_data.mirror_views_by_mirror_resource[original_resource_to_mirrored_upgraded_resource_ptr].emplace(mirrored_upgraded_resource_view.handle);
-                  out_rv = mirrored_upgraded_resource_view.handle;
-               }
-               else // Destroy it if it was accidentally created at the same time by another thread
-               {
-                  out_rv = device_data.original_resource_views_to_mirrored_upgraded_resource_views[in_rv];
-                  lock_device_write.unlock(); // Not really necessary, reshade "destroy_resource" simply clears a com ptr
-                  device->destroy_resource_view(mirrored_upgraded_resource_view);
-               }
-               replaced = true;
-            }
-            else
-            {
-               ASSERT_ONCE_MSG(false, "Failed to create an indirect upgraded texture view (maybe some format mismatch)");
-            }
-
+            resource = device->get_resource_from_view({ in_rv });
             lock_device_read.lock();
+         }
+         // The view may have been mapped by another thread while we were unlocked above: never create a duplicate
+         auto recheck_it = device_data.original_resource_views_to_mirrored_upgraded_resource_views.find(in_rv);
+         if (recheck_it != device_data.original_resource_views_to_mirrored_upgraded_resource_views.end())
+         {
+            replaced = true;
+            out_rv = recheck_it->second;
+         }
+         else
+         {
+            auto original_resource_to_mirrored_upgraded_resource = device_data.original_resources_to_mirrored_upgraded_resources.find(resource.handle);
+            if (original_resource_to_mirrored_upgraded_resource != device_data.original_resources_to_mirrored_upgraded_resources.end())
+            {
+               const auto original_resource_to_mirrored_upgraded_resource_ptr = original_resource_to_mirrored_upgraded_resource->second;
+
+               lock_device_read.unlock(); // Avoids deadlocks with the device
+
+               reshade::api::resource_view_desc resource_view_desc = device->get_resource_view_desc({ in_rv });
+               resource_view_desc.format = reshade::api::format::unknown; // Null the format so it's determined automatically. All the formats returned by "GetBestResourceUpgradeFormat()" are not typeless, so we can make views of (almost) all of them directly.
+
+               reshade::api::resource_view mirrored_upgraded_resource_view;
+               if (device->create_resource_view({original_resource_to_mirrored_upgraded_resource_ptr}, usage, resource_view_desc, &mirrored_upgraded_resource_view))
+               {
+                  std::unique_lock lock_device_write(device_data.mutex);
+                  if (!device_data.original_resource_views_to_mirrored_upgraded_resource_views.contains(in_rv))
+                  {
+                     device_data.original_resource_views_to_mirrored_upgraded_resource_views[in_rv] = mirrored_upgraded_resource_view.handle;
+                     device_data.mirror_views_by_mirror_resource[original_resource_to_mirrored_upgraded_resource_ptr].emplace(mirrored_upgraded_resource_view.handle);
+                     device_data.mirror_views_to_mirror_resources[mirrored_upgraded_resource_view.handle] = original_resource_to_mirrored_upgraded_resource_ptr;
+                     out_rv = mirrored_upgraded_resource_view.handle;
+                  }
+                  else // Destroy it if it was accidentally created at the same time by another thread
+                  {
+                     out_rv = device_data.original_resource_views_to_mirrored_upgraded_resource_views[in_rv];
+                     lock_device_write.unlock(); // Not really necessary, reshade "destroy_resource" simply clears a com ptr
+                     device->destroy_resource_view(mirrored_upgraded_resource_view);
+                  }
+                  replaced = true;
+               }
+               else
+               {
+                  ASSERT_ONCE_MSG(false, "Failed to create an indirect upgraded texture view (maybe some format mismatch)");
+               }
+
+               lock_device_read.lock();
+            }
          }
       }
 
@@ -6580,7 +6672,13 @@ namespace
                      if (rtvs[auto_texture_format_upgrade_shader_hashes_data.first[i]] != nullptr)
                      {
                         const uint64_t prev_resource_view = reinterpret_cast<uint64_t>(rtvs[auto_texture_format_upgrade_shader_hashes_data.first[i]].get());
-                        const uint64_t prev_resource = device->get_resource_from_view({ prev_resource_view }).handle; // TODO: these can cause deadlocks in the device code due to "lock_device_read", cache the view/resource ptrs or something
+                        uint64_t prev_resource = GetCachedResourceFromView(device_data, prev_resource_view); // No device call under the lock
+                        if (prev_resource == 0) // Unknown view (e.g. created before the addon loaded): query the device outside the lock
+                        {
+                           lock_device_read.unlock(); // Avoids deadlocks with the device
+                           prev_resource = device->get_resource_from_view({ prev_resource_view }).handle;
+                           lock_device_read.lock();
+                        }
                         uint64_t resource = prev_resource;
                         // TODO: add aspect ratio tolerance for the "force_indirect_texture_format_upgrades" case? Also check if the format and channels number make sense to be upgraded from that source
                         if (FindOrCreateIndirectUpgradedResource(device, source_resource, prev_resource, resource, device_data, true, reshade::api::resource_usage::render_target, lock_device_read) && resource != prev_resource)
@@ -6603,7 +6701,13 @@ namespace
                   if (uavs[auto_texture_format_upgrade_shader_hashes_data.second[i]] != nullptr)
                   {
                      const uint64_t prev_resource_view = reinterpret_cast<uint64_t>(uavs[auto_texture_format_upgrade_shader_hashes_data.second[i]].get());
-                     const uint64_t prev_resource = device->get_resource_from_view({prev_resource_view}).handle;
+                     uint64_t prev_resource = GetCachedResourceFromView(device_data, prev_resource_view); // No device call under the lock
+                     if (prev_resource == 0) // Unknown view (e.g. created before the addon loaded): query the device outside the lock
+                     {
+                        lock_device_read.unlock(); // Avoids deadlocks with the device
+                        prev_resource = device->get_resource_from_view({ prev_resource_view }).handle;
+                        lock_device_read.lock();
+                     }
                      uint64_t resource = prev_resource;
                      if (FindOrCreateIndirectUpgradedResource(device, source_resource, prev_resource, resource, device_data, true, reshade::api::resource_usage::unordered_access, lock_device_read) && resource != prev_resource)
                      {
@@ -8241,6 +8345,7 @@ namespace
 
       DeviceData& device_data = *device->get_private_data<DeviceData>();
       std::unique_lock lock(device_data.mutex);
+
       if (waiting_on_upgraded_resource_init)
       {
          // If this happened, some resource creation failed an "OnInitResource()" was never called after "OnCreateResource()".
@@ -8434,6 +8539,7 @@ namespace
                if (mirror_views.contains(view_map_it->second))
                {
                   unlinked_mirror_views.push_back(view_map_it->second);
+                  device_data.mirror_views_to_mirror_resources.erase(view_map_it->second);
                   view_map_it = device_data.original_resource_views_to_mirrored_upgraded_resource_views.erase(view_map_it);
                }
                else
@@ -8736,6 +8842,10 @@ namespace
       DeviceData& device_data = *device->get_private_data<DeviceData>();
       std::unique_lock lock(device_data.mutex);
 
+      // Cache the view -> resource mapping so the draw/descriptor/destroy paths never need a device call
+      // (get_resource_from_view) while holding the luma mutex.
+      device_data.original_views_to_resources[view.handle] = resource.handle;
+
 #if DEVELOPMENT
       if (device_data.original_upgraded_resources_formats.contains(resource.handle))
       {
@@ -8765,6 +8875,7 @@ namespace
             lock.lock();
             device_data.original_resource_views_to_mirrored_upgraded_resource_views[view.handle] = mirrored_upgraded_resource_view.handle;
             device_data.mirror_views_by_mirror_resource[original_resource_to_mirrored_upgraded_resource_ptr].emplace(mirrored_upgraded_resource_view.handle);
+            device_data.mirror_views_to_mirror_resources[mirrored_upgraded_resource_view.handle] = original_resource_to_mirrored_upgraded_resource_ptr;
          }
       }
    }
@@ -8785,14 +8896,24 @@ namespace
 #if DEVELOPMENT
       device_data.original_upgraded_resource_views_formats.erase(view.handle);
 #endif
+      device_data.original_views_to_resources.erase(view.handle);
 
       auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.original_resource_views_to_mirrored_upgraded_resource_views.find(view.handle);
       if (original_resource_view_to_mirrored_upgraded_resource_view != device_data.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
          const auto mirrored_upgraded_resource_view = original_resource_view_to_mirrored_upgraded_resource_view->second;
          device_data.original_resource_views_to_mirrored_upgraded_resource_views.erase(original_resource_view_to_mirrored_upgraded_resource_view);
-         // Remove from the per-mirror view registry (one device call; view destruction is not a hot path)
-         const reshade::api::resource mirror_resource = device->get_resource_from_view({ mirrored_upgraded_resource_view });
+         // No device call (get_resource_from_view) under the luma lock: this callback runs inside the D3D11
+         // runtime's final Release (destruction notifier) on an arbitrary thread, so taking the luma lock here and
+         // then calling back into the runtime inverts the lock order vs the draw path (which holds the shared luma
+         // lock while making device calls) and can deadlock. The mirror resource handle is cached at insert time.
+         reshade::api::resource mirror_resource;
+         mirror_resource.handle = 0;
+         if (auto mirror_res_it = device_data.mirror_views_to_mirror_resources.find(mirrored_upgraded_resource_view); mirror_res_it != device_data.mirror_views_to_mirror_resources.end())
+         {
+            mirror_resource.handle = mirror_res_it->second;
+            device_data.mirror_views_to_mirror_resources.erase(mirror_res_it);
+         }
          if (auto mirror_views_it = device_data.mirror_views_by_mirror_resource.find(mirror_resource.handle); mirror_views_it != device_data.mirror_views_by_mirror_resource.end())
          {
             mirror_views_it->second.erase(mirrored_upgraded_resource_view);
@@ -8841,7 +8962,14 @@ namespace
 
             for (uint32_t i = 0; i < replaced_update.count; i++)
             {
-               reshade::api::resource original_resource = rvs[i].handle != 0 ? cmd_list->get_device()->get_resource_from_view({ rvs[i].handle }) : reshade::api::resource{0}; // TODO: fix this, we shouldn't call it due to "lock_device_read"
+               reshade::api::resource original_resource;
+               original_resource.handle = rvs[i].handle != 0 ? GetCachedResourceFromView(device_data, rvs[i].handle) : 0; // No device call under the lock
+               if (rvs[i].handle != 0 && original_resource.handle == 0) // Unknown view (e.g. created before the addon loaded): query the device outside the lock
+               {
+                  lock_device_read.unlock(); // Avoids deadlocks with the device
+                  original_resource = cmd_list->get_device()->get_resource_from_view({ rvs[i].handle });
+                  lock_device_read.lock();
+               }
 
                bool replaced = FindOrCreateIndirectUpgradedResourceView(cmd_list->get_device(), rvs[i].handle, rvs[i].handle, device_data, enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectDependencies, resource_usage, lock_device_read);
                any_replaced |= replaced;
@@ -15029,6 +15157,11 @@ namespace
                      {
                         ImGui::SetTooltip("Indirect Texture Upgrades will possibly still happen, but they will not be bound, allowing you to quickly toggle between the game textures and the upgraded ones");
                      }
+                     ImGui::Checkbox("Initialize Mirror Content (copies)", &enable_mirror_content_init);
+                     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                     {
+                        ImGui::SetTooltip("When a mirror is created, copy the original's current content into it (converted when needed). Disabling leaves mirrors with undefined content, useful to tell apart content-init artifacts from redirection issues");
+                     }
                      
                      // TODO: add a button to also re-create all of them live (we'd need some sort of tracking for that, or to temporarily white list all PS/CS shaders to automatically upgrade textures, or actually, we can just read the source texture and re-upgrade it if we keep them in the list)
                      std::unordered_map<uint64_t, uint64_t> original_resource_views_to_mirrored_upgraded_resource_views;
@@ -16168,6 +16301,18 @@ BOOL APIENTRY CoreMain(HMODULE h_module, DWORD fdw_reason, LPVOID lpv_reserved)
 
       reshade::register_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(OnBindRenderTargetsAndDepthStencil);
 
+      // UE decides whether to enable upgrades at runtime (HDR config), after this registration point (its
+      // DllMain reads the ReShade config after CoreMain), so install the upgrade machinery events
+      // unconditionally for it. All other games set the upgrade settings in DllMain BEFORE CoreMain, so the
+      // load-time settings snapshot in the #else branch below works for them.
+#if GAME_UNREAL_ENGINE
+      reshade::register_event<reshade::addon_event::init_resource>(OnInitResource);
+      reshade::register_event<reshade::addon_event::create_resource>(OnCreateResource);
+      reshade::register_event<reshade::addon_event::destroy_resource>(OnDestroyResource);
+      reshade::register_event<reshade::addon_event::create_resource_view>(OnCreateResourceView);
+      reshade::register_event<reshade::addon_event::init_resource_view>(OnInitResourceView);
+      reshade::register_event<reshade::addon_event::destroy_resource_view>(OnDestroyResourceView);
+#else
       if (texture_format_upgrades_type > TextureFormatUpgradesType::None)
       {
          reshade::register_event<reshade::addon_event::init_resource>(OnInitResource);
@@ -16186,6 +16331,7 @@ BOOL APIENTRY CoreMain(HMODULE h_module, DWORD fdw_reason, LPVOID lpv_reserved)
          reshade::register_event<reshade::addon_event::init_resource_view>(OnInitResourceView);
          reshade::register_event<reshade::addon_event::destroy_resource_view>(OnDestroyResourceView);
       }
+#endif // GAME_UNREAL_ENGINE
 
       reshade::register_event<reshade::addon_event::push_descriptors>(OnPushDescriptors);
 #if DEVELOPMENT
