@@ -24,21 +24,24 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1.2
 
-    - name: Clone vcpkg
-      run: git clone https://github.com/microsoft/vcpkg.git
-
-    - name: Bootstrap vcpkg
-      run: .\vcpkg\bootstrap-vcpkg.bat
-
-    # Exclusively for Prey (which is x64). Ideally it should find the vcpkg.json automatically
+    # The runner image ships a prebuilt vcpkg (C:\vcpkg, see VCPKG_INSTALLATION_ROOT),
+    # so there is no need to clone/bootstrap our own. Install the manifest of every
+    # game that declares vcpkg dependencies (currently Prey, Final Fantasy XV and
+    # BioShock Series). Luma.Features.props auto-installs as the local-dev
+    # equivalent (and safety net) when the packages are missing.
     - name: Install vcpkg packages
+      shell: pwsh
       run: |
-        .\vcpkg\vcpkg install --triplet x64-windows --x-manifest-root=./Source/Games/Prey
-        #.\vcpkg\vcpkg install --triplet x86-windows --x-manifest-root=./Source/Games/Prey
+        $vcpkg = if ($env:VCPKG_INSTALLATION_ROOT -and (Test-Path "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe")) { "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" }
+                 elseif ($env:VCPKG_ROOT -and (Test-Path "$env:VCPKG_ROOT\vcpkg.exe")) { "$env:VCPKG_ROOT\vcpkg.exe" }
+                 else { "vcpkg" }
+        Write-Host "Using vcpkg: $vcpkg"
+        $manifests = Get-ChildItem -Path "Source/Games" -Filter "vcpkg.json" -Recurse | Where-Object { $_.FullName -notmatch 'vcpkg_installed' }
+        foreach ($manifest in $manifests) {
+          Write-Host "Installing vcpkg packages for $($manifest.Directory.Name)"
+          & $vcpkg install --triplet x64-windows --x-manifest-root="$($manifest.DirectoryName)"
+        }
       continue-on-error: true
-
-    - name: Integrate vcpkg with MSBuild
-      run: .\vcpkg\vcpkg integrate install
 
     # This requires the git directory to be added to the PATH Windows environment variables, to properly set up versioning information
     - name: Build ReShade.sln Release
@@ -48,8 +51,12 @@ jobs:
       continue-on-error: true
       
     - name: Build Luma.sln ${{ matrix.config }}-${{ matrix.platform }}
+      shell: pwsh
       run: |
         msbuild Luma.sln /p:Configuration=${{ matrix.config }} /p:Platform=${{ matrix.platform }} /p:DefineConstants="REMOTE_BUILD=1"
+        if ($LASTEXITCODE -ne 0) {
+          Write-Host "::warning::MSBuild reported errors for ${{ matrix.config }}-${{ matrix.platform }} - the projects that failed to compile will be excluded from packaging/release (see the 'Create ZIP' step for the exact list)."
+        }
       continue-on-error: true # if only one or a few games failed to build, we should still build and package+release the other # TODO: add code to avoid doing an empty release if they all failed to build
 
     - name: Create ZIP per addon with matching shaders
@@ -86,6 +93,42 @@ jobs:
         Write-Host "NGX projects: $($ngxProjects -join ', ')"
         Write-Host "Core FAST texture projects: $($coreFastNoiseProjects -join ', ')"
         Write-Host "DXP projects: $($dxpProjects -join ', ')"
+
+        # Determine which projects SHOULD have produced an addon for this
+        # configuration/platform, by combining Luma.sln (which projects build for
+        # this cell, and to which project config) with the vcxproj <ProjectName>
+        # (the produced addon is Luma-<ProjectName>.addon). The solution maps
+        # e.g. Win32 -> x64 for projects with no Win32 build (their addons land
+        # in Binaries\x64-* and ship via the x64 job), so only projects whose
+        # mapped project config equals this matrix cell are expected here. This
+        # lets us warn about failed builds instead of silently dropping them.
+        $solCfg = "${{ matrix.config }}|${{ matrix.platform }}"
+        $slnProjects = @{}
+        $projectLinePattern = '^Project\("\{[^"]+\}"\) = "([^"]+)", "([^"]+\.vcxproj)", "\{([^"]+)\}"'
+        foreach ($line in (Get-Content "Luma.sln")) {
+          if ($line -match $projectLinePattern) {
+            $slnProjects[$Matches[3]] = @{ Name = $Matches[1]; Vcxproj = $Matches[2] }
+          }
+        }
+        $buildLinePattern = '^\s*\{([^}]+)\}\.' + [regex]::Escape($solCfg) + '\.Build\.0\s*=\s*(.+)$'
+        $expectedAddons = @()
+        foreach ($line in (Get-Content "Luma.sln")) {
+          if ($line -match $buildLinePattern) {
+            $guid = $Matches[1]
+            $mappedCfg = $Matches[2].Trim()
+            if ($mappedCfg -ne $solCfg -or -not $slnProjects.ContainsKey($guid)) { continue }
+            $proj = $slnProjects[$guid]
+            $vcxPath = Join-Path (Get-Location) $proj.Vcxproj
+            if (-not (Test-Path $vcxPath)) { continue }
+            $vcxContent = Get-Content $vcxPath -Raw
+            if ($vcxContent -match '<ConfigurationType>StaticLibrary</ConfigurationType>') { continue }
+            $projName = $proj.Name
+            if ($vcxContent -match '<ProjectName>([^<]+)</ProjectName>') { $projName = $Matches[1] }
+            $projName = $projName -replace '&amp;', '&' -replace '&lt;', '<' -replace '&gt;', '>' -replace '&quot;', '"'
+            $expectedAddons += "Luma-$projName.addon"
+          }
+        }
+        Write-Host "Projects expected for this configuration: $($expectedAddons.Count)"
         
         # Find the addon file in the build folder (adjust path accordingly)
         $addonDir = "Binaries\${{ matrix.platform }}-${{ matrix.config }}"
@@ -98,7 +141,19 @@ jobs:
         }
 
         "skip_upload=false" >> $env:GITHUB_OUTPUT
-        
+
+        # Warn about projects that were expected to build for this configuration
+        # but produced no addon (they failed to build and are excluded from this
+        # release - the CI keeps going on purpose so the rest still ships).
+        $builtAddons = @($addonFiles | ForEach-Object { $_.Name })
+        $missingAddons = @($expectedAddons | Where-Object { $builtAddons -notcontains $_ })
+        if ($missingAddons.Count -gt 0) {
+          $missingProjects = $missingAddons | ForEach-Object { $_ -replace '^Luma-', '' -replace '\.addon$', '' }
+          $warningMessage = "Projects that failed to build (excluded from this release): $($missingProjects -join ', ')"
+          Write-Host ("::warning::" + ($warningMessage -replace '%', '%25' -replace ',', '%2C' -replace ':', '%3A'))
+        }
+
+        $packagedCount = 0
         foreach ($addonFile in $addonFiles) {
           if (-not $addonFile) {
             Write-Host "Addon file not found, it's likely this configuration isn't present for this project. Skipping."
@@ -157,10 +212,22 @@ jobs:
           # it copies the shaders mount, filters to this project, bundles the runtime
           # DLLs (d3dcompiler_47, ReShade as dxgi.dll, NGX DLSS) and zips next to the
           # addon or into -OutDir. dxcompiler.dll is intentionally not shipped (SM5-only).
-          powershell -ExecutionPolicy Bypass -File "scripts/package.ps1" -Project $projectName -Config "${{ matrix.config }}" -Platform "${{ matrix.platform }}" -OutDir "."
+          pwsh -ExecutionPolicy Bypass -File "Scripts/package.ps1" -Project $projectName -Config "${{ matrix.config }}" -Platform "${{ matrix.platform }}" -OutDir "."
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::warning::Packaging failed for '$projectName' - it will be excluded from this release."
+            continue
+          }
+          $packagedCount++
 
           #"zipfile=$zipName" >> $env:GITHUB_OUTPUT
           #"skip_upload=false" >> $env:GITHUB_OUTPUT
+        }
+
+        # Avoid shipping an empty release if every project failed to build/package
+        # (last write wins on GITHUB_OUTPUT, so this overrides the default above)
+        if ($packagedCount -eq 0) {
+          Write-Host "::warning::No projects were packaged successfully for ${{ matrix.config }}-${{ matrix.platform }} - skipping the upload for this configuration."
+          "skip_upload=true" >> $env:GITHUB_OUTPUT
         }
 
     - name: Upload ZIP

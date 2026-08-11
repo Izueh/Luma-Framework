@@ -33,9 +33,23 @@ function Test-PropEnabled([string]$vcxprojPath, [string]$propName) {
     return $content -match "<$propName>\s*true\s*</$propName>"
 }
 
-$projectDir = Join-Path $repoRoot "Source\Games\$Project"
-# The vcxproj filename doesn't always match the display name (e.g. FFXV.vcxproj)
-$vcxproj = Get-ChildItem -Path $projectDir -Filter "*.vcxproj" -ErrorAction SilentlyContinue | Select-Object -First 1
+function Find-ProjectDir {
+    param([string]$RepoRoot, [string]$ProjectName)
+    foreach ($rel in @("Source\Games\$ProjectName", "Source\Games\_$ProjectName", "Source\$ProjectName")) {
+        $dir = Join-Path $RepoRoot $rel
+        if (Test-Path $dir -PathType Container) { return $dir }
+    }
+    return $null
+}
+
+$projectDir = Find-ProjectDir -RepoRoot $repoRoot -ProjectName $Project
+if (-not $projectDir) {
+    Write-Error "Project folder not found (or no vcxproj): Source\Games\$Project"
+    exit 1
+}
+# The vcxproj filename doesn't always match the display name (e.g. the kept
+# underscore-prefixed exceptions _Template and _Generic Mod)
+$vcxproj = Get-ChildItem -Path $projectDir -Filter "*.vcxproj" -File -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $vcxproj) {
     Write-Error "Project folder not found (or no vcxproj): $projectDir"
     exit 1
@@ -56,7 +70,7 @@ if (-not [string]::IsNullOrEmpty($AddonPath) -and (Test-Path $AddonPath)) {
     $addonFile = Get-Item $AddonPath
 } else {
     $addonCandidates = @()
-    $projectAddonDir = Join-Path $repoRoot "Source\Games\$Project\Binaries\$Platform-$Config"
+    $projectAddonDir = Join-Path $projectDir "Binaries\$Platform-$Config"
     foreach ($dir in @($projectAddonDir, (Join-Path $repoRoot "Binaries\$Platform-$Config"))) {
         if (Test-Path $dir) {
             $addonCandidates += Get-ChildItem -Path $dir -Filter "*.addon" -ErrorAction SilentlyContinue |
@@ -114,7 +128,7 @@ if (-not $useLumaFastNoise) {
 # 3. Keep shader/recipe/texture files only
 $allowedExtensions = @(".hlsl", ".hlsli")
 Get-ChildItem -Path "$tempDir\Luma" -Recurse -File | ForEach-Object {
-    # PS 5.1 lacks [IO.Path]::GetRelativePath — compute it manually
+    # Keep Windows PowerShell 5.1 compatible - it lacks [IO.Path]::GetRelativePath, so compute it manually
     $relativePath = $_.FullName.Substring("$tempDir\Luma\".Length)
     $isRecipeFile = $_.Name.EndsWith('.recipe.yml', [System.StringComparison]::OrdinalIgnoreCase)
     $isTextureFile = $relativePath -match 'Textures[\\/]'
