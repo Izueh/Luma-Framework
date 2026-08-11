@@ -8,43 +8,18 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(UseLumaDXP)'=='true'">
-    <!-- DXP SDK via vcpkg: the manifest (vcpkg.json) in this project declares the
-         dxp dependency; the overlay port (Source/External/vcpkg-ports) supplies
-         the prebuilt package. The props drives the install + paths directly so
-         enabling UseLumaDXP is all a game needs (no machine vcpkg integration). -->
-    <DXPVcpkgRoot>$(MSBuildProjectDirectory)\vcpkg_installed\x64-windows</DXPVcpkgRoot>
-    <DXPLibDir Condition="'$(Configuration)'=='Development-Debug'">$(DXPVcpkgRoot)\debug\lib</DXPLibDir>
-    <DXPLibDir Condition="'$(DXPLibDir)'==''">$(DXPVcpkgRoot)\lib</DXPLibDir>
-    <DXPBinDir Condition="'$(Configuration)'=='Development-Debug'">$(DXPVcpkgRoot)\debug\bin</DXPBinDir>
-    <DXPBinDir Condition="'$(DXPBinDir)'==''">$(DXPVcpkgRoot)\bin</DXPBinDir>
-    <IncludePath>$(DXPVcpkgRoot)\include;$(IncludePath)</IncludePath>
-    <LibraryPath>$(DXPLibDir);$(LibraryPath)</LibraryPath>
+    <VcpkgEnabled>true</VcpkgEnabled>
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
+    <VcpkgManifestRoot>$(MSBuildProjectDirectory)</VcpkgManifestRoot>
   </PropertyGroup>
 
-  <Target Name="LumaEnsureDxpManifest" BeforeTargets="LumaEnsureDxpVcpkg"
+  <Target Name="LumaEnsureDxpManifest" BeforeTargets="VcpkgInstallManifestDependencies"
           Condition="'$(UseLumaDXP)'=='true'">
-    <!-- Ensure the project's vcpkg manifest + overlay configuration carry the DXP
-         dependency. Creates them if missing, MERGES the dxp dependency/overlay
-         entry into existing files (never overwriting user content), and never
-         deletes anything when the feature is off. -->
     <PropertyGroup>
       <_LumaManifestName>$(ProjectName.Replace(' ', '-').ToLower())-luma</_LumaManifestName>
       <_LumaPropsRoot>$(MSBuildThisFileDirectory)..\..</_LumaPropsRoot>
     </PropertyGroup>
     <Exec Command="powershell -ExecutionPolicy Bypass -File &quot;$(_LumaPropsRoot)\scripts\ensure_dxp_vcpkg.ps1&quot; -ProjectDir &quot;$(MSBuildProjectDirectory)&quot; -ManifestName &quot;$(_LumaManifestName)&quot;" />
-  </Target>
-
-  <!-- vcpkg resolution: VCPKG_INSTALLATION_ROOT (CI runner) -> VCPKG_ROOT (local) -> PATH -->
-  <PropertyGroup>
-    <_LumaVcpkgExe Condition="'$(VCPKG_INSTALLATION_ROOT)'!=''">$(VCPKG_INSTALLATION_ROOT)\vcpkg.exe</_LumaVcpkgExe>
-    <_LumaVcpkgExe Condition="'$(_LumaVcpkgExe)'=='' and '$(VCPKG_ROOT)'!=''">$(VCPKG_ROOT)\vcpkg.exe</_LumaVcpkgExe>
-    <_LumaVcpkgExe Condition="'$(_LumaVcpkgExe)'==''">vcpkg</_LumaVcpkgExe>
-  </PropertyGroup>
-
-  <Target Name="LumaEnsureDxpVcpkg" BeforeTargets="PrepareForBuild"
-          Condition="'$(UseLumaDXP)'=='true' and !Exists('$(DXPVcpkgRoot)\lib\dxpatcher.lib')">
-    <Exec Command="&quot;$(_LumaVcpkgExe)&quot; install --triplet=x64-windows"
-          WorkingDirectory="$(MSBuildProjectDirectory)" />
   </Target>
 
   <PropertyGroup Condition="'$(UseLumaNGX)'=='true'">
