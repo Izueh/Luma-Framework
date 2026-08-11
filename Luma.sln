@@ -45,7 +45,7 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Thumper", "Source\Games\Thu
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Burnout Paradise Remastered", "Source\Games\Burnout Paradise Remastered\Burnout Paradise Remastered.vcxproj", "{5671B4DE-DD84-4FCC-890F-D5B7F5437E42}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Final Fantasy XV", "Source\Games\Final Fantasy XV\FFXV.vcxproj", "{8EF11F8D-FD8B-45E1-888E-CEEA5FFB316E}"
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Final Fantasy XV", "Source\Games\Final Fantasy XV\Final Fantasy XV.vcxproj", "{8EF11F8D-FD8B-45E1-888E-CEEA5FFB316E}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Heavy Rain", "Source\Games\Heavy Rain\Heavy Rain.vcxproj", "{D58EB0ED-8EFA-4DB0-B2AD-B2D2A098873E}"
 EndProject

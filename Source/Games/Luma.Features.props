@@ -34,9 +34,16 @@
     <Exec Command="powershell -ExecutionPolicy Bypass -File &quot;$(_LumaPropsRoot)\scripts\ensure_dxp_vcpkg.ps1&quot; -ProjectDir &quot;$(MSBuildProjectDirectory)&quot; -ManifestName &quot;$(_LumaManifestName)&quot;" />
   </Target>
 
+  <!-- vcpkg resolution: VCPKG_INSTALLATION_ROOT (CI runner) -> VCPKG_ROOT (local) -> PATH -->
+  <PropertyGroup>
+    <_LumaVcpkgExe Condition="'$(VCPKG_INSTALLATION_ROOT)'!=''">$(VCPKG_INSTALLATION_ROOT)\vcpkg.exe</_LumaVcpkgExe>
+    <_LumaVcpkgExe Condition="'$(_LumaVcpkgExe)'=='' and '$(VCPKG_ROOT)'!=''">$(VCPKG_ROOT)\vcpkg.exe</_LumaVcpkgExe>
+    <_LumaVcpkgExe Condition="'$(_LumaVcpkgExe)'==''">vcpkg</_LumaVcpkgExe>
+  </PropertyGroup>
+
   <Target Name="LumaEnsureDxpVcpkg" BeforeTargets="PrepareForBuild"
-          Condition="'$(UseLumaDXP)'=='true' and '$(VCPKG_ROOT)'!='' and !Exists('$(DXPVcpkgRoot)\lib\dxpatcher.lib')">
-    <Exec Command="&quot;$(VCPKG_ROOT)\vcpkg.exe&quot; install --triplet=x64-windows"
+          Condition="'$(UseLumaDXP)'=='true' and !Exists('$(DXPVcpkgRoot)\lib\dxpatcher.lib')">
+    <Exec Command="&quot;$(_LumaVcpkgExe)&quot; install --triplet=x64-windows"
           WorkingDirectory="$(MSBuildProjectDirectory)" />
   </Target>
 
