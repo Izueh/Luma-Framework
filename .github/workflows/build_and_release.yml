@@ -24,11 +24,6 @@ jobs:
     - name: Setup MSBuild
       uses: microsoft/setup-msbuild@v1.1.2
 
-    # The runner image ships a prebuilt vcpkg (C:\vcpkg, see VCPKG_INSTALLATION_ROOT),
-    # so there is no need to clone/bootstrap our own. Install the manifest of every
-    # game that declares vcpkg dependencies (currently Prey, Final Fantasy XV and
-    # BioShock Series). Luma.Features.props auto-installs as the local-dev
-    # equivalent (and safety net) when the packages are missing.
     - name: Install vcpkg packages
       shell: pwsh
       run: |
@@ -42,6 +37,12 @@ jobs:
           & $vcpkg install --triplet x64-windows --x-manifest-root="$($manifest.DirectoryName)"
         }
       continue-on-error: true
+
+    # Projects with VcpkgEnabled=true (Prey, BioShock Series) auto-install their
+    # manifest at build time through this MSBuild integration.
+    - name: Integrate vcpkg with MSBuild
+      shell: pwsh
+      run: $env:VCPKG_INSTALLATION_ROOT\vcpkg.exe integrate install
 
     # This requires the git directory to be added to the PATH Windows environment variables, to properly set up versioning information
     - name: Build ReShade.sln Release
@@ -94,14 +95,7 @@ jobs:
         Write-Host "Core FAST texture projects: $($coreFastNoiseProjects -join ', ')"
         Write-Host "DXP projects: $($dxpProjects -join ', ')"
 
-        # Determine which projects SHOULD have produced an addon for this
-        # configuration/platform, by combining Luma.sln (which projects build for
-        # this cell, and to which project config) with the vcxproj <ProjectName>
-        # (the produced addon is Luma-<ProjectName>.addon). The solution maps
-        # e.g. Win32 -> x64 for projects with no Win32 build (their addons land
-        # in Binaries\x64-* and ship via the x64 job), so only projects whose
-        # mapped project config equals this matrix cell are expected here. This
-        # lets us warn about failed builds instead of silently dropping them.
+        # Expected addons for this cell (from Luma.sln) - missing ones failed to build
         $solCfg = "${{ matrix.config }}|${{ matrix.platform }}"
         $slnProjects = @{}
         $projectLinePattern = '^Project\("\{[^"]+\}"\) = "([^"]+)", "([^"]+\.vcxproj)", "\{([^"]+)\}"'
@@ -142,9 +136,6 @@ jobs:
 
         "skip_upload=false" >> $env:GITHUB_OUTPUT
 
-        # Warn about projects that were expected to build for this configuration
-        # but produced no addon (they failed to build and are excluded from this
-        # release - the CI keeps going on purpose so the rest still ships).
         $builtAddons = @($addonFiles | ForEach-Object { $_.Name })
         $missingAddons = @($expectedAddons | Where-Object { $builtAddons -notcontains $_ })
         if ($missingAddons.Count -gt 0) {
@@ -223,8 +214,7 @@ jobs:
           #"skip_upload=false" >> $env:GITHUB_OUTPUT
         }
 
-        # Avoid shipping an empty release if every project failed to build/package
-        # (last write wins on GITHUB_OUTPUT, so this overrides the default above)
+        # Skip the upload if nothing was packaged (last write wins on GITHUB_OUTPUT)
         if ($packagedCount -eq 0) {
           Write-Host "::warning::No projects were packaged successfully for ${{ matrix.config }}-${{ matrix.platform }} - skipping the upload for this configuration."
           "skip_upload=true" >> $env:GITHUB_OUTPUT
