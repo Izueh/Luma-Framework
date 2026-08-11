@@ -39,12 +39,14 @@ namespace Shader
       AsyncClone = 3, // Applied via a pipeline clone created on the background thread
    };
 
-   // Which variant of a patched pipeline is (or should be) bound. None = no patch involved.
-   enum class PatchVariant : uint8_t
+   // Which object of a cloned pipeline is (or should be) bound: the game's
+   // original or the replacement clone (custom file or patch). None = no clone
+   // involved.
+   enum class CloneVariant : uint8_t
    {
       None = 0,
-      Original = 1,  // the game's original object (patch disabled)
-      Patched = 2,   // the pipeline clone (patch applied)
+      Original = 1,  // the game's original object (replacement disabled)
+      Clone = 2,     // the replacement clone (custom file or patch applied)
    };
 
    // What a pipeline's clone was built from (set at clone creation, reset before

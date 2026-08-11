@@ -400,10 +400,6 @@ public:
       {
          game_device_data_settings.dithering_patch_enabled.store(dithering_patch_enabled, std::memory_order_relaxed);
       }
-      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-      {
-         ImGui::SetTooltip("Toggleable at draw-call granularity via CommandListData::EnsureShaderVariant (clone patches only; the original variant runs without the recipe's resource bindings).");
-      }
 #endif
 #endif
    }
@@ -425,10 +421,10 @@ public:
       // Runtime patch toggle: patch stays ON by default, disabled per draw here
       // (idempotent, no-ops without a toggleable clone).
       const bool use_dithering_patch = game_device_data.dithering_patch_enabled.load(std::memory_order_relaxed)
-         && cmd_list_data.IsPatchToggleable(reshade::api::shader_stage::pixel); // false while patches are disallowed or unloaded
-      cmd_list_data.EnsureShaderVariant(native_device_context, stages,
-         use_dithering_patch ? Shader::PatchVariant::Patched
-                             : Shader::PatchVariant::Original);
+         && cmd_list_data.IsCloneToggleable(reshade::api::shader_stage::pixel); // false while patches are disallowed or unloaded
+      cmd_list_data.UseShaderVariant(native_device_context, stages,
+         use_dithering_patch ? Shader::CloneVariant::Clone
+                             : Shader::CloneVariant::Original);
 
       // Recipe resources only make sense with the patched variant bound (the
       // original shader ignores its bind points).
