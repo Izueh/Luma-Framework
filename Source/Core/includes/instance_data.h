@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -17,6 +18,11 @@
 #include <vector>
 
 #include "managed_resources.h"
+#include "patch.hpp"
+#include "debug.h"
+#if LUMA_USE_DXP
+#include "recipes.h"
+#endif
 
 // Forward declarations
 struct GameDeviceData;
@@ -103,6 +109,10 @@ struct TraceDrawCallData
    uint64_t pipeline_handles = 0; // The actual list of pipelines that run within the traced frame (within this deferred command list, and then merged into the immediate one later)
    ShaderHashesList shader_hashes;
 #endif
+
+   // Which patch variant actually ran for this draw (post-decision in
+   // OnDrawOrDispatch_Custom). Frame capture only.
+   Shader::CloneVariant clone_variant = Shader::CloneVariant::None;
 
    // The original command list (can be useful to have later)
    com_ptr<ID3D11DeviceContext> command_list = nullptr;
@@ -239,12 +249,150 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
    reshade::api::pipeline pipeline_state_original_vertex_shader = reshade::api::pipeline(0);
    reshade::api::pipeline pipeline_state_original_pixel_shader = reshade::api::pipeline(0);
 
+   // Clone (replacement) handles for the currently bound pipelines; 0 when no
+   // clone. Set in OnBindPipeline (lifetime owned by CachedPipeline); internal,
+   // use the methods below (IsCloneToggleable / GetPipelineVariant / UseShaderVariant).
+   reshade::api::pipeline pipeline_state_clone_compute_shader = reshade::api::pipeline(0);
+   reshade::api::pipeline pipeline_state_clone_vertex_shader = reshade::api::pipeline(0);
+   reshade::api::pipeline pipeline_state_clone_pixel_shader = reshade::api::pipeline(0);
+   // Which variant is actually bound per stage (None = no clone involved; covers
+   // both file and patch clones). Updated by OnBindPipeline/UseShaderVariant;
+   // does not affect the pipeline_state_* semantics.
+   Shader::CloneVariant clone_variant_compute = Shader::CloneVariant::None;
+   Shader::CloneVariant clone_variant_vertex = Shader::CloneVariant::None;
+   Shader::CloneVariant clone_variant_pixel = Shader::CloneVariant::None;
+
    Shader::ShaderHashesList<OneShaderPerPipeline> pipeline_state_original_graphics_shader_hashes;
    Shader::ShaderHashesList<OneShaderPerPipeline> pipeline_state_original_compute_shader_hashes;
    bool pipeline_state_has_custom_vertex_shader = false;
    bool pipeline_state_has_custom_pixel_shader = false;
    bool pipeline_state_has_custom_graphics_shader = false;
    bool pipeline_state_has_custom_compute_shader = false;
+
+   // ============================================================================
+   // Clone variant API (game-facing). Per-context/per-bind state (the handles are
+   // only valid for the current bind); per-hash persistent settings live on
+   // Patch::PatchContext. Inline: this codebase is single-TU.
+   // ============================================================================
+
+   // Idempotent per-stage variant switch (native *SetShader, no event dispatch);
+   // no-op when the target handle is 0, returns whether the requested variant is
+   // bound for all requested stages.
+   bool UseShaderVariant(ID3D11DeviceContext* native_device_context, reshade::api::shader_stage stages, Shader::CloneVariant variant)
+   {
+      if (variant == Shader::CloneVariant::None)
+      {
+         return false;
+      }
+
+      bool all_applied = true;
+
+      if ((stages & reshade::api::shader_stage::vertex) != 0)
+      {
+         if (clone_variant_vertex == variant)
+         {
+            // Already the requested variant
+         }
+         else if (pipeline_state_original_vertex_shader.handle != 0
+            && (variant != Shader::CloneVariant::Clone || pipeline_state_clone_vertex_shader.handle != 0))
+         {
+            const uint64_t handle = variant == Shader::CloneVariant::Clone ? pipeline_state_clone_vertex_shader.handle : pipeline_state_original_vertex_shader.handle;
+            native_device_context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(handle), nullptr, 0);
+            clone_variant_vertex = variant;
+         }
+         else
+         {
+            // Tracker says Clone but the clone handle is gone — real bug (only fires when tracker == Clone).
+            ASSERT_ONCE(clone_variant_vertex != Shader::CloneVariant::Clone);
+            all_applied = false;
+         }
+      }
+
+      if ((stages & reshade::api::shader_stage::pixel) != 0)
+      {
+         if (clone_variant_pixel == variant)
+         {
+            // Already the requested variant
+         }
+         else if (pipeline_state_original_pixel_shader.handle != 0
+            && (variant != Shader::CloneVariant::Clone || pipeline_state_clone_pixel_shader.handle != 0))
+         {
+            const uint64_t handle = variant == Shader::CloneVariant::Clone ? pipeline_state_clone_pixel_shader.handle : pipeline_state_original_pixel_shader.handle;
+            native_device_context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(handle), nullptr, 0);
+            clone_variant_pixel = variant;
+         }
+         else
+         {
+            ASSERT_ONCE(clone_variant_pixel != Shader::CloneVariant::Clone);
+            all_applied = false;
+         }
+      }
+
+      if ((stages & reshade::api::shader_stage::compute) != 0)
+      {
+         if (clone_variant_compute == variant)
+         {
+            // Already the requested variant
+         }
+         else if (pipeline_state_original_compute_shader.handle != 0
+            && (variant != Shader::CloneVariant::Clone || pipeline_state_clone_compute_shader.handle != 0))
+         {
+            const uint64_t handle = variant == Shader::CloneVariant::Clone ? pipeline_state_clone_compute_shader.handle : pipeline_state_original_compute_shader.handle;
+            native_device_context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(handle), nullptr, 0);
+            clone_variant_compute = variant;
+         }
+         else
+         {
+            ASSERT_ONCE(clone_variant_compute != Shader::CloneVariant::Clone);
+            all_applied = false;
+         }
+      }
+
+      return all_applied;
+   }
+
+   // Toggleable clone applied to the bound pipeline for this stage?
+   bool IsCloneToggleable(reshade::api::shader_stage stage) const
+   {
+      switch (stage)
+      {
+      case reshade::api::shader_stage::vertex:  return pipeline_state_clone_vertex_shader.handle != 0;
+      case reshade::api::shader_stage::pixel:   return pipeline_state_clone_pixel_shader.handle != 0;
+      case reshade::api::shader_stage::compute: return pipeline_state_clone_compute_shader.handle != 0;
+      default: return false;
+      }
+   }
+
+   // Which variant is actually bound for this stage (None/Original/Clone).
+   Shader::CloneVariant GetActiveCloneVariant(reshade::api::shader_stage stage) const
+   {
+      switch (stage)
+      {
+      case reshade::api::shader_stage::vertex:  return clone_variant_vertex;
+      case reshade::api::shader_stage::pixel:   return clone_variant_pixel;
+      case reshade::api::shader_stage::compute: return clone_variant_compute;
+      default: return Shader::CloneVariant::None;
+      }
+   }
+
+   // Handle for a stage+variant, 0 when unavailable. Escape hatch for manual
+   // binds (Replaced draws).
+   reshade::api::pipeline GetPipelineVariant(reshade::api::shader_stage stage, Shader::CloneVariant variant) const
+   {
+      if (variant == Shader::CloneVariant::None)
+      {
+         return reshade::api::pipeline(0);
+      }
+
+      const bool use_clone = variant == Shader::CloneVariant::Clone;
+      switch (stage)
+      {
+      case reshade::api::shader_stage::vertex:  return use_clone ? pipeline_state_clone_vertex_shader : pipeline_state_original_vertex_shader;
+      case reshade::api::shader_stage::pixel:   return use_clone ? pipeline_state_clone_pixel_shader : pipeline_state_original_pixel_shader;
+      case reshade::api::shader_stage::compute: return use_clone ? pipeline_state_clone_compute_shader : pipeline_state_original_compute_shader;
+      default: return reshade::api::pipeline(0);
+      }
+   }
 
    enum ViewState
    {
@@ -377,12 +525,45 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
 
 struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 {
-   // Only for "swapchains", "back_buffers" and "upgraded_resources" (and related) and "modified_shaders_byte_code".
+   struct NativeTexture2DArrayResource
+   {
+      com_ptr<ID3D11Texture2D> texture;
+      com_ptr<ID3D11ShaderResourceView> srv;
+      uint32_t width = 0;
+      uint32_t height = 0;
+      uint32_t frame_count = 0;
+   };
+
+   // Only for "swapchains", "back_buffers" and "upgraded_resources" (and related) and "patch_context".
    // Device object creation etc is usually single threaded anyway, except for the destructor.
    std::shared_mutex mutex;
 
    std::thread thread_auto_loading;
    std::atomic<bool> thread_auto_loading_running = false;
+
+#if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
+   // Persistent async clone machinery: a long-lived worker compiles clones
+   // from copied subobject data (never holding raw pipeline pointers across
+   // locks), hands the finished clones to the ready queue, and the present
+   // boundary publishes them (never mid-frame). Guarded as follows:
+   //   async_jobs_mutex/cv + async_queue_version: job-queue wakeups.
+   //   async_ready_mutex: the ready queue (worker writes, present drains).
+   //   async_shutdown: set at device destroy before joining the worker.
+   std::mutex async_jobs_mutex;
+   std::condition_variable async_jobs_cv;
+   uint64_t async_queue_version = 0;
+   bool async_shutdown = false;
+   std::mutex async_ready_mutex;
+   struct ReadyAsyncClone
+   {
+      uint64_t pipeline_handle = 0;
+      reshade::api::pipeline clone = {};
+      reshade::api::device* device = nullptr;
+      uint32_t shader_hash = 0; // shader the clone was compiled for (verify at publish)
+      Shader::CloneOrigin clone_origin = Shader::CloneOrigin::None; // what the clone was built from (recorded by the worker)
+   };
+   std::vector<ReadyAsyncClone> async_ready;
+#endif // async providers
 
    std::unordered_set<uint64_t> upgraded_resources; // All the directly upgraded resources, excluding the swapchains backbuffers, as they are created internally by DX
 #if DEVELOPMENT
@@ -391,12 +572,19 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 #endif
    std::unordered_map<uint64_t, uint64_t> original_resources_to_mirrored_upgraded_resources; // TODO: convert/copy the initial/current data from the source texture when created. Also rename to "indirect_upgraded"
    std::unordered_map<uint64_t, uint64_t> original_resource_views_to_mirrored_upgraded_resource_views;
+   // Mirror views grouped by their mirror resource. Lets OnDestroyResource unlink a destroyed mirror's views by
+   // iterating only that mirror's (small) set with plain hash lookups, instead of scanning the whole view map with
+   // a device call (get_resource_from_view) per entry while holding the lock.
+   std::unordered_map<uint64_t, std::unordered_set<uint64_t>> mirror_views_by_mirror_resource;
 
-#if ENABLE_ORIGINAL_SHADERS_MEMORY_EDITS
-   // Edited shaders byte code + size + MD5 hash by (original) shader hash.
-   // We cache these in memory forever just because with ReShade handling their destruction on the spot between the pipeline (shader) creation and init function isn't "possible",
-   // and it can be called from multiple threads so we need to protect it.
-   std::unordered_map<uint32_t, std::tuple<std::unique_ptr<std::byte[]>, size_t, Hash::MD5::Digest>> modified_shaders_byte_code;
+#if LUMA_PATCH_PROVIDERS != 0
+   // Stored shader patches (both bytecode and recipe methods) + per-method
+   // processed markers. See Patch::PatchContext.
+   Patch::PatchContext patch_context;
+#endif
+
+#if LUMA_USE_DXP
+   Recipes recipes;
 #endif
 
    std::unordered_set<reshade::api::swapchain*> swapchains;
@@ -464,6 +652,8 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 #endif
    std::unordered_map<uint32_t, com_ptr<ID3D11PixelShader>> native_pixel_shaders;
    std::unordered_map<uint32_t, com_ptr<ID3D11ComputeShader>> native_compute_shaders;
+
+   std::unordered_map<uint32_t, NativeTexture2DArrayResource> native_texture2d_arrays;
 
 #if DEVELOPMENT
    std::unordered_map<const ID3D11InputLayout*, std::vector<D3D11_INPUT_ELEMENT_DESC>> input_layouts_descs;

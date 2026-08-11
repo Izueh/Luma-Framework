@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <UseLumaDXP Condition="'$(UseLumaDXP)'==''">false</UseLumaDXP>
+    <UseLumaNGX Condition="'$(UseLumaNGX)'==''">false</UseLumaNGX>
+    <UseLumaFSR Condition="'$(UseLumaFSR)'==''">false</UseLumaFSR>
+    <UseLumaFastNoise Condition="'$(UseLumaFastNoise)'==''">false</UseLumaFastNoise>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(UseLumaDXP)'=='true'">
+    <!-- DXP SDK via vcpkg: the manifest (vcpkg.json) in this project declares the
+         dxp dependency; the overlay port (Source/External/vcpkg-ports) supplies
+         the prebuilt package. The props drives the install + paths directly so
+         enabling UseLumaDXP is all a game needs (no machine vcpkg integration). -->
+    <DXPVcpkgRoot>$(MSBuildProjectDirectory)\vcpkg_installed\x64-windows</DXPVcpkgRoot>
+    <DXPLibDir Condition="'$(Configuration)'=='Development-Debug'">$(DXPVcpkgRoot)\debug\lib</DXPLibDir>
+    <DXPLibDir Condition="'$(DXPLibDir)'==''">$(DXPVcpkgRoot)\lib</DXPLibDir>
+    <DXPBinDir Condition="'$(Configuration)'=='Development-Debug'">$(DXPVcpkgRoot)\debug\bin</DXPBinDir>
+    <DXPBinDir Condition="'$(DXPBinDir)'==''">$(DXPVcpkgRoot)\bin</DXPBinDir>
+    <IncludePath>$(DXPVcpkgRoot)\include;$(IncludePath)</IncludePath>
+    <LibraryPath>$(DXPLibDir);$(LibraryPath)</LibraryPath>
+  </PropertyGroup>
+
+  <Target Name="LumaEnsureDxpManifest" BeforeTargets="LumaEnsureDxpVcpkg"
+          Condition="'$(UseLumaDXP)'=='true'">
+    <!-- Ensure the project's vcpkg manifest + overlay configuration carry the DXP
+         dependency. Creates them if missing, MERGES the dxp dependency/overlay
+         entry into existing files (never overwriting user content), and never
+         deletes anything when the feature is off. -->
+    <PropertyGroup>
+      <_LumaManifestName>$(ProjectName.Replace(' ', '-').ToLower())-luma</_LumaManifestName>
+      <_LumaPropsRoot>$(MSBuildThisFileDirectory)..\..</_LumaPropsRoot>
+    </PropertyGroup>
+    <Exec Command="powershell -ExecutionPolicy Bypass -File &quot;$(_LumaPropsRoot)\scripts\ensure_dxp_vcpkg.ps1&quot; -ProjectDir &quot;$(MSBuildProjectDirectory)&quot; -ManifestName &quot;$(_LumaManifestName)&quot;" />
+  </Target>
+
+  <Target Name="LumaEnsureDxpVcpkg" BeforeTargets="PrepareForBuild"
+          Condition="'$(UseLumaDXP)'=='true' and '$(VCPKG_ROOT)'!='' and !Exists('$(DXPVcpkgRoot)\lib\dxpatcher.lib')">
+    <Exec Command="&quot;$(VCPKG_ROOT)\vcpkg.exe&quot; install --triplet=x64-windows"
+          WorkingDirectory="$(MSBuildProjectDirectory)" />
+  </Target>
+
+  <PropertyGroup Condition="'$(UseLumaNGX)'=='true'">
+    <LumaNGXRoot>$(MSBuildThisFileDirectory)..\External\NGX</LumaNGXRoot>
+    <LumaNGXLibName Condition="'$(Configuration)'=='Development-Debug'">nvsdk_ngx_d_dbg.lib</LumaNGXLibName>
+    <LumaNGXLibName Condition="'$(Configuration)'!='Development-Debug'">nvsdk_ngx_d.lib</LumaNGXLibName>
+    <LumaNGXRuntimePath Condition="'$(Configuration)'=='Development-Debug' or '$(Configuration)'=='Development-Release'">$(LumaNGXRoot)\bin\dev\nvngx_dlss.dll</LumaNGXRuntimePath>
+    <LumaNGXRuntimePath Condition="'$(Configuration)'!='Development-Debug' and '$(Configuration)'!='Development-Release'">$(LumaNGXRoot)\bin\rel\nvngx_dlss.dll</LumaNGXRuntimePath>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(UseLumaFSR)'=='true'">
+    <LumaFSRRoot>$(MSBuildThisFileDirectory)..\External\FidelityFX</LumaFSRRoot>
+    <LumaFSRLibSuffix Condition="'$(Configuration)'=='Development-Debug'">d</LumaFSRLibSuffix>
+    <LumaFSRLibSuffix Condition="'$(Configuration)'!='Development-Debug'"></LumaFSRLibSuffix>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile Condition="'$(UseLumaDXP)'=='true'">
+      <!-- PreprocessorDefinitions metadata overrides the CharacterSet-derived
+           UNICODE defines, so restore them explicitly. -->
+      <PreprocessorDefinitions>UNICODE;_UNICODE;_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH;LUMA_USE_DXP=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Condition="'$(UseLumaNGX)'=='true'">
+      <!-- PreprocessorDefinitions metadata overrides the CharacterSet-derived
+           UNICODE defines, so restore them explicitly (same as above). -->
+      <AdditionalIncludeDirectories>$(LumaNGXRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_NGX=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Condition="'$(UseLumaFSR)'=='true'">
+      <AdditionalIncludeDirectories>$(LumaFSRRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_FIDELITY_SK=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Condition="'$(UseLumaFastNoise)'=='true'">
+      <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_FAST_NOISE_TEXTURES=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link Condition="'$(UseLumaDXP)'=='true'">
+      <AdditionalDependencies>dxpatcher.lib;Ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Link Condition="'$(UseLumaNGX)'=='true'">
+      <AdditionalLibraryDirectories>$(LumaNGXRoot)\libs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>$(LumaNGXLibName);%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+    <Link Condition="'$(UseLumaFSR)'=='true'">
+      <AdditionalLibraryDirectories>$(LumaFSRRoot)\libs;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>ffx_backend_dx11_x64$(LumaFSRLibSuffix).lib;ffx_fsr3_x64$(LumaFSRLibSuffix).lib;ffx_frameinterpolation_x64$(LumaFSRLibSuffix).lib;ffx_fsr3upscaler_x64$(LumaFSRLibSuffix).lib;ffx_opticalflow_x64$(LumaFSRLibSuffix).lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <Target Name="LumaCopyNgxRuntime" AfterTargets="Build" Condition="'$(UseLumaNGX)'=='true' and Exists('$(LumaNGXRuntimePath)') and Exists('$(TargetDir)')">
+    <Copy SourceFiles="$(LumaNGXRuntimePath)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="LumaCopyDxpRuntime" AfterTargets="Build" Condition="false" />
+
+  <!-- Package this game like the CI does (scripts/package.ps1) into the repo's
+       out_package folder. Run with: msbuild <Game>.vcxproj /t:LumaPackage
+       (or set -p:LumaPackage=true to run it after every build). -->
+  <Target Name="LumaPackage" AfterTargets="Build" Condition="'$(LumaPackage)'=='true'">
+    <PropertyGroup>
+      <_LumaRepoRoot>$(MSBuildThisFileDirectory)..\..</_LumaRepoRoot>
+    </PropertyGroup>
+    <Exec Command="powershell -ExecutionPolicy Bypass -File &quot;$(_LumaRepoRoot)\scripts\package.ps1&quot; -Project &quot;$(ProjectName)&quot; -Config &quot;$(Configuration)&quot; -Platform &quot;$(Platform)&quot; -AddonPath &quot;$(TargetPath)&quot; -OutDir &quot;$(_LumaRepoRoot)\Binaries\$(Platform)-$(Configuration)&quot;" />
+  </Target>
+</Project>

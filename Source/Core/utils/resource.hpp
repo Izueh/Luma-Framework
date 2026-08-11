@@ -1,5 +1,7 @@
 #pragma once
 
+#include <deps/stb/stb_image.h>
+
 #if DEVELOPMENT
 std::optional<std::string> GetD3DName(ID3D11DeviceChild* obj)
 {
@@ -165,6 +167,165 @@ UINT GetUAVMipLevel(const D3D11_UNORDERED_ACCESS_VIEW_DESC& desc)
    default:
       return 0;
    }
+}
+
+inline bool LoadTexture2DArraySequenceIntoMap(std::unordered_map<uint32_t, DeviceData::NativeTexture2DArrayResource>& texture_map, ID3D11Device* native_device, uint32_t texture_hash, const std::filesystem::path& texture_directory, const char* texture_file_prefix, std::string* error = nullptr)
+{
+   if (!native_device)
+   {
+      if (error)
+      {
+         *error = "Native device is null";
+      }
+      return false;
+   }
+
+   if (texture_file_prefix == nullptr || *texture_file_prefix == '\0')
+   {
+      if (error)
+      {
+         *error = "Texture file prefix is empty";
+      }
+      return false;
+   }
+
+   if (!std::filesystem::is_directory(texture_directory))
+   {
+      if (error)
+      {
+         *error = "Missing texture directory: " + texture_directory.string();
+      }
+      return false;
+   }
+
+   struct FramePixels
+   {
+      std::vector<uint8_t> data;
+      int width = 0;
+      int height = 0;
+   };
+
+   std::vector<FramePixels> frames;
+   int expected_width = 0;
+   int expected_height = 0;
+   for (uint32_t index = 0;; ++index)
+   {
+      const std::filesystem::path file_path = texture_directory / (std::string(texture_file_prefix) + "_" + std::to_string(index) + ".png");
+      if (!std::filesystem::is_regular_file(file_path))
+      {
+         if (index == 0)
+         {
+            if (error)
+            {
+               *error = "Missing texture sequence start file: " + file_path.string();
+            }
+            return false;
+         }
+         break;
+      }
+
+      int width = 0;
+      int height = 0;
+      int channels = 0;
+      stbi_uc* pixels = stbi_load(file_path.string().c_str(), &width, &height, &channels, STBI_rgb_alpha);
+      if (!pixels)
+      {
+         if (error)
+         {
+            *error = "Failed to load texture frame: " + file_path.string();
+         }
+         return false;
+      }
+
+      if (index == 0)
+      {
+         expected_width = width;
+         expected_height = height;
+      }
+      else if (width != expected_width || height != expected_height)
+      {
+         stbi_image_free(pixels);
+         if (error)
+         {
+            *error = "Texture frame dimensions mismatch at: " + file_path.string();
+         }
+         return false;
+      }
+
+      FramePixels frame = {};
+      frame.width = width;
+      frame.height = height;
+      frame.data.assign(pixels, pixels + (static_cast<size_t>(width) * static_cast<size_t>(height) * 4));
+      frames.push_back(std::move(frame));
+      stbi_image_free(pixels);
+   }
+
+   if (frames.empty())
+   {
+      if (error)
+      {
+         *error = "Texture sequence is empty for prefix: " + std::string(texture_file_prefix);
+      }
+      return false;
+   }
+
+   D3D11_TEXTURE2D_DESC texture_desc = {};
+   texture_desc.Width = static_cast<UINT>(expected_width);
+   texture_desc.Height = static_cast<UINT>(expected_height);
+   texture_desc.MipLevels = 1;
+   texture_desc.ArraySize = static_cast<UINT>(frames.size());
+   texture_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+   texture_desc.SampleDesc.Count = 1;
+   texture_desc.Usage = D3D11_USAGE_IMMUTABLE;
+   texture_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+   std::vector<D3D11_SUBRESOURCE_DATA> subresources(frames.size());
+   for (size_t i = 0; i < frames.size(); ++i)
+   {
+      subresources[i].pSysMem = frames[i].data.data();
+      subresources[i].SysMemPitch = static_cast<UINT>(expected_width) * 4u;
+      subresources[i].SysMemSlicePitch = 0;
+   }
+
+   DeviceData::NativeTexture2DArrayResource texture_resource = {};
+   HRESULT hr = native_device->CreateTexture2D(&texture_desc, subresources.data(), &texture_resource.texture);
+   if (FAILED(hr) || !texture_resource.texture)
+   {
+      if (error)
+      {
+         *error = "CreateTexture2D failed for sequence prefix: " + std::string(texture_file_prefix);
+      }
+      return false;
+   }
+
+   D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
+   srv_desc.Format = texture_desc.Format;
+   srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+   srv_desc.Texture2DArray.MostDetailedMip = 0;
+   srv_desc.Texture2DArray.MipLevels = texture_desc.MipLevels;
+   srv_desc.Texture2DArray.FirstArraySlice = 0;
+   srv_desc.Texture2DArray.ArraySize = texture_desc.ArraySize;
+
+   hr = native_device->CreateShaderResourceView(texture_resource.texture.get(), &srv_desc, &texture_resource.srv);
+   if (FAILED(hr) || !texture_resource.srv)
+   {
+      if (error)
+      {
+         *error = "CreateShaderResourceView failed for sequence prefix: " + std::string(texture_file_prefix);
+      }
+      return false;
+   }
+
+   texture_resource.width = static_cast<uint32_t>(expected_width);
+   texture_resource.height = static_cast<uint32_t>(expected_height);
+   texture_resource.frame_count = static_cast<uint32_t>(frames.size());
+
+   texture_map.insert_or_assign(texture_hash, std::move(texture_resource));
+
+   reshade::log::message(reshade::log::level::info,
+      std::format("Managed texture loaded: '{}' -> {}x{} x {} frames (R8G8B8A8_UNORM, 2D array)",
+         texture_file_prefix, expected_width, expected_height, frames.size()).c_str());
+   return true;
 }
 
 bool IsMipOf(uint32_t base_w, uint32_t base_h, uint32_t w, uint32_t h)
