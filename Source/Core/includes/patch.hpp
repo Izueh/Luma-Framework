@@ -35,7 +35,7 @@
 //                                        shader creation; 1: pipeline clone
 //                                        swapped in at bind time
 //
-// Runtime toggling (original <-> patched per draw, EnsureShaderVariant) needs a
+// Runtime toggling (original <-> clone per draw, UseShaderVariant) needs a
 // clone-based mode (CLONE=1 or an async provider); INPLACE patches are always-on.
 //
 // Library availability is separate (LUMA_USE_DXP, from the Luma props when
@@ -130,7 +130,7 @@ namespace Patch
       // unification). Kept separately from patches: stripping is not a patch.
       std::unordered_map<uint32_t, std::shared_ptr<const std::vector<uint8_t>>> stripped_containers;
       // Bind-time default per shader (absent = enabled). Per-draw
-      // EnsureShaderVariant overrides this; never re-runs providers.
+      // UseShaderVariant overrides this; never re-runs providers.
       std::unordered_map<uint32_t, bool> patch_enabled_by_default;
       mutable std::shared_mutex mutex;
 
@@ -141,7 +141,7 @@ namespace Patch
       }
 
       // Bind-time default for this shader. Not "is the patch applied now" —
-      // that's CommandListData::IsPatchToggleable.
+      // that's CommandListData::IsCloneToggleable.
       bool IsPatchEnabled(uint32_t shader_hash) const
       {
          const std::shared_lock lock(mutex);
@@ -461,7 +461,7 @@ namespace Patch
    // (returns it, or nullptr). Providers are marked processed on any definitive
    // outcome, so they never re-run. Implemented in core.hpp (needs the full
    // Game/DeviceData types).
-   std::shared_ptr<PatchedShaderData> TrySyncPatch(Game& game, DeviceData& device_data, const ShaderPatchRequest& request, const ByteCodeView& view, uint32_t providers);
+   std::shared_ptr<PatchedShaderData> PatchShaderSync(Game& game, DeviceData& device_data, const ShaderPatchRequest& request, const ByteCodeView& view, uint32_t providers);
 
    // Runs the async providers for one job (bytecode first: manual wins on
    // conflicts). Stores the result, marks processed on any definitive outcome.

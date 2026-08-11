@@ -70,7 +70,7 @@ struct GameDeviceDataFFXV final : public GameDeviceData
    mutable std::mutex dxp_bindings_mutex;
 
    // Runtime patch toggle (reference): ON by default, disabled per draw via
-   // EnsureShaderVariant. Atomic (UI writes, render reads).
+   // UseShaderVariant. Atomic (UI writes, render reads).
    std::atomic<bool> dithering_patch_enabled = true;
 
    // Luma bloom
