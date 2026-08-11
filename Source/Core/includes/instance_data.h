@@ -576,6 +576,11 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    // iterating only that mirror's (small) set with plain hash lookups, instead of scanning the whole view map with
    // a device call (get_resource_from_view) per entry while holding the lock.
    std::unordered_map<uint64_t, std::unordered_set<uint64_t>> mirror_views_by_mirror_resource;
+   // View handle -> resource handle caches, so the draw/descriptor/destroy paths never need a device call
+   // (get_resource_from_view) while holding the luma mutex (lock-order inversion vs D3D11 runtime locks taken in
+   // destruction-notifier callbacks). Populated in OnInitResourceView / at mirror-view insert sites.
+   std::unordered_map<uint64_t, uint64_t> original_views_to_resources;      // game view -> its resource
+   std::unordered_map<uint64_t, uint64_t> mirror_views_to_mirror_resources; // mirror view -> mirror resource
 
 #if LUMA_PATCH_PROVIDERS != 0
    // Stored shader patches (both bytecode and recipe methods) + per-method
