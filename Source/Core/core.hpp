@@ -231,7 +231,7 @@ namespace Patch
    // providers are marked processed on any definitive outcome (patched or
    // no-patch-needed — deterministic per method+hash, so they are never re-run
    // for the same shader). "providers" is the game's effective provider mask.
-   std::shared_ptr<PatchedShaderData> TrySyncPatch(Game& game, DeviceData& device_data, const ShaderPatchRequest& request, const ByteCodeView& view, uint32_t providers)
+   std::shared_ptr<PatchedShaderData> PatchShaderSync(Game& game, DeviceData& device_data, const ShaderPatchRequest& request, const ByteCodeView& view, uint32_t providers)
    {
       const uint32_t shader_hash = request.shader_hash;
 
@@ -4113,7 +4113,7 @@ namespace
                      patch_request.shader_container_size = original_shader_desc->code_size;
 
                      const Patch::ByteCodeView view = Patch::FindShaderByteCode(original_shader_desc->code, original_shader_desc->code_size);
-                     if (Patch::TrySyncPatch(*game, device_data, patch_request, view, LUMA_PATCH_PROVIDERS))
+                     if (Patch::PatchShaderSync(*game, device_data, patch_request, view, LUMA_PATCH_PROVIDERS))
                      {
                         found_sync_patch_this_pipeline = true;
 #if DEVELOPMENT
@@ -4875,22 +4875,22 @@ namespace
          cmd_list_data.any_dispatch_done = false;
 #endif
          // Nothing is bound anymore: clear the variant handles/trackers (only valid while bound).
-         cmd_list_data.pipeline_state_patched_compute_shader = reshade::api::pipeline(0);
-         cmd_list_data.pipeline_state_patched_vertex_shader = reshade::api::pipeline(0);
-         cmd_list_data.pipeline_state_patched_pixel_shader = reshade::api::pipeline(0);
-         cmd_list_data.patch_variant_compute = Shader::PatchVariant::None;
-         cmd_list_data.patch_variant_vertex = Shader::PatchVariant::None;
-         cmd_list_data.patch_variant_pixel = Shader::PatchVariant::None;
+         cmd_list_data.pipeline_state_clone_compute_shader = reshade::api::pipeline(0);
+         cmd_list_data.pipeline_state_clone_vertex_shader = reshade::api::pipeline(0);
+         cmd_list_data.pipeline_state_clone_pixel_shader = reshade::api::pipeline(0);
+         cmd_list_data.clone_variant_compute = Shader::CloneVariant::None;
+         cmd_list_data.clone_variant_vertex = Shader::CloneVariant::None;
+         cmd_list_data.clone_variant_pixel = Shader::CloneVariant::None;
       }
 
       if ((stages & reshade::api::pipeline_stage::compute_shader) != 0)
       {
          ASSERT_ONCE(stages == reshade::api::pipeline_stage::compute_shader || stages == reshade::api::pipeline_stage::all); // Make sure only one stage happens at a time (it does in DX11)
          cmd_list_data.pipeline_state_original_compute_shader = pipeline;
-         // Expose the patched (clone) handle for this stage (0 = no clone), gated
+         // Expose the clone handle for this stage (0 = no clone), gated
          // by the master switches (per-hash defaults don't gate: per-draw overrides
          // must work). File clones need the mod master, patch clones both.
-         cmd_list_data.pipeline_state_patched_compute_shader =
+         cmd_list_data.pipeline_state_clone_compute_shader =
             (cached_pipeline && cached_pipeline->cloned && custom_shaders_enabled
                && (cached_pipeline->clone_origin != Shader::CloneOrigin::Patch || allow_patches))
                ? cached_pipeline->pipeline_clone
@@ -4919,10 +4919,10 @@ namespace
       {
          ASSERT_ONCE(stages == reshade::api::pipeline_stage::vertex_shader || stages == reshade::api::pipeline_stage::all); // Make sure only one stage happens at a time (it does in DX11)
          cmd_list_data.pipeline_state_original_vertex_shader = pipeline;
-         // Expose the patched (clone) handle for this stage (0 = no clone), gated
+         // Expose the clone handle for this stage (0 = no clone), gated
          // by the master switches (per-hash defaults don't gate: per-draw overrides
          // must work). File clones need the mod master, patch clones both.
-         cmd_list_data.pipeline_state_patched_vertex_shader =
+         cmd_list_data.pipeline_state_clone_vertex_shader =
             (cached_pipeline && cached_pipeline->cloned && custom_shaders_enabled
                && (cached_pipeline->clone_origin != Shader::CloneOrigin::Patch || allow_patches))
                ? cached_pipeline->pipeline_clone
@@ -4952,10 +4952,10 @@ namespace
       {
          ASSERT_ONCE(stages == reshade::api::pipeline_stage::pixel_shader || stages == reshade::api::pipeline_stage::all); // Make sure only one stage happens at a time (it does in DX11)
          cmd_list_data.pipeline_state_original_pixel_shader = pipeline;
-         // Expose the patched (clone) handle for this stage (0 = no clone), gated
+         // Expose the clone handle for this stage (0 = no clone), gated
          // by the master switches (per-hash defaults don't gate: per-draw overrides
          // must work). File clones need the mod master, patch clones both.
-         cmd_list_data.pipeline_state_patched_pixel_shader =
+         cmd_list_data.pipeline_state_clone_pixel_shader =
             (cached_pipeline && cached_pipeline->cloned && custom_shaders_enabled
                && (cached_pipeline->clone_origin != Shader::CloneOrigin::Patch || allow_patches))
                ? cached_pipeline->pipeline_clone
@@ -5022,14 +5022,17 @@ namespace
             std::shared_lock lock(s_mutex_generic);
 
             // Bind-time default: clone when cloned && custom_shaders_enabled &&
-            // IsPatchEnabled (per-draw EnsureShaderVariant overrides). Readback path
-            // (game/mod bound the clone itself) keeps the bound object as-is.
+            // (patch clones also need IsPatchEnabled; per-draw UseShaderVariant
+            // overrides). Readback path (game/mod bound the clone itself) keeps
+            // the bound object as-is.
             const bool game_bound_clone = cached_pipeline->cloned && cached_pipeline->pipeline_clone.handle == pipeline.handle;
-            // Without patch providers there is no patch_context; file clones keep
-            // the existing unconditional swap.
+            // Per-hash defaults only gate patch clones; file clones always
+            // default-on (the mod master switch is their only gate). Without
+            // patch providers there is no patch_context.
             const bool patch_default_on =
 #if LUMA_PATCH_PROVIDERS != 0
-               cmd_list->get_device()->get_private_data<DeviceData>()->patch_context.IsPatchEnabled(cached_pipeline->shader_hashes[0]);
+               cached_pipeline->clone_origin != Shader::CloneOrigin::Patch
+               || cmd_list->get_device()->get_private_data<DeviceData>()->patch_context.IsPatchEnabled(cached_pipeline->shader_hashes[0]);
 #else
                true;
 #endif
@@ -5043,12 +5046,12 @@ namespace
             }
 
             // Track the active variant per stage (DX11 binds one stage per call).
-            const Shader::PatchVariant active_variant = swap_to_clone || game_bound_clone ? Shader::PatchVariant::Patched
-               : cached_pipeline->cloned ? Shader::PatchVariant::Original
-               : Shader::PatchVariant::None;
-            if ((stages & reshade::api::pipeline_stage::compute_shader) != 0) cmd_list_data.patch_variant_compute = active_variant;
-            if ((stages & reshade::api::pipeline_stage::vertex_shader) != 0) cmd_list_data.patch_variant_vertex = active_variant;
-            if ((stages & reshade::api::pipeline_stage::pixel_shader) != 0) cmd_list_data.patch_variant_pixel = active_variant;
+            const Shader::CloneVariant active_variant = swap_to_clone || game_bound_clone ? Shader::CloneVariant::Clone
+               : cached_pipeline->cloned ? Shader::CloneVariant::Original
+               : Shader::CloneVariant::None;
+            if ((stages & reshade::api::pipeline_stage::compute_shader) != 0) cmd_list_data.clone_variant_compute = active_variant;
+            if ((stages & reshade::api::pipeline_stage::vertex_shader) != 0) cmd_list_data.clone_variant_vertex = active_variant;
+            if ((stages & reshade::api::pipeline_stage::pixel_shader) != 0) cmd_list_data.clone_variant_pixel = active_variant;
          }
       }
 
@@ -6722,7 +6725,7 @@ namespace
          draw_or_dispatch_override_type = game->OnDrawOrDispatch(native_device, native_device_context, cmd_list_data, device_data, stages, original_shader_hashes, is_custom_pass, updated_cbuffers, original_draw_dispatch_func);
 
 #if DEVELOPMENT
-         // Frame capture: stamp this draw's entries with the final patch variant
+         // Frame capture: stamp this draw's entries with the final clone variant
          // (the game's calls ran in the callback above), even when the draw was
          // cancelled/replaced.
          {
@@ -6737,15 +6740,15 @@ namespace
                   // Map the entry (one per stage, keyed by the original handle) to its stage tracker.
                   if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_vertex_shader.handle)
                   {
-                     entry.patch_variant = cmd_list_data.patch_variant_vertex;
+                     entry.clone_variant = cmd_list_data.clone_variant_vertex;
                   }
                   else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_pixel_shader.handle)
                   {
-                     entry.patch_variant = cmd_list_data.patch_variant_pixel;
+                     entry.clone_variant = cmd_list_data.clone_variant_pixel;
                   }
                   else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_compute_shader.handle)
                   {
-                     entry.patch_variant = cmd_list_data.patch_variant_compute;
+                     entry.clone_variant = cmd_list_data.clone_variant_compute;
                   }
                }
             }
@@ -10796,7 +10799,7 @@ namespace
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
-         ImGui::SetTooltip("Unload only the patched shaders (custom shader files are untouched).\nPatch clones are preserved, not destroyed: 'Reload Patches' re-enables them instantly.\nPer-draw patch toggles (EnsureShaderVariant) no-op while unloaded.");
+         ImGui::SetTooltip("Unload only the patched shaders (custom shader files are untouched).\nPatch clones are preserved, not destroyed: 'Reload Patches' re-enables them instantly.\nPer-draw patch toggles (UseShaderVariant) no-op while unloaded.");
       }
 
       ImGui::SameLine();
@@ -10920,7 +10923,7 @@ namespace
          {
             bool list_size_changed = false;
 
-            // Per-frame summary: patched draws that ran with the patch disabled
+            // Per-frame summary: draws that ran with the replacement disabled
             // (original variant) this frame.
             {
                const std::shared_lock lock_trace(s_mutex_trace);
@@ -10930,17 +10933,17 @@ namespace
                   CommandListData& cmd_list_data = *runtime->get_command_queue()->get_immediate_command_list()->get_private_data<CommandListData>();
                   const std::shared_lock lock_trace_2(cmd_list_data.mutex_trace);
 
-                  uint32_t patch_disabled_draw_count = 0;
+                  uint32_t clone_disabled_draw_count = 0;
                   for (const auto& entry : cmd_list_data.trace_draw_calls_data)
                   {
-                     if (entry.type == TraceDrawCallData::TraceDrawCallType::Shader && entry.patch_variant == Shader::PatchVariant::Original)
+                     if (entry.type == TraceDrawCallData::TraceDrawCallType::Shader && entry.clone_variant == Shader::CloneVariant::Original)
                      {
-                        patch_disabled_draw_count++;
+                        clone_disabled_draw_count++;
                      }
                   }
-                  if (patch_disabled_draw_count > 0)
+                  if (clone_disabled_draw_count > 0)
                   {
-                     ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "%u patched draw(s) ran with patch disabled (original variant)", patch_disabled_draw_count);
+                     ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.0f, 1.0f), "%u draw(s) ran with the replacement disabled (original variant)", clone_disabled_draw_count);
                   }
                }
             }
@@ -11248,7 +11251,7 @@ namespace
                            }
 
                            // This draw ran with the patch disabled (original variant, per-draw toggle).
-                           if (is_patch_clone && draw_call_data.patch_variant == Shader::PatchVariant::Original)
+                           if (is_patch_clone && draw_call_data.clone_variant == Shader::CloneVariant::Original)
                            {
                               name << " (patch disabled)";
                            }
