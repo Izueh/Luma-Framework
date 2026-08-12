@@ -58,7 +58,7 @@ $vcxproj = $vcxproj.FullName
 # Feature opt-ins, mirroring the CI scan
 $useLumaFastNoise = Test-PropEnabled $vcxproj "UseLumaFastNoise"
 $useLumaDXP = Test-PropEnabled $vcxproj "UseLumaDXP"
-$useLumaNGX = (Test-PropEnabled $vcxproj "UseLumaNGX") -or ((Get-Content $vcxproj -Raw) -match 'nvsdk_ngx')
+$useLumaNGX = Test-PropEnabled $vcxproj "UseLumaNGX"
 Write-Host "Opt-ins: UseLumaFastNoise=$useLumaFastNoise UseLumaDXP=$useLumaDXP UseLumaNGX=$useLumaNGX"
 
 # Locate the addon. When packaging runs from the LumaPackage build target the
