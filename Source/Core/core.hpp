@@ -746,23 +746,6 @@ namespace
       { CompileTimeStringHash("Karis Average CS"), { "Luma_KarisAverage", reshade::api::pipeline_subobject_type::compute_shader } },
    };
 
-   struct NativeTexture2DArrayDefinition
-   {
-      std::filesystem::path relative_directory;
-      std::string file_prefix;
-   };
-
-   // Luma-wide (project-level) texture arrays, mirroring native_shaders_definitions.
-   // Project-level entries are gated by their feature prop (e.g. UseLumaFastNoise ->
-   // ENABLE_FAST_NOISE_TEXTURES) so builds that don't need them skip them; games may
-   // add game-level entries here too (in OnInit) and they are always loaded.
-   std::unordered_map<uint32_t, NativeTexture2DArrayDefinition> native_texture2d_array_definitions =
-   {
-#if ENABLE_FAST_NOISE_TEXTURES
-      { CompileTimeStringHash("FAST Noise"), { std::filesystem::path("Global") / "Textures" / "FAST", "vector2_uniform_gauss1_0_Gauss10_separate05" } },
-#endif
-   };
-
    // TODO: make the data in these a unique ptr for easier handling, and the shader binary data contained inside of "CachedShader" too.
    // All the shaders the game ever loaded (including the ones that have been unloaded). Only used by shader dumping (if "ALLOW_SHADERS_DUMPING" is on) or to see their binary code in the ImGUI view. By original shader binary hash.
    // The data it contains is fully its own, so it's not by "Device". These are "immutable" once set.
@@ -1137,39 +1120,23 @@ namespace
       return GetShadersRootPath();
    }
 
-   bool LoadNativeTexture2DArrays(ID3D11Device* native_device, DeviceData& device_data)
+   void LoadTexture2DArrays(ID3D11Device* native_device, DeviceData& device_data)
    {
       if (!native_device)
       {
-         return false;
+         return;
       }
 
-      device_data.native_texture2d_arrays.clear();
-
+#if ENABLE_FAST_NOISE_TEXTURES
+      // Project-level entries are gated by their feature prop (e.g. UseLumaFastNoise ->
+      // ENABLE_FAST_NOISE_TEXTURES) so builds that don't need them skip them.
       const std::filesystem::path textures_root = GetTexturesRootPath();
-      bool loaded_any = false;
-      size_t loaded_count = 0;
-      for (const auto& [texture_hash, definition] : native_texture2d_array_definitions)
+      if (!device_data.managed_resources.LoadTexture2DArray(native_device, textures_root / "Global" / "Textures" / "FAST", "vector2_uniform_gauss1_0_Gauss10_separate05", "FAST Noise"_h))
       {
-         std::string load_error;
-         const std::filesystem::path texture_directory = textures_root / definition.relative_directory;
-         reshade::log::message(reshade::log::level::debug,
-            std::format("Loading managed texture '{}' from {}", definition.file_prefix, texture_directory.string()).c_str());
-         if (!LoadTexture2DArraySequenceIntoMap(device_data.native_texture2d_arrays, native_device, texture_hash, texture_directory, definition.file_prefix.c_str(), &load_error))
-         {
-            reshade::log::message(reshade::log::level::error,
-               std::format("Failed to load managed texture '{}': {}", definition.file_prefix, load_error.empty() ? "unknown error" : load_error).c_str());
-            ASSERT_ONCE(false);
-            continue;
-         }
-
-         ++loaded_count;
-         loaded_any = true;
+         reshade::log::message(reshade::log::level::error, "Failed to load managed texture 'FAST Noise'");
+         ASSERT_ONCE(false);
       }
-      reshade::log::message(reshade::log::level::info,
-         std::format("Managed texture loading complete: {} of {} loaded (root: {})", loaded_count, native_texture2d_array_definitions.size(), textures_root.string()).c_str());
-
-      return loaded_any;
+#endif
    }
 
    // TODO: if this was ever too slow (it is, at least in dev builds because they use the shader folder with all the games), given we iterate through the shader folder which also contains (possibly hundreds of) dumps and our built binaries,
@@ -2973,9 +2940,9 @@ namespace
 		}
 #endif // ENABLE_SR
 
-      LoadNativeTexture2DArrays(native_device, device_data);
-
       game->OnInitDevice(native_device, device_data);
+
+      LoadTexture2DArrays(native_device, device_data);
 
       // If we upgrade textures, make sure that MSAA DXGI_FORMAT_R16G16B16A16_FLOAT is supported on our GPU, given that it's optional.
       // Most games don't have MSAA, but it might be enforced at driver level.
