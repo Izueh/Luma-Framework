@@ -799,7 +799,7 @@ public:
                 draw_data.depth_buffer = resource_depth.get();
 
                 // Jitters are in UV offsets so we need to scale them to pixel offsets for DLSS.
-                draw_data.jitter_x = g_cb_taa_data[4] * device_data.render_resolution.x * 1.0f;
+                draw_data.jitter_x = g_cb_taa_data[4] * device_data.render_resolution.x * -1.0f;
                 draw_data.jitter_y = g_cb_taa_data[5] * device_data.render_resolution.y * -1.0f;
 
                 draw_data.render_width = device_data.render_resolution.x;
