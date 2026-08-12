@@ -19,11 +19,11 @@
 #include "includes/sr_helpers.hpp"
 
 #if LUMA_HAS_RECIPE_PROVIDERS
-static constexpr uint32_t FFXV_DEPTH_DITHERING_RECIPE_HASH = CompileTimeStringHash("FFXV Depth Dithering");
+static constexpr uint32_t FFXV_DEPTH_DITHERING_RECIPE_HASH = "FFXV Depth Dithering"_h;
 #endif
 
 #if ENABLE_FAST_NOISE_TEXTURES
-static constexpr uint32_t kCoreFastNoiseTextureHash = CompileTimeStringHash("FAST Noise");
+static constexpr uint32_t kCoreFastNoiseTextureHash = "FAST Noise"_h;
 #endif
 
 namespace
@@ -44,13 +44,13 @@ namespace
    ID3D11ShaderResourceView* GetFastNoiseSrv(DeviceData& device_data)
    {
       const std::shared_lock lock_device(device_data.mutex);
-      const auto fast_noise_it = device_data.native_texture2d_arrays.find(kCoreFastNoiseTextureHash);
-      if (fast_noise_it == device_data.native_texture2d_arrays.end() || !fast_noise_it->second.srv)
+      const auto fast_noise_it = device_data.managed_resources.shader_resource_views.find(kCoreFastNoiseTextureHash);
+      if (fast_noise_it == device_data.managed_resources.shader_resource_views.end() || !fast_noise_it->second)
       {
          return nullptr;
       }
 
-      return fast_noise_it->second.srv.get();
+      return fast_noise_it->second.get();
    }
 #endif
 

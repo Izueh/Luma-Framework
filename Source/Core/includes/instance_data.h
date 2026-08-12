@@ -525,15 +525,6 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
 
 struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 {
-   struct NativeTexture2DArrayResource
-   {
-      com_ptr<ID3D11Texture2D> texture;
-      com_ptr<ID3D11ShaderResourceView> srv;
-      uint32_t width = 0;
-      uint32_t height = 0;
-      uint32_t frame_count = 0;
-   };
-
    // Only for "swapchains", "back_buffers" and "upgraded_resources" (and related) and "patch_context".
    // Device object creation etc is usually single threaded anyway, except for the destructor.
    std::shared_mutex mutex;
@@ -541,6 +532,9 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    std::thread thread_auto_loading;
    std::atomic<bool> thread_auto_loading_running = false;
 
+   // TODO(Patch module): move the patch_context member below and this async clone
+   // machinery (ReadyAsyncClone + the LUMA_PATCH_PROVIDERS-gated members) into
+   // patch.hpp once the include-order rework lands (see core.hpp dispatch TODO).
 #if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
    // Persistent async clone machinery: a long-lived worker compiles clones
    // from copied subobject data (never holding raw pipeline pointers across
@@ -657,8 +651,6 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 #endif
    std::unordered_map<uint32_t, com_ptr<ID3D11PixelShader>> native_pixel_shaders;
    std::unordered_map<uint32_t, com_ptr<ID3D11ComputeShader>> native_compute_shaders;
-
-   std::unordered_map<uint32_t, NativeTexture2DArrayResource> native_texture2d_arrays;
 
 #if DEVELOPMENT
    std::unordered_map<const ID3D11InputLayout*, std::vector<D3D11_INPUT_ELEMENT_DESC>> input_layouts_descs;
