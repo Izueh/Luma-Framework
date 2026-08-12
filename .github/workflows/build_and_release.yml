@@ -58,11 +58,7 @@ jobs:
         foreach ($vcxproj in $vcxprojFiles) {
           $content = Get-Content $vcxproj.FullName -Raw
           $projectName = [System.IO.Path]::GetFileNameWithoutExtension($vcxproj.Name)
-          if ($content -match 'nvsdk_ngx') {
-            $ngxProjects += $projectName
-            Write-Host "Found NGX project: $projectName"
-          }
-          elseif ($content -match '<UseLumaNGX>\s*true\s*</UseLumaNGX>') {
+          if ($content -match '<UseLumaNGX>\s*true\s*</UseLumaNGX>') {
             $ngxProjects += $projectName
             Write-Host "Found NGX feature-enabled project: $projectName"
           }
