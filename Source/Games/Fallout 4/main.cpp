@@ -50,8 +50,6 @@ namespace
     bool g_luma_bloom_enable = true;
     static int g_bloom_nmips;
     static std::vector<float> g_bloom_sigmas;
-    int g_bloom_input_width;
-    int g_bloom_input_height;
     bool g_has_run_bloom_threshold_and_blur_y;
 
     // Device resource arrays. We need to manually manage these.
@@ -202,16 +200,16 @@ public:
     {
         auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
         auto& game_device_data = GetGameDeviceData(device_data);
+        auto& managed_resources = game_device_data.managed_resources;
 
         // Reset resolution dependent resources.
+        managed_resources.render_target_views["bloom_sanitize_scene"_h].reset();
         game_device_data.tex_dlss_output.reset();
         ResetCOMArray(g_uav_xe_gtao_prefilter_depths16x16);
         ResetCOMArray(g_rtv_bloom_mips_y);
         ResetCOMArray(g_srv_bloom_mips_y);
         ResetCOMArray(g_rtv_bloom_mips_x);
         ResetCOMArray(g_srv_bloom_mips_x);
-        g_bloom_input_width = 0;
-        g_bloom_input_height = 0;
     }
 
     static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
@@ -246,7 +244,7 @@ public:
             if (g_luma_bloom_enable)
             {
                 // This should be valid for the bloom.
-		        native_device_context->PSGetShaderResources(0, 1, managed_resources.shader_resource_views["scene"_h].put());
+                native_device_context->PSGetShaderResources(0, 1, managed_resources.shader_resource_views["scene"_h].put());
             }
             return DrawOrDispatchOverrideType::None;
         }
