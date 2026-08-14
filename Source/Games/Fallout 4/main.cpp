@@ -30,8 +30,10 @@ namespace
     const ShaderHashesList shader_hashes_SSAODenoiseX = { .compute_shaders = { 0xE151AD86 }};
     const ShaderHashesList shader_hashes_SSAODenoiseY = { .compute_shaders = { 0x7E8F370A }};
 
+    const ShaderHashesList shader_hashes_Downsample = { .pixel_shaders = { 0x05868F11 } };
     const ShaderHashesList shader_hashes_BloomThresholdAndBlurY = { .pixel_shaders = { 0x5D1B5B1A } };
     const ShaderHashesList shader_hashes_ApplyBlurKernel = { .pixel_shaders = { 0x9B7CD304 }};
+    const ShaderHashesList shader_hashes_ApplyBloom = { .pixel_shaders = { 0x67685D89 }};
 
     // We only need jitters from it. They should be in [4] and [5].
     // 8 long Halton(2,3) sequence.
@@ -158,7 +160,8 @@ public:
         native_shaders_definitions.emplace("F4 XeGTAO Denoise Pass 2 CS"_h, ShaderDefinition{ "Luma_F4_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", {{ "XE_GTAO_FINAL_APPLY", "1" }}});
 
         // Luma bloom.
-        native_shaders_definitions.emplace("F4 Bloom Threshold PS"_h, ShaderDefinition{ "Luma_Bloom_Threshold_PS", reshade::api::pipeline_subobject_type::pixel_shader });
+        native_shaders_definitions.emplace("F4 Bloom Sanitize Scene PS"_h, ShaderDefinition{ "Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "sanitize_scene_ps" });
+        native_shaders_definitions.emplace("F4 Bloom Prefilter PS"_h, ShaderDefinition{ "Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "prefilter_ps" });
         native_shaders_definitions.emplace("F4 Bloom Downsample PS"_h, ShaderDefinition{ "Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "downsample_ps" });
         native_shaders_definitions.emplace("F4 Bloom Upsample PS"_h, ShaderDefinition{ "Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "upsample_ps" });
         
@@ -172,10 +175,10 @@ public:
         g_srv_bloom_mips_x.resize(g_bloom_nmips);
         g_bloom_sigmas.resize(g_bloom_nmips);
         g_bloom_sigmas.resize(g_bloom_nmips);
-        g_bloom_sigmas[0] = 1.0f;
-        g_bloom_sigmas[1] = 1.0f;
-        g_bloom_sigmas[2] = 1.0f;
-        g_bloom_sigmas[3] = 1.0f;
+        g_bloom_sigmas[0] = 1.5f;
+        g_bloom_sigmas[1] = 4.0f;
+        g_bloom_sigmas[2] = 4.0f;
+        g_bloom_sigmas[3] = 4.0f;
     }
 
     void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -238,65 +241,80 @@ public:
         auto& game_device_data = GetGameDeviceData(device_data);
         auto& managed_resources = game_device_data.managed_resources;
 
+        if (original_shader_hashes.Contains(shader_hashes_Downsample))
+        {
+            if (g_luma_bloom_enable)
+            {
+                // This should be valid for the bloom.
+		        native_device_context->PSGetShaderResources(0, 1, managed_resources.shader_resource_views["scene"_h].put());
+            }
+            return DrawOrDispatchOverrideType::None;
+        }
+
         if (original_shader_hashes.Contains(shader_hashes_BloomThresholdAndBlurY))
         {
             if (g_luma_bloom_enable)
             {
                 g_has_run_bloom_threshold_and_blur_y = true;
-                native_device_context->PSSetShader(device_data.native_pixel_shaders.at("F4 Bloom Threshold PS"_h).get(), nullptr, 0);
-            }
-            return DrawOrDispatchOverrideType::None;
-        }
 
-        if (original_shader_hashes.Contains(shader_hashes_ApplyBlurKernel))
-        {
-            if (g_luma_bloom_enable && g_has_run_bloom_threshold_and_blur_y)
-            {
-                g_has_run_bloom_threshold_and_blur_y = false;
-                
-                // Backup viewport.
-                D3D11_VIEWPORT viewport_original;
-                UINT nviewports = 1;
-                native_device_context->RSGetViewports(&nviewports, &viewport_original);
-                
-                // Backup sampler.
-                ComPtr<ID3D11SamplerState> smp_original;
-                native_device_context->PSGetSamplers(0, 1, smp_original.put());
-                
+                // Backup Viewports.
+                UINT num_viewports;
+                native_device_context->RSGetViewports(&num_viewports, nullptr);
+                std::vector<D3D11_VIEWPORT> viewports_original(num_viewports);
+                native_device_context->RSGetViewports(&num_viewports, viewports_original.data());
+
+                // Backup samplers.
+                ComPtr<ID3D11SamplerState> ps_sampler_original;
+                native_device_context->PSGetSamplers(0, 1, ps_sampler_original.put());
+
                 // Backup Blend.
                 ComPtr<ID3D11BlendState> blend_original;
                 FLOAT blend_factor_original[4];
                 UINT sample_mask_original;
                 native_device_context->OMGetBlendState(blend_original.put(), blend_factor_original, &sample_mask_original);
-                
-                // Backup RTV and DSV.
-                ComPtr<ID3D11RenderTargetView> rtv_original;
-                ComPtr<ID3D11DepthStencilView> dsv;
-                native_device_context->OMGetRenderTargets(1, rtv_original.put(), dsv.put());
-                
-                // Get bloom input width and height.
-                [[unlikely]] if (!g_bloom_input_width)
+
+                // Sanitize scene pass.
+
+                // Create RT and views.
+                [[unlikely]] if (!managed_resources.render_target_views["bloom_sanitize_scene"_h])
                 {
-                    // Get SRV0's texture description.
-                    ComPtr<ID3D11ShaderResourceView> srv;
-                    native_device_context->PSGetShaderResources(0, 1, srv.put());
-                    ComPtr<ID3D11Resource> resource;
-                    srv->GetResource(resource.put());
+                    D3D11_TEXTURE2D_DESC tex_desc = {};
+                    tex_desc.Width = device_data.render_resolution.x;
+                    tex_desc.Height = device_data.render_resolution.y;
+                    tex_desc.MipLevels = 1;
+                    tex_desc.ArraySize = 1;
+                    tex_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+                    tex_desc.SampleDesc.Count = 1;
+                    tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
                     ComPtr<ID3D11Texture2D> tex;
-                    ensure(resource->QueryInterface(tex.put()), >= 0);
-                    D3D11_TEXTURE2D_DESC tex_desc;
-                    tex->GetDesc(&tex_desc);
-                    
-                    g_bloom_input_width = tex_desc.Width;
-                    g_bloom_input_height = tex_desc.Height;
+                    ensure(native_device->CreateTexture2D(&tex_desc, nullptr, tex.put()), >= 0);
+                    ensure(native_device->CreateRenderTargetView(tex.get(), nullptr, managed_resources.render_target_views["bloom_sanitize_scene"_h].put()), >= 0);
+                    ensure(native_device->CreateShaderResourceView(tex.get(), nullptr, managed_resources.shader_resource_views["bloom_sanitize_scene"_h].put()), >= 0);
                 }
-                
+
+                D3D11_VIEWPORT viewport = {};
+                viewport.Width = device_data.render_resolution.x;
+                viewport.Height = device_data.render_resolution.y;
+
+                // Bindings
+                native_device_context->OMSetRenderTargets(1, &managed_resources.render_target_views["bloom_sanitize_scene"_h], nullptr);
+                native_device_context->RSSetViewports(1, &viewport);
+                native_device_context->PSSetShader(device_data.native_pixel_shaders.at("F4 Bloom Sanitize Scene PS"_h).get(), nullptr, 0);
+                native_device_context->PSSetShaderResources(0, 1, &managed_resources.shader_resource_views["scene"_h]);
+
+                (*original_draw_dispatch_func)();
+
+                //
+
+                const int bloom_input_width = device_data.render_resolution.x;
+                const int bloom_input_height = device_data.render_resolution.y;
+
                 // Create MIPs and views.
                 //
-                
-                const UINT x_mip0_width = g_bloom_input_width >> 1;
-                const UINT x_mip0_height = g_bloom_input_height;
-                
+
+                const UINT x_mip0_width = bloom_input_width >> 1;
+                const UINT x_mip0_height = bloom_input_height;
+
                 // Create X MIPs and views.
                 [[unlikely]] if (!g_rtv_bloom_mips_x[0])
                 {
@@ -313,7 +331,7 @@ public:
                     ensure(native_device->CreateTexture2D(&tex_desc, nullptr, tex.put()), >= 0);
                     ensure(native_device->CreateRenderTargetView(tex.get(), nullptr, &g_rtv_bloom_mips_x[0]), >= 0);
                     ensure(native_device->CreateShaderResourceView(tex.get(), nullptr, &g_srv_bloom_mips_x[0]), >= 0);
-                    
+
                     // Create rest of X MIPs and views.
                     for (UINT i = 1; i < g_bloom_nmips; ++i)
                     {
@@ -324,10 +342,10 @@ public:
                         ensure(native_device->CreateShaderResourceView(tex.get(), nullptr, &g_srv_bloom_mips_x[i]), >= 0);
                     }
                 }
-                
-                const UINT y_mip0_width = g_bloom_input_width >> 1;
-                const UINT y_mip0_height = g_bloom_input_height >> 1;
-                
+
+                const UINT y_mip0_width = bloom_input_width >> 1;
+                const UINT y_mip0_height = bloom_input_height >> 1;
+
                 // Create Y MIPs and views.
                 [[unlikely]] if (!g_rtv_bloom_mips_y[0])
                 {
@@ -356,103 +374,111 @@ public:
                         ensure(native_device->CreateShaderResourceView(tex.get(), &srv_desc, &g_srv_bloom_mips_y[i]), >= 0);
                     }
                 }
-                
+
                 //
                 
-                // The first downsample pass
+                // Prefilter and downsample pass
                 //
-                // The input is prefiltered.
-                //
-                
+
+                [[unlikely]] if (!game_device_data.f4_luma_cb)
+                {
+                    create_constant_buffer(native_device, sizeof(g_f4_luma_cb_data), game_device_data.f4_luma_cb.put());
+                }
+
                 D3D11_VIEWPORT viewport_x = {};
                 viewport_x.Width = x_mip0_width;
                 viewport_x.Height = x_mip0_height;
-                
+
                 // Update CB.
-                g_f4_luma_cb_data.bloom_src_size = float2(g_bloom_input_width, g_bloom_input_height);
+                g_f4_luma_cb_data.bloom_src_size = float2(bloom_input_width, bloom_input_height);
                 g_f4_luma_cb_data.bloom_inv_src_size = float2(1.0f / g_f4_luma_cb_data.bloom_src_size.x, 1.0f / g_f4_luma_cb_data.bloom_src_size.y);
                 g_f4_luma_cb_data.bloom_axis = float2(1.0f, 0.0f);
                 g_f4_luma_cb_data.bloom_sigma = g_bloom_sigmas[0];
                 update_constant_buffer(native_device_context, game_device_data.f4_luma_cb.get(), &g_f4_luma_cb_data, sizeof(g_f4_luma_cb_data));
-                
+
                 // Bindings.
                 native_device_context->OMSetRenderTargets(1, &g_rtv_bloom_mips_x[0], nullptr);
                 native_device_context->RSSetViewports(1, &viewport_x);
                 native_device_context->PSSetShader(device_data.native_pixel_shaders.at("F4 Bloom Downsample PS"_h).get(), nullptr, 0);
                 native_device_context->PSSetConstantBuffers(13, 1, &game_device_data.f4_luma_cb);
-                auto smp_linear = device_data.sampler_state_linear.get();
-                native_device_context->PSSetSamplers(0, 1, &smp_linear);
-                
+                auto sampler = device_data.sampler_state_linear.get();
+                native_device_context->PSSetSamplers(0, 1, &sampler);
+                native_device_context->PSSetShaderResources(0, 1, &managed_resources.shader_resource_views["bloom_sanitize_scene"_h]);
+
                 // Draw X pass.
                 (*original_draw_dispatch_func)();
-                
+
                 std::vector<D3D11_VIEWPORT> viewports_y(g_bloom_nmips);
                 viewports_y[0].Width = y_mip0_width;
                 viewports_y[0].Height = y_mip0_height;
-                
+
                 // Update CB.
                 g_f4_luma_cb_data.bloom_src_size = float2(x_mip0_width, x_mip0_height);
                 g_f4_luma_cb_data.bloom_inv_src_size = float2(1.0f / g_f4_luma_cb_data.bloom_src_size.x, 1.0f / g_f4_luma_cb_data.bloom_src_size.y);
                 g_f4_luma_cb_data.bloom_axis = float2(0.0f, 1.0f);
                 update_constant_buffer(native_device_context, game_device_data.f4_luma_cb.get(), &g_f4_luma_cb_data, sizeof(g_f4_luma_cb_data));
-                
+
                 // Bindings.
                 native_device_context->OMSetRenderTargets(1, &g_rtv_bloom_mips_y[0], nullptr);
-                native_device_context->RSSetViewports(1, &viewports_y[0]);
+                native_device_context->PSSetShader(device_data.native_pixel_shaders.at("F4 Bloom Prefilter PS"_h).get(), nullptr, 0);
                 native_device_context->PSSetShaderResources(0, 1, &g_srv_bloom_mips_x[0]);
-                
+                native_device_context->RSSetViewports(1, &viewports_y[0]);
+
                 // Draw Y pass.
                 (*original_draw_dispatch_func)();
-                
+
                 //
-                
-                // Rest of downsample passes
+
+                // Downsample passes
                 //
-                
+
+                // Bindings.
+                native_device_context->PSSetShader(device_data.native_pixel_shaders.at("F4 Bloom Downsample PS"_h).get(), nullptr, 0);
+
                 // Render downsample passes.
                 for (UINT i = 1; i < g_bloom_nmips; ++i)
                 {
                     viewport_x.Width = std::max(1u, x_mip0_width >> i);
                     viewport_x.Height = std::max(1u, x_mip0_height >> i);
-                    
+
                     // Update CB.
                     g_f4_luma_cb_data.bloom_src_size = float2(viewports_y[i - 1].Width, viewports_y[i - 1].Height);
                     g_f4_luma_cb_data.bloom_axis = float2(1.0f, 0.0f);
                     g_f4_luma_cb_data.bloom_inv_src_size = float2(1.0f / g_f4_luma_cb_data.bloom_src_size.x, 1.0f / g_f4_luma_cb_data.bloom_src_size.y);
                     g_f4_luma_cb_data.bloom_sigma = g_bloom_sigmas[i];
                     update_constant_buffer(native_device_context, game_device_data.f4_luma_cb.get(), &g_f4_luma_cb_data, sizeof(g_f4_luma_cb_data));
-                    
+
                     // Bindings.
                     native_device_context->OMSetRenderTargets(1, &g_rtv_bloom_mips_x[i], nullptr);
-                    native_device_context->RSSetViewports(1, &viewport_x);
                     native_device_context->PSSetShaderResources(0, 1, &g_srv_bloom_mips_y[i - 1]);
-                    
+                    native_device_context->RSSetViewports(1, &viewport_x);
+
                     // Draw X pass.
                     (*original_draw_dispatch_func)();
-                    
+
                     viewports_y[i].Width = std::max(1u, y_mip0_width >> i);
                     viewports_y[i].Height = std::max(1u, y_mip0_height >> i);
-                    
+
                     // Update CB.
                     g_f4_luma_cb_data.bloom_src_size = float2(viewport_x.Width, viewport_x.Height);
                     g_f4_luma_cb_data.bloom_axis = float2(0.0f, 1.0f);
                     g_f4_luma_cb_data.bloom_inv_src_size = float2(1.0f / g_f4_luma_cb_data.bloom_src_size.x, 1.0f / g_f4_luma_cb_data.bloom_src_size.y);
                     update_constant_buffer(native_device_context, game_device_data.f4_luma_cb.get(), &g_f4_luma_cb_data, sizeof(g_f4_luma_cb_data));
-                    
+
                     // Bindings.
                     native_device_context->OMSetRenderTargets(1, &g_rtv_bloom_mips_y[i], nullptr);
-                    native_device_context->RSSetViewports(1, &viewports_y[i]);
                     native_device_context->PSSetShaderResources(0, 1, &g_srv_bloom_mips_x[i]);
-                    
+                    native_device_context->RSSetViewports(1, &viewports_y[i]);
+
                     // Draw Y pass.
                     (*original_draw_dispatch_func)();
                 }
-                
+
                 //
-                
+
                 // Upsample passes
                 //
-                
+
                 // Create blend.
                 [[unlikely]] if (!managed_resources.blends["bloom"_h])
                 {
@@ -462,55 +488,58 @@ public:
                     desc.RenderTarget[0].DestBlend = D3D11_BLEND_BLEND_FACTOR;
                     ensure(native_device->CreateBlendState(&desc, managed_resources.blends["bloom"_h].put()), >= 0);
                 }
-                
+
                 // If both dst and src are D3D11_BLEND_BLEND_FACTOR,
                 // factor of 0.5 will be enegrgy preserving.
                 static constexpr FLOAT blend_factor[] = { 0.5f, 0.5f, 0.5f, 0.5f };
-                
+
                 // Bindings.
                 native_device_context->PSSetShader(device_data.native_pixel_shaders.at("F4 Bloom Upsample PS"_h).get(), nullptr, 0);
                 native_device_context->OMSetBlendState(managed_resources.blends["bloom"_h].get(), blend_factor, UINT_MAX);
-                
+
                 for (int i = g_bloom_nmips - 1; i > 0; --i)
                 {
                     // Update CB.
                     g_f4_luma_cb_data.bloom_src_size = float2(viewports_y[i].Width, viewports_y[i].Height);
                     g_f4_luma_cb_data.bloom_inv_src_size = float2(1.0f / g_f4_luma_cb_data.bloom_src_size.x, 1.0f / g_f4_luma_cb_data.bloom_src_size.y);
                     update_constant_buffer(native_device_context, game_device_data.f4_luma_cb.get(), &g_f4_luma_cb_data, sizeof(g_f4_luma_cb_data));
-                    
+
                     // Bindings.
                     native_device_context->OMSetRenderTargets(1, &g_rtv_bloom_mips_y[i - 1], nullptr);
                     native_device_context->RSSetViewports(1, &viewports_y[i - 1]);
                     native_device_context->PSSetShaderResources(0, 1, &g_srv_bloom_mips_y[i]);
-                    
+
                     (*original_draw_dispatch_func)();
                 }
-                
-                // The final upsample pass
+
                 //
-                // We are binding the original RTV.
-                //
-                
-                // Update CB.
-                g_f4_luma_cb_data.bloom_src_size = float2(viewports_y[0].Width, viewports_y[0].Height);
-                g_f4_luma_cb_data.bloom_inv_src_size = float2(1.0f / g_f4_luma_cb_data.bloom_src_size.x, 1.0f / g_f4_luma_cb_data.bloom_src_size.y);
-                update_constant_buffer(native_device_context, game_device_data.f4_luma_cb.get(), &g_f4_luma_cb_data, sizeof(g_f4_luma_cb_data));
-                
-                // Bindings.
-                native_device_context->OMSetRenderTargets(1, &rtv_original, dsv.get());
-                native_device_context->RSSetViewports(1, &viewport_original);
-                native_device_context->PSSetShaderResources(0, 1, &g_srv_bloom_mips_y[0]);
-                
-                (*original_draw_dispatch_func)();
-                
-                //
-                
+
                 // Restore.
                 // May not be necessary, needs testing.
-                native_device_context->PSSetSamplers(0, 1, &smp_original);
                 native_device_context->OMSetBlendState(blend_original.get(), blend_factor_original, sample_mask_original);
-                
+                native_device_context->RSSetViewports(viewports_original.size(), viewports_original.data());
+                native_device_context->PSSetSamplers(0, 1, &ps_sampler_original);
+
                 return DrawOrDispatchOverrideType::Replaced;
+            }
+            return DrawOrDispatchOverrideType::None;
+        }
+
+        if (original_shader_hashes.Contains(shader_hashes_ApplyBlurKernel))
+        {
+            if (g_luma_bloom_enable && g_has_run_bloom_threshold_and_blur_y)
+            {
+                g_has_run_bloom_threshold_and_blur_y = false;
+                return DrawOrDispatchOverrideType::Replaced;
+            }
+            return DrawOrDispatchOverrideType::None;
+        }
+
+        if (original_shader_hashes.Contains(shader_hashes_ApplyBloom))
+        {
+            if (g_luma_bloom_enable)
+            {
+                native_device_context->PSSetShaderResources(1, 1, &g_srv_bloom_mips_y[0]);
             }
             return DrawOrDispatchOverrideType::None;
         }
@@ -799,7 +828,7 @@ public:
                 draw_data.depth_buffer = resource_depth.get();
 
                 // Jitters are in UV offsets so we need to scale them to pixel offsets for DLSS.
-                draw_data.jitter_x = g_cb_taa_data[4] * device_data.render_resolution.x * -1.0f;
+                draw_data.jitter_x = g_cb_taa_data[4] * device_data.render_resolution.x * 1.0f;
                 draw_data.jitter_y = g_cb_taa_data[5] * device_data.render_resolution.y * -1.0f;
 
                 draw_data.render_width = device_data.render_resolution.x;
