@@ -39,7 +39,7 @@ public:
 
    void Resize(ID3D11DeviceContext* context, uint32_t new_capacity)
    {
-      com_ptr<ID3D11Buffer> old_buffer = buffer;
+       ComPtr<ID3D11Buffer> old_buffer = buffer;
 
       {
          D3D11_BUFFER_DESC bd = {};
@@ -49,7 +49,7 @@ public:
          bd.CPUAccessFlags = 0;
          bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS;
          bd.StructureByteStride = 0;
-         device->CreateBuffer(&bd, nullptr, &buffer);
+         device->CreateBuffer(&bd, nullptr, buffer.put());
       }
       {
          D3D11_SHADER_RESOURCE_VIEW_DESC srvd = {};
@@ -58,7 +58,7 @@ public:
          srvd.Buffer.FirstElement = 0;
          srvd.Buffer.NumElements = new_capacity / 4;
          srvd.BufferEx.Flags = D3D11_BUFFEREX_SRV_FLAG_RAW;
-         device->CreateShaderResourceView(buffer.get(), &srvd, &srv);
+         device->CreateShaderResourceView(buffer.get(), &srvd, srv.put());
       }
       capacity = new_capacity;
 
@@ -75,9 +75,9 @@ public:
       }
    }
 
-   com_ptr<ID3D11Device> device;
-   com_ptr<ID3D11Buffer> buffer;
-   com_ptr<ID3D11ShaderResourceView> srv;
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11Buffer> buffer;
+   ComPtr<ID3D11ShaderResourceView> srv;
    uint32_t capacity;
    uint32_t size;
 };
