@@ -1,5 +1,6 @@
 #define GAME_PERSONA_5 1
 
+#define ALLOW_SHADERS_DUMPING 0
 #define DISABLE_DISPLAY_COMPOSITION 1
 #define ENABLE_NGX 1
 #define ENABLE_FIDELITY_SK 1
@@ -22,9 +23,9 @@ enum class FramePhase
 
 struct ReplacementTexture
 {
-   com_ptr<ID3D11Texture2D> texture;
-   com_ptr<ID3D11ShaderResourceView> srv;
-   com_ptr<ID3D11RenderTargetView> rtv;
+   ComPtr<ID3D11Texture2D> texture;
+   ComPtr<ID3D11ShaderResourceView> srv;
+   ComPtr<ID3D11RenderTargetView> rtv;
    D3D11_TEXTURE2D_DESC desc;
    bool in_use = false;
 };
@@ -161,25 +162,25 @@ struct GameDeviceDataPersona5 final : public GameDeviceData
    std::atomic<bool> has_drawn_upscaling = false;
 
    // resources used to identify the deferred context used for scene drawing
-   com_ptr<ID3D11CommandList> remainder_command_list;
+   ComPtr<ID3D11CommandList> remainder_command_list;
    std::atomic<ID3D11DeviceContext*> draw_device_context = nullptr;
 
    // textures we got from the game
-   com_ptr<ID3D11Texture2D> source_color;
-   com_ptr<ID3D11Resource> depth_texture;
-   com_ptr<ID3D11Texture2D> motion_vectors;
+   ComPtr<ID3D11Texture2D> source_color;
+   ComPtr<ID3D11Resource> depth_texture;
+   ComPtr<ID3D11Texture2D> motion_vectors;
 
    // the command list we split to interject dlss
-   com_ptr<ID3D11CommandList> partial_command_list;
+   ComPtr<ID3D11CommandList> partial_command_list;
 
    // resources used to apply sr
-   com_ptr<ID3D11Texture2D> decoded_motion_vectors;
-   com_ptr<ID3D11UnorderedAccessView> decoded_motion_vectors_uav;
-   com_ptr<ID3D11Texture2D> resolve_texture;
-   com_ptr<ID3D11Texture2D> merged_texture;
-   com_ptr<ID3D11UnorderedAccessView> merged_texture_uav;
-   com_ptr<ID3D11ShaderResourceView> merged_texture_srv;
-   com_ptr<ID3D11RenderTargetView> merged_texture_rtv;
+   ComPtr<ID3D11Texture2D> decoded_motion_vectors;
+   ComPtr<ID3D11UnorderedAccessView> decoded_motion_vectors_uav;
+   ComPtr<ID3D11Texture2D> resolve_texture;
+   ComPtr<ID3D11Texture2D> merged_texture;
+   ComPtr<ID3D11UnorderedAccessView> merged_texture_uav;
+   ComPtr<ID3D11ShaderResourceView> merged_texture_srv;
+   ComPtr<ID3D11RenderTargetView> merged_texture_rtv;
 
    // pool for replacement textures
    std::vector<ReplacementTexture> replacement_textures;
@@ -187,7 +188,7 @@ struct GameDeviceDataPersona5 final : public GameDeviceData
    std::unordered_map<ID3D11Resource*, uint32_t> current_replacements;
    // the game uses this to draw geometry for the UI this is the only resource that gets mapped
    // after the bloom effect, as constant buffers are updated with UpdateSubresource
-   com_ptr<ID3D11Buffer> modifiable_index_vertex_buffer;
+   ComPtr<ID3D11Buffer> modifiable_index_vertex_buffer;
    uint2 render_resolution = {};
    uint2 upscale_resolution = {};
    uint2 target_resolution = {};
@@ -200,8 +201,8 @@ struct GameDeviceDataPersona5 final : public GameDeviceData
    std::unordered_map<ID3D11Buffer*, std::array<uint8_t, 7168>> cbuffer_cache;
    std::atomic<ID3D11Buffer*> cb_transform = nullptr;
 #endif // ENABLE_SR
-   com_ptr<ID3D11Buffer> scratch_constant_buffer;
-   com_ptr<ID3D11UnorderedAccessView> scratch_constant_buffer_uav;
+   ComPtr<ID3D11Buffer> scratch_constant_buffer;
+   ComPtr<ID3D11UnorderedAccessView> scratch_constant_buffer_uav;
 
    FramePhase frame_phase = FramePhase::SHADOW_MAP;
    bool render_target_changed = false;
@@ -247,8 +248,8 @@ public:
       reshade::api::effect_runtime* runtime = nullptr;
       if (!reshade::get_config_value(runtime, NAME, "ShadowMapSizeOverride", g_shadow_map_size_override))
       {
-          //older versions were saving the setting under the wrong key
-          reshade::get_config_value(runtime, NAME, "shadow_map_size_override", g_shadow_map_size_override);
+         // older versions were saving the setting under the wrong key
+         reshade::get_config_value(runtime, NAME, "shadow_map_size_override", g_shadow_map_size_override);
       }
    }
 
@@ -281,7 +282,7 @@ public:
          bd.CPUAccessFlags = 0;
          bd.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
          bd.StructureByteStride = 80;
-         native_device->CreateBuffer(&bd, nullptr, &game_device_data.scratch_constant_buffer);
+         native_device->CreateBuffer(&bd, nullptr, game_device_data.scratch_constant_buffer.put());
       }
 
       {
@@ -291,14 +292,14 @@ public:
          uavd.Buffer.FirstElement = 0;
          uavd.Buffer.Flags = 0;
          uavd.Buffer.NumElements = 1;
-         native_device->CreateUnorderedAccessView(game_device_data.scratch_constant_buffer.get(), &uavd, &game_device_data.scratch_constant_buffer_uav);
+         native_device->CreateUnorderedAccessView(game_device_data.scratch_constant_buffer.get(), &uavd, game_device_data.scratch_constant_buffer_uav.put());
       }
    }
 
    void SetupSr(ID3D11DeviceContext* native_device_context, GameDeviceDataPersona5& game_device_data, DeviceData& device_data)
    {
-      com_ptr<ID3D11Device> device;
-      native_device_context->GetDevice(&device);
+      ComPtr<ID3D11Device> device;
+      native_device_context->GetDevice(device.put());
 
       D3D11_TEXTURE2D_DESC target_desc;
       game_device_data.source_color->GetDesc(&target_desc);
@@ -349,7 +350,7 @@ public:
 
             device->CreateTexture2D(&motion_vector_desc,
                nullptr,
-               &game_device_data.decoded_motion_vectors);
+               game_device_data.decoded_motion_vectors.put());
          }
          {
             D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
@@ -359,7 +360,7 @@ public:
 
             device->CreateUnorderedAccessView(game_device_data.decoded_motion_vectors.get(),
                &uav_desc,
-               &game_device_data.decoded_motion_vectors_uav);
+               game_device_data.decoded_motion_vectors_uav.put());
          }
          {
             D3D11_TEXTURE2D_DESC desc;
@@ -377,7 +378,7 @@ public:
 
             device->CreateTexture2D(&desc,
                nullptr,
-               &game_device_data.resolve_texture);
+               game_device_data.resolve_texture.put());
          }
          {
             D3D11_TEXTURE2D_DESC desc;
@@ -395,7 +396,7 @@ public:
 
             device->CreateTexture2D(&desc,
                nullptr,
-               &game_device_data.merged_texture);
+               game_device_data.merged_texture.put());
          }
          {
             D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
@@ -403,18 +404,20 @@ public:
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
             srv_desc.Texture2D.MostDetailedMip = 0;
             srv_desc.Texture2D.MipLevels = 1;
+
             device->CreateShaderResourceView(game_device_data.merged_texture.get(),
                &srv_desc,
-               &game_device_data.merged_texture_srv);
+               game_device_data.merged_texture_srv.put());
          }
          {
             D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
             rtv_desc.Format = target_desc.Format;
             rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
             rtv_desc.Texture2D.MipSlice = 0;
+
             device->CreateRenderTargetView(game_device_data.merged_texture.get(),
                &rtv_desc,
-               &game_device_data.merged_texture_rtv);
+               game_device_data.merged_texture_rtv.put());
          }
          {
             D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc;
@@ -424,7 +427,7 @@ public:
 
             device->CreateUnorderedAccessView(game_device_data.merged_texture.get(),
                &uavDesc,
-               &game_device_data.merged_texture_uav);
+               game_device_data.merged_texture_uav.put());
          }
 
          game_device_data.replacement_textures.clear();
@@ -456,13 +459,13 @@ public:
          }
       }
 
-      com_ptr<ID3D11Device> device;
-      resource->GetDevice(&device);
+      ComPtr<ID3D11Device> device;
+      resource->GetDevice(device.put());
 
       ReplacementTexture replacement_texture;
       device->CreateTexture2D(&texture_desc,
          nullptr,
-         &replacement_texture.texture);
+         replacement_texture.texture.put());
 
       DXGI_FORMAT format = texture_desc.Format;
       if (format == DXGI_FORMAT_R8G8B8A8_TYPELESS)
@@ -481,7 +484,7 @@ public:
       srv_desc.Texture2D.MipLevels = 1;
       device->CreateShaderResourceView(replacement_texture.texture.get(),
          &srv_desc,
-         &replacement_texture.srv);
+         replacement_texture.srv.put());
 
       D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
       rtv_desc.Format = format;
@@ -489,7 +492,7 @@ public:
       rtv_desc.Texture2D.MipSlice = 0;
       device->CreateRenderTargetView(replacement_texture.texture.get(),
          &rtv_desc,
-         &replacement_texture.rtv);
+         replacement_texture.rtv.put());
 
       replacement_texture.desc = texture_desc;
       replacement_texture.in_use = true;
@@ -501,8 +504,8 @@ public:
 
    ID3D11RenderTargetView* GetPostProcessRtvOutputRes(ID3D11RenderTargetView* rtv, GameDeviceDataPersona5& game_device_data, uint2& resolution)
    {
-      com_ptr<ID3D11Resource> resource;
-      rtv->GetResource(&resource);
+      ComPtr<ID3D11Resource> resource;
+      rtv->GetResource(resource.put());
 
       if (game_device_data.current_replacements.contains(resource.get()))
       {
@@ -519,8 +522,8 @@ public:
          return game_device_data.merged_texture_rtv.get();
       }
 
-      com_ptr<ID3D11Texture2D> texture;
-      resource->QueryInterface(&texture);
+      ComPtr<ID3D11Texture2D> texture;
+      resource->QueryInterface(texture.put());
 
       D3D11_TEXTURE2D_DESC texture_desc;
       texture->GetDesc(&texture_desc);
@@ -537,8 +540,8 @@ public:
 
    ID3D11RenderTargetView* GetPostProcessRtvScaled(ID3D11RenderTargetView* rtv, GameDeviceDataPersona5& game_device_data, uint2& resolution)
    {
-      com_ptr<ID3D11Resource> resource;
-      rtv->GetResource(&resource);
+      ComPtr<ID3D11Resource> resource;
+      rtv->GetResource(resource.put());
 
       if (game_device_data.current_replacements.contains(resource.get()))
       {
@@ -553,8 +556,8 @@ public:
          return game_device_data.merged_texture_rtv.get();
       }
 
-      com_ptr<ID3D11Texture2D> texture;
-      resource->QueryInterface(&texture);
+      ComPtr<ID3D11Texture2D> texture;
+      resource->QueryInterface(texture.put());
 
       D3D11_TEXTURE2D_DESC texture_desc;
       texture->GetDesc(&texture_desc);
@@ -571,8 +574,8 @@ public:
 
    ID3D11ShaderResourceView* GetPostProcessSrv(ID3D11ShaderResourceView* srv, GameDeviceDataPersona5& game_device_data)
    {
-      com_ptr<ID3D11Resource> resource;
-      srv->GetResource(&resource);
+      ComPtr<ID3D11Resource> resource;
+      srv->GetResource(resource.put());
 
       if (game_device_data.current_replacements.contains(resource.get()))
       {
@@ -629,14 +632,14 @@ public:
 
       auto CheckAndHandleRenderPassTransition = [native_device_context, &cmd_list_data, &device_data, &game_device_data](ID3D11RenderTargetView* render_target_view_1, ID3D11DepthStencilView* depth_stencil_view)
       {
-         com_ptr<ID3D11Resource> resource;
-         render_target_view_1->GetResource(&resource);
+         ComPtr<ID3D11Resource> resource;
+         render_target_view_1->GetResource(resource.put());
          if (!resource)
          {
             return DrawOrDispatchOverrideType::None;
          }
-         com_ptr<ID3D11Texture2D> tex;
-         resource->QueryInterface(&tex);
+         ComPtr<ID3D11Texture2D> tex;
+         resource->QueryInterface(tex.put());
          if (!tex)
          {
             return DrawOrDispatchOverrideType::None;
@@ -657,18 +660,23 @@ public:
 
             if (SrActive(device_data))
             {
-               depth_stencil_view->GetResource(&game_device_data.depth_texture);
+               depth_stencil_view->GetResource(game_device_data.depth_texture.put());
 
-               com_ptr<ID3D11Resource> renderTargetResource;
-               render_target_view_1->GetResource(&renderTargetResource);
+               ComPtr<ID3D11Resource> renderTargetResource;
+               render_target_view_1->GetResource(renderTargetResource.put());
 
-               renderTargetResource->QueryInterface(&game_device_data.motion_vectors);
+               renderTargetResource->QueryInterface(game_device_data.motion_vectors.put());
 
                D3D11_TEXTURE2D_DESC target_desc;
                game_device_data.motion_vectors->GetDesc(&target_desc);
 
-               com_ptr<ID3D11Buffer> constant_buffers[2];
-               native_device_context->VSGetConstantBuffers(1, 2, &constant_buffers[0]);
+               ComPtr<ID3D11Buffer> constant_buffers[2];
+               {
+                  ID3D11Buffer* constant_buffers_raw[2];
+                  native_device_context->VSGetConstantBuffers(1, 2, &constant_buffers_raw[0]);
+                  constant_buffers[0].attach(constant_buffers_raw[0]);
+                  constant_buffers[1].attach(constant_buffers_raw[1]);
+               }
 
                if (constant_buffers[0])
                {
@@ -723,9 +731,14 @@ public:
 
          game_device_data.render_target_changed = false;
 
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-         com_ptr<ID3D11RenderTargetView> render_target_views[2];
-         native_device_context->OMGetRenderTargets(2, &render_target_views[0], &depth_stencil_view);
+         ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+         ComPtr<ID3D11RenderTargetView> render_target_views[2];
+         {
+            ID3D11RenderTargetView* render_target_views_raw[2];
+            native_device_context->OMGetRenderTargets(2, &render_target_views_raw[0], depth_stencil_view.put());
+            render_target_views[0].attach(render_target_views_raw[0]);
+            render_target_views[1].attach(render_target_views_raw[1]);
+         }
 
          if (!depth_stencil_view)
          {
@@ -738,14 +751,14 @@ public:
             return CheckAndHandleRenderPassTransition(render_target_views[1].get(), depth_stencil_view.get());
          }
 
-         com_ptr<ID3D11Resource> depth_stencil_resource;
-         depth_stencil_view->GetResource(&depth_stencil_resource);
+         ComPtr<ID3D11Resource> depth_stencil_resource;
+         depth_stencil_view->GetResource(depth_stencil_resource.put());
          if (!depth_stencil_resource)
          {
             return DrawOrDispatchOverrideType::None;
          }
-         com_ptr<ID3D11Texture2D> depth_stencil_texture;
-         depth_stencil_resource->QueryInterface(&depth_stencil_texture);
+         ComPtr<ID3D11Texture2D> depth_stencil_texture;
+         depth_stencil_resource->QueryInterface(depth_stencil_texture.put());
          if (!depth_stencil_texture)
          {
             return DrawOrDispatchOverrideType::None;
@@ -786,9 +799,14 @@ public:
          }
          game_device_data.render_target_changed = false;
 
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-         com_ptr<ID3D11RenderTargetView> render_target_views[2];
-         native_device_context->OMGetRenderTargets(2, &render_target_views[0], &depth_stencil_view);
+         ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+         ComPtr<ID3D11RenderTargetView> render_target_views[2];
+         {
+            ID3D11RenderTargetView* render_target_views_raw[2];
+            native_device_context->OMGetRenderTargets(2, &render_target_views_raw[0], depth_stencil_view.put());
+            render_target_views[0].attach(render_target_views_raw[0]);
+            render_target_views[1].attach(render_target_views_raw[1]);
+         }
 
          if (!render_target_views[0] ||
              !render_target_views[1] ||
@@ -808,8 +826,8 @@ public:
       {
          game_device_data.frame_phase = FramePhase::DEFERRED;
 
-         com_ptr<ID3D11Buffer> cbShadow;
-         native_device_context->PSGetConstantBuffers(6, 1, &cbShadow);
+         ComPtr<ID3D11Buffer> cbShadow;
+         native_device_context->PSGetConstantBuffers(6, 1, cbShadow.put());
 
          if (cbShadow)
          {
@@ -834,17 +852,17 @@ public:
              game_device_data.motion_vectors)
          {
             game_device_data.frame_phase = FramePhase::POSTPROCESSING_AND_UI;
-            com_ptr<ID3D11ShaderResourceView> color_srv;
-            native_device_context->PSGetShaderResources(0, 1, &color_srv);
+            ComPtr<ID3D11ShaderResourceView> color_srv;
+            native_device_context->PSGetShaderResources(0, 1, color_srv.put());
 
-            com_ptr<ID3D11Resource> color_resource;
-            color_srv->GetResource(&color_resource);
-            color_resource->QueryInterface(&game_device_data.source_color);
+            ComPtr<ID3D11Resource> color_resource;
+            color_srv->GetResource(color_resource.put());
+            color_resource->QueryInterface(game_device_data.source_color.put());
 
             SetupSr(native_device_context, game_device_data, device_data);
 
             // split the command list since DLSS must be executed on an immediate context
-            native_device_context->FinishCommandList(TRUE, &game_device_data.partial_command_list);
+            native_device_context->FinishCommandList(TRUE, game_device_data.partial_command_list.put());
             if (game_device_data.modifiable_index_vertex_buffer)
             {
                D3D11_MAPPED_SUBRESOURCE mapped_buffer;
@@ -862,8 +880,15 @@ public:
           (game_device_data.render_resolution.x != game_device_data.upscale_resolution.x ||
              game_device_data.render_resolution.y != game_device_data.upscale_resolution.y))
       {
-         com_ptr<ID3D11ShaderResourceView> srvs[4];
-         native_device_context->PSGetShaderResources(0, 4, &srvs[0]);
+         ComPtr<ID3D11ShaderResourceView> srvs[4];
+         {
+            ID3D11ShaderResourceView* srvs_raw[4];
+            native_device_context->PSGetShaderResources(0, 4, &srvs_raw[0]);
+            for (uint32_t i = 0; i < 4; ++i)
+            {
+               srvs[i].attach(srvs_raw[i]);
+            }
+         }
          bool srv_replaced = false;
          for (uint32_t i = 0; i < 4; ++i)
          {
@@ -882,9 +907,9 @@ public:
             native_device_context->PSSetShaderResources(0, 4, &srvs[0]);
          }
 
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-         com_ptr<ID3D11RenderTargetView> render_target_view;
-         native_device_context->OMGetRenderTargets(1, &render_target_view, &depth_stencil_view);
+         ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+         ComPtr<ID3D11RenderTargetView> render_target_view;
+         native_device_context->OMGetRenderTargets(1, render_target_view.put(), depth_stencil_view.put());
          if (!original_shader_hashes.Contains(shader_hashes_copy) && render_target_view)
          {
             ID3D11RenderTargetView* replacement_rtv;
@@ -942,16 +967,16 @@ public:
          // as far as I can tell the render target and source texture have basiscally the same
          // content whenever this is used so copying it over before fixes the hallway and should
          // be safe for everything else
-         com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->PSGetShaderResources(0, 1, &srv);
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0, 1, srv.put());
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
 
-         com_ptr<ID3D11Resource> srv_resource;
-         srv->GetResource(&srv_resource);
+         ComPtr<ID3D11Resource> srv_resource;
+         srv->GetResource(srv_resource.put());
 
-         com_ptr<ID3D11Resource> rtv_resource;
-         rtv->GetResource(&rtv_resource);
+         ComPtr<ID3D11Resource> rtv_resource;
+         rtv->GetResource(rtv_resource.put());
 
          native_device_context->CopySubresourceRegion(rtv_resource.get(), 0, 0, 0, 0, srv_resource.get(), 0, nullptr);
       }
@@ -1028,18 +1053,18 @@ public:
 
    static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
    {
-      com_ptr<ID3D11DeviceContext> native_device_context;
+      ComPtr<ID3D11DeviceContext> native_device_context;
       ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      HRESULT hr = device_child->QueryInterface(&native_device_context);
+      HRESULT hr = device_child->QueryInterface(native_device_context.put());
 
       auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
 
       if (native_device_context)
       {
-         com_ptr<ID3D11CommandList> native_command_list;
+         ComPtr<ID3D11CommandList> native_command_list;
          ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         HRESULT hr = device_child->QueryInterface(&native_command_list);
+         HRESULT hr = device_child->QueryInterface(native_command_list.put());
          if (native_command_list == game_device_data.remainder_command_list && game_device_data.partial_command_list)
          {
             native_device_context->ExecuteCommandList(game_device_data.partial_command_list.get(), FALSE);
@@ -1072,13 +1097,13 @@ public:
             }
 
             {
-               com_ptr<ID3D11Device> device;
-               native_device_context->GetDevice(&device);
+               ComPtr<ID3D11Device> device;
+               native_device_context->GetDevice(device.put());
 
                D3D11_TEXTURE2D_DESC motion_vectors_desc;
                game_device_data.motion_vectors->GetDesc(&motion_vectors_desc);
 
-               com_ptr<ID3D11ShaderResourceView> motion_vectors_srv;
+               ComPtr<ID3D11ShaderResourceView> motion_vectors_srv;
                {
                   D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
                   srv_desc.Format = motion_vectors_desc.Format;
@@ -1087,14 +1112,12 @@ public:
                   srv_desc.Texture2D.MipLevels = 1;
                   device->CreateShaderResourceView(game_device_data.motion_vectors.get(),
                      &srv_desc,
-                     &motion_vectors_srv);
+                     motion_vectors_srv.put());
                }
 
-               ID3D11ShaderResourceView* srvs[] = {motion_vectors_srv.get()};
-               ID3D11UnorderedAccessView* uavs[] = {game_device_data.decoded_motion_vectors_uav.get()};
                native_device_context->CSSetShader(device_data.native_compute_shaders[CompileTimeStringHash("Decode Motion Vector")].get(), 0, 0);
-               native_device_context->CSSetShaderResources(0, 1, srvs);
-               native_device_context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+               native_device_context->CSSetShaderResources(0, 1, motion_vectors_srv.get_addressof());
+               native_device_context->CSSetUnorderedAccessViews(0, 1, game_device_data.decoded_motion_vectors_uav.get_addressof(), nullptr);
                native_device_context->Dispatch((game_device_data.render_resolution.x + 7) / 8, (game_device_data.render_resolution.y + 7) / 8, 1);
             }
 
@@ -1116,10 +1139,10 @@ public:
                game_device_data.has_drawn_upscaling = true;
             }
             {
-               com_ptr<ID3D11Device> device;
-               native_device_context->GetDevice(&device);
-               com_ptr<ID3D11ShaderResourceView> resolve_textureSRV;
-               com_ptr<ID3D11ShaderResourceView> color_srv;
+               ComPtr<ID3D11Device> device;
+               native_device_context->GetDevice(device.put());
+               ComPtr<ID3D11ShaderResourceView> resolve_texture_srv;
+               ComPtr<ID3D11ShaderResourceView> color_srv;
 
                {
                   D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
@@ -1129,7 +1152,7 @@ public:
                   srv_desc.Texture2D.MipLevels = 1;
                   device->CreateShaderResourceView(game_device_data.resolve_texture.get(),
                      &srv_desc,
-                     &resolve_textureSRV);
+                     resolve_texture_srv.put());
                }
                {
                   D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
@@ -1139,17 +1162,16 @@ public:
                   srv_desc.Texture2D.MipLevels = 1;
                   device->CreateShaderResourceView(game_device_data.source_color.get(),
                      &srv_desc,
-                     &color_srv);
+                     color_srv.put());
                }
 
                // some sr methods don't retain the alpha channel - combine sr result with the alpha from the original color texture
                {
-                  ID3D11ShaderResourceView* srvs[] = {resolve_textureSRV.get(), color_srv.get()};
-                  ID3D11UnorderedAccessView* uavs[] = {game_device_data.merged_texture_uav.get()};
+                  ID3D11ShaderResourceView* srvs[] = {resolve_texture_srv.get(), color_srv.get()};
                   ID3D11SamplerState* samplers[] = {device_data.sampler_state_linear.get()};
                   native_device_context->CSSetShader(device_data.native_compute_shaders[CompileTimeStringHash("Merge")].get(), 0, 0);
                   native_device_context->CSSetShaderResources(0, 2, srvs);
-                  native_device_context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+                  native_device_context->CSSetUnorderedAccessViews(0, 1, game_device_data.merged_texture_uav.get_addressof(), nullptr);
                   native_device_context->CSSetSamplers(0, 1, samplers);
                   native_device_context->Dispatch((game_device_data.upscale_resolution.x + 7) / 8, (game_device_data.upscale_resolution.y + 7) / 8, 1);
                }
@@ -1162,13 +1184,13 @@ public:
          }
       }
 
-      com_ptr<ID3D11CommandList> native_command_list;
-      hr = device_child->QueryInterface(&native_command_list);
+      ComPtr<ID3D11CommandList> native_command_list;
+      hr = device_child->QueryInterface(native_command_list.put());
       if (native_command_list)
       {
          ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         hr = device_child->QueryInterface(&native_device_context);
-         if (native_device_context == game_device_data.draw_device_context)
+         hr = device_child->QueryInterface(native_device_context.put());
+         if (native_device_context.get() == game_device_data.draw_device_context)
          {
             game_device_data.remainder_command_list = native_command_list.get();
          }
@@ -1244,9 +1266,9 @@ public:
       // game_device_data.frame_phase == FramePhase::GBUFFER
       if ((ID3D11Buffer*)dest.handle == game_device_data.cb_transform)
       {
-         com_ptr<ID3D11DeviceContext> native_device_context;
+         ComPtr<ID3D11DeviceContext> native_device_context;
          ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-         HRESULT hr = device_child->QueryInterface(&native_device_context);
+         HRESULT hr = device_child->QueryInterface(native_device_context.put());
          return HandleTransformUpdate((ID3D11Buffer*)dest.handle, data, native_device_context.get(), game_device_data, device_data);
       }
 
@@ -1263,10 +1285,10 @@ public:
          return;
       }
 
-      com_ptr<ID3D11DeviceContext> native_device_context;
+      ComPtr<ID3D11DeviceContext> native_device_context;
       ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      device_child->QueryInterface(&native_device_context);
-      if (native_device_context == game_device_data.draw_device_context)
+      device_child->QueryInterface(native_device_context.put());
+      if (native_device_context.get() == game_device_data.draw_device_context)
       {
          game_device_data.last_viewport_size = uint2((uint32_t)viewports->width, (uint32_t)viewports->height);
       }
@@ -1296,32 +1318,27 @@ public:
 
       ImGui::NewLine();
 
-      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-      {
-         ImGui::SetTooltip("When enabled setting Rendering Scale to 50%% or 75%% will use Super Resolution (DLSS or FSR) to scale the image to the output resolution.\nOtherwise Super Resolution will only be used as AA and the image is bilinearly upscaled.");
-      }
-
       const char* previewString;
       char buffer[32];
       if (g_shadow_map_size_override == 512)
       {
-          previewString = "Very low - 512";
+         previewString = "Very low - 512";
       }
       else if (g_shadow_map_size_override == 1024)
       {
-          previewString = "Low - 1024";
+         previewString = "Low - 1024";
       }
       else if (g_shadow_map_size_override == 2048)
       {
-          previewString = "Middle - 2048";
+         previewString = "Middle - 2048";
       }
       else if (g_shadow_map_size_override == 4096)
       {
-          previewString = "High - 4096";
+         previewString = "High - 4096";
       }
       else if (g_shadow_map_size_override == 8192)
       {
-          previewString = "Very high - 8192";
+         previewString = "Very high - 8192";
       }
       else if (g_shadow_map_size_override > 0)
       {
