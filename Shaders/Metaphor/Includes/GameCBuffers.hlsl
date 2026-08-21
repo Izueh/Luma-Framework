@@ -15,9 +15,6 @@ namespace CB
 		float2 InvOutputRes;
 		float RenderScale;
 		float InvRenderScale;
-		float ShadowRes;
-		float InvShadowRes;
-		float2 JitterOffset;
     };
 
     struct LumaGameData

@@ -389,6 +389,10 @@ M_INLINE float3 TransformPoint(const float4x4 m, const float3& b)
 
 namespace
 {
+   bool first_boot = true; // Automatic setting
+   bool enable_hdr = false;
+   bool next_enable_hdr = enable_hdr; // The value we serialize, that will be ignored until reboot
+
    uint32_t g_scene_ui_msaa_samples = 8;
    float2 projection_jitters = {0, 0};
    ShaderHashesList shader_hashes_tonemap;
@@ -571,6 +575,13 @@ public:
    {
       auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
+      if (!enable_hdr)
+      {
+         cb_luma_global_settings.DisplayMode = DisplayModeType::SDR;
+         cb_luma_global_settings.ScenePeakWhite = srgb_white_level;
+         cb_luma_global_settings.ScenePaperWhite = srgb_white_level;
+         cb_luma_global_settings.UIPaperWhite = srgb_white_level;
+      }
    }
 
    void OnInitDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -1576,7 +1587,7 @@ public:
          }
       }
       else if (game_device_data.frame_progress.Reached(FrameProgress::BackgroundTonemapped) &&
-          !game_device_data.frame_progress.Reached(FrameProgress::AddedParticles) &&
+               !game_device_data.frame_progress.Reached(FrameProgress::AddedParticles) &&
                original_shader_hashes.Contains(shader_hashes_merge_particles))
       {
          // only apply sr when we have the necessary input resources
@@ -1602,9 +1613,9 @@ public:
 
             if (!game_device_data.frame_progress.Reached(FrameProgress::LutApplied))
             {
-                CommitSkinCache(native_device_context, game_device_data);
+               CommitSkinCache(native_device_context, game_device_data);
 
-                SetupSr(native_device_context, game_device_data, device_data);
+               SetupSr(native_device_context, game_device_data, device_data);
             }
 
             // split the command list since DLSS must be executed on an immediate context
@@ -1861,10 +1872,10 @@ public:
                game_device_data.frame_progress.SetReached(FrameProgress::SceneUiDrawStarted);
             }
             else if (dsd.DepthEnable && bd.RenderTarget[0].BlendOp != D3D11_BLEND_OP_REV_SUBTRACT && game_device_data.frame_progress.Reached(FrameProgress::SceneUiDrawStarted) &&
-                !original_shader_hashes.Contains(shader_hashes_material))
+                     !original_shader_hashes.Contains(shader_hashes_material))
             {
-                native_device_context->RSSetState(game_device_data.scene_ui_rasterizer_state.get());
-                native_device_context->OMSetBlendState(game_device_data.scene_ui_blend_state.get(), nullptr, 0xFFFFFFFF);
+               native_device_context->RSSetState(game_device_data.scene_ui_rasterizer_state.get());
+               native_device_context->OMSetBlendState(game_device_data.scene_ui_blend_state.get(), nullptr, 0xFFFFFFFF);
             }
             else if (!dsd.DepthEnable && game_device_data.frame_progress.Reached(FrameProgress::SceneUiDrawStarted))
             {
@@ -1982,8 +1993,8 @@ public:
             game_device_data.remainder_command_list.reset();
             for (uint32_t i = 0; i < game_device_data.partial_command_lists.size(); ++i)
             {
-                native_device_context->ExecuteCommandList(game_device_data.partial_command_lists[i].get(), FALSE);
-                game_device_data.partial_command_lists[i].reset();
+               native_device_context->ExecuteCommandList(game_device_data.partial_command_lists[i].get(), FALSE);
+               game_device_data.partial_command_lists[i].reset();
             }
             game_device_data.partial_command_lists.clear();
 
@@ -2319,7 +2330,7 @@ public:
 
                if (System::ScanMemoryForPattern((const std::byte*)original_shader_desc->code, original_shader_desc->code_size, (std::byte*)"GFD_PSCONST_SYSTEM", 18, true).size() > 0)
                {
-                   shader_hashes_material.pixel_shaders.emplace(hash);
+                  shader_hashes_material.pixel_shaders.emplace(hash);
                }
             }
             else if (subobject.type == reshade::api::pipeline_subobject_type::blend_state)
@@ -2339,6 +2350,15 @@ public:
       reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
+
+      if (ImGui::Checkbox("Enable HDR", &next_enable_hdr))
+      {
+         reshade::set_config_value(runtime, NAME, "EnableHDR", next_enable_hdr);
+      }
+      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+      {
+         ImGui::SetTooltip("Requires restart.");
+      }
 
       const char* previewString;
       char buffer[32];
@@ -2389,7 +2409,33 @@ public:
    void PrintImGuiAbout() override
    {
       ImGui::Text("Metaphor Luma mod - about and credits section", "");
-      ImGui::Text("xxHash Library\n"
+      ImGui::Text("Credits:\n"
+                  "Idarion\n"
+                  "Luma Framework: Pumbo\n"
+                  "HDR implementation based on RenoDX mod by: Ritsu\n");
+      ImGui::Text("\nrenodx\n"
+                  "MIT License\n"
+                  "\n"
+                  "Copyright (c) 2025 Carlos Lopez Jr.\n"
+                  "\n"
+                  "Permission is hereby granted, free of charge, to any person obtaining a copy\n"
+                  "of this software and associated documentation files (the \"Software\"), to deal\n"
+                  "in the Software without restriction, including without limitation the rights\n"
+                  "to use, copy, modify, merge, publish, distribute, sublicense, and/or sell\n"
+                  "copies of the Software, and to permit persons to whom the Software is\n"
+                  "furnished to do so, subject to the following conditions:\n"
+                  "\n"
+                  "The above copyright notice and this permission notice shall be included in all\n"
+                  "copies or substantial portions of the Software.\n"
+                  "\n"
+                  "THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\n"
+                  "IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\n"
+                  "FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\n"
+                  "AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\n"
+                  "LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\n"
+                  "OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\n"
+                  "SOFTWARE.\n");
+      ImGui::Text("\nxxHash Library\n"
                   "Copyright (c) 2012-2021 Yann Collet\n"
                   "All rights reserved.\n"
                   "\n"
@@ -2518,8 +2564,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // PS - 8, 10, 12
       // CS - 2, 3 , 5, 6, 7, 8, 9, 10, 11, 12, 13
       luma_settings_cbuffer_index = 8;
-      swapchain_upgrade_type = SwapchainUpgradeType::None;
-      force_disable_display_composition = true;
 
       game = new Metaphor();
    }
@@ -2532,6 +2576,39 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);
+
+   if (ul_reason_for_call == DLL_PROCESS_ATTACH)
+   {
+      reshade::get_config_value(nullptr, NAME, "FirstBoot", first_boot);
+      if (first_boot)
+      {
+         reshade::set_config_value(nullptr, NAME, "FirstBoot", false);
+
+         // Automatically enable HDR in the mod if it's supported on the primary display on first boot
+         bool hdr_supported_display;
+         bool hdr_enabled_display;
+         Display::IsHDRSupportedAndEnabled(0, hdr_supported_display, hdr_enabled_display);
+         enable_hdr = hdr_supported_display;
+
+         reshade::set_config_value(nullptr, NAME, "EnableHDR", enable_hdr);
+      }
+      else
+      {
+         reshade::get_config_value(nullptr, NAME, "EnableHDR", enable_hdr);
+      }
+      next_enable_hdr = enable_hdr;
+
+      if (enable_hdr)
+      {
+         swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled;
+         swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
+      }
+      else
+      {
+         swapchain_upgrade_type = SwapchainUpgradeType::None;
+         force_disable_display_composition = true;
+      }
+   }
 
    return TRUE;
 }

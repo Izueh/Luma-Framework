@@ -1,3 +1,7 @@
+#include "Includes/Common.hlsl"
+#include "Includes/Sample.hlsl"
+#include "Includes/Tonemapper.hlsl"
+
 cbuffer GFD_PSCONST_TONEMAP : register(b12)
 {
 	float FilmSlope : packoffset(c0);
@@ -21,15 +25,15 @@ cbuffer GFD_PSCONST_SYSTEM : register(b0)
 
 cbuffer GFD_PSCONST_HDR : register(b11)
 {
-	float middleGray : packoffset(c0);
-	float adaptedLum : packoffset(c0.y);
+	float middleGray : packoffset(c0);		// Around 10
+	float adaptedLum : packoffset(c0.y);	// Less than 1
 	float bloomScale : packoffset(c0.z);
 	float starScale : packoffset(c0.w);
-	float elapsedTime : packoffset(c1);
-	float toonBloomScale : packoffset(c1.y);
-	float adaptedLumAdjust : packoffset(c1.z);
-	float adaptedLumLimit : packoffset(c1.w);
-	float pbrIntensity : packoffset(c2);
+	float elapsedTime : packoffset(c1);				 // Controls animations maybe?
+	float toonBloomScale : packoffset(c1.y);		// more than 1
+	float adaptedLumAdjust : packoffset(c1.z);	// Less than 1
+	float adaptedLumLimit : packoffset(c1.w);	 // 0
+	float pbrIntensity : packoffset(c2);				// more than 1
 }
 
 SamplerState opaueSampler_s : register(s0);
@@ -42,50 +46,6 @@ Texture2D<float4> starTexture : register(t2);
 Texture2D<float4> toneTexture : register(t3);
 Texture2D<float4> gbuffer1Texture : register(t4);
 
-// From Shaders\Includes\Bloom.hlsl
-// Bicubic upsampling in 4 texture fetches.
-//
-// f(x) = (4 + 3 * |x|^3 – 6 * |x|^2) / 6 for 0 <= |x| <= 1
-// f(x) = (2 – |x|)^3 / 6 for 1 < |x| <= 2
-// f(x) = 0 otherwise
-//
-// Source: https://www.researchgate.net/publication/220494113_Efficient_GPU-Based_Texture_Interpolation_using_Uniform_B-Splines
-float4 sample_bicubic(Texture2D tex, SamplerState smp, float2 texcoord) {
-	uint2 src_size;
-	tex.GetDimensions(src_size.x, src_size.y);
-	float2 inv_src_size = rcp(src_size);
-		// transform the coordinate from [0,extent] to [-0.5, extent-0.5]
-		float2 coord_grid = texcoord * src_size - 0.5;
-		float2 index = floor(coord_grid);
-		float2 fraction = coord_grid - index;
-		float2 one_frac = 1.0 - fraction;
-		float2 one_frac2 = one_frac * one_frac;
-		float2 fraction2 = fraction * fraction;
-		float2 w0 = 1.0 / 6.0 * one_frac2 * one_frac;
-		float2 w1 = 2.0 / 3.0 - 0.5 * fraction2 * (2.0 - fraction);
-		float2 w2 = 2.0 / 3.0 - 0.5 * one_frac2 * (2.0 - one_frac);
-		float2 w3 = 1.0 / 6.0 * fraction2 * fraction;
-		float2 g0 = w0 + w1;
-		float2 g1 = w2 + w3;
-
-		// h0 = w1/g0 - 1, move from [-0.5, extent-0.5] to [0, extent]
-		float2 h0 = (w1 / g0) - 0.5 + index;
-		float2 h1 = (w3 / g1) + 1.5 + index;
-
-		// fetch the four linear interpolations
-		float4 tex00 = tex.SampleLevel(smp, float2(h0.x, h0.y) * inv_src_size, 0.0);
-		float4 tex10 = tex.SampleLevel(smp, float2(h1.x, h0.y) * inv_src_size, 0.0);
-		float4 tex01 = tex.SampleLevel(smp, float2(h0.x, h1.y) * inv_src_size, 0.0);
-		float4 tex11 = tex.SampleLevel(smp, float2(h1.x, h1.y) * inv_src_size, 0.0);
-
-		// weigh along the y-direction
-		tex00 = lerp(tex01, tex00, g0.y);
-		tex10 = lerp(tex11, tex10, g0.y);
-
-		// weigh along the x-direction
-		return lerp(tex10, tex00, g0.x);
-}
-
 void main(
 	float4 v0 : SV_POSITION0,
 	float2 v1 : TEXCOORD0,
@@ -95,9 +55,12 @@ void main(
 	uint4 bitmask, uiDest;
 	float4 fDest;
 
-	r0 = sample_bicubic(bloomTexture, bloomSampler_s, v1.xy);
-	r1.xyz = sample_bicubic(starTexture, starSampler_s, v1.xy).xyz;
-	r2.xyz = opaueTexture.Sample(opaueSampler_s, v1.xy).xyz;
+	r0 = sample_bicubic(bloomTexture, bloomSampler_s, v1.xy);				// 1/4th of res
+	r1.xyz = sample_bicubic(starTexture, starSampler_s, v1.xy).xyz;			// 1/4th of res
+	r2.xyz = opaueTexture.Sample(opaueSampler_s, v1.xy).xyz;				// Underexposed background
+	float3 untonemapped = r2.rgb;
+	float3 vanilla = r2.rgb;
+	
 	r3.xy = resolution.xy * v1.xy;
 	r3.xy = (int2)r3.xy;
 	r3.zw = float2(0,0);
@@ -105,25 +68,49 @@ void main(
 	r1.w = 255 * r3.y;
 	r1.w = (uint)r1.w;
 	r1.w = (int)r1.w & 8;
-	if (r1.w == 0) {
+	if (r1.w == 0)
+	{
+		// GBuffer calculations
 		r1.w = 255 * r3.x;
 		r1.w = (uint)r1.w;
 		r1.w = (uint)r1.w >> 4;
 		r1.w = (uint)r1.w;
 		r1.w = 0.0666666701 * r1.w;
+
+		// Shortfuse "input color (r2) needs to be adjusted for midgray"
 		r2.w = toneTexture.Sample(toneSampler_s, float2(0.5,0.5)).x;
+
+		// Lerp
 		r3.x = 1 + -middleGray;
 		r1.w = r3.x * r1.w + middleGray;
+
+		// Adjusting Luminance? Lerps at the end I think
 		r3.xyz = r2.xyz * r1.www;
 		r3.xyz = adaptedLum * r3.xyz;
-		r1.w = max(adaptedLumLimit, r2.w);
+		r1.w = max(adaptedLumLimit, r2.w);	// minimal limit? Why max?
 		r1.w = 9.99999975e-05 + r1.w;
 		r1.w = -adaptedLum + r1.w;
 		r1.w = adaptedLumAdjust * r1.w + adaptedLum;
+
+		/* Game highlights after (exposure). I think they divide by decimals so it's
+		 * technically a multiplication. Vanilla causes brightness to shoot up, but
+		 * renodx produces more reasonable results (Wrong midgray in renodx?) */
 		r3.xyz = r3.xyz / r1.www;
+		untonemapped = r3.rgb;
+
+		/* ACES RRT? (RRT = Reference Rendering Transform)
+		Produce the reference (source with sweeteners transformed to something ODT
+		will use) */
 		r1.w = dot(float3(0.439700812,0.382978052,0.1773348), r3.xyz);
 		r4.y = dot(float3(0.0897923037,0.813423157,0.096761629), r3.xyz);
 		r4.z = dot(float3(0.0175439864,0.111544058,0.870704114), r3.xyz);
+		if (LumaSettings.DisplayMode == 1)
+		{
+			float3 corrected_bt709 = mul(ACES::BT709_TO_AP0_MAT, r3.rgb);
+			r1.w = corrected_bt709.r;
+			r4.y = corrected_bt709.g;
+			r4.z = corrected_bt709.b;
+		}
 		r2.w = min(r4.y, r1.w);
 		r2.w = min(r2.w, r4.z);
 		r3.w = max(r4.y, r1.w);
@@ -169,6 +156,9 @@ void main(
 		r3.w = r4.w ? r5.x : r3.w;
 		r3.w = max(0, r3.w);
 		r3.w = min(360, r3.w);
+		// rgb_2_hue end
+
+		// center_hue
 		r4.w = 180 < r3.w;
 		r5.x = -360 + r3.w;
 		r3.w = r4.w ? r5.x : r3.w;
@@ -190,6 +180,9 @@ void main(
 		r1.w = dot(r4.xyz, float3(0.272228718,0.674081743,0.0536895171));
 		r4.xyz = r4.xyz + -r1.www;
 		r4.xyz = r4.xyz * float3(0.959999979,0.959999979,0.959999979) + r1.www;
+		// ACES::RRT ends here
+
+		// ACES SDR tonemapper
 		r5.xy = float2(1,0.180000007) + FilmBlackClip;
 		r1.w = -FilmToe + r5.x;
 		r2.w = 1 + FilmWhiteClip;
@@ -253,9 +246,21 @@ void main(
 		r4.xyz = max(float3(0,0,0), r4.xyz);
 		r4.xyz = r4.xyz + -r3.xyz;
 		r2.xyz = FilmAlpha * r4.xyz + r3.xyz;
+		vanilla = r2.rgb;	// in AP1
+		vanilla = UpgradeTonemap(untonemapped, vanilla);
+		// End of ACES SDR tonemapper
 	}
-	r1.xyz = starScale * r1.xyz + r2.xyz;
-	o0.xyz = r0.xyz * r0.www + r1.xyz;
+	float3 outputColor = vanilla;
+
+	/* r1.xyz = starScale * r1.xyz + r2.xyz;
+	o0.xyz = r0.xyz * r0.www + r1.xyz; */
+
+	// Add bloom/stars
+	// We add it to output cause devs add linear bloom/stars to tonemapped image
+	outputColor = starScale * r1.xyz + outputColor.rgb;
+	outputColor = r0.xyz * r0.www + outputColor.rgb;
+
+	o0.xyz = outputColor.rgb;
 	o0.w = 1;
 	return;
 }
