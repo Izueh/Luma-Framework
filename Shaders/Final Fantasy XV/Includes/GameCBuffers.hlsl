@@ -10,7 +10,8 @@ namespace CB
 struct LumaGameSettings
 {
    float4 RenderResolution; // xy = dimensions, zw = 1/dimensions
-   float tonemap_type;
+   uint UseSDROverHDR;      // 1: derive and use the game's SDR curve tuning even when the game runs in HDR mode (default)
+   uint UseVanillaGamutRatio;  // gates the game's HDR gamut-ratio blend (was "FakeHDR")
    float BloomStrength;
    float Sharpness;
 };

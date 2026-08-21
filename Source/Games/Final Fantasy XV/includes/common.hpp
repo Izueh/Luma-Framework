@@ -53,9 +53,6 @@ struct GameDeviceDataFFXV final : public GameDeviceData
    // Post-TAA upscale tracking
    UpscaleTrackingState upscale_tracking;
 
-   ComPtr<ID3D11Buffer> dxp_frame_constants_cb;
-   uint32_t dxp_frame_constants_frame_index = UINT32_MAX;
-
    // Recipe patch bindings resolved once at patch-apply time (see
    // ApplyDepthDitheringShaderPatch). Read per-draw under dxp_bindings_mutex;
    // written by whichever provider applied the patch (sync: creation thread,

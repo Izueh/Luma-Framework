@@ -40,6 +40,31 @@ float3 FFXV_Inverse(float3 y, float ZeroSlope, float InvLog, float Param_n37, fl
     );
 }
 
+// --- 1c. Recover the game's SDR curve tuning from the HDR-mode uploads ---
+// The game computes the HDR tuning from the SDR tuning by a fixed rule (verified
+// bit-identical across multiple scene captures, SDR vs HDR display mode):
+//   (K_hdr + 1) = 3.988391 * (K_sdr + 1)
+//   10^D_hdr    = 2 * 10^D_sdr          (D = Disposition, inside InvLog)
+//   p_hdr       = p_sdr + 0.34526
+//   n46_hdr     = 0.507594 * n46_sdr
+//   n49_hdr     = 0.606713 * n49_sdr
+//   ZeroSlope, HighRange: identical in both modes
+// Inverting gives the SDR curve from whatever HDR params the game uploads, so the
+// SDR look is preserved even if the game ever changes its constants.
+void RecoverSDRParams(
+    float Contrast_hdr, float InvLog_hdr, float ZeroSlope_hdr, float Param_n37_hdr,
+    float Param_n46_hdr, float Param_n49_hdr,
+    out float Contrast, out float InvLog, out float ZeroSlope,
+    out float Param_n37, out float Param_n46, out float Param_n49)
+{
+    Contrast  = (Contrast_hdr + 1.0) / 3.988391 - 1.0;
+    InvLog    = 1.0 / log((exp(1.0 / InvLog_hdr) - 1.0) / 2.0 + 1.0);
+    ZeroSlope = ZeroSlope_hdr;
+    Param_n37 = Param_n37_hdr - 0.34526;
+    Param_n46 = Param_n46_hdr / 0.507594;
+    Param_n49 = Param_n49_hdr / 0.606713;
+}
+
 // --- 2. First Derivative (Slope) ---
 float FFXV_d1(float x, float ZeroSlope, float InvLog, float Param_n37, float Contrast, float Param_n46)
 {
@@ -80,6 +105,9 @@ float FFXV_d3(float x, float ZeroSlope, float InvLog, float Param_n37, float Con
 
 // --- 5. Newton-Bisection Root Finder ---
 // rootOrder: 2 = y''=0 (true inflection), 3 = y'''=0 (max curvature, better linear pivot)
+// For rootOrder 3 the y''=0 inflection is computed first, then the y'''=0 root is
+// searched on [inflection, xmax] with a fallback to the inflection if none is found
+// (same semantics as renodx FindInflection_FFXV precision 2).
 // Phase 1: log-space scan seeds a guaranteed sign-change bracket.
 // Phase 2: Newton step with bisection fallback refines inside the bracket.
 // Returns -1 if no sign change is found in [xmin, xmax].
@@ -87,14 +115,12 @@ float Find_Inflection(float xmin, float xmax, int scanSteps, int bisectIters,
                     float ZeroSlope, float InvLog, float Param_n37, float Contrast, float Param_n46,
                     int rootOrder)
 {
-    // Phase 1: find sign-change bracket via uniform log-space scan
+    // Phase 1: find y''=0 sign-change bracket via uniform log-space scan
     float logMin = log(xmin + 1e-6);
     float logMax = log(xmax);
 
     float xPrev = exp(logMin);
-    float fPrev = (rootOrder == 3)
-                  ? FFXV_d3(xPrev, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46)
-                  : FFXV_d2(xPrev, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
+    float fPrev = FFXV_d2(xPrev, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
 
     float xl = xPrev, fl = fPrev;
     float xr = xPrev, fr = fPrev;
@@ -103,9 +129,7 @@ float Find_Inflection(float xmin, float xmax, int scanSteps, int bisectIters,
     [loop]
     for (int i = 1; i <= scanSteps; i++) {
         float x = exp(lerp(logMin, logMax, (float)i / (float)scanSteps));
-        float f = (rootOrder == 3)
-                  ? FFXV_d3(x, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46)
-                  : FFXV_d2(x, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
+        float f = FFXV_d2(x, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
 
         if ((fPrev <= 0 && f >= 0) || (fPrev >= 0 && f <= 0)) {
             xl = xPrev; fl = fPrev;
@@ -118,22 +142,13 @@ float Find_Inflection(float xmin, float xmax, int scanSteps, int bisectIters,
 
     if (!found) return -1.0;
 
-    // Phase 2: Newton + bisection hybrid — bracket [xl,xr] always straddles the root
+    // Phase 2: Newton + bisection hybrid — bracket [xl,xr] always straddles the y''=0 root
     float x = sqrt(xl * xr); // geometric midpoint start
 
     [loop]
     for (int it = 0; it < bisectIters; it++) {
-        float f, fprime;
-        if (rootOrder == 3) {
-            f = FFXV_d3(x, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
-            // y'''' via central differences of y'''
-            float eps = max(x * 1e-4, 1e-8);
-            fprime = (FFXV_d3(x + eps, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46)
-                    - FFXV_d3(x - eps, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46)) / (2.0 * eps);
-        } else {
-            f = FFXV_d2(x, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
-            fprime = FFXV_d3(x, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
-        }
+        float f = FFXV_d2(x, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
+        float fprime = FFXV_d3(x, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
 
         // Narrow the bracket before attempting Newton, maintaining sign-change invariant
         if ((fl <= 0 && f >= 0) || (fl >= 0 && f <= 0)) {
@@ -143,6 +158,56 @@ float Find_Inflection(float xmin, float xmax, int scanSteps, int bisectIters,
         }
 
         // Newton step if it lands inside the current bracket; else geometric midpoint
+        float x_newton = x - f / (fprime + 1e-9);
+        x = (x_newton > xl && x_newton < xr) ? x_newton : sqrt(xl * xr);
+
+        if (abs(xr - xl) < 1e-5 * xl) break;
+    }
+
+    float inflection = x;
+    if (rootOrder != 3) return inflection;
+
+    // Phase 3: search for the y'''=0 (max curvature) root on [inflection, xmax]
+    logMin = log(inflection + 1e-6);
+    xPrev = inflection;
+    fPrev = FFXV_d3(xPrev, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
+
+    xl = xPrev; fl = fPrev;
+    xr = xPrev; fr = fPrev;
+    found = false;
+
+    [loop]
+    for (int i = 1; i <= scanSteps; i++) {
+        float xScan = exp(lerp(logMin, logMax, (float)i / (float)scanSteps));
+        float f = FFXV_d3(xScan, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
+
+        if ((fPrev <= 0 && f >= 0) || (fPrev >= 0 && f <= 0)) {
+            xl = xPrev; fl = fPrev;
+            xr = xScan; fr = f;
+            found = true;
+            break;
+        }
+        xPrev = xScan; fPrev = f;
+    }
+
+    if (!found) return inflection;
+
+    // Phase 4: Newton + bisection hybrid on y''' (4th derivative via central differences)
+    x = sqrt(xl * xr);
+    [loop]
+    for (int it = 0; it < bisectIters; it++) {
+        float f = FFXV_d3(x, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
+        // y'''' via central differences of y'''
+        float eps = max(x * 1e-4, 1e-8);
+        float fprime = (FFXV_d3(x + eps, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46)
+                       - FFXV_d3(x - eps, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46)) / (2.0 * eps);
+
+        if ((fl <= 0 && f >= 0) || (fl >= 0 && f <= 0)) {
+            xr = x; fr = f;
+        } else {
+            xl = x; fl = f;
+        }
+
         float x_newton = x - f / (fprime + 1e-9);
         x = (x_newton > xl && x_newton < xr) ? x_newton : sqrt(xl * xr);
 
@@ -176,11 +241,12 @@ float3 FFXV_Extended(float3 color, float3 base, float ZeroSlope, float InvLog, f
 
 float3 ApplyTonemapAndGrading(float3 color)
 {
+    // color = BT2020_To_BT709(color);
     float3 tonemapped_color = renodx::tonemap::neutwo::PerChannel(color, PEAK_NITS/GAME_NITS);
  #if UI_DRAW_TYPE == 2
    ColorGradingLUTTransferFunctionInOutCorrected(tonemapped_color, VANILLA_ENCODING_TYPE, GAMMA_CORRECTION_TYPE, true);
    tonemapped_color *= GAME_NITS / UI_NITS;
    ColorGradingLUTTransferFunctionInOutCorrected(tonemapped_color, GAMMA_CORRECTION_TYPE, VANILLA_ENCODING_TYPE, true);
 #endif
-    return tonemapped_color;
+    return (tonemapped_color);
 }
