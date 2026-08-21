@@ -371,21 +371,29 @@ void AddTraceDrawCallData(std::vector<TraceDrawCallData>& trace_draw_calls_data,
          rv->GetResource(&resource);
 
          const bool upgraded = device_data.original_resources_to_mirrored_upgraded_resources.contains((uint64_t)resource.get()) || device_data.upgraded_resources.contains((uint64_t)resource.get()) || (/*swapchain_upgrade_type > SwapchainUpgradeType::None &&*/ device_data.back_buffers.contains((uint64_t)resource.get())); // TODO: expose "swapchain_upgrade_type" here or something like that
+         const bool scaled = [&]() {
+            auto it = device_data.original_resources_to_mirrored_upgraded_resources.find((uint64_t)resource.get());
+            return it != device_data.original_resources_to_mirrored_upgraded_resources.end() && it->second.is_scaled;
+         }();
 
          using ViewType = std::remove_pointer_t<decltype(rv)>;
          // Note: depth/stencil views are ignored for now
          if constexpr (std::is_same_v<ViewType, ID3D11ShaderResourceView>)
          {
             trace_draw_call_data.any_input_resources_format_upgraded |= upgraded;
+            trace_draw_call_data.any_input_resources_scaled |= scaled;
          }
          else if constexpr (std::is_same_v<ViewType, ID3D11RenderTargetView>)
          {
             trace_draw_call_data.any_output_resources_format_upgraded |= upgraded;
+            trace_draw_call_data.any_output_resources_scaled |= scaled;
          }
          else if constexpr (std::is_same_v<ViewType, ID3D11UnorderedAccessView>)
          {
             trace_draw_call_data.any_input_resources_format_upgraded |= upgraded;
             trace_draw_call_data.any_output_resources_format_upgraded |= upgraded;
+            trace_draw_call_data.any_input_resources_scaled |= scaled;
+            trace_draw_call_data.any_output_resources_scaled |= scaled;
          }
       }
    };
@@ -1625,28 +1633,10 @@ void DrawBloom(ID3D11Device* device, ID3D11DeviceContext* device_context, Device
    auto& managed_resources = device_data.managed_resources;
 
    // TODO: Reorganize this better.
-   static std::vector<ID3D11RenderTargetView*> rtv_mips_x(nmips);
-   static std::vector<ID3D11ShaderResourceView*> srv_mips_x(nmips);
-   static std::vector<ID3D11RenderTargetView*> rtv_mips_y(nmips);
-   static std::vector<ID3D11ShaderResourceView*> srv_mips_y(nmips);
-
-#if DEVELOPMENT
-   static int last_nmips = nmips;
-   if (nmips != last_nmips)
-   {
-      ResetCOMArray(rtv_mips_x);
-      ResetCOMArray(srv_mips_x);
-      ResetCOMArray(rtv_mips_y);
-      ResetCOMArray(srv_mips_y);
-
-      rtv_mips_x.resize(nmips);
-      srv_mips_x.resize(nmips);
-      rtv_mips_y.resize(nmips);
-      srv_mips_y.resize(nmips);
-
-      last_nmips = nmips;
-   }
-#endif
+   static std::vector<ID3D11RenderTargetView*> rtv_mips_x;
+   static std::vector<ID3D11ShaderResourceView*> srv_mips_x;
+   static std::vector<ID3D11RenderTargetView*> rtv_mips_y;
+   static std::vector<ID3D11ShaderResourceView*> srv_mips_y;
 
    // Backup IA.
    D3D11_PRIMITIVE_TOPOLOGY primitive_topology_original;
@@ -1697,6 +1687,28 @@ void DrawBloom(ID3D11Device* device, ID3D11DeviceContext* device_context, Device
 
    const auto scene_width = tex_desc.Width;
    const auto scene_height = tex_desc.Height;
+
+   // The bloom mips are sized from the scene; reset them when the scene size or mip count changes
+   // Needed for proper support of the new resource scaling feature.
+   static UINT last_scene_width = 0;
+   static UINT last_scene_height = 0;
+   static int last_nmips = -1;
+   if (nmips != last_nmips || scene_width != last_scene_width || scene_height != last_scene_height)
+   {
+      ResetCOMArray(rtv_mips_x);
+      ResetCOMArray(srv_mips_x);
+      ResetCOMArray(rtv_mips_y);
+      ResetCOMArray(srv_mips_y);
+
+      rtv_mips_x.resize(nmips);
+      srv_mips_x.resize(nmips);
+      rtv_mips_y.resize(nmips);
+      srv_mips_y.resize(nmips);
+
+      last_nmips = nmips;
+      last_scene_width = scene_width;
+      last_scene_height = scene_height;
+   }
 
    const UINT x_mip0_width = tex_desc.Width / 2;
    const UINT x_mip0_height = tex_desc.Height;

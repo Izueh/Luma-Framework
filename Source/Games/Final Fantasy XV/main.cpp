@@ -36,9 +36,12 @@ namespace
    ShaderHashesList shader_hashes_bloom_skip;
    ShaderHashesList shader_hashes_bloom_glare_vignette;
    ShaderHashesList shader_hashes_attach_fast_noise;
+   ShaderHashesList shader_hashes_directional_light;
    const uint32_t CBTemporalAA_buffer_size = 256;
    const uint32_t CBExposure_buffer_size = 24;
    const uint32_t CBView_buffer_size = 768;
+
+   bool enable_directional_shadows = false;
 
 #if ENABLE_FAST_NOISE_TEXTURES
    ID3D11ShaderResourceView* GetFastNoiseSrv(DeviceData& device_data)
@@ -90,43 +93,7 @@ namespace
 #endif
 
 #if LUMA_HAS_RECIPE_PROVIDERS
-   struct FFXVDxpFrameConstants
-   {
-      uint32_t FrameIndex = 0;
-      uint32_t Padding[3] = {};
-   };
-
-   bool UpdatePatchedCB(ID3D11DeviceContext* native_device_context, GameDeviceDataFFXV& game_device_data)
-   {
-      if (!game_device_data.dxp_frame_constants_cb)
-      {
-         return false;
-      }
-
-      const uint32_t frame_index = cb_luma_global_settings.FrameIndex;
-      if (game_device_data.dxp_frame_constants_frame_index == frame_index)
-      {
-         return true;
-      }
-
-      D3D11_MAPPED_SUBRESOURCE mapped_buffer = {};
-      if (FAILED(native_device_context->Map(game_device_data.dxp_frame_constants_cb.get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped_buffer)))
-      {
-         return false;
-      }
-
-      auto* frame_constants = static_cast<FFXVDxpFrameConstants*>(mapped_buffer.pData);
-      frame_constants->FrameIndex = frame_index;
-      frame_constants->Padding[0] = 0;
-      frame_constants->Padding[1] = 0;
-      frame_constants->Padding[2] = 0;
-      native_device_context->Unmap(game_device_data.dxp_frame_constants_cb.get(), 0);
-
-      game_device_data.dxp_frame_constants_frame_index = frame_index;
-      return true;
-   }
-
-   bool BindPatchedResources(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, reshade::api::shader_stage stages, bool& updated_cbuffers)
+   bool BindPatchedResources(ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, reshade::api::shader_stage stages, bool& updated_cbuffers)
    {
       if ((stages & reshade::api::shader_stage::pixel) == 0 || original_shader_hashes.pixel_shaders[0] == UINT64_MAX)
       {
@@ -168,10 +135,14 @@ namespace
          }
       }
 
-      if (frame_constants_bind_point != UINT32_MAX && UpdatePatchedCB(native_device_context, game_device_data))
+      if (frame_constants_bind_point != UINT32_MAX)
       {
-         ID3D11Buffer* frame_constants_cb = game_device_data.dxp_frame_constants_cb.get();
-         native_device_context->PSSetConstantBuffers(frame_constants_bind_point, 1, &frame_constants_cb);
+         // The recipe reads the frame index from Luma's own settings cbuffer
+         // (cb13[2].y). Upload the current settings (FrameIndex) if dirty and
+         // bind it at the recipe's fixed slot (register 13).
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
+         ID3D11Buffer* luma_settings_cb = device_data.luma_global_settings.get();
+         native_device_context->PSSetConstantBuffers(frame_constants_bind_point, 1, &luma_settings_cb);
          updated_cbuffers = true;
          any_bound = true;
       }
@@ -182,9 +153,7 @@ namespace
    std::optional<dxp::RecipeReport> ApplyDepthDitheringShaderPatch(DeviceData& device_data, const Patch::ShaderPatchRequest& request)
    {
       std::shared_ptr<dxp::sm5::Recipe> recipe = device_data.recipes.GetRecipe(FFXV_DEPTH_DITHERING_RECIPE_HASH);
-      if (recipe == nullptr
-         || request.shader_container == nullptr
-         || request.shader_container_size < sizeof(DXBCHeader))
+      if (recipe == nullptr || request.shader_container == nullptr || request.shader_container_size < sizeof(DXBCHeader))
       {
          return std::nullopt;
       }
@@ -195,13 +164,22 @@ namespace
       }
 
       dxp::PatchOptions options;
-      options.logger = [](dxp::LogLevel level, const std::string& message) {
+      options.logger = [](dxp::LogLevel level, const std::string& message)
+      {
          reshade::log::level reshade_level = reshade::log::level::info;
-         switch (level) {
-            case dxp::LogLevel::Error: reshade_level = reshade::log::level::error; break;
-            case dxp::LogLevel::Warning: reshade_level = reshade::log::level::warning; break;
-            case dxp::LogLevel::Debug: reshade_level = reshade::log::level::debug; break;
-            case dxp::LogLevel::Info: break;
+         switch (level)
+         {
+         case dxp::LogLevel::Error:
+            reshade_level = reshade::log::level::error;
+            break;
+         case dxp::LogLevel::Warning:
+            reshade_level = reshade::log::level::warning;
+            break;
+         case dxp::LogLevel::Debug:
+            reshade_level = reshade::log::level::debug;
+            break;
+         case dxp::LogLevel::Info:
+            break;
          }
          reshade::log::message(reshade_level, ("[Luma] [Patch] " + message).c_str());
       };
@@ -217,7 +195,7 @@ namespace
       }
       else
       {
-         input_container = { reinterpret_cast<const uint8_t*>(request.shader_container), request.shader_container_size };
+         input_container = {reinterpret_cast<const uint8_t*>(request.shader_container), request.shader_container_size};
       }
 
       auto result = recipe->Execute(input_container, options);
@@ -286,8 +264,23 @@ public:
       GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
+
+      use_os_reference_white_level = false;
+
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs CS"), ShaderDefinition{"Luma_FFXV_MotionVec_Decode", reshade::api::pipeline_subobject_type::compute_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Output Scaled PS"), ShaderDefinition{"Luma_FFXV_Output_Scaled", reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(0x2100CE9BU, ShaderDefinition{"Luma_Directional_Light", reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(0xA315F1E7U, ShaderDefinition{"Luma_Directional_Light_CSM", reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(0x4B8E0FF8U, ShaderDefinition{"Luma_Directional_Light_CSM_AO", reshade::api::pipeline_subobject_type::pixel_shader});
+
+
+      default_luma_global_game_settings.BloomStrength = 1.f;
+      default_luma_global_game_settings.Sharpness = 1.f;
+      default_luma_global_game_settings.UseSDROverHDR = 1;
+      default_luma_global_game_settings.UseVanillaGamutRatio = 0;
+
+      cb_luma_global_settings.GameSettings = default_luma_global_game_settings;
+
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12; // #w## Update this (find the right value) ###
 
@@ -320,24 +313,6 @@ public:
       reshade::log::message(reshade::log::level::info, std::format("Recipe directory: {}", device_data.recipes.GetRootPath().string()).c_str());
       bool loaded = device_data.recipes.LoadFromFile(FFXV_DEPTH_DITHERING_RECIPE_HASH, "FFXV_Dithering_Fixes");
       ASSERT_ONCE_MSG(loaded, "Failed to load FFXV depth dithering DXP recipe");
-
-      D3D11_BUFFER_DESC frame_constants_desc = {};
-      frame_constants_desc.ByteWidth = sizeof(FFXVDxpFrameConstants);
-      frame_constants_desc.Usage = D3D11_USAGE_DYNAMIC;
-      frame_constants_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-      frame_constants_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
-
-      ComPtr<ID3D11Buffer> frame_constants_cb;
-      if (FAILED(native_device->CreateBuffer(&frame_constants_desc, nullptr, frame_constants_cb.put())))
-      {
-         Log_Debug(reshade::log::level::error, "FFXV: CreateBuffer failed for DXP frame constants");
-         return;
-      }
-#endif
-
-#if LUMA_HAS_RECIPE_PROVIDERS
-      game_device_data.dxp_frame_constants_cb = std::move(frame_constants_cb);
-      game_device_data.dxp_frame_constants_frame_index = UINT32_MAX;
 #endif
    }
 
@@ -346,6 +321,14 @@ public:
       reshade::api::effect_runtime* runtime = nullptr;
       reshade::get_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
       reshade::get_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
+
+      bool use_sdr_over_hdr = true;
+      reshade::get_config_value(runtime, NAME, "UseSDROverHDR", use_sdr_over_hdr);
+      cb_luma_global_settings.GameSettings.UseSDROverHDR = use_sdr_over_hdr ? 1 : 0;
+
+      bool use_vanilla_gamut_ratio = false;
+      reshade::get_config_value(runtime, NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
+      cb_luma_global_settings.GameSettings.UseVanillaGamutRatio = use_vanilla_gamut_ratio ? 1 : 0;
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
@@ -354,6 +337,17 @@ public:
 
       if (ImGui::TreeNodeEx("Post Process", ImGuiTreeNodeFlags_DefaultOpen))
       {
+
+         if (ImGui::Checkbox("Directional Shadows", &enable_directional_shadows))
+         {
+            reshade::set_config_value(runtime, NAME, "DirectionalShadows", enable_directional_shadows);
+         }
+         if (DrawResetButton(enable_directional_shadows, false, "DirectionalShadows", runtime))
+         {
+            enable_directional_shadows = false;
+            reshade::set_config_value(runtime, NAME, "DirectionalShadows", enable_directional_shadows);
+         }
+
          if (ImGui::SliderFloat("Bloom Strength", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
             reshade::set_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
@@ -364,20 +358,48 @@ public:
             reshade::set_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
          }
 
-         if(ImGui::SliderFloat("Sharpness", &cb_luma_global_settings.GameSettings.Sharpness, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+         if (ImGui::SliderFloat("Sharpness", &cb_luma_global_settings.GameSettings.Sharpness, 0.f, 2.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
             reshade::set_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
          }
-         if (DrawResetButton(cb_luma_global_settings.GameSettings.Sharpness, 0.f, "Sharpness", runtime))
+         if (DrawResetButton(cb_luma_global_settings.GameSettings.Sharpness, 1.f, "Sharpness", runtime))
          {
-            cb_luma_global_settings.GameSettings.Sharpness = 0.f;
+            cb_luma_global_settings.GameSettings.Sharpness = 1.f;
             reshade::set_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
          }
+
+         if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
+         {
+            bool use_sdr_over_hdr = cb_luma_global_settings.GameSettings.UseSDROverHDR == 1;
+            if (ImGui::Checkbox("Use SDR Tonemap Curve", &use_sdr_over_hdr))
+            {
+               cb_luma_global_settings.GameSettings.UseSDROverHDR = use_sdr_over_hdr ? 1 : 0;
+               reshade::set_config_value(runtime, NAME, "UseSDROverHDR", use_sdr_over_hdr);
+            }
+            if (DrawResetButton(use_sdr_over_hdr, true, "UseSDROverHDR", runtime))
+            {
+               cb_luma_global_settings.GameSettings.UseSDROverHDR = 1;
+               reshade::set_config_value(runtime, NAME, "UseSDROverHDR", use_sdr_over_hdr);
+            }
+
+            bool use_vanilla_gamut_ratio = cb_luma_global_settings.GameSettings.UseVanillaGamutRatio == 1;
+            if (ImGui::Checkbox("Use Vanilla Gamut Ratio", &use_vanilla_gamut_ratio))
+            {
+               cb_luma_global_settings.GameSettings.UseVanillaGamutRatio = use_vanilla_gamut_ratio ? 1 : 0;
+               reshade::set_config_value(runtime, NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
+            }
+            if (DrawResetButton(use_vanilla_gamut_ratio, false, "UseVanillaGamutRatio", runtime))
+            {
+               cb_luma_global_settings.GameSettings.UseVanillaGamutRatio = 0;
+               reshade::set_config_value(runtime, NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
+            }
+         }
+
          ImGui::TreePop();
       }
 
 #if DEVELOPMENT
-   ImGui::NewLine();
+      ImGui::NewLine();
 #if ENABLE_BLOOM
       ImGui::Checkbox("Luma Bloom Enable", &g_luma_bloom_enable);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -387,8 +409,10 @@ public:
          g_bloom_sigmas.resize(g_bloom_nmips, 2.0f);
       for (int i = 0; i < g_bloom_nmips; ++i)
       {
+         ImGui::PushID(i); // Unique ID per slider, otherwise ImGui flags the loop items as conflicting IDs
          const std::string name = "Luma Bloom Sigma " + std::to_string(i);
          ImGui::SliderFloat(name.c_str(), &g_bloom_sigmas[i], 0.0f, 15.0f, "%.3f");
+         ImGui::PopID();
       }
 #endif
 
@@ -420,8 +444,7 @@ public:
 #if LUMA_HAS_RECIPE_PROVIDERS
       // Runtime patch toggle: patch stays ON by default, disabled per draw here
       // (idempotent, no-ops without a toggleable clone).
-      const bool use_dithering_patch = game_device_data.dithering_patch_enabled.load(std::memory_order_relaxed)
-         && cmd_list_data.IsCloneToggleable(reshade::api::shader_stage::pixel); // false while patches are disallowed or unloaded
+      const bool use_dithering_patch = game_device_data.dithering_patch_enabled.load(std::memory_order_relaxed) && cmd_list_data.IsCloneToggleable(reshade::api::shader_stage::pixel); // false while patches are disallowed or unloaded
       cmd_list_data.UseShaderVariant(native_device_context, stages,
          use_dithering_patch ? Shader::CloneVariant::Clone
                              : Shader::CloneVariant::Original);
@@ -430,7 +453,7 @@ public:
       // original shader ignores its bind points).
       if (use_dithering_patch)
       {
-         BindPatchedResources(native_device_context, device_data, original_shader_hashes, stages, updated_cbuffers);
+         BindPatchedResources(native_device_context, cmd_list_data, device_data, original_shader_hashes, stages, updated_cbuffers);
       }
 #endif
 
@@ -446,19 +469,26 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
 
-      if (original_shader_hashes.Contains(shader_hashes_attach_fast_noise))
+      if (original_shader_hashes.Contains(shader_hashes_directional_light) && enable_directional_shadows)
       {
-         // This shader is used in the game's TAA pass, which runs before our TAA handling, so it's a good place to bind our FAST noise texture for use in the TAA shader (as an alternative to the Bayer matrix dithering the game uses by default, which can cause banding with TAA).
-         ID3D11ShaderResourceView* fast_noise_srv = GetFastNoiseSrv(device_data);
-         if (fast_noise_srv)
+
+         auto shader = device_data.native_pixel_shaders.find(original_shader_hashes.pixel_shaders[0])->second.get();
+         
+         if (shader != nullptr)
          {
-            native_device_context->PSSetShaderResources(20, 1, &fast_noise_srv);
+            native_device_context->PSSetShader(shader, nullptr, 0);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
+
+            ID3D11ShaderResourceView* fast_noise_srv = GetFastNoiseSrv(device_data);
+            if (fast_noise_srv)
+            {
+               native_device_context->PSSetShaderResources(42, 1, &fast_noise_srv);
 #if DEVELOPMENT
-            VerifyFastNoiseBinding(native_device_context, 20, fast_noise_srv, "AttachFastNoise");
+            VerifyFastNoiseBinding(native_device_context, 42, fast_noise_srv, "AttachFastNoise");
 #endif
+            }
          }
-         ID3D11SamplerState* const sampler = device_data.sampler_state_point.get();
-         native_device_context->PSSetSamplers(4, 1, &sampler);
+
          return DrawOrDispatchOverrideType::None;
       }
 
@@ -585,7 +615,7 @@ public:
 
          // Setup output texture
          com_ptr<ID3D11Texture2D> output_color;
-         D3D11_TEXTURE2D_DESC output_texture_desc;
+         D3D11_TEXTURE2D_DESC output_texture_desc = {};
          bool output_supports_uav = false;
          bool output_changed = false;
          uintptr_t taa_output_key = 0;
@@ -607,6 +637,7 @@ public:
             ComPtr<ID3D11Resource> output_resource;
             output_rtv->GetResource(output_resource.put());
             output_resource->QueryInterface(&output_color);
+            output_color->GetDesc(&output_texture_desc); // The upscale branch also fills the copyback size below
 
             UpscaledResource* taa_upscaled = LinkUpscaledResource(
                native_device,
@@ -789,8 +820,6 @@ public:
          // Execute SR
          device_data.has_drawn_sr = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
 
-
-
 #if DEVELOPMENT
          // Add trace info for DLSS/FSR execution
          if (device_data.has_drawn_sr)
@@ -851,7 +880,6 @@ public:
                if (!output_supports_uav)
                {
                   native_device_context->CopyResource(output_color.get(), device_data.sr_output_color.get());
-
                }
                else
                {
@@ -880,13 +908,11 @@ public:
          {
             device_data.sr_output_color = nullptr;
             game_device_data.sr_output_srv = nullptr;
-
          }
          draw_state_stack.Restore(native_device_context);
          compute_state_stack.Restore(native_device_context);
       }
 
-      
       // Luma bloom: at the highpass pass capture the pre-bloom scene SRV, skip all intermediate
       // passes, and at the final glare/vignette pass substitute the game's composite bloom with
       // Luma's separable Gaussian bloom so the original shader applies its glare/vignette on top.
@@ -1369,7 +1395,7 @@ public:
 
       D3D11_TEXTURE2D_DESC src_upscaled_desc;
       upscaled_source->texture->GetDesc(&src_upscaled_desc);
-      const float2 src_target_res = { static_cast<float>(src_upscaled_desc.Width), static_cast<float>(src_upscaled_desc.Height) };
+      const float2 src_target_res = {static_cast<float>(src_upscaled_desc.Width), static_cast<float>(src_upscaled_desc.Height)};
       UpscaledResource* upscaled_dest = LinkUpscaledResource(
          native_device, native_context.get(),
          dest_resource,
@@ -1595,7 +1621,6 @@ public:
             }
          }
       }
-         
 
       // No need to convert to native DX11 flags
       if (access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write)
@@ -1692,7 +1717,7 @@ public:
       game_device_data.upscale_tracking.InvalidatePoolIfScaleChanged(device_data.output_resolution, device_data.render_resolution);
 
       game_device_data.ResetPerFrameData();
-      if(device_data.sr_type != SR::Type::None && (device_data.sr_suppressed || !device_data.has_drawn_sr))
+      if (device_data.sr_type != SR::Type::None && (device_data.sr_suppressed || !device_data.has_drawn_sr))
       {
          device_data.force_reset_sr = true;
       }
@@ -1825,7 +1850,6 @@ public:
 
          ImGui::EndTable();
       }
-
    }
 #endif
 
@@ -1853,33 +1877,26 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
       // Bloom: highpass captures the pre-bloom scene, all intermediate passes are skipped,
       // and the glare/vignette pass is the final combine that receives the Luma bloom.
-      shader_hashes_bloom_highpass.pixel_shaders.emplace(0xFF665135u);     // Highpass
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0xD1F0305Eu);         // Blur3Tap
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0xDB66D833u);         // Blur5Tap
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0x2558DE2Fu);         // Blur9Tap
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0x6150AEF2u);         // Blur17Tap
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0x1B5AC203u);         // Blur33Tap
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0x635313E0u);         // Blur65Tap
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0xA6FC2BA8u);         // Copy
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0x22F93AE1u);         // ConstantColor
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0xDDF4077Eu);         // Composite
+      shader_hashes_bloom_highpass.pixel_shaders.emplace(0xFF665135u);       // Highpass
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0xD1F0305Eu);           // Blur3Tap
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0xDB66D833u);           // Blur5Tap
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0x2558DE2Fu);           // Blur9Tap
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0x6150AEF2u);           // Blur17Tap
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0x1B5AC203u);           // Blur33Tap
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0x635313E0u);           // Blur65Tap
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0xA6FC2BA8u);           // Copy
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0x22F93AE1u);           // ConstantColor
+      shader_hashes_bloom_skip.pixel_shaders.emplace(0xDDF4077Eu);           // Composite
       shader_hashes_bloom_glare_vignette.pixel_shaders.emplace(0xBBC1036Cu); // GlareVignette
-      shader_hashes_attach_fast_noise.pixel_shaders.emplace(std::stoul("44E818B0", nullptr, 16));
-      shader_hashes_attach_fast_noise.pixel_shaders.emplace(std::stoul("3E3E40BE", nullptr, 16));
-      shader_hashes_attach_fast_noise.pixel_shaders.emplace(std::stoul("850830F0", nullptr, 16));
-      shader_hashes_attach_fast_noise.pixel_shaders.emplace(std::stoul("7E0FB904", nullptr, 16));
-      shader_hashes_attach_fast_noise.pixel_shaders.emplace(std::stoul("B064A20F", nullptr, 16));
+      shader_hashes_directional_light.pixel_shaders.emplace(std::stoul("2100CE9B", nullptr, 16)); // Directional Light
+      shader_hashes_directional_light.pixel_shaders.emplace(std::stoul("A315F1E7", nullptr, 16)); // CSM
+      shader_hashes_directional_light.pixel_shaders.emplace(std::stoul("4B8E0FF8", nullptr, 16)); // CSM_AO
 #if DEVELOPMENT
-      swapchain_format_upgrade_type = TextureFormatUpgradesType::None; // We don't need swapchain upgrade for this game
-      swapchain_upgrade_type = SwapchainUpgradeType::None;                      // 1 = scrgb
+      swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled; // We don't need swapchain upgrade for this game
+      swapchain_upgrade_type = SwapchainUpgradeType::scRGB;                      // 1 = scrgb
 #endif
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
 
-      std::vector<ShaderDefineData> game_shader_defines_data = {
-         {"TONEMAP_TYPE", '1', true, false, "0 - Vanilla SDR\n1 - Luma HDR (Vanilla+)\n2 - Raw HDR (Untonemapped)\nThe HDR tonemapper works for SDR too\nThis games uses a filmic tonemapper, which slightly crushes blacks", 2},
-      };
-
-      shader_defines_data.append_range(game_shader_defines_data);
       assert(shader_defines_data.size() < MAX_SHADER_DEFINES);
 
 #if DEVELOPMENT
@@ -1907,14 +1924,21 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(0xBBC1036Cu, "Bloom GlareVignette");
 #endif
 
-      texture_upgrade_formats = {
-        reshade::api::format::r10g10b10a2_unorm
-      };
-      enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
+      // texture_upgrade_formats = {
+      //   reshade::api::format::r11g11b10_float
+      // };
+      enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectAndIndirectDependencies;
 
-      auto_texture_format_upgrade_shader_hashes[std::stoul("75DFE4B0", nullptr, 16)] = {{0}, {}}; // Main game tonemapping
-      auto_texture_format_upgrade_shader_hashes[std::stoul("18EF8C72", nullptr, 16)] = {{0}, {}}; // Title screen tonemapping
-      auto_texture_format_upgrade_shader_hashes[std::stoul("DD4C5B74", nullptr, 16)] = {{0}, {}}; // Post-processing / swapchain
+      // auto_texture_format_upgrade_shader_hashes[std::stoul("75DFE4B0", nullptr, 16)] = {{0}, {}}; // Main game tonemapping
+      // auto_texture_format_upgrade_shader_hashes[std::stoul("18EF8C72", nullptr, 16)] = {{0}, {}}; // Title screen tonemapping
+      // auto_texture_format_upgrade_shader_hashes[std::stoul("DD4C5B74", nullptr, 16)] = {{0}, {}}; // Post-processing / swapchain
+      //  TAA seed: upgrade its output RTV 0 and scale it render_resolution -> output_resolution.
+      {
+         AutoTextureFormatUpgradeShaderHash taa_upgrade;
+         taa_upgrade.rtv_slots = {0};
+         taa_upgrade.scale = true;
+         auto_texture_format_upgrade_shader_hashes[std::stoul("0DF0A97D", nullptr, 16)] = taa_upgrade; // TAA
+      }
       game = new FinalFantasyXV();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)

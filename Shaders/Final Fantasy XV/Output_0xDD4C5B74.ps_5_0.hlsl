@@ -37,6 +37,7 @@ void main(
   // r0.xyz = float3(0.0773993805,0.0773993805,0.0773993805) * r0.xyz;
   // r0.xyz = r2.xyz ? r0.xyz : r1.xyz;
   r0.xyz = gamma_sRGB_to_linear(r0.xyz, GCT_MIRROR);
+  float3 color = r0.xyz;
 
   // r0.xyz = log2(r0.xyz);
   // r0.xyz = gamma * r0.xyz;
@@ -46,14 +47,14 @@ void main(
   // r0.xyz = GammaCorrection(r0.xyz, 2.4);
   
   // color expansion
-  r0.w = 0.587700009 * r0.y;
-  r0.w = r0.x * 1.66050005 + -r0.w;
-  r1.x = -r0.z * 0.072800003 + r0.w;
-  r0.w = 0.100599997 * r0.y;
-  r0.w = r0.x * -0.0182000007 + -r0.w;
-  r1.z = r0.z * 1.11870003 + r0.w;
-  r0.x = dot(r0.xy, float2(-0.124600001,1.13300002));
-  r1.y = -r0.z * 0.0083999997 + r0.x;
+  // r0.w = 0.587700009 * r0.y;
+  // r0.w = r0.x * 1.66050005 + -r0.w;
+  // r1.x = -r0.z * 0.072800003 + r0.w;
+  // r0.w = 0.100599997 * r0.y;
+  // r0.w = r0.x * -0.0182000007 + -r0.w;
+  // r1.z = r0.z * 1.11870003 + r0.w;
+  // r0.x = dot(r0.xy, float2(-0.124600001,1.13300002));
+  // r1.y = -r0.z * 0.0083999997 + r0.x;
 
   // r1.rgb = BT709_To_BT2020(r1.rgb);
   // r1.rgb = max(0.f, r1.rgb);
@@ -66,7 +67,8 @@ void main(
   // scale with game nits
 
   // o0.rgb = r1.rgb * 203.f / 80.f;
-  o0.rgb = r1.rgb;
+  // o0.rgb = r1.rgb;
+  o0.rgb = BT2020_To_BT709(color);
 
   return;
 }

@@ -70,7 +70,7 @@ void frag_main()
     float _216 = dp3_f32(_213, float3(0.0064210002310574054718017578125f, 0.0243079997599124908447265625f, 0.969271004199981689453125f));
     bool EnabledToneCurve = cb0_m17.z != 0u;
     float3 _277;
-#if TONEMAP_TYPE != 0
+    if (LumaSettings.DisplayMode != 0)
     {
         float TenPowLogHighRangePlusContrastMinusOne = cb0_m2.x;
         float TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse = cb0_m2.y;
@@ -78,15 +78,23 @@ void frag_main()
         float Param_n37 = cb0_m2.w;
         float Param_n46 = cb0_m3.x;
         float Param_n49 = cb0_m3.y;
+        // Derive the game's SDR curve tuning from the HDR-mode uploads (closed form).
+        // Only applies when the game itself is in HDR mode (cb0_m16) and the toggle is on.
+        if (cb0_m16 != 0u && LumaSettings.GameSettings.UseSDROverHDR != 0u)
+        {
+            RecoverSDRParams(cb0_m2.x, cb0_m2.y, cb0_m2.z, cb0_m2.w, cb0_m3.x, cb0_m3.y,
+                             TenPowLogHighRangePlusContrastMinusOne, TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse, ZeroSlopeByTenPowDispositionPlusOne, Param_n37, Param_n46, Param_n49);
+        }
         float3 untonemapped = float3(_214, _215, _216);
         float3 vanillaTonemapped = FFXV(untonemapped, ZeroSlopeByTenPowDispositionPlusOne, TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse, Param_n37, TenPowLogHighRangePlusContrastMinusOne, Param_n46, Param_n49);
-        float inflection = Find_Inflection(0.0, 1.0, 16, 8, ZeroSlopeByTenPowDispositionPlusOne, TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse, Param_n37, TenPowLogHighRangePlusContrastMinusOne, Param_n46, 2);
+        float inflection = Find_Inflection(0.0, 1.0, 16, 8, ZeroSlopeByTenPowDispositionPlusOne, TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse, Param_n37, TenPowLogHighRangePlusContrastMinusOne, Param_n46, 3);
         float3 tonemapped = FFXV_Extended(untonemapped, vanillaTonemapped, ZeroSlopeByTenPowDispositionPlusOne, TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse, Param_n37, TenPowLogHighRangePlusContrastMinusOne, Param_n46, Param_n49, inflection);
         _277 = EnabledToneCurve ? tonemapped : untonemapped;
     }
-#else
-    _277 = float3(EnabledToneCurve ? max(mad(log2(mad(exp2(log2((log2(mad(_214, 39.810718536376953125f, cb0_m2.z)) * cb0_m2.y) * 0.693147182464599609375f) * cb0_m2.w), cb0_m2.x, 1.0f)) * cb0_m3.x, 0.693147182464599609375f, -cb0_m3.y), 0.0f) : _214, EnabledToneCurve ? max(mad(cb0_m3.x * log2(mad(cb0_m2.x, exp2(log2((log2(mad(_215, 39.810718536376953125f, cb0_m2.z)) * cb0_m2.y) * 0.693147182464599609375f) * cb0_m2.w), 1.0f)), 0.693147182464599609375f, -cb0_m3.y), 0.0f) : _215, EnabledToneCurve ? max(mad(cb0_m3.x * log2(mad(cb0_m2.x, exp2(log2((log2(mad(_216, 39.810718536376953125f, cb0_m2.z)) * cb0_m2.y) * 0.693147182464599609375f) * cb0_m2.w), 1.0f)), 0.693147182464599609375f, -cb0_m3.y), 0.0f) : _216);
-#endif
+    else 
+    {
+        _277 = float3(EnabledToneCurve ? max(mad(log2(mad(exp2(log2((log2(mad(_214, 39.810718536376953125f, cb0_m2.z)) * cb0_m2.y) * 0.693147182464599609375f) * cb0_m2.w), cb0_m2.x, 1.0f)) * cb0_m3.x, 0.693147182464599609375f, -cb0_m3.y), 0.0f) : _214, EnabledToneCurve ? max(mad(cb0_m3.x * log2(mad(cb0_m2.x, exp2(log2((log2(mad(_215, 39.810718536376953125f, cb0_m2.z)) * cb0_m2.y) * 0.693147182464599609375f) * cb0_m2.w), 1.0f)), 0.693147182464599609375f, -cb0_m3.y), 0.0f) : _215, EnabledToneCurve ? max(mad(cb0_m3.x * log2(mad(cb0_m2.x, exp2(log2((log2(mad(_216, 39.810718536376953125f, cb0_m2.z)) * cb0_m2.y) * 0.693147182464599609375f) * cb0_m2.w), 1.0f)), 0.693147182464599609375f, -cb0_m3.y), 0.0f) : _216);
+    }
     float3 _281 = float3(dp3_f32(_277, float3(1.41498100757598876953125f, -0.400139987468719482421875f, -0.01484099961817264556884765625f)), dp3_f32(_277, float3(-0.074470996856689453125f, 1.08135700225830078125f, -0.00688599981367588043212890625f)), dp3_f32(_277, float3(-0.0075070001184940338134765625f, -0.02446799911558628082275390625f, 1.03197395801544189453125f)));
     float _282 = dp3_f32(_281, float3(0.3433000147342681884765625f, 0.59329998493194580078125f, 0.0634000003337860107421875f));
     float _283 = dp3_f32(_281, float3(0.4095999896526336669921875f, -0.4532000124454498291015625f, 0.043600000441074371337890625f));
@@ -113,12 +121,11 @@ void frag_main()
     float _460 = dp3_f32(_459, float3(1.914248943328857421875f, -0.8911859989166259765625f, -0.02306200005114078521728515625f));
     float _461 = dp3_f32(_459, float3(-0.086308002471923828125f, 1.104712009429931640625f, -0.018403999507427215576171875f));
     float _462 = dp3_f32(_459, float3(-0.02810700051486492156982421875f, -0.100798003375530242919921875f, 1.1289050579071044921875f));
-    
-    ;
+
     float _488;
     float _489;
     float _490;
-    if (cb0_m16 != 0u)
+    if (cb0_m16 != 0u && LumaSettings.GameSettings.UseVanillaGamutRatio != 0u)
     {
         float _477 = mad(_462, 0.0432999990880489349365234375f, (_460 * 0.627399981021881103515625f) + (_461 * 0.329299986362457275390625f));
         float _478 = mad(_462, 0.011400000192224979400634765625f, (_460 * 0.069099999964237213134765625f) + (_461 * 0.91949999332427978515625f));
@@ -129,16 +136,19 @@ void frag_main()
     }
     else
     {
-        _488 = _462;
-        _489 = _461;
-        _490 = _460;
+        float3 color_bt2020 = BT709_To_BT2020(float3(_460, _461, _462));
+        _488 = color_bt2020.z;
+        _489 = color_bt2020.y;
+        _490 = color_bt2020.x;
     }
-#if TONEMAP_TYPE != 0
-    float3 color = ApplyTonemapAndGrading(float3(_490, _489, _488));
-    _490 = color.x;
-    _489 = color.y;
-    _488 = color.z;
-#endif
+
+    if (LumaSettings.DisplayMode != 0)
+    {
+        float3 color = ApplyTonemapAndGrading(float3(_490, _489, _488));
+        _490 = color.x;
+        _489 = color.y;
+        _488 = color.z;
+    }
     float _491 = max(_490, 0.0f);
     float _492 = max(_489, 0.0f);
     float _493 = max(_488, 0.0f);

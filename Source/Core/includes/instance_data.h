@@ -217,6 +217,8 @@ struct TraceDrawCallData
    // TODO: these might not always be filled up!
    bool any_input_resources_format_upgraded = false;
    bool any_output_resources_format_upgraded = false;
+   bool any_input_resources_scaled = false;
+   bool any_output_resources_scaled = false;
 
    bool IsRTVValid(size_t index) const { return rtv_format[index] != DXGI_FORMAT_UNKNOWN && rtv_format[index] != DXGI_FORMAT(-1); }
    bool IsSRVValid(size_t index) const { return srv_format[index] != DXGI_FORMAT_UNKNOWN && srv_format[index] != DXGI_FORMAT(-1); }
@@ -244,6 +246,11 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
 
    // Only used when checking for "ChainTextureFormatUpgradesType::DirectAndIndirectDependencies", as it might be disabled at runtime.
    uint enable_chain_indirect_texture_format_upgrades = 0; // TODO: ChainTextureFormatUpgradesType
+
+   // Force resource scaling to output resolution for this command list (set during recording).
+   // Used when has_drawn_sr isn't available during recording, potential issue if sr fails to draw.
+   bool force_scale = false;
+
 
    reshade::api::pipeline pipeline_state_original_compute_shader = reshade::api::pipeline(0);
    reshade::api::pipeline pipeline_state_original_vertex_shader = reshade::api::pipeline(0);
@@ -546,7 +553,8 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    std::mutex async_jobs_mutex;
    std::condition_variable async_jobs_cv;
    uint64_t async_queue_version = 0;
-   bool async_shutdown = false;
+
+   std::atomic<bool> async_shutdown = false;
    std::mutex async_ready_mutex;
    struct ReadyAsyncClone
    {
@@ -564,7 +572,15 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    std::unordered_map<uint64_t, reshade::api::format> original_upgraded_resources_formats; // Maps the original resource to its direct upgraded format. These include the swapchain buffers too!
    std::unordered_map<uint64_t, std::pair<uint64_t, reshade::api::format>> original_upgraded_resource_views_formats; // All the views for direct upgraded resources, with the resource and the original resource view format
 #endif
-   std::unordered_map<uint64_t, uint64_t> original_resources_to_mirrored_upgraded_resources; // TODO: convert/copy the initial/current data from the source texture when created. Also rename to "indirect_upgraded"
+   struct IndirectUpgradedResource {
+      uint64_t mirror_handle = 0;
+      bool is_scaled = false;
+      uint32_t original_width = 0;
+      uint32_t original_height = 0;
+      uint32_t mirror_width = 0;
+      uint32_t mirror_height = 0;
+   };
+   std::unordered_map<uint64_t, IndirectUpgradedResource> original_resources_to_mirrored_upgraded_resources; // TODO: convert/copy the initial/current data from the source texture when created. Also rename to "indirect_upgraded"
    std::unordered_map<uint64_t, uint64_t> original_resource_views_to_mirrored_upgraded_resource_views;
    // Mirror views grouped by their mirror resource. Lets OnDestroyResource unlink a destroyed mirror's views by
    // iterating only that mirror's (small) set with plain hash lookups, instead of scanning the whole view map with
@@ -575,6 +591,10 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    // destruction-notifier callbacks). Populated in OnInitResourceView / at mirror-view insert sites.
    std::unordered_map<uint64_t, uint64_t> original_views_to_resources;      // game view -> its resource
    std::unordered_map<uint64_t, uint64_t> mirror_views_to_mirror_resources; // mirror view -> mirror resource
+   // Mirrors freed at present (frame boundary) instead of on original destruction, so in-flight
+   // hooks/game state can never dereference a freed mirror. Guarded by `mutex`.
+   std::vector<reshade::api::resource> pending_mirror_resource_destructions;
+   std::vector<reshade::api::resource_view> pending_mirror_view_destructions;
 
 #if LUMA_PATCH_PROVIDERS != 0
    // Stored shader patches (both bytecode and recipe methods) + per-method

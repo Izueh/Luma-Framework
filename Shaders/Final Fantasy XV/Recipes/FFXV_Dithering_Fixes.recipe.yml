@@ -1,8 +1,12 @@
 version: 1
 steps:
-  # Probe: detect the original 16-phase dither discard sequence without
-  # mutating. Publishes state[detect_original_16phase_discard] = matched,
-  # which gates every step below.
+  # Probe: detect the original 16-phase procedural bayer usage without
+  # mutating. The mul/round_ne/ftou/ult window is the bayer quantization used
+  # both for dither discards (keep iff phase < round(16*alpha)) and for
+  # material-layer masks (ult result ANDed to a float and fed to control
+  # flow) — all of these are legitimate bayer usages that benefit from the
+  # noise replacement. Publishes state[detect_original_16phase_discard] =
+  # matched, which gates every step below.
   - kind: apply_rule
     name: detect_original_16phase_discard_probe
     required: false
@@ -51,6 +55,19 @@ steps:
 
   # Shared resource declarations for all branches: only added when at least
   # one probe matched, so non-dithering shaders stay byte-identical.
+  #
+  # Bind slots are deliberately FIXED (not auto-assigned): auto-assign picks the
+  # first free slot per shader, which collides with the game's own bindings
+  # (cb4/cb5, t16/t17/t18 are all in use by the character pipeline) and is never
+  # restored after the draw, corrupting subsequent passes. Instead:
+  #  - fast_noise -> reverse_bind: take the HIGHEST free texture slot (scan down
+  #    from t127), far from the low registers the game's shaders occupy, so the
+  #    patch never collides with the game's own bindings (auto-assign from 0
+  #    would take slots the game uses).
+  #  - frame counter -> register 13 (Luma's settings cbuffer, cb13[2].y): the
+  #    game never declares cb13 in any patched shader; the runtime binds it.
+  #  - frame counter -> cb13[2].y: Luma's own settings cbuffer (the game never
+  #    declares cb13 in any patched shader). The runtime binds it per draw.
   - kind: add_resource
     name: add_noise_resources
     condition:
@@ -62,13 +79,18 @@ steps:
     textures:
       - handle: fast_noise
         dimension: 8
+        register_index: 42
     cbuffers:
       - handle: frame_constants
-        elements: 1
+        register_index: 13
+        elements: 3
 
-  # Branch 1: 16-phase procedural dither discard. Replaces the
-  # mul/round_ne/ftou/ult tail with the fast noise load; the trailing
-  # movc/min/lt/discard sequence keeps working against the noise value.
+  # Branch 1: 16-phase procedural bayer replacement. Replaces the
+  # mul/round_ne/ftou/ult tail with the fast noise load + a saturated
+  # "alpha >= noise" compare; the trailing discard (or movc/min/lt/discard)
+  # sequence keeps working against the noise value. Applies to both dither
+  # discards and bayer masks (their ult result feeds the noise compare the
+  # same way).
   - kind: apply_rule
     name: replace_discard_noise_tail
     match_mode: match_all
@@ -116,8 +138,10 @@ steps:
             - type: immediate32
               immediates_u32: [31]
             - type: constant_buffer
-              handle: frame_constants
-              components: { selection_mode: select, value: x }
+              indices:
+                - { representation: immediate32, immediate_lo: 13 }
+                - { representation: immediate32, immediate_lo: 2 }
+              components: { selection_mode: select, value: y }
         - opcode: and
           operands:
             - type: temp
@@ -140,6 +164,7 @@ steps:
               handle: fast_noise
               components: { selection_mode: swizzle, value: xyzw }
         - opcode: mov
+          saturate: true
           operands:
             - capture: noise_value
             - type: temp
@@ -194,8 +219,10 @@ steps:
             - type: immediate32
               immediates_u32: [31]
             - type: constant_buffer
-              handle: frame_constants
-              components: { selection_mode: select, value: x }
+              indices:
+                - { representation: immediate32, immediate_lo: 13 }
+                - { representation: immediate32, immediate_lo: 2 }
+              components: { selection_mode: select, value: y }
         - opcode: and
           operands:
             - type: temp
@@ -218,6 +245,7 @@ steps:
               handle: fast_noise
               components: { selection_mode: swizzle, value: xyzw }
         - opcode: mov
+          saturate: true
           operands:
             - capture: hair_dither_dst
             - type: temp
@@ -285,8 +313,10 @@ steps:
             - type: immediate32
               immediates_u32: [31]
             - type: constant_buffer
-              handle: frame_constants
-              components: { selection_mode: select, value: x }
+              indices:
+                - { representation: immediate32, immediate_lo: 13 }
+                - { representation: immediate32, immediate_lo: 2 }
+              components: { selection_mode: select, value: y }
         - opcode: and
           operands:
             - type: temp
@@ -309,6 +339,7 @@ steps:
               handle: fast_noise
               components: { selection_mode: swizzle, value: xyzw }
         - opcode: mov
+          saturate: true
           operands:
             - capture: clamped_phase
             - type: temp
