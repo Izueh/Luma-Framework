@@ -117,7 +117,7 @@ steps:
         - opcode: ftou
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: xy }
             - type: input
               indices:
@@ -126,49 +126,47 @@ steps:
         - opcode: mov
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: w }
             - type: immediate32
               immediates_u32: [0]
         - opcode: and
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: z }
             - type: immediate32
               immediates_u32: [31]
             - type: constant_buffer
-              indices:
-                - { representation: immediate32, immediate_lo: 13 }
-                - { representation: immediate32, immediate_lo: 2 }
+              handle: { name: frame_constants, element_index: 2 }
               components: { selection_mode: select, value: y }
         - opcode: and
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: xy }
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: swizzle, value: xyxx }
             - type: immediate32
               immediates_u32: [127, 127, 0, 0]
         - opcode: ld
           operands:
             - type: temp
-              handle: sampled_noise
+              handle: { name: sampled_noise }
               components: { selection_mode: mask, value: x }
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: swizzle, value: xyzw }
             - type: resource
-              handle: fast_noise
+              handle: { name: fast_noise }
               components: { selection_mode: swizzle, value: xyzw }
         - opcode: mov
           saturate: true
           operands:
             - capture: noise_value
             - type: temp
-              handle: sampled_noise
+              handle: { name: sampled_noise }
               components: { selection_mode: select, value: x }
         - opcode: ge
           operands:
@@ -198,7 +196,7 @@ steps:
         - opcode: ftou
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: xy }
             - type: input
               indices:
@@ -207,49 +205,47 @@ steps:
         - opcode: mov
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: w }
             - type: immediate32
               immediates_u32: [0]
         - opcode: and
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: z }
             - type: immediate32
               immediates_u32: [31]
             - type: constant_buffer
-              indices:
-                - { representation: immediate32, immediate_lo: 13 }
-                - { representation: immediate32, immediate_lo: 2 }
+              handle: { name: frame_constants, element_index: 2 }
               components: { selection_mode: select, value: y }
         - opcode: and
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: xy }
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: swizzle, value: xyxx }
             - type: immediate32
               immediates_u32: [127, 127, 0, 0]
         - opcode: ld
           operands:
             - type: temp
-              handle: sampled_noise
+              handle: { name: sampled_noise }
               components: { selection_mode: mask, value: x }
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: swizzle, value: xyzw }
             - type: resource
-              handle: fast_noise
+              handle: { name: fast_noise }
               components: { selection_mode: swizzle, value: xyzw }
         - opcode: mov
           saturate: true
           operands:
             - capture: hair_dither_dst
             - type: temp
-              handle: sampled_noise
+              handle: { name: sampled_noise }
               components: { selection_mode: select, value: x }
 
   # Branch 3: clamped 16-phase bayer discard (hair fade materials). The
@@ -292,7 +288,7 @@ steps:
         - opcode: ftou
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: xy }
             - type: input
               indices:
@@ -301,54 +297,52 @@ steps:
         - opcode: mov
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: w }
             - type: immediate32
               immediates_u32: [0]
         - opcode: and
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: z }
             - type: immediate32
               immediates_u32: [31]
             - type: constant_buffer
-              indices:
-                - { representation: immediate32, immediate_lo: 13 }
-                - { representation: immediate32, immediate_lo: 2 }
+              handle: { name: frame_constants, element_index: 2 }
               components: { selection_mode: select, value: y }
         - opcode: and
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: xy }
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: swizzle, value: xyxx }
             - type: immediate32
               immediates_u32: [127, 127, 0, 0]
         - opcode: ld
           operands:
             - type: temp
-              handle: sampled_noise
+              handle: { name: sampled_noise }
               components: { selection_mode: mask, value: x }
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: swizzle, value: xyzw }
             - type: resource
-              handle: fast_noise
+              handle: { name: fast_noise }
               components: { selection_mode: swizzle, value: xyzw }
         - opcode: mov
           saturate: true
           operands:
             - capture: clamped_phase
             - type: temp
-              handle: sampled_noise
+              handle: { name: sampled_noise }
               components: { selection_mode: select, value: x }
         - opcode: min
           operands:
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: mask, value: x }
             - capture: clamped_clamp_z
             - capture: clamped_phase
@@ -357,5 +351,5 @@ steps:
             - capture: clamped_discard_target
             - capture: clamped_alpha
             - type: temp
-              handle: noise_uv
+              handle: { name: noise_uv }
               components: { selection_mode: select, value: x }
