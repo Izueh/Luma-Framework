@@ -5110,7 +5110,8 @@ namespace
             target_desc.texture.format = GetBestResourceUpgradeFormat(source_desc);
             needs_upgraded_resource = source_desc.texture.format != target_desc.texture.format;
          }
-         needs_upgraded_resource &= target_desc.type == reshade::api::resource_type::texture_2d; // Only 2D mirrors: 3D/1D resources (e.g. the 3D tonemap LUT) can't be converted by the copy shader, and mirroring them only corrupts the pipeline (the game writes through format-mismatched views, the addon reads stale/garbage data)
+         needs_upgraded_resource &= target_desc.type == reshade::api::resource_type::texture_2d; // Filter out false positives (UAVs can be buffers)
+         // TODO: optionally copy the content of "in_resource"?
 
          // Resolution scaling (upscale only): scale the mirror from render_resolution to output_resolution
          bool needs_scale = false;
@@ -8484,12 +8485,7 @@ namespace
          const auto original_resource_to_mirrored_upgraded_resource_ptr = original_resource_to_mirrored_upgraded_resource->second.mirror_handle;
          device_data.original_resources_to_mirrored_upgraded_resources.erase(original_resource_to_mirrored_upgraded_resource);
 
-         // Invalidate stale view mappings for this mirror while the lock is held. UE's texture pool reuses COM
-         // pointers across generations: if the game destroys a resource WITHOUT destroying all of its views (legal),
-         // the view map keeps (original view -> mirror view) entries pointing at the mirror we are about to destroy.
-         // The game can then re-allocate the same view handle and Luma would redirect it to the dead mirror view,
-         // propagating stale/dangling pointers into the game's own view->resource logic (null derefs in game code).
-         // Uses the per-mirror view registry (hash lookups only, no device calls under the lock).
+         // Invalidate stale view mappings for this mirror while the lock is held.
          std::vector<uint64_t> unlinked_mirror_views;
          if (auto mirror_views_it = device_data.mirror_views_by_mirror_resource.find(original_resource_to_mirrored_upgraded_resource_ptr); mirror_views_it != device_data.mirror_views_by_mirror_resource.end())
          {
