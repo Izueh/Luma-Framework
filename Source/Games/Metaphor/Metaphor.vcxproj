@@ -66,7 +66,6 @@
     <UseLumaFSR>true</UseLumaFSR>
     <LumaPackage>false</LumaPackage>
   </PropertyGroup>
-
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
   <ImportGroup Label="PropertySheets">
@@ -308,11 +307,9 @@
   <ItemGroup>
     <ClInclude Include="ShaderPatches\ShaderPatches.h" />
     <ClInclude Include="stretchy_buffer.h" />
+    <ClInclude Include="temporal_aa_depth.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>
 </Project>
-
-
-

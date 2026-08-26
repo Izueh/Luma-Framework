@@ -123,6 +123,7 @@ void main(
 	float variance_clip_min = clip_min;
 	float variance_clip_max = clip_max;
 	
+	float dither_amount = 0.0f;
 	if (UseVarianceClipping > 0)
 	{
         float mean 	=	(a + b + c +
@@ -133,10 +134,17 @@ void main(
 						 d*d + e*e + f*f +
 						 g*g + h*h + i*i) * k_Inv9;
 
-        float sigma = VarianceScale * sqrt(abs(mean_sq - mean * mean));
+		float sd = sqrt(abs(mean_sq - mean * mean));
+        float sigma = VarianceScale * sd;
 
         variance_clip_min = max(clip_min, mean - sigma);
         variance_clip_max = min(clip_max, mean + sigma);
+		
+		float cv = sd / (abs(mean) + 1e-5f);
+		
+		float dither_threshold = 0.008f;
+		float dither_weight = 100.0f;
+		dither_amount = saturate((cv -  dither_threshold) * dither_weight);
 	}
 	
 	float2 velocity = t_VelocityMap.SampleLevel(s_samplLinearClamp, uv, 0).xy * VelocityScale;
@@ -153,9 +161,11 @@ void main(
 	float weight_velocity = ((velocity_length * velocity_length + velocity_length + 1.0f) * (velocity_length + 1.0f)) * 0.125f;
 	// (x^2 + x + 1) * (x + 1)
 	
-	float weight = saturate( weight_depth * weight_velocity );
+	float weight = 1.0f - saturate( weight_depth * weight_velocity );
 	
-	rw_TemporalDepth[dispatchID.xy] = lerp(clipped_history, e, weight);
+	weight *= 1.0f - min(dither_amount * max(1.0f, velocity_length * 2.0f), 1.0f);
+	
+	rw_TemporalDepth[dispatchID.xy] = lerp(e, clipped_history, weight);
 	
 #else // HAS_PREVIOUS_FRAME
 
