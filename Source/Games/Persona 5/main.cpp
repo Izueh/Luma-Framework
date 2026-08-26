@@ -1,7 +1,6 @@
 #define GAME_PERSONA_5 1
 
 #define ALLOW_SHADERS_DUMPING 0
-#define DISABLE_DISPLAY_COMPOSITION 1
 
 #include "..\..\Core\core.hpp"
 #define XXH_STATIC_LINKING_ONLY
