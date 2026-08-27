@@ -35,7 +35,7 @@
 //                                        shader creation; 1: pipeline clone
 //                                        swapped in at bind time
 //
-// Runtime toggling (original <-> clone per draw, UseShaderVariant) needs a
+// Runtime toggling (original <-> patched per draw, UseShaderVariant) needs a
 // clone-based mode (CLONE=1 or an async provider); INPLACE patches are always-on.
 //
 // Library availability is separate (LUMA_USE_DXP, from the Luma props when
@@ -129,8 +129,9 @@ namespace Patch
       // Debug-data-stripped containers by pre-strip hash (Heavy Rain-style
       // unification). Kept separately from patches: stripping is not a patch.
       std::unordered_map<uint32_t, std::shared_ptr<const std::vector<uint8_t>>> stripped_containers;
-      // Bind-time default per shader (absent = enabled). Per-draw
-      // UseShaderVariant overrides this; never re-runs providers.
+      // Bind-time default per shader (absent = enabled). Replaced by
+      // OnBindPatchedShader(game.h) callback; UseShaderVariant overrides at draw time.
+      // Never re-runs providers.
       std::unordered_map<uint32_t, bool> patch_enabled_by_default;
       mutable std::shared_mutex mutex;
 
@@ -141,7 +142,7 @@ namespace Patch
       }
 
       // Bind-time default for this shader. Not "is the patch applied now" —
-      // that's CommandListData::IsCloneToggleable.
+      // the game decides via OnBindPatchedShader.
       bool IsPatchEnabled(uint32_t shader_hash) const
       {
          const std::shared_lock lock(mutex);
@@ -399,14 +400,13 @@ namespace Patch
       return out;
    }
 
-   // Clones the pipeline replacing shader subobjects via "find_patch" (same
-   // lookup order as LoadCustomShaders: files first, then patches). No re-entry
-   // guard needed: addon-created pipelines bypass ReShade's event dispatch.
-   inline std::pair<reshade::api::pipeline, bool> ClonePipelineWithPatches(
-      reshade::api::device* device,
-      reshade::api::pipeline_layout layout,
-      const reshade::api::pipeline_subobject* subobjects,
+   // CPU half of "ClonePipelineWithPatches": copies the subobjects and splices
+   // patched bytecode via "find_patch" (same lookup order as LoadCustomShaders:
+   // files first, then patches). No device call — the async worker defers
+   // creation to the present boundary (see ProcessAsyncCloneBatch).
+   inline std::pair<reshade::api::pipeline_subobject*, bool> BuildPatchedCloneSubobjects(
       uint32_t subobject_count,
+      const reshade::api::pipeline_subobject* subobjects,
       std::function<std::optional<std::pair<const uint8_t*, uint32_t>>(
           const reshade::api::shader_desc* clone_desc,
           const reshade::api::shader_desc* orig_desc)> find_patch)
@@ -444,6 +444,27 @@ namespace Patch
       if (!injected)
       {
          Shader::DestroyPipelineSubojects(new_subobjects, subobject_count);
+         return {nullptr, false};
+      }
+
+      return {new_subobjects, true};
+   }
+
+   // Clones the pipeline replacing shader subobjects via "find_patch" (same
+   // lookup order as LoadCustomShaders: files first, then patches). No re-entry
+   // guard needed: addon-created pipelines bypass ReShade's event dispatch.
+   inline std::pair<reshade::api::pipeline, bool> ClonePipelineWithPatches(
+      reshade::api::device* device,
+      reshade::api::pipeline_layout layout,
+      const reshade::api::pipeline_subobject* subobjects,
+      uint32_t subobject_count,
+      std::function<std::optional<std::pair<const uint8_t*, uint32_t>>(
+          const reshade::api::shader_desc* clone_desc,
+          const reshade::api::shader_desc* orig_desc)> find_patch)
+   {
+      auto [new_subobjects, injected] = BuildPatchedCloneSubobjects(subobject_count, subobjects, std::move(find_patch));
+      if (!injected)
+      {
          return {{}, false};
       }
 

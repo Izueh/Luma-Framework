@@ -1,4 +1,8 @@
 version: 1
+env:
+  # Cbuffer element offset for frame_constants (cb13[2].y = frame counter)
+  # Change this value to access a different element in the cbuffer.
+  frame_index_offset: 2
 steps:
   # Probe: detect the original 16-phase procedural bayer usage without
   # mutating. The mul/round_ne/ftou/ult window is the bayer quantization used
@@ -78,7 +82,7 @@ steps:
     temps: [sampled_noise, noise_uv]
     textures:
       - handle: fast_noise
-        dimension: 8
+        dimension: texture2darray
         register_index: 42
     cbuffers:
       - handle: frame_constants
@@ -138,7 +142,7 @@ steps:
             - type: immediate32
               immediates_u32: [31]
             - type: constant_buffer
-              handle: { name: frame_constants, element_index: 2 }
+              handle: { name: frame_constants, element_index: frame_index_offset }
               components: { selection_mode: select, value: y }
         - opcode: and
           operands:
@@ -217,7 +221,7 @@ steps:
             - type: immediate32
               immediates_u32: [31]
             - type: constant_buffer
-              handle: { name: frame_constants, element_index: 2 }
+              handle: { name: frame_constants, element_index: frame_index_offset }
               components: { selection_mode: select, value: y }
         - opcode: and
           operands:
@@ -309,7 +313,7 @@ steps:
             - type: immediate32
               immediates_u32: [31]
             - type: constant_buffer
-              handle: { name: frame_constants, element_index: 2 }
+              handle: { name: frame_constants, element_index: frame_index_offset }
               components: { selection_mode: select, value: y }
         - opcode: and
           operands:

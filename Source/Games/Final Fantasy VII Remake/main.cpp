@@ -1,19 +1,29 @@
 #define GAME_FF7_REMAKE 1
 
-#define LUMA_PATCH_BYTECODE_SYNC 1
+#define LUMA_PATCH_BYTECODE_SYNC 0
+#define LUMA_PATCH_RECIPE_ASYNC 1
+#define ENABLE_GAME_PIPELINE_STATE_READBACK 1
 #define CHECK_GRAPHICS_API_COMPATIBILITY 1
-#ifdef NDEBUG
 #define ALLOW_SHADERS_DUMPING 1
-#endif
 
 #include <chrono>
 #include <random>
+#include <atomic>
+#include <mutex>
+#include <unordered_set>
 #include <d3d11TokenizedProgramFormat.hpp>
 #include "includes\settings.hpp"
 #include "..\..\Core\core.hpp"
 
 namespace
 {
+#if LUMA_HAS_RECIPE_PROVIDERS
+   static constexpr uint32_t FF7R_DEPTH_DITHERING_RECIPE_HASH = "FF7R Depth Dithering"_h;
+#endif
+#if ENABLE_FAST_NOISE_TEXTURES
+   static constexpr uint32_t kCoreFastNoiseTextureHash = "FAST Noise"_h;
+#endif
+
    float2 projection_jitters = {0, 0};
    float vert_fov = 60.f * (M_PI / 180.f);
    float near_plane = 0.1f;
@@ -423,6 +433,20 @@ struct GameDeviceDataFF7Remake final : public GameDeviceData
       output_sdr_hudless_height = 0;
    }
 #endif // ENABLE_FRAMEGEN
+
+   // DXP recipe patch state. Presence in the map implies the shader was
+   // patched; "ready" flips on present when the clone was actually published.
+   struct FF7RDxpBindingEntry
+   {
+      uint32_t noise_texture_register_index = UINT32_MAX;
+      bool ready = false;
+   };
+   // Pending entries (written by the patch provider thread, under pending_mutex).
+   mutable std::mutex pending_mutex;
+   std::unordered_map<uint32_t, FF7RDxpBindingEntry> pending_patched_shaders;
+   // Finalized entries: updated ONLY on present (render thread), read-only
+   // during frame rendering, so NO lock is needed on OnBind / OnDraw!
+   std::unordered_map<uint32_t, FF7RDxpBindingEntry> patched_shaders;
 };
 
 class FF7Remake final : public Game
@@ -588,12 +612,27 @@ public:
       auto& game_device_data = GetGameDeviceData(device_data);
    }
 
+#if LUMA_HAS_RECIPE_PROVIDERS
+   void OnInitDevice(ID3D11Device* native_device, DeviceData& device_data) override
+   {
+      reshade::log::message(reshade::log::level::info, std::format("Recipe directory: {}", device_data.recipes.GetRootPath().string()).c_str());
+      bool loaded = device_data.recipes.LoadFromFile(FF7R_DEPTH_DITHERING_RECIPE_HASH, "dithering_fix");
+      ASSERT_ONCE_MSG(loaded, "Failed to load FF7R depth dithering DXP recipe");
+   }
+#endif
+
    std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size,
       reshade::api::pipeline_subobject_type type,
       uint64_t shader_hash = -1,
       const std::byte* shader_object = nullptr,
       size_t shader_object_size = 0) override
    {
+#if LUMA_PATCH_RECIPE_ASYNC
+      // Dithering fix is handled by recipe async; skip the sync path entirely.
+      // Other sync patches (tonemap, output, etc.) continue below.
+      if (type == reshade::api::pipeline_subobject_type::pixel_shader || type == reshade::api::pipeline_subobject_type::compute_shader)
+         return nullptr;
+#endif
       if (enabled_dithering_fix == 0.f)
          return nullptr;
       if (type != reshade::api::pipeline_subobject_type::pixel_shader && type != reshade::api::pipeline_subobject_type::compute_shader)
@@ -909,9 +948,120 @@ public:
       }
    }
 
+#if LUMA_PATCH_RECIPE_ASYNC
+   std::optional<dxp::RecipeReport> PatchShaderRecipeAsync(DeviceData& device_data, const Patch::ShaderPatchRequest& request) override
+   {
+      std::shared_ptr<dxp::sm5::Recipe> recipe = device_data.recipes.GetRecipe(FF7R_DEPTH_DITHERING_RECIPE_HASH);
+      if (recipe == nullptr || request.shader_container == nullptr || request.shader_container_size < sizeof(DXBCHeader))
+      {
+         return std::nullopt;
+      }
+
+      if (request.type != reshade::api::pipeline_subobject_type::pixel_shader)
+      {
+         return std::nullopt;
+      }
+
+
+
+      dxp::PatchOptions options;
+      options.logger = [](dxp::LogLevel level, const std::string& message)
+      {
+         reshade::log::level reshade_level = reshade::log::level::info;
+         switch (level)
+         {
+         case dxp::LogLevel::Error:
+            reshade_level = reshade::log::level::error;
+            break;
+         case dxp::LogLevel::Warning:
+            reshade_level = reshade::log::level::warning;
+            break;
+         case dxp::LogLevel::Debug:
+            reshade_level = reshade::log::level::debug;
+            break;
+         case dxp::LogLevel::Info:
+            break;
+         }
+         reshade::log::message(reshade::log::level::info, ("[Luma] [Patch] " + message).c_str());
+      };
+      options.log_level = dxp::LogLevel::Warning;
+
+      std::span<const uint8_t> input_container;
+      if (request.shader_container_owned != nullptr)
+      {
+         input_container = *request.shader_container_owned;
+      }
+      else
+      {
+         input_container = {reinterpret_cast<const uint8_t*>(request.shader_container), request.shader_container_size};
+      }
+
+      auto result = recipe->Execute(input_container, options);
+      if (!result || result->output_bytes.empty())
+      {
+         reshade::log::message(reshade::log::level::warning,
+            std::format("[Patch] recipe execution failed for shader {:08X}", request.shader_hash).c_str());
+         return std::nullopt;
+      }
+
+      // Only hand back the patched bytes when the recipe actually modified the
+      // shader; otherwise the Core would recompile the identical input bytes.
+      if (!result->modified)
+      {
+         return std::nullopt;
+      }
+
+      // Cache resolved bindings in the pending queue (available); "ready" is
+      // set on present when the clone is published (OnPatchedShadersPublished).
+      {
+         auto& game_device_data = *static_cast<GameDeviceDataFF7Remake*>(device_data.game);
+
+         GameDeviceDataFF7Remake::FF7RDxpBindingEntry entry{};
+         const auto& bindings = result->new_bindings;
+         const auto noise_it = bindings.find("noise_texture");
+         if (noise_it != bindings.end())
+         {
+            entry.noise_texture_register_index = noise_it->second.register_index;
+         }
+
+         const std::lock_guard lock(game_device_data.pending_mutex);
+         game_device_data.pending_patched_shaders.insert_or_assign(request.shader_hash, std::move(entry));
+      }
+
+      reshade::log::message(reshade::log::level::debug,
+         std::format("[Patch] patched shader {:08X} ({} bytes)", request.shader_hash, result->output_bytes.size()).c_str());
+
+      return std::move(*result);
+   }
+#endif
+
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
+
+#if LUMA_PATCH_RECIPE_ASYNC
+      // Bind FastNoise only when this shader was patched AND its clone was
+      // published (ready); reads from patched_shaders (render-thread only).
+      if ((stages & reshade::api::shader_stage::pixel) != 0
+          && !original_shader_hashes.pixel_shaders.empty())
+      {
+         const auto shader_hash = *original_shader_hashes.pixel_shaders.begin();
+         const bool shader_enabled = enabled_dithering_fix != 0.f;
+
+         if (shader_enabled)
+         {
+            const auto it = game_device_data.patched_shaders.find(shader_hash);
+            if (it != game_device_data.patched_shaders.end() && it->second.ready)
+            {
+               auto srv_it = device_data.managed_resources.shader_resource_views.find(kCoreFastNoiseTextureHash);
+               if (srv_it != device_data.managed_resources.shader_resource_views.end() && srv_it->second)
+               {
+                  native_device_context->PSSetShaderResources(it->second.noise_texture_register_index, 1, &srv_it->second);
+               }
+            }
+         }
+      }
+#endif
 
       // ============================================================================
       // GTAO Implementation
@@ -989,14 +1139,6 @@ public:
          com_ptr<ID3D11SamplerState> ps_samplers[1];
          native_device_context->PSGetSamplers(0, 1, &ps_samplers[0]);
 
-         // Set Luma constant buffers before caching state (like UE4 does)
-         if (!updated_cbuffers)
-         {
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData);
-            updated_cbuffers = true;
-         }
-
          // Cache pipeline state
          DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
          DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
@@ -1012,6 +1154,9 @@ public:
          // ========================================
          {
             native_device_context->CSSetShader(it_prefilter->second.get(), nullptr, 0);
+            // Set Luma CBs right before compute dispatch
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData);
             
             // Bind depth as SRV (t0)
             ID3D11ShaderResourceView* srvs[] = { srv_depth.get() };
@@ -1189,14 +1334,6 @@ public:
             need_copy = true;
          }
 
-         // Set Luma constant buffers
-         if (!updated_cbuffers)
-         {
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData);
-            updated_cbuffers = true;
-         }
-
          // Cache state
          DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
          DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
@@ -1209,6 +1346,9 @@ public:
 
          // Run denoise compute shader
          native_device_context->CSSetShader(it_denoise->second.get(), nullptr, 0);
+         // Set Luma CBs right before compute dispatch
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData);
          
          ID3D11ShaderResourceView* srvs[] = { game_device_data.gtao_ao_edges_srv.get() };
          native_device_context->CSSetShaderResources(0, 1, srvs);
@@ -1418,12 +1558,8 @@ public:
          native_device_context->PSSetShader(tm_ps_it->second.get(), nullptr, 0);
 
          // Ensure Luma CBs are bound for the PS stage
-         if (!updated_cbuffers)
-         {
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
-            updated_cbuffers = true;
-         }
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
 
          // Issue the game's original draw call with our tonemap PS
          if (original_draw_dispatch_func)
@@ -1450,12 +1586,9 @@ public:
          native_device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
 
          // Ensure Luma CBs are bound for the PS stage
-         if (!updated_cbuffers)
-         {
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
-            updated_cbuffers = true;
-         }
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+         updated_cbuffers = true;
 
          // Draw fullscreen quad
          native_device_context->Draw(4, 0);
@@ -1585,12 +1718,9 @@ public:
          native_device_context->PSSetShader(tm_ps_it->second.get(), nullptr, 0);
 
          // Ensure Luma CBs are bound for the PS stage
-         if (!updated_cbuffers)
-         {
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
-            updated_cbuffers = true;
-         }
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+         updated_cbuffers = true;
 
          // Issue the game's original draw call with our tonemap PS
          if (original_draw_dispatch_func)
@@ -1616,12 +1746,9 @@ public:
          native_device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
 
          // Ensure Luma CBs are bound for the PS stage
-         if (!updated_cbuffers)
-         {
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
-            updated_cbuffers = true;
-         }
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+         updated_cbuffers = true;
 
          // Draw fullscreen quad
          native_device_context->Draw(4, 0);
@@ -1988,6 +2115,45 @@ public:
 
       return DrawOrDispatchOverrideType::None; // Don't cancel the original draw call
    }
+
+#if LUMA_PATCH_PROVIDERS != 0
+   void OnPatchedShadersPublished(DeviceData& device_data, const std::vector<uint32_t>& published_shader_hashes) override
+   {
+      auto& game_device_data = GetGameDeviceData(device_data);
+      // Only hashes whose clone actually went live this present become usable;
+      // anything else stays pending (worker may still be producing it).
+      const std::lock_guard lock(game_device_data.pending_mutex);
+      for (uint32_t shader_hash : published_shader_hashes)
+      {
+         auto it = game_device_data.pending_patched_shaders.find(shader_hash);
+         if (it == game_device_data.pending_patched_shaders.end())
+         {
+            continue;
+         }
+         it->second.ready = true;
+         game_device_data.patched_shaders.insert_or_assign(shader_hash, std::move(it->second));
+         game_device_data.pending_patched_shaders.erase(it);
+      }
+   }
+#endif
+
+#if LUMA_PATCH_PROVIDERS != 0
+   bool OnBindPatchedShader(DeviceData& device_data, uint32_t shader_hash, reshade::api::pipeline_subobject_type type) override
+   {
+      auto& game_device_data = *static_cast<GameDeviceDataFF7Remake*>(device_data.game);
+      
+      if (type != reshade::api::pipeline_subobject_type::pixel_shader)
+         return false;
+      
+      // Patch only applies once its clone is live: presence in the map means
+      // the shader was patched, "ready" means it was published on present.
+      // No lock needed: patched_shaders is updated ONLY on present (render thread).
+      const auto it = game_device_data.patched_shaders.find(shader_hash);
+      const bool patch_ready = it != game_device_data.patched_shaders.end() && it->second.ready;
+      
+      return enabled_dithering_fix != 0.f && patch_ready;
+   }
+#endif
 
    void OnPresent(ID3D11Device* native_device, DeviceData& device_data) override
    {

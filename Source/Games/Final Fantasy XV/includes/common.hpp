@@ -3,6 +3,7 @@
 #include <atomic>
 #include <memory>
 #include <numbers>
+#include <unordered_map>
 #include "log.hpp"
 #include "native_cbuffers.hpp"
 #include "upscale_tracking.hpp"
@@ -53,18 +54,21 @@ struct GameDeviceDataFFXV final : public GameDeviceData
    // Post-TAA upscale tracking
    UpscaleTrackingState upscale_tracking;
 
-   // Recipe patch bindings resolved once at patch-apply time (see
-   // ApplyDepthDitheringShaderPatch). Read per-draw under dxp_bindings_mutex;
-   // written by whichever provider applied the patch (sync: creation thread,
-   // async: worker thread).
-   struct FFXVDxpBindingSet
+   // Recipe patch bindings resolved at patch-apply time. Presence in the map
+   // implies the shader was patched; "ready" flips on present when the clone
+   // was actually published (OnPatchedShadersPublished).
+   struct FFXVDxpBindingEntry
    {
-      uint32_t shader_hash = 0;
       uint32_t fast_noise_bind_point = UINT32_MAX;
       uint32_t frame_constants_bind_point = UINT32_MAX;
+      bool ready = false;
    };
-   std::vector<FFXVDxpBindingSet> dxp_binding_sets;
-   mutable std::mutex dxp_bindings_mutex;
+   // Pending entries (written by the patch provider thread, under pending_mutex).
+   mutable std::mutex pending_mutex;
+   std::unordered_map<uint32_t, FFXVDxpBindingEntry> pending_dxp_bindings;
+   // Finalized entries: updated ONLY on present (render thread), read per-draw
+   // without locks (draw and present run on the same thread).
+   std::unordered_map<uint32_t, FFXVDxpBindingEntry> dxp_bindings;
 
    // Runtime patch toggle (reference): ON by default, disabled per draw via
    // UseShaderVariant. Atomic (UI writes, render reads).

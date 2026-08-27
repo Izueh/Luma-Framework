@@ -35,18 +35,15 @@ namespace Shader
    {
       None = 0,      // No patch applied
       Inplace = 1,   // Applied in-place at shader creation (sync, INPLACE mode)
-      SyncClone = 2, // Applied via a pipeline clone created synchronously at pipeline init (CLONE mode)
-      AsyncClone = 3, // Applied via a pipeline clone created on the background thread
+      Sync = 2,      // Applied via a pipeline clone created synchronously at pipeline init (CLONE mode)
+      Async = 3,     // Applied via a pipeline clone created on the background thread
    };
 
-   // Which object of a cloned pipeline is (or should be) bound: the game's
-   // original or the replacement clone (custom file or patch). None = no clone
-   // involved.
-   enum class CloneVariant : uint8_t
+   // Which shader variant is (or should be) bound.
+   enum class ShaderVariant : uint8_t
    {
-      None = 0,
-      Original = 1,  // the game's original object (replacement disabled)
-      Clone = 2,     // the replacement clone (custom file or patch applied)
+      Original = 0,  // the game's original shader
+      Patched  = 1,  // the pipeline clone (patch applied)
    };
 
    // What a pipeline's clone was built from (set at clone creation, reset before
