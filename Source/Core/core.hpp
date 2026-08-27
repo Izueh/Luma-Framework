@@ -8907,6 +8907,7 @@ namespace
       {
       default:
       break;
+#if !defined(GAME_PERSONA_5) && !defined(GAME_METAPHOR)
       case reshade::api::descriptor_type::texture_unordered_access_view:
       case reshade::api::descriptor_type::texture_shader_resource_view:
       {
@@ -9010,6 +9011,7 @@ namespace
          }
          break;
       }
+#endif
       case reshade::api::descriptor_type::constant_buffer:
       {
          for (uint32_t i = 0; i < update.count; i++)
