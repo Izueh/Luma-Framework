@@ -785,9 +785,10 @@ namespace
       std::unordered_map<uint32_t, std::filesystem::path> dumped_shaders_meta_paths;
       uint32_t shader_cache_count = 0;
 #endif
-      // Sets live_patched_data on a cached shader and queues it for patched dump.
-      // Thread-safe: acquires s_mutex_dumping to update patched_shaders_to_dump.
-      inline void SetLivePatchedShader(CachedShader* cached_shader, uint32_t shader_hash,
+      // Sets live_patched_* fields on a cached shader so the debug UI can
+      // display the patched bytecode.
+#if DEVELOPMENT && LUMA_PATCH_PROVIDERS != 0
+      inline void SetLivePatchedShaderInfo(CachedShader* cached_shader, uint32_t shader_hash,
                                         const uint8_t* code, uint32_t size)
       {
          if (!cached_shader || !code || size == 0)
@@ -796,12 +797,17 @@ namespace
          cached_shader->live_patched_data = cached_shader->live_patched_owned_data.data();
          cached_shader->live_patched_size = size;
          cached_shader->live_patched_disasm.clear();
-         // Queue for patched dump (thread-safe via s_mutex_dumping)
-         {
-            const std::lock_guard<std::recursive_mutex> lock_dumping(s_mutex_dumping);
-            patched_shaders_to_dump.emplace(shader_hash);
-         }
       }
+#endif // DEVELOPMENT && LUMA_PATCH_PROVIDERS != 0
+
+      // Queues a patched shader for dump
+#if ALLOW_SHADER_PATCHES_DUMPING && LUMA_PATCH_PROVIDERS != 0
+      inline void QueuePatchedShaderForDump(uint32_t shader_hash)
+      {
+         const std::lock_guard<std::recursive_mutex> lock_dumping(s_mutex_dumping);
+         patched_shaders_to_dump.emplace(shader_hash);
+      }
+#endif // ALLOW_SHADER_PATCHES_DUMPING && LUMA_PATCH_PROVIDERS != 0
    }
 
    std::string shaders_compilation_errors; // errors and warning log
@@ -4228,12 +4234,12 @@ namespace
 #endif // ALLOW_SHADERS_DUMPING
                   }
 
-#if DEVELOPMENT
+#if DEVELOPMENT && LUMA_PATCH_PROVIDERS != 0
                   if (live_patched_shader_code != nullptr)
                   {
-                     SetLivePatchedShader(cached_shader, shader_hash, static_cast<const uint8_t*>(live_patched_shader_code), static_cast<uint32_t>(live_patched_shader_size));
+                     SetLivePatchedShaderInfo(cached_shader, shader_hash, static_cast<const uint8_t*>(live_patched_shader_code), static_cast<uint32_t>(live_patched_shader_size));
                   }
-#endif // DEVELOPMENT
+#endif // DEVELOPMENT && LUMA_PATCH_PROVIDERS != 0
 
                   // Try with native DX11 reflections first, they are much faster than disassembly
                   if (!found_reflections)
@@ -4656,7 +4662,7 @@ namespace
                   {
                      if (auto it = shader_cache.find(hash); it != shader_cache.end() && it->second)
                      {
-                        SetLivePatchedShader(it->second, hash, shader_data->code.data(), static_cast<uint32_t>(shader_data->code.size()));
+                        SetLivePatchedShaderInfo(it->second, hash, shader_data->code.data(), static_cast<uint32_t>(shader_data->code.size()));
                      }
                   }
                }
@@ -10920,13 +10926,20 @@ namespace
                   published_patch_hashes.push_back(entry.shader_hash);
                }
                const uint32_t shader_hash = cached_pipeline->shader_hashes[0];
+#if LUMA_PATCH_PROVIDERS != 0
                if (auto patched = device_data.patch_context.GetShaderData(shader_hash); patched)
                {
                   if (auto it = shader_cache.find(shader_hash); it != shader_cache.end() && it->second)
                   {
-                     SetLivePatchedShader(it->second, shader_hash, patched->code.data(), static_cast<uint32_t>(patched->code.size()));
+#if DEVELOPMENT
+                     SetLivePatchedShaderInfo(it->second, shader_hash, patched->code.data(), static_cast<uint32_t>(patched->code.size()));
+#endif
+#if ALLOW_SHADER_PATCHES_DUMPING
+                     QueuePatchedShaderForDump(shader_hash);
+#endif
                   }
                }
+#endif
             }
 #endif
             device_data.cloned_pipeline_count++;

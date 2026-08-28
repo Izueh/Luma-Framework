@@ -73,7 +73,7 @@ static constexpr UINT kGTAOKnobsCBSlot = 9;
 static float g_gtao_final_value_power = 1.f; // primary darkness dial (user-calibrated: matches the vanilla AO histogram, mean 0.90 vs native 0.89)
 static float g_gtao_depth_scale = 1.f;       // viewZ divisor (game units -> ~meters); dial against broad over-occlusion
 static float g_gtao_radius_override = 0.f;   // > 0 overrides the shader's EFFECT_RADIUS (view units after DepthScale)
-#if DEVELOPMENT
+#if DEVELOPMENT || TEST
 static int g_gtao_debug_view = 0; // 0=off 1=depth gradient 2=normals 3=AO x8 4=edges (shader honors it under DEVELOPMENT too)
 #endif
 
