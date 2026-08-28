@@ -2,9 +2,11 @@
 
 #define LUMA_PATCH_BYTECODE_SYNC 0
 #define LUMA_PATCH_RECIPE_ASYNC 1
-#define ENABLE_GAME_PIPELINE_STATE_READBACK 1
 #define CHECK_GRAPHICS_API_COMPATIBILITY 1
+#ifdef _DEBUG
 #define ALLOW_SHADERS_DUMPING 1
+#define ALLOW_SHADER_PATCHES_DUMPING 1
+#endif
 
 #include <chrono>
 #include <random>
@@ -183,7 +185,7 @@ namespace
                .key = "CustomLUTStrength",
                .binding = &cb_luma_global_settings.GameSettings.custom_lut_strength,
                .type = Luma::Settings::SettingValueType::FLOAT,
-               .default_value = 92.f,
+               .default_value = 100.f,
                .can_reset = true,
                .label = "LUT Strength",
                .tooltip = "LUT strength multiplier.",
@@ -319,7 +321,7 @@ namespace
                .default_value = 1.f, 
                .can_reset = true, 
                .label = "Enable Dithering Fix (Experimental)", 
-               .tooltip = "Enables a fix for dithering that can cause checkered patterns when using Super Resolution. Default is On, requires restart to take effect.",
+               .tooltip = "Enables a fix for dithering that can cause checkered patterns when using Super Resolution. Default is On.",
             }
          }
       }
@@ -444,8 +446,9 @@ struct GameDeviceDataFF7Remake final : public GameDeviceData
    // Pending entries (written by the patch provider thread, under pending_mutex).
    mutable std::mutex pending_mutex;
    std::unordered_map<uint32_t, FF7RDxpBindingEntry> pending_patched_shaders;
-   // Finalized entries: updated ONLY on present (render thread), read-only
-   // during frame rendering, so NO lock is needed on OnBind / OnDraw!
+   // Finalized entries: updated only on the render thread (lazy clone create
+   // at bind / present), read-only during frame rendering, so NO lock is
+   // needed on OnBind / OnDraw!
    std::unordered_map<uint32_t, FF7RDxpBindingEntry> patched_shaders;
 };
 
@@ -2146,8 +2149,9 @@ public:
          return false;
       
       // Patch only applies once its clone is live: presence in the map means
-      // the shader was patched, "ready" means it was published on present.
-      // No lock needed: patched_shaders is updated ONLY on present (render thread).
+      // the shader was patched, "ready" means its clone was created (lazily at
+      // first bind). No lock needed: patched_shaders is updated only on the
+      // render thread.
       const auto it = game_device_data.patched_shaders.find(shader_hash);
       const bool patch_ready = it != game_device_data.patched_shaders.end() && it->second.ready;
       

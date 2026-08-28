@@ -61,10 +61,12 @@ namespace CB
       uint FrameIndex;
 
 #if DEVELOPMENT // In case we disabled the "DEVELOPMENT" shader define while the code is compiled in "DEVELOPMENT" mode, we'll simply push values that aren't read by shaders (see "CPU_DEVELOPMENT")
-      alignas(16) LumaDevSettings DevSettings;
+      LumaDevSettings DevSettings;
+#else
+      float2 Padding1;
 #endif // DEVELOPMENT
 
-      alignas(16) LumaGameSettings GameSettings; // Custom games setting, with a per game struct
+      LumaGameSettings GameSettings; // Custom games setting, with a per game struct
    };
    // Have a pre-padded version to satisfy DX buffer requirements (if we aligned the original struct, it'd pad in between structs and mess up the alignment to the GPU etc)
    struct alignas(16) LumaGlobalSettingsPadded : LumaGlobalSettings { };
@@ -82,9 +84,11 @@ namespace CB
 
       float2 RenderResolutionScale;
       float2 PreviousRenderResolutionScale;
+      
       uint RenderScaleActive;
+      float3 Padding1;
 
-      alignas(16) LumaGameData GameData; // Custom games data, with a per game struct
+      LumaGameData GameData; // Custom games data, with a per game struct
    };
    struct alignas(16) LumaInstanceDataPadded : LumaInstanceData { };
    static_assert(sizeof(LumaInstanceDataPadded) % sizeof(uint32_t) == 0);

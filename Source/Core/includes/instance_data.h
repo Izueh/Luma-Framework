@@ -6,6 +6,7 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <memory>
 #include <shared_mutex>
@@ -442,35 +443,39 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    std::atomic<bool> thread_auto_loading_running = false;
 
    // TODO(Patch module): move the patch_context member below and this async clone
-   // machinery (PendingClone + the LUMA_PATCH_PROVIDERS-gated members) into
+   // machinery (AsyncCloneEntry + the LUMA_PATCH_PROVIDERS-gated members) into
    // patch.hpp once the include-order rework lands (see core.hpp dispatch TODO).
 #if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
-   // Persistent async clone machinery: a long-lived worker builds patched
-   // subobjects from copied data (never holding raw pipeline pointers across
-   // locks); the present boundary creates the pipeline and publishes it
-   // (never mid-frame). Guarded as follows:
-   //   async_jobs_mutex/cv + async_queue_version: job-queue wakeups.
-   //   async_ready_mutex: the ready queue (worker writes, present drains).
-   //   async_shutdown: set at device destroy before joining the worker.
-   std::mutex async_jobs_mutex;
-   std::condition_variable async_jobs_cv;
-   uint64_t async_queue_version = 0;
-
-   std::atomic<bool> async_shutdown = false;
-   std::mutex async_ready_mutex;
-   struct PendingClone
+   // Unified async clone entry: mode 1 populates subobjects+layout (created at
+   // present boundary), mode 2 populates pipeline_clone (created by worker).
+   // Only one of the two paths is active per build configuration.
+   struct AsyncCloneEntry
    {
       uint64_t pipeline_handle = 0;
-      // Patched subobjects built on the worker (CPU); owned here until the
-      // present boundary creates the pipeline and frees them.
+      // Mode 1: subobjects built by worker, pipeline created at present boundary
       reshade::api::pipeline_subobject* subobjects = nullptr;
       uint32_t subobject_count = 0;
-      reshade::api::device* device = nullptr;
       reshade::api::pipeline_layout layout = {};
+      // Mode 2: pipeline already compiled by worker
+      reshade::api::pipeline pipeline_clone = {};
+      // Shared
+      reshade::api::device* device = nullptr;
       uint32_t shader_hash = 0; // shader the clone was built for (verify at publish)
       Shader::CloneOrigin clone_origin = Shader::CloneOrigin::None; // what the clone was built from (recorded by the worker)
    };
-   std::vector<PendingClone> async_ready;
+   // Lock-free ready queue. Single worker thread — atomic pointer is sufficient,
+   // no mutex needed. Worker publishes to the queue (reads pointer, creates if
+   // null, writes). Render thread drains at OnPresent via atomic exchange.
+   struct AsyncReadyQueue
+   {
+      std::deque<AsyncCloneEntry> items;
+   };
+   std::atomic<AsyncReadyQueue*> async_ready_queue{nullptr};
+
+   std::atomic<bool> async_shutdown = false;
+   std::mutex async_jobs_mutex;
+   std::condition_variable async_jobs_cv;
+   uint64_t async_queue_version = 0;
 #endif // async providers
 
    std::unordered_set<uint64_t> upgraded_resources; // All the directly upgraded resources, excluding the swapchains backbuffers, as they are created internally by DX

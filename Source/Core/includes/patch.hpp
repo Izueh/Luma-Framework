@@ -59,6 +59,29 @@
 #define LUMA_PATCH_SYNC_MODE_CLONE 0
 #endif
 
+// Selects where async patch-clone pipelines get created (only matters with an
+// async provider; sync providers are unaffected):
+//   1 = On Present - the worker builds patched subobjects (CPU only); the
+//                    render thread creates the pipelines at the present
+//                    boundary. This might be prefered since NVIDIA drivers
+//                    might lock when calling Create*Shader functions from
+//                    different threads.
+//   2 = On Worker  - the worker builds subobjects AND calls create_pipeline
+//                    itself; present only registers finished clones.
+#ifndef LUMA_ASYNC_CLONE_MODE
+#define LUMA_ASYNC_CLONE_MODE 2
+#endif
+#if LUMA_ASYNC_CLONE_MODE != 1 && LUMA_ASYNC_CLONE_MODE != 2
+#error "LUMA_ASYNC_CLONE_MODE must be 1 (On Present) or 2 (On Worker)"
+#endif
+
+// LUMA_ASYNC_CLONE_MODE 1 only: maximum clones created per present, to spread
+// the device work across frames instead of one giant batch.
+// 0 = unlimited
+#ifndef LUMA_ASYNC_CLONE_PRESENT_BUDGET
+#define LUMA_ASYNC_CLONE_PRESENT_BUDGET 0
+#endif
+
 #define LUMA_PATCH_PROVIDER_BYTECODE_SYNC (1u << 0)
 #define LUMA_PATCH_PROVIDER_BYTECODE_ASYNC (1u << 1)
 #define LUMA_PATCH_PROVIDER_RECIPE_SYNC (1u << 2)

@@ -66,8 +66,9 @@ struct GameDeviceDataFFXV final : public GameDeviceData
    // Pending entries (written by the patch provider thread, under pending_mutex).
    mutable std::mutex pending_mutex;
    std::unordered_map<uint32_t, FFXVDxpBindingEntry> pending_dxp_bindings;
-   // Finalized entries: updated ONLY on present (render thread), read per-draw
-   // without locks (draw and present run on the same thread).
+   // Finalized entries: updated only on the render thread (lazy clone create
+   // at bind / present), read per-draw without locks (draw and present run on
+   // the same thread).
    std::unordered_map<uint32_t, FFXVDxpBindingEntry> dxp_bindings;
 
    // Runtime patch toggle (reference): ON by default, disabled per draw via

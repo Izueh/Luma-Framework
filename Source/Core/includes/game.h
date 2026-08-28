@@ -85,10 +85,10 @@ public:
    // Called at bind time for patch-cloned pipelines to decide whether to use the
    // patched variant (true) or the original (false). Default is true (patch ON).
    virtual bool OnBindPatchedShader(DeviceData& device_data, uint32_t shader_hash, reshade::api::pipeline_subobject_type type) { return true; }
-   // Called on the render thread right after the present boundary published
-   // patch clones (only the hashes that became live this frame). Games flip
-   // their binding state here so resources are never bound before the patched
-   // shader can run. Must not take luma mutexes.
+   // Called on the render thread when a patch clone was created (lazily, on
+   // first bind) with the hashes that became live. Games flip their binding
+   // state here so resources are never bound before the patched shader can
+   // run. Must not take luma mutexes.
    virtual void OnPatchedShadersPublished(DeviceData& device_data, const std::vector<uint32_t>& published_shader_hashes) {}
 #endif
    // This is called every frame just before sending out the final image to the display (the swapchain).
