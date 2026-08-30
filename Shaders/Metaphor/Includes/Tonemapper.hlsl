@@ -102,12 +102,11 @@ float3 ApplyUserTonemap(float3 untonemapped)
 
 	if (LumaSettings.DisplayMode == 1)
 	{
-		float3 hue_shifted_color = saturate(untonemapped);
-
 		const float reference_white = 100.0f;
 		const float white_clip = 100.0f;
 		const float mid_gray_nits = 18.0f;
-		const float hue_correction = 0.0f;
+		const float hue_correction_min = 0.0f;
+		const float hue_correction_max = 0.6f;
 
 		float reno_drt_max = (LumaSettings.PeakWhiteNits / LumaSettings.GamePaperWhiteNits);
 		reno_drt_max = gamma_sRGB_to_linear1(linear_to_gamma1(reno_drt_max));
@@ -119,19 +118,28 @@ float3 ApplyUserTonemap(float3 untonemapped)
 			y,
 			max(white_clip, peak),
 			peak,
-			0.f,
+			0.0f,
 			0.18f,
 			mid_gray_nits / 100.0f);
 
-		float scale = (y > 0 ? (y_new / y) : 1.f);
+		float scale = (y > 0 ? (y_new / y) : 1.0f);
 		outputColor = untonemapped * scale;
 		outputColor = min(outputColor, peak);
 
+		float max_channel = max(untonemapped.x, max(untonemapped.y, untonemapped.z));
+		
+		float3 clamped = saturate(untonemapped);
+		float t = smoothstep(1.5f, 3.0f, max_channel);
+		
+		float3 hue_shifted_color = clamped;
+		
 		float3 perceptual_new = renodx::color::ictcp::To(outputColor, 0);
 		float3 perceptual_old = renodx::color::ictcp::To(hue_shifted_color, 0);
 
 		// Save chrominance to apply back
 		float chrominance_pre_adjust = length(perceptual_new.yz);
+		
+		float hue_correction = lerp(hue_correction_min, hue_correction_max, t);
 
 		perceptual_new.yz = lerp(perceptual_new.yz, perceptual_old.yz, hue_correction);
 
