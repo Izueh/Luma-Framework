@@ -217,7 +217,7 @@ public:
    {
       reshade::register_event<reshade::addon_event::create_resource>(HeavenBurnsRed::OnCreateResource);
       reshade::register_event<reshade::addon_event::create_pipeline>(HeavenBurnsRed::OnCreatePipeline);
-      //reshade::register_event<reshade::addon_event::bind_pipeline>(HeavenBurnsRed::OnBindPipeline);
+      reshade::register_event<reshade::addon_event::create_sampler>(HeavenBurnsRed::OnCreateSampler);
       reshade::register_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(HeavenBurnsRed::OnBindRenderTargetsAndDepthStencil);
    }
    
@@ -294,19 +294,16 @@ public:
       return false;
    }
    
-   static void OnBindPipeline(
-      reshade::api::command_list *cmd_list,
-      reshade::api::pipeline_stage stages,
-      reshade::api::pipeline pipeline)
+   static bool OnCreateSampler(
+      reshade::api::device* device,
+      reshade::api::sampler_desc &desc)
    {
-      // only accept OM calls
-      if ((stages & reshade::api::pipeline_stage::output_merger) == 0)
-         return;
-
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
+      if (desc.max_anisotropy <= 1.f)
+         return false;
       
-      game_device_data.blend_state_changed = true;
+      // The game already uses aniso samplers for most of the texture samplings, but for lightmap it's 3x and texture 16x/10x/4x
+      desc.max_anisotropy = D3D11_REQ_MAXANISOTROPY;
+      return true;
    }
    
    static void OnBindRenderTargetsAndDepthStencil(
@@ -448,7 +445,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    {
       reshade::unregister_event<reshade::addon_event::create_resource>(HeavenBurnsRed::OnCreateResource);
       reshade::unregister_event<reshade::addon_event::create_pipeline>(HeavenBurnsRed::OnCreatePipeline);
-      //reshade::unregister_event<reshade::addon_event::bind_pipeline>(HeavenBurnsRed::OnBindPipeline);
+      reshade::unregister_event<reshade::addon_event::create_sampler>(HeavenBurnsRed::OnCreateSampler);
       reshade::unregister_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(HeavenBurnsRed::OnBindRenderTargetsAndDepthStencil);
    }
 
