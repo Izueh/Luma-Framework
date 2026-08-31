@@ -7,7 +7,7 @@
 #define ENABLE_UI_SCALING 0
 #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
 #define CHECK_GRAPHICS_API_COMPATIBILITY 1
-#define V2_0_4
+#define V2_0_5
 
 #include <d3d11.h>
 #include "..\..\Core\core.hpp"
