@@ -291,6 +291,9 @@ public:
          uavd.Buffer.NumElements = 1;
          native_device->CreateUnorderedAccessView(game_device_data.scratch_constant_buffer.get(), &uavd, game_device_data.scratch_constant_buffer_uav.put());
       }
+
+      // no taa but needed for DLSS indicator in UI
+      device_data.taa_detected = true;
    }
 
    void SetupSr(ID3D11DeviceContext* native_device_context, GameDeviceDataPersona5& game_device_data, DeviceData& device_data)
@@ -869,6 +872,7 @@ public:
             }
 
             game_device_data.draw_device_context = native_device_context;
+            device_data.has_drawn_main_post_processing = true;
          }
       }
       // fallthrough replace rtv on bloom select as well
@@ -1046,6 +1050,9 @@ public:
          game_device_data.target_resolution = game_device_data.last_viewport_size;
          game_device_data.last_viewport_size = uint2(0, 0);
       }
+
+      device_data.has_drawn_sr = false;
+      device_data.has_drawn_main_post_processing = false;
    }
 
    static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
@@ -1133,7 +1140,8 @@ public:
                draw_data.reset = device_data.force_reset_sr;
 
                bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context.get(), draw_data);
-               game_device_data.has_drawn_upscaling = true;
+               game_device_data.has_drawn_upscaling = dlss_succeeded;
+               device_data.has_drawn_sr = dlss_succeeded;
             }
             {
                ComPtr<ID3D11Device> device;
