@@ -13,12 +13,12 @@ float2 GetBloomScale(Texture2D tex)
 {
 	float2 sourceSize;
 	tex.GetDimensions(sourceSize.x, sourceSize.y);
-	return native_bloom_res / sourceSize;
+	return (native_bloom_res.y / sourceSize.y);
 }
 
 float2 GetStarburstScale(Texture2D tex)
 {
 	float2 sourceSize;
 	tex.GetDimensions(sourceSize.x, sourceSize.y);
-	return sourceSize / native_bloom_res;
+	return (sourceSize.y / native_bloom_res.y);
 }

@@ -106,6 +106,13 @@ struct Plane
    float d;
 };
 
+enum class UpscalingMode : uint32_t
+{
+   Auto = 0,
+   SuperResolution = 1,
+   Game = 2
+};
+
 // vertex buffers have usually either a stride of 28 or 40 bytes
 // we don't know which at creation time so we store the bounding boxes for both options
 struct BoundingBoxCollection
@@ -258,7 +265,7 @@ namespace
    bool first_boot = true; // Automatic setting
    bool enable_hdr = false;
    bool next_enable_hdr = enable_hdr; // The value we serialize, that will be ignored until reboot
-   bool use_sr_for_upscaling = false;
+   UpscalingMode upscaling_mode = UpscalingMode::Auto;
 
 #if DEVELOPMENT || TEST
    uint32_t shadow_draw_calls = 0;
@@ -274,6 +281,7 @@ namespace
    ShaderHashesList shader_hashes_smaa_edge_detection;
    ShaderHashesList shader_hashes_smaa_weight_calculation;
    ShaderHashesList shader_hashes_smaa_blending;
+   ShaderHashesList shader_hashes_dof_prepare;
    ShaderHashesList shader_hashes_lut;
    ShaderHashesList shader_hashes_outline;
    ShaderHashesList shader_hashes_ocean;
@@ -373,6 +381,7 @@ struct GameDeviceDataMetaphor final : public GameDeviceData
    std::unordered_map<ID3D11Buffer*, SkinCacheEntry> skin_lookup;
 
    TemporalAADepth::TemporalAADepthPass temporal_depth_pass;
+   bool has_temporal_depth_pass_drawn = false;
 #endif // ENABLE_SR
    // std::vector<ComPtr<ID3D11Texture2D>> bayer_matrix_textures;
    // std::vector<ComPtr<ID3D11ShaderResourceView>> bayer_matrix_texture_srvs;
@@ -388,6 +397,10 @@ struct GameDeviceDataMetaphor final : public GameDeviceData
    bool shadow_world_view_proj_valid = false;
    std::shared_mutex bounding_box_mutex;
    std::unordered_map<ID3D11Buffer*, BoundingBoxCollection> bounding_boxes;
+
+   ComPtr<ID3D11Texture2D> bloom_texture;
+   ComPtr<ID3D11RenderTargetView> bloom_texture_rtv;
+   ComPtr<ID3D11ShaderResourceView> bloom_texture_srv;
 
    // resources related to MSAA rendering of the UI elements rendered in the 3D scene
    ComPtr<ID3D11RasterizerState> original_scene_raterizer_state;
@@ -426,10 +439,18 @@ class Metaphor final : public Game
       return device_data.sr_type != SR::Type::None && !device_data.sr_suppressed;
    }
 
+   static bool UseSRForUpscaling(const DeviceData& device_data)
+   {
+      return (upscaling_mode == UpscalingMode::SuperResolution || (upscaling_mode == UpscalingMode::Auto && device_data.sr_type == SR::Type::DLSS)) && !device_data.sr_suppressed;
+   }
+
 public:
    void OnInit(bool async) override
    {
       native_shaders_definitions.emplace(CompileTimeStringHash("Copy Depth"), ShaderDefinition{"Luma_CopyDepth", reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Gaussian Blur Horizontal"),
+         ShaderDefinition{"Luma_GaussianBlur", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, {{"HORIZONTAL", "1"}}});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Gaussian Blur Vertical"), ShaderDefinition{"Luma_GaussianBlur", reshade::api::pipeline_subobject_type::pixel_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Motion Vector"), ShaderDefinition{"Luma_PrepareMotionVector", reshade::api::pipeline_subobject_type::compute_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Ocean Data"), ShaderDefinition{"Luma_PrepareOceanData", reshade::api::pipeline_subobject_type::compute_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Create Bias Mask"), ShaderDefinition{"Luma_CreateBiasMask", reshade::api::pipeline_subobject_type::compute_shader});
@@ -458,7 +479,23 @@ public:
       {
          g_scene_ui_msaa_samples = 8;
       }
-      reshade::get_config_value(runtime, NAME, "UseSRForUpscaling", use_sr_for_upscaling);
+      uint32_t upscaling_mode_uint = (uint32_t)UpscalingMode::Auto;
+      if (!reshade::get_config_value(runtime, NAME, "UpscalingMode", upscaling_mode_uint))
+      {
+         bool use_sr_for_upscaling;
+         if (reshade::get_config_value(runtime, NAME, "UseSRForUpscaling", use_sr_for_upscaling))
+         {
+            upscaling_mode_uint = (uint32_t)(use_sr_for_upscaling ? UpscalingMode::SuperResolution : UpscalingMode::Auto);
+         }
+      }
+      if (upscaling_mode_uint > (uint32_t)UpscalingMode::Game)
+      {
+         upscaling_mode = UpscalingMode::Auto;
+      }
+      else
+      {
+         upscaling_mode = (UpscalingMode)upscaling_mode_uint;
+      }
    }
 
    void OnInitSwapchain(reshade::api::swapchain* swapchain) override
@@ -665,6 +702,9 @@ public:
 
       game_device_data.ocean_buffer = std::make_unique<StretchyBuffer>(native_device, context.get(), 32);
       game_device_data.prev_ocean_buffer = std::make_unique<StretchyBuffer>(native_device, context.get(), 32);
+
+      // no taa but needed for DLSS indicator in UI
+      device_data.taa_detected = true;
    }
 
    void SetupMotionVectorTexture(ID3D11Device* device, GameDeviceDataMetaphor& game_device_data, uint32_t width, uint32_t height)
@@ -1002,7 +1042,7 @@ public:
          uav_texture->GetDesc(&uav_desc);
 
          if (SrActive(device_data) &&
-             use_sr_for_upscaling &&
+             UseSRForUpscaling(device_data) &&
              (srv_desc.Width < uav_desc.Width && srv_desc.Height < uav_desc.Height))
          {
             game_device_data.source_color = srv_texture;
@@ -1330,6 +1370,62 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
 
+      if (original_shader_hashes.pixel_shaders.size() > 0 &&
+          original_shader_hashes.pixel_shaders.front() == 0x2054ae6a) // 13-sample blur
+      {
+         ComPtr<ID3D11RenderTargetView> render_target_view;
+         native_device_context->OMGetRenderTargets(1, render_target_view.put(), nullptr);
+
+         ComPtr<ID3D11Resource> render_target_resource;
+         render_target_view->GetResource(render_target_resource.put());
+         ComPtr<ID3D11Texture2D> render_target_texture;
+         render_target_resource->QueryInterface(render_target_texture.put());
+
+         D3D11_TEXTURE2D_DESC render_target_desc;
+         render_target_texture->GetDesc(&render_target_desc);
+
+         bool needs_recreate = false;
+         if (game_device_data.bloom_texture)
+         {
+            D3D11_TEXTURE2D_DESC bloom_texture_desc;
+            game_device_data.bloom_texture->GetDesc(&bloom_texture_desc);
+            if (bloom_texture_desc.Width != render_target_desc.Width ||
+                bloom_texture_desc.Height != render_target_desc.Height)
+            {
+               needs_recreate = true;
+            }
+         }
+
+         if (!game_device_data.bloom_texture ||
+             needs_recreate)
+         {
+            D3D11_TEXTURE2D_DESC bloom_desc = render_target_desc;
+
+            native_device->CreateTexture2D(&bloom_desc,
+               nullptr,
+               game_device_data.bloom_texture.put());
+            native_device->CreateShaderResourceView(game_device_data.bloom_texture.get(),
+               nullptr,
+               game_device_data.bloom_texture_srv.put());
+            native_device->CreateRenderTargetView(game_device_data.bloom_texture.get(),
+               nullptr,
+               game_device_data.bloom_texture_rtv.put());
+         }
+
+         ID3D11PixelShader* ps = device_data.native_pixel_shaders[CompileTimeStringHash("Gaussian Blur Horizontal")].get();
+         native_device_context->PSSetShader(ps, nullptr, 0);
+         native_device_context->OMSetRenderTargets(1, game_device_data.bloom_texture_rtv.get_addressof(), nullptr);
+         native_device_context->Draw(4, 0);
+
+         ps = device_data.native_pixel_shaders[CompileTimeStringHash("Gaussian Blur Vertical")].get();
+         native_device_context->PSSetShader(ps, nullptr, 0);
+         native_device_context->OMSetRenderTargets(1, render_target_view.get_addressof(), nullptr);
+         native_device_context->PSSetShaderResources(0, 1, game_device_data.bloom_texture_srv.get_addressof());
+         native_device_context->Draw(4, 0);
+
+         return DrawOrDispatchOverrideType::Replaced;
+      }
+
       if (game_device_data.frame_progress.Reached(FrameProgress::OpaqueRenderingStarted) &&
           !game_device_data.frame_progress.Reached(FrameProgress::BackgroundTonemapped))
       {
@@ -1353,6 +1449,7 @@ public:
             game_device_data.partial_command_lists.push_back(command_list);
 
             game_device_data.frame_progress.SetReached(FrameProgress::BackgroundTonemapped);
+            device_data.has_drawn_main_post_processing = true;
             return DrawOrDispatchOverrideType::Replaced;
          }
          if (!SrActive(device_data) ||
@@ -1685,6 +1782,46 @@ public:
 
          game_device_data.frame_progress.SetReached(FrameProgress::LutApplied);
       }
+      else if (original_shader_hashes.Contains(shader_hashes_dof_prepare) &&
+               SrActive(device_data) &&
+               !game_device_data.upscaling)
+      {
+         if (!game_device_data.has_temporal_depth_pass_drawn)
+         {
+            ComPtr<ID3D11ShaderResourceView> depth_srv;
+            native_device_context->PSGetShaderResources(1, 1, depth_srv.put());
+            ComPtr<ID3D11Resource> depth_resource;
+            depth_srv->GetResource(depth_resource.put());
+            ComPtr<ID3D11Texture2D> depth_texture;
+            depth_resource->QueryInterface(depth_texture.put());
+
+            D3D11_TEXTURE2D_DESC depth_desc;
+            depth_texture->GetDesc(&depth_desc);
+
+            TemporalAADepth::DrawData draw_data;
+            draw_data.width = depth_desc.Width;
+            draw_data.height = depth_desc.Height;
+            draw_data.input_depth_srv = depth_srv.get();
+            draw_data.input_mv_srv = game_device_data.motion_vectors_srv.get();
+            draw_data.use_variance_clip = true;
+            draw_data.variance_scale = 1.0f;
+            draw_data.velocity_scale.x = -1.0f;
+            draw_data.velocity_scale.y = -1.0f;
+            draw_data.has_history = !device_data.force_reset_sr;
+
+            ComPtr<ID3D11Device> native_device;
+            native_device_context->GetDevice(native_device.put());
+
+            game_device_data.temporal_depth_pass.Draw(native_device.get(), native_device_context, device_data, draw_data);
+
+            game_device_data.has_temporal_depth_pass_drawn = true;
+
+            ID3D11UnorderedAccessView* null_uav = nullptr;
+            native_device_context->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
+         }
+         ID3D11ShaderResourceView* temporal_depth_srv = game_device_data.temporal_depth_pass.resources[TemporalAADepth::Texture::DepthHistoryRead].srv.get();
+         native_device_context->PSSetShaderResources(1, 1, &temporal_depth_srv);
+      }
       else if (game_device_data.frame_progress.Reached(FrameProgress::AddedParticles) &&
                !game_device_data.frame_progress.Reached(FrameProgress::SceneUiDrawFinished) &&
                !game_device_data.upscaling &&
@@ -1802,27 +1939,32 @@ public:
                ID3D11ShaderResourceView* depth_source = depth_stencil_resource_view.get();
                if (SrActive(device_data))
                {
-                  TemporalAADepth::DrawData draw_data;
-                  draw_data.width = render_target_desc.Width;
-                  draw_data.height = render_target_desc.Height;
-                  draw_data.input_depth_srv = depth_stencil_resource_view.get();
-                  draw_data.input_mv_srv = game_device_data.motion_vectors_srv.get();
-                  draw_data.use_variance_clip = true;
-                  draw_data.variance_scale = 1.0f;
-                  draw_data.velocity_scale.x = -1.0f;
-                  draw_data.velocity_scale.y = -1.0f;
-                  draw_data.has_history = !device_data.force_reset_sr;
+                  if (!game_device_data.has_temporal_depth_pass_drawn)
+                  {
+                     TemporalAADepth::DrawData draw_data;
+                     draw_data.width = render_target_desc.Width;
+                     draw_data.height = render_target_desc.Height;
+                     draw_data.input_depth_srv = depth_stencil_resource_view.get();
+                     draw_data.input_mv_srv = game_device_data.motion_vectors_srv.get();
+                     draw_data.use_variance_clip = true;
+                     draw_data.variance_scale = 1.0f;
+                     draw_data.velocity_scale.x = -1.0f;
+                     draw_data.velocity_scale.y = -1.0f;
+                     draw_data.has_history = !device_data.force_reset_sr;
 
-                  ComPtr<ID3D11Device> native_device;
-                  native_device_context->GetDevice(native_device.put());
+                     ComPtr<ID3D11Device> native_device;
+                     native_device_context->GetDevice(native_device.put());
 
-                  game_device_data.temporal_depth_pass.Draw(native_device.get(), native_device_context, device_data, draw_data);
+                     game_device_data.temporal_depth_pass.Draw(native_device.get(), native_device_context, device_data, draw_data);
+
+                     game_device_data.has_temporal_depth_pass_drawn = true;
+
+                     ID3D11UnorderedAccessView* null_uav = nullptr;
+                     native_device_context->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
+                  }
 
                   depth_source = game_device_data.temporal_depth_pass.resources[TemporalAADepth::Texture::DepthHistoryRead].srv.get();
                }
-
-               ID3D11UnorderedAccessView* null_uav = nullptr;
-               native_device_context->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
 
                DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
                draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
@@ -1876,21 +2018,38 @@ public:
          {
             return DrawOrDispatchOverrideType::None;
          }
-         if (game_device_data.vsconst_transform_data_changed)
-         {
-            ComPtr<ID3D11Buffer> vertex_buffer;
-            uint32_t stride;
-            native_device_context->IAGetVertexBuffers(0, 1, vertex_buffer.put(), &stride, nullptr);
-            UpdatePreviousTransformAndCache((stages & reshade::api::shader_stage::pixel) != 0, false, false, vertex_buffer.get(), native_device_context, game_device_data, original_shader_hashes);
-         }
-         ID3D11PixelShader* shader = GetMotionVectorPixelShader(original_shader_hashes.vertex_shaders.front(), original_shader_hashes.pixel_shaders.front(), native_device, game_device_data);
-         if (!shader)
-         {
-            return DrawOrDispatchOverrideType::None;
-         }
-         native_device_context->PSSetShader(shader, nullptr, 0);
 
-         BindMotionVectorRenderTarget(native_device_context, game_device_data);
+         ComPtr<ID3D11DepthStencilState> depth_stencil_state;
+         native_device_context->OMGetDepthStencilState(depth_stencil_state.put(), nullptr);
+
+         ComPtr<ID3D11BlendState> blend_state;
+         native_device_context->OMGetBlendState(blend_state.put(), nullptr, nullptr);
+         if (depth_stencil_state && blend_state)
+         {
+            D3D11_DEPTH_STENCIL_DESC dsd = {};
+            depth_stencil_state->GetDesc(&dsd);
+
+            D3D11_BLEND_DESC bd = {};
+            blend_state->GetDesc(&bd);
+            if (dsd.DepthEnable && bd.RenderTarget[0].BlendOp != D3D11_BLEND_OP_REV_SUBTRACT && !shader_hashes_material.Contains(original_shader_hashes))
+            {
+               if (game_device_data.vsconst_transform_data_changed)
+               {
+                  ComPtr<ID3D11Buffer> vertex_buffer;
+                  uint32_t stride;
+                  native_device_context->IAGetVertexBuffers(0, 1, vertex_buffer.put(), &stride, nullptr);
+                  UpdatePreviousTransformAndCache((stages & reshade::api::shader_stage::pixel) != 0, false, false, vertex_buffer.get(), native_device_context, game_device_data, original_shader_hashes);
+               }
+               ID3D11PixelShader* shader = GetMotionVectorPixelShader(original_shader_hashes.vertex_shaders.front(), original_shader_hashes.pixel_shaders.front(), native_device, game_device_data);
+               if (!shader)
+               {
+                  return DrawOrDispatchOverrideType::None;
+               }
+               native_device_context->PSSetShader(shader, nullptr, 0);
+
+               BindMotionVectorRenderTarget(native_device_context, game_device_data);
+            }
+         }
       }
       else if (game_device_data.vsconst_transform_data_changed)
       {
@@ -1920,6 +2079,8 @@ public:
 
       device_data.force_reset_sr = !game_device_data.has_drawn_upscaling;
       game_device_data.has_drawn_upscaling = false;
+      device_data.has_drawn_sr = false;
+      device_data.has_drawn_main_post_processing = false;
    }
 
    static bool OnClearRenderTargetView(reshade::api::command_list* cmd_list, reshade::api::resource_view rtv, const float color[4], uint32_t rect_count, const reshade::api::rect* rects)
@@ -2229,7 +2390,8 @@ public:
                draw_data.reset = device_data.force_reset_sr;
 
                bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context.get(), draw_data);
-               game_device_data.has_drawn_upscaling = true;
+               game_device_data.has_drawn_upscaling = dlss_succeeded;
+               device_data.has_drawn_sr = dlss_succeeded;
             }
             {
                ComPtr<ID3D11Device> device;
@@ -2307,6 +2469,8 @@ public:
             game_device_data.original_scene_dsv.reset();
 
             game_device_data.frame_progress.Reset();
+
+            game_device_data.has_temporal_depth_pass_drawn = false;
 
             game_device_data.draw_device_context = nullptr;
             game_device_data.draw_device_context_candidates.clear();
@@ -2426,7 +2590,7 @@ public:
          ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
          HRESULT hr = device_child->QueryInterface(native_device_context.put());
          HandleTransformUpdate((ID3D11Buffer*)dest.handle, data, native_device_context.get(), game_device_data, device_data);
-         return true;
+         return !game_device_data.frame_progress.Reached(FrameProgress::AddedParticles);
       }
 
       return false;
@@ -2603,15 +2767,37 @@ public:
          ImGui::SetTooltip("Requires restart.");
       }
 
-      if (ImGui::Checkbox("Use Super Resolution for upscaling", &use_sr_for_upscaling))
+      const char* upscaling_mode_names[] = {
+         "Auto",
+         "Yes",
+         "No"};
+      if (ImGui::BeginCombo("Use Super Resolution for upscaling", upscaling_mode_names[(uint32_t)upscaling_mode]))
       {
-         reshade::set_config_value(runtime, NAME, "UseSRForUpscaling", use_sr_for_upscaling);
+         auto AddComboItem = [&](const char* name, uint32_t size, bool enabled)
+         {
+            const bool selected = upscaling_mode == (UpscalingMode)size;
+            if (ImGui::Selectable(name, selected))
+            {
+               upscaling_mode = (UpscalingMode)size;
+               reshade::set_config_value(runtime, NAME, "UpscalingMode", size);
+            }
+            if (selected)
+            {
+               ImGui::SetItemDefaultFocus();
+            }
+         };
+
+         AddComboItem(upscaling_mode_names[(uint32_t)UpscalingMode::Auto], (uint32_t)UpscalingMode::Auto, true);
+         AddComboItem(upscaling_mode_names[(uint32_t)UpscalingMode::SuperResolution], (uint32_t)UpscalingMode::SuperResolution, true);
+         AddComboItem(upscaling_mode_names[(uint32_t)UpscalingMode::Game], (uint32_t)UpscalingMode::Game, true);
+         ImGui::EndCombo();
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("When enabled setting Rendering Scale to 50%% or 75%% will use Super Resolution (DLSS or FSR) to scale the image to the output resolution.\n"
                            "Otherwise DLAA or FSR AA and game internal upscaler is used.\n"
-                           "Especially with FSR this might not look better and will degrade visual quality of the floating icons and the blur when sprinting.");
+                           "Especially with FSR this might not look better and will degrade visual quality of the floating icons and the blur when sprinting.\n"
+                           "Auto mode chooses the best setting for the current Super Resolution technique.\n");
       }
 
       const char* previewString;
@@ -2757,6 +2943,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_smaa_edge_detection.pixel_shaders.emplace(std::stoul("8C9E5C72", nullptr, 16));
       shader_hashes_smaa_weight_calculation.pixel_shaders.emplace(std::stoul("CA15EAC0", nullptr, 16));
       shader_hashes_smaa_blending.pixel_shaders.emplace(std::stoul("5732C405", nullptr, 16));
+
+      shader_hashes_dof_prepare.pixel_shaders.emplace(std::stoul("19B152A6", nullptr, 16));
 
       shader_hashes_lut.pixel_shaders.emplace(std::stoul("D8196629", nullptr, 16));
 
