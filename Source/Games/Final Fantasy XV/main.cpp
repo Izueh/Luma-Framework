@@ -34,7 +34,6 @@ static constexpr uint32_t kCoreFastNoiseTextureHash = "FAST Noise"_h;
 namespace
 {
    ShaderHashesList shader_hashes_tonemap;
-   ShaderHashesList shader_hashes_autoexposure;
    ShaderHashesList shader_hashes_TAA;
    ShaderHashesList shader_hashes_OutputScaled;
    ShaderHashesList shader_hashes_bloom_highpass;
@@ -43,7 +42,6 @@ namespace
    ShaderHashesList shader_hashes_attach_fast_noise;
    ShaderHashesList shader_hashes_directional_light;
    const uint32_t CBTemporalAA_buffer_size = 256;
-   const uint32_t CBExposure_buffer_size = 24;
    const uint32_t CBView_buffer_size = 768;
 
    bool enable_directional_shadows = false;
@@ -172,6 +170,12 @@ public:
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
 
+      // Quality level of the per-pixel extended tonemap pivot computation (see "Includes/Tonemap.hlsli")
+      std::vector<ShaderDefineData> game_shader_defines_data = {
+         { "FFXV_TONEMAP_PRECISION", '0', true, false, "Precision of the HDR tone curve extension pivot computation (cost is only paid in HDR)\n0 - Simple (fixed pivot, cheapest)\n1 - High (curve inflection)\n2 - Very High (max curvature, most accurate)", 2 },
+      };
+      shader_defines_data.append_range(game_shader_defines_data);
+
       use_os_reference_white_level = false;
 
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs CS"), ShaderDefinition{"Luma_FFXV_MotionVec_Decode", reshade::api::pipeline_subobject_type::compute_shader});
@@ -182,7 +186,7 @@ public:
 
 
       default_luma_global_game_settings.BloomStrength = 1.f;
-      default_luma_global_game_settings.Sharpness = 1.f;
+      default_luma_global_game_settings.Sharpness = 0.3f;
       default_luma_global_game_settings.UseSDROverHDR = 1;
       default_luma_global_game_settings.UseVanillaGamutRatio = 0;
 
@@ -232,6 +236,13 @@ public:
       bool use_sdr_over_hdr = true;
       reshade::get_config_value(runtime, NAME, "UseSDROverHDR", use_sdr_over_hdr);
       cb_luma_global_settings.GameSettings.UseSDROverHDR = use_sdr_over_hdr ? 1 : 0;
+      
+      enable_directional_shadows = false;
+      reshade::get_config_value(runtime, NAME, "DirectionalShadows", enable_directional_shadows);
+
+      bool dithering_patch_enabled = true;
+      reshade::get_config_value(runtime, NAME, "DitheringFix", dithering_patch_enabled);
+      this->dithering_patch_enabled.store(dithering_patch_enabled, std::memory_order_relaxed);
 
       bool use_vanilla_gamut_ratio = false;
       reshade::get_config_value(runtime, NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
@@ -255,6 +266,35 @@ public:
             reshade::set_config_value(runtime, NAME, "DirectionalShadows", enable_directional_shadows);
          }
 
+#if LUMA_HAS_RECIPE_PROVIDERS
+         bool dithering_patch_enabled = this->dithering_patch_enabled.load(std::memory_order_relaxed);
+         if (ImGui::Checkbox("Dithering Fix", &dithering_patch_enabled))
+         {
+            this->dithering_patch_enabled.store(dithering_patch_enabled, std::memory_order_relaxed);
+            reshade::set_config_value(runtime, NAME, "DitheringFix", dithering_patch_enabled);
+
+         }
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Fixes issues with low quality dithering. (Noisy transparency, etc...)");
+         if (DrawResetButton(dithering_patch_enabled, true, "DitheringFix", runtime))
+         {
+            this->dithering_patch_enabled.store(true, std::memory_order_relaxed);
+            reshade::set_config_value(runtime, NAME, "DitheringFix", dithering_patch_enabled);
+         }
+#endif
+
+#if ENABLE_BLOOM
+         if (ImGui::Checkbox("Enable Luma Bloom", &g_luma_bloom_enable))
+         {
+            reshade::set_config_value(runtime, NAME, "UseLumaBloom", g_luma_bloom_enable);
+         }
+         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Replaces game bloom, fixes blockyness issues.");
+
+         if (DrawResetButton(g_luma_bloom_enable, true, "UseLumaBloom", runtime))
+         {
+            reshade::set_config_value(runtime, NAME, "UseLumaBloom", g_luma_bloom_enable);
+         }
          if (ImGui::SliderFloat("Bloom Strength", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
             reshade::set_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
@@ -264,53 +304,25 @@ public:
             cb_luma_global_settings.GameSettings.BloomStrength = 1.f;
             reshade::set_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
          }
+#endif
 
-         if (ImGui::SliderFloat("Sharpness", &cb_luma_global_settings.GameSettings.Sharpness, 0.f, 2.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+         if (ImGui::SliderFloat("Sharpness", &cb_luma_global_settings.GameSettings.Sharpness, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
             reshade::set_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
          }
-         if (DrawResetButton(cb_luma_global_settings.GameSettings.Sharpness, 1.f, "Sharpness", runtime))
+         if (DrawResetButton(cb_luma_global_settings.GameSettings.Sharpness, 0.3f, "Sharpness", runtime))
          {
-            cb_luma_global_settings.GameSettings.Sharpness = 1.f;
+            cb_luma_global_settings.GameSettings.Sharpness = 0.3f;
             reshade::set_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
-         }
-
-         if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
-         {
-            bool use_sdr_over_hdr = cb_luma_global_settings.GameSettings.UseSDROverHDR == 1;
-            if (ImGui::Checkbox("Use SDR Tonemap Curve", &use_sdr_over_hdr))
-            {
-               cb_luma_global_settings.GameSettings.UseSDROverHDR = use_sdr_over_hdr ? 1 : 0;
-               reshade::set_config_value(runtime, NAME, "UseSDROverHDR", use_sdr_over_hdr);
-            }
-            if (DrawResetButton(use_sdr_over_hdr, true, "UseSDROverHDR", runtime))
-            {
-               cb_luma_global_settings.GameSettings.UseSDROverHDR = 1;
-               reshade::set_config_value(runtime, NAME, "UseSDROverHDR", use_sdr_over_hdr);
-            }
-
-            bool use_vanilla_gamut_ratio = cb_luma_global_settings.GameSettings.UseVanillaGamutRatio == 1;
-            if (ImGui::Checkbox("Use Vanilla Gamut Ratio", &use_vanilla_gamut_ratio))
-            {
-               cb_luma_global_settings.GameSettings.UseVanillaGamutRatio = use_vanilla_gamut_ratio ? 1 : 0;
-               reshade::set_config_value(runtime, NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
-            }
-            if (DrawResetButton(use_vanilla_gamut_ratio, false, "UseVanillaGamutRatio", runtime))
-            {
-               cb_luma_global_settings.GameSettings.UseVanillaGamutRatio = 0;
-               reshade::set_config_value(runtime, NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
-            }
          }
 
          ImGui::TreePop();
       }
 
 #if DEVELOPMENT
-      ImGui::NewLine();
 #if ENABLE_BLOOM
-      ImGui::Checkbox("Luma Bloom Enable", &g_luma_bloom_enable);
-      if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-         ImGui::SetTooltip("Replaces the game's bloom with Luma's separable Gaussian bloom, which is higher quality and resolution-independent.");
+
+      ImGui::NewLine();
 
       if (ImGui::SliderInt("Luma Bloom Mips", &g_bloom_nmips, 1, 10))
          g_bloom_sigmas.resize(g_bloom_nmips, 2.0f);
@@ -320,16 +332,6 @@ public:
          const std::string name = "Luma Bloom Sigma " + std::to_string(i);
          ImGui::SliderFloat(name.c_str(), &g_bloom_sigmas[i], 0.0f, 15.0f, "%.3f");
          ImGui::PopID();
-      }
-#endif
-
-      auto& game_device_data_settings = GetGameDeviceData(device_data);
-      ImGui::Checkbox("FFXV DLSS Pre-Exposure Use Reciprocal", &game_device_data_settings.dlss_use_inverse_pre_exposure);
-#if LUMA_HAS_RECIPE_PROVIDERS
-      bool dithering_patch_enabled = this->dithering_patch_enabled.load(std::memory_order_relaxed);
-      if (ImGui::Checkbox("Depth Dithering Patch Enabled (runtime toggle reference)", &dithering_patch_enabled))
-      {
-         this->dithering_patch_enabled.store(dithering_patch_enabled, std::memory_order_relaxed);
       }
 #endif
 #endif
@@ -403,11 +405,11 @@ public:
          {
             const auto& handle = binding_pair.first;
             const auto& binding = binding_pair.second;
-            if (handle == "fast_noise" && binding.resource_kind == dxp::ResourceKind::Texture)
+            if (handle == "fast_noise" && binding.binding_class == dxp::BindingClass::Texture)
             {
                entry.fast_noise_bind_point = binding.register_index;
             }
-            else if (handle == "frame_constants" && binding.resource_kind == dxp::ResourceKind::CBuffer)
+            else if (handle == "frame_constants" && binding.binding_class == dxp::BindingClass::CBuffer)
             {
                entry.frame_constants_bind_point = binding.register_index;
             }
@@ -417,8 +419,10 @@ public:
          game_device_data.pending_dxp_bindings.insert_or_assign(request.shader_hash, std::move(entry));
       }
 
+#if DEVELOPMENT || TEST
       reshade::log::message(reshade::log::level::debug,
          std::format("[Patch] patched shader {:08X} ({} bytes, {} new bindings)", request.shader_hash, result->output_bytes.size(), result->new_bindings.size()).c_str());
+#endif
       return std::move(*result);
    }
 #endif
@@ -437,17 +441,6 @@ public:
       }
 #endif
 
-      // Extract exposure texture from autoexposure pass
-      if (original_shader_hashes.Contains(shader_hashes_autoexposure))
-      {
-         Log_Debug(
-            reshade::log::level::info,
-            "FFXV Autoexposure pass detected - extracting exposure texture");
-         game_device_data.has_drawn_autoexposure = true;
-         game_device_data.use_exposure_texture = ExtractExposureTexture(native_device, native_device_context, game_device_data);
-         game_device_data.use_exposure_texture = false;
-         return DrawOrDispatchOverrideType::None;
-      }
 
       if (original_shader_hashes.Contains(shader_hashes_directional_light) && enable_directional_shadows)
       {
@@ -552,6 +545,14 @@ public:
                ("TAA constant buffer not found or view buffer not processed yet - skipping TAA pass handling: " + reason).c_str());
             device_data.force_reset_sr = true;
             return DrawOrDispatchOverrideType::None;
+         }
+
+         // Extract jitter from cached TAA cbuffer (guaranteed to have correct values at this point)
+         if (game_device_data.taa_cb_data)
+         {
+            game_device_data.taa_jitters.x = game_device_data.taa_cb_data->g_uvJitterOffset.x * game_device_data.taa_cb_data->g_screenSize.x;
+            game_device_data.taa_jitters.y = game_device_data.taa_cb_data->g_uvJitterOffset.y * game_device_data.taa_cb_data->g_screenSize.y;
+            device_data.render_resolution = {game_device_data.taa_cb_data->g_screenSize.x, game_device_data.taa_cb_data->g_screenSize.y};
          }
 
          // Check if the motion vector decode shader is available
@@ -759,7 +760,7 @@ public:
          settings_data.render_height = static_cast<uint>(device_data.render_resolution.y);
          settings_data.dynamic_resolution = false;
          settings_data.hdr = true;
-         settings_data.auto_exposure = false;
+         settings_data.auto_exposure = true;
          settings_data.inverted_depth = false;
          settings_data.mvs_jittered = false;
          settings_data.render_preset = dlss_render_preset;
@@ -776,8 +777,6 @@ public:
          draw_data.output_color = device_data.sr_output_color.get();
          draw_data.motion_vectors = game_device_data.sr_motion_vectors.get();
          draw_data.depth_buffer = game_device_data.depth_buffer.get();
-         if (device_data.sr_type != SR::Type::DLSS && game_device_data.use_exposure_texture)
-            draw_data.exposure = game_device_data.exposure_texture.get();
 
          draw_data.jitter_x = jitters.x;
          draw_data.jitter_y = jitters.y;
@@ -1298,7 +1297,7 @@ public:
          std::shared_lock shared_lock_samplers(s_mutex_samplers);
 
          const auto prev_texture_mip_lod_bias_offset = device_data.texture_mip_lod_bias_offset;
-         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.taa_detected && device_data.cloned_pipeline_count != 0)
+         if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && device_data.taa_detected)
          {
             device_data.texture_mip_lod_bias_offset = SR::GetMipLODBias(device_data.render_resolution.y, device_data.output_resolution.y); // This results in -1 at output res
          }
@@ -1588,54 +1587,13 @@ public:
       DeviceData& device_data = *device->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      if ((game_device_data.found_taa_cb && game_device_data.found_exposure_cb) || !game_device_data.has_drawn_autoexposure)
-         return;
-
-      if (access == reshade::api::map_access::read_only)
-      {
-         D3D11_BUFFER_DESC buffer_desc;
-         buffer->GetDesc(&buffer_desc);
-         if (buffer_desc.ByteWidth == CBExposure_buffer_size)
-         {
-            if (data != nullptr && *data != nullptr && offset < buffer_desc.ByteWidth)
-            {
-               const uint64_t max_read = buffer_desc.ByteWidth - offset;
-               const uint64_t requested_size = (size == 0 || size > max_read) ? max_read : size;
-
-               if (requested_size >= sizeof(cbExposure))
-               {
-                  if (!game_device_data.exposure_cb_data)
-                  {
-                     game_device_data.exposure_cb_data = std::make_unique<cbExposure>();
-                  }
-
-                  std::memcpy(game_device_data.exposure_cb_data.get(), *data, sizeof(cbExposure));
-                  game_device_data.found_exposure_cb = true;
-
-#if DEVELOPMENT || TEST
-                  char log_buf[256];
-                  snprintf(log_buf, sizeof(log_buf),
-                     "Found exposure CB: offset=%llu size=%llu exposure=%f scale=%f max=%f",
-                     static_cast<unsigned long long>(offset),
-                     static_cast<unsigned long long>(requested_size),
-                     game_device_data.exposure_cb_data->exposure,
-                     game_device_data.exposure_cb_data->exposureScale,
-                     game_device_data.exposure_cb_data->maxExposure);
-                  Log_Debug(reshade::log::level::info, log_buf);
-#endif
-               }
-            }
-         }
-      }
-
-      // No need to convert to native DX11 flags
-      if (access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write)
+      // Cache every 256-byte buffer on Map (data will be available on Unmap)
+      if ((access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write))
       {
          D3D11_BUFFER_DESC buffer_desc;
          buffer->GetDesc(&buffer_desc);
          if (buffer_desc.ByteWidth == CBTemporalAA_buffer_size)
          {
-            Log_Debug(reshade::log::level::info, "Found TAA CBTemporalAA candidate");
             game_device_data.cb_taa_buffer = buffer;
             game_device_data.cb_taa_buffer_map_data = *data;
          }
@@ -1649,20 +1607,20 @@ public:
       DeviceData& device_data = *device->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      if (!game_device_data.found_taa_cb)
+      // Update cached TAA cbuffer data on Unmap (data is now available)
+      if (game_device_data.cb_taa_buffer == buffer && game_device_data.cb_taa_buffer_map_data != nullptr)
       {
-         if (!game_device_data.found_taa_cb && game_device_data.cb_taa_buffer == buffer && game_device_data.cb_taa_buffer_map_data != nullptr)
+         if (!game_device_data.taa_cb_data)
          {
-            CheckAndExtractTAABuffer(device, resource);
-            cb_luma_global_settings.GameSettings.RenderResolution = float4(device_data.render_resolution.x, device_data.render_resolution.y, 1.f / device_data.render_resolution.x, 1.f / device_data.render_resolution.y);
-            device_data.cb_luma_global_settings_dirty = true;
-            UpdateLODBias(device);
+            game_device_data.taa_cb_data = std::make_unique<cbTemporalAA>();
          }
+         std::memcpy(game_device_data.taa_cb_data.get(), game_device_data.cb_taa_buffer_map_data, sizeof(cbTemporalAA));
+         game_device_data.found_taa_cb = true;
       }
-      if (game_device_data.cb_taa_buffer_map_data != nullptr)
-         game_device_data.cb_taa_buffer_map_data = nullptr;
-      if (game_device_data.cb_taa_buffer.get() != nullptr)
-         game_device_data.cb_taa_buffer = nullptr;
+
+      // Clear the cached pointer
+      game_device_data.cb_taa_buffer_map_data = nullptr;
+      game_device_data.cb_taa_buffer = nullptr;
    }
 
    static bool OnUpdateBufferRegion(reshade::api::device* device, const void* data, reshade::api::resource resource, uint64_t offset, uint64_t size)
@@ -1696,6 +1654,11 @@ public:
       if (!game_device_data.found_per_view_globals)
       {
          CheckAndExtractPerViewGlobalsBuffer(device, resource, data);
+         // Update LOD bias now that we know the render resolution from view cbuffer
+         if (game_device_data.has_processed_view_buffer)
+         {
+            UpdateLODBias(device);
+         }
       }
 
       return false;
@@ -1816,46 +1779,6 @@ public:
 
          ImGui::EndTable();
       }
-
-      if (ImGui::BeginTable("FFXV Exposure CB Table", 2, ImGuiTableFlags_Borders))
-      {
-         if (game_device_data.exposure_cb_data)
-         {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Exposure");
-            ImGui::TableNextColumn();
-            ImGui::Text("%.6f", game_device_data.exposure_cb_data->exposure);
-
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Exposure Scale");
-            ImGui::TableNextColumn();
-            ImGui::Text("%.6f", game_device_data.exposure_cb_data->exposureScale);
-
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Max Exposure");
-            ImGui::TableNextColumn();
-            ImGui::Text("%.6f", game_device_data.exposure_cb_data->maxExposure);
-
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("DLSS Mode");
-            ImGui::TableNextColumn();
-            ImGui::Text("%s", game_device_data.dlss_use_inverse_pre_exposure ? "Reciprocal (1/exposureScale)" : "Direct (exposureScale)");
-         }
-         else
-         {
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::Text("Exposure CB");
-            ImGui::TableNextColumn();
-            ImGui::Text("Not captured");
-         }
-
-         ImGui::EndTable();
-      }
    }
 #endif
 
@@ -1876,8 +1799,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_tonemap.pixel_shaders.emplace(std::stoul("75DFE4B0", nullptr, 16)); // Main game tonemapping
       shader_hashes_tonemap.pixel_shaders.emplace(std::stoul("18EF8C72", nullptr, 16)); // Title screen tonemapping
       shader_hashes_tonemap.pixel_shaders.emplace(std::stoul("DD4C5B74", nullptr, 16)); // Post-processing / swapchain
-      shader_hashes_autoexposure.compute_shaders.emplace(std::stoul("42D0E27F", nullptr, 16));
-      shader_hashes_autoexposure.compute_shaders.emplace(std::stoul("0E10B96C", nullptr, 16));
+
       shader_hashes_OutputScaled.pixel_shaders.emplace(std::stoul("1B6C8C68", nullptr, 16));
       shader_hashes_TAA.pixel_shaders.emplace(std::stoul("0DF0A97D", nullptr, 16));
 
@@ -1897,7 +1819,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_directional_light.pixel_shaders.emplace(std::stoul("2100CE9B", nullptr, 16)); // Directional Light
       shader_hashes_directional_light.pixel_shaders.emplace(std::stoul("A315F1E7", nullptr, 16)); // CSM
       shader_hashes_directional_light.pixel_shaders.emplace(std::stoul("4B8E0FF8", nullptr, 16)); // CSM_AO
-#if DEVELOPMENT
+#if 1
       swapchain_format_upgrade_type = TextureFormatUpgradesType::AllowedEnabled; // We don't need swapchain upgrade for this game
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;                      // 1 = scrgb
 #endif
@@ -1913,8 +1835,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(std::stoul("75DFE4B0", nullptr, 16), "Tonemap");
       forced_shader_names.emplace(std::stoul("18EF8C72", nullptr, 16), "Tonemap_TitleScreen");
       forced_shader_names.emplace(std::stoul("1040DAB1", nullptr, 16), "MotionVectorDecode");
-      forced_shader_names.emplace(std::stoul("42D0E27F", nullptr, 16), "AutoExposure");
-      forced_shader_names.emplace(std::stoul("0E10B96C", nullptr, 16), "AutoExposure (Nights)");
+
       forced_shader_names.emplace(std::stoul("1B6C8C68", nullptr, 16), "Output Scaled");
       forced_shader_names.emplace(std::stoul("850830F0", nullptr, 16), "Dirt");
       forced_shader_names.emplace(0xFF665135u, "Bloom Highpass");
@@ -1945,6 +1866,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          taa_upgrade.scale = true;
          auto_texture_format_upgrade_shader_hashes[std::stoul("0DF0A97D", nullptr, 16)] = taa_upgrade; // TAA
       }
+
+      enable_samplers_upgrade = true;
+
       game = new FinalFantasyXV();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)

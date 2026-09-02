@@ -86,9 +86,7 @@ void frag_main()
                              TenPowLogHighRangePlusContrastMinusOne, TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse, ZeroSlopeByTenPowDispositionPlusOne, Param_n37, Param_n46, Param_n49);
         }
         float3 untonemapped = float3(_214, _215, _216);
-        float3 vanillaTonemapped = FFXV(untonemapped, ZeroSlopeByTenPowDispositionPlusOne, TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse, Param_n37, TenPowLogHighRangePlusContrastMinusOne, Param_n46, Param_n49);
-        float inflection = Find_Inflection(0.0, 1.0, 16, 8, ZeroSlopeByTenPowDispositionPlusOne, TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse, Param_n37, TenPowLogHighRangePlusContrastMinusOne, Param_n46, 3);
-        float3 tonemapped = FFXV_Extended(untonemapped, vanillaTonemapped, ZeroSlopeByTenPowDispositionPlusOne, TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse, Param_n37, TenPowLogHighRangePlusContrastMinusOne, Param_n46, Param_n49, inflection);
+        float3 tonemapped = FFXV_TonemapExtended(untonemapped, ZeroSlopeByTenPowDispositionPlusOne, TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse, Param_n37, TenPowLogHighRangePlusContrastMinusOne, Param_n46, Param_n49);
         _277 = EnabledToneCurve ? tonemapped : untonemapped;
     }
     else 

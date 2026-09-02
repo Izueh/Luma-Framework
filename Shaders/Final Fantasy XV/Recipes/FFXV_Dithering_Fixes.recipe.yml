@@ -83,7 +83,7 @@ steps:
     textures:
       - handle: fast_noise
         dimension: texture2darray
-        register_index: 42
+        register_index: 59
     cbuffers:
       - handle: frame_constants
         register_index: 13
@@ -124,8 +124,7 @@ steps:
               handle: { name: noise_uv }
               components: { selection_mode: mask, value: xy }
             - type: input
-              indices:
-                - { representation: immediate32, immediate_lo: 0 }
+              immediates_u32: [0]
               components: { selection_mode: swizzle, value: xyxx }
         - opcode: mov
           operands:
@@ -155,6 +154,9 @@ steps:
             - type: immediate32
               immediates_u32: [127, 127, 0, 0]
         - opcode: ld
+          # extended_opcode:
+          #   dimension: texture2darray
+          #   return_type: [float, float, float, float]
           operands:
             - type: temp
               handle: { name: sampled_noise }
@@ -203,8 +205,7 @@ steps:
               handle: { name: noise_uv }
               components: { selection_mode: mask, value: xy }
             - type: input
-              indices:
-                - { representation: immediate32, immediate_lo: 0 }
+              immediates_u32: [0]
               components: { selection_mode: swizzle, value: xyxx }
         - opcode: mov
           operands:
@@ -234,6 +235,9 @@ steps:
             - type: immediate32
               immediates_u32: [127, 127, 0, 0]
         - opcode: ld
+          # extended_opcode:
+          #   dimension: texture2darray
+          #   return_type: [float, float, float, float]
           operands:
             - type: temp
               handle: { name: sampled_noise }
@@ -295,8 +299,7 @@ steps:
               handle: { name: noise_uv }
               components: { selection_mode: mask, value: xy }
             - type: input
-              indices:
-                - { representation: immediate32, immediate_lo: 0 }
+              immediates_u32: [0]
               components: { selection_mode: swizzle, value: xyxx }
         - opcode: mov
           operands:
@@ -326,6 +329,9 @@ steps:
             - type: immediate32
               immediates_u32: [127, 127, 0, 0]
         - opcode: ld
+          # extended_opcode:
+          #   dimension: texture2darray
+          #   return_type: [float, float, float, float]
           operands:
             - type: temp
               handle: { name: sampled_noise }

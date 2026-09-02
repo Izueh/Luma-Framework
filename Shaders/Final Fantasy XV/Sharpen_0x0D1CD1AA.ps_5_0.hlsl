@@ -44,7 +44,7 @@ void main(
   // r1.xyz = r1.xyz / r2.xyz;
   // r0.xyz = r1.xyz * g_gauss_weights[2].xyz + r0.xyz;
   r1.xyz = g_sharpen_srcSamplerTexture.SampleLevel(pointSampler_s, v1.xy, 0).xyz;
-  o0.xyz = RCAS(v0.xy, 0, 0x7FFFFFFF, g_sharpenAmount * g_sharpenAmountMultiplier * LumaSettings.GameSettings.Sharpness, g_sharpen_srcSamplerTexture, dummyFloat2Texture, 1.0, true, float4(r1.rgb, 1.0)).rgb;
+  o0.xyz = RCAS(v0.xy, 0, 0x7FFFFFFF, LumaSettings.GameSettings.Sharpness, g_sharpen_srcSamplerTexture, dummyFloat2Texture, 1.0, true, float4(r1.rgb, 1.0)).rgb;
 
   // r2.xyz = float3(1,1,1) + r1.xyz;
   // r1.xyz = r1.xyz / r2.xyz;

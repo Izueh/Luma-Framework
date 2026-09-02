@@ -571,7 +571,7 @@ float ContactShadowViewSpace(float3 vector_viewPosition, float3 vector_viewNorma
 
     #if defined(CONTACT_SHADOWS_INTERLEAVED_GRADIENT_NOISE)
     #if USE_FAST_NOISE
-    float sampleJitter = noiseTexture.Load(int4((uint2)vector_pixelPosition.xy % 128, LumaSettings.FrameIndex % 8, 0)).x;
+    float sampleJitter = noiseTexture.Load(int4((uint2)vector_pixelPosition.xy % 128, LumaSettings.FrameIndex % 32, 0)).x;
     sampleJitter = lerp(0.5f, sampleJitter, saturate(CONTACT_SHADOWS_NOISE_STRENGTH));
     #else
     float sampleJitter = InterleavedGradientNoise(vector_pixelPosition, LumaSettings.FrameIndex);
@@ -1007,8 +1007,8 @@ OutputStruct main(in InputStruct IN)
     float3 clampedDiffuse = min(diffuseLighting, 100.0f.xxx);
     float3 clampedCombined = min(specularLighting + diffuseLighting, 100.0f.xxx);
 
-    OUT.Target0 = float4(materialData.writeSpecularSeparately ? clampedDiffuse : clampedCombined, 0.0f) * 2;
-    OUT.Target1 = float4(materialData.writeSpecularSeparately ? clampedSpecular : 0.0f.xxx, 0.0f) * 2;
+    OUT.Target0 = float4(materialData.writeSpecularSeparately ? clampedDiffuse : clampedCombined, 0.0f);
+    OUT.Target1 = float4(materialData.writeSpecularSeparately ? clampedSpecular : 0.0f.xxx, 0.0f);
 
     //OUT.Target0 = float4(IN.param2.xyz, 0);
     //OUT.Target0 = float4(vector_worldNormalDirection, 0);

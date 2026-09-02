@@ -5,7 +5,14 @@
 // Internal helper for log safety
 float SafeLog(float x) { return log(max(x, 1e-6)); }
 
-// --- 1. Forward Tonemapping Function ---
+// ============================== FFXV tonemap curve ==============================
+// y(x) = n46 * ln( T * u^p + 1 ) - n49,   with u = inv * ln(a*x + b),  a = 39.8107185
+// (b = ZeroSlope, inv = TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse,
+//  p = Param_n37, T = TenPowLogHighRangePlusContrastMinusOne)
+// Extended HDR: above a pivot point the curve is replaced by its tangent line there,
+// to restore the dynamic range the game's (SDR-like) curve compresses away.
+
+// --- Forward tonemapping ---
 float FFXV(float x, float ZeroSlope, float InvLog, float Param_n37, float Contrast, float Param_n46, float Param_n49)
 {
     const float a = 39.8107185;
@@ -23,7 +30,7 @@ float3 FFXV(float3 color, float ZeroSlope, float InvLog, float Param_n37, float 
     );
 }
 
-// --- 1b. Inverse Tonemapping Function ---
+// --- Inverse tonemapping ---
 float FFXV_Inverse(float y, float ZeroSlope, float InvLog, float Param_n37, float Contrast, float Param_n46, float Param_n49)
 {
     float up = (exp((y + Param_n49) / Param_n46) - 1.0) / Contrast;
@@ -40,7 +47,7 @@ float3 FFXV_Inverse(float3 y, float ZeroSlope, float InvLog, float Param_n37, fl
     );
 }
 
-// --- 1c. Recover the game's SDR curve tuning from the HDR-mode uploads ---
+// --- Recover the game's SDR curve tuning from the HDR-mode uploads ---
 // The game computes the HDR tuning from the SDR tuning by a fixed rule (verified
 // bit-identical across multiple scene captures, SDR vs HDR display mode):
 //   (K_hdr + 1) = 3.988391 * (K_sdr + 1)
@@ -65,57 +72,65 @@ void RecoverSDRParams(
     Param_n49 = Param_n49_hdr / 0.606713;
 }
 
-// --- 2. First Derivative (Slope) ---
+// ============================== Derivatives ==============================
+// Analytic derivatives of the FFXV curve, optimized for GPU execution.
+// Let q = inv * a / (a*x + b) (the inner derivative, shared by all orders):
+//   y'  = n46 * T * p * u^(p-1) * q / (1 + T*u^p)
+//   y'' = k * ( ((p-1) - ln(a*x+b)) - T*p*u^p / (1 + T*u^p) ) / (1 + T*u^p),
+//     with k = n46 * T * p * u^(p-2) * q^2
+// Each needs only ONE pow() with a variable exponent (vs 3 in the naive form),
+// plus a single log() and division.
+// Note: these were numerically validated to match the naive formulation to ~1e-7
+// relative error (see "tonemap_test.cpp" alongside this file).
+
 float FFXV_d1(float x, float ZeroSlope, float InvLog, float Param_n37, float Contrast, float Param_n46)
 {
     const float a = 39.8107185;
     float axb = a * x + ZeroSlope;
+    float q = InvLog * a / axb;
     float u = InvLog * log(axb);
-    float up = pow(u, Param_n37);
-    // (u^p)' = p * u^(p-1) * (InvLog * a / (ax + b))
-    float up_p = Param_n37 * pow(u, Param_n37 - 1.0) * (InvLog * a / axb);
+    float upm1 = pow(u, Param_n37 - 1.0); // u^(p-1)
+    float up = u * upm1; // u^p
     float denom = 1.0 + Contrast * up;
-    return Param_n46 * (Contrast * up_p) / denom;
+    return Param_n46 * Contrast * Param_n37 * upm1 * q / denom;
 }
 
-// --- 3. Second Derivative (Curvature) ---
 float FFXV_d2(float x, float ZeroSlope, float InvLog, float Param_n37, float Contrast, float Param_n46)
 {
     const float a = 39.8107185;
     float axb = max(a * x + ZeroSlope, 1e-6);
     float g = log(axb);
     float gSafe = max(g, 1e-6); // prevent u < 0 at low x where log(axb) < 0
+    float q = InvLog * a / axb;
     float u = InvLog * gSafe;
-    float up = pow(u, Param_n37);
-    float up_p = Param_n37 * pow(u, Param_n37 - 1.0) * (InvLog * a / axb);
-    // up_pp = p * inv^2 * a^2 / (ax+b)^2 * u^(p-2) * ((p-1) - gSafe)
-    float up_pp = Param_n37 * InvLog * InvLog * (a * a) / (axb * axb) *
-                  pow(u, Param_n37 - 2.0) * ((Param_n37 - 1.0) - gSafe);
+    float upm2 = pow(u, Param_n37 - 2.0); // u^(p-2)
+    float up = u * u * upm2; // u^p
     float denom = 1.0 + Contrast * up;
-    return Param_n46 * ((Contrast * up_pp) / denom - (Contrast * Contrast * up_p * up_p) / (denom * denom));
+    float k = Param_n46 * Contrast * Param_n37 * upm2 * (q * q);
+    return k * ((Param_n37 - 1.0) - gSafe - Contrast * Param_n37 * up / denom) / denom;
 }
 
-// --- 4. Third Derivative (Numerical Approximation for Root Finding) ---
+// --- Third derivative (numerical, central differences of y'') ---
+// Only used by the highest precision root finding level.
 float FFXV_d3(float x, float ZeroSlope, float InvLog, float Param_n37, float Contrast, float Param_n46)
 {
     float eps = max(x * 1e-4, 1e-7);
-    return (FFXV_d2(x + eps, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46) - 
+    return (FFXV_d2(x + eps, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46) -
             FFXV_d2(x - eps, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46)) / (2.0 * eps);
 }
 
-// --- 5. Newton-Bisection Root Finder ---
-// rootOrder: 2 = y''=0 (true inflection), 3 = y'''=0 (max curvature, better linear pivot)
-// For rootOrder 3 the y''=0 inflection is computed first, then the y'''=0 root is
-// searched on [inflection, xmax] with a fallback to the inflection if none is found
-// (same semantics as renodx FindInflection_FFXV precision 2).
+// ============================== Root finding ==============================
+// Finds the y''=0 inflection ("precision" 1) or y'''=0 max-curvature ("precision" 2)
+// point of the FFXV curve in [xmin, xmax].
 // Phase 1: log-space scan seeds a guaranteed sign-change bracket.
-// Phase 2: Newton step with bisection fallback refines inside the bracket.
+// Phase 2: pure log-space (geometric midpoint) bisection - one eval per iteration,
+// no Newton (its derivative-of-derivative evaluations cost far more than the extra
+// bisection iterations needed for the same accuracy, and were the main GPU cost).
 // Returns -1 if no sign change is found in [xmin, xmax].
 float Find_Inflection(float xmin, float xmax, int scanSteps, int bisectIters,
                     float ZeroSlope, float InvLog, float Param_n37, float Contrast, float Param_n46,
                     int rootOrder)
 {
-    // Phase 1: find y''=0 sign-change bracket via uniform log-space scan
     float logMin = log(xmin + 1e-6);
     float logMax = log(xmax);
 
@@ -142,29 +157,19 @@ float Find_Inflection(float xmin, float xmax, int scanSteps, int bisectIters,
 
     if (!found) return -1.0;
 
-    // Phase 2: Newton + bisection hybrid — bracket [xl,xr] always straddles the y''=0 root
-    float x = sqrt(xl * xr); // geometric midpoint start
-
+    // Pure bisection on the bracketed y''=0 root (geometric midpoint in log space)
     [loop]
     for (int it = 0; it < bisectIters; it++) {
-        float f = FFXV_d2(x, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
-        float fprime = FFXV_d3(x, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
-
-        // Narrow the bracket before attempting Newton, maintaining sign-change invariant
+        float xm = sqrt(xl * xr);
+        float f = FFXV_d2(xm, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
         if ((fl <= 0 && f >= 0) || (fl >= 0 && f <= 0)) {
-            xr = x; fr = f;
+            xr = xm; fr = f;
         } else {
-            xl = x; fl = f;
+            xl = xm; fl = f;
         }
-
-        // Newton step if it lands inside the current bracket; else geometric midpoint
-        float x_newton = x - f / (fprime + 1e-9);
-        x = (x_newton > xl && x_newton < xr) ? x_newton : sqrt(xl * xr);
-
-        if (abs(xr - xl) < 1e-5 * xl) break;
     }
 
-    float inflection = x;
+    float inflection = sqrt(xl * xr);
     if (rootOrder != 3) return inflection;
 
     // Phase 3: search for the y'''=0 (max curvature) root on [inflection, xmax]
@@ -192,32 +197,22 @@ float Find_Inflection(float xmin, float xmax, int scanSteps, int bisectIters,
 
     if (!found) return inflection;
 
-    // Phase 4: Newton + bisection hybrid on y''' (4th derivative via central differences)
-    x = sqrt(xl * xr);
+    // Phase 4: pure bisection on the bracketed y'''=0 root
     [loop]
     for (int it = 0; it < bisectIters; it++) {
-        float f = FFXV_d3(x, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
-        // y'''' via central differences of y'''
-        float eps = max(x * 1e-4, 1e-8);
-        float fprime = (FFXV_d3(x + eps, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46)
-                       - FFXV_d3(x - eps, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46)) / (2.0 * eps);
-
+        float xm = sqrt(xl * xr);
+        float f = FFXV_d3(xm, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46);
         if ((fl <= 0 && f >= 0) || (fl >= 0 && f <= 0)) {
-            xr = x; fr = f;
+            xr = xm; fr = f;
         } else {
-            xl = x; fl = f;
+            xl = xm; fl = f;
         }
-
-        float x_newton = x - f / (fprime + 1e-9);
-        x = (x_newton > xl && x_newton < xr) ? x_newton : sqrt(xl * xr);
-
-        if (abs(xr - xl) < 1e-5 * xl) break;
     }
 
-    return x;
+    return sqrt(xl * xr);
 }
 
-// --- 6. The Final Extended Tonemapper ---
+// --- The Final Extended Tonemapper ---
 float FFXV_Extended(float x, float base, float ZeroSlope, float InvLog, float Param_n37, float Contrast, float Param_n46, float Param_n49, float inflection)
 {
     float pivot_x = inflection;
@@ -239,11 +234,39 @@ float3 FFXV_Extended(float3 color, float3 base, float ZeroSlope, float InvLog, f
     );
 }
 
+// ============================== HDR tonemap + grading ==============================
+// "FFXV_TONEMAP_PRECISION":
+// 0 - Simple: fixed 0.18 pivot (cheap, renodx default. Dynamic range extension is mild)
+// 1 - High: y''=0 inflection pivot (root finding, second derivative)
+// 2 - Very High: y'''=0 max-curvature pivot (root finding, also on the third derivative)
+// Can be overridden at runtime through the "FFXV_TONEMAP_PRECISION" shader define
+// (a compile time setting, changing it triggers a shader recompilation).
+#ifndef FFXV_TONEMAP_PRECISION
+#define FFXV_TONEMAP_PRECISION 2
+#endif
+
+// Runs the whole HDR tonemap extension on the game's curve.
+// The pivot (and thus the root finding) only depends on the frame-constant curve
+// parameters, so it's computed once (scalar), never per channel/pixel colour.
+// Note: scanSteps/bisectIters were tuned against "tonemap_test.cpp": 24 bisection
+// iterations land within ~1e-5 of the reference (Newton) root, i.e. below fp32 noise.
+float3 FFXV_TonemapExtended(float3 untonemapped,
+                          float ZeroSlope, float InvLog, float Param_n37,
+                          float Contrast, float Param_n46, float Param_n49)
+{
+#if FFXV_TONEMAP_PRECISION == 0
+    const float inflection = 0.18;
+#else
+    float inflection = Find_Inflection(0.0, 1.0, 16, 24, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46, FFXV_TONEMAP_PRECISION == 2 ? 3 : 2);
+#endif
+    return FFXV_Extended(untonemapped, FFXV(untonemapped, ZeroSlope, InvLog, Param_n37, Contrast, Param_n46, Param_n49), ZeroSlope, InvLog, Param_n37, Contrast, Param_n46, Param_n49, inflection);
+}
+
 float3 ApplyTonemapAndGrading(float3 color)
 {
     // color = BT2020_To_BT709(color);
     float3 tonemapped_color = renodx::tonemap::neutwo::PerChannel(color, PEAK_NITS/GAME_NITS);
- #if UI_DRAW_TYPE == 2
+#if UI_DRAW_TYPE == 2
    ColorGradingLUTTransferFunctionInOutCorrected(tonemapped_color, VANILLA_ENCODING_TYPE, GAMMA_CORRECTION_TYPE, true);
    tonemapped_color *= GAME_NITS / UI_NITS;
    ColorGradingLUTTransferFunctionInOutCorrected(tonemapped_color, GAMMA_CORRECTION_TYPE, VANILLA_ENCODING_TYPE, true);

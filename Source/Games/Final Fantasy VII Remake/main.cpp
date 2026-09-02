@@ -1031,8 +1031,10 @@ public:
          game_device_data.pending_patched_shaders.insert_or_assign(request.shader_hash, std::move(entry));
       }
 
+#if DEVELOPMENT || TEST
       reshade::log::message(reshade::log::level::debug,
          std::format("[Patch] patched shader {:08X} ({} bytes)", request.shader_hash, result->output_bytes.size()).c_str());
+#endif
 
       return std::move(*result);
    }
