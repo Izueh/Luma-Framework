@@ -2,6 +2,10 @@
 #include "../../Includes/Reinhard.hlsl"
 #include "ictcp_portable.hlsl"
 
+#ifndef ENABLE_HDR_BOOST
+#define ENABLE_HDR_BOOST 1
+#endif
+
 static const float3x3 sRGB_2_AP0 = float3x3(
 	0.4397010, 0.3829780, 0.1773350,
 	0.0897923, 0.8134230, 0.0967616,
@@ -87,13 +91,41 @@ float3 UpgradeTonemap(float3 untonemapped, float3 vanillaSDR)
 		// untonemapped = renodx::color::bt709::from::AP1(untonemapped);
 		vanillaSDR = mul(ACES::AP1_TO_BT709_MAT, vanillaSDR);
 
-		outputColor = UpgradeToneMapByLuminance(untonemapped, ToneMapMaxCLL(untonemapped), ToneMapMaxCLL(vanillaSDR), 1.f);
+		outputColor = UpgradeToneMapByLuminance(untonemapped, ToneMapMaxCLL(untonemapped), vanillaSDR, 1.f);
 
 		// Mimic them and return AP1?
 		outputColor = mul(ACES::BT709_TO_AP1_MAT, outputColor);
 	}
 
 	return outputColor;
+}
+
+float3 ApplyFakeHDR(float3 color, uint mask)
+{
+#if ENABLE_HDR_BOOST
+	if(LumaSettings.DisplayMode == 1)
+	{
+		if(mask & 128) //sky
+		{
+			float normalizationPoint = 0.2; // Found empirically
+			float fakeHDRIntensity = 0.3;
+			color.xyz = FakeHDR(color.xyz, normalizationPoint, fakeHDRIntensity);
+		}
+		else if((mask & 8) == 0) //background
+		{
+			float normalizationPoint = 0.12; // Found empirically
+			float fakeHDRIntensity = 0.08;
+			color.xyz = FakeHDR(color.xyz, normalizationPoint, fakeHDRIntensity);
+		}
+		else //character and objects
+		{
+			float normalizationPoint = 0.1; // Found empirically
+			float fakeHDRIntensity = 0.08;
+			color.xyz = FakeHDR(color.xyz, normalizationPoint, fakeHDRIntensity);
+		}
+	}
+#endif
+	return color;
 }
 
 float3 ApplyUserTonemap(float3 untonemapped)

@@ -62,9 +62,8 @@ void main(
 	r2.zw = float2(0,0);
 	r2.xy = gbuffer1Texture.Load(r2.xyz).zw;
 	r1.w = 255 * r2.y;
-	r1.w = (uint)r1.w;
-	r1.w = (int)r1.w & 8;
-	if (r1.w == 0)
+	uint mask = (uint)r1.w;
+	if ((mask & 8) == 0)
 	{
 		r1.w = 255 * r2.x;
 		r1.w = (uint)r1.w;
@@ -228,7 +227,7 @@ void main(
 		vanilla = r1.rgb;	// in AP1
 		vanilla = UpgradeTonemap(untonemapped, vanilla);
 	}
-	float3 outputColor = vanilla;
+	float3 outputColor = ApplyFakeHDR(vanilla, mask);
 
 	// Add bloom
 	// We add it to outputColor cause devs add linear bloom to tonemapped image

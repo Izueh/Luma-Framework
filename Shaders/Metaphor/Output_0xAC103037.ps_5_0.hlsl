@@ -13,16 +13,21 @@ void main(
 	float2 v1 : TEXCOORD0,
 	out float4 o0 : SV_Target0)
 {
-	float4 r0,r1,r2;
-	uint4 bitmask, uiDest;
-	float4 fDest;
-
-	r0.xyzw = sample_bicubic(bloomTexture, linearSampler_s, v1.xy);
-	r1.xyzw = effectTexture.Sample(nearestSampler_s, v1.xy).xyzw;
-	r2.xyzw = colorTexture.Sample(nearestSampler_s, v1.xy).xyzw;
-	r1.xyz = r2.xyz * r1.www + r1.xyz;
-	o0.w = r2.w;
-	o0.xyz = r0.xyz * r0.www + r1.xyz;
+	float4 bloom = sample_bicubic(bloomTexture, linearSampler_s, v1.xy);
+	float4 effect = effectTexture.Sample(nearestSampler_s, v1.xy).xyzw;
+	float4 color = colorTexture.Sample(nearestSampler_s, v1.xy).xyzw;
+	#if ENABLE_HDR_BOOST
+	if(LumaSettings.DisplayMode == 1)
+	{
+		//effects have pre-multiplied alpha
+		float scale = max(1.0f - effect.w, 0.00001f);
+		float normalizationPoint = 0.1; // Found empirically
+		float fakeHDRIntensity = 0.15;
+		effect.xyz = FakeHDR(effect.xyz / scale, normalizationPoint, fakeHDRIntensity) * scale;
+	}
+	#endif
+	o0.xyz = bloom.xyz * bloom.w + color.xyz * effect.w + effect.xyz;
+	o0.w = color.w;
 
 	o0.rgb = ApplyUserTonemap(o0.rgb);
 	return;

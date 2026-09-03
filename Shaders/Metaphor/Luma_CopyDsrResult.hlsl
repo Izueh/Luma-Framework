@@ -17,7 +17,7 @@ void main(uint2 tid : SV_DispatchThreadID, uint3 gid : SV_GroupId, uint gix : SV
 	float alpha = 0.0f;
 	[branch]
 	if(LumaSettings.GameSettings.RenderScale < 1.0f)
-	{	
+	{
 		//the alpha channel is used to mask out elements from bloom, when upscaling we won't get perfect coverage anyway so filter a bit more
 		//conservatively to prevent light leaking
 		for(int x = -1; x <= 1; ++x)

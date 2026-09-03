@@ -362,8 +362,6 @@ struct GameDeviceDataMetaphor final : public GameDeviceData
    ComPtr<ID3D11Texture2D> sr_particle_texture;
    float2 sr_projection_jitters = {0, 0};
 
-   uint2 render_resolution = {};
-   uint2 target_resolution = {};
    bool upscaling = false;
 
    // cache transform, swapped each frame
@@ -447,6 +445,13 @@ class Metaphor final : public Game
 public:
    void OnInit(bool async) override
    {
+      std::vector<ShaderDefineData> game_shader_defines_data = {
+         {"ENABLE_HDR_BOOST", '1', true, false, "Enable a \"Fake\" HDR boosting effect.", 1},
+      };
+      shader_defines_data.append_range(game_shader_defines_data);
+
+      GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');
+
       native_shaders_definitions.emplace(CompileTimeStringHash("Copy Depth"), ShaderDefinition{"Luma_CopyDepth", reshade::api::pipeline_subobject_type::pixel_shader});
       native_shaders_definitions.emplace(CompileTimeStringHash("Gaussian Blur Horizontal"),
          ShaderDefinition{"Luma_GaussianBlur", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, {{"HORIZONTAL", "1"}}});
@@ -1007,7 +1012,8 @@ public:
       auto& game_device_data = GetGameDeviceData(device_data);
 
       if ((stages & reshade::api::shader_stage::compute) != 0 &&
-          original_shader_hashes.compute_shaders[0] == 0xF2DB8A9B) // upscaling
+          original_shader_hashes.compute_shaders[0] == 0xF2DB8A9B && // upscaling
+          game_device_data.draw_device_context == native_device_context)
       {
          ComPtr<ID3D11ShaderResourceView> srv;
          native_device_context->CSGetShaderResources(0, 1, srv.put());
@@ -2040,12 +2046,15 @@ public:
                   native_device_context->IAGetVertexBuffers(0, 1, vertex_buffer.put(), &stride, nullptr);
                   UpdatePreviousTransformAndCache((stages & reshade::api::shader_stage::pixel) != 0, false, false, vertex_buffer.get(), native_device_context, game_device_data, original_shader_hashes);
                }
-               ID3D11PixelShader* shader = GetMotionVectorPixelShader(original_shader_hashes.vertex_shaders.front(), original_shader_hashes.pixel_shaders.front(), native_device, game_device_data);
-               if (!shader)
+               if (original_shader_hashes.pixel_shaders.front() != 0xE7F75BFE) // don't replace shader for sprites like gallica's speechbubble
                {
-                  return DrawOrDispatchOverrideType::None;
+                  ID3D11PixelShader* shader = GetMotionVectorPixelShader(original_shader_hashes.vertex_shaders.front(), original_shader_hashes.pixel_shaders.front(), native_device, game_device_data);
+                  if (!shader)
+                  {
+                     return DrawOrDispatchOverrideType::None;
+                  }
+                  native_device_context->PSSetShader(shader, nullptr, 0);
                }
-               native_device_context->PSSetShader(shader, nullptr, 0);
 
                BindMotionVectorRenderTarget(native_device_context, game_device_data);
             }
@@ -2134,7 +2143,6 @@ public:
             native_device_context->GetDevice(device.put());
 
             {
-
                D3D11_TEXTURE2D_DESC src_desc = {};
                game_device_data.sr_source_color->GetDesc(&src_desc);
 
@@ -2147,10 +2155,11 @@ public:
                uint32_t output_width = target_desc.Width;
                uint32_t output_height = target_desc.Height;
 
-               if (game_device_data.target_resolution.x != output_width ||
-                   game_device_data.target_resolution.y != output_height ||
-                   game_device_data.render_resolution.x != width ||
-                   game_device_data.render_resolution.y != height)
+               if (device_data.output_resolution.x != output_width ||
+                   device_data.output_resolution.y != output_height ||
+                   device_data.render_resolution.x != width ||
+                   device_data.render_resolution.y != height ||
+                   !game_device_data.scaled_motion_vectors) //check if resources were previously created
                {
                   cb_luma_global_settings.GameSettings.RenderRes = {(float)width, (float)height};
                   cb_luma_global_settings.GameSettings.InvRenderRes = {1.0f / (float)width, 1.0f / (float)height};
@@ -2288,13 +2297,13 @@ public:
                         game_device_data.merged_texture_uav.put());
                   }
 
-                  game_device_data.render_resolution.x = width;
-                  game_device_data.render_resolution.y = height;
-                  game_device_data.target_resolution.x = output_width;
-                  game_device_data.target_resolution.y = output_height;
+                  device_data.render_resolution.x = width;
+                  device_data.render_resolution.y = height;
+                  device_data.output_resolution.x = output_width;
+                  device_data.output_resolution.y = output_height;
 
-                  game_device_data.upscaling = game_device_data.render_resolution.x != game_device_data.target_resolution.x &&
-                                               game_device_data.render_resolution.y != game_device_data.target_resolution.y;
+                  game_device_data.upscaling = device_data.render_resolution.x != device_data.output_resolution.x &&
+                                               device_data.render_resolution.y != device_data.output_resolution.y;
                }
             }
 
@@ -2307,10 +2316,10 @@ public:
             auto* sr_instance_data = device_data.GetSRInstanceData();
             {
                SR::SettingsData settings_data;
-               settings_data.output_width = game_device_data.target_resolution.x;
-               settings_data.output_height = game_device_data.target_resolution.y;
-               settings_data.render_width = game_device_data.render_resolution.x;
-               settings_data.render_height = game_device_data.render_resolution.y;
+               settings_data.output_width = device_data.output_resolution.x;
+               settings_data.output_height = device_data.output_resolution.y;
+               settings_data.render_width = device_data.render_resolution.x;
+               settings_data.render_height = device_data.render_resolution.y;
                settings_data.dynamic_resolution = false;
                settings_data.hdr = true;
                settings_data.inverted_depth = false;
@@ -2348,7 +2357,7 @@ public:
                native_device_context->CSSetConstantBuffers(0, 1, cbs);
                native_device_context->CSSetShaderResources(0, 2, srvs);
                native_device_context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-               native_device_context->Dispatch((game_device_data.render_resolution.x + 7) / 8, (game_device_data.render_resolution.y + 7) / 8, 1);
+               native_device_context->Dispatch((device_data.render_resolution.x + 7) / 8, (device_data.render_resolution.y + 7) / 8, 1);
             }
 
             if (game_device_data.sr_particle_texture)
@@ -2371,7 +2380,7 @@ public:
                native_device_context->CSSetShader(device_data.native_compute_shaders[CompileTimeStringHash("Create Bias Mask")].get(), 0, 0);
                native_device_context->CSSetShaderResources(0, 1, srvs);
                native_device_context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-               native_device_context->Dispatch((game_device_data.render_resolution.x + 7) / 8, (game_device_data.render_resolution.y + 7) / 8, 1);
+               native_device_context->Dispatch((device_data.render_resolution.x + 7) / 8, (device_data.render_resolution.y + 7) / 8, 1);
             }
 
             {
@@ -2380,8 +2389,8 @@ public:
                draw_data.output_color = game_device_data.resolve_texture.get();
                draw_data.motion_vectors = game_device_data.scaled_motion_vectors.get();
                draw_data.depth_buffer = game_device_data.sr_depth_texture.get();
-               draw_data.render_width = game_device_data.render_resolution.x;
-               draw_data.render_height = game_device_data.render_resolution.y;
+               draw_data.render_width = device_data.render_resolution.x;
+               draw_data.render_height = device_data.render_resolution.y;
                draw_data.bias_mask = game_device_data.sr_particle_texture ? game_device_data.bias_mask.get() : nullptr;
                draw_data.pre_exposure = 0.0f;
                draw_data.jitter_x = game_device_data.sr_projection_jitters.x;
@@ -2429,13 +2438,14 @@ public:
                   native_device_context->CSSetShaderResources(0, 2, srvs);
                   native_device_context->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
                   native_device_context->CSSetSamplers(0, 1, samplers);
-                  native_device_context->Dispatch((game_device_data.target_resolution.x + 7) / 8, (game_device_data.target_resolution.y + 7) / 8, 1);
+                  native_device_context->Dispatch((device_data.output_resolution.x + 7) / 8, (device_data.output_resolution.y + 7) / 8, 1);
                }
 
                native_device_context->CopySubresourceRegion(game_device_data.sr_dest_color.get(), 0, 0, 0, 0, game_device_data.merged_texture.get(), 0, nullptr);
             }
 
             game_device_data.sr_source_color.reset();
+            game_device_data.sr_dest_color.reset();
             game_device_data.sr_depth_texture.reset();
             game_device_data.sr_particle_texture.reset();
             // release all resources from the game we got this frame
@@ -2513,10 +2523,10 @@ public:
             {
                std::shared_lock shared_lock_samplers(s_mutex_samplers);
                if (SrActive(device_data) &&
-                   game_device_data.render_resolution.y > 0.0f &&
-                   game_device_data.target_resolution.y > 0.0f)
+                   device_data.render_resolution.y > 0.0f &&
+                   device_data.output_resolution.y > 0.0f)
                {
-                  device_data.texture_mip_lod_bias_offset = std::log2(game_device_data.render_resolution.y / game_device_data.target_resolution.y) - 1.f; // This results in -1 at output res
+                  device_data.texture_mip_lod_bias_offset = std::log2(device_data.render_resolution.y / device_data.output_resolution.y) - 1.f; // This results in -1 at output res
                }
                else
                {
@@ -2818,6 +2828,7 @@ public:
       {
          previewString = "8x";
       }
+      ImGui::BeginDisabled(UseSRForUpscaling(device_data) && device_data.render_resolution != device_data.output_resolution);
       if (ImGui::BeginCombo("3D UI MSAA Sample Count", previewString))
       {
          auto AddComboItem = [&](const char* name, uint32_t size, bool enabled)
@@ -2844,6 +2855,7 @@ public:
       {
          ImGui::SetTooltip("Applies MSAA to the floating icons. Only active when the image isn't upscaled with DLSS/FSR.");
       }
+      ImGui::EndDisabled();
    }
 
 #if DEVELOPMENT || TEST

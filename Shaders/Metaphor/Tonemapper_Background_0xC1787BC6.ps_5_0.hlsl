@@ -66,9 +66,8 @@ void main(
 	r3.zw = float2(0,0);
 	r3.xy = gbuffer1Texture.Load(r3.xyz).zw;
 	r1.w = 255 * r3.y;
-	r1.w = (uint)r1.w;
-	r1.w = (int)r1.w & 8;
-	if (r1.w == 0)
+	uint mask = (uint)r1.w;
+	if ((mask & 8) == 0)
 	{
 		// GBuffer calculations
 		r1.w = 255 * r3.x;
@@ -250,7 +249,7 @@ void main(
 		vanilla = UpgradeTonemap(untonemapped, vanilla);
 		// End of ACES SDR tonemapper
 	}
-	float3 outputColor = vanilla;
+	float3 outputColor = ApplyFakeHDR(vanilla, mask);
 
 	/* r1.xyz = starScale * r1.xyz + r2.xyz;
 	o0.xyz = r0.xyz * r0.www + r1.xyz; */

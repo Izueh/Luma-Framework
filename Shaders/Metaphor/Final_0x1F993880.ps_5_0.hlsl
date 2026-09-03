@@ -25,7 +25,7 @@ void main(
 	o0.w = r0.w;
 	if (LumaSettings.DisplayMode == 1)
 	{
-		o0.xyz = linear_to_gamma(gamma_to_linear(linear_to_sRGB_gamma(r0.xyz, GCT_MIRROR), GCT_MIRROR), GCT_MIRROR);
+		o0.xyz = r0.xyz;
 	}
 	else
 	{
