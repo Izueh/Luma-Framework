@@ -64,7 +64,7 @@ void main(
 	r1.x = (int)r1.x & 128;
 	if (r1.x == 0) {
 		// scale by resolution of console version for consistent intensity
-		r1.xy = edgesize * (resolution.y / 1656.0f) * resolutionRev.xy;
+		r1.xy = edgesize * pow(resolution.y / 1656.0f, 0.5) * resolutionRev.xy;
 		r2.x = -r1.x;
 		r2.z = 0;
 		r2.xy = v1.xy + r2.xz;
@@ -85,7 +85,7 @@ void main(
 		r1.x = saturate(0.333000004 * r1.x);
 		r1.x = edgepower * r1.x + 1;
 	} else {
-		r2.xy = edgesize_sky * resolutionRev.xy;
+		r2.xy = edgesize_sky * pow(resolution.y / 1656.0f, 0.5) * resolutionRev.xy;
 		r3.x = -r2.x;
 		r3.z = 0;
 		r1.yz = v1.xy + r3.xz;

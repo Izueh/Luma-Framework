@@ -6,6 +6,7 @@
 #include "..\..\Core\core.hpp"
 
 #include "ShaderPatches\ShaderPatches.h"
+#include "blue_noise.h"
 #include "stretchy_buffer.h"
 #include "temporal_aa_depth.h"
 #define XXH_STATIC_LINKING_ONLY
@@ -384,6 +385,9 @@ struct GameDeviceDataMetaphor final : public GameDeviceData
    // std::vector<ComPtr<ID3D11Texture2D>> bayer_matrix_textures;
    // std::vector<ComPtr<ID3D11ShaderResourceView>> bayer_matrix_texture_srvs;
 
+   ComPtr<ID3D11Texture2D> noise_texture;
+   ComPtr<ID3D11ShaderResourceView> noise_texture_srv;
+
    ComPtr<ID3D11Buffer> scratch_constant_buffer;
    ComPtr<ID3D11UnorderedAccessView> scratch_constant_buffer_uav;
    FrameProgress frame_progress;
@@ -695,6 +699,35 @@ public:
       //         game_device_data.bayer_matrix_texture_srvs[i].put());
       //   }
       //}
+
+      {
+         D3D11_TEXTURE2D_DESC desc = {};
+         desc.Width = 32;
+         desc.Height = 32;
+         desc.Usage = D3D11_USAGE_DEFAULT;
+         desc.ArraySize = 1;
+         desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+         desc.SampleDesc.Count = 1;
+         desc.SampleDesc.Quality = 0;
+         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+         desc.CPUAccessFlags = 0;
+         desc.MiscFlags = 0;
+         desc.MipLevels = 1;
+
+         D3D11_SUBRESOURCE_DATA subresource_data;
+         subresource_data.pSysMem = blue_noise_data;
+         subresource_data.SysMemPitch = 4 * blue_noise_width;
+         subresource_data.SysMemSlicePitch = blue_noise_height * subresource_data.SysMemPitch;
+
+         native_device->CreateTexture2D(&desc,
+            &subresource_data,
+            game_device_data.noise_texture.put());
+      }
+      {
+         native_device->CreateShaderResourceView(game_device_data.noise_texture.get(),
+            nullptr,
+            game_device_data.noise_texture_srv.put());
+      }
 
       ComPtr<ID3D11RasterizerState> scene_ui_rasterizer_state;
       ComPtr<ID3D11BlendState> scene_ui_blend_state;
@@ -1377,6 +1410,11 @@ public:
       }
 
       if (original_shader_hashes.pixel_shaders.size() > 0 &&
+          original_shader_hashes.pixel_shaders.front() == 0x1A75C9AE) // AO
+      {
+         native_device_context->PSSetShaderResources(2, 1, game_device_data.noise_texture_srv.get_addressof());
+      }
+      else if (original_shader_hashes.pixel_shaders.size() > 0 &&
           original_shader_hashes.pixel_shaders.front() == 0x2054ae6a) // 13-sample blur
       {
          ComPtr<ID3D11RenderTargetView> render_target_view;
@@ -2159,7 +2197,7 @@ public:
                    device_data.output_resolution.y != output_height ||
                    device_data.render_resolution.x != width ||
                    device_data.render_resolution.y != height ||
-                   !game_device_data.scaled_motion_vectors) //check if resources were previously created
+                   !game_device_data.scaled_motion_vectors) // check if resources were previously created
                {
                   cb_luma_global_settings.GameSettings.RenderRes = {(float)width, (float)height};
                   cb_luma_global_settings.GameSettings.InvRenderRes = {1.0f / (float)width, 1.0f / (float)height};
@@ -2533,6 +2571,8 @@ public:
                   device_data.texture_mip_lod_bias_offset = 0.f;
                }
             }
+            cb_luma_global_settings.SRType = SrActive(device_data) ? (uint(device_data.sr_type) + 1) : 0;
+            device_data.cb_luma_global_settings_dirty = true;
 
             if (game_device_data.partial_command_lists.size())
             {
