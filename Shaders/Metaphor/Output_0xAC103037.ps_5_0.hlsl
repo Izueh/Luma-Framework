@@ -19,11 +19,9 @@ void main(
 	#if ENABLE_HDR_BOOST
 	if(LumaSettings.DisplayMode == 1)
 	{
-		//effects have pre-multiplied alpha
-		float scale = max(1.0f - effect.w, 0.00001f);
-		float normalizationPoint = 0.1; // Found empirically
-		float fakeHDRIntensity = 0.15;
-		effect.xyz = FakeHDR(effect.xyz / scale, normalizationPoint, fakeHDRIntensity) * scale;
+		float normalizationPoint = 0.01; // Found empirically
+		float fakeHDRIntensity = 0.08;
+		effect.xyz = FakeHDR(effect.xyz, normalizationPoint, fakeHDRIntensity);
 	}
 	#endif
 	o0.xyz = bloom.xyz * bloom.w + color.xyz * effect.w + effect.xyz;
