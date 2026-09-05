@@ -1614,7 +1614,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          if (extra_upgraded_formats)
          {
             texture_upgrade_formats.emplace(reshade::api::format::r11g11b10_float); // Some games use this format for the whole post processing
-            texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px;
+            // Allow padding to 4 as UE always does it for screen space render targets
+            texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::PadTo4Px | (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px;
          }
 
 #if 0 // Not needed as we do it through "auto_texture_format_upgrade_shader_hashes"
