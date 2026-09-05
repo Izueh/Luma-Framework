@@ -16,6 +16,7 @@ void main(
   r0.xyz = r0.xyz / r0.w;
 
   r1.xyzw = translucencyTexture.Sample(translucencySampler, v2.xy).xyzw;
+  r1.xyzw = max(r1.xyzw, 0.0); // Luma: protect against negative values
   r0.xyz = r1.w * r0.xyz;
   r0.xyz = r0.xyz * float3(0.25,0.25,0.25) + r1.xyz;
   r0.w = max(r0.x, r0.y);

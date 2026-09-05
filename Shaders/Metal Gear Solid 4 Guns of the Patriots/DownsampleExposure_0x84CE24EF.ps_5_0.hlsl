@@ -11,10 +11,10 @@ void main(
   out float4 o0 : SV_TARGET0)
 {
 #if 1 // Luma: fix cropped sampling in UW (e.g. in 32:9 it'd only sample the half left portion of the image, probably not intentional)
-  float GameAspectRatio = LumaSettings.SwapchainSize.x * LumaSettings.SwapchainInvSize.y;
-  float NativeAspectRatio = 16.0 / 9.0;
+  float gameAspectRatio = LumaSettings.SwapchainSize.x * LumaSettings.SwapchainInvSize.y;
+  float nativeAspectRatio = 16.0 / 9.0;
 
-  v2.x *= max(GameAspectRatio / NativeAspectRatio, 1.0);
+  v2.x *= max(gameAspectRatio / nativeAspectRatio, 1.0);
 #endif
 #if 0 // Color output test
   o0 = t0.Sample(s0_s, v2.xy).xyzw;
@@ -39,7 +39,7 @@ void main(
       r2.xyzw = t0.Sample(s0_s, r2.xy).xyzw;
 
       // Decode HDR
-      r2.xyz = r2.xyz / r2.www;
+      r2.xyz = r2.xyz / r2.w;
       r2.xyz = float3(0.25,0.25,0.25) * r2.xyz;
 
 #if 1 // Luma: fix Rec.601 luminance // TODO: calculate in linear

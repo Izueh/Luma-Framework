@@ -48,7 +48,7 @@ void main(
   r0.x = max(0, r0.x);
   r0.xyz = v3.xyz * r0.xxx;
   r1.xyz = r1.xyz / r2.xyz;
-  r1.xyz = saturate(r1.xyz * v4.yyy + -v4.zzz); // TODO: unclamp and upgrade render target (it's 256x256, which also would need a wider size in UW)
+  r1.xyz = saturate(r1.xyz * v4.yyy - v4.zzz); // TODO: unclamp and upgrade render target (it's 256x256, which also would need a wider size in UW)
   r0.xyz = r1.xyz * v4.www + r0.xyz;
   o0.xyz = v5.xxx * r0.xyz;
   o0.w = 1;
