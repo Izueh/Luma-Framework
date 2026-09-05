@@ -18,12 +18,20 @@ void main(
   float3 decodedScene = r0.xyz * 0.25;
 
   float exposure = v2.x;
+  // Exposure can be nan if the scene is all black
+  if (IsNaN_Strict(exposure))
+  {
+    exposure = 1.0;
+  }
   float exposureSomething = v2.y;
   float3 exposedScene = exposure * decodedScene;
 
   o0.xyz = ((exposedScene * exposureSomething + 1.0) * exposedScene) / (exposedScene + 1.0);
 
-#if 1 // Luma: fix Rec.601 luminance // TODO: calculate in linear! Also why is it calculating the luminance of the scene color instead of the tonemapped output?
+  // Luma: nan protection
+  o0.xyz = max(o0.xyz, 0.0);
+
+#if 1 // Luma: fix Rec.601 luminance // TODO: calculate in linear!
   o0.w = GetLuminance(decodedScene);
 #else
   o0.w = dot(decodedScene, float3(0.300000012,0.589999974,0.109999999));

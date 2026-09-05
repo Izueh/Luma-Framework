@@ -4,6 +4,7 @@ Texture2D<float4> t0 : register(t0);
 SamplerState s1_s : register(s1);
 SamplerState s0_s : register(s0);
 
+// TODO: actually not DoF exclusive
 void main(
   float4 v0 : SV_POSITION0,
   float4 v1 : COLOR0,

@@ -10,7 +10,7 @@ void main(
   float2 v2 : TEXCOORD0,
   out float4 o0 : SV_TARGET0)
 {
-#if 1 // Luma: fix cropped sampling in UW (e.g. in 32:9 it'd only sample the half left portion of the image, probably not intentional)
+#if 1 // Luma: fix cropped sampling in UW (e.g. in 32:9 it'd only sample the half left portion of the image, probably not intentional). This happens both in the vanilla game (with black bars) and UW mods
   float gameAspectRatio = LumaSettings.SwapchainSize.x * LumaSettings.SwapchainInvSize.y;
   float nativeAspectRatio = 16.0 / 9.0;
 

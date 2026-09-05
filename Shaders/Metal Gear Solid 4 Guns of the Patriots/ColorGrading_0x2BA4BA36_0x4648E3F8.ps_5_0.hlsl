@@ -358,6 +358,7 @@ void main(
     float colorMax1 = max(max3(color), 1.0);
     colorMax *= colorMax1;
     
+    // Note: this can look a bit weird on snow levels
     color = min(colorMax, color);
 #else
     color = max(colorMin, color);

@@ -2,12 +2,14 @@
 
 #define ENABLE_SMAA 1
 
+#define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
+
 #include "..\..\Core\core.hpp"
 
 namespace
 {
-   // "FinalPostProcess" (FXAA)
    const ShaderHashesList shader_hashes_FXAA = { .pixel_shaders = { 0xFAB5AE7C } };
+   const ShaderHashesList shader_hashes_SwapchainCopy = { .pixel_shaders = { 0xD4BDA6C0 } };
 
    // User settings:
    bool smaa_enable = true; // TODO: test!
@@ -18,6 +20,8 @@ struct GameDeviceDataMetalGearSolid4 final : public GameDeviceData
    // The resolution "DrawSMAA()" last created its (Luma managed) intermediate render targets at
    uint32_t smaa_width = 0;
    uint32_t smaa_height = 0;
+
+   CustomPixelShaderPassData correct_subtractive_blends_data;
 };
 
 class GameMetalGearSolid4 final : public Game
@@ -67,7 +71,7 @@ public:
       if (ImGui::Checkbox("SMAA Enable", &smaa_enable))
          reshade::set_config_value(runtime, NAME, "SMAAEnable", smaa_enable);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-         ImGui::SetTooltip("Replaces the game's FXAA (which can't be disabled in the game's settings) with SMAA, which is sharper and more temporally stable.");
+         ImGui::SetTooltip("Replaces the game's FXAA with SMAA, which is sharper and more temporally stable.");
    }
 
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
@@ -116,6 +120,7 @@ public:
          auto& managed_resources = device_data.managed_resources;
 
          // "DrawSMAA()" only re-creates its resolution dependent resources when the swapchain is re-initialized, so do it ourselves in case the game ever changed its post processing resolution on its own.
+         // Note: the game resolution cannot change anyway!
          if (game_device_data.smaa_width != rtv_texture_desc.Width || game_device_data.smaa_height != rtv_texture_desc.Height)
          {
             managed_resources.depth_stencil_views["smaa_dsv"_h].reset();
@@ -165,8 +170,120 @@ public:
          native_device_context->VSSetConstantBuffers(1, 1, &vs_cb1_original_ptr);
          ID3D11Buffer* const ps_cb1_original_ptr = ps_cb1_original.get();
          native_device_context->PSSetConstantBuffers(1, 1, &ps_cb1_original_ptr);
+         
+#if DEVELOPMENT
+         const std::shared_lock lock_trace(s_mutex_trace);
+         if (trace_running)
+         {
+            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+            TraceDrawCallData trace_draw_call_data;
+            trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+            trace_draw_call_data.command_list = native_device_context;
+            trace_draw_call_data.custom_name = "SMAA";
+            // Re-use the RTV data for simplicity
+            GetResourceInfo(rtv_scene.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
+            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
+         }
+#endif
 
          return DrawOrDispatchOverrideType::Replaced;
+      }
+      // Clear the swapchain in case our display aspect ratio isn't 16:9 and we don't have an UW mod.
+      // The game doesn't and as such if you have reshade open, imgui ends up trailing behind
+      else if (original_shader_hashes.Contains(shader_hashes_SwapchainCopy))
+      {
+         // SRV 0 is the scene, and FXAA resolves it onto RT 0.
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0, 1, srv.put());
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
+
+         if (srv && rtv)
+         {
+            ComPtr<ID3D11Resource> srv_resource;
+            srv->GetResource(srv_resource.put());
+            ComPtr<ID3D11Resource> rtv_resource;
+            rtv->GetResource(rtv_resource.put());
+
+            if (srv_resource && rtv_resource)
+            {
+               ComPtr<ID3D11Texture2D> rtv_texture_2d;
+               rtv_resource->QueryInterface(rtv_texture_2d.put());
+               D3D11_TEXTURE2D_DESC rtv_texture_2d_desc = {};
+               if (rtv_texture_2d)
+                  rtv_texture_2d->GetDesc(&rtv_texture_2d_desc);
+
+               ComPtr<ID3D11Texture2D> srv_texture_2d;
+               srv_resource->QueryInterface(srv_texture_2d.put());
+               D3D11_TEXTURE2D_DESC srv_texture_2d_desc = {};
+               if (srv_texture_2d)
+                  srv_texture_2d->GetDesc(&srv_texture_2d_desc);
+
+               if (rtv_texture_2d_desc.Width != srv_texture_2d_desc.Width || rtv_texture_2d_desc.Height != srv_texture_2d_desc.Height)
+               {
+                  constexpr FLOAT clear_color[4] = { 0.f, 0.f, 0.f, 1.f };
+                  native_device_context->ClearRenderTargetView(rtv.get(), clear_color);
+               }
+            }
+         }
+      }
+      // TODO: delete once we add UI separate composition, this would work out of the box there? Also renove "ENABLE_POST_DRAW_DISPATCH_CALLBACK".
+      else if (original_shader_hashes.Contains(shader_hashes_UI))
+      {
+         ComPtr<ID3D11BlendState> blend_state;
+         native_device_context->OMGetBlendState(blend_state.put(), nullptr, nullptr);
+         D3D11_BLEND_DESC blend_desc = {};
+         if (blend_state)
+         {
+            blend_state->GetDesc(&blend_desc);
+         }
+
+         // This pass subtracts the source from the target so we need to clamp it after draw in R16G16B16A16_FLOAT otherwise values can go negative
+         if (IsBlendInverted(blend_desc, 1, false, 0))
+         {
+            if (original_draw_dispatch_func && *original_draw_dispatch_func)
+            {
+               (*original_draw_dispatch_func)();
+            }
+            
+            com_ptr<ID3D11RenderTargetView> rtv;
+            com_ptr<ID3D11DepthStencilView> dsv;
+            native_device_context->OMGetRenderTargets(1, &rtv, &dsv);
+            
+            if (rtv.get() && test_index != 14)
+            {
+               DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack; // Use full mode because setting the RTV here might unbind the same resource being bound as SRV
+               draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
+            
+               D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
+               rtv->GetDesc(&rtv_desc);
+               const bool ms = rtv_desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2DMS;
+               ASSERT_ONCE(rtv_desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2DMS || rtv_desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2D);
+            
+               // Clip all negative values, like vanilla (I tried to clamp to the closest valid luminance instead, but it created weird colors)
+               auto& game_device_data = GetGameDeviceData(device_data);
+               DrawCustomPixelShaderPass(native_device, native_device_context, rtv.get(), device_data, ms ? Math::CompileTimeStringHash("Copy RGB Max 0 A Sat MS") : Math::CompileTimeStringHash("Copy RGB Max 0 A Sat"), game_device_data.correct_subtractive_blends_data);
+            
+               draw_state_stack.Restore(native_device_context);
+            
+#if DEVELOPMENT
+               const std::shared_lock lock_trace(s_mutex_trace);
+               if (trace_running)
+               {
+                  const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+                  TraceDrawCallData trace_draw_call_data;
+                  trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+                  trace_draw_call_data.command_list = native_device_context;
+                  trace_draw_call_data.custom_name = "Sanitize Subtractive Blends";
+                  // Re-use the RTV data for simplicity
+                  GetResourceInfo(rtv.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
+                  cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
+               }
+#endif
+            }
+
+            return DrawOrDispatchOverrideType::Replaced;
+         }
       }
 
       return DrawOrDispatchOverrideType::None;
@@ -225,12 +342,21 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       
       // Game floors are blurry without this // TODO: test. Not actually sure it helps
       enable_samplers_upgrade = true;
+
+      shader_hashes_UI.pixel_shaders = {
+         std::stoul("AC6CABC7", nullptr, 16),
+         std::stoul("E7786E92", nullptr, 16),
+         std::stoul("B7EB5F39", nullptr, 16),
+         std::stoul("1625064C", nullptr, 16),
+      };
       
 #if DEVELOPMENT
       forced_shader_names.emplace(std::stoul("8EBC590F", nullptr, 16), "Wind");
+      forced_shader_names.emplace(std::stoul("38875909", nullptr, 16), "Wind");
       forced_shader_names.emplace(std::stoul("FAB5AE7C", nullptr, 16), "FXAA");
       forced_shader_names.emplace(std::stoul("E7786E92", nullptr, 16), "UI");
       forced_shader_names.emplace(std::stoul("B7EB5F39", nullptr, 16), "UI");
+      forced_shader_names.emplace(std::stoul("1625064C", nullptr, 16), "UI Font");
 #endif
 
       game = new GameMetalGearSolid4();
