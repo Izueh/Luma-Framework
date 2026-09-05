@@ -669,10 +669,12 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 #endif
 
    // TODO: make changes thread safe
+   // Render resolution without padding.
    float2 render_resolution = { 1, 1 };
    float2 previous_render_resolution = { 1, 1 };
-   // Note: this is the "display"/swapchain res
+   // Note: this is the window/swapchain res
    float2 output_resolution = { 1, 1 };
+   float2 display_resolution = { 1, 1 };
 
    // Live settings (set by the code, not directly by users):
    float default_user_peak_white = default_peak_white;

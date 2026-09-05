@@ -561,23 +561,30 @@ namespace
          // A custom aspect ratio (defaulted to 16:9, because that's the global standard).
          // It can be useful for games that don't support UltraWide or 4:3 resolutions and internally force 16:9 rendering, while having a fullscreen swapchain with black bars.
          CustomAspectRatio = 1 << 4,
+         CustomSize = 1 << 5, 
          // All mip chain sizes based starting from the highest resolution between rendering and swapchain resolution (they should generally have the same aspect ratio anyway) to 1.
          // This can be useful for blur passes etc, if they used power of 2 mips, instead of simply halving the base resolution.
-         Mips = 1 << 5,
+         Mips = 1 << 6,
          // Upgrade textures cubes (of all sizes), these are sometimes used by old games to do reflections (e.g. Burnout Revenge cars reflections)
-         Cubes = 1 << 6,
+         Cubes = 1 << 7,
          // Checks the swapchain/output resolution width only (e.g. used by games that add horizontal lines, like "Thumper" or "Beyond: Two Souls").
          // These are usually hard to match to an aspect ratio without using the "CustomAspectRatio" with a manually found aspect ratio,
          // and thus mips like bloom might be missing
-         SwapchainResolutionWidth = 1 << 7,
-         SwapchainResolutionHeight = 1 << 8,
+         SwapchainResolutionWidth = 1 << 8,
+         SwapchainResolutionHeight = 1 << 9,
+         // The display resolution (useful for games that create textures before setting the swapchain size).
+         DisplayResolution = 1 << 10,
+         DisplayAspectRatio = 1 << 11,
          // Avoid upgrading 1x1 textures
-         No1Px = 1 << 9,
+         No1Px = 1 << 12,
+         // Loosen up the aspect ratio checks to multiples of 4 pixels, per axis, that's what some engines do (e.g. Unreal Engine).
+         PadTo4Px = 1 << 13,
          // "None" needs to be != 0, and specify all the negating flags
          None = No1Px,
       };
       uint32_t texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
       std::unordered_set<float> texture_format_upgrades_2d_custom_aspect_ratios = { 16.f / 9.f };
+      std::vector<uint2> texture_format_upgrades_2d_custom_sizes;
       // Most games do resolution scaling properly, with a maximum aspect ratio offset of 1 pixel, though occasionally it goes to 2 pixels of difference.
       // Set to 0 to only accept 100% matching aspect ratio.
       uint32_t texture_format_upgrades_2d_aspect_ratio_pixel_threshold = 1;
@@ -2791,13 +2798,16 @@ namespace
          // Inherit a minimal set of states from the possible previous device. Any other state wouldn't be relevant or could be outdated, so we might as well reset all to default.
          if (!global_devices_data.empty())
          {
+            device_data.display_resolution = global_devices_data[0]->display_resolution;
             device_data.output_resolution = global_devices_data[0]->output_resolution;
             device_data.render_resolution = global_devices_data[0]->render_resolution;
          }
          // Fallback on the display resolution as default, it's the best guess we can make, most games will start fullscreen
          else
          {
-            device_data.output_resolution = float2(GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+            // Note: we intentionally never update this, as there really isn't ever a good time to logically do so.
+            device_data.display_resolution = float2(GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
+            device_data.output_resolution = device_data.display_resolution;
             device_data.render_resolution = device_data.output_resolution;
          }
          device_data.previous_render_resolution = device_data.render_resolution;
@@ -8143,22 +8153,45 @@ namespace
       if (texture_format_upgrades_2d_size_filters != (uint32_t)TextureFormatUpgrades2DSizeFilters::All)
       {
          bool size_filter = false;
+         
+         uint2 render_resolution = uint2(device_data.render_resolution.x, device_data.render_resolution.y);
+         uint2 output_resolution = uint2(device_data.output_resolution.x, device_data.output_resolution.y);
+         uint2 display_resolution = uint2(device_data.display_resolution.x, device_data.display_resolution.y);
 
+         if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::PadTo4Px) != 0)
+         {
+            // If the texture is 4px aligned, pad all the resolution checks as well
+            bool is_4px_aligned = (desc.texture.width % 4) == 0 && (desc.texture.height % 4) == 0; 
+            if (is_4px_aligned)
+            {
+               render_resolution.x = (render_resolution.x + 3u) & ~3u;
+               render_resolution.y = (render_resolution.y + 3u) & ~3u;
+               output_resolution.x = (output_resolution.x + 3u) & ~3u;
+               output_resolution.y = (output_resolution.y + 3u) & ~3u;
+               display_resolution.x = (display_resolution.x + 3u) & ~3u;
+               display_resolution.y = (display_resolution.y + 3u) & ~3u;
+            }
+         }
+         
+         if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::DisplayResolution) != 0)
+         {
+            size_filter |= desc.texture.width == display_resolution.x && desc.texture.height == display_resolution.y;
+         }
          if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution) != 0)
          {
-            size_filter |= desc.texture.width == device_data.output_resolution.x && desc.texture.height == device_data.output_resolution.y;
+            size_filter |= desc.texture.width == output_resolution.x && desc.texture.height == output_resolution.y;
          }
          if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolutionWidth) != 0)
          {
-            size_filter |= desc.texture.width == device_data.output_resolution.x;
+            size_filter |= desc.texture.width == output_resolution.x;
          }
          if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolutionHeight) != 0)
          {
-            size_filter |= desc.texture.height == device_data.output_resolution.y;
+            size_filter |= desc.texture.height == output_resolution.y;
          }
          if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::RenderResolution) != 0)
          {
-            size_filter |= desc.texture.width == device_data.render_resolution.x && desc.texture.height == device_data.render_resolution.y;
+            size_filter |= desc.texture.width == render_resolution.x && desc.texture.height == render_resolution.y;
          }
          // Flipped condition, given we already allowed them above in "type_and_size_filter"
          if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::Cubes) == 0)
@@ -8194,7 +8227,7 @@ namespace
 #endif
          if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio) != 0)
          {
-            float target_aspect_ratio = (float)device_data.output_resolution.x / (float)device_data.output_resolution.y;
+            float target_aspect_ratio = (float)output_resolution.x / (float)output_resolution.y;
             bool aspect_ratio_filter = target_aspect_ratio >= (min_aspect_ratio - FLT_EPSILON) && target_aspect_ratio <= (max_aspect_ratio + FLT_EPSILON);
             size_filter |= aspect_ratio_filter;
 #if DEVELOPMENT
@@ -8203,7 +8236,16 @@ namespace
          }
          if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::RenderAspectRatio) != 0)
          {
-            float target_aspect_ratio = (float)device_data.render_resolution.x / (float)device_data.render_resolution.y;
+            float target_aspect_ratio = (float)render_resolution.x / (float)render_resolution.y;
+            bool aspect_ratio_filter = target_aspect_ratio >= (min_aspect_ratio - FLT_EPSILON) && target_aspect_ratio <= (max_aspect_ratio + FLT_EPSILON);
+            size_filter |= aspect_ratio_filter;
+#if DEVELOPMENT
+            ASSERT_ONCE_MSG(!aspect_ratio_filter || max(desc.texture.width, desc.texture.height) > 1 || generating_manual_mips || ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px) != 0), "Upgrading 1x1 resource by aspect ratio, this is possibly unwanted");
+#endif
+         }
+         if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::DisplayAspectRatio) != 0)
+         {
+            float target_aspect_ratio = (float)display_resolution.x / (float)display_resolution.y;
             bool aspect_ratio_filter = target_aspect_ratio >= (min_aspect_ratio - FLT_EPSILON) && target_aspect_ratio <= (max_aspect_ratio + FLT_EPSILON);
             size_filter |= aspect_ratio_filter;
 #if DEVELOPMENT
@@ -8220,9 +8262,17 @@ namespace
                size_filter |= aspect_ratio_filter;
 #if DEVELOPMENT
                ASSERT_ONCE_MSG(!aspect_ratio_filter || max(desc.texture.width, desc.texture.height) > 1 || generating_manual_mips || ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px) != 0), "Upgrading 1x1 resource by aspect ratio, this is possibly unwanted");
-#else
-               if (size_filter) break;
 #endif
+            }
+         }
+         if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::CustomSize) != 0)
+         {
+            const std::shared_lock lock_texture_upgrades(s_mutex_texture_upgrades);
+            for (auto texture_format_upgrades_2d_custom_size : texture_format_upgrades_2d_custom_sizes)
+            {
+               size_filter |= desc.texture.width == texture_format_upgrades_2d_custom_size.x && desc.texture.height == texture_format_upgrades_2d_custom_size.y;
+               // We passed a very specific test, no need to do any more exclusion tests below
+               if (size_filter) break;
             }
          }
 
@@ -8233,7 +8283,7 @@ namespace
 
          if ((texture_format_upgrades_2d_size_filters & (uint32_t)TextureFormatUpgrades2DSizeFilters::Mips) != 0)
          {
-            float2 max_resolution = device_data.output_resolution.y >= device_data.render_resolution.y ? device_data.output_resolution : device_data.render_resolution;
+            auto max_resolution = output_resolution.y >= render_resolution.y ? output_resolution : render_resolution;
             size_filter |= IsMipOf(max_resolution.x, max_resolution.y, desc.texture.width, desc.texture.height);
          }
 
@@ -16084,6 +16134,7 @@ namespace
          }
 #endif // DEVELOPMENT || TEST
 
+#if !GRAPHICS_ANALYZER
          if (ImGui::BeginTabItem("About"))
          {
             game->PrintImGuiAbout();
@@ -16109,6 +16160,7 @@ namespace
 
             ImGui::EndTabItem(); // About
          }
+#endif // !GRAPHICS_ANALYZER
 
          ImGui::EndTabBar(); // TabBar
       }
