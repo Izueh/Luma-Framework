@@ -121,6 +121,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "The Witcher 2", "Source\Gam
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Medal of Honor Airborne", "Source\Games\Medal of Honor Airborne\Medal of Honor Airborne.vcxproj", "{7C3E9A18-4D62-4B85-9E30-1A8F5D2C6B44}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Metal Gear Solid 4 Guns of the Patriots", "Source\Games\Metal Gear Solid 4 Guns of the Patriots\Metal Gear Solid 4 Guns of the Patriots.vcxproj", "{4585017B-F79C-4FB5-8821-3E8A7D4C8177}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Development-Debug|Win32 = Development-Debug|Win32
@@ -889,6 +891,18 @@ Global
 		{7C3E9A18-4D62-4B85-9E30-1A8F5D2C6B44}.Test-Release|Win32.ActiveCfg = Test-Release|Win32
 		{7C3E9A18-4D62-4B85-9E30-1A8F5D2C6B44}.Test-Release|Win32.Build.0 = Test-Release|Win32
 		{7C3E9A18-4D62-4B85-9E30-1A8F5D2C6B44}.Test-Release|x64.ActiveCfg = Test-Release|Win32
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177}.Development-Debug|Win32.ActiveCfg = Development-Debug|Win32
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177}.Development-Debug|x64.ActiveCfg = Development-Debug|x64
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177}.Development-Debug|x64.Build.0 = Development-Debug|x64
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177}.Development-Release|Win32.ActiveCfg = Development-Release|Win32
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177}.Development-Release|x64.ActiveCfg = Development-Release|x64
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177}.Development-Release|x64.Build.0 = Development-Release|x64
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177}.Publishing-Release|Win32.ActiveCfg = Publishing-Release|Win32
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177}.Publishing-Release|x64.ActiveCfg = Publishing-Release|x64
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177}.Publishing-Release|x64.Build.0 = Publishing-Release|x64
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177}.Test-Release|Win32.ActiveCfg = Test-Release|Win32
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177}.Test-Release|x64.ActiveCfg = Test-Release|x64
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177}.Test-Release|x64.Build.0 = Test-Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -950,6 +964,7 @@ Global
 		{17FBB4FD-8E4E-4E61-AC32-BBEBA09B8D18} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{8F4A1D26-93BC-4E07-A5D1-64C2E7B9F310} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{7C3E9A18-4D62-4B85-9E30-1A8F5D2C6B44} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{4585017B-F79C-4FB5-8821-3E8A7D4C8177} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {8B799422-BA66-3174-B21F-B9FA07C4B2E3}
