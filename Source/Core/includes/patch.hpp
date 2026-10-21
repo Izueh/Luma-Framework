@@ -1,13 +1,16 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -35,12 +38,12 @@
 //                                        shader creation; 1: pipeline clone
 //                                        swapped in at bind time
 //
-// Runtime toggling (original <-> patched per draw, UseShaderVariant) needs a
-// clone-based mode (CLONE=1 or an async provider); INPLACE patches are always-on.
+// Toggling recipes at runtime and falling back to the original shaders at draw
+// time need a clone-based mode (CLONE=1 or an async provider); INPLACE patches are always-on.
 //
 // Library availability is separate (LUMA_USE_DXP, from the Luma props when
-// UseLumaDXP=true; recipe provider flags imply it as well). It never enables
-// provider code by itself.
+// UseLumaDXP=true). DXP games default to async recipes unless a sync recipe
+// or async bytecode provider is selected.
 // ============================================================================
 
 #ifndef LUMA_PATCH_BYTECODE_SYNC
@@ -53,10 +56,10 @@
 #define LUMA_PATCH_RECIPE_SYNC 0
 #endif
 #ifndef LUMA_PATCH_RECIPE_ASYNC
-#define LUMA_PATCH_RECIPE_ASYNC 0
+#define LUMA_PATCH_RECIPE_ASYNC (LUMA_USE_DXP && !LUMA_PATCH_RECIPE_SYNC && !LUMA_PATCH_BYTECODE_ASYNC)
 #endif
 #ifndef LUMA_PATCH_SYNC_MODE_CLONE
-#define LUMA_PATCH_SYNC_MODE_CLONE 0
+#define LUMA_PATCH_SYNC_MODE_CLONE LUMA_PATCH_RECIPE_SYNC
 #endif
 
 // Selects where async patch-clone pipelines get created (only matters with an
@@ -68,6 +71,10 @@
 //                    different threads.
 //   2 = On Worker  - the worker builds subobjects AND calls create_pipeline
 //                    itself; present only registers finished clones.
+#if LUMA_PATCH_RECIPE_SYNC && !LUMA_PATCH_SYNC_MODE_CLONE
+#error "Synchronous recipes require LUMA_PATCH_SYNC_MODE_CLONE for live reload"
+#endif
+
 #ifndef LUMA_ASYNC_CLONE_MODE
 #define LUMA_ASYNC_CLONE_MODE 2
 #endif
@@ -93,7 +100,7 @@
 #define LUMA_HAS_RECIPE_PROVIDERS (LUMA_PATCH_RECIPE_SYNC || LUMA_PATCH_RECIPE_ASYNC)
 
 // Library availability: defined by the Luma props when UseLumaDXP=true, which
-// also adds the dxp include/link paths. Never enables provider code by itself.
+// also adds the dxp include/link paths.
 #ifndef LUMA_USE_DXP
 #define LUMA_USE_DXP 0
 #endif
@@ -115,6 +122,7 @@
 
 #if LUMA_USE_DXP
 #include <dxp/RecipeReport.hpp>
+#include <dxp/sm5/Recipe.hpp>
 #endif
 
 class Game;      // Global per-game implementation (game.h)
@@ -133,6 +141,25 @@ namespace Patch
 
    constexpr size_t METHOD_COUNT = 2;
 
+#if LUMA_USE_DXP
+   struct RecipeResult
+   {
+      uint32_t shader_hash = 0;
+      uint32_t recipe_hash = 0;
+      std::string identity;
+      reshade::api::pipeline_subobject_type stage = reshade::api::pipeline_subobject_type::unknown;
+      dxp::RecipeReport report;
+   };
+
+   // The patch part of a clone ("Shader::CustomPipelineData::patch_data"), filled while the clone is built.
+   struct ClonePatchData
+   {
+      // Keeps the clone alive with its reports, so command lists that bound it can still use it after a reload
+      com_ptr<ID3D11DeviceChild> native_pipeline_clone;
+      std::vector<std::shared_ptr<const RecipeResult>> recipe_results;
+   };
+#endif
+
    // A stored patch: patched container bytes + provider metadata.
    struct PatchedShaderData
    {
@@ -140,9 +167,55 @@ namespace Patch
       Method method = Method::Bytecode;
       std::optional<Hash::MD5::Digest> md5; // Bytecode method: MD5 of the patched container (debug)
 #if LUMA_USE_DXP
-      std::optional<dxp::RecipeReport> report; // Recipe method: bindings/usage reports
+      // Recipe method: one report per recipe that modified the shader, in execution order.
+      std::vector<std::shared_ptr<const RecipeResult>> recipe_results;
 #endif
    };
+
+#if LUMA_HAS_RECIPE_PROVIDERS
+   // In which builds a recipe (or one of its options) is shown in the "Patch Settings" tab.
+   enum class RecipeVisibility : uint8_t
+   {
+      Development, // "DEVELOPMENT" builds only
+      Test,        // "DEVELOPMENT" and "TEST" builds
+      Always,      // All builds (users too)
+   };
+
+   // A recipe env variable the game exposes. Its type and default come from the recipe's "env:" block.
+   // Variables not listed here are only shown in development builds.
+   struct RecipeOption
+   {
+      std::string env;
+      std::string label;
+      std::string tooltip;
+      RecipeVisibility visibility = RecipeVisibility::Always;
+   };
+
+   // Game-side description of a recipe (by its identity, e.g. "PS/dithering_fix.recipe.yml").
+   // Unregistered recipes still load, enabled, and are only shown in development builds.
+   struct RecipeRegistration
+   {
+      std::string identity;
+      std::string display_name;
+      std::string description;
+      bool default_enabled = true;
+      RecipeVisibility visibility = RecipeVisibility::Development;
+      std::vector<RecipeOption> options;
+   };
+
+   // Global (all devices) recipe settings, saved in the "<NAME> Recipes" config section.
+   // Changes are applied at the next present by re-patching lazily (see "ApplyRecipeSettingsChanges").
+   // Register before devices are created (e.g. in "Game::OnInit").
+   void RegisterRecipe(RecipeRegistration registration);
+   bool IsRecipeEnabled(std::string_view identity);
+   void SetRecipeEnabled(std::string_view identity, bool enabled);
+   // User env override, or nullopt if the recipe's own (or the game's) value is used.
+   std::optional<dxp::PrimitiveValue> GetRecipeEnv(std::string_view identity, const std::string& env);
+   void SetRecipeEnv(std::string_view identity, const std::string& env, dxp::PrimitiveValue value);
+   void ResetRecipeEnv(std::string_view identity, const std::string& env);
+#endif
+
+   struct ShaderPatchRequest;
 
    // Thread-safe store of patches + per-method processed markers.
    struct PatchContext
@@ -152,108 +225,30 @@ namespace Patch
       // Debug-data-stripped containers by pre-strip hash (Heavy Rain-style
       // unification). Kept separately from patches: stripping is not a patch.
       std::unordered_map<uint32_t, std::shared_ptr<const std::vector<uint8_t>>> stripped_containers;
-      // Bind-time default per shader (absent = enabled). Replaced by
-      // OnBindPatchedShader(game.h) callback; UseShaderVariant overrides at draw time.
-      // Never re-runs providers.
-      std::unordered_map<uint32_t, bool> patch_enabled_by_default;
       mutable std::shared_mutex mutex;
-
-      bool HasPatch(uint32_t shader_hash) const
+#if LUMA_HAS_RECIPE_PROVIDERS
+      struct RecipeEntry
       {
-         const std::shared_lock lock(mutex);
-         return patched_shaders.contains(shader_hash);
-      }
-
-      // Bind-time default for this shader. Not "is the patch applied now" —
-      // the game decides via OnBindPatchedShader.
-      bool IsPatchEnabled(uint32_t shader_hash) const
-      {
-         const std::shared_lock lock(mutex);
-         auto it = patch_enabled_by_default.find(shader_hash);
-         return it == patch_enabled_by_default.end() || it->second;
-      }
-
-      // Sets the bind-time default; returns true if changed.
-      bool SetPatchEnabled(uint32_t shader_hash, bool enabled)
-      {
-         const std::unique_lock lock(mutex);
-         auto [it, inserted] = patch_enabled_by_default.try_emplace(shader_hash, enabled);
-         if (!inserted && it->second == enabled)
-         {
-            return false;
-         }
-         it->second = enabled;
-         return true;
-      }
-
-      // Clears all bind-time defaults.
-      void ResetPatchToggles()
-      {
-         const std::unique_lock lock(mutex);
-         patch_enabled_by_default.clear();
-      }
-
-      // Definitive outcome (patched or no-patch-needed) already determined for
-      // this (method, shader); no-match is terminal per hash.
-      bool IsProcessed(Method method, uint32_t shader_hash) const
-      {
-         const std::shared_lock lock(mutex);
-         return processed_shaders[static_cast<size_t>(method)].contains(shader_hash);
-      }
-
-      // Returns true if newly inserted (not yet processed).
-      bool SetProcessed(Method method, uint32_t shader_hash)
-      {
-         const std::unique_lock lock(mutex);
-         return processed_shaders[static_cast<size_t>(method)].emplace(shader_hash).second;
-      }
-
-      std::shared_ptr<PatchedShaderData> GetShaderData(uint32_t shader_hash) const
-      {
-         const std::shared_lock lock(mutex);
-         auto it = patched_shaders.find(shader_hash);
-         if (it != patched_shaders.end() && it->second && !it->second->code.empty())
-         {
-            return it->second; // Increments ref-count safely inside the lock
-         }
-         return nullptr;
-      }
-
-      void StorePatched(uint32_t shader_hash, std::shared_ptr<PatchedShaderData> data)
-      {
-         // Create the fully populated object first to minimize time spent inside the unique_lock
-         const std::unique_lock lock(mutex);
-         // Overwrites or inserts in a single, fast operation
-         patched_shaders.insert_or_assign(shader_hash, std::move(data));
-      }
-
-      std::shared_ptr<const std::vector<uint8_t>> GetStrippedContainer(uint32_t pre_strip_shader_hash) const
-      {
-         const std::shared_lock lock(mutex);
-         auto it = stripped_containers.find(pre_strip_shader_hash);
-         return it != stripped_containers.end() ? it->second : nullptr;
-      }
-
-      void StoreStrippedContainer(uint32_t pre_strip_shader_hash, std::shared_ptr<const std::vector<uint8_t>> data)
-      {
-         const std::unique_lock lock(mutex);
-         stripped_containers.insert_or_assign(pre_strip_shader_hash, std::move(data));
-      }
-
-      template <typename TVisitor>
-      void ForEachPatchedShader(TVisitor&& visitor) const
-      {
-         const std::shared_lock lock(mutex);
-         for (const auto& [shader_hash, patched_shader] : patched_shaders)
-         {
-            if (!patched_shader || patched_shader->code.empty())
-            {
-               continue;
-            }
-
-            std::forward<TVisitor>(visitor)(shader_hash, *patched_shader);
-         }
-      }
+         uint32_t hash = 0;
+         std::string identity;
+         reshade::api::pipeline_subobject_type stage = reshade::api::pipeline_subobject_type::unknown;
+         std::shared_ptr<const dxp::sm5::Recipe> recipe;
+         // User settings, copied from the global recipe settings when the recipes are loaded.
+         bool enabled = true;
+         std::unordered_map<std::string, dxp::PrimitiveValue> env_overrides;
+      };
+      // Root folder recipes are loaded from: <root>/<GAME_NAME>/Recipes.
+      std::filesystem::path recipes_path;
+      // Recipes are immutable once parsed and safe to share across threads
+      // (Execute is const and thread-safe); shared_ptr keeps async jobs valid.
+      // Enabled recipes run chained in this (load) order.
+      std::vector<RecipeEntry> recipes;
+      // Game-provided env (not user facing), see "SetOptions".
+      std::unordered_map<uint32_t, dxp::PatchOptions> recipe_options_by_hash;
+      std::atomic<uint64_t> reload_generation = 0;
+      // Global recipe settings version the recipes were loaded with.
+      uint64_t applied_settings_version = 0;
+#endif
    };
 
    // Request passed to recipe providers (full DXBC container).
@@ -263,9 +258,6 @@ namespace Patch
       uint32_t shader_hash = uint32_t(-1);
       const std::byte* shader_container = nullptr;
       size_t shader_container_size = 0;
-      // Async path only: the job's owned container, so games can pass it
-      // straight to Recipe::Execute without copying.
-      const std::vector<uint8_t>* shader_container_owned = nullptr;
    };
 
    // SHEX/SHDR chunk view inside a DXBC container (as seen by bytecode providers).
@@ -284,194 +276,49 @@ namespace Patch
       reshade::api::pipeline_subobject_type type = reshade::api::pipeline_subobject_type::unknown;
       std::vector<uint8_t> shader_container;
       uint32_t bytecode_offset = 0;
+#if LUMA_HAS_RECIPE_PROVIDERS
+      uint64_t generation = 0;
+#endif
    };
 
-   // Validates the DXBC container and locates the SHEX/SHDR bytecode chunk.
-   inline ByteCodeView FindShaderByteCode(const void* container, size_t container_size)
-   {
-      ByteCodeView view;
-      if (container == nullptr || container_size < sizeof(Shader::DXBCHeader))
-      {
-         return view;
-      }
+#if LUMA_PATCH_PROVIDERS != 0
+   inline bool HasPatch(const DeviceData& device_data, uint32_t shader_hash);
 
-      const auto* header = static_cast<const Shader::DXBCHeader*>(container);
-      if (memcmp(header->format_name, "DXBC", 4) != 0 || header->file_size != container_size)
-      {
-         return view;
-      }
+   // Returns true if newly inserted (not yet processed).
+   inline bool SetProcessed(DeviceData& device_data, Method method, uint32_t shader_hash);
 
-      for (uint32_t i = 0; i < header->chunk_count; ++i)
-      {
-         if (header->chunk_offsets[i] + sizeof(Shader::DXBCChunk) > container_size)
-         {
-            return view;
-         }
+   inline std::shared_ptr<PatchedShaderData> GetShaderData(const DeviceData& device_data, uint32_t shader_hash);
 
-         const auto* chunk = reinterpret_cast<const Shader::DXBCChunk*>(static_cast<const uint8_t*>(container) + header->chunk_offsets[i]);
-         if (memcmp(&chunk->type_name, "SHEX", 4) == 0 || memcmp(&chunk->type_name, "SHDR", 4) == 0)
-         {
-            if (header->chunk_offsets[i] + sizeof(Shader::DXBCChunk) + sizeof(Shader::DXBCByteCodeChunk) > container_size)
-            {
-               return view;
-            }
+   inline void StorePatched(DeviceData& device_data, uint32_t shader_hash, std::shared_ptr<PatchedShaderData> data);
 
-            const auto* chunk_byte_code = reinterpret_cast<const Shader::DXBCByteCodeChunk*>(chunk->chunk_data);
-            const size_t bytecode_offset = header->chunk_offsets[i] + sizeof(Shader::DXBCChunk) + offsetof(Shader::DXBCByteCodeChunk, byte_code);
-            const uint32_t bytecode_size = (chunk_byte_code->chunk_size_dword * sizeof(uint32_t)) - sizeof(Shader::DXBCByteCodeChunk); // Stored in DWORDs and counts the size and program version/type in its count, so we remove them
+   inline std::shared_ptr<const std::vector<uint8_t>> GetStrippedContainer(const DeviceData& device_data, uint32_t pre_strip_shader_hash);
 
-            if (bytecode_offset + bytecode_size > container_size)
-            {
-               return view;
-            }
+   inline void StoreStrippedContainer(DeviceData& device_data, uint32_t pre_strip_shader_hash, std::shared_ptr<const std::vector<uint8_t>> data);
 
-            view.bytecode = static_cast<const uint8_t*>(container) + bytecode_offset;
-            view.bytecode_size = bytecode_size;
-            view.bytecode_offset = uint32_t(bytecode_offset);
-            view.valid = true;
-            return view;
-         }
-      }
+   template <typename TVisitor>
+   inline void ForEachPatchedShader(const DeviceData& device_data, TVisitor&& visitor);
 
-      return view;
-   }
+#if LUMA_HAS_RECIPE_PROVIDERS
+   // Game-provided env for one recipe (e.g. offsets in Luma's cbuffers). Takes precedence over the user's env overrides.
+   void SetOptions(DeviceData& device_data, uint32_t recipe_hash, dxp::PatchOptions options);
+   // Reads the recipe files from disk (with the current user settings). Does not touch existing patches.
+   void LoadRecipes(DeviceData& device_data);
+   // Drops recipe patches and their clones, then loads the recipes again; pipelines re-patch on their next bind.
+   void ReloadRecipes(DeviceData& device_data);
+   // Reloads the recipes if their settings changed since they were last loaded (call at present).
+   void ApplyRecipeSettingsChanges(DeviceData& device_data);
+   // ImGui ("Patch Settings" tab): enable toggles and env variables of the recipes, filtered by their visibility for this build.
+   void DrawRecipeSettings(const DeviceData& device_data);
+#endif
 
-   // Splices new SHEX/SHDR bytecode into a copied container, fixing chunk
-   // offsets/sizes and recomputing the container MD5 (mandatory, or D3D may
-   // refuse the shader). Returns an empty vector on invalid input.
-   inline std::vector<uint8_t> BuildPatchedContainer(const void* container, size_t container_size, size_t bytecode_offset, const void* new_bytecode, size_t new_bytecode_size)
-   {
-      std::vector<uint8_t> out;
-      if (container == nullptr || new_bytecode == nullptr || container_size < sizeof(Shader::DXBCHeader) || bytecode_offset >= container_size)
-      {
-         return out;
-      }
+   // Runs the sync providers for one shader (returns a patch, or nullptr).
+   // The caller stores bytecode patches after validation. Providers are marked processed on any definitive
+   // outcome. Recipes can re-run after reload. Implemented in patch.inl
+   // (needs the full Game/DeviceData types).
+   std::shared_ptr<PatchedShaderData> PatchShaderSync(Game& game, DeviceData& device_data, const ShaderPatchRequest& request, const ByteCodeView& view, uint32_t providers);
 
-      const auto* header = static_cast<const Shader::DXBCHeader*>(container);
-
-      // Locate the chunk that owns the bytecode and validate the sizes.
-      const Shader::DXBCChunk* chunk = nullptr;
-      uint32_t chunk_index = 0;
-      for (uint32_t i = 0; i < header->chunk_count; ++i)
-      {
-         if (header->chunk_offsets[i] + sizeof(Shader::DXBCChunk) > container_size)
-         {
-            return out;
-         }
-         const auto* candidate = reinterpret_cast<const Shader::DXBCChunk*>(static_cast<const uint8_t*>(container) + header->chunk_offsets[i]);
-         if (header->chunk_offsets[i] + sizeof(Shader::DXBCChunk) + offsetof(Shader::DXBCByteCodeChunk, byte_code) == bytecode_offset)
-         {
-            chunk = candidate;
-            chunk_index = i;
-            break;
-         }
-      }
-      if (chunk == nullptr)
-      {
-         return out;
-      }
-
-      const auto* chunk_byte_code = reinterpret_cast<const Shader::DXBCByteCodeChunk*>(chunk->chunk_data);
-      const uint32_t old_bytecode_size = (chunk_byte_code->chunk_size_dword * sizeof(uint32_t)) - sizeof(Shader::DXBCByteCodeChunk);
-      if (bytecode_offset + old_bytecode_size > container_size)
-      {
-         return out;
-      }
-
-      const int32_t bytecode_size_diff = int32_t(new_bytecode_size) - int32_t(old_bytecode_size); // int32 should always be enough
-      ASSERT_ONCE(bytecode_size_diff % int32_t(sizeof(uint32_t)) == 0); // Make sure it's a multiple of DWORD (4 bytes), it's probably mandatory for it to be
-
-      const size_t new_container_size = container_size + bytecode_size_diff;
-      out.resize(new_container_size);
-
-      // Copy everything up to the byte code (the body itself is copied below)
-      std::memcpy(out.data(), container, bytecode_offset);
-
-      // Copy anything after this chunk (chunk_size counts the 8-byte chunk
-      // header, so the tail starts 8 bytes into the bytecode, which the copy
-      // below overwrites).
-      const size_t old_tail_offset = header->chunk_offsets[chunk_index] + chunk->chunk_size;
-      const size_t new_tail_offset = old_tail_offset + bytecode_size_diff;
-      const size_t tail_size = container_size - old_tail_offset;
-      if (new_tail_offset + tail_size <= new_container_size)
-      {
-         std::memcpy(out.data() + new_tail_offset, static_cast<const uint8_t*>(container) + old_tail_offset, tail_size);
-      }
-
-      // Copy the replaced byte code in
-      std::memcpy(out.data() + bytecode_offset, new_bytecode, new_bytecode_size);
-
-      // Update sizes
-      auto* new_header = reinterpret_cast<Shader::DXBCHeader*>(out.data());
-      new_header->file_size += bytecode_size_diff;
-      auto* new_chunk = reinterpret_cast<Shader::DXBCChunk*>(out.data() + new_header->chunk_offsets[chunk_index]);
-      new_chunk->chunk_size += bytecode_size_diff; // Chunk size
-      auto* new_chunk_byte_code = reinterpret_cast<Shader::DXBCByteCodeChunk*>(new_chunk->chunk_data);
-      new_chunk_byte_code->chunk_size_dword += bytecode_size_diff / int32_t(sizeof(uint32_t)); // Byte code size in DWORD (4 bytes)
-
-      // Update chunk offsets of all chunks after this one
-      for (uint32_t j = chunk_index + 1; j < new_header->chunk_count; ++j)
-      {
-         new_header->chunk_offsets[j] += bytecode_size_diff;
-      }
-
-      // Recalculate and set the container MD5, or the shader might fail to load.
-      // Official implementation: https://github.com/doitsujin/dxbc-spirv/blob/32866c0d0a0236b93681d25405e57a3e9d6868d3/dxbc/dxbc_container.cpp#L11 (should match 100%)
-      Hash::MD5::Digest md5_digest = Shader::CalcDXBCHash(out.data(), out.size());
-      std::memcpy(new_header->hash, &md5_digest.data, Shader::DXBCHeader::hash_size);
-
-      return out;
-   }
-
-   // CPU half of "ClonePipelineWithPatches": copies the subobjects and splices
-   // patched bytecode via "find_patch" (same lookup order as LoadCustomShaders:
-   // files first, then patches). No device call — the async worker defers
-   // creation to the present boundary (see ProcessAsyncCloneBatch).
-   inline std::pair<reshade::api::pipeline_subobject*, bool> BuildPatchedCloneSubobjects(
-      uint32_t subobject_count,
-      const reshade::api::pipeline_subobject* subobjects,
-      std::function<std::optional<std::pair<const uint8_t*, uint32_t>>(
-          const reshade::api::shader_desc* clone_desc,
-          const reshade::api::shader_desc* orig_desc)> find_patch)
-   {
-      auto* new_subobjects = Shader::ClonePipelineSubobjects(subobject_count, subobjects);
-      bool injected = false;
-
-      for (uint32_t i = 0; i < subobject_count; ++i)
-      {
-         const auto& subobject = subobjects[i];
-         switch (subobject.type)
-         {
-         case reshade::api::pipeline_subobject_type::geometry_shader:
-         case reshade::api::pipeline_subobject_type::vertex_shader:
-         case reshade::api::pipeline_subobject_type::compute_shader:
-         case reshade::api::pipeline_subobject_type::pixel_shader:
-            break;
-         default:
-            continue;
-         }
-
-         auto* clone_desc = static_cast<reshade::api::shader_desc*>(new_subobjects[i].data);
-         auto patch_opt = find_patch(clone_desc, static_cast<const reshade::api::shader_desc*>(subobject.data));
-         if (!patch_opt)
-            continue;
-
-         auto [patch_data, patch_size] = *patch_opt;
-         free(const_cast<void*>(clone_desc->code));
-         clone_desc->code_size = patch_size;
-         clone_desc->code = malloc(patch_size);
-         std::memcpy(const_cast<void*>(clone_desc->code), patch_data, patch_size);
-         injected = true;
-      }
-
-      if (!injected)
-      {
-         Shader::DestroyPipelineSubojects(new_subobjects, subobject_count);
-         return {nullptr, false};
-      }
-
-      return {new_subobjects, true};
-   }
+   void TryPatchPipeline(DeviceData& device_data, uint64_t pipeline_handle);
+#endif // LUMA_PATCH_PROVIDERS != 0
 
    // Clones the pipeline replacing shader subobjects via "find_patch" (same
    // lookup order as LoadCustomShaders: files first, then patches). No re-entry
@@ -483,32 +330,38 @@ namespace Patch
       uint32_t subobject_count,
       std::function<std::optional<std::pair<const uint8_t*, uint32_t>>(
           const reshade::api::shader_desc* clone_desc,
-          const reshade::api::shader_desc* orig_desc)> find_patch)
+          const reshade::api::shader_desc* orig_desc,
+          reshade::api::pipeline_subobject_type type)> find_patch);
+
+#if LUMA_USE_DXP
+   // A resource a recipe added, resolved for the current draw.
+   struct RecipeBinding
    {
-      auto [new_subobjects, injected] = BuildPatchedCloneSubobjects(subobject_count, subobjects, std::move(find_patch));
-      if (!injected)
-      {
-         return {{}, false};
-      }
+      reshade::api::pipeline_subobject_type stage = reshade::api::pipeline_subobject_type::unknown;
+      UINT slot = 0;
+      com_ptr<ID3D11ShaderResourceView> srv;
+      com_ptr<ID3D11Buffer> buffer;
+      com_ptr<ID3D11SamplerState> sampler;
+      com_ptr<ID3D11UnorderedAccessView> uav;
+   };
+   // Appends the resources the recipes of a clone's stage added: Luma's cbuffers or "managed_resources" entries named after
+   // the recipe handles (games register theirs). Returns false if any is missing, the stage should then use its original shader.
+   bool ResolveRecipeBindings(DeviceData& device_data, const Shader::CustomPipelineData& data, reshade::api::pipeline_subobject_type type,
+      std::vector<RecipeBinding>& bindings, bool& has_recipe);
+   void SetRecipeBindings(ID3D11DeviceContext* context, CommandListData& cmd_list_data, const std::vector<RecipeBinding>& bindings);
+#endif
 
-      reshade::api::pipeline pipeline_clone = {};
-      const bool ok = device->create_pipeline(layout, subobject_count, new_subobjects, &pipeline_clone);
-      Shader::DestroyPipelineSubojects(new_subobjects, subobject_count);
+   void UnloadPatches(DeviceData& device_data);
+   void ReloadPatches(DeviceData& device_data);
+   uint32_t CountPatchedClones(const DeviceData& device_data);
 
-      if (!ok)
-         ASSERT_ONCE(pipeline_clone.handle == 0);
-
-      return {pipeline_clone, ok};
-   }
-
-   // Runs the sync providers for one shader and stores any patch produced
-   // (returns it, or nullptr). Providers are marked processed on any definitive
-   // outcome, so they never re-run. Implemented in core.hpp (needs the full
-   // Game/DeviceData types).
-   std::shared_ptr<PatchedShaderData> PatchShaderSync(Game& game, DeviceData& device_data, const ShaderPatchRequest& request, const ByteCodeView& view, uint32_t providers);
-
-   // Runs the async providers for one job (bytecode first: manual wins on
-   // conflicts). Stores the result, marks processed on any definitive outcome.
-   // Returns true if a patch was stored. Implemented in core.hpp.
-   bool ProcessAsyncPatchJob(Game& game, DeviceData& device_data, PatchJob& job, uint32_t providers);
+#if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
+   // TODO(Patch module): job collection depends on core.hpp's globals
+   // (s_mutex_generic, pipeline_cache_destruction_mutex). Keep its
+   // implementation in patch.inl until those are extracted.
+   void GeneratePatchedShadersAsync(DeviceData& device_data, const std::unordered_set<uint64_t>& pipelines_filter);
+   void NotifyAsyncCloneQueue(DeviceData& device_data);
+   void ProcessAsyncCloneBatch(DeviceData& device_data, const std::unordered_set<uint64_t>& pipelines);
+   void PublishReadyAsyncClones(DeviceData& device_data);
+#endif
 } // namespace Patch

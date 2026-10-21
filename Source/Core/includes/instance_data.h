@@ -22,9 +22,6 @@
 #include "patch.hpp"
 #include "debug.h"
 #include "resource_upgrades.hpp"
-#if LUMA_USE_DXP
-#include "recipes.h"
-#endif
 
 // Forward declarations
 struct GameDeviceData;
@@ -124,11 +121,6 @@ struct TraceDrawCallData
    uint64_t pipeline_handles = 0; // The actual list of pipelines that run within the traced frame (within this deferred command list, and then merged into the immediate one later)
    ShaderHashesList shader_hashes;
 #endif
-
-   // Which shader variant actually ran for this draw (post-decision in
-   // OnDrawOrDispatch_Custom). Frame capture only.
-   Shader::ShaderVariant clone_variant = Shader::ShaderVariant::Original;
-   bool patch_enabled = false;
 
    // The original command list (can be useful to have later)
    com_ptr<ID3D11DeviceContext> command_list = nullptr;
@@ -271,16 +263,20 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
    reshade::api::pipeline pipeline_state_original_vertex_shader = reshade::api::pipeline(0);
    reshade::api::pipeline pipeline_state_original_pixel_shader = reshade::api::pipeline(0);
 
-   // Patch clone handles (hash -> clone pipeline). Original handle is always
-   // derivable from pipeline_state_original_*_shader (the bound pipeline).
-   std::unordered_map<uint32_t, reshade::api::pipeline> patch_clone_handles;
-
    Shader::ShaderHashesList<OneShaderPerPipeline> pipeline_state_original_graphics_shader_hashes;
    Shader::ShaderHashesList<OneShaderPerPipeline> pipeline_state_original_compute_shader_hashes;
    bool pipeline_state_has_custom_vertex_shader = false;
    bool pipeline_state_has_custom_pixel_shader = false;
    bool pipeline_state_has_custom_graphics_shader = false;
    bool pipeline_state_has_custom_compute_shader = false;
+   Shader::CustomPipelineData custom_vertex_pipeline;
+   Shader::CustomPipelineData custom_pixel_pipeline;
+   Shader::CustomPipelineData custom_compute_pipeline;
+   // Clones selected at bind time (0 = none). "pipeline_state_has_custom_*_shader" tells whether they are bound right now,
+   // as a draw can fall back to the original shaders (see "Shader::UsePipelineVariant()").
+   reshade::api::pipeline pipeline_state_custom_vertex_shader = reshade::api::pipeline(0);
+   reshade::api::pipeline pipeline_state_custom_pixel_shader = reshade::api::pipeline(0);
+   reshade::api::pipeline pipeline_state_custom_compute_shader = reshade::api::pipeline(0);
 
    // Determined by "draw_callbacks_by_shader_hashes" when binding shaders
    DrawOrDispatchCallback draw_callback = nullptr;
@@ -292,41 +288,6 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
 
    const AutoTextureFormatUpgradeShaderHash* auto_graphics_texture_format_upgrades = nullptr;
    const AutoTextureFormatUpgradeShaderHash* auto_compute_texture_format_upgrades = nullptr;
-
-   // ============================================================================
-   // Patch variant API (game-facing). Per-context/per-bind state.
-   // ============================================================================
-
-   // Switch between original and patched shader for a given hash.
-   // "stages" selects which original handle to use (vertex/pixel/compute).
-   void UseShaderVariant(ID3D11DeviceContext* native_device_context, uint32_t shader_hash,
-      reshade::api::shader_stage stages, Shader::ShaderVariant variant)
-   {
-      auto it = patch_clone_handles.find(shader_hash);
-      if (it == patch_clone_handles.end()) return;
-
-      reshade::api::pipeline bound_pipeline;
-      if ((stages & reshade::api::shader_stage::vertex) != 0)
-         bound_pipeline = pipeline_state_original_vertex_shader;
-      else if ((stages & reshade::api::shader_stage::pixel) != 0)
-         bound_pipeline = pipeline_state_original_pixel_shader;
-      else if ((stages & reshade::api::shader_stage::compute) != 0)
-         bound_pipeline = pipeline_state_original_compute_shader;
-      else
-         return;
-
-      uint64_t handle = (variant == Shader::ShaderVariant::Patched)
-         ? it->second.handle
-         : bound_pipeline.handle;
-      if (handle == 0) return;
-
-      if ((stages & reshade::api::shader_stage::vertex) != 0)
-         native_device_context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(handle), nullptr, 0);
-      else if ((stages & reshade::api::shader_stage::pixel) != 0)
-         native_device_context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(handle), nullptr, 0);
-      else if ((stages & reshade::api::shader_stage::compute) != 0)
-         native_device_context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(handle), nullptr, 0);
-   }
 
    enum ViewState
    {
@@ -491,7 +452,7 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
 
    // TODO(Patch module): move the patch_context member below and this async clone
    // machinery (AsyncCloneEntry + the LUMA_PATCH_PROVIDERS-gated members) into
-   // patch.hpp once the include-order rework lands (see core.hpp dispatch TODO).
+   // patch.hpp once the include-order rework lands (see patch.inl).
 #if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
    // Unified async clone entry: mode 1 populates subobjects+layout (created at
    // present boundary), mode 2 populates pipeline_clone (created by worker).
@@ -509,15 +470,14 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
       reshade::api::device* device = nullptr;
       uint32_t shader_hash = 0; // shader the clone was built for (verify at publish)
       Shader::CloneOrigin clone_origin = Shader::CloneOrigin::None; // what the clone was built from (recorded by the worker)
+      Shader::CustomPipelineData custom_pipeline_data;
+#if LUMA_HAS_RECIPE_PROVIDERS
+      uint64_t generation = 0;
+#endif
    };
-   // Lock-free ready queue. Single worker thread — atomic pointer is sufficient,
-   // no mutex needed. Worker publishes to the queue (reads pointer, creates if
-   // null, writes). Render thread drains at OnPresent via atomic exchange.
-   struct AsyncReadyQueue
-   {
-      std::deque<AsyncCloneEntry> items;
-   };
-   std::atomic<AsyncReadyQueue*> async_ready_queue{nullptr};
+   // Ready queue shared by the worker and OnPresent. The jobs mutex protects
+   // appending entries and detaching the queue for publication.
+   std::deque<AsyncCloneEntry> async_ready_queue;
 
    std::atomic<bool> async_shutdown = false;
    std::mutex async_jobs_mutex;
@@ -534,10 +494,6 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    // Stored shader patches (both bytecode and recipe methods) + per-method
    // processed markers. See Patch::PatchContext.
    Patch::PatchContext patch_context;
-#endif
-
-#if LUMA_USE_DXP
-   Recipes recipes;
 #endif
 
    std::unordered_set<reshade::api::swapchain*> swapchains;

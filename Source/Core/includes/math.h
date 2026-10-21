@@ -170,8 +170,8 @@ namespace Math
       return crc ^ 0xffffffff;
    }
 
-   // "fnv1a_32" consteval hash (always evaluated at compile time for literals)
-   consteval uint32_t CompileTimeStringHash(std::string_view s)
+   // "fnv1a_32" constexpr hash (can be evaluated at compile time for literals)
+   constexpr uint32_t CompileTimeStringHash(std::string_view s)
    {
       uint32_t hash = 0x811c9dc5;
       for (char c : s)

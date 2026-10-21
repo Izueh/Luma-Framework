@@ -1,7 +1,7 @@
 version: 1
 env:
-  # Cbuffer element offset for frame_constants (cb13[2].y = frame counter)
-  # Change this value to access a different element in the cbuffer.
+  # Cbuffer element offset for luma_settings (cb13[3].y = frame counter)
+  # FFXV supplies this from the FrameIndex struct offset through PatchOptions.
   frame_index_offset: 3
 steps:
   # Probe: detect the original 16-phase procedural bayer usage without
@@ -60,18 +60,9 @@ steps:
   # Shared resource declarations for all branches: only added when at least
   # one probe matched, so non-dithering shaders stay byte-identical.
   #
-  # Bind slots are deliberately FIXED (not auto-assigned): auto-assign picks the
-  # first free slot per shader, which collides with the game's own bindings
-  # (cb4/cb5, t16/t17/t18 are all in use by the character pipeline) and is never
-  # restored after the draw, corrupting subsequent passes. Instead:
-  #  - fast_noise -> reverse_bind: take the HIGHEST free texture slot (scan down
-  #    from t127), far from the low registers the game's shaders occupy, so the
-  #    patch never collides with the game's own bindings (auto-assign from 0
-  #    would take slots the game uses).
-  #  - frame counter -> register 13 (Luma's settings cbuffer, cb13[2].y): the
-  #    game never declares cb13 in any patched shader; the runtime binds it.
-  #  - frame counter -> cb13[2].y: Luma's own settings cbuffer (the game never
-  #    declares cb13 in any patched shader). The runtime binds it per draw.
+  # Fixed slots avoid the low registers used by later game passes: bindings
+  # are not restored after a normal patched draw. Noise uses t59; the frame
+  # counter uses Luma's settings buffer at cb13[3].y, bound by core per draw.
   - kind: add_resource
     name: add_noise_resources
     condition:
@@ -85,9 +76,9 @@ steps:
         dimension: texture2darray
         register_index: 59
     cbuffers:
-      - handle: frame_constants
+      - handle: luma_settings
         register_index: 13
-        elements: 3
+        elements: 4
 
   # Branch 1: 16-phase procedural bayer replacement. Replaces the
   # mul/round_ne/ftou/ult tail with the fast noise load + a saturated
@@ -141,7 +132,7 @@ steps:
             - type: immediate32
               immediates_u32: [31]
             - type: constant_buffer
-              handle: { name: frame_constants, element_index: frame_index_offset }
+              handle: { name: luma_settings, element_index: frame_index_offset }
               components: { selection_mode: select, value: y }
         - opcode: and
           operands:
@@ -224,7 +215,7 @@ steps:
             - type: immediate32
               immediates_u32: [31]
             - type: constant_buffer
-              handle: { name: frame_constants, element_index: frame_index_offset }
+              handle: { name: luma_settings, element_index: frame_index_offset }
               components: { selection_mode: select, value: y }
         - opcode: and
           operands:
@@ -320,7 +311,7 @@ steps:
             - type: immediate32
               immediates_u32: [31]
             - type: constant_buffer
-              handle: { name: frame_constants, element_index: frame_index_offset }
+              handle: { name: luma_settings, element_index: frame_index_offset }
               components: { selection_mode: select, value: y }
         - opcode: and
           operands:

@@ -69,11 +69,16 @@ public:
    virtual std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) { return nullptr; }
    virtual std::unique_ptr<std::byte[]> PatchShaderBytecodeAsync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) { return nullptr; }
 
-#if LUMA_USE_DXP
-   // Recipe method: operates on the full DXBC container via a DXP recipe.
-   virtual std::optional<dxp::RecipeReport> PatchShaderRecipeSync(DeviceData& device_data, const Patch::ShaderPatchRequest& request) { return std::nullopt; }
-   virtual std::optional<dxp::RecipeReport> PatchShaderRecipeAsync(DeviceData& device_data, const Patch::ShaderPatchRequest& request) { return std::nullopt; }
-#endif
+   // Called for a draw or dispatch with a custom pipeline clone selected, after the recipes' resources were bound
+   // (they come from "managed_resources", a clone missing any is swapped for its original shader for this draw).
+   // Call "Shader::UsePipelineVariant()" (here or in any draw callback) to pick the original or the clone yourself.
+   virtual DrawOrDispatchOverrideType OnDrawOrDispatchCustomPipeline(ID3D11DeviceContext* native_device_context,
+      CommandListData& cmd_list_data, DeviceData& device_data,
+      const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes,
+      std::function<void()>* original_draw_dispatch_func = nullptr)
+   {
+      return DrawOrDispatchOverrideType::None;
+   }
 
    // Called for every game's valid draw call (any type),
    // this is where you can override passes, add new ones, cancel other ones etc.
@@ -82,16 +87,6 @@ public:
    // Use "original_draw_dispatch_func" to call the original draw/dispatch within your function (you have to cancel it manually if you do so, as that's not tracked). This is useful if you want to add any post draw/dispatch behaviour. "ENABLE_POST_DRAW_DISPATCH_CALLBACK" is required for the it to work. Note that some advanced debugging behaviours might conflict if you replace the draw call.
    // Not called for draws/dispatches that matched a callback in "draw_callbacks_by_shader_hashes"/"dispatch_callbacks_by_shader_hashes" (which have this same signature).
    virtual DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func = nullptr) { return DrawOrDispatchOverrideType::None; }
-   // Called at bind time for patch-cloned pipelines to decide whether to use the
-   // patched variant (true) or the original (false). Default is true (patch ON).
-   // Requires "LUMA_PATCH_PROVIDERS".
-   virtual bool OnBindPatchedShader(DeviceData& device_data, uint32_t shader_hash, reshade::api::pipeline_subobject_type type) { return true; }
-   // Called on the render thread when a patch clone was created (lazily, on
-   // first bind) with the hashes that became live. Games flip their binding
-   // state here so resources are never bound before the patched shader can
-   // run. Must not take luma mutexes.
-   // Requires "LUMA_PATCH_PROVIDERS".
-   virtual void OnPatchedShadersPublished(DeviceData& device_data, const std::vector<uint32_t>& published_shader_hashes) {}
    // This is called every frame just before sending out the final image to the display (the swapchain).
    // You can reliable reset any per frame setting here.
    virtual void OnPresent(ID3D11Device* native_device, DeviceData& device_data) {}
