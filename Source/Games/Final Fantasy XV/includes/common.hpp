@@ -4,9 +4,9 @@
 #include <memory>
 #include <numbers>
 #include <unordered_map>
-#include "log.hpp"
 #include "native_cbuffers.hpp"
 #include "upscale_tracking.hpp"
+#include "rain.hpp"
 
 struct GameDeviceDataFFXV final : public GameDeviceData
 {
@@ -42,46 +42,29 @@ struct GameDeviceDataFFXV final : public GameDeviceData
    bool has_processed_view_buffer = false;
 
    float2 taa_jitters = {0, 0};
+   float2 taa_jitter_uv = {};
    float2 projection_jitters = {0, 0};
 
    // Post-TAA upscale tracking
    UpscaleTrackingState upscale_tracking;
 
-   // Luma bloom
-   ComPtr<ID3D11ShaderResourceView> bloom_scene_srv;
-   ComPtr<ID3D11Buffer> bloom_globals_cb;   // game's _Globals b0 captured at highpass
-   bool captured_bloom_scene = false;
+   DrawStateStack<DrawStateStackType::FullGraphics> taa_state;
 
-#if DEVELOPMENT || TEST
-   uint32_t dbg_replaced_srvs = 0;
-   uint32_t dbg_replaced_rtvs = 0;
-   uint32_t dbg_replaced_viewports = 0;
-   uint32_t dbg_replaced_scissors = 0;
-   // When true, log unmodified viewport/scissor state for intermediate passes between TAA and Upscale
-   bool dbg_log_baseline_state = false;
-#endif
+   FFXVRainLayer rain;
 
    void ResetPerFrameData()
    {
 
       // Clear per-frame source links while keeping persistent pooled allocations.
       upscale_tracking.ResetFrame();
-
-#if DEVELOPMENT || TEST
-      dbg_replaced_srvs = 0;
-      dbg_replaced_rtvs = 0;
-      dbg_replaced_viewports = 0;
-      dbg_replaced_scissors = 0;
-#endif
+      rain.ResetFrame();
 
       has_drawn_upscaling = false;
       has_drawn_tonemap = false;
+      taa_state.state.reset();
       found_taa_cb = false;
       has_processed_view_buffer = false;
       found_per_view_globals = false;
 
-      captured_bloom_scene = false;
-      bloom_scene_srv.reset();
-      bloom_globals_cb.reset();
    }
 };

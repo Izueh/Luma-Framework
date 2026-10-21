@@ -26,12 +26,12 @@ struct SPIRV_Cross_Output
 
 void frag_main()
 {
-    float resolutionScale = 1.0f;
+    float2 resolutionScale = float2(1.0f, 1.0f);
     if (LumaData.GameData.IsUpscaling != 0)
     {
-        resolutionScale = LumaData.RenderResolutionScale.x;
+        resolutionScale = LumaData.RenderResolutionScale.xy;
     }
-    float2 _46 = float2(mad(cb0_m1.x * resolutionScale, -0.5f, TEXCOORD.x), mad(cb0_m1.y * resolutionScale, -0.5f, TEXCOORD.y));
+    float2 _46 = float2(mad(cb0_m1.x * resolutionScale.x, -0.5f, TEXCOORD.x), mad(cb0_m1.y * resolutionScale.y, -0.5f, TEXCOORD.y));
     float4 _49 = t0.GatherRed(s0, _46);
     float4 _55 = t0.GatherGreen(s0, _46);
     SV_TARGET.x = max(_49.w, max(_49.y, max(_49.x, _49.z)));

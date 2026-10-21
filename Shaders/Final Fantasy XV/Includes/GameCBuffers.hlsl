@@ -13,11 +13,14 @@ struct LumaGameSettings
    uint UseVanillaGamutRatio; // gates the game's HDR gamut-ratio blend (was "FakeHDR")
    float BloomStrength;
    float Sharpness;
+   float VignetteStrength;
+   uint EnableDoF;
 };
 
 struct LumaGameData
 {
    int IsUpscaling;
+   float2 TemporalJitterUV;
 };
 }
 

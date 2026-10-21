@@ -44,7 +44,7 @@ void main(
   float2 pixelOffset = highpass_pixelOffset.xy;
   if (LumaData.GameData.IsUpscaling != 0)
   {
-    pixelOffset = saturate(pixelOffset / LumaData.RenderResolutionScale.xy);
+    pixelOffset *= LumaData.RenderResolutionScale.xy;
   }
   o0.xyzw = v0.xyzw;
   o1.xy = pixelOffset * float2(-1,1) + v1.xy;
