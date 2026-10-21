@@ -12,7 +12,7 @@ void main(uint2 tid : SV_DispatchThreadID, uint3 gid : SV_GroupId, uint gix : SV
 	{
 		return;
 	}
-	float2 uv = tid.xy * LumaSettings.GameSettings.InvOutputRes;
+	float2 uv = (float2(tid.xy) + 0.5f) * LumaSettings.GameSettings.InvOutputRes;
 	
 	float alpha = 0.0f;
 	[branch]
