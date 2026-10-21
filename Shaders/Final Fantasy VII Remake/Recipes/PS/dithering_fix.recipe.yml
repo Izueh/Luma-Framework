@@ -96,18 +96,18 @@ steps:
 
   # Step 2: Add a texture2darray resource declaration for the noise texture
   - kind: add_resource
-    name: add_noise_texture
+    name: add_fast_noise
     required: true
     condition:
       or:
         - is: fix_dither
         - is: fix_dither_nophase
     textures:
-      - handle: noise_texture
+      - handle: fast_noise
         reverse_bind: true
         dimension: texture2darray
 
-  # Step 3: Patch the LD instruction to use the new noise_texture binding
+  # Step 3: Patch the LD instruction to use the new fast_noise binding
   - kind: apply_rule
     name: patch_ld
     required: true
@@ -141,5 +141,5 @@ steps:
             - type: temp
               capture: ld_coords
             - type: resource
-              handle: { name: noise_texture }
+              handle: { name: fast_noise }
               capture: ld_resource

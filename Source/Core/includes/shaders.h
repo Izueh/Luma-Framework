@@ -6,6 +6,9 @@
 enum class ShaderReplaceDrawType;
 enum class ShaderCustomDepthStencilType;
 
+namespace Patch { struct ClonePatchData; struct PatchedShaderData; }
+struct CommandListData;
+
 namespace Shader
 {
    constexpr uint8_t meta_version = 2;
@@ -35,26 +38,36 @@ namespace Shader
    {
       None = 0,      // No patch applied
       Inplace = 1,   // Applied in-place at shader creation (sync, INPLACE mode)
-      Sync = 2,      // Applied via a pipeline clone created synchronously at pipeline init (CLONE mode)
+      Sync = 2,      // Applied via a pipeline clone created synchronously at pipeline init or bind (CLONE mode)
       Async = 3,     // Applied via a pipeline clone created on the background thread
    };
 
-   // Which shader variant is (or should be) bound.
-   enum class ShaderVariant : uint8_t
+   // Which version of a pipeline is bound: the game's own, or its clone (custom shader files and patches).
+   enum class PipelineVariant : uint8_t
    {
-      Original = 0,  // the game's original shader
-      Patched  = 1,  // the pipeline clone (patch applied)
+      Original,
+      Custom,
    };
 
+
    // What a pipeline's clone was built from (set at clone creation, reset before
-   // each re-clone). Exactly one source per clone: a file wins over a patch on
-   // the same hash. Used to preserve patch clones across unloads and to tell
-   // patch toggles from file swaps.
+   // each re-clone). A file wins over a patch on the same hash; a pipeline
+   // containing both sources is classified as File. Used to preserve patch clones
+   // across unloads and to tell patch toggles from file swaps.
    enum class CloneOrigin : uint8_t
    {
       None = 0,
       File = 1,
       Patch = 2,
+   };
+
+   // What a pipeline clone was built from, per shader stage. Copied on command lists when bound.
+   struct CustomPipelineData
+   {
+      reshade::api::shader_stage file_stages = reshade::api::shader_stage(0);
+      reshade::api::shader_stage patch_stages = reshade::api::shader_stage(0);
+      // Recipe reports and clone ownership (patch.hpp), null for clones without recipes. Shared with the command lists that bound the clone.
+      std::shared_ptr<Patch::ClonePatchData> patch_data;
    };
 
    // Mostly hardcoded to match a shader object, but it can work for other ReShade pipelines as well
@@ -74,14 +87,16 @@ namespace Shader
 #endif
       // True if we cloned it and "replaced" it with custom shaders
       bool cloned = false;
+      bool manually_unloaded = false;
       // Needs to be destroyed when the original pipeline is.
       reshade::api::pipeline pipeline_clone;
       // How the patch was applied to this pipeline (for the frame capture view: "#", "#S", "#A")
       PatchApplicationMode patch_application_mode = PatchApplicationMode::None;
       // What the current clone was built from (set at clone creation, reset
       // before each re-clone). Preserves patch clones across unloads; a file
-      // wins over a patch on the same clone.
+      // wins over a patch on the same shader hash.
       CloneOrigin clone_origin = CloneOrigin::None;
+      CustomPipelineData custom_pipeline_data;
       // Original shaders hash (there should only be one except in DX12)
       // Any value is valid and possible, including 0
 #if DX12
@@ -602,6 +617,23 @@ namespace Shader
       }
       return template_shader_name;
    }
+
+   // ============================================================================
+   // Pipeline clone helpers, defined in shaders.inl (they need the complete "CommandListData" and patch types).
+   // ============================================================================
+
+   // The stage of a shader subobject (0 if it isn't one).
+   reshade::api::shader_stage GetShaderStage(reshade::api::pipeline_subobject_type type);
+   // Records a shader injected into a clone: a custom shader file, or a patch (with its recipe reports).
+   void RecordCloneShader(CustomPipelineData& data, reshade::api::pipeline_subobject_type type,
+      const std::shared_ptr<Patch::PatchedShaderData>& patch = nullptr);
+   // What the clone of a pipeline (or the clone bound on a command list) was built from, for one shader stage.
+   CloneOrigin GetCloneOrigin(const CachedPipeline& pipeline, reshade::api::shader_stage stage);
+   CloneOrigin GetShaderOrigin(const CommandListData& cmd_list_data, reshade::api::shader_stage stage);
+   // Binds the original pipelines of "stages" or their clones, for the current draw/dispatch (callable from any draw callback):
+   // the next draw binds the clones again if it can use them. Stages without a clone (selected at bind time) are left alone.
+   // In DX11 a pipeline is a single shader, so stages switch independently.
+   void UsePipelineVariant(CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, reshade::api::shader_stage stages, PipelineVariant variant);
 }
 
 // TODO: delete. This is useless. If anything, make a typedef of "ShaderHashesList" with a single shader per stage.

@@ -47,27 +47,6 @@ struct GameDeviceDataFFXV final : public GameDeviceData
    // Post-TAA upscale tracking
    UpscaleTrackingState upscale_tracking;
 
-   // Recipe patch bindings resolved at patch-apply time. Presence in the map
-   // implies the shader was patched; "ready" flips on present when the clone
-   // was actually published (OnPatchedShadersPublished).
-   struct FFXVDxpBindingEntry
-   {
-      uint32_t fast_noise_bind_point = UINT32_MAX;
-      uint32_t frame_constants_bind_point = UINT32_MAX;
-      bool ready = false;
-   };
-   // Pending entries (written by the patch provider thread, under pending_mutex).
-   mutable std::mutex pending_mutex;
-   std::unordered_map<uint32_t, FFXVDxpBindingEntry> pending_dxp_bindings;
-   // Finalized entries: updated only on the render thread (lazy clone create
-   // at bind / present), read per-draw without locks (draw and present run on
-   // the same thread).
-   std::unordered_map<uint32_t, FFXVDxpBindingEntry> dxp_bindings;
-
-   // Runtime patch toggle (reference): ON by default, disabled per draw via
-   // UseShaderVariant. Atomic (UI writes, render reads).
-   std::atomic<bool> dithering_patch_enabled = true;
-
    // Luma bloom
    ComPtr<ID3D11ShaderResourceView> bloom_scene_srv;
    ComPtr<ID3D11Buffer> bloom_globals_cb;   // game's _Globals b0 captured at highpass
