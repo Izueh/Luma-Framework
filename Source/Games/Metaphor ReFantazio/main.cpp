@@ -876,6 +876,14 @@ public:
          game_device_data.draw_contexts[i].skin_buffer = std::make_unique<StretchyBuffer>(native_device, context.get(), 32 * 1024 * 1024);
 
          game_device_data.draw_contexts[i].ocean_buffer = std::make_unique<StretchyBuffer>(native_device, context.get(), 32);
+
+         game_device_data.draw_contexts[i].inv_proj.SetIdentity();
+         game_device_data.draw_contexts[i].proj.SetIdentity();
+         game_device_data.draw_contexts[i].proj_with_jitter.SetIdentity();
+         game_device_data.draw_contexts[i].view.SetIdentity();
+         game_device_data.draw_contexts[i].prev_inv_proj.SetIdentity();
+         game_device_data.draw_contexts[i].prev_proj_with_current_jitter.SetIdentity();
+         game_device_data.draw_contexts[i].prev_view_proj.SetIdentity();
       }
 
       native_device->QueryInterface(game_device_data.multithread.put());
@@ -3464,7 +3472,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
    {
       Globals::SetGlobals(PROJECT_NAME, "Metaphor: ReFantazio Luma mod");
-      Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::Playable;
+      Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::Finished;
       Globals::VERSION = 1;
 
       enable_samplers_upgrade = true;
