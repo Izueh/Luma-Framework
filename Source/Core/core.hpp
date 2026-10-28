@@ -3593,6 +3593,8 @@ namespace
          {
             switch (subobject.type)
             {
+            case reshade::api::pipeline_subobject_type::input_layout:
+                return false;
 #if GEOMETRY_SHADER_SUPPORT
             case reshade::api::pipeline_subobject_type::geometry_shader:
 #endif // GEOMETRY_SHADER_SUPPORT

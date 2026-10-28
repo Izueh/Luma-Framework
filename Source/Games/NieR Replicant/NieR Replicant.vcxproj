@@ -62,11 +62,10 @@
     </PropertyPageSchema>
   </ItemGroup>
   <PropertyGroup>
-    <UseLumaNGX>false</UseLumaNGX>
-    <UseLumaFSR>false</UseLumaFSR>
+    <UseLumaNGX>true</UseLumaNGX>
+    <UseLumaFSR>true</UseLumaFSR>
     <LumaPackage>false</LumaPackage>
   </PropertyGroup>
-
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
   <ImportGroup Label="PropertySheets">
@@ -304,6 +303,9 @@
   <ItemGroup>
     <ClCompile Include="..\..\Core\unity_build.cpp" />
     <ClCompile Include="main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="ShaderPatches\ShaderPatches.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

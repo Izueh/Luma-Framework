@@ -13,7 +13,7 @@ namespace CB
 
     struct LumaGameData
     {
-        float Dummy;
+        float2 ProjectionJitters;
 	};
 }
 

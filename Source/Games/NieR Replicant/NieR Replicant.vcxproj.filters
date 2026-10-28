@@ -4,4 +4,14 @@
     <ClCompile Include="main.cpp" />
     <ClCompile Include="..\..\Core\unity_build.cpp" />
   </ItemGroup>
+  <ItemGroup>
+    <Filter Include="ShaderPatches">
+      <UniqueIdentifier>{1647ae98-0735-4f24-868a-85b86f713026}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="ShaderPatches\ShaderPatches.h">
+      <Filter>ShaderPatches</Filter>
+    </ClInclude>
+  </ItemGroup>
 </Project>
