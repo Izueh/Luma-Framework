@@ -883,7 +883,8 @@ public:
       }
       D3D11_BUFFER_DESC bd;
       native_buffer->GetDesc(&bd);
-      if (bd.ByteWidth == 912)
+      if ((bd.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0 &&
+          bd.ByteWidth == 912)
       {
          auto& device_data = *device->get_private_data<DeviceData>();
          auto& game_device_data = GetGameDeviceData(device_data);
