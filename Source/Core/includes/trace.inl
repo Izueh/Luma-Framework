@@ -581,16 +581,64 @@ namespace Trace
          return shader ? find(device_data.native_pixel_shaders, shader.get()) : 0;
       }
 
+      struct NativeShaderReflection
+      {
+         const void* code = nullptr; // Read again when the shader is recompiled
+         bool found = false;
+         CachedShader reflection;
+      };
+      std::mutex s_mutex_native_reflections;
+      std::unordered_map<uint32_t, NativeShaderReflection> native_reflections; // By "native_shaders_definitions" key
+
+      // The slots a Luma shader uses, read like the ones of game shaders ("ReflectShaderSlots()"). False if it can't be reflected.
+      bool FindNativeShaderReflection(uint32_t native_shader_hash, CachedShader& reflection)
+      {
+         const std::shared_lock lock_loading(s_mutex_loading);
+         const auto custom_shader = custom_shaders_cache.find(Shader::ShiftHash32ToHash64(native_shader_hash));
+         if (custom_shader == custom_shaders_cache.end() || !custom_shader->second || custom_shader->second->code.empty() || !Shader::d3d_reflect)
+            return false;
+         const std::lock_guard lock(s_mutex_native_reflections);
+         NativeShaderReflection& native_reflection = native_reflections[native_shader_hash];
+         const auto& code = custom_shader->second->code;
+         if (native_reflection.code != code.data())
+         {
+            native_reflection = {code.data()};
+            com_ptr<ID3D11ShaderReflection> shader_reflector;
+            D3D11_SHADER_DESC shader_desc;
+            if (SUCCEEDED(Shader::d3d_reflect(code.data(), code.size(), IID_ID3D11ShaderReflection, (void**)&shader_reflector)) && SUCCEEDED(shader_reflector->GetDesc(&shader_desc)))
+            {
+               bool found_any_rtvs = false;
+               bool found_any_other_bindings = false;
+               ReflectShaderSlots(shader_reflector.get(), shader_desc, native_reflection.reflection, found_any_rtvs, found_any_other_bindings);
+               native_reflection.found = true;
+            }
+         }
+         if (native_reflection.found)
+            reflection = native_reflection.reflection;
+         return native_reflection.found;
+      }
+
       void RecordCustomPass(ID3D11DeviceContext* native_device_context, const char* name, reshade::api::shader_stage stage, const DrawDispatchData& draw_dispatch_data)
       {
-         const bool debug_draw = debug_draw_custom_pass != 0 && debug_draw_custom_pass == Math::CompileTimeStringHash(name) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id());
-         if (!debug_draw && !trace_running)
+         if (debug_draw_custom_pass == 0 && !trace_running)
             return;
          DeviceData* device_data = FindDeviceData(native_device_context);
          if (!device_data)
             return;
+         uint32_t shader_hash;
+         {
+            const std::shared_lock lock_device(device_data->mutex);
+            shader_hash = FindNativeShaderHash(*device_data, native_device_context, stage);
+         }
+         // Unnamed passes go by their shader's name
+         if (!name)
+         {
+            const auto definition = native_shaders_definitions.find(shader_hash);
+            name = definition != native_shaders_definitions.end() && definition->second.file_name ? definition->second.file_name : "Custom Draw";
+         }
+
          // The pass drew right before, its state is still bound
-         if (debug_draw)
+         if (debug_draw_custom_pass != 0 && debug_draw_custom_pass == Math::CompileTimeStringHash(name) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id()))
          {
             const int32_t instance = debug_draw_custom_pass_instance.fetch_add(1);
             if (debug_draw_pipeline_target_instance == -1 || instance == debug_draw_pipeline_target_instance)
@@ -602,14 +650,71 @@ namespace Trace
          trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
          trace_draw_call_data.custom_name = name;
          trace_draw_call_data.custom_stage = stage;
+         trace_draw_call_data.custom_shader_hash = shader_hash;
+         CachedShader reflection;
+         const bool has_reflection = shader_hash != 0 && FindNativeShaderReflection(shader_hash, reflection);
          {
             const std::shared_lock lock_device(device_data->mutex);
-            CaptureState(trace_draw_call_data, *device_data, native_device_context, stage, nullptr, draw_dispatch_data);
-            trace_draw_call_data.custom_shader_hash = FindNativeShaderHash(*device_data, native_device_context, stage);
+            CaptureState(trace_draw_call_data, *device_data, native_device_context, stage, has_reflection ? &reflection : nullptr, draw_dispatch_data);
          }
          // The pixel shader state doesn't include the draw arguments
          trace_draw_call_data.draw_dispatch_data = draw_dispatch_data;
          queued_entries.push_back(std::move(trace_draw_call_data));
+      }
+   }
+
+   void ReflectShaderSlots(ID3D11ShaderReflection* shader_reflector, const D3D11_SHADER_DESC& shader_desc, CachedShader& cached_shader, bool& found_any_rtvs, bool& found_any_other_bindings)
+   {
+      HRESULT hr;
+      // RTVs
+      for (UINT i = 0; i < shader_desc.OutputParameters; ++i)
+      {
+         D3D11_SIGNATURE_PARAMETER_DESC shader_output_desc;
+         hr = shader_reflector->GetOutputParameterDesc(i, &shader_output_desc);
+         if (SUCCEEDED(hr) && strcmp(shader_output_desc.SemanticName, "SV_Target") == 0)
+         {
+            ASSERT_ONCE(shader_output_desc.SemanticIndex == shader_output_desc.Register && shader_output_desc.SemanticIndex < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT);
+            cached_shader.rtvs[shader_output_desc.SemanticIndex] = true;
+            found_any_rtvs = true;
+         }
+      }
+
+      // SRVs and UAVs and samplers (it works for compute shaders too)
+      for (UINT i = 0; i < shader_desc.BoundResources; ++i)
+      {
+         D3D11_SHADER_INPUT_BIND_DESC bind_desc;
+         hr = shader_reflector->GetResourceBindingDesc(i, &bind_desc);
+         if (SUCCEEDED(hr))
+         {
+            for (UINT j = 0; j < bind_desc.BindCount; ++j)
+            {
+               if (bind_desc.Type == D3D_SIT_TEXTURE)
+               {
+                  ASSERT_ONCE(bind_desc.BindPoint + j < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT);
+                  cached_shader.srvs[bind_desc.BindPoint + j] = true;
+                  found_any_other_bindings = true;
+               }
+               else if (bind_desc.Type == D3D_SIT_UAV_RWTYPED)
+               {
+                  ASSERT_ONCE(bind_desc.BindPoint + j < D3D11_1_UAV_SLOT_COUNT);
+                  cached_shader.uavs[bind_desc.BindPoint + j] = true;
+                  found_any_other_bindings = true;
+               }
+               // Verify that the cbuffer index and bind points match (they should always do)
+               else if (bind_desc.Type == D3D_SIT_CBUFFER)
+               {
+                  ASSERT_ONCE(bind_desc.BindPoint + j < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT);
+                  //ASSERT_ONCE(cached_shader.cbs[bind_desc.BindPoint + j]);
+                  cached_shader.cbs[bind_desc.BindPoint + j] = true;
+               }
+               // These are always valid, even when the other ones aren't, so don't set "found_any_other_bindings" to true
+               else if (bind_desc.Type == D3D_SIT_SAMPLER)
+               {
+                  ASSERT_ONCE(bind_desc.BindPoint + j < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT);
+                  cached_shader.samplers[bind_desc.BindPoint + j] = true;
+               }
+            }
+         }
       }
    }
 

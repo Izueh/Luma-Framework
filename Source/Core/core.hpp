@@ -288,6 +288,7 @@ namespace
    bool trace_ignore_vertex_shaders = true;
    bool trace_ignore_buffer_writes = true;
    bool trace_ignore_bindings = true;
+   bool trace_ignore_custom_draws = true; // Luma passes ("Trace::Draw()")
    bool trace_ignore_non_bound_shader_referenced_resources = true;
    bool allow_replace_draw_nans = false;
 #endif // DEVELOPMENT
@@ -3937,59 +3938,10 @@ namespace
                            }
 #endif
 
-                           // RTVs
-                           for (UINT i = 0; i < shader_desc.OutputParameters; ++i)
-                           {
-                              D3D11_SIGNATURE_PARAMETER_DESC shader_output_desc;
-                              hr = shader_reflector->GetOutputParameterDesc(i, &shader_output_desc);
-                              if (SUCCEEDED(hr) && strcmp(shader_output_desc.SemanticName, "SV_Target") == 0)
-                              {
-                                 ASSERT_ONCE(shader_output_desc.SemanticIndex == shader_output_desc.Register && shader_output_desc.SemanticIndex < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT);
-                                 cached_shader->rtvs[shader_output_desc.SemanticIndex] = true;
-                                 found_any_rtvs = true;
-                              }
-                           }
-
-                           // SRVs and UAVs and samplers (it works for compute shaders too)
-                           for (UINT i = 0; i < shader_desc.BoundResources; ++i)
-                           {
-                              D3D11_SHADER_INPUT_BIND_DESC bind_desc;
-                              hr = shader_reflector->GetResourceBindingDesc(i, &bind_desc);
-                              if (SUCCEEDED(hr))
-                              {
-                                 for (UINT j = 0; j < bind_desc.BindCount; ++j)
-                                 {
-                                    if (bind_desc.Type == D3D_SIT_TEXTURE)
-                                    {
-                                       ASSERT_ONCE(bind_desc.BindPoint + j < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT);
-                                       cached_shader->srvs[bind_desc.BindPoint + j] = true;
-                                       found_any_other_bindings = true;
-                                    }
-                                    else if (bind_desc.Type == D3D_SIT_UAV_RWTYPED)
-                                    {
-                                       ASSERT_ONCE(bind_desc.BindPoint + j < D3D11_1_UAV_SLOT_COUNT);
-                                       cached_shader->uavs[bind_desc.BindPoint + j] = true;
-                                       found_any_other_bindings = true;
-                                    }
-                                    // Verify that the cbuffer index and bind points match (they should always do)
-                                    else if (bind_desc.Type == D3D_SIT_CBUFFER)
-                                    {
-                                       ASSERT_ONCE(bind_desc.BindPoint + j < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT);
-                                       //ASSERT_ONCE(cached_shader->cbs[bind_desc.BindPoint + j]);
-                                       cached_shader->cbs[bind_desc.BindPoint + j] = true;
-                                    }
-                                    // These are always valid, even when the other ones aren't, so don't set "found_any_other_bindings" to true
-                                    else if (bind_desc.Type == D3D_SIT_SAMPLER)
-                                    {
-                                       ASSERT_ONCE(bind_desc.BindPoint + j < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT);
-                                       cached_shader->samplers[bind_desc.BindPoint + j] = true;
-                                    }
-                                 }
-                              }
-                           }
+                           Trace::ReflectShaderSlots(shader_reflector.get(), shader_desc, *cached_shader, found_any_rtvs, found_any_other_bindings);
 
                            // TODO: does this issue still happen now that we added more early out checks?
-                           // Note: sometimes the "GetResourceBindingDesc" above fails (it gives success, but then returns no bindings)... It might be related to "D3DCOMPILER_STRIP_REFLECTION_DATA",
+                           // Note: sometimes the "GetResourceBindingDesc" in "Trace::ReflectShaderSlots()" fails (it gives success, but then returns no bindings)... It might be related to "D3DCOMPILER_STRIP_REFLECTION_DATA",
                            // but we don't know for sure nor we can retrieve that flag, we wrote some heuristics to guess when it failed, then we pretend all bound resources are "valid" (to show them in the debug data).
                            if (found_any_other_bindings || (shader_desc.FloatInstructionCount != 0 || shader_desc.IntInstructionCount != 0 || shader_desc.UintInstructionCount != 0))
                            {
@@ -10361,6 +10313,17 @@ namespace
       OverlayLog::Render();
    }
 
+   // "ImGui::SameLine()" before the next button (or checkbox) of a row, unless it doesn't fit in the window anymore: the row wraps
+   void SameLineIfFits(const char* next_label, bool checkbox = false)
+   {
+      const ImGuiStyle& style = ImGui::GetStyle();
+      const float label_width = ImGui::CalcTextSize(next_label, nullptr, true).x;
+      const float width = checkbox ? (ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + label_width) : (label_width + style.FramePadding.x * 2.f);
+      ImGui::SameLine();
+      if (ImGui::GetContentRegionAvail().x < width)
+         ImGui::NewLine();
+   }
+
    // @see https://pthom.github.io/imgui_manual_online/manual/imgui_manual.html
    // This runs within the swapchain "Present()" function, and thus it's thread safe
    void OnRegisterMainOverlay(reshade::api::effect_runtime* runtime)
@@ -10380,12 +10343,12 @@ namespace
          trace_scheduled = true;
       }
 #if 0 // Currently not necessary
-      ImGui::SameLine();
+      SameLineIfFits("List Unique Shaders Only", true);
       ImGui::Checkbox("List Unique Shaders Only", &trace_list_unique_shaders_only);
 #endif
 
 #if !GRAPHICS_ANALYZER
-      ImGui::SameLine();
+      SameLineIfFits("Mod Enabled", true);
       bool mod_enabled = custom_shaders_enabled || !ignore_indirect_upgraded_textures || !ignore_upgraded_samplers;
       if (ImGui::Checkbox("Mod Enabled", &mod_enabled))
       {
@@ -10424,7 +10387,7 @@ namespace
          ImGui::SetTooltip("Unload all compiled and replaced shaders. The numbers shows how many shaders are being replaced at this moment in the game, from the custom loaded/compiled ones.\nThis will also reset many of their debug settings to default.\nYou can use ReShade's Global Effects Toggle Shortcut to toggle these on and off.");
       }
 
-      ImGui::SameLine();
+      SameLineIfFits("Reload Shaders");
 #endif // DEVELOPMENT || TEST
 
       bool needs_compilation = false;
@@ -10486,7 +10449,7 @@ namespace
 #if DEVELOPMENT || TEST
 #if LUMA_PATCH_PROVIDERS != 0
       // Patch-specific unload/reload: reload reads the recipes again and rebuilds their clones.
-      ImGui::SameLine();
+      SameLineIfFits("Unload Patches (000)");
       if (ImGui::Button(std::format("Unload Patches ({})", Patch::CountPatchedClones(device_data)).c_str()))
       {
          needs_unload_patches = true;
@@ -10496,7 +10459,7 @@ namespace
          ImGui::SetTooltip("Unload only the patched shaders (custom shader files are untouched).\nPatch clones are preserved until 'Reload Patches' rebuilds them.");
       }
 
-      ImGui::SameLine();
+      SameLineIfFits("Reload Patches");
       if (ImGui::Button("Reload Patches"))
       {
          needs_load_patches = true;
@@ -10507,7 +10470,7 @@ namespace
       }
 #endif // LUMA_PATCH_PROVIDERS != 0
 
-      ImGui::SameLine();
+      SameLineIfFits("Clean Shaders Cache");
       if (ImGui::Button("Clean Shaders Cache"))
       {
          const std::unique_lock lock_loading(s_mutex_loading);
@@ -10524,7 +10487,7 @@ namespace
 #endif
 
 #if DEVELOPMENT && _DEBUG // Not usually necessary, takes unnecessary space
-      ImGui::SameLine();
+      SameLineIfFits("Auto Load Shaders", true);
       ImGui::PushID("##AutoLoadCheckBox");
       if (ImGui::Checkbox("Auto Load Shaders", &auto_load))
       {
@@ -10543,14 +10506,14 @@ namespace
       ImGui::PopID();
 #endif // DEVELOPMENT
 #if DEVELOPMENT || TEST
-      ImGui::SameLine();
+      SameLineIfFits("Allow Custom Shaders", true);
       ImGui::Checkbox("Allow Custom Shaders", &custom_shaders_enabled);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Toggles all the mods custom shaders from applying (without unloading them).\nNote that this might break rendering, only use for testing or vanilla comparison.");
       }
 #if LUMA_PATCH_PROVIDERS != 0
-      ImGui::SameLine();
+      SameLineIfFits("Allow Patches", true);
       ImGui::Checkbox("Allow Patches", &allow_patches);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
@@ -10559,14 +10522,14 @@ namespace
 #endif // LUMA_PATCH_PROVIDERS != 0
 #endif // DEVELOPMENT || TEST
 #if DEVELOPMENT
-      ImGui::SameLine();
+      SameLineIfFits("Compile/Clear All Shaders", true);
       ImGui::Checkbox("Compile/Clear All Shaders", &compile_clear_all_shaders);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("If enabled, shaders that aren't used by this mod will be compiled or cleared too.\nUseful to test if they compile properly after changes to c++ or shaders code.\nNote that some mods has specific shader defines configurations that we don't have access too here, but they should build nonetheless.");
       }
 
-      ImGui::SameLine();
+      SameLineIfFits("Auto Dump Shaders (000)", true);
       ImGui::PushID("##AutoDumpCheckBox");
       if (ImGui::Checkbox(std::format("Auto Dump Shaders ({})", shader_cache_count).c_str(), &auto_dump))
       {
@@ -10579,7 +10542,7 @@ namespace
 
       if (!auto_dump) // Only show if auto dump is off for convenience. Even if theoretically if we ever turned off auto dump for an instant, we might have missed dumping any shaders.
       {
-         ImGui::SameLine();
+         SameLineIfFits("Force Dump Shaders");
          ImGui::PushID("##DumpShaders");
          // "ALLOW_SHADERS_DUMPING" is expected to be on here
          if (ImGui::Button("Force Dump Shaders"))
@@ -10674,15 +10637,17 @@ namespace
                }
             }
 
-            ImGui::SameLine();
+            SameLineIfFits("Show Command List / Thread Info", true);
             list_size_changed |= ImGui::Checkbox("Show Command List / Thread Info", &trace_show_command_list_info);
-            ImGui::SameLine();
+            SameLineIfFits("Ignore Vertex Shaders", true);
             list_size_changed |= ImGui::Checkbox("Ignore Vertex Shaders", &trace_ignore_vertex_shaders);
-            ImGui::SameLine();
+            SameLineIfFits("Ignore Buffer Writes", true);
             list_size_changed |= ImGui::Checkbox("Ignore Buffer Writes", &trace_ignore_buffer_writes);
-            ImGui::SameLine();
+            SameLineIfFits("Ignore Bindings", true);
             list_size_changed |= ImGui::Checkbox("Ignore Bindings", &trace_ignore_bindings);
-            ImGui::SameLine();
+            SameLineIfFits("Ignore Custom Draws", true);
+            list_size_changed |= ImGui::Checkbox("Ignore Custom Draws", &trace_ignore_custom_draws);
+            SameLineIfFits("Ignore Non Bound Shader Referenced Resources", true);
             ImGui::Checkbox("Ignore Non Bound Shader Referenced Resources", &trace_ignore_non_bound_shader_referenced_resources);
 
             if (ImGui::BeginChild("HashList", ImVec2(500, -FLT_MIN), ImGuiChildFlags_ResizeX))
@@ -10722,6 +10687,9 @@ namespace
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::BindPipeline
                            || draw_call_data.type == TraceDrawCallData::TraceDrawCallType::BindResource) {
                            if (trace_ignore_bindings) continue;
+                        }
+                        else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom) {
+                           if (trace_ignore_custom_draws && draw_call_data.custom_stage != reshade::api::shader_stage(0)) continue;
                         }
                         actual_trace_count++;
                         trace_draw_calls_index_inverse_redirector.emplace_back(index);
@@ -11163,6 +11131,8 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom)
                         {
+                           if (trace_ignore_custom_draws && draw_call_data.custom_stage != reshade::api::shader_stage(0)) continue;
+
                            if (trace_show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
