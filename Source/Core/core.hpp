@@ -199,6 +199,9 @@
 #include "includes/instance_data.h"
 #include "includes/game.h"
 #include "includes/com_ptr.h"
+#if DEVELOPMENT
+#include "includes/mcp.hpp"
+#endif
 
 #include "utils/format.hpp"
 #include "utils/pipeline.hpp"
@@ -5243,10 +5246,6 @@ namespace
          cmd_list_data.write_finished.store(true, std::memory_order_release);
       }
    }
-
-#if DEVELOPMENT
-#include "includes/mcp_server.inl"
-#endif // DEVELOPMENT
 
    void OnPresent(
       reshade::api::command_queue* queue,
@@ -15461,6 +15460,9 @@ namespace
 
 #include "includes/shaders.inl"
 #include "includes/patch.inl"
+#if DEVELOPMENT
+#include "includes/mcp_server.inl"
+#endif
 
 // "async" means that this is not called from the dll loading function ("DLL_PROCESS_ATTACH"), so we can do threading related stuff in the function
 void Init(bool async)
@@ -15506,7 +15508,7 @@ void Init(bool async)
    // Games call through these pointers, so the MCP tap sees every settings update and draw
    for (auto& [type, implementation] : sr_implementations)
    {
-      implementation = std::make_unique<Mcp::SrTap>(std::move(implementation));
+      implementation = Mcp::TapSuperResolution(std::move(implementation));
    }
 #endif
 #endif
