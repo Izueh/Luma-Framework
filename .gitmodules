@@ -4,3 +4,9 @@
 [submodule "ReShade Addon/external/DKUtil"]
 	path = Source/External/DKUtil
 url=https://github.com/gottyduke/DKUtil.git
+[submodule "Source/External/safetyhook"]
+	path = Source/External/safetyhook
+	url = https://github.com/cursey/safetyhook.git
+[submodule "Source/External/zydis"]
+	path = Source/External/zydis
+	url = https://github.com/zyantific/zydis.git

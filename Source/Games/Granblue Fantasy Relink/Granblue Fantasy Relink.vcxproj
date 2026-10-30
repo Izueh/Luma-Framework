@@ -64,6 +64,7 @@
   <PropertyGroup>
     <UseLumaNGX>true</UseLumaNGX>
     <UseLumaFSR>true</UseLumaFSR>
+    <UseLumaSafetyHook>true</UseLumaSafetyHook>
     <LumaPackage>false</LumaPackage>
   </PropertyGroup>
 
@@ -303,17 +304,9 @@
   <ItemGroup>
     <ClCompile Include="..\..\Core\unity_build.cpp" />
     <ClCompile Include="main.cpp" />
-    <ClCompile Include="includes\safetyhook.cpp" />
-    <ClCompile Include="includes\Zydis.c">
-      <ForcedIncludeFiles>
-      </ForcedIncludeFiles>
-      <AdditionalIncludeDirectories>$(ProjectDir)includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="includes\cbuffers.h" />
-    <ClInclude Include="includes\safetyhook.hpp" />
-    <ClInclude Include="includes\Zydis.h" />
   </ItemGroup>
   <!-- Apply feature settings after the final per-configuration properties. -->
   <Import Project="..\Luma.DXP.props" Condition="Exists('..\Luma.DXP.props')" />

@@ -6,6 +6,8 @@
     <UseLumaFSR Condition="'$(UseLumaFSR)'==''">false</UseLumaFSR>
     <!-- FSR 4 through DX11->DX12 interop (needs UseLumaFSR). The FidelityFX API DX12 dlls are loaded from the game folder at runtime, they aren't shipped. -->
     <UseLumaFSR4 Condition="'$(UseLumaFSR4)'==''">false</UseLumaFSR4>
+    <!-- Shared hooking library (SafetyHook and Zydis submodules) -->
+    <UseLumaSafetyHook Condition="'$(UseLumaSafetyHook)'==''">false</UseLumaSafetyHook>
     <UseLumaFastNoise Condition="'$(UseLumaFastNoise)'==''">false</UseLumaFastNoise>
     <!-- On by default: NVAPI is a static lib that loads the driver's DLL at runtime, so it's harmless on non NVIDIA GPUs (init just fails). -->
     <UseLumaNVAPI Condition="'$(UseLumaNVAPI)'==''">true</UseLumaNVAPI>
@@ -48,6 +50,36 @@
     <LumaNVAPILibName Condition="'$(Platform)'!='Win32'">nvapi64.lib</LumaNVAPILibName>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(UseLumaSafetyHook)'=='true'">
+    <LumaSafetyHookRoot>$(MSBuildThisFileDirectory)..\External\safetyhook</LumaSafetyHookRoot>
+    <LumaZydisRoot>$(MSBuildThisFileDirectory)..\External\zydis</LumaZydisRoot>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(UseLumaSafetyHook)'=='true'">
+    <ClCompile Include="$(LumaSafetyHookRoot)\src\allocator.cpp;$(LumaSafetyHookRoot)\src\easy.cpp;$(LumaSafetyHookRoot)\src\inline_hook.cpp;$(LumaSafetyHookRoot)\src\mid_hook.cpp;$(LumaSafetyHookRoot)\src\os.windows.cpp;$(LumaSafetyHookRoot)\src\utility.cpp;$(LumaSafetyHookRoot)\src\vmt_hook.cpp">
+      <ObjectFileName>$(IntDir)safetyhook\</ObjectFileName>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <!-- Zydis and Zycore have files with the same name (e.g. "String.c"), so they need separate object folders -->
+    <ClCompile Include="$(LumaZydisRoot)\src\*.c">
+      <ObjectFileName>$(IntDir)zydis\</ObjectFileName>
+      <AdditionalIncludeDirectories>$(LumaZydisRoot)\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <CompileAs>CompileAsC</CompileAs>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="$(LumaZydisRoot)\dependencies\zycore\src\*.c;$(LumaZydisRoot)\dependencies\zycore\src\API\*.c">
+      <ObjectFileName>$(IntDir)zycore\</ObjectFileName>
+      <CompileAs>CompileAsC</CompileAs>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+  </ItemGroup>
+
   <ItemDefinitionGroup>
     <ClCompile>
       <!-- The unity build can exceed the default object file section limit (C1128), especially in Debug. -->
@@ -70,6 +102,10 @@
     </ClCompile>
     <ClCompile Condition="'$(UseLumaFSR)'=='true' and '$(UseLumaFSR4)'=='true'">
       <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_FSR4=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Condition="'$(UseLumaSafetyHook)'=='true'">
+      <AdditionalIncludeDirectories>$(LumaSafetyHookRoot)\include;$(LumaZydisRoot)\include;$(LumaZydisRoot)\dependencies\zycore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>UNICODE;_UNICODE;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;ENABLE_SAFETYHOOK=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Condition="'$(UseLumaFastNoise)'=='true'">
       <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_FAST_NOISE_TEXTURES=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>

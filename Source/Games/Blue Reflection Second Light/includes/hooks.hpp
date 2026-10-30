@@ -2,7 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "safetyhook.hpp"
+#include <safetyhook.hpp>
 
 template<typename T>
 static inline T* ResolveRipRelative(void* instr, std::ptrdiff_t dispOffset, std::size_t instrSize)

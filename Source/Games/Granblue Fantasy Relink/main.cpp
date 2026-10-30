@@ -17,7 +17,7 @@
 #include "includes\cbuffers.h"
 #include "includes\common.hpp"
 #include "includes\hooks.hpp"
-#include "includes\safetyhook.hpp"
+#include <safetyhook.hpp>
 #include "includes\common.cpp"
 #include "includes\hooks.cpp"
 

@@ -14,7 +14,7 @@
 #include "..\..\Core\core.hpp"
 #include "includes\shader_patches.h"
 #include "includes\hooks.hpp"
-#include "includes\safetyhook.hpp"
+#include <safetyhook.hpp>
 #include "includes\hooks.cpp"
 #include "includes\stretchy_buffer.hpp"
 
