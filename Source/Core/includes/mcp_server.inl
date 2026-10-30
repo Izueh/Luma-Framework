@@ -434,6 +434,8 @@ namespace Mcp
             }
             if (entry.cancelled_or_replaced)
                w->Field("cancelled_or_replaced", true);
+            if (!entry.replaced_slots.empty())
+               w->Field("updated", true);
             else
             {
                w->Field("stage", "unknown"); // Destroyed since the capture
@@ -657,6 +659,46 @@ namespace Mcp
             w->Field("address", std::format("{} {} {}", GetTextureAddressModeName(entry.samplers_address_u[i]), GetTextureAddressModeName(entry.samplers_address_v[i]), GetTextureAddressModeName(entry.samplers_address_w[i])));
             w->Key("address_ids").BeginArray().Value(uint32_t(entry.samplers_address_u[i])).Value(uint32_t(entry.samplers_address_v[i])).Value(uint32_t(entry.samplers_address_w[i])).EndArray();
             w->Field("mip_lod_bias", entry.samplers_mip_lod_bias[i]); });
+
+         // Slots a draw callback changed ("Trace::UpdateDraw()"), with what it bound
+         if (const auto& replaced = entry.replaced_state; replaced && !entry.replaced_slots.empty())
+         {
+            constexpr const char* slot_kind_names[] = {"rtv", "srv", "uav", "dsv", "cb", "sampler"};
+            constexpr const char* slot_change_names[] = {"added", "replaced", "unbound"};
+            w->Key("replaced_slots").BeginArray();
+            for (const auto& [kind, slot, change] : entry.replaced_slots)
+            {
+               w->BeginObject().Field("kind", EnumName(slot_kind_names, size_t(kind))).Field("slot", slot).Field("change", EnumName(slot_change_names, size_t(change)));
+               if (change != TraceDrawCallData::SlotChange::Unbound)
+               {
+                  w->Key("replacement").BeginObject();
+                  switch (kind)
+                  {
+                  case TraceDrawCallData::SlotKind::RTV:
+                     write_resource(replaced->rt_format[slot], replaced->rtv_format[slot], replaced->rt_size[slot], replaced->rtv_size[slot], replaced->rtv_mip[slot], replaced->rt_type_name[slot], replaced->rt_hash[slot], replaced->rt_debug_name[slot]);
+                     break;
+                  case TraceDrawCallData::SlotKind::SRV:
+                     write_resource(replaced->sr_format[slot], replaced->srv_format[slot], replaced->sr_size[slot], replaced->srv_size[slot], replaced->srv_mip[slot], replaced->sr_type_name[slot], replaced->sr_hash[slot], replaced->sr_debug_name[slot]);
+                     break;
+                  case TraceDrawCallData::SlotKind::UAV:
+                     write_resource(replaced->ua_format[slot], replaced->uav_format[slot], replaced->ua_size[slot], replaced->uav_size[slot], replaced->uav_mip[slot], replaced->ua_type_name[slot], replaced->ua_hash[slot], replaced->ua_debug_name[slot]);
+                     break;
+                  case TraceDrawCallData::SlotKind::DSV:
+                     w->Format("format", replaced->ds_format).Format("view_format", replaced->dsv_format).Field("resource", replaced->ds_hash);
+                     break;
+                  case TraceDrawCallData::SlotKind::CB:
+                     w->Field("resource", replaced->cb_hash[slot]);
+                     break;
+                  case TraceDrawCallData::SlotKind::Sampler:
+                     w->Field("filter", GetFilterName(replaced->samplers_filter[slot])).Field("mip_lod_bias", replaced->samplers_mip_lod_bias[slot]);
+                     break;
+                  }
+                  w->EndObject();
+               }
+               w->EndObject();
+            }
+            w->EndArray();
+         }
 
          if (!entry.input_layout_hash.empty())
          {

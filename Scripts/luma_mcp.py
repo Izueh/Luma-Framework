@@ -121,7 +121,7 @@ TOOLS = [
         "luma_trace_list",
         "List entries of the last capture (compact). Hides VS entries, bindings and buffer writes by default (like the dev UI). "
         "Fields: index, type, stage, hash, replaced (none/file/patch_*), variant (what ran for a cloned shader: original/file/patch, original when a "
-        "recipe resource was missing or the game picked it), cancelled_or_replaced (the draw callbacks didn't let the draw through), upgrade_flags (^ input upgraded, v output upgraded, \\ / scaled), rt0, depth, "
+        "recipe resource was missing or the game picked it), cancelled_or_replaced (the draw callbacks didn't let the draw through), updated (they changed its bindings, see luma_trace_get), upgrade_flags (^ input upgraded, v output upgraded, \\ / scaled), rt0, depth, "
         "copy_kind, note (the game's own per draw decision, e.g. mv / jitter / unpatched / mv_reject=N).",
         {"type": {"type": "string", "description": "shader, custom, copy, clear, present, cpu_read, cpu_write, ..."},
          "variant": {"type": "string", "description": "Only shader entries that ran this variant: original, file, patch"},
@@ -139,7 +139,8 @@ TOOLS = [
         "Full state of one captured entry: RTV/SRV/UAV/DSV resource and view formats and sizes, blend per RT, depth/stencil (func, write, stencil ref/ops), "
         "rasterizer (cull, scissor enable, depth clip/bias), all viewports and scissor rects, samplers (filter, address, mip bias), bound cbuffers (with D3D11.1 ranges), "
         "input layout, draw/dispatch arguments, copy kind/regions (copy, region, resolve, buffer), the source/target resources of copies, clears, CPU writes and Luma passes, clear values, custom shader file and compilation errors, "
-        "the recipes of the shader's current patch clone, a Luma pass's shader file (luma_shader) and compilation errors. "
+        "the recipes of the shader's current patch clone, a Luma pass's shader file (luma_shader) and compilation errors, and replaced_slots: "
+        "the views, cbuffers and samplers the game mod's draw callback added, replaced or unbound (the rest of the entry is what the game bound). "
         "The state is recorded before the game mod's draw hook runs: a viewport it scales, a blend or shader it swaps in are not shown "
         "(read the result with luma_read_resource instead).",
         {"index": {"type": "integer", "description": "Entry index from luma_trace_list"}}, ["index"],
