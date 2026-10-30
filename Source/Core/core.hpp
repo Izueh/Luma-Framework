@@ -5991,6 +5991,7 @@ namespace
       }
       thread_local_cmd_list = cmd_list;
 
+      std::optional<size_t> trace_start_index;
       {
          // Do this before any custom code runs as the state might change
          const std::shared_lock lock_trace(s_mutex_trace); // TODO: it's not safe to lock global mutexes that might have already been locked by other concurrent functions, while also calling functions in the device or primary device context (in DX11) (because they have their own locks inside that might cause deadlocks!). The solution here would be to cache the data upfront and then lock a mutex to add it to our array. This might be safe if the game threading was already safe though, I'm not 100% sure.
@@ -6001,6 +6002,7 @@ namespace
             const std::lock_guard<std::recursive_mutex> lock_dumping(s_mutex_dumping);
             const std::shared_lock lock_device(device_data.mutex);
             ASSERT_ONCE(native_device_context);
+            trace_start_index = cmd_list_data.trace_draw_calls_data.size();
             if (is_dispatch)
             {
                AddTraceDrawCallData(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_compute_shader.handle, shader_cache, last_draw_dispatch_data, device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views);
@@ -6628,6 +6630,14 @@ namespace
             if (trace_running)
             {
                const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+               for (size_t i = trace_start_index.value_or(SIZE_MAX); i < cmd_list_data.trace_draw_calls_data.size(); i++)
+               {
+                  auto& entry = cmd_list_data.trace_draw_calls_data[i];
+                  if (entry.type != TraceDrawCallData::TraceDrawCallType::Shader) continue;
+                  if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_compute_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::compute);
+                  else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_vertex_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::vertex);
+                  else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_pixel_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::pixel);
+               }
                // Luma passes the game drew from its hook (SMAA, RCAS, bloom, SR), after the draw's own entries
                MoveInjectedPassTraces(&cmd_list_data.trace_draw_calls_data, native_device_context);
             }

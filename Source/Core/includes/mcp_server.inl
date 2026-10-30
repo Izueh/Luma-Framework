@@ -223,6 +223,7 @@ namespace Mcp
          const char* stage = "";
          int32_t instance = 0;
          std::thread::id thread;
+         uint64_t settings_version = 0; // The recipe settings version the recipes were loaded with before a "set_recipe" change
          std::vector<std::string> series; // Per frame results of multi frame reads
          struct HashCounts
          {
@@ -434,6 +435,8 @@ namespace Mcp
       {
          return pipeline.GetReplacement() != Shader::CachedPipeline::Replacement::None;
       }
+      // In "Shader::CloneOrigin" order
+      constexpr const char* clone_origin_names[] = {"original", "file", "patch"};
 
       // Needs "s_mutex_loading" (shared)
       const Shader::CachedCustomShader* FindCustomShader(uint32_t shader_hash)
@@ -481,6 +484,9 @@ namespace Mcp
                const auto* custom_shader = FindCustomShader(pipeline->shader_hashes[0]);
                if (custom_shader && !custom_shader->compilation_errors.empty())
                   w->Field("compilation_failed", custom_shader->compilation_error);
+               // A clone's draw can still run the original (e.g. a recipe resource is missing)
+               if (pipeline->cloned || entry.drawn_origin != Shader::CloneOrigin::None)
+                  w->Field("variant", EnumName(clone_origin_names, size_t(entry.drawn_origin)));
             }
             else
             {
@@ -588,6 +594,16 @@ namespace Mcp
             w->Field("replace_draw_type", Shader::CachedPipeline::shader_replace_draw_type_names[size_t(pipeline->replace_draw_type)]);
             if (const auto* custom_shader = FindCustomShader(pipeline->shader_hashes[0]))
                WriteCustomShader(w, *custom_shader, false);
+#if LUMA_USE_DXP
+            // The pipeline's current clone, it may have been re-patched since the capture
+            if (const auto& patch_data = pipeline->custom_pipeline_data.patch_data)
+            {
+               w->Key("recipes").BeginArray();
+               for (const auto& result : patch_data->recipe_results)
+                  w->Value(result->identity);
+               w->EndArray();
+            }
+#endif
          }
 
          const auto& dd = entry.draw_dispatch_data;
@@ -720,6 +736,7 @@ namespace Mcp
          std::optional<uint32_t> hash;
          const std::string* stage;
          const std::string* resource;
+         const std::string* variant;
 
          bool Matches(const DeviceData& device_data, const TraceDrawCallData& entry) const
          {
@@ -728,6 +745,8 @@ namespace Mcp
             if ((pipeline && pipeline->HasVertexShader() && !include_vs) || ((entry.type == Type::BindPipeline || entry.type == Type::BindResource) && !include_bindings) || (entry.type == Type::CPUWrite && entry.rt_type_name[0] == "Buffer" && !include_buffer_writes))
                return false;
             if ((type && *type != EnumName(trace_type_names, size_t(entry.type))) || (hash && (!pipeline || pipeline->shader_hashes[0] != *hash)) || (stage && (!pipeline || _stricmp(stage->c_str(), pipeline->StageName()) != 0)) || (replaced_only && (!pipeline || !IsReplaced(*pipeline))))
+               return false;
+            if (variant && (entry.type != Type::Shader || *variant != EnumName(clone_origin_names, size_t(entry.drawn_origin))))
                return false;
             const auto has_resource = [&](const auto& hashes)
             { return std::ranges::find(hashes, *resource) != std::end(hashes); };
@@ -1177,6 +1196,9 @@ namespace Mcp
          w.Key("render_resolution").BeginArray().Value(device_data.render_resolution.x).Value(device_data.render_resolution.y).EndArray();
          w.Field("mod_active", IsModActive(device_data));
          w.Field("file_clones", CountFileClones(device_data));
+#if LUMA_PATCH_PROVIDERS != 0
+         w.Field("patched_clones", Patch::CountPatchedClones(device_data));
+#endif
          {
             const std::shared_lock lock_loading(s_mutex_loading);
             w.Field("has_compilation_errors", !shaders_compilation_errors.empty());
@@ -1347,7 +1369,8 @@ namespace Mcp
             .type = job->Arg("type"),
             .hash = job->HashArg("hash"),
             .stage = job->Arg("stage"),
-            .resource = job->Arg("resource")};
+            .resource = job->Arg("resource"),
+            .variant = job->Arg("variant")};
          size_t matched = 0;
          for (size_t i = 0; i < cmd_list_data.trace_draw_calls_data.size(); i++)
          {
@@ -1873,6 +1896,313 @@ namespace Mcp
          return true;
       }
 
+      const char* SubobjectStageName(reshade::api::pipeline_subobject_type type)
+      {
+         switch (type)
+         {
+         case reshade::api::pipeline_subobject_type::vertex_shader: return "VS";
+         case reshade::api::pipeline_subobject_type::pixel_shader: return "PS";
+         case reshade::api::pipeline_subobject_type::compute_shader: return "CS";
+         case reshade::api::pipeline_subobject_type::geometry_shader: return "GS";
+         default: return "any";
+         }
+      }
+
+      // In "Patch::Method" order
+      constexpr const char* patch_method_names[] = {"bytecode", "recipe"};
+
+#if LUMA_USE_DXP
+      // In "dxp::BindingClass" order
+      constexpr const char* binding_class_names[] = {"unknown", "temp", "input", "output", "texture", "texture_uav", "raw_resource", "structured_resource", "cbuffer", "sampler", "uav"};
+
+      void WriteRecipeResult(JsonWriter* w, const Patch::RecipeResult& result)
+      {
+         w->BeginObject().Field("recipe", result.identity).Field("stage", SubobjectStageName(result.stage)).Key("steps").BeginArray();
+         for (const dxp::StepReport& step : result.report.steps)
+         {
+            w->BeginObject().Field("name", step.name).Field("success", step.success);
+            if (const auto* rule = std::get_if<dxp::ApplyRuleResults>(&step.results))
+               w->Field("matches", rule->match_count).Field("applied", rule->applied_count);
+            w->EndObject();
+         }
+         w->EndArray().Key("new_bindings").BeginArray();
+         for (const auto& [handle, binding] : result.report.new_bindings)
+            w->BeginObject().Field("handle", handle).Field("class", EnumName(binding_class_names, size_t(binding.binding_class))).Field("register", binding.register_index).EndObject();
+         w->EndArray().EndObject();
+      }
+#endif
+
+#if LUMA_HAS_RECIPE_PROVIDERS
+      // In "Patch::RecipeVisibility" order
+      constexpr const char* recipe_visibility_names[] = {"development", "test", "always"};
+      // In "dxp::PrimitiveValue" order
+      constexpr const char* env_type_names[] = {"bool", "int32", "uint32", "int64", "uint64", "double"};
+
+      void WriteEnv(JsonWriter* w, std::string_view key, const dxp::PrimitiveValue& value)
+      {
+         w->Key(key);
+         std::visit([w](auto v)
+            { w->Value(v); }, value);
+      }
+
+      struct RecipeInfo
+      {
+         std::string identity;
+         reshade::api::pipeline_subobject_type stage;
+         std::shared_ptr<const dxp::sm5::Recipe> recipe;
+         std::optional<dxp::PatchOptions> game_options;
+      };
+      // A copy of the loaded recipes, so the recipe settings can be read without the patch context lock
+      std::vector<RecipeInfo> GetRecipes(const DeviceData& device_data)
+      {
+         const auto& context = device_data.patch_context;
+         const std::shared_lock lock(context.mutex);
+         std::vector<RecipeInfo> recipes;
+         for (const Patch::PatchContext::RecipeEntry& entry : context.recipes)
+         {
+            const auto game_options = context.recipe_options_by_hash.find(entry.hash);
+            recipes.push_back({entry.identity, entry.stage, entry.recipe, game_options != context.recipe_options_by_hash.end() ? std::optional(game_options->second) : std::nullopt});
+         }
+         return recipes;
+      }
+
+      void WriteRecipes(JsonWriter* w, const DeviceData& device_data)
+      {
+         {
+            const std::shared_lock lock(device_data.patch_context.mutex);
+            w->Path("recipes_path", device_data.patch_context.recipes_path).Field("reload_generation", device_data.patch_context.reload_generation.load());
+         }
+         w->Key("recipes").BeginArray();
+         for (const RecipeInfo& info : GetRecipes(device_data))
+         {
+            const std::optional<Patch::RecipeRegistration> registration = Patch::GetRecipeRegistration(info.identity);
+            w->BeginObject().Field("identity", info.identity).Field("stage", SubobjectStageName(info.stage)).Field("enabled", Patch::IsRecipeEnabled(info.identity));
+            w->Field("registered", registration.has_value());
+            if (registration)
+               w->Field("display_name", registration->display_name).Field("default_enabled", registration->default_enabled).Field("visibility", EnumName(recipe_visibility_names, size_t(registration->visibility)));
+            // Effective value: the game's (read only), else the user's, else the recipe's own
+            w->Key("env").BeginArray();
+            for (const auto& [env, default_value] : info.recipe->GetEnv())
+            {
+               w->BeginObject().Field("name", env).Field("type", EnumName(env_type_names, default_value.index()));
+               if (registration)
+               {
+                  if (const auto option = std::ranges::find(registration->options, env, &Patch::RecipeOption::env); option != registration->options.end())
+                     w->Field("label", option->label).Field("visibility", EnumName(recipe_visibility_names, size_t(option->visibility)));
+               }
+               const std::optional<dxp::PrimitiveValue> game_value = info.game_options ? info.game_options->GetEnv(env) : std::nullopt;
+               const std::optional<dxp::PrimitiveValue> user_value = Patch::GetRecipeEnv(info.identity, env);
+               WriteEnv(w, "default", default_value);
+               if (game_value)
+                  WriteEnv(w, "game", *game_value);
+               if (user_value)
+                  WriteEnv(w, "user", *user_value);
+               WriteEnv(w, "effective", game_value ? *game_value : (user_value ? *user_value : default_value));
+               w->EndObject();
+            }
+            w->EndArray().EndObject();
+         }
+         w->EndArray();
+      }
+#endif
+
+      bool RunPatchState(Job* job, DeviceData& device_data)
+      {
+         auto& w = job->result;
+         w.Key("providers").BeginArray();
+#if LUMA_PATCH_BYTECODE_SYNC
+         w.Value("bytecode_sync");
+#endif
+#if LUMA_PATCH_BYTECODE_ASYNC
+         w.Value("bytecode_async");
+#endif
+#if LUMA_PATCH_RECIPE_SYNC
+         w.Value("recipe_sync");
+#endif
+#if LUMA_PATCH_RECIPE_ASYNC
+         w.Value("recipe_async");
+#endif
+         w.EndArray();
+#if LUMA_PATCH_PROVIDERS != 0
+         const auto hash = job->HashArg("hash");
+         w.Field("allow_patches", allow_patches).Field("patches_unloaded", patches_unloaded).Field("patched_clones", Patch::CountPatchedClones(device_data));
+#if LUMA_HAS_RECIPE_PROVIDERS
+         if (!hash)
+            WriteRecipes(&w, device_data);
+#endif
+         const std::shared_lock lock_generic(s_mutex_generic); // Before the patch context's, like "Patch::ReloadRecipes()"
+         w.Key("patched_shaders").BeginArray();
+         Patch::ForEachPatchedShader(device_data, [&](uint32_t shader_hash, const Patch::PatchedShaderData& patch)
+            {
+               if (hash && shader_hash != *hash)
+                  return;
+               w.BeginObject().Hash("hash", shader_hash).Field("method", EnumName(patch_method_names, size_t(patch.method))).Field("bytes", patch.code.size());
+#if LUMA_USE_DXP
+               w.Key("recipes").BeginArray();
+               for (const auto& result : patch.recipe_results)
+               {
+                  if (hash)
+                     WriteRecipeResult(&w, *result);
+                  else
+                     w.Value(result->identity);
+               }
+               w.EndArray();
+#endif
+               w.EndObject();
+            });
+         w.EndArray();
+         if (!hash)
+            return true;
+         w.Key("pipelines").BeginArray();
+         if (const auto it = device_data.pipeline_caches_by_shader_hash.find(*hash); it != device_data.pipeline_caches_by_shader_hash.end())
+         {
+            for (const auto* pipeline : it->second)
+            {
+               w.BeginObject().Field("stage", pipeline->StageName()).Field("replaced", ReplacementName(*pipeline)).Field("cloned", pipeline->cloned);
+               w.Field("clone_origin", EnumName(clone_origin_names, size_t(pipeline->clone_origin))).Field("manually_unloaded", pipeline->manually_unloaded);
+#if LUMA_USE_DXP
+               // Whether a draw would use the clone now, or fall back to the original for a missing recipe resource
+               const auto& data = pipeline->custom_pipeline_data;
+               if (data.patch_data && pipeline->subobjects_cache)
+               {
+                  std::vector<Patch::RecipeBinding> bindings;
+                  bool has_recipe = false;
+                  w.Field("recipe_bindings_resolved", Patch::ResolveRecipeBindings(device_data, data, pipeline->subobjects_cache[0].type, bindings, has_recipe));
+               }
+#endif
+               w.EndObject();
+            }
+         }
+         w.EndArray();
+#else
+         job->read_args.emplace("hash");
+#endif
+         return true;
+      }
+
+      bool RunSetRecipe(Job* job, DeviceData& device_data)
+      {
+#if LUMA_HAS_RECIPE_PROVIDERS
+         const auto applied_settings_version = [&device_data]
+         {
+            const std::shared_lock lock(device_data.patch_context.mutex);
+            return device_data.patch_context.applied_settings_version;
+         };
+         if (job->phase == 1)
+         {
+            // Applied by "Patch::ApplyRecipeSettingsChanges()" at the ReShade present
+            if (applied_settings_version() != job->settings_version)
+            {
+               job->result.Field("reloaded", true).Field("note", "Saved to the config like the \"Patch Settings\" tab. Pipelines re-patch on their next bind, see luma_patch_state");
+               return true;
+            }
+            if (++job->frames < 10)
+               return false;
+            job->error = "The recipes weren't reloaded in 10 frames";
+            return true;
+         }
+
+         const std::string* identity = job->Arg("identity");
+         const auto recipes = GetRecipes(device_data);
+         const auto info = identity ? std::ranges::find(recipes, *identity, &RecipeInfo::identity) : recipes.end();
+         if (info == recipes.end())
+         {
+            job->error = "Unknown recipe, pass the \"identity\" of one from luma_patch_state";
+            return true;
+         }
+         // Everything is validated before anything is changed
+         std::optional<bool> enable;
+         if (const std::string* enabled = job->Arg("enabled"))
+         {
+            const auto value = Patch::RecipeEnvFromString(*enabled, true);
+            if (!value)
+            {
+               job->error = "\"enabled\" takes 1, 0, true or false";
+               return true;
+            }
+            enable = std::get<bool>(*value);
+         }
+         const std::string* env = job->Arg("env");
+         const bool reset = job->BoolArg("reset", false);
+         std::optional<dxp::PrimitiveValue> env_value;
+         if (env)
+         {
+            const auto& recipe_env = info->recipe->GetEnv();
+            const auto default_value = recipe_env.find(*env);
+            if (default_value == recipe_env.end())
+            {
+               job->error = std::format("{} has no env variable \"{}\"", *identity, *env);
+               return true;
+            }
+            if (info->game_options && info->game_options->GetEnv(*env))
+            {
+               job->error = std::format("\"{}\" is set by the game, it's read only", *env);
+               return true;
+            }
+            const std::string* value = job->Arg("value");
+            env_value = value ? Patch::RecipeEnvFromString(*value, default_value->second) : std::nullopt;
+            if (!reset && !env_value)
+            {
+               job->error = std::format("Pass \"reset\", or a \"value\" of type {}", EnumName(env_type_names, default_value->second.index()));
+               return true;
+            }
+         }
+         if (!enable && !env)
+         {
+            job->error = "Pass \"enabled\", and/or \"env\" with \"value\" or \"reset\"";
+            return true;
+         }
+
+         const uint64_t settings_version = applied_settings_version();
+         bool changed = false;
+         if (enable)
+         {
+            changed |= Patch::IsRecipeEnabled(*identity) != *enable;
+            Patch::SetRecipeEnabled(*identity, *enable);
+         }
+         if (env)
+         {
+            const std::optional<dxp::PrimitiveValue> previous = Patch::GetRecipeEnv(*identity, *env);
+            changed |= reset ? previous.has_value() : previous != env_value;
+            if (reset)
+               Patch::ResetRecipeEnv(*identity, *env);
+            else
+               Patch::SetRecipeEnv(*identity, *env, *env_value);
+         }
+         job->result.Field("identity", *identity).Field("changed", changed);
+         if (!changed)
+            return true;
+         job->settings_version = settings_version;
+         job->phase = 1;
+         return false;
+#else
+         job->error = "This game has no recipe providers";
+         return true;
+#endif
+      }
+
+      bool RunReloadPatches(Job* job, DeviceData& device_data)
+      {
+#if LUMA_PATCH_PROVIDERS != 0
+         if (job->phase == 0)
+         {
+            // Like the dev UI's "Reload Patches" / "Unload Patches" buttons, processed in "OnReShadePresent"
+            (job->BoolArg("unload", false) ? needs_unload_patches : needs_load_patches) = true;
+            job->phase = 1;
+            return false;
+         }
+         if (needs_load_patches || needs_unload_patches)
+            return false;
+         job->result.Field("patches_unloaded", patches_unloaded).Field("patched_clones", Patch::CountPatchedClones(device_data));
+         if (!patches_unloaded)
+            job->result.Field("note", "Recipe clones rebuild on each pipeline's next bind, see luma_patch_state");
+#else
+         job->read_args.emplace("unload");
+         job->error = "This game has no patch providers";
+#endif
+         return true;
+      }
+
       bool RunGetSettings(Job* job)
       {
          auto& w = job->result;
@@ -2030,6 +2360,12 @@ namespace Mcp
             return RunShaderList(job, device_data);
          if (tool == "dump_shader")
             return RunDumpShader(job);
+         if (tool == "patch_state")
+            return RunPatchState(job, device_data);
+         if (tool == "set_recipe")
+            return RunSetRecipe(job, device_data);
+         if (tool == "reload_patches")
+            return RunReloadPatches(job, device_data);
          job->error = "Unknown tool " + tool;
          return true;
       }
@@ -2290,6 +2626,9 @@ namespace Mcp
       RegisterToggles({{"core.hide_ui", &hide_ui}, {"core.force_disable_display_composition", &force_disable_display_composition}, {"core.ignore_upgraded_samplers", &ignore_upgraded_samplers},
          {"core.enable_upgraded_texture_resource_copy_redirection", &enable_upgraded_texture_resource_copy_redirection}});
       RegisterInts({{"core.frame_sleep_ms", &frame_sleep_ms, 0, 100}, {"core.frame_sleep_interval", &frame_sleep_interval, 1, 30}});
+#if LUMA_PATCH_PROVIDERS != 0 // Read at bind time, like the dev UI's "Allow Patches"
+      RegisterToggles({{"core.allow_patches", &allow_patches}});
+#endif
 #if ENABLE_FIDELITY_SK && DEVELOPMENT && !defined(NDEBUG) // As "FidelityFX::draw_debug_view"
       RegisterToggles({{"core.fsr_debug_view", &FidelityFX::draw_debug_view}});
 #endif
