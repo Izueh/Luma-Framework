@@ -22,6 +22,47 @@ namespace Trace
       {
          bool list_size_changed = false;
 
+         // Instances of a Luma pass are counted by name, see "Trace::CustomDraw()"
+         const auto custom_pass_instance = [&](const CommandListData& cmd_list_data, int32_t index)
+         {
+            const auto& draw_call_data = cmd_list_data.trace_draw_calls_data.at(index);
+            int32_t target_instance = 0;
+            for (int32_t i = 0; i < index; i++)
+            {
+               const auto& other = cmd_list_data.trace_draw_calls_data.at(i);
+               if (other.type == TraceDrawCallData::TraceDrawCallType::Custom && strcmp(other.custom_name, draw_call_data.custom_name) == 0 && other.thread_id == draw_call_data.thread_id)
+                  target_instance++;
+            }
+            return target_instance;
+         };
+         const auto is_custom_pass_debug_drawn = [&](const TraceDrawCallData& draw_call_data, int32_t target_instance)
+         {
+            return debug_draw_custom_pass == CompileTimeStringHash(draw_call_data.custom_name) && (debug_draw_pipeline_target_instance < 0 || debug_draw_pipeline_target_instance == target_instance);
+         };
+         const auto toggle_custom_pass_debug_draw = [&](const TraceDrawCallData& draw_call_data, int32_t target_instance)
+         {
+            const bool enabled = is_custom_pass_debug_drawn(draw_call_data, target_instance);
+            debug_draw_pipeline = 0;
+            debug_draw_shader_hash = 0;
+            debug_draw_shader_hash_string[0] = 0;
+            debug_draw_custom_pass = enabled ? 0 : CompileTimeStringHash(draw_call_data.custom_name);
+            device_data.debug_draw_frozen_draw_state_stack.reset();
+            device_data.debug_draw_texture = nullptr;
+            device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
+            device_data.debug_draw_texture_size = {};
+            debug_draw_custom_pass_instance = 0;
+            debug_draw_pipeline_target_instance = enabled ? -1 : target_instance;
+            debug_draw_pipeline_target_thread = (!enabled && debug_draw_pipeline_instance_filter_by_thread) ? draw_call_data.thread_id : std::thread::id();
+            if (debug_draw_mode == DebugDrawMode::Depth || debug_draw_mode == DebugDrawMode::Stencil)
+            {
+               debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
+            }
+            debug_draw_mode = draw_call_data.custom_stage == reshade::api::shader_stage::compute ? DebugDrawMode::UnorderedAccessView : DebugDrawMode::RenderTarget;
+            debug_draw_view_index = 0;
+            debug_draw_mip = 0;
+            debug_draw_freeze_inputs = false;
+         };
+
          if (ImGui::Button("Clear Capture and Debug Settings"))
          {
             captured_count = 0;
@@ -670,33 +711,9 @@ namespace Trace
                         ImGui::SetNextItemAllowOverlap();
                         if (ImGui::SmallButton(ICON_FK_SEARCH))
                         {
-                           int32_t target_instance = 0;
-                           for (int32_t i = 0; i < index; i++)
-                           {
-                              const auto& other = cmd_list_data.trace_draw_calls_data.at(i);
-                              if (other.type == TraceDrawCallData::TraceDrawCallType::Custom && strcmp(other.custom_name, draw_call_data.custom_name) == 0 && draw_call_data.thread_id == other.thread_id)
-                                 target_instance++;
-                           }
-
-                           debug_draw_pipeline = 0;
-                           debug_draw_shader_hash = 0;
-                           debug_draw_shader_hash_string[0] = 0;
-                           debug_draw_custom_pass = CompileTimeStringHash(draw_call_data.custom_name);
-                           device_data.debug_draw_frozen_draw_state_stack.reset();
-                           device_data.debug_draw_texture = nullptr;
-                           device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
-                           device_data.debug_draw_texture_size = {};
-                           debug_draw_custom_pass_instance = 0;
-                           debug_draw_pipeline_target_instance = target_instance;
-                           debug_draw_pipeline_target_thread = debug_draw_pipeline_instance_filter_by_thread ? draw_call_data.thread_id : std::thread::id();
-                           if (debug_draw_mode == DebugDrawMode::Depth || debug_draw_mode == DebugDrawMode::Stencil)
-                           {
-                              debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
-                           }
-                           debug_draw_mode = draw_call_data.custom_stage == reshade::api::shader_stage::compute ? DebugDrawMode::UnorderedAccessView : DebugDrawMode::RenderTarget;
-                           debug_draw_view_index = 0;
-                           debug_draw_mip = 0;
-                           debug_draw_freeze_inputs = false;
+                           const int32_t target_instance = custom_pass_instance(cmd_list_data, index);
+                           if (!is_custom_pass_debug_drawn(draw_call_data, target_instance))
+                              toggle_custom_pass_debug_draw(draw_call_data, target_instance);
                         }
                      }
                      ImGui::PopID();
@@ -2118,14 +2135,21 @@ namespace Trace
                               if (const auto definition = native_shaders_definitions.find(draw_call_data.custom_shader_hash); definition != native_shaders_definitions.end() && definition->second.file_name)
                                  ImGui::Text("Luma Shader: %s", definition->second.file_name);
 
-                              // Instances of a Luma pass are counted by name, see "Trace::CustomDraw()"
-                              int32_t target_instance = 0;
-                              for (int32_t i = 0; i < selected_index; i++)
+                              const int32_t target_instance = custom_pass_instance(cmd_list_data, selected_index);
+                              const bool debug_draw_shader_enabled = is_custom_pass_debug_drawn(draw_call_data, target_instance);
+                              // Luma passes are recorded after drawing, so their inputs can't be frozen nor their blends disabled
+                              if (debug_draw_shader_enabled ? ImGui::Button("Disable Debug Draw Shader Instance") : ImGui::Button("Debug Draw Shader Instance"))
                               {
-                                 const auto& other = cmd_list_data.trace_draw_calls_data.at(i);
-                                 if (other.type == TraceDrawCallData::TraceDrawCallType::Custom && strcmp(other.custom_name, draw_call_data.custom_name) == 0 && other.thread_id == draw_call_data.thread_id)
-                                    target_instance++;
+                                 toggle_custom_pass_debug_draw(draw_call_data, target_instance);
                               }
+                              if (!debug_draw_auto_clear_texture && debug_draw_shader_enabled && device_data.debug_draw_texture.get() == nullptr)
+                              {
+                                 ImGui::BeginDisabled(true);
+                                 ImGui::SameLine();
+                                 ImGui::SmallButton(ICON_FK_WARNING);
+                                 ImGui::EndDisabled();
+                              }
+
                               const uint32_t custom_pass = CompileTimeStringHash(draw_call_data.custom_name);
                               bool track_buffer_enabled = track_buffer_custom_pass == custom_pass && (track_buffer_pipeline_target_instance < 0 || track_buffer_pipeline_target_instance == target_instance);
                               if (track_buffer_enabled ? ImGui::Button("Disable Constant Buffer Tracking") : ImGui::Button("Enable Constant Buffer Tracking"))
@@ -2144,7 +2168,7 @@ namespace Trace
                               ImGui::Text("State Analysis:");
                               if (ImGui::BeginChild("StateAnalysisScroll", ImVec2(0, -FLT_MIN), ImGuiChildFlags_Borders))
                               {
-                                 draw_state_analysis(draw_call_data, nullptr, debug_draw_custom_pass == CompileTimeStringHash(draw_call_data.custom_name));
+                                 draw_state_analysis(draw_call_data, nullptr, is_custom_pass_debug_drawn(draw_call_data, target_instance));
                               }
                               ImGui::EndChild(); // StateAnalysisScroll
                            }
