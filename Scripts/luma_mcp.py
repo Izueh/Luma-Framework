@@ -148,7 +148,8 @@ TOOLS = [
         "luma_read_resource",
         "Read back a view of a pass right after it drew (the frame after the call, not a stale live read). Works for any format, including depth/stencil, "
         "3D LUTs, arrays, MSAA (resolved), BC, r16/rg16, r11g11b10. Writes the raw .bin + .json meta, returns per-channel stats (min/max/mean/percentiles, "
-        "NaN/Inf/negative/above 1/exact zero) and a PNG preview path. PS and CS passes only (use the PS entry of a draw). view=swapchain or ui reads the "
+        "NaN/Inf/negative/above 1/exact zero) and a PNG preview path. PS and CS passes only (use the PS entry of a draw), including Luma passes "
+        "(custom entries with a stage) by index. view=swapchain or ui reads the "
         "back buffer or Luma's UI texture at present (before display composition), no pass needed. view=registered:<name> reads one of Luma's own "
         "textures (SMAA input/predication mask/output, GTAO depth mips, motion vectors, core.bloom with mip=, core.smaa_edges...; see luma_dev_values kind "
         "texture) at present: its last content, usually this frame's.",

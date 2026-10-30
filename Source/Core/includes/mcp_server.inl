@@ -164,15 +164,17 @@ namespace Mcp
          bool freeze_inputs;
          bool disable_blends;
          bool replaced_pass;
+         uint32_t custom_pass;
 
          static DebugDrawSelection Current()
          {
-            return {debug_draw_pipeline, debug_draw_shader_hash, debug_draw_pipeline_target_instance, debug_draw_pipeline_target_thread, debug_draw_mode, debug_draw_view_index, debug_draw_freeze_inputs, debug_draw_disable_blends, debug_draw_replaced_pass};
+            return {debug_draw_pipeline, debug_draw_shader_hash, debug_draw_pipeline_target_instance, debug_draw_pipeline_target_thread, debug_draw_mode, debug_draw_view_index, debug_draw_freeze_inputs, debug_draw_disable_blends, debug_draw_replaced_pass, debug_draw_custom_pass};
          }
          void Apply() const
          {
             debug_draw_pipeline = pipeline;
             debug_draw_shader_hash = shader_hash;
+            debug_draw_custom_pass = custom_pass;
             debug_draw_pipeline_target_instance = target_instance;
             debug_draw_pipeline_target_thread = target_thread;
             debug_draw_mode = mode;
@@ -220,6 +222,7 @@ namespace Mcp
          // The pass a readback targets (see "ResolveTarget")
          uint64_t pipeline_handle = 0;
          uint32_t shader_hash = 0;
+         uint32_t custom_pass = 0; // A Luma pass instead of a game pipeline, see "debug_draw_custom_pass"
          const char* stage = "";
          int32_t instance = 0;
          std::thread::id thread;
@@ -724,14 +727,29 @@ namespace Mcp
                return false;
             }
             const TraceDrawCallData& entry = cmd_list_data.trace_draw_calls_data[index];
+            const bool deferred = IsDeferred(entry);
+            job->thread = deferred ? entry.thread_id : std::thread::id();
+            if (entry.type == TraceDrawCallData::TraceDrawCallType::Custom && entry.custom_stage != reshade::api::shader_stage(0))
+            {
+               // Instances of a Luma pass are counted by name, see "Trace::RecordCustomPass()"
+               job->instance = 0;
+               for (size_t i = 0; i < index; i++)
+               {
+                  const auto& other = cmd_list_data.trace_draw_calls_data[i];
+                  if (other.type == TraceDrawCallData::TraceDrawCallType::Custom && strcmp(other.custom_name, entry.custom_name) == 0 && (!deferred || other.thread_id == entry.thread_id))
+                     job->instance++;
+               }
+               job->custom_pass = Math::CompileTimeStringHash(entry.custom_name);
+               job->shader_hash = entry.custom_shader_hash;
+               job->stage = entry.custom_stage == reshade::api::shader_stage::compute ? "CS" : "PS";
+               return true;
+            }
             pipeline = entry.type == TraceDrawCallData::TraceDrawCallType::Shader ? FindPipeline(device_data, entry.pipeline_handle) : nullptr;
             if (!pipeline)
             {
-               job->error = std::format("Trace index {} is not a shader pass with a live pipeline", index);
+               job->error = std::format("Trace index {} is not a shader pass with a live pipeline, or a Luma pass", index);
                return false;
             }
-            const bool deferred = IsDeferred(entry);
-            job->thread = deferred ? entry.thread_id : std::thread::id();
             job->instance = 0;
             for (size_t i = 0; i < index; i++)
             {
@@ -1430,7 +1448,7 @@ namespace Mcp
 
             // Restored in "OnPresent" once the job finishes. Blends stay on and inputs unfrozen, so the pass runs as the game drew it.
             job->saved_debug_draw = DebugDrawSelection::Current();
-            DebugDrawSelection{job->pipeline_handle, job->shader_hash, job->instance, job->thread, mode->second, int32_t(job->IntArg("slot", 0)), false, false, job->BoolArg("replaced", true)}.Apply();
+            DebugDrawSelection{job->pipeline_handle, job->custom_pass ? 0 : job->shader_hash, job->instance, job->thread, mode->second, int32_t(job->IntArg("slot", 0)), false, false, job->BoolArg("replaced", true), job->custom_pass}.Apply();
             device_data.debug_draw_texture = nullptr;
             job->result.Hash("hash", job->shader_hash).Field("instance", job->instance).Field("view", mode->first).Field("slot", debug_draw_view_index);
             job->phase = 1;
@@ -1450,9 +1468,9 @@ namespace Mcp
          {
             if (!ResolveTarget(job, device_data, cmd_list_data))
                return true;
-            if (job->stage == std::string_view("GS") || job->stage == std::string_view("XS"))
+            if (job->stage == std::string_view("GS") || job->stage == std::string_view("XS") || job->custom_pass)
             {
-               job->error = std::format("Constant buffer tracking doesn't support {} passes", job->stage);
+               job->error = std::format("Constant buffer tracking doesn't support {} passes", job->custom_pass ? "Luma" : job->stage);
                return true;
             }
             const int64_t slot = job->IntArg("slot", 0);

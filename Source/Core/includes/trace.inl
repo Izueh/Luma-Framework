@@ -537,6 +537,13 @@ namespace Trace
 
    void RecordCustomPass(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const char* name, uint32_t shader_hash, reshade::api::shader_stage stage, bool before_current_draw)
    {
+      // The debug draw of a Luma pass, its state is still bound
+      if (debug_draw_custom_pass != 0 && debug_draw_custom_pass == Math::CompileTimeStringHash(name) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id()))
+      {
+         const int32_t instance = debug_draw_custom_pass_instance.fetch_add(1);
+         if (debug_draw_pipeline_target_instance == -1 || instance == debug_draw_pipeline_target_instance)
+            CopyDebugDrawTexture(debug_draw_mode, debug_draw_view_index, native_device_context, device_data, stage == reshade::api::shader_stage::compute);
+      }
       if (!trace_running)
          return;
       TraceDrawCallData trace_draw_call_data;

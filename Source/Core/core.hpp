@@ -743,8 +743,10 @@ namespace
       uint64_t debug_draw_pipeline = 0; // In DX11 shaders and pipelines are the same thing so this is kinda useless (excluding the rare case where multiple pipelines (compiled shader objects) were based on the same shader, and hence had the same hash)
       int32_t debug_draw_pipeline_target_instance = -1;
       std::thread::id debug_draw_pipeline_target_thread = std::thread::id(); // Filter target instances by thread, which would hopefully reliably match the command lists, over multiple frames
+      uint32_t debug_draw_custom_pass = 0; // A Luma pass instead of a game pipeline, by the hash of its "Trace::CustomDraw()" name
 
       std::atomic<int32_t> debug_draw_pipeline_instance = 0; // Theoretically should be within "CommandListData" but this should work for most cases
+      std::atomic<int32_t> debug_draw_custom_pass_instance = 0;
 
       DebugDrawMode debug_draw_mode = DebugDrawMode::Custom;
       bool debug_draw_freeze_inputs = false; // Allows freezing the inputs/state of this pass, allowing you to edit the shader and seeing the results live. This is bundled with the textures debug draw feature because generally you don't need to freeze the inputs of any prior pass if not the very same one you are analyzing (or iterating upon). If the game stopped drawing the shader, debugging would also stop.
@@ -5715,6 +5717,7 @@ namespace
          // Leave "debug_draw_texture_format" and "debug_draw_texture_size", we need that in ImGUI (we'd need to clear it after ImGUI if necessary, but we skip drawing it if the texture isn't valid)
       }
       debug_draw_pipeline_instance = 0;
+      debug_draw_custom_pass_instance = 0;
 
 #if 0 // Optionally clear it every frame, to remove it if it wasn't found (this needs to be done elsewhere for now, because we print it below)
       device_data.track_buffer_data = {};
@@ -10621,6 +10624,7 @@ namespace
                   debug_draw_pipeline = 0;
                   debug_draw_shader_hash = 0;
                   debug_draw_shader_hash_string[0] = 0;
+                  debug_draw_custom_pass = 0;
                   debug_draw_pipeline_target_instance = -1;
                   debug_draw_pipeline_target_thread = std::thread::id();
 
@@ -11214,6 +11218,7 @@ namespace
                               device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
                               device_data.debug_draw_texture_size = {};
                               debug_draw_pipeline_instance = 0;
+                              debug_draw_custom_pass = 0;
                               debug_draw_pipeline_target_instance = target_instance;
                               debug_draw_pipeline_target_thread = debug_draw_pipeline_instance_filter_by_thread ? draw_call_data.thread_id : std::thread::id();
                               const auto prev_debug_draw_mode = debug_draw_mode;
@@ -11236,6 +11241,41 @@ namespace
                                  debug_draw_mip = 0;
                               }
                               debug_draw_freeze_inputs = false; // Optional, but also unfreeze inputs automatically every time we swap the target pass here
+                           }
+                        }
+                        else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom && draw_call_data.custom_stage != reshade::api::shader_stage(0))
+                        {
+                           ImGui::SameLine();
+                           ImGui::SetNextItemAllowOverlap();
+                           if (ImGui::SmallButton(ICON_FK_SEARCH))
+                           {
+                              int32_t target_instance = 0;
+                              for (int32_t i = 0; i < index; i++)
+                              {
+                                 const auto& other = cmd_list_data.trace_draw_calls_data.at(i);
+                                 if (other.type == TraceDrawCallData::TraceDrawCallType::Custom && strcmp(other.custom_name, draw_call_data.custom_name) == 0 && draw_call_data.thread_id == other.thread_id)
+                                    target_instance++;
+                              }
+
+                              debug_draw_pipeline = 0;
+                              debug_draw_shader_hash = 0;
+                              debug_draw_shader_hash_string[0] = 0;
+                              debug_draw_custom_pass = CompileTimeStringHash(draw_call_data.custom_name);
+                              device_data.debug_draw_frozen_draw_state_stack.reset();
+                              device_data.debug_draw_texture = nullptr;
+                              device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
+                              device_data.debug_draw_texture_size = {};
+                              debug_draw_custom_pass_instance = 0;
+                              debug_draw_pipeline_target_instance = target_instance;
+                              debug_draw_pipeline_target_thread = debug_draw_pipeline_instance_filter_by_thread ? draw_call_data.thread_id : std::thread::id();
+                              if (debug_draw_mode == DebugDrawMode::Depth || debug_draw_mode == DebugDrawMode::Stencil)
+                              {
+                                 debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
+                              }
+                              debug_draw_mode = draw_call_data.custom_stage == reshade::api::shader_stage::compute ? DebugDrawMode::UnorderedAccessView : DebugDrawMode::RenderTarget;
+                              debug_draw_view_index = 0;
+                              debug_draw_mip = 0;
+                              debug_draw_freeze_inputs = false;
                            }
                         }
                         ImGui::PopID();
@@ -11464,6 +11504,7 @@ namespace
                                        device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
                                        device_data.debug_draw_texture_size = {};
                                        debug_draw_pipeline_instance = 0;
+                                       debug_draw_custom_pass = 0;
 #if 1 // We could also let the user settings persist if we wished so, but automatically setting them is usually better
                                        debug_draw_pipeline_target_instance = debug_draw_shader_enabled ? -1 : target_instance;
                                        debug_draw_pipeline_target_thread = (!debug_draw_shader_enabled && debug_draw_pipeline_instance_filter_by_thread) ? draw_call_data.thread_id : std::thread::id();
@@ -13451,6 +13492,7 @@ namespace
                         // Reset all the settings we don't need anymore, as they were for a different debug draw mode
                         debug_draw_pipeline = 0;
                         debug_draw_shader_hash = 0;
+                        debug_draw_custom_pass = 0;
                         debug_draw_shader_hash_string[0] = 0;
                         debug_draw_pipeline_target_instance = -1;
                         debug_draw_pipeline_target_thread = std::thread::id();
@@ -14361,6 +14403,7 @@ namespace
                   if (debug_draw_shader_hash != 0)
                   {
                      debug_draw_pipeline = 0;
+                     debug_draw_custom_pass = 0;
                   }
 
                   device_data.debug_draw_frozen_draw_state_stack.reset();
@@ -14370,7 +14413,7 @@ namespace
                }
                ImGui::SameLine();
                // Allow it to go through if we have a custom debug draw texture set
-               bool debug_draw_enabled = debug_draw_shader_hash != 0 || debug_draw_pipeline != 0 || (debug_draw_mode == DebugDrawMode::Custom && device_data.debug_draw_texture.get()); // It wants to be shown (if it manages!)
+               bool debug_draw_enabled = debug_draw_shader_hash != 0 || debug_draw_pipeline != 0 || debug_draw_custom_pass != 0 || (debug_draw_mode == DebugDrawMode::Custom && device_data.debug_draw_texture.get()); // It wants to be shown (if it manages!)
                // Show the reset button for both conditions or they could get stuck
                if (debug_draw_enabled)
                {
@@ -14380,6 +14423,7 @@ namespace
                      debug_draw_shader_hash_string[0] = 0;
                      debug_draw_shader_hash = 0;
                      debug_draw_pipeline = 0;
+                     debug_draw_custom_pass = 0;
 
                      device_data.debug_draw_frozen_draw_state_stack.reset();
                      device_data.debug_draw_texture = nullptr;
