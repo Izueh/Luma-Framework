@@ -699,6 +699,7 @@ public:
          {
             tracking.post_taa_upscale_active = false;
             ReplaceUpscaledInputs(native_device_context, tracking, is_compute, 1);
+            Trace::UpdateDraw(cmd_list_data, device_data, native_device_context);
             return DrawOrDispatchOverrideType::None;
          }
          if (is_tonemap)
@@ -728,6 +729,7 @@ public:
             ForgetNativeUpscaleOutputs(native_device_context, tracking);
          if (replaced_outputs > 0)
             ReplaceViewports(native_device_context, cmd_list_data, source_resolution, target_resolution);
+         Trace::UpdateDraw(cmd_list_data, device_data, native_device_context);
       }
 
       auto& rain = game_device_data.rain;
