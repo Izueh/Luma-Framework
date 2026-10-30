@@ -98,7 +98,8 @@ TOOLS = [
     tool(
         "luma_trace_capture",
         "Capture one frame with Luma's own frame trace. Unlike RenoDX DevKit it includes Luma's injected passes as type custom entries "
-        "(Luma SMAA, RCAS, Bloom, Super Resolution, display composition, redirected copies/UI, and what a game mod traces itself; a pass "
+        "(Luma SMAA, RCAS, bloom, display composition, redirected copies/UI and the game mod's own passes, with the state they drew with like "
+        "shader entries (stage, luma_shader); DLSS/FSR draws and phase markers by name only; a pass "
         "replacing a game draw, e.g. XeGTAO, is a note on that draw), "
         "merged deferred context work, clears/copies, and which shader variant ran. With 'trigger' it keeps capturing until a frame contains that shader. "
         "With 'frames' it captures several frames and returns draws per shader hash per frame (a capture spans two presents). "
@@ -137,7 +138,7 @@ TOOLS = [
         "Full state of one captured entry: RTV/SRV/UAV/DSV resource and view formats and sizes, blend per RT, depth/stencil (func, write, stencil ref/ops), "
         "rasterizer (cull, scissor enable, depth clip/bias), all viewports and scissor rects, samplers (filter, address, mip bias), bound cbuffers (with D3D11.1 ranges), "
         "input layout, draw/dispatch arguments, copy kind/regions (copy, region, resolve, buffer), the source/target resources of copies, clears, CPU writes and Luma passes, clear values, custom shader file and compilation errors, "
-        "the recipes of the shader's current patch clone. "
+        "the recipes of the shader's current patch clone, a Luma pass's shader file (luma_shader) and compilation errors. "
         "The state is recorded before the game mod's draw hook runs: a viewport it scales, a blend or shader it swaps in are not shown "
         "(read the result with luma_read_resource instead).",
         {"index": {"type": "integer", "description": "Entry index from luma_trace_list"}}, ["index"],

@@ -375,6 +375,12 @@ namespace Mcp
          const auto it = custom_shaders_cache.find(shader_hash);
          return it != custom_shaders_cache.end() ? it->second : nullptr;
       }
+      // Needs "s_mutex_loading" (shared). Luma's own shaders by their "native_shaders_definitions" key.
+      const Shader::CachedCustomShader* FindNativeShader(uint32_t native_shader_hash)
+      {
+         const auto it = custom_shaders_cache.find(Shader::ShiftHash32ToHash64(native_shader_hash));
+         return it != custom_shaders_cache.end() ? it->second : nullptr;
+      }
 
       void WriteCustomShader(JsonWriter* w, const Shader::CachedCustomShader& custom_shader, bool with_disasm)
       {
@@ -402,7 +408,11 @@ namespace Mcp
          if (IsDeferred(entry))
             w->Field("deferred", true);
          if (entry.type == TraceDrawCallData::TraceDrawCallType::Custom)
+         {
             w->Field("name", entry.custom_name);
+            if (entry.custom_stage != reshade::api::shader_stage(0))
+               w->Field("stage", entry.custom_stage == reshade::api::shader_stage::compute ? "CS" : "PS");
+         }
          if (entry.type == TraceDrawCallData::TraceDrawCallType::Shader)
          {
             if (const auto* pipeline = FindPipeline(device_data, entry.pipeline_handle))
@@ -536,6 +546,13 @@ namespace Mcp
             }
 #endif
          }
+         else if (entry.custom_shader_hash != 0)
+         {
+            if (const auto definition = native_shaders_definitions.find(entry.custom_shader_hash); definition != native_shaders_definitions.end())
+               w->Field("luma_shader", definition->second.file_name);
+            if (const auto* custom_shader = FindNativeShader(entry.custom_shader_hash))
+               WriteCustomShader(w, *custom_shader, false);
+         }
 
          const auto& dd = entry.draw_dispatch_data;
          w->Key("draw").BeginObject();
@@ -548,7 +565,7 @@ namespace Mcp
 
          w->Field("depth_state", EnumName(TraceDrawCallData::depth_state_names, size_t(entry.depth_state)));
          w->Field("stencil_state", EnumName(TraceDrawCallData::depth_state_names, size_t(entry.stencil_state)));
-         if (pipeline && pipeline->HasPixelShader())
+         if ((pipeline && pipeline->HasPixelShader()) || entry.custom_stage == reshade::api::shader_stage::pixel)
             WriteRenderState(w, entry);
          if (entry.type == TraceDrawCallData::TraceDrawCallType::CopyResource)
          {
@@ -572,9 +589,9 @@ namespace Mcp
                w->Field("debug_name", debug_name);
          };
 
-         // Entries without a shader (copies, clears, CPU writes, Luma's passes) record whole resources instead of views: the target in
+         // Entries without a shader (copies, clears, CPU writes, markers) record whole resources instead of views: the target in
          // "rt_*[0]" (copy destination) and the source in "sr_*[0]" (copy source, bound buffer)
-         if (entry.type != TraceDrawCallData::TraceDrawCallType::Shader)
+         if (entry.type != TraceDrawCallData::TraceDrawCallType::Shader && entry.custom_stage == reshade::api::shader_stage(0))
          {
             const auto write_whole_resource = [&](const char* key, DXGI_FORMAT format, const uint4& size, const std::string& type, const std::string& hash)
             {
@@ -896,7 +913,7 @@ namespace Mcp
       class SrTap final : public SR::SuperResolutionImpl
       {
       public:
-         explicit SrTap(std::unique_ptr<SR::SuperResolutionImpl> wrapped) : inner(std::move(wrapped))
+         SrTap(SR::Type type, std::unique_ptr<SR::SuperResolutionImpl> wrapped) : type(type), inner(std::move(wrapped))
          {
          }
 
@@ -941,7 +958,7 @@ namespace Mcp
                      captured.textures.emplace_back(sr_resource_names[i], CloneResource(native_device.get(), command_list, resources[i]));
             }
             captured.draw_succeeded = inner->Draw(data, command_list, draw_data);
-            QueueInjectedPassTrace(command_list, "Luma Super Resolution", draw_data.output_color);
+            Trace::Marker(command_list, SR::GetTypeName(type), draw_data.output_color);
             if (capture && draw_data.output_color)
                captured.textures.emplace_back(sr_resource_names[std::size(resources) - 1], CloneResource(native_device.get(), command_list, draw_data.output_color));
             {
@@ -1057,6 +1074,7 @@ namespace Mcp
             bool succeeded = false;
          };
 
+         SR::Type type;
          std::unique_ptr<SR::SuperResolutionImpl> inner;
          std::atomic<uint32_t> init_count = 0;
          std::atomic<uint32_t> deinit_count = 0;
@@ -2589,31 +2607,9 @@ namespace Mcp
          { return dev_value.owner == owner; });
    }
 
-   void Annotate(CommandListData& cmd_list_data, std::string_view text, std::optional<int64_t> value)
+   std::unique_ptr<SR::SuperResolutionImpl> TapSuperResolution(SR::Type type, std::unique_ptr<SR::SuperResolutionImpl> implementation)
    {
-      if (!trace_running) // Cheap early out for the hot path, rechecked under the lock
-         return;
-      const std::shared_lock lock_trace(s_mutex_trace);
-      if (!trace_running)
-         return;
-      const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-      // Games can push their own custom entries after the shader ones
-      for (auto it = cmd_list_data.trace_draw_calls_data.rbegin(); it != cmd_list_data.trace_draw_calls_data.rend(); ++it)
-      {
-         if (it->type != TraceDrawCallData::TraceDrawCallType::Shader)
-            continue;
-         if (!it->note.empty())
-            it->note += ' ';
-         it->note += text;
-         if (value)
-            std::format_to(std::back_inserter(it->note), "={}", *value);
-         return;
-      }
-   }
-
-   std::unique_ptr<SR::SuperResolutionImpl> TapSuperResolution(std::unique_ptr<SR::SuperResolutionImpl> implementation)
-   {
-      return std::make_unique<SrTap>(std::move(implementation));
+      return std::make_unique<SrTap>(type, std::move(implementation));
    }
 
    void Start()

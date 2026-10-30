@@ -199,6 +199,7 @@
 #include "includes/instance_data.h"
 #include "includes/game.h"
 #include "includes/com_ptr.h"
+#include "includes/trace.hpp"
 #if DEVELOPMENT
 #include "includes/mcp.hpp"
 #endif
@@ -5651,22 +5652,9 @@ namespace
             }
 
             // Note: we don't really need to re-apply our custom cbuffers in most games (e.g. Prey), they are on indexes that are never used by the game's code
-            DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), nullptr, device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(), device_data.native_pixel_shaders[CompileTimeStringHash("Display Composition")].get(), device_data.display_composition_srv.get(), target_resource_texture_view.get(), target_desc.Width, target_desc.Height, false);
-
-#if DEVELOPMENT
-            {
-               const std::shared_lock lock_trace(s_mutex_trace);
-               if (trace_running)
-               {
-                  const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-                  TraceDrawCallData trace_draw_call_data;
-                  trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
-                  trace_draw_call_data.command_list = native_device_context;
-                  trace_draw_call_data.custom_name = "Luma Display Composition";
-                  cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-               }
-            }
-#endif // DEVELOPMENT
+            Trace::CustomDraw(native_device_context, device_data, "Luma Display Composition", [&]
+               { DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), nullptr, device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(), device_data.native_pixel_shaders[CompileTimeStringHash("Display Composition")].get(), device_data.display_composition_srv.get(), target_resource_texture_view.get(), target_desc.Width, target_desc.Height, false); },
+               CompileTimeStringHash("Display Composition"));
 
             if (ui_needs_composition)
             {
@@ -5753,11 +5741,11 @@ namespace
          if (trace_running && device_data.primary_command_list_data)
          {
             const std::unique_lock lock_trace_2(device_data.primary_command_list_data->mutex_trace);
-            MoveInjectedPassTraces(&device_data.primary_command_list_data->trace_draw_calls_data, device_data.primary_command_list.get());
+            Trace::MoveQueued(device_data.primary_command_list_data->trace_draw_calls_data, device_data.primary_command_list.get());
          }
          else
          {
-            injected_pass_traces.clear();
+            Trace::ClearQueued();
          }
       }
 #endif
@@ -6005,14 +5993,14 @@ namespace
             trace_start_index = cmd_list_data.trace_draw_calls_data.size();
             if (is_dispatch)
             {
-               AddTraceDrawCallData(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_compute_shader.handle, shader_cache, last_draw_dispatch_data, device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views);
+               Trace::AddDrawCall(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_compute_shader.handle, last_draw_dispatch_data);
             }
             else
             {
-               AddTraceDrawCallData(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_vertex_shader.handle, shader_cache, last_draw_dispatch_data, device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views);
+               Trace::AddDrawCall(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_vertex_shader.handle, last_draw_dispatch_data);
                if (cmd_list_data.pipeline_state_original_pixel_shader.handle != 0) // Somehow this can happen (e.g. query tests don't require pixel shaders)
                {
-                  AddTraceDrawCallData(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_pixel_shader.handle, shader_cache, last_draw_dispatch_data, device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views);
+                  Trace::AddDrawCall(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_pixel_shader.handle, last_draw_dispatch_data);
                }
             }
          }
@@ -6060,12 +6048,7 @@ namespace
                   do_ui = true;
 
 #if DEVELOPMENT
-                  const std::shared_lock lock_trace(s_mutex_trace);
-                  if (trace_running)
-                  {
-                     const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-                     AddCustomTraceDrawCallData(cmd_list_data.trace_draw_calls_data, native_device_context, "Redirect UI", rtv.get(), true);
-                  }
+                  Trace::Marker(native_device_context, "Redirect UI", rtv.get(), true);
 #endif
                }
                else if (rtv == ui_texture_rtv_const)
@@ -6639,11 +6622,11 @@ namespace
                   else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_pixel_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::pixel);
                }
                // Luma passes the game drew from its hook (SMAA, RCAS, bloom, SR), after the draw's own entries
-               MoveInjectedPassTraces(&cmd_list_data.trace_draw_calls_data, native_device_context);
+               Trace::MoveQueued(cmd_list_data.trace_draw_calls_data, native_device_context, trace_start_index.value_or(SIZE_MAX));
             }
             else
             {
-               injected_pass_traces.clear();
+               Trace::ClearQueued();
             }
          }
 #endif
@@ -9599,33 +9582,23 @@ namespace
                hr = native_device->CreateRenderTargetView(proxy_target_resource_texture.get(), &target_rtv_desc, &target_resource_texture_view);
                ASSERT_ONCE(SUCCEEDED(hr));
 
-               if (use_scale)
-               {
-                  DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), device_data.sampler_state_linear.get(), vs_scale.get(), ps_scale.get(), source_resource_texture_view.get(), target_resource_texture_view.get(), target_desc.Width, target_desc.Height, true);
-               }
-               else
-               {
-                  DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), nullptr, vs_copy.get(), ps_copy.get(), source_resource_texture_view.get(), target_resource_texture_view.get(), target_desc.Width, target_desc.Height, true);
-               }
+               Trace::CustomDraw(native_device_context, device_data, "Redirected Copy Resource", [&]
+                  {
+                     if (use_scale)
+                        DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), device_data.sampler_state_linear.get(), vs_scale.get(), ps_scale.get(), source_resource_texture_view.get(), target_resource_texture_view.get(), target_desc.Width, target_desc.Height, true);
+                     else
+                        DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), nullptr, vs_copy.get(), ps_copy.get(), source_resource_texture_view.get(), target_resource_texture_view.get(), target_desc.Width, target_desc.Height, true);
+                  });
 
 #if DEVELOPMENT
                {
                   const std::shared_lock lock_trace(s_mutex_trace);
                   if (trace_running)
                   {
-                     const std::shared_lock lock_generic(s_mutex_generic);
                      CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
                      const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-                     const std::lock_guard<std::recursive_mutex> lock_dumping(s_mutex_dumping);
-
-                     // Highlight that the next capture data is redirected
-                     TraceDrawCallData trace_draw_call_data;
-                     trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
-                     trace_draw_call_data.command_list = native_device_context;
-                     trace_draw_call_data.custom_name = "Redirected Copy Resource";
-                     GetResourceInfo(source_resource_texture.get(), trace_draw_call_data.sr_size[0], trace_draw_call_data.sr_format[0], &trace_draw_call_data.sr_type_name[0], &trace_draw_call_data.sr_hash[0]);
-                     GetResourceInfo(target_resource_texture.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-                     cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
+                     // Copy hooks don't move the queue, and this has to be before the copy's own entry
+                     Trace::MoveQueued(cmd_list_data.trace_draw_calls_data, native_device_context);
                   }
                }
 #endif
@@ -15471,6 +15444,7 @@ namespace
 #include "includes/shaders.inl"
 #include "includes/patch.inl"
 #if DEVELOPMENT
+#include "includes/trace.inl"
 #include "includes/mcp_server.inl"
 #endif
 
@@ -15518,7 +15492,7 @@ void Init(bool async)
    // Games call through these pointers, so the MCP tap sees every settings update and draw
    for (auto& [type, implementation] : sr_implementations)
    {
-      implementation = Mcp::TapSuperResolution(std::move(implementation));
+      implementation = Mcp::TapSuperResolution(type, std::move(implementation));
    }
 #endif
 #endif

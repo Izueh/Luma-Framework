@@ -251,7 +251,7 @@ struct TraceDrawCallData
    };
    CopyInfo copy_info;
 
-   // Free text game code attached to this entry during the capture (see "Mcp::Annotate")
+   // Free text game code attached to this entry during the capture (see "Trace::Annotate")
    std::string note;
    // What the shader that ran was built from ("None" for the original), after the draw callbacks picked the variant
    Shader::CloneOrigin drawn_origin = Shader::CloneOrigin::None;
@@ -268,6 +268,9 @@ struct TraceDrawCallData
    bool IsDSVValid() const { return dsv_format != DXGI_FORMAT_UNKNOWN && dsv_format != DXGI_FORMAT(-1); }
 
    const char* custom_name = "Unknown";
+   // Luma passes ("Trace::CustomDraw"): the stage whose state was recorded (none for markers), and its "native_shaders_definitions" key
+   reshade::api::shader_stage custom_stage = reshade::api::shader_stage(0);
+   uint32_t custom_shader_hash = 0;
 };
 
 // Applies to command lists and command queue (DirectX 11 command list and deferred or immediate contexts, though usually it's for "ID3D11DeviceContext").

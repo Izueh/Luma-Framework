@@ -159,6 +159,9 @@
     <ClInclude Include="includes\mcp.hpp">
       <Filter>Includes</Filter>
     </ClInclude>
+    <ClInclude Include="includes\trace.hpp">
+      <Filter>Includes</Filter>
+    </ClInclude>
     <ClInclude Include="includes\resource_upgrades.hpp">
       <Filter>Includes</Filter>
     </ClInclude>
@@ -168,6 +171,9 @@
       <Filter>Includes</Filter>
     </None>
     <None Include="includes\mcp_server.inl">
+      <Filter>Includes</Filter>
+    </None>
+    <None Include="includes\trace.inl">
       <Filter>Includes</Filter>
     </None>
   </ItemGroup>
