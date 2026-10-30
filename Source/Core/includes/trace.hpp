@@ -423,12 +423,13 @@ namespace Trace
    // The dev UI ("trace_ui.inl"): the Captured Commands tab, and the debug draw settings (in the Settings tab)
    void DrawCaptureTab(reshade::api::effect_runtime* runtime, DeviceData& device_data, bool& open_settings_tab);
    void DrawDebugDrawSettings(DeviceData& device_data);
-   // Core: moves the entries queued on this thread for "native_device_context" into its trace at "index" (the other contexts' are dropped),
-   // and returns how many. Expects the trace mutexes locked.
-   size_t MoveQueued(std::vector<TraceDrawCallData>& trace_draw_calls_data, ID3D11DeviceContext* native_device_context, size_t index = SIZE_MAX);
+   // Core: moves the entries queued on this thread for "native_device_context" (Luma passes and markers) into its trace, outside of the draw hooks
+   // (the other contexts' are dropped). Without a command list, they are dropped.
+   void FlushQueued(CommandListData* cmd_list_data, ID3D11DeviceContext* native_device_context);
+   // Core: pre-allocates the entries of a command list's captures
+   void InitCommandList(CommandListData& cmd_list_data);
    // Core: called by the draw hooks with what the draw callbacks returned, flags the entries of the draw ("trace_current_draw") if they didn't let it through
    void EndDraw(CommandListData& cmd_list_data, bool cancelled_or_replaced);
-   void ClearQueued();
 #else
    inline void CustomDraw(ID3D11DeviceContext*, const char*, UINT) {}
    inline void CustomDispatch(ID3D11DeviceContext*, const char*, UINT, UINT, UINT) {}

@@ -674,6 +674,19 @@ namespace Trace
          device_data.track_buffer_data.num_constants = cb_num;
       }
 
+      // Moves the entries queued on this thread for "native_device_context" into its trace at "index" (the other contexts' are dropped), and returns how many.
+      // Expects the trace mutexes locked.
+      size_t MoveQueued(std::vector<TraceDrawCallData>& trace_draw_calls_data, ID3D11DeviceContext* native_device_context, size_t index = SIZE_MAX)
+      {
+         const size_t first_index = (std::min)(index, trace_draw_calls_data.size());
+         std::erase_if(queued_entries, [native_device_context](const TraceDrawCallData& entry)
+            { return entry.command_list.get() != native_device_context; });
+         trace_draw_calls_data.insert(trace_draw_calls_data.begin() + first_index, std::make_move_iterator(queued_entries.begin()), std::make_move_iterator(queued_entries.end()));
+         const size_t count = queued_entries.size();
+         queued_entries.clear();
+         return count;
+      }
+
       // Builds an event entry with "setup" and adds it to the trace, while a capture runs
       template <typename TSetup>
       void AddEventEntry(CommandListData& cmd_list_data, ID3D11DeviceContext* command_list, TraceDrawCallData::TraceDrawCallType type, TSetup&& setup)
@@ -1263,7 +1276,7 @@ namespace Trace
       const std::shared_lock lock_trace(s_mutex);
       if (!running)
       {
-         ClearQueued();
+         queued_entries.clear();
          return;
       }
       const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -1354,6 +1367,31 @@ namespace Trace
       return drawn;
    }
 
+   void FlushQueued(CommandListData* cmd_list_data, ID3D11DeviceContext* native_device_context)
+   {
+      const std::shared_lock lock_trace(s_mutex);
+      if (!running || !cmd_list_data)
+      {
+         queued_entries.clear();
+         return;
+      }
+      const std::unique_lock lock_trace_2(cmd_list_data->mutex_trace);
+      MoveQueued(cmd_list_data->trace_draw_calls_data, native_device_context);
+   }
+
+   void InitCommandList(CommandListData& cmd_list_data)
+   {
+      // Pre-allocate to make it faster (whether it's primary or not)
+      // Check for the memory as this can crash in x86 games that had little consecutive memory left (e.g. Burnout Paradise Remastered)
+#ifdef WIN32
+      constexpr size_t reserve_size = 2500;
+#else
+      constexpr size_t reserve_size = 5000;
+#endif
+      if (System::CanAllocate(sizeof(TraceDrawCallData) * reserve_size * 2)) // Check for double the space, just to be sure
+         cmd_list_data.trace_draw_calls_data.reserve(reserve_size);
+   }
+
    void EndFrame(DeviceData& device_data)
    {
       // Clear at the end of every frame and re-capture it in the next frame if its still available
@@ -1411,17 +1449,6 @@ namespace Trace
       }
    }
 
-   size_t MoveQueued(std::vector<TraceDrawCallData>& trace_draw_calls_data, ID3D11DeviceContext* native_device_context, size_t index)
-   {
-      const size_t first_index = (std::min)(index, trace_draw_calls_data.size());
-      std::erase_if(queued_entries, [native_device_context](const TraceDrawCallData& entry)
-         { return entry.command_list.get() != native_device_context; });
-      trace_draw_calls_data.insert(trace_draw_calls_data.begin() + first_index, std::make_move_iterator(queued_entries.begin()), std::make_move_iterator(queued_entries.end()));
-      const size_t count = queued_entries.size();
-      queued_entries.clear();
-      return count;
-   }
-
    void EndDraw(CommandListData& cmd_list_data, bool cancelled_or_replaced)
    {
       if (!running)
@@ -1433,8 +1460,4 @@ namespace Trace
          cmd_list_data.trace_draw_calls_data[i].cancelled_or_replaced = true;
    }
 
-   void ClearQueued()
-   {
-      queued_entries.clear();
-   }
 } // namespace Trace

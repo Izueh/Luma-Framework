@@ -4924,15 +4924,7 @@ namespace
          }
 
 #if DEVELOPMENT
-         // Pre-allocate to make it faster (whether it's primary or not)
-         // Check for the memory as this can crash in x86 games that had little consecutive memory left (e.g. Burnout Paradise Remastered)
-#ifdef WIN32
-         constexpr size_t reserve_size = 2500;
-#else
-         constexpr size_t reserve_size = 5000;
-#endif
-         if (System::CanAllocate(sizeof(decltype(cmd_list_data.trace_draw_calls_data)::value_type) * reserve_size * 2)) // Check for double the space, just to be sure
-            cmd_list_data.trace_draw_calls_data.reserve(reserve_size);
+         Trace::InitCommandList(cmd_list_data);
 #endif
       }
       else
@@ -5585,19 +5577,8 @@ namespace
       game->OnPresent(native_device, device_data);
 
 #if DEVELOPMENT
-      // Luma passes the game drew at present (or outside its draw hooks) on this thread; ones queued for another context are dropped
-      {
-         const std::shared_lock lock_trace(Trace::s_mutex);
-         if (Trace::running && device_data.primary_command_list_data)
-         {
-            const std::unique_lock lock_trace_2(device_data.primary_command_list_data->mutex_trace);
-            Trace::MoveQueued(device_data.primary_command_list_data->trace_draw_calls_data, device_data.primary_command_list.get());
-         }
-         else
-         {
-            Trace::ClearQueued();
-         }
-      }
+      // Luma passes the game drew at present (or outside its draw hooks) on this thread
+      Trace::FlushQueued(device_data.primary_command_list_data, device_data.primary_command_list.get());
 #endif
 
 #if 0 // TODO: this breaks games atm, need more restrictive checks
@@ -8875,16 +8856,8 @@ namespace
                }
 
 #if DEVELOPMENT
-               {
-                  const std::shared_lock lock_trace(Trace::s_mutex);
-                  if (Trace::running)
-                  {
-                     CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-                     const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-                     // Copy hooks don't move the queue, and this has to be before the copy's own entry
-                     Trace::MoveQueued(cmd_list_data.trace_draw_calls_data, native_device_context);
-                  }
-               }
+               // Copy hooks don't move the queue, and this has to be before the copy's own entry
+               Trace::FlushQueued(cmd_list->get_private_data<CommandListData>(), native_device_context);
 #endif
 
                //
