@@ -209,11 +209,6 @@
 #include "utils/shader_compiler.hpp"
 #include "utils/display.hpp"
 #include "utils/resource.hpp"
-#if DEVELOPMENT
-// Before "draw.hpp", whose Luma pass helpers only queue trace entries while a capture runs.
-// Atomic so hot paths can check it without "s_mutex_trace" (and recheck it under the lock).
-static std::atomic<bool> trace_running = false; // For this frame
-#endif
 #include "utils/draw.hpp"
 #include "utils/system.h"
 
@@ -269,10 +264,6 @@ namespace
    std::shared_mutex s_mutex_samplers;
    // For "global_native_devices", "global_devices_data", "game_window"
    recursive_shared_mutex s_mutex_device;
-#if DEVELOPMENT
-   // for "trace_count" and "trace_scheduled" and "trace_running"
-   std::shared_mutex s_mutex_trace;
-#endif
 
    // Dev or User settings:
    bool auto_dump = (bool)ALLOW_SHADERS_DUMPING;
@@ -284,12 +275,6 @@ namespace
 #endif
 #if DEVELOPMENT
    bool compile_clear_all_shaders = false; // If true, even shaders that aren't used by the current mod will be compiled, for a test
-   bool trace_show_command_list_info = false;
-   bool trace_ignore_vertex_shaders = true;
-   bool trace_ignore_buffer_writes = true;
-   bool trace_ignore_bindings = true;
-   bool trace_ignore_custom_draws = true; // Luma passes ("Trace::Draw()")
-   bool trace_ignore_non_bound_shader_referenced_resources = true;
    bool allow_replace_draw_nans = false;
 #endif // DEVELOPMENT
    constexpr bool precompile_custom_shaders = true; // Async shader compilation on boot
@@ -729,47 +714,9 @@ namespace
    thread_local reshade::api::format last_attempted_upgraded_resource_creation_format = reshade::api::format::unknown;
    thread_local reshade::api::format last_attempted_upgraded_resource_view_creation_view_format = reshade::api::format::unknown;
 
-   bool trace_scheduled = false; // For next frame
-   uint32_t trace_count = 0; // Not exactly necessary but... it might help
-
    uint64_t last_drawn_shader = SHADER_HASH_NONE; // Not exactly thread safe but it's fine...
 
    thread_local reshade::api::command_list* thread_local_cmd_list = nullptr; // Hacky global variable (possibly not cleared, stale), only use to quickly tell the command list of the thread
-
-   // Textures debug drawing
-   namespace
-   {
-      uint32_t debug_draw_shader_hash = 0;
-      char debug_draw_shader_hash_string[HASH_CHARACTERS_LENGTH + 1] = {};
-      uint64_t debug_draw_pipeline = 0; // In DX11 shaders and pipelines are the same thing so this is kinda useless (excluding the rare case where multiple pipelines (compiled shader objects) were based on the same shader, and hence had the same hash)
-      int32_t debug_draw_pipeline_target_instance = -1;
-      std::thread::id debug_draw_pipeline_target_thread = std::thread::id(); // Filter target instances by thread, which would hopefully reliably match the command lists, over multiple frames
-      uint32_t debug_draw_custom_pass = 0; // A Luma pass instead of a game pipeline, by the hash of its "Trace::Draw()" name
-
-      std::atomic<int32_t> debug_draw_pipeline_instance = 0; // Theoretically should be within "CommandListData" but this should work for most cases
-      std::atomic<int32_t> debug_draw_custom_pass_instance = 0;
-
-      DebugDrawMode debug_draw_mode = DebugDrawMode::Custom;
-      bool debug_draw_freeze_inputs = false; // Allows freezing the inputs/state of this pass, allowing you to edit the shader and seeing the results live. This is bundled with the textures debug draw feature because generally you don't need to freeze the inputs of any prior pass if not the very same one you are analyzing (or iterating upon). If the game stopped drawing the shader, debugging would also stop.
-      int32_t debug_draw_view_index = 0;
-      bool debug_draw_disable_blends = false; // Allows disabling HW blends so we can debug the raw pixel shader output
-      uint32_t debug_draw_options = (uint32_t)DebugDrawTextureOptionsMask::Fullscreen | (uint32_t)DebugDrawTextureOptionsMask::BackgroundPassthrough | (uint32_t)DebugDrawTextureOptionsMask::Tonemap;
-      int32_t debug_draw_mip = 0;
-      bool debug_draw_pipeline_instance_filter_by_thread = false; // Not true by default as it seems like quite a few games set up multiple render threads, so this conflicts between frames
-      bool debug_draw_auto_clear_texture = false;
-      bool debug_draw_replaced_pass = false; // Whether we print the debugging of the original or replaced pass (the resources bindings etc might be different, though this won't forcefully run the original pass if it was skipped by the game's mod custom code, so this isn't fully reliable)
-      bool debug_draw_auto_gamma = true;
-   }
-
-   // Constant Buffers tracking
-   namespace
-   {
-      uint64_t track_buffer_pipeline = 0; // Can be any type of shader
-      int32_t track_buffer_pipeline_target_instance = -1;
-      int32_t track_buffer_index = 0;
-
-      std::atomic<int32_t> track_buffer_pipeline_instance = 0; // Theoretically should be within "CommandListData" but this should work for most cases
-   }
 
    // CB Dev settings settings
    namespace
@@ -4609,8 +4556,8 @@ namespace
       cmd_list_data.pipeline_state_has_custom_graphics_shader = cmd_list_data.pipeline_state_has_custom_pixel_shader || cmd_list_data.pipeline_state_has_custom_vertex_shader;
 
 #if DEVELOPMENT // Note: we only print the supported ones!
-      const std::shared_lock lock_trace(s_mutex_trace);
-      if (trace_running)
+      const std::shared_lock lock_trace(Trace::s_mutex);
+      if (Trace::running)
       {
          CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
          const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -5081,8 +5028,8 @@ namespace
 
       cmd_list_data.temp_custom_depth_stencil = ShaderCustomDepthStencilType::None;
 
-      const std::shared_lock lock_trace(s_mutex_trace);
-      if (trace_running)
+      const std::shared_lock lock_trace(Trace::s_mutex);
+      if (Trace::running)
       {
          const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
          TraceDrawCallData trace_draw_call_data;
@@ -5100,8 +5047,8 @@ namespace
    {
       SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api());
 
-      const std::shared_lock lock_trace(s_mutex_trace);
-      if (trace_running)
+      const std::shared_lock lock_trace(Trace::s_mutex);
+      if (Trace::running)
       {
          CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
          const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -5181,8 +5128,8 @@ namespace
       }
       secondary_cmd_list_data.requires_join = false;
 
-      const std::shared_lock lock_trace(s_mutex_trace);
-      if (trace_running)
+      const std::shared_lock lock_trace(Trace::s_mutex);
+      if (Trace::running)
       {
          const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
          TraceDrawCallData trace_draw_call_data;
@@ -5345,11 +5292,11 @@ namespace
                         debug_srv_desc.Texture2DMS.UnusedField_NothingToDefine = 0; // Useless, but good to make it explicit
                         debug_draw_srv_slot = 3;
                      }
-                     debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::TextureMultiSample;
+                     Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::TextureMultiSample;
                   }
                   else
                   {
-                     debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::TextureMultiSample;
+                     Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::TextureMultiSample;
                   }
                   if (texture_2d_desc.ArraySize > 1) // Array
                   {
@@ -5369,14 +5316,14 @@ namespace
                         debug_srv_desc.Texture2DArray.ArraySize = texture_2d_desc.ArraySize;
                         debug_draw_srv_slot = 4;
                      }
-                     debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::TextureArray;
+                     Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::TextureArray;
                   }
                   else
                   {
-                     debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::TextureArray;
+                     Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::TextureArray;
                   }
-                  debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::Texture2D;
-                  debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::Texture3D;
+                  Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::Texture2D;
+                  Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::Texture3D;
                }
                else if (debug_draw_texture_3d)
                {
@@ -5389,10 +5336,10 @@ namespace
                   debug_srv_desc.Texture3D.MostDetailedMip = 0;
                   debug_srv_desc.Texture3D.MipLevels = UINT(-1); // Use all
                   debug_draw_srv_slot = 6;
-                  debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::TextureMultiSample;
-                  debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::TextureArray;
-                  debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::Texture3D;
-                  debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::Texture2D;
+                  Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::TextureMultiSample;
+                  Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::TextureArray;
+                  Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::Texture3D;
+                  Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::Texture2D;
                }
                else if (debug_draw_texture_1d)
                {
@@ -5409,7 +5356,7 @@ namespace
                      debug_srv_desc.Texture1DArray.FirstArraySlice = 0;
                      debug_srv_desc.Texture1DArray.ArraySize = texture_1d_desc.ArraySize;
                      debug_draw_srv_slot = 8;
-                     debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::TextureArray;
+                     Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::TextureArray;
                   }
                   else
                   {
@@ -5417,28 +5364,28 @@ namespace
                      debug_srv_desc.Texture1D.MostDetailedMip = 0;
                      debug_srv_desc.Texture1D.MipLevels = UINT(-1); // Use all
                      debug_draw_srv_slot = 7;
-                     debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::TextureArray;
+                     Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::TextureArray;
                   }
-                  debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::TextureMultiSample;
-                  debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::Texture3D;
-                  debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::Texture2D;
+                  Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::TextureMultiSample;
+                  Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::Texture3D;
+                  Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::Texture2D;
                }
 
-               if (debug_draw_auto_gamma)
+               if (Trace::debug_draw_auto_gamma)
                {
                   // TODO: if this is depth and depth is inverted (or not), should we flip the gamma direction? Gamma to linear looks good on direct/linear depth
                   if (!IsLinearFormat(device_data.debug_draw_texture_format)) // We don't use the view format as we create a new view with the native format
                   {
-                     debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::GammaToLinear;
+                     Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::GammaToLinear;
                   }
                   else
                   {
-                     debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::LinearToGamma;
-                     debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::GammaToLinear;
+                     Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::LinearToGamma;
+                     Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::GammaToLinear;
                      // If the game rendering or post processing was in gamma space, automatically linearize color textures (just a guess, it's usually right)
                      if (IsRGBAFormat(device_data.debug_draw_texture_format, false) && GetShaderDefineCompiledNumericalValue(POST_PROCESS_SPACE_TYPE_HASH) == 0)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::GammaToLinear;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::GammaToLinear;
                      }
                   }
                }
@@ -5458,16 +5405,16 @@ namespace
                ID3D11ShaderResourceView* const debug_srv_const = debug_srv.get();
                native_device_context->PSSetShaderResources(debug_draw_srv_slot, 1, &debug_srv_const); // Use index 1 (0 is already used)
 
-               auto temp_debug_draw_options = debug_draw_options;
-               bool debug_draw_saturate = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::Saturate) != 0;
-               // TODO: save two versions of "debug_draw_options", one that matches the user settings and one that is the current automated version of it
+               auto temp_debug_draw_options = Trace::debug_draw_options;
+               bool debug_draw_saturate = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::Saturate) != 0;
+               // TODO: save two versions of "Trace::debug_draw_options", one that matches the user settings and one that is the current automated version of it
                if (debug_draw_saturate || !IsFloatFormat(device_data.debug_draw_texture_format))
                {
-                  temp_debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::Tonemap;
+                  temp_debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::Tonemap;
                }
                custom_const_buffer_data_2 = temp_debug_draw_options;
 
-               custom_const_buffer_data_3 = float(debug_draw_mip);
+               custom_const_buffer_data_3 = float(Trace::debug_draw_mip);
             }
             // Empty the shader resources so the shader can tell there isn't one
             else
@@ -5661,18 +5608,18 @@ namespace
 
 #if DEVELOPMENT
       // Clear at the end of every frame and re-capture it in the next frame if its still available
-      if (debug_draw_auto_clear_texture)
+      if (Trace::debug_draw_auto_clear_texture)
       {
          device_data.debug_draw_texture = nullptr;
          // Leave "debug_draw_texture_format" and "debug_draw_texture_size", we need that in ImGUI (we'd need to clear it after ImGUI if necessary, but we skip drawing it if the texture isn't valid)
       }
-      debug_draw_pipeline_instance = 0;
-      debug_draw_custom_pass_instance = 0;
+      Trace::debug_draw_pipeline_instance = 0;
+      Trace::debug_draw_custom_pass_instance = 0;
 
 #if 0 // Optionally clear it every frame, to remove it if it wasn't found (this needs to be done elsewhere for now, because we print it below)
       device_data.track_buffer_data = {};
 #endif
-      track_buffer_pipeline_instance = 0;
+      Trace::track_buffer_pipeline_instance = 0;
 #endif // DEVELOPMENT
 
       device_data.has_drawn_main_post_processing_previous = device_data.has_drawn_main_post_processing;
@@ -5690,8 +5637,8 @@ namespace
 #if DEVELOPMENT
       // Luma passes the game drew at present (or outside its draw hooks) on this thread; ones queued for another context are dropped
       {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (trace_running && device_data.primary_command_list_data)
+         const std::shared_lock lock_trace(Trace::s_mutex);
+         if (Trace::running && device_data.primary_command_list_data)
          {
             const std::unique_lock lock_trace_2(device_data.primary_command_list_data->mutex_trace);
             Trace::MoveQueued(device_data.primary_command_list_data->trace_draw_calls_data, device_data.primary_command_list.get());
@@ -5729,8 +5676,8 @@ namespace
 
 #if DEVELOPMENT
       {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (trace_running)
+         const std::shared_lock lock_trace(Trace::s_mutex);
+         if (Trace::running)
          {
             CommandListData& cmd_list_data = *queue->get_immediate_command_list()->get_private_data<CommandListData>();
             const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -5935,8 +5882,8 @@ namespace
       std::optional<size_t> trace_start_index;
       {
          // Do this before any custom code runs as the state might change
-         const std::shared_lock lock_trace(s_mutex_trace); // TODO: it's not safe to lock global mutexes that might have already been locked by other concurrent functions, while also calling functions in the device or primary device context (in DX11) (because they have their own locks inside that might cause deadlocks!). The solution here would be to cache the data upfront and then lock a mutex to add it to our array. This might be safe if the game threading was already safe though, I'm not 100% sure.
-         if (trace_running)
+         const std::shared_lock lock_trace(Trace::s_mutex); // TODO: it's not safe to lock global mutexes that might have already been locked by other concurrent functions, while also calling functions in the device or primary device context (in DX11) (because they have their own locks inside that might cause deadlocks!). The solution here would be to cache the data upfront and then lock a mutex to add it to our array. This might be safe if the game threading was already safe though, I'm not 100% sure.
+         if (Trace::running)
          {
             const std::shared_lock lock_generic(s_mutex_generic);
             const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -5967,8 +5914,8 @@ namespace
       // passes queued meanwhile into the trace: before the draw if it went through (they ran first), after it otherwise (they replaced it)
       const auto finish_trace = [&](bool draw_went_through)
       {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (!trace_running)
+         const std::shared_lock lock_trace(Trace::s_mutex);
+         if (!Trace::running)
          {
             Trace::ClearQueued();
             return;
@@ -6258,7 +6205,7 @@ namespace
                               rtvs[slot] = reinterpret_cast<ID3D11RenderTargetView*>(resource_view);
                               any_changed = true;
 #if DEVELOPMENT
-                              if (trace_running)
+                              if (Trace::running)
                               {
                                  // Diagnostic: log when a hash-based (seed) RTV is redirected to a mirror, and at what size.
                                  if (seed_draw_before)
@@ -6913,9 +6860,9 @@ namespace
 #if DEVELOPMENT
       DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
 
-      bool wants_debug_draw = debug_draw_shader_hash != 0 || debug_draw_pipeline != 0;
-      wants_debug_draw &= (debug_draw_pipeline == 0 || debug_draw_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle);
-      wants_debug_draw &= (debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_graphics_shader_hashes.Contains(debug_draw_shader_hash, reshade::api::shader_stage::pixel)) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id());
+      bool wants_debug_draw = Trace::debug_draw_shader_hash != 0 || Trace::debug_draw_pipeline != 0;
+      wants_debug_draw &= (Trace::debug_draw_pipeline == 0 || Trace::debug_draw_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle);
+      wants_debug_draw &= (Trace::debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_graphics_shader_hashes.Contains(Trace::debug_draw_shader_hash, reshade::api::shader_stage::pixel)) && (Trace::debug_draw_pipeline_target_thread == std::thread::id() || Trace::debug_draw_pipeline_target_thread == std::this_thread::get_id());
 
       com_ptr<ID3D11DepthStencilState> original_depth_stencil_state;
       UINT original_stencil_ref = 0;
@@ -6930,7 +6877,7 @@ namespace
       DrawStateStack pre_draw_state_stack;
       if (wants_debug_draw)
       {
-         if (debug_draw_freeze_inputs)
+         if (Trace::debug_draw_freeze_inputs)
          {
             // The cached (frozen) state is empty, cache it, and then duplicate the resources
             if (!device_data.debug_draw_frozen_draw_state_stack)
@@ -6948,7 +6895,7 @@ namespace
 
          pre_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
 
-         if (debug_draw_disable_blends) // TODO: we never reset these after the draw call? Potentially polluting the game's state? It'd be fine if we are draw debugging! Same for the other usages of this.
+         if (Trace::debug_draw_disable_blends) // TODO: we never reset these after the draw call? Potentially polluting the game's state? It'd be fine if we are draw debugging! Same for the other usages of this.
          {
             native_device_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
          }
@@ -6972,8 +6919,8 @@ namespace
       // First run the draw call (don't delegate it to ReShade) and then copy its output
       if (wants_debug_draw)
       {
-         auto local_debug_draw_pipeline_instance = debug_draw_pipeline_instance.fetch_add(1);
-         if (debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == debug_draw_pipeline_target_instance)
+         auto local_debug_draw_pipeline_instance = Trace::debug_draw_pipeline_instance.fetch_add(1);
+         if (Trace::debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == Trace::debug_draw_pipeline_target_instance)
          {
             DrawStateStack post_draw_state_stack;
 
@@ -6981,28 +6928,28 @@ namespace
             {
                draw_lambda();
             }
-            else if (!debug_draw_replaced_pass)
+            else if (!Trace::debug_draw_replaced_pass)
             {
                post_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
                pre_draw_state_stack.Restore(native_device_context);
             }
 
-            CopyDebugDrawTexture(debug_draw_mode, debug_draw_view_index, cmd_list, false);
+            Trace::CopyDebugDrawTexture(Trace::debug_draw_mode, Trace::debug_draw_view_index, cmd_list, false);
 
-            if (cancelled_or_replaced && !debug_draw_replaced_pass)
+            if (cancelled_or_replaced && !Trace::debug_draw_replaced_pass)
             {
                post_draw_state_stack.Restore(native_device_context);
             }
             cancelled_or_replaced = true;
          }
       }
-      bool track_buffer_pipeline_ps = track_buffer_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle;
-      bool track_buffer_pipeline_vs = track_buffer_pipeline == cmd_list_data.pipeline_state_original_vertex_shader.handle;
-      if (track_buffer_pipeline != 0 && (track_buffer_pipeline_ps || track_buffer_pipeline_vs))
+      bool track_buffer_pipeline_ps = Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle;
+      bool track_buffer_pipeline_vs = Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_vertex_shader.handle;
+      if (Trace::track_buffer_pipeline != 0 && (track_buffer_pipeline_ps || track_buffer_pipeline_vs))
       {
-         auto local_track_buffer_pipeline_instance = track_buffer_pipeline_instance.fetch_add(1);
-         // TODO: make "track_buffer_pipeline_target_instance" by thread (like "debug_draw_pipeline_target_instance"), though it's rarely useful
-         if (track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == track_buffer_pipeline_target_instance)
+         auto local_track_buffer_pipeline_instance = Trace::track_buffer_pipeline_instance.fetch_add(1);
+         // TODO: make "Trace::track_buffer_pipeline_target_instance" by thread (like "Trace::debug_draw_pipeline_target_instance"), though it's rarely useful
+         if (Trace::track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == Trace::track_buffer_pipeline_target_instance)
          {
             com_ptr<ID3D11Buffer> cb;
             UINT cb_first = 0, cb_num = 0;
@@ -7011,19 +6958,19 @@ namespace
             if (track_buffer_pipeline_ps)
             {
                if (native_device_context_1)
-                  native_device_context_1->PSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+                  native_device_context_1->PSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
                else
-                  native_device_context->PSGetConstantBuffers(track_buffer_index, 1, &cb);
+                  native_device_context->PSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
             }
             else if (track_buffer_pipeline_vs)
             {
                if (native_device_context_1)
-                  native_device_context_1->VSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+                  native_device_context_1->VSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
                else
-                  native_device_context->VSGetConstantBuffers(track_buffer_index, 1, &cb);
+                  native_device_context->VSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
             }
             // Copy the buffer in our data, and make a copy if necessary, if we are in a deferred context
-            device_data.track_buffer_data.data_valid = CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
+            device_data.track_buffer_data.data_valid = Trace::CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
             device_data.track_buffer_data.hash = std::to_string(std::hash<void*>{}(cb.get()));
             device_data.track_buffer_data.first_constant = cb_first;
             device_data.track_buffer_data.num_constants = cb_num;
@@ -7094,9 +7041,9 @@ namespace
 #if DEVELOPMENT
       DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
 
-      bool wants_debug_draw = debug_draw_shader_hash != 0 || debug_draw_pipeline != 0;
-      wants_debug_draw &= (debug_draw_pipeline == 0 || debug_draw_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle);
-      wants_debug_draw &= (debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_graphics_shader_hashes.Contains(debug_draw_shader_hash, reshade::api::shader_stage::pixel)) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id());
+      bool wants_debug_draw = Trace::debug_draw_shader_hash != 0 || Trace::debug_draw_pipeline != 0;
+      wants_debug_draw &= (Trace::debug_draw_pipeline == 0 || Trace::debug_draw_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle);
+      wants_debug_draw &= (Trace::debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_graphics_shader_hashes.Contains(Trace::debug_draw_shader_hash, reshade::api::shader_stage::pixel)) && (Trace::debug_draw_pipeline_target_thread == std::thread::id() || Trace::debug_draw_pipeline_target_thread == std::this_thread::get_id());
 
       com_ptr<ID3D11DepthStencilState> original_depth_stencil_state;
       UINT original_stencil_ref = 0;
@@ -7110,7 +7057,7 @@ namespace
       DrawStateStack pre_draw_state_stack;
       if (wants_debug_draw)
       {
-         if (debug_draw_freeze_inputs)
+         if (Trace::debug_draw_freeze_inputs)
          {
             if (!device_data.debug_draw_frozen_draw_state_stack)
             {
@@ -7123,7 +7070,7 @@ namespace
 
          pre_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
 
-         if (debug_draw_disable_blends)
+         if (Trace::debug_draw_disable_blends)
          {
             native_device_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
          }
@@ -7148,8 +7095,8 @@ namespace
       // First run the draw call (don't delegate it to ReShade) and then copy its output
       if (wants_debug_draw)
       {
-         auto local_debug_draw_pipeline_instance = debug_draw_pipeline_instance.fetch_add(1);
-         if (debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == debug_draw_pipeline_target_instance)
+         auto local_debug_draw_pipeline_instance = Trace::debug_draw_pipeline_instance.fetch_add(1);
+         if (Trace::debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == Trace::debug_draw_pipeline_target_instance)
          {
             DrawStateStack post_draw_state_stack;
 
@@ -7157,27 +7104,27 @@ namespace
             {
                draw_lambda();
             }
-            else if (!debug_draw_replaced_pass)
+            else if (!Trace::debug_draw_replaced_pass)
             {
                post_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
                pre_draw_state_stack.Restore(native_device_context);
             }
 
-            CopyDebugDrawTexture(debug_draw_mode, debug_draw_view_index, cmd_list, false);
+            Trace::CopyDebugDrawTexture(Trace::debug_draw_mode, Trace::debug_draw_view_index, cmd_list, false);
 
-            if (cancelled_or_replaced && !debug_draw_replaced_pass)
+            if (cancelled_or_replaced && !Trace::debug_draw_replaced_pass)
             {
                post_draw_state_stack.Restore(native_device_context);
             }
             cancelled_or_replaced = true;
          }
       }
-      bool track_buffer_pipeline_ps = track_buffer_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle;
-      bool track_buffer_pipeline_vs = track_buffer_pipeline == cmd_list_data.pipeline_state_original_vertex_shader.handle;
-      if (track_buffer_pipeline != 0 && (track_buffer_pipeline_ps || track_buffer_pipeline_vs))
+      bool track_buffer_pipeline_ps = Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle;
+      bool track_buffer_pipeline_vs = Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_vertex_shader.handle;
+      if (Trace::track_buffer_pipeline != 0 && (track_buffer_pipeline_ps || track_buffer_pipeline_vs))
       {
-         auto local_track_buffer_pipeline_instance = track_buffer_pipeline_instance.fetch_add(1);
-         if (track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == track_buffer_pipeline_target_instance)
+         auto local_track_buffer_pipeline_instance = Trace::track_buffer_pipeline_instance.fetch_add(1);
+         if (Trace::track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == Trace::track_buffer_pipeline_target_instance)
          {
             com_ptr<ID3D11Buffer> cb;
             UINT cb_first = 0, cb_num = 0;
@@ -7186,19 +7133,19 @@ namespace
             if (track_buffer_pipeline_ps)
             {
                if (native_device_context_1)
-                  native_device_context_1->PSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+                  native_device_context_1->PSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
                else
-                  native_device_context->PSGetConstantBuffers(track_buffer_index, 1, &cb);
+                  native_device_context->PSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
             }
             else if (track_buffer_pipeline_vs)
             {
                if (native_device_context_1)
-                  native_device_context_1->VSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+                  native_device_context_1->VSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
                else
-                  native_device_context->VSGetConstantBuffers(track_buffer_index, 1, &cb);
+                  native_device_context->VSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
             }
             // Copy the buffer in our data, and make a copy if necessary, if we are in a deferred context
-            device_data.track_buffer_data.data_valid = CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
+            device_data.track_buffer_data.data_valid = Trace::CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
             device_data.track_buffer_data.hash = std::to_string(std::hash<void*>{}(cb.get()));
             device_data.track_buffer_data.first_constant = cb_first;
             device_data.track_buffer_data.num_constants = cb_num;
@@ -7255,14 +7202,14 @@ namespace
 #if DEVELOPMENT
       DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
 
-      bool wants_debug_draw = debug_draw_shader_hash != 0 || debug_draw_pipeline != 0;
-      wants_debug_draw &= (debug_draw_pipeline == 0 || debug_draw_pipeline == cmd_list_data.pipeline_state_original_compute_shader.handle);
-      wants_debug_draw &= (debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_compute_shader_hashes.Contains(debug_draw_shader_hash, reshade::api::shader_stage::compute)) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id());
+      bool wants_debug_draw = Trace::debug_draw_shader_hash != 0 || Trace::debug_draw_pipeline != 0;
+      wants_debug_draw &= (Trace::debug_draw_pipeline == 0 || Trace::debug_draw_pipeline == cmd_list_data.pipeline_state_original_compute_shader.handle);
+      wants_debug_draw &= (Trace::debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_compute_shader_hashes.Contains(Trace::debug_draw_shader_hash, reshade::api::shader_stage::compute)) && (Trace::debug_draw_pipeline_target_thread == std::thread::id() || Trace::debug_draw_pipeline_target_thread == std::this_thread::get_id());
 
       DrawStateStack<DrawStateStackType::Compute> pre_draw_state_stack;
       if (wants_debug_draw)
       {
-         if (debug_draw_freeze_inputs)
+         if (Trace::debug_draw_freeze_inputs)
          {
             if (!device_data.debug_draw_frozen_draw_state_stack)
             {
@@ -7288,8 +7235,8 @@ namespace
       // First run the draw call (don't delegate it to ReShade) and then copy its output
       if (wants_debug_draw)
       {
-         auto local_debug_draw_pipeline_instance = debug_draw_pipeline_instance.fetch_add(1);
-         if (debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == debug_draw_pipeline_target_instance)
+         auto local_debug_draw_pipeline_instance = Trace::debug_draw_pipeline_instance.fetch_add(1);
+         if (Trace::debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == Trace::debug_draw_pipeline_target_instance)
          {
             DrawStateStack<DrawStateStackType::Compute> post_draw_state_stack;
 
@@ -7297,37 +7244,37 @@ namespace
             {
                draw_lambda();
             }
-            else if (!debug_draw_replaced_pass)
+            else if (!Trace::debug_draw_replaced_pass)
             {
                post_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
                pre_draw_state_stack.Restore(native_device_context);
             }
 
-            CopyDebugDrawTexture(debug_draw_mode, debug_draw_view_index, cmd_list, true);
+            Trace::CopyDebugDrawTexture(Trace::debug_draw_mode, Trace::debug_draw_view_index, cmd_list, true);
 
-            if (cancelled_or_replaced && !debug_draw_replaced_pass)
+            if (cancelled_or_replaced && !Trace::debug_draw_replaced_pass)
             {
                post_draw_state_stack.Restore(native_device_context);
             }
             cancelled_or_replaced = true;
          }
       }
-      bool track_buffer_pipeline_cs = track_buffer_pipeline == cmd_list_data.pipeline_state_original_compute_shader.handle;
-      if (track_buffer_pipeline != 0 && track_buffer_pipeline_cs)
+      bool track_buffer_pipeline_cs = Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_compute_shader.handle;
+      if (Trace::track_buffer_pipeline != 0 && track_buffer_pipeline_cs)
       {
-         auto local_track_buffer_pipeline_instance = track_buffer_pipeline_instance.fetch_add(1);
-         if (track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == track_buffer_pipeline_target_instance)
+         auto local_track_buffer_pipeline_instance = Trace::track_buffer_pipeline_instance.fetch_add(1);
+         if (Trace::track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == Trace::track_buffer_pipeline_target_instance)
          {
             com_ptr<ID3D11Buffer> cb;
             UINT cb_first = 0, cb_num = 0;
             com_ptr<ID3D11DeviceContext1> native_device_context_1;
             native_device_context->QueryInterface(&native_device_context_1);
             if (native_device_context_1)
-               native_device_context_1->CSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+               native_device_context_1->CSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
             else
-               native_device_context->CSGetConstantBuffers(track_buffer_index, 1, &cb);
+               native_device_context->CSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
             // Copy the buffer in our data, and make a copy if necessary, if we are in a deferred context
-            device_data.track_buffer_data.data_valid = CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
+            device_data.track_buffer_data.data_valid = Trace::CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
             device_data.track_buffer_data.hash = std::to_string(std::hash<void*>{}(cb.get()));
             device_data.track_buffer_data.first_constant = cb_first;
             device_data.track_buffer_data.num_constants = cb_num;
@@ -7406,9 +7353,9 @@ namespace
 
       const auto& original_shader_hashes = is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader_hashes : cmd_list_data.pipeline_state_original_graphics_shader_hashes;
 
-      bool wants_debug_draw = debug_draw_shader_hash != 0 || debug_draw_pipeline != 0;
-      wants_debug_draw &= debug_draw_pipeline == 0 || debug_draw_pipeline == (is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader.handle : cmd_list_data.pipeline_state_original_pixel_shader.handle);
-      wants_debug_draw &= (debug_draw_shader_hash == 0 || original_shader_hashes.Contains(debug_draw_shader_hash, is_dispatch ? reshade::api::shader_stage::compute : reshade::api::shader_stage::pixel)) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id());
+      bool wants_debug_draw = Trace::debug_draw_shader_hash != 0 || Trace::debug_draw_pipeline != 0;
+      wants_debug_draw &= Trace::debug_draw_pipeline == 0 || Trace::debug_draw_pipeline == (is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader.handle : cmd_list_data.pipeline_state_original_pixel_shader.handle);
+      wants_debug_draw &= (Trace::debug_draw_shader_hash == 0 || original_shader_hashes.Contains(Trace::debug_draw_shader_hash, is_dispatch ? reshade::api::shader_stage::compute : reshade::api::shader_stage::pixel)) && (Trace::debug_draw_pipeline_target_thread == std::thread::id() || Trace::debug_draw_pipeline_target_thread == std::this_thread::get_id());
 
       com_ptr<ID3D11DepthStencilState> original_depth_stencil_state;
       UINT original_stencil_ref = 0;
@@ -7423,7 +7370,7 @@ namespace
       DrawStateStack<DrawStateStackType::Compute> pre_draw_state_stack_compute;
       if (wants_debug_draw)
       {
-         if (debug_draw_freeze_inputs)
+         if (Trace::debug_draw_freeze_inputs)
          {
             if (!is_dispatch)
             {
@@ -7452,7 +7399,7 @@ namespace
          else
             pre_draw_state_stack_graphics.Cache(native_device_context, device_data.uav_max_count);
 
-         if (!is_dispatch && debug_draw_disable_blends)
+         if (!is_dispatch && Trace::debug_draw_disable_blends)
          {
             native_device_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
          }
@@ -7474,8 +7421,8 @@ namespace
       Trace::EndDraw(cmd_list_data, cancelled_or_replaced);
       if (wants_debug_draw)
       {
-         auto local_debug_draw_pipeline_instance = debug_draw_pipeline_instance.fetch_add(1);
-         if (debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == debug_draw_pipeline_target_instance)
+         auto local_debug_draw_pipeline_instance = Trace::debug_draw_pipeline_instance.fetch_add(1);
+         if (Trace::debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == Trace::debug_draw_pipeline_target_instance)
          {
             DrawStateStack<DrawStateStackType::FullGraphics> post_draw_state_stack_graphics;
             DrawStateStack<DrawStateStackType::Compute> post_draw_state_stack_compute;
@@ -7484,7 +7431,7 @@ namespace
             {
                draw_lambda();
             }
-            else if (!debug_draw_replaced_pass)
+            else if (!Trace::debug_draw_replaced_pass)
             {
                if (is_dispatch)
                {
@@ -7498,9 +7445,9 @@ namespace
                }
             }
 
-            CopyDebugDrawTexture(debug_draw_mode, debug_draw_view_index, cmd_list, is_dispatch);
+            Trace::CopyDebugDrawTexture(Trace::debug_draw_mode, Trace::debug_draw_view_index, cmd_list, is_dispatch);
 
-            if (cancelled_or_replaced && !debug_draw_replaced_pass)
+            if (cancelled_or_replaced && !Trace::debug_draw_replaced_pass)
             {
                if (is_dispatch)
                   post_draw_state_stack_compute.Restore(native_device_context);
@@ -7510,13 +7457,13 @@ namespace
             cancelled_or_replaced = true;
          }
       }
-      bool track_buffer_pipeline_ps = is_dispatch ? false : (track_buffer_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle);
-      bool track_buffer_pipeline_vs = is_dispatch ? false : (track_buffer_pipeline == cmd_list_data.pipeline_state_original_vertex_shader.handle);
-      bool track_buffer_pipeline_cs = is_dispatch ? (track_buffer_pipeline == cmd_list_data.pipeline_state_original_compute_shader.handle) : false;
-      if (track_buffer_pipeline != 0 && (track_buffer_pipeline_ps || track_buffer_pipeline_vs || track_buffer_pipeline_cs))
+      bool track_buffer_pipeline_ps = is_dispatch ? false : (Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle);
+      bool track_buffer_pipeline_vs = is_dispatch ? false : (Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_vertex_shader.handle);
+      bool track_buffer_pipeline_cs = is_dispatch ? (Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_compute_shader.handle) : false;
+      if (Trace::track_buffer_pipeline != 0 && (track_buffer_pipeline_ps || track_buffer_pipeline_vs || track_buffer_pipeline_cs))
       {
-         auto local_track_buffer_pipeline_instance = track_buffer_pipeline_instance.fetch_add(1);
-         if (track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == track_buffer_pipeline_target_instance)
+         auto local_track_buffer_pipeline_instance = Trace::track_buffer_pipeline_instance.fetch_add(1);
+         if (Trace::track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == Trace::track_buffer_pipeline_target_instance)
          {
             com_ptr<ID3D11Buffer> cb;
             UINT cb_first = 0, cb_num = 0;
@@ -7525,26 +7472,26 @@ namespace
             if (track_buffer_pipeline_ps)
             {
                if (native_device_context_1)
-                  native_device_context_1->PSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+                  native_device_context_1->PSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
                else
-                  native_device_context->PSGetConstantBuffers(track_buffer_index, 1, &cb);
+                  native_device_context->PSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
             }
             else if (track_buffer_pipeline_vs)
             {
                if (native_device_context_1)
-                  native_device_context_1->VSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+                  native_device_context_1->VSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
                else
-                  native_device_context->VSGetConstantBuffers(track_buffer_index, 1, &cb);
+                  native_device_context->VSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
             }
             else if (track_buffer_pipeline_cs)
             {
                if (native_device_context_1)
-                  native_device_context_1->CSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+                  native_device_context_1->CSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
                else
-                  native_device_context->CSGetConstantBuffers(track_buffer_index, 1, &cb);
+                  native_device_context->CSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
             }
             // Copy the buffer in our data, and make a copy if necessary, if we are in a deferred context
-            device_data.track_buffer_data.data_valid = CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
+            device_data.track_buffer_data.data_valid = Trace::CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
             device_data.track_buffer_data.hash = std::to_string(std::hash<void*>{}(cb.get()));
             device_data.track_buffer_data.first_constant = cb_first;
             device_data.track_buffer_data.num_constants = cb_num;
@@ -8564,7 +8511,7 @@ namespace
                any_upgraded |= upgraded;
 
 #if DEVELOPMENT
-               if (trace_running && original_resource.handle != 0 && device_data.resource_upgrades.HasMirror(original_resource.handle))
+               if (Trace::running && original_resource.handle != 0 && device_data.resource_upgrades.HasMirror(original_resource.handle))
                {
                   // Diagnostic: a downstream shader is binding an SRV of a mirrored resource (e.g. the TAA
                   // seed output). Log whether it was recognized as upgraded (which drives chain propagation).
@@ -8615,8 +8562,8 @@ namespace
             ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(buffer_range.buffer.handle);
 
 #if DEVELOPMENT
-            const std::shared_lock lock_trace(s_mutex_trace);
-            if (trace_running)
+            const std::shared_lock lock_trace(Trace::s_mutex);
+            if (Trace::running)
             {
                CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
                const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -8767,8 +8714,8 @@ namespace
       DeviceData& device_data = *device->get_private_data<DeviceData>();
 
       {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (trace_running)
+         const std::shared_lock lock_trace(Trace::s_mutex);
+         if (Trace::running)
          {
             auto& cmd_list_data = *device_data.primary_command_list_data;
             const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -8795,8 +8742,8 @@ namespace
       DeviceData& device_data = *device->get_private_data<DeviceData>();
 
       {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (trace_running)
+         const std::shared_lock lock_trace(Trace::s_mutex);
+         if (Trace::running)
          {
             auto& cmd_list_data = cmd_list ? *cmd_list->get_private_data<CommandListData>() : *device_data.primary_command_list_data;
             const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -8838,8 +8785,8 @@ namespace
 
 #if DEVELOPMENT
       {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (trace_running)
+         const std::shared_lock lock_trace(Trace::s_mutex);
+         if (Trace::running)
          {
             auto& cmd_list_data = *device_data.primary_command_list_data;
             const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -8977,8 +8924,8 @@ namespace
 
 #if DEVELOPMENT
       {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (trace_running)
+         const std::shared_lock lock_trace(Trace::s_mutex);
+         if (Trace::running)
          {
             auto& cmd_list_data = *device_data.primary_command_list_data;
             const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -9062,8 +9009,8 @@ namespace
 
 #if DEVELOPMENT
       {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (trace_running && dsv.handle != 0)
+         const std::shared_lock lock_trace(Trace::s_mutex);
+         if (Trace::running && dsv.handle != 0)
          {
             CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
             const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -9101,8 +9048,8 @@ namespace
 
 #if DEVELOPMENT
       {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (trace_running && rtv.handle != 0)
+         const std::shared_lock lock_trace(Trace::s_mutex);
+         if (Trace::running && rtv.handle != 0)
          {
             CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
             const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -9142,8 +9089,8 @@ namespace
 
 #if DEVELOPMENT
       {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (trace_running)
+         const std::shared_lock lock_trace(Trace::s_mutex);
+         if (Trace::running)
          {
             CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
             const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -9195,8 +9142,8 @@ namespace
 
 #if DEVELOPMENT
       {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (trace_running)
+         const std::shared_lock lock_trace(Trace::s_mutex);
+         if (Trace::running)
          {
             CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
             const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -9233,10 +9180,10 @@ namespace
    void OnCopyResource_Debug(reshade::api::command_list* cmd_list, reshade::api::resource source, reshade::api::resource dest, const TraceDrawCallData::CopyInfo& copy_info = {})
    {
 #if DEVELOPMENT
-      if (trace_running) // Unlocked early out, every copy (including buffer ones) comes through here
+      if (Trace::running) // Unlocked early out, every copy (including buffer ones) comes through here
       {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (trace_running)
+         const std::shared_lock lock_trace(Trace::s_mutex);
+         if (Trace::running)
          {
             CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
             const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -9561,8 +9508,8 @@ namespace
 
 #if DEVELOPMENT
                {
-                  const std::shared_lock lock_trace(s_mutex_trace);
-                  if (trace_running)
+                  const std::shared_lock lock_trace(Trace::s_mutex);
+                  if (Trace::running)
                   {
                      CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
                      const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -9823,44 +9770,7 @@ namespace
 
       DeviceData& device_data = *runtime->get_device()->get_private_data<DeviceData>();
 #if DEVELOPMENT
-      {
-         // Some games fail to capture input on boot, so use a special key to force a graphics capture
-         static bool graphics_capture_key_down = false; // "static" is fine, games usually only have one present call per frame
-         bool was_graphics_capture_key_down = graphics_capture_key_down;
-         graphics_capture_key_down = GetAsyncKeyState(VK_SUBTRACT) & 0x8000; // Numpad - key
-         if (graphics_capture_key_down && !was_graphics_capture_key_down)
-         {
-            trace_scheduled = true;
-         }
-         was_graphics_capture_key_down = graphics_capture_key_down;
-
-         const std::unique_lock lock_trace(s_mutex_trace);
-         if (trace_running)
-         {
-#if _DEBUG && LOG_VERBOSE
-            reshade::log::message(reshade::log::level::info, "--- Frame Graphics Capture Ended ---");
-#endif
-            trace_running = false;
-            CommandListData& cmd_list_data = *runtime->get_command_queue()->get_immediate_command_list()->get_private_data<CommandListData>();
-            const std::shared_lock lock_trace_2(cmd_list_data.mutex_trace);
-            trace_count = cmd_list_data.trace_draw_calls_data.size();
-         }
-         else if (trace_scheduled)
-         {
-#if _DEBUG && LOG_VERBOSE
-            reshade::log::message(reshade::log::level::info, "--- Frame Graphics Capture Started ---");
-#endif
-            // Split the trace logic over "two" frames, to make sure we capture everything in between two present calls
-            trace_scheduled = false;
-            {
-               CommandListData& cmd_list_data = *runtime->get_command_queue()->get_immediate_command_list()->get_private_data<CommandListData>();
-               const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-               cmd_list_data.trace_draw_calls_data.clear(); // This leaves the reserved space allocated
-            }
-            trace_count = 0;
-            trace_running = true;
-         }
-      }
+      Trace::OnPresent(*runtime->get_command_queue()->get_immediate_command_list()->get_private_data<CommandListData>());
 #endif // DEVELOPMENT
 
       // Dump new shaders (checking the "shaders_to_dump" count is theoretically not thread safe but it should work nonetheless as this is run every frame)
@@ -10340,7 +10250,7 @@ namespace
 
       if (ImGui::Button("Frame Capture"))
       {
-         trace_scheduled = true;
+         Trace::scheduled = true;
       }
 #if 0 // Currently not necessary
       SameLineIfFits("List Unique Shaders Only", true);
@@ -10570,13 +10480,13 @@ namespace
          static uint32_t prev_trace_count = -1; // Default to -1 to trigger a change in the first frame
 
          bool changed_selected = false;
-         bool trace_count_changed = prev_trace_count != trace_count;
-         bool open_capture_tab = trace_count_changed && trace_count > 0;
-         open_settings_tab = trace_count_changed && trace_count <= 0; // Fall back on settings (and also default to it in the first frame)
-         prev_trace_count = trace_count;
+         bool trace_count_changed = prev_trace_count != Trace::captured_count;
+         bool open_capture_tab = trace_count_changed && Trace::captured_count > 0;
+         open_settings_tab = trace_count_changed && Trace::captured_count <= 0; // Fall back on settings (and also default to it in the first frame)
+         prev_trace_count = Trace::captured_count;
 
          ImGui::PushID("##CaptureTab");
-         bool handle_shader_tab = trace_count > 0 && ImGui::BeginTabItem(std::format("Captured Commands ({})", trace_count).c_str(), nullptr, open_capture_tab ? ImGuiTabItemFlags_SetSelected : 0); // No need for "s_mutex_trace" here
+         bool handle_shader_tab = Trace::captured_count > 0 && ImGui::BeginTabItem(std::format("Captured Commands ({})", Trace::captured_count).c_str(), nullptr, open_capture_tab ? ImGuiTabItemFlags_SetSelected : 0); // No need for "Trace::s_mutex" here
          ImGui::PopID();
          if (handle_shader_tab)
          {
@@ -10584,27 +10494,27 @@ namespace
 
             if (ImGui::Button("Clear Capture and Debug Settings"))
             {
-               trace_count = 0;
+               Trace::captured_count = 0;
                selected_index = -1;
                changed_selected = true;
                open_settings_tab = true;
 
                {
-                  debug_draw_pipeline = 0;
-                  debug_draw_shader_hash = 0;
-                  debug_draw_shader_hash_string[0] = 0;
-                  debug_draw_custom_pass = 0;
-                  debug_draw_pipeline_target_instance = -1;
-                  debug_draw_pipeline_target_thread = std::thread::id();
+                  Trace::debug_draw_pipeline = 0;
+                  Trace::debug_draw_shader_hash = 0;
+                  Trace::debug_draw_shader_hash_string[0] = 0;
+                  Trace::debug_draw_custom_pass = 0;
+                  Trace::debug_draw_pipeline_target_instance = -1;
+                  Trace::debug_draw_pipeline_target_thread = std::thread::id();
 
                   device_data.debug_draw_frozen_draw_state_stack.reset();
                   device_data.debug_draw_texture = nullptr;
                   device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
                   device_data.debug_draw_texture_size = {};
 
-                  track_buffer_pipeline = 0;
-                  track_buffer_pipeline_target_instance = -1;
-                  track_buffer_index = 0;
+                  Trace::track_buffer_pipeline = 0;
+                  Trace::track_buffer_pipeline_target_instance = -1;
+                  Trace::track_buffer_index = 0;
 
                   device_data.track_buffer_data.Clear();
                }
@@ -10638,24 +10548,24 @@ namespace
             }
 
             SameLineIfFits("Show Command List / Thread Info", true);
-            list_size_changed |= ImGui::Checkbox("Show Command List / Thread Info", &trace_show_command_list_info);
+            list_size_changed |= ImGui::Checkbox("Show Command List / Thread Info", &Trace::show_command_list_info);
             SameLineIfFits("Ignore Vertex Shaders", true);
-            list_size_changed |= ImGui::Checkbox("Ignore Vertex Shaders", &trace_ignore_vertex_shaders);
+            list_size_changed |= ImGui::Checkbox("Ignore Vertex Shaders", &Trace::ignore_vertex_shaders);
             SameLineIfFits("Ignore Buffer Writes", true);
-            list_size_changed |= ImGui::Checkbox("Ignore Buffer Writes", &trace_ignore_buffer_writes);
+            list_size_changed |= ImGui::Checkbox("Ignore Buffer Writes", &Trace::ignore_buffer_writes);
             SameLineIfFits("Ignore Bindings", true);
-            list_size_changed |= ImGui::Checkbox("Ignore Bindings", &trace_ignore_bindings);
+            list_size_changed |= ImGui::Checkbox("Ignore Bindings", &Trace::ignore_bindings);
             SameLineIfFits("Ignore Custom Draws", true);
-            list_size_changed |= ImGui::Checkbox("Ignore Custom Draws", &trace_ignore_custom_draws);
+            list_size_changed |= ImGui::Checkbox("Ignore Custom Draws", &Trace::ignore_custom_draws);
             SameLineIfFits("Ignore Non Bound Shader Referenced Resources", true);
-            ImGui::Checkbox("Ignore Non Bound Shader Referenced Resources", &trace_ignore_non_bound_shader_referenced_resources);
+            ImGui::Checkbox("Ignore Non Bound Shader Referenced Resources", &Trace::ignore_non_bound_shader_referenced_resources);
 
             if (ImGui::BeginChild("HashList", ImVec2(500, -FLT_MIN), ImGuiChildFlags_ResizeX))
             {
                if (ImGui::BeginListBox("##HashesListBox", ImVec2(-FLT_MIN, -FLT_MIN)))
                {
-                  const std::shared_lock lock_trace(s_mutex_trace); // We don't really need "s_mutex_trace" here as when that data is being written ImGUI isn't running, but...
-                  if (!trace_running)
+                  const std::shared_lock lock_trace(Trace::s_mutex); // We don't really need "Trace::s_mutex" here as when that data is being written ImGUI isn't running, but...
+                  if (!Trace::running)
                   {
                      const std::shared_lock lock_generic(s_mutex_generic);
                      CommandListData& cmd_list_data = *runtime->get_command_queue()->get_immediate_command_list()->get_private_data<CommandListData>();
@@ -10663,14 +10573,14 @@ namespace
 
 #if 1 // Much more optimized, drawing all items is extremely slow otherwise
                      std::vector<uint32_t> trace_draw_calls_index_redirector; // From full list index to filtered list index
-                     trace_draw_calls_index_redirector.reserve(trace_count);
+                     trace_draw_calls_index_redirector.reserve(Trace::captured_count);
                      std::vector<uint32_t> trace_draw_calls_index_inverse_redirector; // From filtered index to full list index
-                     trace_draw_calls_index_inverse_redirector.reserve(trace_count);
+                     trace_draw_calls_index_inverse_redirector.reserve(Trace::captured_count);
 
                      // Pre count the elements (some are skipped) otherwise the clipper won't work properly
                      // TODO: do this once on capture
                      size_t actual_trace_count = 0;
-                     for (auto index = 0; index < trace_count; index++) {
+                     for (auto index = 0; index < Trace::captured_count; index++) {
                         trace_draw_calls_index_redirector.emplace_back(uint32_t(trace_draw_calls_index_inverse_redirector.size())); // The closest one
                         auto& draw_call_data = cmd_list_data.trace_draw_calls_data.at(index);
                         if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Shader) {
@@ -10678,18 +10588,18 @@ namespace
                            const auto pipeline_pair = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle);
                            const bool is_valid = pipeline_pair != device_data.pipeline_cache_by_pipeline_handle.end() && pipeline_pair->second != nullptr;
                            if (is_valid) {
-                              if (trace_ignore_vertex_shaders && pipeline_pair->second->HasVertexShader()) continue; // DX11 exclusive behaviour
+                              if (Trace::ignore_vertex_shaders && pipeline_pair->second->HasVertexShader()) continue; // DX11 exclusive behaviour
                            }
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::CPUWrite) {
-                           if (trace_ignore_buffer_writes && draw_call_data.rt_type_name[0] == "Buffer") continue;
+                           if (Trace::ignore_buffer_writes && draw_call_data.rt_type_name[0] == "Buffer") continue;
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::BindPipeline
                            || draw_call_data.type == TraceDrawCallData::TraceDrawCallType::BindResource) {
-                           if (trace_ignore_bindings) continue;
+                           if (Trace::ignore_bindings) continue;
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom) {
-                           if (trace_ignore_custom_draws && draw_call_data.custom_stage != reshade::api::shader_stage(0)) continue;
+                           if (Trace::ignore_custom_draws && draw_call_data.custom_stage != reshade::api::shader_stage(0)) continue;
                         }
                         actual_trace_count++;
                         trace_draw_calls_index_inverse_redirector.emplace_back(index);
@@ -10717,7 +10627,7 @@ namespace
                         for (int filtered_index = clipper.DisplayStart; filtered_index < clipper.DisplayEnd; filtered_index++) {
                            uint32_t index = trace_draw_calls_index_inverse_redirector[filtered_index]; // Raw index
 #else
-                     for (uint32_t index = 0; index < trace_count; index++) {
+                     for (uint32_t index = 0; index < Trace::captured_count; index++) {
 #endif
                         auto& draw_call_data = cmd_list_data.trace_draw_calls_data.at(index);
                         ASSERT_ONCE_MSG(draw_call_data.command_list, "The code below will probably crash if the command list isn't valid, remember to always assign it when adding a new element to the list");
@@ -10738,7 +10648,7 @@ namespace
                         auto text_color = IM_COL32(255, 255, 255, 255); // White
 
                         std::string command_list_info = "";
-                        if (trace_show_command_list_info)
+                        if (Trace::show_command_list_info)
                         {
                            if (draw_call_data.command_list && draw_call_data.command_list->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) // Deferred
                               command_list_info = " - ~> " + std::to_string(reinterpret_cast<uint64_t>(draw_call_data.command_list.get())) + " - " + std::to_string(thread_id);
@@ -10808,7 +10718,7 @@ namespace
                            name << std::setfill('0');
                            bool written_any_text = false;
 
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               // Index - Thread ID (command list) - Shader Hash(es) - Shader Name
                               name << std::setw(3) << index << std::setw(0); // Fill up 3 slots for the index so the text is aligned
@@ -10823,7 +10733,7 @@ namespace
                            // Pick the default color by shader type
                            if (pipeline->HasVertexShader())
                            {
-                              if (trace_ignore_vertex_shaders)
+                              if (Trace::ignore_vertex_shaders)
                               {
                                  continue;
                               }
@@ -10981,7 +10891,7 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::CopyResource)
                         {
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
@@ -10992,9 +10902,9 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::BindPipeline)
                         {
-                           if (trace_ignore_bindings) continue;
+                           if (Trace::ignore_bindings) continue;
                            
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
@@ -11005,9 +10915,9 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::BindResource)
                         {
-                           if (trace_ignore_bindings) continue;
+                           if (Trace::ignore_bindings) continue;
                            
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
@@ -11018,7 +10928,7 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::CPURead)
                         {
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
@@ -11029,7 +10939,7 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::CPUWrite)
                         {
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
@@ -11037,7 +10947,7 @@ namespace
                            }
 
                            // Hacky resource type name check
-                           if (trace_ignore_buffer_writes && draw_call_data.rt_type_name[0] == "Buffer")
+                           if (Trace::ignore_buffer_writes && draw_call_data.rt_type_name[0] == "Buffer")
                            {
                               continue;
                            }
@@ -11048,7 +10958,7 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::ClearResource)
                         {
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
@@ -11059,7 +10969,7 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::CreateCommandList)
                         {
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
@@ -11070,7 +10980,7 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::AppendCommandList)
                         {
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
@@ -11081,7 +10991,7 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::ResetCommmandList)
                         {
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
@@ -11092,7 +11002,7 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::FlushCommandList)
                         {
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
@@ -11103,7 +11013,7 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Present)
                         {
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
@@ -11131,9 +11041,9 @@ namespace
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom)
                         {
-                           if (trace_ignore_custom_draws && draw_call_data.custom_stage != reshade::api::shader_stage(0)) continue;
+                           if (Trace::ignore_custom_draws && draw_call_data.custom_stage != reshade::api::shader_stage(0)) continue;
 
-                           if (trace_show_command_list_info)
+                           if (Trace::show_command_list_info)
                            {
                               name << std::setfill('0') << std::setw(3) << index << std::setw(0);
                            name << command_list_info;
@@ -11186,41 +11096,41 @@ namespace
                                     target_instance++;
                               }
 
-                              debug_draw_pipeline = pipeline_pair->first; // Note: this is probably completely useless at the moment as we don't store the index of the pipeline instance the user had selected (e.g. "debug_draw_pipeline_target_instance")
-                              debug_draw_shader_hash = pipeline_pair->second->shader_hashes[0];
-                              std::string new_debug_draw_shader_hash_string = Shader::Hash_NumToStr(debug_draw_shader_hash);
+                              Trace::debug_draw_pipeline = pipeline_pair->first; // Note: this is probably completely useless at the moment as we don't store the index of the pipeline instance the user had selected (e.g. "Trace::debug_draw_pipeline_target_instance")
+                              Trace::debug_draw_shader_hash = pipeline_pair->second->shader_hashes[0];
+                              std::string new_debug_draw_shader_hash_string = Shader::Hash_NumToStr(Trace::debug_draw_shader_hash);
                               if (new_debug_draw_shader_hash_string.size() <= HASH_CHARACTERS_LENGTH)
-                                 strcpy(&debug_draw_shader_hash_string[0], new_debug_draw_shader_hash_string.c_str());
+                                 strcpy(&Trace::debug_draw_shader_hash_string[0], new_debug_draw_shader_hash_string.c_str());
                               else
-                                 debug_draw_shader_hash_string[0] = 0;
+                                 Trace::debug_draw_shader_hash_string[0] = 0;
                               device_data.debug_draw_frozen_draw_state_stack.reset();
                               device_data.debug_draw_texture = nullptr;
                               device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
                               device_data.debug_draw_texture_size = {};
-                              debug_draw_pipeline_instance = 0;
-                              debug_draw_custom_pass = 0;
-                              debug_draw_pipeline_target_instance = target_instance;
-                              debug_draw_pipeline_target_thread = debug_draw_pipeline_instance_filter_by_thread ? draw_call_data.thread_id : std::thread::id();
-                              const auto prev_debug_draw_mode = debug_draw_mode;
-                              if (prev_debug_draw_mode == DebugDrawMode::Depth || prev_debug_draw_mode == DebugDrawMode::Stencil)
+                              Trace::debug_draw_pipeline_instance = 0;
+                              Trace::debug_draw_custom_pass = 0;
+                              Trace::debug_draw_pipeline_target_instance = target_instance;
+                              Trace::debug_draw_pipeline_target_thread = Trace::debug_draw_pipeline_instance_filter_by_thread ? draw_call_data.thread_id : std::thread::id();
+                              const auto prev_debug_draw_mode = Trace::debug_draw_mode;
+                              if (prev_debug_draw_mode == Trace::DebugDrawMode::Depth || prev_debug_draw_mode == Trace::DebugDrawMode::Stencil)
                               {
-                                 debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
+                                 Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
                               }
-                              if (prev_debug_draw_mode == DebugDrawMode::Custom)
+                              if (prev_debug_draw_mode == Trace::DebugDrawMode::Custom)
                               {
-                                 debug_draw_view_index = 0;
-                                 debug_draw_mip = 0;
+                                 Trace::debug_draw_view_index = 0;
+                                 Trace::debug_draw_mip = 0;
                                  // Don't change it automatically in this pass, it will default to render target (usually) if we come from debugging somewhere else, and keep the last debugging mode otherwise
-                                 debug_draw_mode = pipeline_pair->second->HasPixelShader() ? DebugDrawMode::RenderTarget : (pipeline_pair->second->HasComputeShader() ? DebugDrawMode::UnorderedAccessView : DebugDrawMode::ShaderResource);
+                                 Trace::debug_draw_mode = pipeline_pair->second->HasPixelShader() ? Trace::DebugDrawMode::RenderTarget : (pipeline_pair->second->HasComputeShader() ? Trace::DebugDrawMode::UnorderedAccessView : Trace::DebugDrawMode::ShaderResource);
                               }
                               // Fall back on depth if there main RT isn't valid
-                              if (debug_draw_mode == DebugDrawMode::RenderTarget && draw_call_data.rt_format[0] == DXGI_FORMAT_UNKNOWN && draw_call_data.depth_state != TraceDrawCallData::DepthStateType::Disabled)
+                              if (Trace::debug_draw_mode == Trace::DebugDrawMode::RenderTarget && draw_call_data.rt_format[0] == DXGI_FORMAT_UNKNOWN && draw_call_data.depth_state != TraceDrawCallData::DepthStateType::Disabled)
                               {
-                                 debug_draw_mode = DebugDrawMode::Depth;
-                                 debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::RedOnly;
-                                 debug_draw_mip = 0;
+                                 Trace::debug_draw_mode = Trace::DebugDrawMode::Depth;
+                                 Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
+                                 Trace::debug_draw_mip = 0;
                               }
-                              debug_draw_freeze_inputs = false; // Optional, but also unfreeze inputs automatically every time we swap the target pass here
+                              Trace::debug_draw_freeze_inputs = false; // Optional, but also unfreeze inputs automatically every time we swap the target pass here
                            }
                         }
                         else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom && draw_call_data.custom_stage != reshade::api::shader_stage(0))
@@ -11237,25 +11147,25 @@ namespace
                                     target_instance++;
                               }
 
-                              debug_draw_pipeline = 0;
-                              debug_draw_shader_hash = 0;
-                              debug_draw_shader_hash_string[0] = 0;
-                              debug_draw_custom_pass = CompileTimeStringHash(draw_call_data.custom_name);
+                              Trace::debug_draw_pipeline = 0;
+                              Trace::debug_draw_shader_hash = 0;
+                              Trace::debug_draw_shader_hash_string[0] = 0;
+                              Trace::debug_draw_custom_pass = CompileTimeStringHash(draw_call_data.custom_name);
                               device_data.debug_draw_frozen_draw_state_stack.reset();
                               device_data.debug_draw_texture = nullptr;
                               device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
                               device_data.debug_draw_texture_size = {};
-                              debug_draw_custom_pass_instance = 0;
-                              debug_draw_pipeline_target_instance = target_instance;
-                              debug_draw_pipeline_target_thread = debug_draw_pipeline_instance_filter_by_thread ? draw_call_data.thread_id : std::thread::id();
-                              if (debug_draw_mode == DebugDrawMode::Depth || debug_draw_mode == DebugDrawMode::Stencil)
+                              Trace::debug_draw_custom_pass_instance = 0;
+                              Trace::debug_draw_pipeline_target_instance = target_instance;
+                              Trace::debug_draw_pipeline_target_thread = Trace::debug_draw_pipeline_instance_filter_by_thread ? draw_call_data.thread_id : std::thread::id();
+                              if (Trace::debug_draw_mode == Trace::DebugDrawMode::Depth || Trace::debug_draw_mode == Trace::DebugDrawMode::Stencil)
                               {
-                                 debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
+                                 Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
                               }
-                              debug_draw_mode = draw_call_data.custom_stage == reshade::api::shader_stage::compute ? DebugDrawMode::UnorderedAccessView : DebugDrawMode::RenderTarget;
-                              debug_draw_view_index = 0;
-                              debug_draw_mip = 0;
-                              debug_draw_freeze_inputs = false;
+                              Trace::debug_draw_mode = draw_call_data.custom_stage == reshade::api::shader_stage::compute ? Trace::DebugDrawMode::UnorderedAccessView : Trace::DebugDrawMode::RenderTarget;
+                              Trace::debug_draw_view_index = 0;
+                              Trace::debug_draw_mip = 0;
+                              Trace::debug_draw_freeze_inputs = false;
                            }
                         }
                         ImGui::PopID();
@@ -11279,7 +11189,7 @@ namespace
                      selected_index = -1;
                      changed_selected = true;
                   }
-                  selected_index = min(selected_index, trace_count - 1); // Extra safety
+                  selected_index = min(selected_index, Trace::captured_count - 1); // Extra safety
                   ImGui::EndListBox();
                }
             }
@@ -11409,7 +11319,7 @@ namespace
                         continue;
                      }
                      const bool non_referenced = srv_format == DXGI_FORMAT(-1);
-                     if (trace_ignore_non_bound_shader_referenced_resources && srv_format == DXGI_FORMAT(-1))
+                     if (Trace::ignore_non_bound_shader_referenced_resources && srv_format == DXGI_FORMAT(-1))
                      {
                         continue;
                      }
@@ -11524,15 +11434,15 @@ namespace
                      }
 
                      // TODO: hide the button if the resource is a buffer
-                     if (debug_draw_shader_enabled && (debug_draw_mode != DebugDrawMode::ShaderResource || debug_draw_view_index != i) && ImGui::Button("Debug Draw Resource"))
+                     if (debug_draw_shader_enabled && (Trace::debug_draw_mode != Trace::DebugDrawMode::ShaderResource || Trace::debug_draw_view_index != i) && ImGui::Button("Debug Draw Resource"))
                      {
-                        if (debug_draw_mode == DebugDrawMode::Depth || debug_draw_mode == DebugDrawMode::Stencil)
+                        if (Trace::debug_draw_mode == Trace::DebugDrawMode::Depth || Trace::debug_draw_mode == Trace::DebugDrawMode::Stencil)
                         {
-                           debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
+                           Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
                         }
-                        debug_draw_mode = DebugDrawMode::ShaderResource;
-                        debug_draw_view_index = i;
-                        debug_draw_mip = slot_data.srv_mip[i];
+                        Trace::debug_draw_mode = Trace::DebugDrawMode::ShaderResource;
+                        Trace::debug_draw_view_index = i;
+                        Trace::debug_draw_mip = slot_data.srv_mip[i];
                      }
 
                      ImGui::PopID();
@@ -11550,7 +11460,7 @@ namespace
                         continue;
                      }
                      const bool non_referenced = uav_format == DXGI_FORMAT(-1);
-                     if (trace_ignore_non_bound_shader_referenced_resources && uav_format == DXGI_FORMAT(-1))
+                     if (Trace::ignore_non_bound_shader_referenced_resources && uav_format == DXGI_FORMAT(-1))
                      {
                         continue;
                      }
@@ -11659,15 +11569,15 @@ namespace
                         auto_texture_format_upgrade_shader_hashes[pipeline->shader_hashes[0]] = AutoTextureFormatUpgradeShaderHash{ std::vector<uint8_t>(), std::vector<uint8_t>{ uint8_t(i) }, false }; // DX11 logic
                      }
 
-                     if (debug_draw_shader_enabled && (debug_draw_mode != DebugDrawMode::UnorderedAccessView || debug_draw_view_index != i) && ImGui::Button("Debug Draw Resource"))
+                     if (debug_draw_shader_enabled && (Trace::debug_draw_mode != Trace::DebugDrawMode::UnorderedAccessView || Trace::debug_draw_view_index != i) && ImGui::Button("Debug Draw Resource"))
                      {
-                        if (debug_draw_mode == DebugDrawMode::Depth || debug_draw_mode == DebugDrawMode::Stencil)
+                        if (Trace::debug_draw_mode == Trace::DebugDrawMode::Depth || Trace::debug_draw_mode == Trace::DebugDrawMode::Stencil)
                         {
-                           debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
+                           Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
                         }
-                        debug_draw_mode = DebugDrawMode::UnorderedAccessView;
-                        debug_draw_view_index = i;
-                        debug_draw_mip = slot_data.uav_mip[i];
+                        Trace::debug_draw_mode = Trace::DebugDrawMode::UnorderedAccessView;
+                        Trace::debug_draw_view_index = i;
+                        Trace::debug_draw_mip = slot_data.uav_mip[i];
                      }
 
                      if (pipeline)
@@ -11720,7 +11630,7 @@ namespace
                         continue;
                      }
                      const bool non_referenced = rtv_format == DXGI_FORMAT(-1);
-                     if (trace_ignore_non_bound_shader_referenced_resources && rtv_format == DXGI_FORMAT(-1))
+                     if (Trace::ignore_non_bound_shader_referenced_resources && rtv_format == DXGI_FORMAT(-1))
                      {
                         continue;
                      }
@@ -12060,15 +11970,15 @@ namespace
                         auto_texture_format_upgrade_shader_hashes[pipeline->shader_hashes[0]] = AutoTextureFormatUpgradeShaderHash{ std::vector<uint8_t>{ uint8_t(i) }, std::vector<uint8_t>(), false }; // DX11 logic
                      }
 
-                     if (debug_draw_shader_enabled && (debug_draw_mode != DebugDrawMode::RenderTarget || debug_draw_view_index != i) && ImGui::Button("Debug Draw Resource"))
+                     if (debug_draw_shader_enabled && (Trace::debug_draw_mode != Trace::DebugDrawMode::RenderTarget || Trace::debug_draw_view_index != i) && ImGui::Button("Debug Draw Resource"))
                      {
-                        if (debug_draw_mode == DebugDrawMode::Depth || debug_draw_mode == DebugDrawMode::Stencil)
+                        if (Trace::debug_draw_mode == Trace::DebugDrawMode::Depth || Trace::debug_draw_mode == Trace::DebugDrawMode::Stencil)
                         {
-                           debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
+                           Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
                         }
-                        debug_draw_mode = DebugDrawMode::RenderTarget;
-                        debug_draw_view_index = i;
-                        debug_draw_mip = slot_data.rtv_mip[i];
+                        Trace::debug_draw_mode = Trace::DebugDrawMode::RenderTarget;
+                        Trace::debug_draw_view_index = i;
+                        Trace::debug_draw_mip = slot_data.rtv_mip[i];
                      }
 
                      if (pipeline)
@@ -12123,7 +12033,7 @@ namespace
                   const TraceDrawCallData& dsv_data = SlotData(TraceDrawCallData::SlotKind::DSV, 0);
                   if (dsv_data.dsv_format != DXGI_FORMAT_UNKNOWN && (dsv_data.depth_state != TraceDrawCallData::DepthStateType::Disabled && dsv_data.depth_state != TraceDrawCallData::DepthStateType::Invalid) || dsv_data.stencil_state != TraceDrawCallData::DepthStateType::Disabled)
                   {
-                     // Note: "trace_ignore_non_bound_shader_referenced_resources" isn't implemented here
+                     // Note: "Trace::ignore_non_bound_shader_referenced_resources" isn't implemented here
 
                      ImGui::PushID(TraceDrawCallData::rtvs_size + TraceDrawCallData::srvs_size + TraceDrawCallData::uavs_size); // Offset by the max amount of previous iterations from above
 
@@ -12189,20 +12099,20 @@ namespace
 
                   const bool has_valid_depth = draw_call_data.depth_state != TraceDrawCallData::DepthStateType::Disabled
                      && draw_call_data.depth_state != TraceDrawCallData::DepthStateType::Invalid;
-                  if (has_valid_depth && debug_draw_shader_enabled && debug_draw_mode != DebugDrawMode::Depth && ImGui::Button("Debug Draw Depth Resource"))
+                  if (has_valid_depth && debug_draw_shader_enabled && Trace::debug_draw_mode != Trace::DebugDrawMode::Depth && ImGui::Button("Debug Draw Depth Resource"))
                   {
-                     debug_draw_mode = DebugDrawMode::Depth;
-                     debug_draw_view_index = 0;
-                     debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::RedOnly;
-                     debug_draw_mip = 0;
+                     Trace::debug_draw_mode = Trace::DebugDrawMode::Depth;
+                     Trace::debug_draw_view_index = 0;
+                     Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
+                     Trace::debug_draw_mip = 0;
                   }
                   const bool has_valid_stencil = draw_call_data.stencil_state != TraceDrawCallData::DepthStateType::Disabled && draw_call_data.stencil_state != TraceDrawCallData::DepthStateType::Invalid;
-                  if (has_valid_stencil && debug_draw_shader_enabled && debug_draw_mode != DebugDrawMode::Stencil && ImGui::Button("Debug Draw Stencil Resource"))
+                  if (has_valid_stencil && debug_draw_shader_enabled && Trace::debug_draw_mode != Trace::DebugDrawMode::Stencil && ImGui::Button("Debug Draw Stencil Resource"))
                   {
-                     debug_draw_mode = DebugDrawMode::Stencil;
-                     debug_draw_view_index = 0;
-                     debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::RedOnly;
-                     debug_draw_mip = 0;
+                     Trace::debug_draw_mode = Trace::DebugDrawMode::Stencil;
+                     Trace::debug_draw_view_index = 0;
+                     Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
+                     Trace::debug_draw_mip = 0;
                   }
 
                   ImGui::Text("");
@@ -12395,7 +12305,7 @@ namespace
 
                                  if (pipeline_pair->second->HasVertexShader() || pipeline_pair->second->HasPixelShader() || pipeline_pair->second->HasComputeShader())
                                  {
-                                    debug_draw_shader_enabled = debug_draw_shader_hash == pipeline_pair->second->shader_hashes[0];
+                                    debug_draw_shader_enabled = Trace::debug_draw_shader_hash == pipeline_pair->second->shader_hashes[0];
 
                                     const auto& trace_draw_call_data = draw_call_data;
 
@@ -12409,7 +12319,7 @@ namespace
                                              target_instance++;
                                        }
 
-                                       debug_draw_shader_enabled &= debug_draw_pipeline_target_instance < 0 || debug_draw_pipeline_target_instance == target_instance;
+                                       debug_draw_shader_enabled &= Trace::debug_draw_pipeline_target_instance < 0 || Trace::debug_draw_pipeline_target_instance == target_instance;
                                     }
 
                                     bool has_any_resources = false;
@@ -12440,82 +12350,82 @@ namespace
 
                                        if (debug_draw_shader_enabled)
                                        {
-                                          debug_draw_pipeline = 0;
-                                          debug_draw_shader_hash = 0;
-                                          debug_draw_shader_hash_string[0] = 0;
+                                          Trace::debug_draw_pipeline = 0;
+                                          Trace::debug_draw_shader_hash = 0;
+                                          Trace::debug_draw_shader_hash_string[0] = 0;
                                        }
                                        else
                                        {
-                                          debug_draw_pipeline = pipeline_pair->first; // Note: this is probably completely useless at the moment as we don't store the index of the pipeline instance the user had selected (e.g. "debug_draw_pipeline_target_instance")
-                                          debug_draw_shader_hash = pipeline_pair->second->shader_hashes[0];
-                                          std::string new_debug_draw_shader_hash_string = Shader::Hash_NumToStr(debug_draw_shader_hash);
+                                          Trace::debug_draw_pipeline = pipeline_pair->first; // Note: this is probably completely useless at the moment as we don't store the index of the pipeline instance the user had selected (e.g. "Trace::debug_draw_pipeline_target_instance")
+                                          Trace::debug_draw_shader_hash = pipeline_pair->second->shader_hashes[0];
+                                          std::string new_debug_draw_shader_hash_string = Shader::Hash_NumToStr(Trace::debug_draw_shader_hash);
                                           if (new_debug_draw_shader_hash_string.size() <= HASH_CHARACTERS_LENGTH)
-                                             strcpy(&debug_draw_shader_hash_string[0], new_debug_draw_shader_hash_string.c_str());
+                                             strcpy(&Trace::debug_draw_shader_hash_string[0], new_debug_draw_shader_hash_string.c_str());
                                           else
-                                             debug_draw_shader_hash_string[0] = 0;
+                                             Trace::debug_draw_shader_hash_string[0] = 0;
                                           debug_draw_shader_just_enabled = true;
                                        }
                                        device_data.debug_draw_frozen_draw_state_stack.reset(); // We need to force reset this anyway otherwise it might store a pointer to a "DrawStateStack<DrawStateStackType::Compute>" or a "DrawStateStack<DrawStateStackType::FullGraphcis>" and we wouldn't know about
                                        device_data.debug_draw_texture = nullptr;
                                        device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
                                        device_data.debug_draw_texture_size = {};
-                                       debug_draw_pipeline_instance = 0;
-                                       debug_draw_custom_pass = 0;
+                                       Trace::debug_draw_pipeline_instance = 0;
+                                       Trace::debug_draw_custom_pass = 0;
 #if 1 // We could also let the user settings persist if we wished so, but automatically setting them is usually better
-                                       debug_draw_pipeline_target_instance = debug_draw_shader_enabled ? -1 : target_instance;
-                                       debug_draw_pipeline_target_thread = (!debug_draw_shader_enabled && debug_draw_pipeline_instance_filter_by_thread) ? draw_call_data.thread_id : std::thread::id();
-                                       const auto prev_debug_draw_mode = debug_draw_mode;
-                                       if (prev_debug_draw_mode == DebugDrawMode::Depth || prev_debug_draw_mode == DebugDrawMode::Stencil)
+                                       Trace::debug_draw_pipeline_target_instance = debug_draw_shader_enabled ? -1 : target_instance;
+                                       Trace::debug_draw_pipeline_target_thread = (!debug_draw_shader_enabled && Trace::debug_draw_pipeline_instance_filter_by_thread) ? draw_call_data.thread_id : std::thread::id();
+                                       const auto prev_debug_draw_mode = Trace::debug_draw_mode;
+                                       if (prev_debug_draw_mode == Trace::DebugDrawMode::Depth || prev_debug_draw_mode == Trace::DebugDrawMode::Stencil)
                                        {
-                                          debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
+                                          Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
                                        }
-                                       if (prev_debug_draw_mode == DebugDrawMode::Custom)
+                                       if (prev_debug_draw_mode == Trace::DebugDrawMode::Custom)
                                        {
-                                          debug_draw_mip = 0;
+                                          Trace::debug_draw_mip = 0;
                                        }
-                                       debug_draw_mode = pipeline_pair->second->HasPixelShader() ? DebugDrawMode::RenderTarget : (pipeline_pair->second->HasComputeShader() ? DebugDrawMode::UnorderedAccessView : DebugDrawMode::ShaderResource); // Do it regardless of "debug_draw_shader_enabled"
+                                       Trace::debug_draw_mode = pipeline_pair->second->HasPixelShader() ? Trace::DebugDrawMode::RenderTarget : (pipeline_pair->second->HasComputeShader() ? Trace::DebugDrawMode::UnorderedAccessView : Trace::DebugDrawMode::ShaderResource); // Do it regardless of "debug_draw_shader_enabled"
                                        // Fall back on depth if there main RT isn't valid
-                                       if (debug_draw_mode == DebugDrawMode::RenderTarget && trace_draw_call_data.rt_format[0] == DXGI_FORMAT_UNKNOWN && draw_call_data.depth_state != TraceDrawCallData::DepthStateType::Disabled)
+                                       if (Trace::debug_draw_mode == Trace::DebugDrawMode::RenderTarget && trace_draw_call_data.rt_format[0] == DXGI_FORMAT_UNKNOWN && draw_call_data.depth_state != TraceDrawCallData::DepthStateType::Disabled)
                                        {
-                                          debug_draw_mode = DebugDrawMode::Depth;
-                                          debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::RedOnly;
-                                          debug_draw_mip = 0;
+                                          Trace::debug_draw_mode = Trace::DebugDrawMode::Depth;
+                                          Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
+                                          Trace::debug_draw_mip = 0;
                                        }
-                                       if (debug_draw_mode != prev_debug_draw_mode)
+                                       if (Trace::debug_draw_mode != prev_debug_draw_mode)
                                        {
-                                          debug_draw_view_index = 0;
+                                          Trace::debug_draw_view_index = 0;
                                        }
                                        // Preserve the last SRV/UAV/RTV index if we are passing between draw calls, it should help (e.g. during gbuffers rendering)
                                        else if (debug_draw_shader_just_enabled)
                                        {
-                                          if (debug_draw_mode == DebugDrawMode::RenderTarget)
+                                          if (Trace::debug_draw_mode == Trace::DebugDrawMode::RenderTarget)
                                           {
-                                             if (debug_draw_view_index < 0 || debug_draw_view_index >= std::size(original_shader->rtvs) || !original_shader->rtvs[debug_draw_view_index])
-                                                debug_draw_view_index = 0;
+                                             if (Trace::debug_draw_view_index < 0 || Trace::debug_draw_view_index >= std::size(original_shader->rtvs) || !original_shader->rtvs[Trace::debug_draw_view_index])
+                                                Trace::debug_draw_view_index = 0;
                                           }
-                                          else if (debug_draw_mode == DebugDrawMode::ShaderResource)
+                                          else if (Trace::debug_draw_mode == Trace::DebugDrawMode::ShaderResource)
                                           {
-                                             if (debug_draw_view_index < 0 || debug_draw_view_index >= std::size(original_shader->srvs) || !original_shader->srvs[debug_draw_view_index])
-                                                debug_draw_view_index = 0;
+                                             if (Trace::debug_draw_view_index < 0 || Trace::debug_draw_view_index >= std::size(original_shader->srvs) || !original_shader->srvs[Trace::debug_draw_view_index])
+                                                Trace::debug_draw_view_index = 0;
                                           }
-                                          else if (debug_draw_mode == DebugDrawMode::UnorderedAccessView)
+                                          else if (Trace::debug_draw_mode == Trace::DebugDrawMode::UnorderedAccessView)
                                           {
-                                             if (debug_draw_view_index < 0 || debug_draw_view_index >= std::size(original_shader->uavs) || !original_shader->uavs[debug_draw_view_index])
-                                                debug_draw_view_index = 0;
+                                             if (Trace::debug_draw_view_index < 0 || Trace::debug_draw_view_index >= std::size(original_shader->uavs) || !original_shader->uavs[Trace::debug_draw_view_index])
+                                                Trace::debug_draw_view_index = 0;
                                           }
-                                          else // DebugDrawMode::Depth || DebugDrawMode::Stencil
+                                          else // Trace::DebugDrawMode::Depth || Trace::DebugDrawMode::Stencil
                                           {
-                                             debug_draw_view_index = 0;
-                                             debug_draw_mip = 0;
+                                             Trace::debug_draw_view_index = 0;
+                                             Trace::debug_draw_mip = 0;
                                           }
                                        }
-                                       //debug_draw_replaced_pass = false;
+                                       //Trace::debug_draw_replaced_pass = false;
 #endif
 
                                        debug_draw_shader_enabled = !debug_draw_shader_enabled;
                                     }
                                     // Show that it's failing to retrieve the texture if we can!
-                                    if (!debug_draw_auto_clear_texture && has_any_resources && debug_draw_shader_enabled && !debug_draw_shader_just_enabled && device_data.debug_draw_texture.get() == nullptr)
+                                    if (!Trace::debug_draw_auto_clear_texture && has_any_resources && debug_draw_shader_enabled && !debug_draw_shader_just_enabled && device_data.debug_draw_texture.get() == nullptr)
                                     {
                                        ImGui::BeginDisabled(true);
                                        ImGui::SameLine();
@@ -12525,43 +12435,43 @@ namespace
                                     if (has_any_resources)
                                     {
                                        ImGui::SameLine();
-                                       if (ImGui::Checkbox("Freeze Inputs", &debug_draw_freeze_inputs) && !debug_draw_freeze_inputs)
+                                       if (ImGui::Checkbox("Freeze Inputs", &Trace::debug_draw_freeze_inputs) && !Trace::debug_draw_freeze_inputs)
                                        {
                                           device_data.debug_draw_frozen_draw_state_stack.reset();
                                        }
                                        
                                        ImGui::SameLine();
-                                       ImGui::BeginDisabled(debug_draw_mode != DebugDrawMode::RenderTarget);
-                                       ImGui::Checkbox("Disable Blends", &debug_draw_disable_blends);
+                                       ImGui::BeginDisabled(Trace::debug_draw_mode != Trace::DebugDrawMode::RenderTarget);
+                                       ImGui::Checkbox("Disable Blends", &Trace::debug_draw_disable_blends);
                                        ImGui::EndDisabled();
                                     }
 
-                                    bool track_buffer_enabled = track_buffer_pipeline != 0 && track_buffer_pipeline == pipeline_pair->first;
-                                    track_buffer_enabled &= track_buffer_pipeline_target_instance < 0 || track_buffer_pipeline_target_instance == target_instance;
+                                    bool track_buffer_enabled = Trace::track_buffer_pipeline != 0 && Trace::track_buffer_pipeline == pipeline_pair->first;
+                                    track_buffer_enabled &= Trace::track_buffer_pipeline_target_instance < 0 || Trace::track_buffer_pipeline_target_instance == target_instance;
                                     if (track_buffer_enabled ? ImGui::Button("Disable Constant Buffer Tracking") : ImGui::Button("Enable Constant Buffer Tracking"))
                                     {
                                        if (!track_buffer_enabled)
                                        {
-                                          track_buffer_pipeline = pipeline_pair->first;
-                                          track_buffer_pipeline_target_instance = target_instance;
-                                          track_buffer_index = 0;
+                                          Trace::track_buffer_pipeline = pipeline_pair->first;
+                                          Trace::track_buffer_pipeline_target_instance = target_instance;
+                                          Trace::track_buffer_index = 0;
                                        }
                                        else
                                        {
-                                          track_buffer_pipeline = 0;
-                                          track_buffer_pipeline_target_instance = -1;
+                                          Trace::track_buffer_pipeline = 0;
+                                          Trace::track_buffer_pipeline_target_instance = -1;
                                        }
                                        track_buffer_enabled = !track_buffer_enabled;
                                     }
 
                                     if (track_buffer_enabled)
                                     {
-                                       ImGui::SliderInt("Constant Buffer Tracked Index", &track_buffer_index, 0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT - 1);
+                                       ImGui::SliderInt("Constant Buffer Tracked Index", &Trace::track_buffer_index, 0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT - 1);
 
                                        // Hacky way of retrieving the data if the tracked buffer was in a deferred command list and hence couldn't be mapped there
                                        if (!device_data.track_buffer_data.data_valid && device_data.track_buffer_data.cb)
                                        {
-                                          // Make sure we have the immediate context, because MapBufferData will fail otherwise.
+                                          // Make sure we have the immediate context, because Trace::MapBufferData will fail otherwise.
                                           ComPtr<ID3D11Device> native_device;
                                           draw_call_data.command_list->GetDevice(native_device.put());
                                           ComPtr<ID3D11DeviceContext> native_device_context;
@@ -12569,7 +12479,7 @@ namespace
 
                                           D3D11_BUFFER_DESC desc = {};
                                           device_data.track_buffer_data.cb->GetDesc(&desc);
-                                          device_data.track_buffer_data.data_valid = MapBufferData(device_data.track_buffer_data.cb, native_device_context.get(), device_data.track_buffer_data.data, desc.ByteWidth);
+                                          device_data.track_buffer_data.data_valid = Trace::MapBufferData(device_data.track_buffer_data.cb, native_device_context.get(), device_data.track_buffer_data.data, desc.ByteWidth);
                                        }
 
                                        if (device_data.track_buffer_data.data_valid && !device_data.track_buffer_data.data.empty())
@@ -12673,7 +12583,7 @@ namespace
                                  ImGui::Text("State Analysis:");
                                  if (ImGui::BeginChild("StateAnalysisScroll", ImVec2(0, -FLT_MIN), ImGuiChildFlags_Borders))
                                  {
-                                    draw_state_analysis(draw_call_data, nullptr, debug_draw_custom_pass == CompileTimeStringHash(draw_call_data.custom_name));
+                                    draw_state_analysis(draw_call_data, nullptr, Trace::debug_draw_custom_pass == CompileTimeStringHash(draw_call_data.custom_name));
                                  }
                                  ImGui::EndChild(); // StateAnalysisScroll
                               }
@@ -13561,24 +13471,24 @@ namespace
                      if (!debug_draw_resource_enabled) // Enabled
                      {
                         // Reset all the settings we don't need anymore, as they were for a different debug draw mode
-                        debug_draw_pipeline = 0;
-                        debug_draw_shader_hash = 0;
-                        debug_draw_custom_pass = 0;
-                        debug_draw_shader_hash_string[0] = 0;
-                        debug_draw_pipeline_target_instance = -1;
-                        debug_draw_pipeline_target_thread = std::thread::id();
-                        if (debug_draw_mode == DebugDrawMode::Depth || debug_draw_mode == DebugDrawMode::Stencil)
+                        Trace::debug_draw_pipeline = 0;
+                        Trace::debug_draw_shader_hash = 0;
+                        Trace::debug_draw_custom_pass = 0;
+                        Trace::debug_draw_shader_hash_string[0] = 0;
+                        Trace::debug_draw_pipeline_target_instance = -1;
+                        Trace::debug_draw_pipeline_target_thread = std::thread::id();
+                        if (Trace::debug_draw_mode == Trace::DebugDrawMode::Depth || Trace::debug_draw_mode == Trace::DebugDrawMode::Stencil)
                         {
-                           debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
+                           Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
                         }
-                        debug_draw_mode = DebugDrawMode::Custom;
-                        debug_draw_freeze_inputs = false;
-                        debug_draw_view_index = 0;
-                        debug_draw_disable_blends = false;
-                        debug_draw_mip = 0;
+                        Trace::debug_draw_mode = Trace::DebugDrawMode::Custom;
+                        Trace::debug_draw_freeze_inputs = false;
+                        Trace::debug_draw_view_index = 0;
+                        Trace::debug_draw_disable_blends = false;
+                        Trace::debug_draw_mip = 0;
 
                         // TODO: fix. As of now this is needed or the texture would be cleared every frame and then set again. We'd need to add a separate (temporary) non clear texture mode for it
-                        debug_draw_auto_clear_texture = false;
+                        Trace::debug_draw_auto_clear_texture = false;
 
                         device_data.debug_draw_frozen_draw_state_stack.reset();
                         device_data.debug_draw_texture = selected_resource.get();
@@ -14456,25 +14366,25 @@ namespace
 
                ImGui::NewLine();
                ImGuiInputTextFlags text_flags = ImGuiInputTextFlags_CharsHexadecimal | ImGuiInputTextFlags_CharsNoBlank | ImGuiInputTextFlags_AlwaysOverwrite | ImGuiInputTextFlags_NoUndoRedo;
-               if (ImGui::InputTextWithHint("Debug Draw Shader Hash", "12345678", debug_draw_shader_hash_string, HASH_CHARACTERS_LENGTH + 1, text_flags))
+               if (ImGui::InputTextWithHint("Debug Draw Shader Hash", "12345678", Trace::debug_draw_shader_hash_string, HASH_CHARACTERS_LENGTH + 1, text_flags))
                {
                   try
                   {
-                     if (strlen(debug_draw_shader_hash_string) != HASH_CHARACTERS_LENGTH)
+                     if (strlen(Trace::debug_draw_shader_hash_string) != HASH_CHARACTERS_LENGTH)
                      {
                         throw std::invalid_argument("Shader Hash has invalid length");
                      }
-                     debug_draw_shader_hash = Shader::Hash_StrToNum(&debug_draw_shader_hash_string[0]);
+                     Trace::debug_draw_shader_hash = Shader::Hash_StrToNum(&Trace::debug_draw_shader_hash_string[0]);
                   }
                   catch (const std::exception& e)
                   {
-                     debug_draw_shader_hash = 0;
+                     Trace::debug_draw_shader_hash = 0;
                   }
                   // Keep the pipeline ptr if we are simply clearing the hash // TODO: why???
-                  if (debug_draw_shader_hash != 0)
+                  if (Trace::debug_draw_shader_hash != 0)
                   {
-                     debug_draw_pipeline = 0;
-                     debug_draw_custom_pass = 0;
+                     Trace::debug_draw_pipeline = 0;
+                     Trace::debug_draw_custom_pass = 0;
                   }
 
                   device_data.debug_draw_frozen_draw_state_stack.reset();
@@ -14484,17 +14394,17 @@ namespace
                }
                ImGui::SameLine();
                // Allow it to go through if we have a custom debug draw texture set
-               bool debug_draw_enabled = debug_draw_shader_hash != 0 || debug_draw_pipeline != 0 || debug_draw_custom_pass != 0 || (debug_draw_mode == DebugDrawMode::Custom && device_data.debug_draw_texture.get()); // It wants to be shown (if it manages!)
+               bool debug_draw_enabled = Trace::debug_draw_shader_hash != 0 || Trace::debug_draw_pipeline != 0 || Trace::debug_draw_custom_pass != 0 || (Trace::debug_draw_mode == Trace::DebugDrawMode::Custom && device_data.debug_draw_texture.get()); // It wants to be shown (if it manages!)
                // Show the reset button for both conditions or they could get stuck
                if (debug_draw_enabled)
                {
                   ImGui::PushID("Debug Draw");
                   if (ImGui::SmallButton(ICON_FK_UNDO))
                   {
-                     debug_draw_shader_hash_string[0] = 0;
-                     debug_draw_shader_hash = 0;
-                     debug_draw_pipeline = 0;
-                     debug_draw_custom_pass = 0;
+                     Trace::debug_draw_shader_hash_string[0] = 0;
+                     Trace::debug_draw_shader_hash = 0;
+                     Trace::debug_draw_pipeline = 0;
+                     Trace::debug_draw_custom_pass = 0;
 
                      device_data.debug_draw_frozen_draw_state_stack.reset();
                      device_data.debug_draw_texture = nullptr;
@@ -14513,101 +14423,101 @@ namespace
                }
                if (debug_draw_enabled)
                {
-                  if (debug_draw_mode != DebugDrawMode::Custom)
+                  if (Trace::debug_draw_mode != Trace::DebugDrawMode::Custom)
                   {
-                     auto prev_debug_draw_mode = debug_draw_mode;
-                     if (ImGui::SliderInt("Debug Draw Mode", &(int&)debug_draw_mode, int(DebugDrawMode::Custom) + 1, IM_ARRAYSIZE(debug_draw_mode_strings) - 1, debug_draw_mode_strings[(size_t)debug_draw_mode], ImGuiSliderFlags_NoInput))
+                     auto prev_debug_draw_mode = Trace::debug_draw_mode;
+                     if (ImGui::SliderInt("Debug Draw Mode", &(int&)Trace::debug_draw_mode, int(Trace::DebugDrawMode::Custom) + 1, IM_ARRAYSIZE(Trace::debug_draw_mode_strings) - 1, Trace::debug_draw_mode_strings[(size_t)Trace::debug_draw_mode], ImGuiSliderFlags_NoInput))
                      {
                         // Make sure to reset it to 0 when we change mode, depth only supports 1 texture etc
-                        debug_draw_view_index = 0;
+                        Trace::debug_draw_view_index = 0;
                         // Automatically toggle some settings
-                        if (debug_draw_mode == DebugDrawMode::Depth || debug_draw_mode == DebugDrawMode::Stencil)
+                        if (Trace::debug_draw_mode == Trace::DebugDrawMode::Depth || Trace::debug_draw_mode == Trace::DebugDrawMode::Stencil)
                         {
-                           debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::RedOnly;
-                           debug_draw_mip = 0;
+                           Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
+                           Trace::debug_draw_mip = 0;
                         }
-                        else if (prev_debug_draw_mode == DebugDrawMode::Depth || prev_debug_draw_mode == DebugDrawMode::Stencil)
+                        else if (prev_debug_draw_mode == Trace::DebugDrawMode::Depth || prev_debug_draw_mode == Trace::DebugDrawMode::Stencil)
                         {
-                           debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
+                           Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
                         }
                      }
-                     if (ImGui::Checkbox("Debug Draw: Freeze Inputs", &debug_draw_freeze_inputs))
+                     if (ImGui::Checkbox("Debug Draw: Freeze Inputs", &Trace::debug_draw_freeze_inputs))
                      {
                         device_data.debug_draw_frozen_draw_state_stack.reset();
                      }
-                     ImGui::Checkbox("Debug Draw: Disable Blends", &debug_draw_disable_blends);
+                     ImGui::Checkbox("Debug Draw: Disable Blends", &Trace::debug_draw_disable_blends);
                   }
-                  if (debug_draw_mode == DebugDrawMode::RenderTarget)
+                  if (Trace::debug_draw_mode == Trace::DebugDrawMode::RenderTarget)
                   {
-                     ImGui::SliderInt("Debug Draw: Render Target Index", &debug_draw_view_index, 0, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT - 1);
+                     ImGui::SliderInt("Debug Draw: Render Target Index", &Trace::debug_draw_view_index, 0, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT - 1);
                   }
-                  else if (debug_draw_mode == DebugDrawMode::UnorderedAccessView)
+                  else if (Trace::debug_draw_mode == Trace::DebugDrawMode::UnorderedAccessView)
                   {
-                     ImGui::SliderInt("Debug Draw: Unordered Access View", &debug_draw_view_index, 0, device_data.uav_max_count - 1);
+                     ImGui::SliderInt("Debug Draw: Unordered Access View", &Trace::debug_draw_view_index, 0, device_data.uav_max_count - 1);
                   }
-                  else if (debug_draw_mode == DebugDrawMode::ShaderResource)
+                  else if (Trace::debug_draw_mode == Trace::DebugDrawMode::ShaderResource)
                   {
-                     ImGui::SliderInt("Debug Draw: Pixel Shader Resource Index", &debug_draw_view_index, 0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT - 1);
+                     ImGui::SliderInt("Debug Draw: Pixel Shader Resource Index", &Trace::debug_draw_view_index, 0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT - 1);
                   }
                   const int max_mip = GetTextureMaxMipLevels(D3D11_REQ_TEXTURE1D_U_DIMENSION) - 1;
-                  ImGui::SliderInt("Debug Draw: Texture Mip", &debug_draw_mip, 0, max_mip);
-                  ImGui::Checkbox("Debug Draw: Allow Drawing Replaced Pass", &debug_draw_replaced_pass);
-                  ImGui::SliderInt("Debug Draw: Target Pipeline Instance", &debug_draw_pipeline_target_instance, -1, 100); // In case the same pipeline was run more than once by the game, we can pick one to print
-                  if (ImGui::Checkbox("Debug Draw: Filter Target Pipeline Instance By Thread", &debug_draw_pipeline_instance_filter_by_thread) && !debug_draw_pipeline_instance_filter_by_thread)
+                  ImGui::SliderInt("Debug Draw: Texture Mip", &Trace::debug_draw_mip, 0, max_mip);
+                  ImGui::Checkbox("Debug Draw: Allow Drawing Replaced Pass", &Trace::debug_draw_replaced_pass);
+                  ImGui::SliderInt("Debug Draw: Target Pipeline Instance", &Trace::debug_draw_pipeline_target_instance, -1, 100); // In case the same pipeline was run more than once by the game, we can pick one to print
+                  if (ImGui::Checkbox("Debug Draw: Filter Target Pipeline Instance By Thread", &Trace::debug_draw_pipeline_instance_filter_by_thread) && !Trace::debug_draw_pipeline_instance_filter_by_thread)
                   {
-                     debug_draw_pipeline_target_thread = std::thread::id();
+                     Trace::debug_draw_pipeline_target_thread = std::thread::id();
                   }
-                  bool debug_draw_fullscreen = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::Fullscreen) != 0;
-                  bool debug_draw_rend_res_scale = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::RenderResolutionScale) != 0;
-                  bool debug_draw_red_only = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::RedOnly) != 0;
-                  bool debug_draw_show_alpha = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::ShowAlpha) != 0;
-                  bool debug_draw_premultiply_alpha = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::PreMultiplyAlpha) != 0;
-                  bool debug_draw_invert_colors = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::InvertColors) != 0;
-                  bool debug_draw_linear_to_gamma = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::LinearToGamma) != 0;
-                  bool debug_draw_gamma_to_linear = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::GammaToLinear) != 0;
-                  bool debug_draw_flip_y = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::FlipY) != 0;
-                  bool debug_draw_abs = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::Abs) != 0;
-                  bool debug_draw_saturate = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::Saturate) != 0;
-                  bool debug_draw_background_passthrough = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::BackgroundPassthrough) != 0;
-                  bool debug_draw_zoom_4x = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::Zoom4x) != 0;
-                  bool debug_draw_bilinear = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::Bilinear) != 0;
-                  bool debug_draw_srgb = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::SRGB) != 0;
-                  bool debug_draw_tonemap = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::Tonemap) != 0;
-                  bool debug_draw_uv_to_pixel_space = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::UVToPixelSpace) != 0;
-                  bool debug_draw_denormalize = (debug_draw_options & (uint32_t)DebugDrawTextureOptionsMask::Denormalize) != 0;
+                  bool debug_draw_fullscreen = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::Fullscreen) != 0;
+                  bool debug_draw_rend_res_scale = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::RenderResolutionScale) != 0;
+                  bool debug_draw_red_only = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly) != 0;
+                  bool debug_draw_show_alpha = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::ShowAlpha) != 0;
+                  bool debug_draw_premultiply_alpha = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::PreMultiplyAlpha) != 0;
+                  bool debug_draw_invert_colors = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::InvertColors) != 0;
+                  bool debug_draw_linear_to_gamma = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::LinearToGamma) != 0;
+                  bool debug_draw_gamma_to_linear = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::GammaToLinear) != 0;
+                  bool debug_draw_flip_y = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::FlipY) != 0;
+                  bool debug_draw_abs = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::Abs) != 0;
+                  bool debug_draw_saturate = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::Saturate) != 0;
+                  bool debug_draw_background_passthrough = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::BackgroundPassthrough) != 0;
+                  bool debug_draw_zoom_4x = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::Zoom4x) != 0;
+                  bool debug_draw_bilinear = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::Bilinear) != 0;
+                  bool debug_draw_srgb = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::SRGB) != 0;
+                  bool debug_draw_tonemap = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::Tonemap) != 0;
+                  bool debug_draw_uv_to_pixel_space = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::UVToPixelSpace) != 0;
+                  bool debug_draw_denormalize = (Trace::debug_draw_options & (uint32_t)Trace::DebugDrawTextureOptionsMask::Denormalize) != 0;
 
                   // TODO: do these in a template function to shorten the code
                   if (ImGui::Checkbox("Debug Draw Options: Fullscreen", &debug_draw_fullscreen))
                   {
                      if (debug_draw_fullscreen)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::Fullscreen;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::Fullscreen;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::Fullscreen;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::Fullscreen;
                      }
                   }
                   if (ImGui::Checkbox("Debug Draw Options: Render Resolution Scale", &debug_draw_rend_res_scale))
                   {
                      if (debug_draw_rend_res_scale)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::RenderResolutionScale;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::RenderResolutionScale;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RenderResolutionScale;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::RenderResolutionScale;
                      }
                   }
                   if (ImGui::Checkbox("Debug Draw Options: Background Passthrough", &debug_draw_background_passthrough))
                   {
                      if (debug_draw_background_passthrough)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::BackgroundPassthrough;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::BackgroundPassthrough;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::BackgroundPassthrough;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::BackgroundPassthrough;
                      }
                   }
                   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -14618,11 +14528,11 @@ namespace
                   {
                      if (debug_draw_show_alpha)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::ShowAlpha;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::ShowAlpha;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::ShowAlpha;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::ShowAlpha;
                      }
                   }
                   ImGui::BeginDisabled(debug_draw_show_alpha); // Alpha takes over red in shaders, so disable red if alpha is on
@@ -14630,11 +14540,11 @@ namespace
                   {
                      if (debug_draw_red_only)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::RedOnly;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::RedOnly;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::RedOnly;
                      }
                   }
                   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -14646,61 +14556,61 @@ namespace
                   {
                      if (debug_draw_premultiply_alpha)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::PreMultiplyAlpha;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::PreMultiplyAlpha;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::PreMultiplyAlpha;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::PreMultiplyAlpha;
                      }
                   }
                   if (ImGui::Checkbox("Debug Draw Options: Invert Colors", &debug_draw_invert_colors))
                   {
                      if (debug_draw_invert_colors)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::InvertColors;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::InvertColors;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::InvertColors;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::InvertColors;
                      }
                   }
-                  ImGui::Checkbox("Debug Draw Options: Auto Gamma", &debug_draw_auto_gamma);
-                  if (!debug_draw_auto_gamma)
+                  ImGui::Checkbox("Debug Draw Options: Auto Gamma", &Trace::debug_draw_auto_gamma);
+                  if (!Trace::debug_draw_auto_gamma)
                   {
                      // Draw this first as it's much more likely to be needed
                      if (ImGui::Checkbox("Debug Draw Options: Gamma to Linear", &debug_draw_gamma_to_linear))
                      {
                         if (debug_draw_gamma_to_linear)
                         {
-                           debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::GammaToLinear;
+                           Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::GammaToLinear;
                         }
                         else
                         {
-                           debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::GammaToLinear;
+                           Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::GammaToLinear;
                         }
                      }
                      if (ImGui::Checkbox("Debug Draw Options: Linear to Gamma", &debug_draw_linear_to_gamma))
                      {
                         if (debug_draw_linear_to_gamma)
                         {
-                           debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::LinearToGamma;
+                           Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::LinearToGamma;
                         }
                         else
                         {
-                           debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::LinearToGamma;
+                           Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::LinearToGamma;
                         }
                      }
                   }
-                  ImGui::BeginDisabled((debug_draw_options & ((uint32_t)DebugDrawTextureOptionsMask::LinearToGamma | (uint32_t)DebugDrawTextureOptionsMask::GammaToLinear)) == 0);
+                  ImGui::BeginDisabled((Trace::debug_draw_options & ((uint32_t)Trace::DebugDrawTextureOptionsMask::LinearToGamma | (uint32_t)Trace::DebugDrawTextureOptionsMask::GammaToLinear)) == 0);
                   if (ImGui::Checkbox("Debug Draw Options: sRGB Encode/Decode", &debug_draw_srgb))
                   {
                      if (debug_draw_srgb)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::SRGB;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::SRGB;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::SRGB;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::SRGB;
                      }
                   }
                   ImGui::EndDisabled();
@@ -14712,22 +14622,22 @@ namespace
                   {
                      if (debug_draw_flip_y)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::FlipY;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::FlipY;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::FlipY;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::FlipY;
                      }
                   }
                   if (ImGui::Checkbox("Debug Draw Options: Abs", &debug_draw_abs))
                   {
                      if (debug_draw_abs)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::Abs;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::Abs;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::Abs;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::Abs;
                      }
                   }
                   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -14738,11 +14648,11 @@ namespace
                   {
                      if (debug_draw_saturate)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::Saturate;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::Saturate;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::Saturate;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::Saturate;
                      }
                   }
                   ImGui::BeginDisabled(debug_draw_saturate || !IsFloatFormat(device_data.debug_draw_texture_format));
@@ -14754,11 +14664,11 @@ namespace
                   {
                      if (debug_draw_tonemap)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::Tonemap;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::Tonemap;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::Tonemap;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::Tonemap;
                      }
                   }
                   ImGui::EndDisabled();
@@ -14766,11 +14676,11 @@ namespace
                   {
                      if (debug_draw_uv_to_pixel_space)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::UVToPixelSpace;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::UVToPixelSpace;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::UVToPixelSpace;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::UVToPixelSpace;
                      }
                   }
                   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -14781,11 +14691,11 @@ namespace
                   {
                      if (debug_draw_denormalize)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::Denormalize;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::Denormalize;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::Denormalize;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::Denormalize;
                      }
                   }
                   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -14796,29 +14706,29 @@ namespace
                   {
                      if (debug_draw_zoom_4x)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::Zoom4x;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::Zoom4x;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::Zoom4x;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::Zoom4x;
                      }
                   }
                   if (ImGui::Checkbox("Debug Draw Options: Bilinear Sampling", &debug_draw_bilinear))
                   {
                      if (debug_draw_bilinear)
                      {
-                        debug_draw_options |= (uint32_t)DebugDrawTextureOptionsMask::Bilinear;
+                        Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::Bilinear;
                      }
                      else
                      {
-                        debug_draw_options &= ~(uint32_t)DebugDrawTextureOptionsMask::Bilinear;
+                        Trace::debug_draw_options &= ~(uint32_t)Trace::DebugDrawTextureOptionsMask::Bilinear;
                      }
                   }
                   if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                   {
                      ImGui::SetTooltip("Bilinear instead of Nearest Neighbor");
                   }
-                  if (device_data.debug_draw_texture || debug_draw_auto_clear_texture)
+                  if (device_data.debug_draw_texture || Trace::debug_draw_auto_clear_texture)
                   {
                      if (GetFormatName(device_data.debug_draw_texture_format) != nullptr)
                      {
@@ -14830,7 +14740,7 @@ namespace
                      }
                      ImGui::Text("Debug Draw Info: Texture Size: %ux%ux%ux%u", device_data.debug_draw_texture_size.x, device_data.debug_draw_texture_size.y, device_data.debug_draw_texture_size.z, device_data.debug_draw_texture_size.w);
                   }
-                  if (ImGui::Checkbox("Debug Draw: Auto Clear Texture", &debug_draw_auto_clear_texture)) // Is it persistent or not (in case the target texture stopped being found on newer frames). We could also "freeze" it and stop updating it, but we don't need that for now.
+                  if (ImGui::Checkbox("Debug Draw: Auto Clear Texture", &Trace::debug_draw_auto_clear_texture)) // Is it persistent or not (in case the target texture stopped being found on newer frames). We could also "freeze" it and stop updating it, but we don't need that for now.
                   {
                      device_data.debug_draw_texture_format = DXGI_FORMAT_UNKNOWN;
                      device_data.debug_draw_texture_size = {};

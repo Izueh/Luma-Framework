@@ -305,8 +305,8 @@ public:
    {
 #if DEVELOPMENT
       {
-         const std::unique_lock lock_trace(s_mutex_trace);
-         trace_count = 0;
+         const std::unique_lock lock_trace(Trace::s_mutex);
+         Trace::captured_count = 0;
       }
 #endif
    }
