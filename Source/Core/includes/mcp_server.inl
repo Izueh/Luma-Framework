@@ -434,14 +434,14 @@ namespace Mcp
                if (pipeline->cloned || entry.drawn_origin != Shader::CloneOrigin::None)
                   w->Field("variant", EnumName(clone_origin_names, size_t(entry.drawn_origin)));
             }
-            if (entry.cancelled_or_replaced)
-               w->Field("cancelled_or_replaced", true);
-            if (!entry.replaced_slots.empty())
-               w->Field("updated", true);
             else
             {
                w->Field("stage", "unknown"); // Destroyed since the capture
             }
+            if (entry.cancelled_or_replaced)
+               w->Field("cancelled_or_replaced", true);
+            if (!entry.replaced_slots.empty())
+               w->Field("updated", true);
          }
          std::string flags;
          if (entry.any_input_resources_format_upgraded)
@@ -746,7 +746,9 @@ namespace Mcp
                return false;
             if (cancelled_only && !entry.cancelled_or_replaced)
                return false;
-            if (variant && (entry.type != Type::Shader || *variant != EnumName(clone_origin_names, size_t(entry.drawn_origin))))
+            // Like the "variant" field, only clones (or draws stamped by a variant) have one
+            const bool has_variant = (pipeline && pipeline->cloned) || entry.drawn_origin != Shader::CloneOrigin::None;
+            if (variant && (entry.type != Type::Shader || !has_variant || *variant != EnumName(clone_origin_names, size_t(entry.drawn_origin))))
                return false;
             const auto has_resource = [&](const auto& hashes)
             { return std::ranges::find(hashes, *resource) != std::end(hashes); };
@@ -1205,7 +1207,7 @@ namespace Mcp
             const std::shared_lock lock_loading(s_mutex_loading);
             w.Field("has_compilation_errors", !shaders_compilation_errors.empty());
          }
-         w.Field("Trace::captured_count", Trace::captured_count);
+         w.Field("trace_count", Trace::captured_count);
          w.Field("swapchain_upgrade_type", uint32_t(swapchain_upgrade_type));
          w.Field("swapchain_format_upgrade_type", uint32_t(swapchain_format_upgrade_type));
          w.Field("texture_format_upgrades_type", uint32_t(texture_format_upgrades_type));

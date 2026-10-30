@@ -56,7 +56,7 @@ READ_TARGET = {
     "view": {"type": "string", "description": "rtv (default), srv, uav, depth, stencil, swapchain, ui, registered:<name>"},
     "slot": {"type": "integer", "description": "View slot (default 0)"},
     "mip": {"type": "integer", "description": "Mip level (default 0)"},
-    "replaced": {"type": "boolean", "description": "Read the bindings of Luma's replaced pass (default true) or the original ones"},
+    "replaced": {"type": "boolean", "description": "For a pass the draw callbacks cancelled or replaced (cancelled_or_replaced): read what Luma drew instead (default true), or false to run the original pass for the readback. Draws that went through with swapped bindings (updated) always read what they drew, their original bindings are in luma_trace_get replaced_slots"},
 }
 COMPARE_OPTIONS = {
     "region": ANALYSIS["region"],
