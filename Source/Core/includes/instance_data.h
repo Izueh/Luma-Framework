@@ -258,8 +258,8 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
 #if DEVELOPMENT
    std::shared_mutex mutex_trace;
    std::vector<TraceDrawCallData> trace_draw_calls_data;
-   // The entries of the draw being processed (first, count), see "Trace::EndDraw"
-   std::pair<size_t, size_t> trace_current_draw = {};
+   // The entries of the draw being processed (first, count), "first" is SIZE_MAX outside of them (see "Trace::Draw()")
+   std::pair<size_t, size_t> trace_current_draw = {SIZE_MAX, 0};
 
    bool requires_join = false;
 

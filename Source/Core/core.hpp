@@ -5569,19 +5569,7 @@ namespace
       }
 
 #if DEVELOPMENT
-      // Clear at the end of every frame and re-capture it in the next frame if its still available
-      if (Trace::debug_draw_auto_clear_texture)
-      {
-         device_data.debug_draw_texture = nullptr;
-         // Leave "debug_draw_texture_format" and "debug_draw_texture_size", we need that in ImGUI (we'd need to clear it after ImGUI if necessary, but we skip drawing it if the texture isn't valid)
-      }
-      Trace::debug_draw_pipeline_instance = 0;
-      Trace::debug_draw_custom_pass_instance = 0;
-
-#if 0 // Optionally clear it every frame, to remove it if it wasn't found (this needs to be done elsewhere for now, because we print it below)
-      device_data.track_buffer_data = {};
-#endif
-      Trace::track_buffer_pipeline_instance = 0;
+      Trace::EndFrame(device_data);
 #endif // DEVELOPMENT
 
       device_data.has_drawn_main_post_processing_previous = device_data.has_drawn_main_post_processing;
@@ -5830,69 +5818,11 @@ namespace
       }
       thread_local_cmd_list = cmd_list;
 
-      std::optional<size_t> trace_start_index;
-      {
-         // Do this before any custom code runs as the state might change
-         const std::shared_lock lock_trace(Trace::s_mutex); // TODO: it's not safe to lock global mutexes that might have already been locked by other concurrent functions, while also calling functions in the device or primary device context (in DX11) (because they have their own locks inside that might cause deadlocks!). The solution here would be to cache the data upfront and then lock a mutex to add it to our array. This might be safe if the game threading was already safe though, I'm not 100% sure.
-         if (Trace::running)
-         {
-            const std::shared_lock lock_generic(s_mutex_generic);
-            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-            const std::lock_guard<std::recursive_mutex> lock_dumping(s_mutex_dumping);
-            const std::shared_lock lock_device(device_data.mutex);
-            ASSERT_ONCE(native_device_context);
-            trace_start_index = cmd_list_data.trace_draw_calls_data.size();
-            if (is_dispatch)
-            {
-               Trace::AddDrawCall(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_compute_shader.handle, last_draw_dispatch_data);
-            }
-            else
-            {
-               Trace::AddDrawCall(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_vertex_shader.handle, last_draw_dispatch_data);
-               if (cmd_list_data.pipeline_state_original_pixel_shader.handle != 0) // Somehow this can happen (e.g. query tests don't require pixel shaders)
-               {
-                  Trace::AddDrawCall(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_pixel_shader.handle, last_draw_dispatch_data);
-               }
-            }
-            // Until the callbacks finish, see "Trace::UpdateDraw()"
-            cmd_list_data.trace_current_draw = {*trace_start_index, cmd_list_data.trace_draw_calls_data.size() - *trace_start_index};
-         }
-      }
+      if (is_dispatch)
+         Trace::Dispatch(cmd_list_data, device_data, native_device_context, last_draw_dispatch_data);
+      else
+         Trace::Draw(cmd_list_data, device_data, native_device_context, last_draw_dispatch_data);
 #endif //DEVELOPMENT
-
-#if DEVELOPMENT
-      // On every way out of the draw callbacks: stamps the variant the draw's shaders ran with (see "Shader::UsePipelineVariant()"), and moves the
-      // passes queued meanwhile into the trace: before the draw if it went through (they ran first), after it otherwise (they replaced it)
-      const auto finish_trace = [&](bool draw_went_through)
-      {
-         const std::shared_lock lock_trace(Trace::s_mutex);
-         if (!Trace::running)
-         {
-            Trace::ClearQueued();
-            return;
-         }
-         const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-         auto& entries = cmd_list_data.trace_draw_calls_data;
-         if (!trace_start_index)
-         {
-            Trace::MoveQueued(entries, native_device_context);
-            return;
-         }
-         auto& [first, count] = cmd_list_data.trace_current_draw;
-         for (size_t i = first; i < first + count && i < entries.size(); i++)
-         {
-            auto& entry = entries[i];
-            if (entry.type != TraceDrawCallData::TraceDrawCallType::Shader) continue;
-            if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_compute_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::compute);
-            else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_vertex_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::vertex);
-            else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_pixel_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::pixel);
-         }
-         if (draw_went_through)
-            first += Trace::MoveQueued(entries, native_device_context, first);
-         else
-            Trace::MoveQueued(entries, native_device_context);
-      };
-#endif
 
       const bool mod_active = IsModActive(device_data);
 
@@ -5978,7 +5908,7 @@ namespace
       else if (!is_dispatch && hide_ui && cmd_list_data.is_known_ui_shader_bound)
       {
 #if DEVELOPMENT
-         finish_trace(false);
+         Trace::FinishDrawCallbacks(cmd_list_data, native_device_context, false);
 #endif
          return true; // Skip draw call
       }
@@ -6487,7 +6417,7 @@ namespace
             if (draw_or_dispatch_override_type != DrawOrDispatchOverrideType::None)
             {
 #if DEVELOPMENT
-               finish_trace(false);
+               Trace::FinishDrawCallbacks(cmd_list_data, native_device_context, false);
 #endif
                return true;
             }
@@ -6504,7 +6434,7 @@ namespace
          }
 
 #if DEVELOPMENT
-         finish_trace(draw_or_dispatch_override_type == DrawOrDispatchOverrideType::None);
+         Trace::FinishDrawCallbacks(cmd_list_data, native_device_context, draw_or_dispatch_override_type == DrawOrDispatchOverrideType::None);
 #endif
 
          if (draw_or_dispatch_override_type != DrawOrDispatchOverrideType::None)
@@ -6811,10 +6741,6 @@ namespace
 #if DEVELOPMENT
       DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
 
-      bool wants_debug_draw = Trace::debug_draw_shader_hash != 0 || Trace::debug_draw_pipeline != 0;
-      wants_debug_draw &= (Trace::debug_draw_pipeline == 0 || Trace::debug_draw_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle);
-      wants_debug_draw &= (Trace::debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_graphics_shader_hashes.Contains(Trace::debug_draw_shader_hash, reshade::api::shader_stage::pixel)) && (Trace::debug_draw_pipeline_target_thread == std::thread::id() || Trace::debug_draw_pipeline_target_thread == std::this_thread::get_id());
-
       com_ptr<ID3D11DepthStencilState> original_depth_stencil_state;
       UINT original_stencil_ref = 0;
       // We do this here and not in the depth state set as it's just much easier to keep track of the state changes, given that here they are wrapped around a draw call
@@ -6825,32 +6751,7 @@ namespace
          native_device_context->OMSetDepthStencilState((cmd_list_data.temp_custom_depth_stencil == ShaderCustomDepthStencilType::IgnoreTestWriteDepth_IgnoreStencil) ? device_data.default_depth_stencil_state.get() : device_data.depth_test_false_write_true_stencil_false_state.get(), 0);
       }
 
-      DrawStateStack pre_draw_state_stack;
-      if (wants_debug_draw)
-      {
-         if (Trace::debug_draw_freeze_inputs)
-         {
-            // The cached (frozen) state is empty, cache it, and then duplicate the resources
-            if (!device_data.debug_draw_frozen_draw_state_stack)
-            {
-               device_data.debug_draw_frozen_draw_state_stack = std::make_shared<DrawStateStack<DrawStateStackType::FullGraphics>>();
-               // TODO: do this properly... we had header include problems. Also this needs to be swapped to the compute type of compute shaders, and graphics for pixel (we need to refresh it if the type was wrong).
-               ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Cache(native_device_context, device_data.uav_max_count);
-               ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Clone(native_device_context, device_data.GetLumaCBuffers());
-            }
-            // Restore the new or cached cloned state
-            // We keep the original RTVs, UAVs and shaders otherwise live editing of custom shaders won't work.
-            // Making the draw on a non frozen UAV could cause iterative passes to not 100% freeze, but if ever needed, we could add a flag for that too (and e.g. copy back their value from the cached clone).
-            ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Restore(native_device_context, false, false);
-         }
-
-         pre_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
-
-         if (Trace::debug_draw_disable_blends) // TODO: we never reset these after the draw call? Potentially polluting the game's state? It'd be fine if we are draw debugging! Same for the other usages of this.
-         {
-            native_device_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
-         }
-      }
+      const Trace::GameDraw game_draw = Trace::BeginGameDraw(cmd_list_data, device_data, native_device_context, false);
 #endif
 
 #if ENABLE_DRAW_DISPATCH_DATA_CACHE || DEVELOPMENT
@@ -6865,68 +6766,7 @@ namespace
       // TODO: add performance tracing around these
       bool cancelled_or_replaced = OnDrawOrDispatch_Custom<false>(cmd_list, updated_cbuffers, original_draw_dispatch_func);
 #if DEVELOPMENT
-      Trace::EndDraw(cmd_list_data, cancelled_or_replaced);
-
-      // First run the draw call (don't delegate it to ReShade) and then copy its output
-      if (wants_debug_draw)
-      {
-         auto local_debug_draw_pipeline_instance = Trace::debug_draw_pipeline_instance.fetch_add(1);
-         if (Trace::debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == Trace::debug_draw_pipeline_target_instance)
-         {
-            DrawStateStack post_draw_state_stack;
-
-            if (!cancelled_or_replaced)
-            {
-               draw_lambda();
-            }
-            else if (!Trace::debug_draw_replaced_pass)
-            {
-               post_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
-               pre_draw_state_stack.Restore(native_device_context);
-            }
-
-            Trace::CopyDebugDrawTexture(Trace::debug_draw_mode, Trace::debug_draw_view_index, cmd_list, false);
-
-            if (cancelled_or_replaced && !Trace::debug_draw_replaced_pass)
-            {
-               post_draw_state_stack.Restore(native_device_context);
-            }
-            cancelled_or_replaced = true;
-         }
-      }
-      bool track_buffer_pipeline_ps = Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle;
-      bool track_buffer_pipeline_vs = Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_vertex_shader.handle;
-      if (Trace::track_buffer_pipeline != 0 && (track_buffer_pipeline_ps || track_buffer_pipeline_vs))
-      {
-         auto local_track_buffer_pipeline_instance = Trace::track_buffer_pipeline_instance.fetch_add(1);
-         // TODO: make "Trace::track_buffer_pipeline_target_instance" by thread (like "Trace::debug_draw_pipeline_target_instance"), though it's rarely useful
-         if (Trace::track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == Trace::track_buffer_pipeline_target_instance)
-         {
-            com_ptr<ID3D11Buffer> cb;
-            UINT cb_first = 0, cb_num = 0;
-            com_ptr<ID3D11DeviceContext1> native_device_context_1;
-            native_device_context->QueryInterface(&native_device_context_1);
-            if (track_buffer_pipeline_ps)
-            {
-               if (native_device_context_1)
-                  native_device_context_1->PSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
-               else
-                  native_device_context->PSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
-            }
-            else if (track_buffer_pipeline_vs)
-            {
-               if (native_device_context_1)
-                  native_device_context_1->VSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
-               else
-                  native_device_context->VSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
-            }
-            // Copy the buffer in our data, and make a copy if necessary, if we are in a deferred context
-            device_data.track_buffer_data.data_valid = Trace::CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
-            device_data.track_buffer_data.hash = std::to_string(std::hash<void*>{}(cb.get()));
-            device_data.track_buffer_data.first_constant = cb_first;
-            device_data.track_buffer_data.num_constants = cb_num;
-         }
-      }
+      cancelled_or_replaced = Trace::EndGameDraw(game_draw, cmd_list_data, device_data, cmd_list, cancelled_or_replaced, draw_lambda) || cancelled_or_replaced;
       if (cancelled_or_replaced)
       {
          // Cancel the lambda as we've already drawn once, we don't want to do it further below
@@ -6992,10 +6832,6 @@ namespace
 #if DEVELOPMENT
       DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
 
-      bool wants_debug_draw = Trace::debug_draw_shader_hash != 0 || Trace::debug_draw_pipeline != 0;
-      wants_debug_draw &= (Trace::debug_draw_pipeline == 0 || Trace::debug_draw_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle);
-      wants_debug_draw &= (Trace::debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_graphics_shader_hashes.Contains(Trace::debug_draw_shader_hash, reshade::api::shader_stage::pixel)) && (Trace::debug_draw_pipeline_target_thread == std::thread::id() || Trace::debug_draw_pipeline_target_thread == std::this_thread::get_id());
-
       com_ptr<ID3D11DepthStencilState> original_depth_stencil_state;
       UINT original_stencil_ref = 0;
       if (cmd_list_data.temp_custom_depth_stencil != ShaderCustomDepthStencilType::None)
@@ -7005,27 +6841,7 @@ namespace
          native_device_context->OMSetDepthStencilState((cmd_list_data.temp_custom_depth_stencil == ShaderCustomDepthStencilType::IgnoreTestWriteDepth_IgnoreStencil) ? device_data.default_depth_stencil_state.get() : device_data.depth_test_false_write_true_stencil_false_state.get(), 0);
       }
 
-      DrawStateStack pre_draw_state_stack;
-      if (wants_debug_draw)
-      {
-         if (Trace::debug_draw_freeze_inputs)
-         {
-            if (!device_data.debug_draw_frozen_draw_state_stack)
-            {
-               device_data.debug_draw_frozen_draw_state_stack = std::make_shared<DrawStateStack<DrawStateStackType::FullGraphics>>();
-               ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Cache(native_device_context, device_data.uav_max_count);
-               ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Clone(native_device_context, device_data.GetLumaCBuffers());
-            }
-            ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Restore(native_device_context, false, false);
-         }
-
-         pre_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
-
-         if (Trace::debug_draw_disable_blends)
-         {
-            native_device_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
-         }
-      }
+      const Trace::GameDraw game_draw = Trace::BeginGameDraw(cmd_list_data, device_data, native_device_context, false);
 #endif
 
 #if ENABLE_DRAW_DISPATCH_DATA_CACHE || DEVELOPMENT
@@ -7042,66 +6858,7 @@ namespace
       bool updated_cbuffers = false;
       bool cancelled_or_replaced = OnDrawOrDispatch_Custom<false>(cmd_list, updated_cbuffers, original_draw_dispatch_func);
 #if DEVELOPMENT
-      Trace::EndDraw(cmd_list_data, cancelled_or_replaced);
-      // First run the draw call (don't delegate it to ReShade) and then copy its output
-      if (wants_debug_draw)
-      {
-         auto local_debug_draw_pipeline_instance = Trace::debug_draw_pipeline_instance.fetch_add(1);
-         if (Trace::debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == Trace::debug_draw_pipeline_target_instance)
-         {
-            DrawStateStack post_draw_state_stack;
-
-            if (!cancelled_or_replaced)
-            {
-               draw_lambda();
-            }
-            else if (!Trace::debug_draw_replaced_pass)
-            {
-               post_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
-               pre_draw_state_stack.Restore(native_device_context);
-            }
-
-            Trace::CopyDebugDrawTexture(Trace::debug_draw_mode, Trace::debug_draw_view_index, cmd_list, false);
-
-            if (cancelled_or_replaced && !Trace::debug_draw_replaced_pass)
-            {
-               post_draw_state_stack.Restore(native_device_context);
-            }
-            cancelled_or_replaced = true;
-         }
-      }
-      bool track_buffer_pipeline_ps = Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle;
-      bool track_buffer_pipeline_vs = Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_vertex_shader.handle;
-      if (Trace::track_buffer_pipeline != 0 && (track_buffer_pipeline_ps || track_buffer_pipeline_vs))
-      {
-         auto local_track_buffer_pipeline_instance = Trace::track_buffer_pipeline_instance.fetch_add(1);
-         if (Trace::track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == Trace::track_buffer_pipeline_target_instance)
-         {
-            com_ptr<ID3D11Buffer> cb;
-            UINT cb_first = 0, cb_num = 0;
-            com_ptr<ID3D11DeviceContext1> native_device_context_1;
-            native_device_context->QueryInterface(&native_device_context_1);
-            if (track_buffer_pipeline_ps)
-            {
-               if (native_device_context_1)
-                  native_device_context_1->PSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
-               else
-                  native_device_context->PSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
-            }
-            else if (track_buffer_pipeline_vs)
-            {
-               if (native_device_context_1)
-                  native_device_context_1->VSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
-               else
-                  native_device_context->VSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
-            }
-            // Copy the buffer in our data, and make a copy if necessary, if we are in a deferred context
-            device_data.track_buffer_data.data_valid = Trace::CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
-            device_data.track_buffer_data.hash = std::to_string(std::hash<void*>{}(cb.get()));
-            device_data.track_buffer_data.first_constant = cb_first;
-            device_data.track_buffer_data.num_constants = cb_num;
-         }
-      }
+      cancelled_or_replaced = Trace::EndGameDraw(game_draw, cmd_list_data, device_data, cmd_list, cancelled_or_replaced, draw_lambda) || cancelled_or_replaced;
       if (cancelled_or_replaced)
       {
          // Cancel the lambda as we've already drawn once, we don't want to do it further below
@@ -7153,26 +6910,7 @@ namespace
 #if DEVELOPMENT
       DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
 
-      bool wants_debug_draw = Trace::debug_draw_shader_hash != 0 || Trace::debug_draw_pipeline != 0;
-      wants_debug_draw &= (Trace::debug_draw_pipeline == 0 || Trace::debug_draw_pipeline == cmd_list_data.pipeline_state_original_compute_shader.handle);
-      wants_debug_draw &= (Trace::debug_draw_shader_hash == 0 || cmd_list_data.pipeline_state_original_compute_shader_hashes.Contains(Trace::debug_draw_shader_hash, reshade::api::shader_stage::compute)) && (Trace::debug_draw_pipeline_target_thread == std::thread::id() || Trace::debug_draw_pipeline_target_thread == std::this_thread::get_id());
-
-      DrawStateStack<DrawStateStackType::Compute> pre_draw_state_stack;
-      if (wants_debug_draw)
-      {
-         if (Trace::debug_draw_freeze_inputs)
-         {
-            if (!device_data.debug_draw_frozen_draw_state_stack)
-            {
-               device_data.debug_draw_frozen_draw_state_stack = std::make_shared<DrawStateStack<DrawStateStackType::Compute>>();
-               ((DrawStateStack<DrawStateStackType::Compute>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Cache(native_device_context, device_data.uav_max_count);
-               ((DrawStateStack<DrawStateStackType::Compute>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Clone(native_device_context, device_data.GetLumaCBuffers());
-            }
-            ((DrawStateStack<DrawStateStackType::Compute>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Restore(native_device_context, false, false);
-         }
-
-         pre_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
-      }
+      const Trace::GameDraw game_draw = Trace::BeginGameDraw(cmd_list_data, device_data, native_device_context, true);
 #endif
 
 #if ENABLE_DRAW_DISPATCH_DATA_CACHE || DEVELOPMENT
@@ -7182,55 +6920,7 @@ namespace
       bool updated_cbuffers = false;
       bool cancelled_or_replaced = OnDrawOrDispatch_Custom<true>(cmd_list, updated_cbuffers, original_draw_dispatch_func);
 #if DEVELOPMENT
-      Trace::EndDraw(cmd_list_data, cancelled_or_replaced);
-      // First run the draw call (don't delegate it to ReShade) and then copy its output
-      if (wants_debug_draw)
-      {
-         auto local_debug_draw_pipeline_instance = Trace::debug_draw_pipeline_instance.fetch_add(1);
-         if (Trace::debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == Trace::debug_draw_pipeline_target_instance)
-         {
-            DrawStateStack<DrawStateStackType::Compute> post_draw_state_stack;
-
-            if (!cancelled_or_replaced)
-            {
-               draw_lambda();
-            }
-            else if (!Trace::debug_draw_replaced_pass)
-            {
-               post_draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
-               pre_draw_state_stack.Restore(native_device_context);
-            }
-
-            Trace::CopyDebugDrawTexture(Trace::debug_draw_mode, Trace::debug_draw_view_index, cmd_list, true);
-
-            if (cancelled_or_replaced && !Trace::debug_draw_replaced_pass)
-            {
-               post_draw_state_stack.Restore(native_device_context);
-            }
-            cancelled_or_replaced = true;
-         }
-      }
-      bool track_buffer_pipeline_cs = Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_compute_shader.handle;
-      if (Trace::track_buffer_pipeline != 0 && track_buffer_pipeline_cs)
-      {
-         auto local_track_buffer_pipeline_instance = Trace::track_buffer_pipeline_instance.fetch_add(1);
-         if (Trace::track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == Trace::track_buffer_pipeline_target_instance)
-         {
-            com_ptr<ID3D11Buffer> cb;
-            UINT cb_first = 0, cb_num = 0;
-            com_ptr<ID3D11DeviceContext1> native_device_context_1;
-            native_device_context->QueryInterface(&native_device_context_1);
-            if (native_device_context_1)
-               native_device_context_1->CSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
-            else
-               native_device_context->CSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
-            // Copy the buffer in our data, and make a copy if necessary, if we are in a deferred context
-            device_data.track_buffer_data.data_valid = Trace::CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
-            device_data.track_buffer_data.hash = std::to_string(std::hash<void*>{}(cb.get()));
-            device_data.track_buffer_data.first_constant = cb_first;
-            device_data.track_buffer_data.num_constants = cb_num;
-         }
-      }
+      cancelled_or_replaced = Trace::EndGameDraw(game_draw, cmd_list_data, device_data, cmd_list, cancelled_or_replaced, draw_lambda) || cancelled_or_replaced;
       if (cancelled_or_replaced)
       {
          // Cancel the lambda as we've already drawn once, we don't want to do it further below
@@ -7304,10 +6994,6 @@ namespace
 
       const auto& original_shader_hashes = is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader_hashes : cmd_list_data.pipeline_state_original_graphics_shader_hashes;
 
-      bool wants_debug_draw = Trace::debug_draw_shader_hash != 0 || Trace::debug_draw_pipeline != 0;
-      wants_debug_draw &= Trace::debug_draw_pipeline == 0 || Trace::debug_draw_pipeline == (is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader.handle : cmd_list_data.pipeline_state_original_pixel_shader.handle);
-      wants_debug_draw &= (Trace::debug_draw_shader_hash == 0 || original_shader_hashes.Contains(Trace::debug_draw_shader_hash, is_dispatch ? reshade::api::shader_stage::compute : reshade::api::shader_stage::pixel)) && (Trace::debug_draw_pipeline_target_thread == std::thread::id() || Trace::debug_draw_pipeline_target_thread == std::this_thread::get_id());
-
       com_ptr<ID3D11DepthStencilState> original_depth_stencil_state;
       UINT original_stencil_ref = 0;
       if (!is_dispatch && cmd_list_data.temp_custom_depth_stencil != ShaderCustomDepthStencilType::None)
@@ -7317,44 +7003,7 @@ namespace
          native_device_context->OMSetDepthStencilState((cmd_list_data.temp_custom_depth_stencil == ShaderCustomDepthStencilType::IgnoreTestWriteDepth_IgnoreStencil) ? device_data.default_depth_stencil_state.get() : device_data.depth_test_false_write_true_stencil_false_state.get(), 0);
       }
 
-      DrawStateStack<DrawStateStackType::FullGraphics> pre_draw_state_stack_graphics;
-      DrawStateStack<DrawStateStackType::Compute> pre_draw_state_stack_compute;
-      if (wants_debug_draw)
-      {
-         if (Trace::debug_draw_freeze_inputs)
-         {
-            if (!is_dispatch)
-            {
-               if (!device_data.debug_draw_frozen_draw_state_stack)
-               {
-                  device_data.debug_draw_frozen_draw_state_stack = std::make_shared<DrawStateStack<DrawStateStackType::FullGraphics>>();
-                  ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Cache(native_device_context, device_data.uav_max_count);
-                  ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Clone(native_device_context, device_data.GetLumaCBuffers());
-               }
-               ((DrawStateStack<DrawStateStackType::FullGraphics>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Restore(native_device_context, false, false);
-            }
-            else
-            {
-               if (!device_data.debug_draw_frozen_draw_state_stack)
-               {
-                  device_data.debug_draw_frozen_draw_state_stack = std::make_shared<DrawStateStack<DrawStateStackType::Compute>>();
-                  ((DrawStateStack<DrawStateStackType::Compute>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Cache(native_device_context, device_data.uav_max_count);
-                  ((DrawStateStack<DrawStateStackType::Compute>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Clone(native_device_context, device_data.GetLumaCBuffers());
-               }
-               ((DrawStateStack<DrawStateStackType::Compute>*)(device_data.debug_draw_frozen_draw_state_stack.get()))->Restore(native_device_context, false, false);
-            }
-         }
-
-         if (is_dispatch)
-            pre_draw_state_stack_compute.Cache(native_device_context, device_data.uav_max_count);
-         else
-            pre_draw_state_stack_graphics.Cache(native_device_context, device_data.uav_max_count);
-
-         if (!is_dispatch && Trace::debug_draw_disable_blends)
-         {
-            native_device_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
-         }
-      }
+      const Trace::GameDraw game_draw = Trace::BeginGameDraw(cmd_list_data, device_data, native_device_context, is_dispatch);
 #endif
 
 #if ENABLE_DRAW_DISPATCH_DATA_CACHE || DEVELOPMENT
@@ -7369,85 +7018,7 @@ namespace
          ? OnDrawOrDispatch_Custom<true>(cmd_list, updated_cbuffers, original_draw_dispatch_func)
          : OnDrawOrDispatch_Custom<false>(cmd_list, updated_cbuffers, original_draw_dispatch_func);
 #if DEVELOPMENT
-      Trace::EndDraw(cmd_list_data, cancelled_or_replaced);
-      if (wants_debug_draw)
-      {
-         auto local_debug_draw_pipeline_instance = Trace::debug_draw_pipeline_instance.fetch_add(1);
-         if (Trace::debug_draw_pipeline_target_instance == -1 || local_debug_draw_pipeline_instance == Trace::debug_draw_pipeline_target_instance)
-         {
-            DrawStateStack<DrawStateStackType::FullGraphics> post_draw_state_stack_graphics;
-            DrawStateStack<DrawStateStackType::Compute> post_draw_state_stack_compute;
-
-            if (!cancelled_or_replaced)
-            {
-               draw_lambda();
-            }
-            else if (!Trace::debug_draw_replaced_pass)
-            {
-               if (is_dispatch)
-               {
-                  post_draw_state_stack_compute.Cache(native_device_context, device_data.uav_max_count);
-                  pre_draw_state_stack_compute.Restore(native_device_context);
-               }
-               else
-               {
-                  post_draw_state_stack_graphics.Cache(native_device_context, device_data.uav_max_count);
-                  pre_draw_state_stack_graphics.Restore(native_device_context);
-               }
-            }
-
-            Trace::CopyDebugDrawTexture(Trace::debug_draw_mode, Trace::debug_draw_view_index, cmd_list, is_dispatch);
-
-            if (cancelled_or_replaced && !Trace::debug_draw_replaced_pass)
-            {
-               if (is_dispatch)
-                  post_draw_state_stack_compute.Restore(native_device_context);
-               else
-                  post_draw_state_stack_graphics.Restore(native_device_context);
-            }
-            cancelled_or_replaced = true;
-         }
-      }
-      bool track_buffer_pipeline_ps = is_dispatch ? false : (Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle);
-      bool track_buffer_pipeline_vs = is_dispatch ? false : (Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_vertex_shader.handle);
-      bool track_buffer_pipeline_cs = is_dispatch ? (Trace::track_buffer_pipeline == cmd_list_data.pipeline_state_original_compute_shader.handle) : false;
-      if (Trace::track_buffer_pipeline != 0 && (track_buffer_pipeline_ps || track_buffer_pipeline_vs || track_buffer_pipeline_cs))
-      {
-         auto local_track_buffer_pipeline_instance = Trace::track_buffer_pipeline_instance.fetch_add(1);
-         if (Trace::track_buffer_pipeline_target_instance == -1 || local_track_buffer_pipeline_instance == Trace::track_buffer_pipeline_target_instance)
-         {
-            com_ptr<ID3D11Buffer> cb;
-            UINT cb_first = 0, cb_num = 0;
-            com_ptr<ID3D11DeviceContext1> native_device_context_1;
-            native_device_context->QueryInterface(&native_device_context_1);
-            if (track_buffer_pipeline_ps)
-            {
-               if (native_device_context_1)
-                  native_device_context_1->PSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
-               else
-                  native_device_context->PSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
-            }
-            else if (track_buffer_pipeline_vs)
-            {
-               if (native_device_context_1)
-                  native_device_context_1->VSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
-               else
-                  native_device_context->VSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
-            }
-            else if (track_buffer_pipeline_cs)
-            {
-               if (native_device_context_1)
-                  native_device_context_1->CSGetConstantBuffers1(Trace::track_buffer_index, 1, &cb, &cb_first, &cb_num);
-               else
-                  native_device_context->CSGetConstantBuffers(Trace::track_buffer_index, 1, &cb);
-            }
-            // Copy the buffer in our data, and make a copy if necessary, if we are in a deferred context
-            device_data.track_buffer_data.data_valid = Trace::CopyBuffer(cb, native_device_context, device_data.track_buffer_data.data, device_data.track_buffer_data.cb);
-            device_data.track_buffer_data.hash = std::to_string(std::hash<void*>{}(cb.get()));
-            device_data.track_buffer_data.first_constant = cb_first;
-            device_data.track_buffer_data.num_constants = cb_num;
-         }
-      }
+      cancelled_or_replaced = Trace::EndGameDraw(game_draw, cmd_list_data, device_data, cmd_list, cancelled_or_replaced, draw_lambda) || cancelled_or_replaced;
       if (cancelled_or_replaced)
       {
          // Cancel the lambda as we've already drawn once, we don't want to do it further below
