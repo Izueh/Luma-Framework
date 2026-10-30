@@ -981,7 +981,7 @@ namespace Mcp
                      captured.textures.emplace_back(sr_resource_names[i], CloneResource(native_device.get(), command_list, resources[i]));
             }
             captured.draw_succeeded = inner->Draw(data, command_list, draw_data);
-            Trace::Marker(command_list, SR::GetTypeName(type), draw_data.output_color, true);
+            Trace::Marker(command_list, SR::GetTypeName(type), draw_data.output_color);
             if (capture && draw_data.output_color)
                captured.textures.emplace_back(sr_resource_names[std::size(resources) - 1], CloneResource(native_device.get(), command_list, draw_data.output_color));
             {

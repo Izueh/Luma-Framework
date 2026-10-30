@@ -557,7 +557,8 @@ public:
             native_device_context->PSSetShader(device_data.native_pixel_shaders[CompileTimeStringHash("Draw Final Exposure")].get(), nullptr, 0);
             ID3D11RenderTargetView* render_target_view_const = game_device_data.exposure_buffer_rtv.get();
             native_device_context->OMSetRenderTargets(1, &render_target_view_const, nullptr);
-            Trace::CustomDraw(native_device_context, device_data, "Super Resolution Draw Exposure", [&] { native_device_context->Draw(3, 0); }, CompileTimeStringHash("Draw Final Exposure"), true);
+            native_device_context->Draw(3, 0);
+            Trace::Draw(native_device_context, "Super Resolution Draw Exposure", 3);
 
             // Copy it back as CPU buffer and read+store it
             native_device_context->CopyResource(game_device_data.exposure_buffers_cpu[game_device_data.exposure_buffers_cpu_index].get(), game_device_data.exposure_buffer_gpu.get());

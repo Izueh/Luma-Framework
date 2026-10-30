@@ -273,9 +273,7 @@ public:
          // Avoids nans spreading over the transparency phase and TAA etc (character shaders occasionally spit out some)
          // Note: this is likely not needed anymore given we patch (almost) all shaders that draw on the scene buffer to avoid nans.
          if (test_index != 18)
-            Trace::CustomDraw(native_device_context, device_data, "Sanitize Scene Color NaNs", [&]
-               { SanitizeNaNs(native_device, native_device_context, game_device_data.scene_color_rtv.get(), device_data, game_device_data.sanitize_nans_data, true); },
-               CompileTimeStringHash("Sanitize RGBA Mipped"), true);
+            SanitizeNaNs(native_device, native_device_context, game_device_data.scene_color_rtv.get(), device_data, game_device_data.sanitize_nans_data, true, "Sanitize Scene Color NaNs");
 
          // Restore the compute state first, given it might be considered as output and take over SR bindings of the same resource
          compute_state_stack.Restore(native_device_context);

@@ -704,7 +704,7 @@ public:
 
             native_device_context->CopyResource(game_device_data.scene_texture.get(), rtr.get());
 
-            Trace::Marker(native_device_context, "Copy Fog Background", game_device_data.scene_texture.get(), true);
+            Trace::Marker(native_device_context, "Copy Fog Background", game_device_data.scene_texture.get());
 
             // Note: we could try to just set the original RTV as SRV as well, given that the same pixel is first being read and then written, there should be no conflicts and it should avoid copies, however that's illegal in DX
             ID3D11ShaderResourceView* const scene_texture_srv_const = game_device_data.scene_texture_srv.get();

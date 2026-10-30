@@ -577,7 +577,7 @@ public:
 
             native_device_context->GenerateMips(auto_exposure_mip_chain_srv.get());
 
-            Trace::Marker(native_device_context, "Generate Auto Exposure Mips", nullptr, true);
+            Trace::Marker(native_device_context, "Generate Auto Exposure Mips");
             ID3D11ShaderResourceView* const auto_exposure_mip_last_srv_const = auto_exposure_mip_last_srv.get();
             native_device_context->PSSetShaderResources(0, 1, &auto_exposure_mip_last_srv_const);
 

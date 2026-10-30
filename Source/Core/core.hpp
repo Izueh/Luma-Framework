@@ -743,7 +743,7 @@ namespace
       uint64_t debug_draw_pipeline = 0; // In DX11 shaders and pipelines are the same thing so this is kinda useless (excluding the rare case where multiple pipelines (compiled shader objects) were based on the same shader, and hence had the same hash)
       int32_t debug_draw_pipeline_target_instance = -1;
       std::thread::id debug_draw_pipeline_target_thread = std::thread::id(); // Filter target instances by thread, which would hopefully reliably match the command lists, over multiple frames
-      uint32_t debug_draw_custom_pass = 0; // A Luma pass instead of a game pipeline, by the hash of its "Trace::CustomDraw()" name
+      uint32_t debug_draw_custom_pass = 0; // A Luma pass instead of a game pipeline, by the hash of its "Trace::Draw()" name
 
       std::atomic<int32_t> debug_draw_pipeline_instance = 0; // Theoretically should be within "CommandListData" but this should work for most cases
       std::atomic<int32_t> debug_draw_custom_pass_instance = 0;
@@ -5654,9 +5654,7 @@ namespace
             }
 
             // Note: we don't really need to re-apply our custom cbuffers in most games (e.g. Prey), they are on indexes that are never used by the game's code
-            Trace::CustomDraw(native_device_context, device_data, "Luma Display Composition", [&]
-               { DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), nullptr, device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(), device_data.native_pixel_shaders[CompileTimeStringHash("Display Composition")].get(), device_data.display_composition_srv.get(), target_resource_texture_view.get(), target_desc.Width, target_desc.Height, false); },
-               CompileTimeStringHash("Display Composition"));
+            DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), nullptr, device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(), device_data.native_pixel_shaders[CompileTimeStringHash("Display Composition")].get(), device_data.display_composition_srv.get(), target_resource_texture_view.get(), target_desc.Width, target_desc.Height, false, "Luma Display Composition");
 
             if (ui_needs_composition)
             {
@@ -6006,14 +6004,16 @@ namespace
                   Trace::AddDrawCall(cmd_list_data.trace_draw_calls_data, device_data, native_device_context, cmd_list_data.pipeline_state_original_pixel_shader.handle, last_draw_dispatch_data);
                }
             }
+            // Until the callbacks finish, see "Trace::UpdateDraw()"
+            cmd_list_data.trace_current_draw = {*trace_start_index, cmd_list_data.trace_draw_calls_data.size() - *trace_start_index};
          }
       }
 #endif //DEVELOPMENT
 
 #if DEVELOPMENT
       // On every way out of the draw callbacks: stamps the variant the draw's shaders ran with (see "Shader::UsePipelineVariant()"), and moves the
-      // passes queued meanwhile into the trace (see "Trace::EndDraw()")
-      const auto finish_trace = [&]
+      // passes queued meanwhile into the trace: before the draw if it went through (they ran first), after it otherwise (they replaced it)
+      const auto finish_trace = [&](bool draw_went_through)
       {
          const std::shared_lock lock_trace(s_mutex_trace);
          if (!trace_running)
@@ -6023,8 +6023,13 @@ namespace
          }
          const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
          auto& entries = cmd_list_data.trace_draw_calls_data;
-         const size_t draw_index = (std::min)(trace_start_index.value_or(entries.size()), entries.size());
-         for (size_t i = draw_index; i < entries.size(); i++)
+         if (!trace_start_index)
+         {
+            Trace::MoveQueued(entries, native_device_context);
+            return;
+         }
+         auto& [first, count] = cmd_list_data.trace_current_draw;
+         for (size_t i = first; i < first + count && i < entries.size(); i++)
          {
             auto& entry = entries[i];
             if (entry.type != TraceDrawCallData::TraceDrawCallType::Shader) continue;
@@ -6032,10 +6037,10 @@ namespace
             else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_vertex_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::vertex);
             else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_pixel_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::pixel);
          }
-         const size_t draw_count = entries.size() - draw_index;
-         // Luma passes the game drew from its hook (SMAA, RCAS, bloom, SR), after the draw's own entries (unless they are markers placed before it)
-         const size_t inserted_before = Trace::MoveQueued(entries, native_device_context, draw_index);
-         cmd_list_data.trace_current_draw = {draw_index + inserted_before, draw_count};
+         if (draw_went_through)
+            first += Trace::MoveQueued(entries, native_device_context, first);
+         else
+            Trace::MoveQueued(entries, native_device_context);
       };
 #endif
 
@@ -6080,7 +6085,7 @@ namespace
                   do_ui = true;
 
 #if DEVELOPMENT
-                  Trace::Marker(native_device_context, "Redirect UI", rtv.get(), true);
+                  Trace::Marker(native_device_context, "Redirect UI", rtv.get());
 #endif
                }
                else if (rtv == ui_texture_rtv_const)
@@ -6123,7 +6128,7 @@ namespace
       else if (!is_dispatch && hide_ui && cmd_list_data.is_known_ui_shader_bound)
       {
 #if DEVELOPMENT
-         finish_trace();
+         finish_trace(false);
 #endif
          return true; // Skip draw call
       }
@@ -6632,7 +6637,7 @@ namespace
             if (draw_or_dispatch_override_type != DrawOrDispatchOverrideType::None)
             {
 #if DEVELOPMENT
-               finish_trace();
+               finish_trace(false);
 #endif
                return true;
             }
@@ -6649,7 +6654,7 @@ namespace
          }
 
 #if DEVELOPMENT
-         finish_trace();
+         finish_trace(draw_or_dispatch_override_type == DrawOrDispatchOverrideType::None);
 #endif
 
          if (draw_or_dispatch_override_type != DrawOrDispatchOverrideType::None)
@@ -9593,13 +9598,14 @@ namespace
                hr = native_device->CreateRenderTargetView(proxy_target_resource_texture.get(), &target_rtv_desc, &target_resource_texture_view);
                ASSERT_ONCE(SUCCEEDED(hr));
 
-               Trace::CustomDraw(native_device_context, device_data, "Redirected Copy Resource", [&]
-                  {
-                     if (use_scale)
-                        DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), device_data.sampler_state_linear.get(), vs_scale.get(), ps_scale.get(), source_resource_texture_view.get(), target_resource_texture_view.get(), target_desc.Width, target_desc.Height, true);
-                     else
-                        DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), nullptr, vs_copy.get(), ps_copy.get(), source_resource_texture_view.get(), target_resource_texture_view.get(), target_desc.Width, target_desc.Height, true);
-                  });
+               if (use_scale)
+               {
+                  DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), device_data.sampler_state_linear.get(), vs_scale.get(), ps_scale.get(), source_resource_texture_view.get(), target_resource_texture_view.get(), target_desc.Width, target_desc.Height, true, "Redirected Copy Resource");
+               }
+               else
+               {
+                  DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), nullptr, vs_copy.get(), ps_copy.get(), source_resource_texture_view.get(), target_resource_texture_view.get(), target_desc.Width, target_desc.Height, true, "Redirected Copy Resource");
+               }
 
 #if DEVELOPMENT
                {

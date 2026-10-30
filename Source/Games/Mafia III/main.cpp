@@ -849,7 +849,8 @@ public:
                      ID3D11SamplerState* const sampler_state_linear = device_data.sampler_state_linear.get();
                      native_device_context->CSSetSamplers(0, 1, &sampler_state_linear);
 
-                     Trace::CustomDispatch(native_device_context, device_data, "Normalize 3D LUT", [&] { native_device_context->Dispatch(8, 8, 8); }, CompileTimeStringHash("Normalize LUT 3D"), true);
+                     native_device_context->Dispatch(8, 8, 8);
+                     Trace::Dispatch(native_device_context, "Normalize 3D LUT", 8, 8, 8);
 
                      draw_state_stack.Restore(native_device_context);
 
@@ -1790,9 +1791,7 @@ public:
                   device_data.primary_command_list->GSSetShader(nullptr, nullptr, 0);
 
                   SetLumaConstantBuffers(device_data.primary_command_list.get(), cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
-                  Trace::CustomDraw(device_data.primary_command_list.get(), device_data, "Draw Sky Motion Vectors", [&]
-                     { DrawCustomPixelShader(device_data.primary_command_list.get(), nullptr, nullptr, device_data.sampler_state_linear.get(), device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(), device_data.native_pixel_shaders[CompileTimeStringHash("Draw Sky Motion Vectors")].get(), nullptr, game_device_data.last_motion_vectors_rtv.get(), device_data.render_resolution.x, device_data.render_resolution.y, false); },
-                     CompileTimeStringHash("Draw Sky Motion Vectors"), true);
+                  DrawCustomPixelShader(device_data.primary_command_list.get(), nullptr, nullptr, device_data.sampler_state_linear.get(), device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(), device_data.native_pixel_shaders[CompileTimeStringHash("Draw Sky Motion Vectors")].get(), nullptr, game_device_data.last_motion_vectors_rtv.get(), device_data.render_resolution.x, device_data.render_resolution.y, false, "Draw Sky Motion Vectors");
 
                   device_data.primary_command_list->GSSetShader(gs.get(), nullptr, 0);
 

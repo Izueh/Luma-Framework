@@ -5,14 +5,9 @@ namespace Trace
 {
    namespace
    {
-      struct QueuedEntry
-      {
-         TraceDrawCallData entry;
-         bool before_current_draw = false;
-      };
       // Entries recorded without the command list's trace at hand (Luma passes, game hooks), moved into it after Core's draw and present hooks
       // (a pass drawn outside of them is moved at the next hook on its thread, later than where it ran)
-      thread_local std::vector<QueuedEntry> queued_entries;
+      thread_local std::vector<TraceDrawCallData> queued_entries;
 
       // Records the state bound for "stage", the slots "reflection" uses, or all the bound ones without it. Expects "device_data.mutex" (shared).
       void CaptureState(TraceDrawCallData& trace_draw_call_data, const DeviceData& device_data, ID3D11DeviceContext* native_device_context, reshade::api::shader_stage stage, const CachedShader* reflection, const DrawDispatchData& draw_dispatch_data)
@@ -119,6 +114,7 @@ namespace Trace
             com_ptr<ID3D11DepthStencilView> dsv;
             native_device_context->OMGetRenderTargetsAndUnorderedAccessViews(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv, 0, device_data.uav_max_count, &uavs[0]);
             dsv = RedirectMirroredRVS(dsv.get());
+         trace_draw_call_data.dsv = dsv.get();
 
             com_ptr<ID3D11DepthStencilState> depth_stencil_state;
             UINT stencil_ref;
@@ -247,11 +243,10 @@ namespace Trace
 
             for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT && i < TraceDrawCallData::rtvs_size; i++)
             {
+               rtvs[i] = RedirectMirroredRVS(rtvs[i].get());
+               trace_draw_call_data.rtvs[i] = rtvs[i].get();
                if ((rtvs[i] != nullptr || (show_used_unbound_resources && cached_shader->rtvs[i])) && (show_unused_bound || cached_shader->rtvs[i]))
                {
-                  rtvs[i] = RedirectMirroredRVS(rtvs[i].get());
-                  trace_draw_call_data.rtvs[i] = rtvs[i].get();
-
                   D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
                   rtv_desc.Format = DXGI_FORMAT(-1);
                   if (rtvs[i])
@@ -287,11 +282,10 @@ namespace Trace
             }
             for (UINT i = 0; i < device_data.uav_max_count && i < TraceDrawCallData::uavs_size; i++)
             {
+               uavs[i] = RedirectMirroredRVS(uavs[i].get());
+               trace_draw_call_data.uavs[i] = uavs[i].get();
                if ((uavs[i] != nullptr || (show_used_unbound_resources && cached_shader->uavs[i])) && (show_unused_bound || cached_shader->uavs[i]))
                {
-                  uavs[i] = RedirectMirroredRVS(uavs[i].get());
-                  trace_draw_call_data.uavs[i] = uavs[i].get();
-
                   D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
                   uav_desc.Format = DXGI_FORMAT(-1);
                   if (uavs[i]) uavs[i]->GetDesc(&uav_desc);
@@ -310,11 +304,10 @@ namespace Trace
             native_device_context->PSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]);
             for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT && i < TraceDrawCallData::srvs_size; i++)
             {
+               srvs[i] = RedirectMirroredRVS(srvs[i].get());
+               trace_draw_call_data.srvs[i] = srvs[i].get();
                if ((srvs[i] != nullptr || (show_used_unbound_resources && cached_shader->srvs[i])) && (show_unused_bound || cached_shader->srvs[i]))
                {
-                  srvs[i] = RedirectMirroredRVS(srvs[i].get());
-                  trace_draw_call_data.srvs[i] = srvs[i].get();
-
                   D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
                   srv_desc.Format = DXGI_FORMAT(-1);
                   if (srvs[i]) srvs[i]->GetDesc(&srv_desc);
@@ -338,6 +331,7 @@ namespace Trace
                native_device_context->PSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0]);
             for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; i++)
             {
+               trace_draw_call_data.cb_buffers[i] = cbs[i].get();
                if ((cbs[i] != nullptr || (show_used_unbound_resources && cached_shader->cbs[i])) && (show_unused_bound || cached_shader->cbs[i]))
                {
                   trace_draw_call_data.cbs[i] = true;
@@ -351,6 +345,7 @@ namespace Trace
             native_device_context->PSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, &sampler_states[0]);
             for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
             {
+               trace_draw_call_data.sampler_states[i] = sampler_states[i].get();
                if ((sampler_states[i] != nullptr || (show_used_unbound_resources && cached_shader->samplers[i])) && (show_unused_bound || cached_shader->samplers[i]))
                {
                   D3D11_SAMPLER_DESC desc = {};
@@ -370,11 +365,10 @@ namespace Trace
             native_device_context->VSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]);
             for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT && i < TraceDrawCallData::srvs_size; i++)
             {
+               srvs[i] = RedirectMirroredRVS(srvs[i].get());
+               trace_draw_call_data.srvs[i] = srvs[i].get();
                if ((srvs[i] != nullptr || (show_used_unbound_resources && cached_shader->srvs[i])) && (show_unused_bound || cached_shader->srvs[i]))
                {
-                  srvs[i] = RedirectMirroredRVS(srvs[i].get());
-                  trace_draw_call_data.srvs[i] = srvs[i].get();
-
                   D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
                   srv_desc.Format = DXGI_FORMAT(-1);
                   if (srvs[i]) srvs[i]->GetDesc(&srv_desc);
@@ -423,6 +417,7 @@ namespace Trace
                native_device_context->VSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0]);
             for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; i++)
             {
+               trace_draw_call_data.cb_buffers[i] = cbs[i].get();
                if ((cbs[i] != nullptr || (show_used_unbound_resources && cached_shader->cbs[i])) && (show_unused_bound || cached_shader->cbs[i]))
                {
                   trace_draw_call_data.cbs[i] = true;
@@ -436,6 +431,7 @@ namespace Trace
             native_device_context->VSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, &sampler_states[0]);
             for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
             {
+               trace_draw_call_data.sampler_states[i] = sampler_states[i].get();
                if ((sampler_states[i] != nullptr || (show_used_unbound_resources && cached_shader->samplers[i])) && (show_unused_bound || cached_shader->samplers[i]))
                {
                   D3D11_SAMPLER_DESC desc = {};
@@ -454,11 +450,10 @@ namespace Trace
             native_device_context->CSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]); // TODO: use the CSGetShaderResources1 version (all around) which also has the plane desc
             for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT && i < TraceDrawCallData::srvs_size; i++)
             {
+               srvs[i] = RedirectMirroredRVS(srvs[i].get());
+               trace_draw_call_data.srvs[i] = srvs[i].get();
                if ((srvs[i] != nullptr || (show_used_unbound_resources && cached_shader->srvs[i])) && (show_unused_bound || cached_shader->srvs[i]))
                {
-                  srvs[i] = RedirectMirroredRVS(srvs[i].get());
-                  trace_draw_call_data.srvs[i] = srvs[i].get();
-
                   D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
                   srv_desc.Format = DXGI_FORMAT(-1);
                   if (srvs[i]) srvs[i]->GetDesc(&srv_desc);
@@ -477,11 +472,10 @@ namespace Trace
             native_device_context->CSGetUnorderedAccessViews(0, device_data.uav_max_count, &uavs[0]);
             for (UINT i = 0; i < device_data.uav_max_count && i < TraceDrawCallData::uavs_size; i++)
             {
+               uavs[i] = RedirectMirroredRVS(uavs[i].get());
+               trace_draw_call_data.uavs[i] = uavs[i].get();
                if ((uavs[i] != nullptr || (show_used_unbound_resources && cached_shader->uavs[i])) && (show_unused_bound || cached_shader->uavs[i]))
                {
-                  uavs[i] = RedirectMirroredRVS(uavs[i].get());
-                  trace_draw_call_data.uavs[i] = uavs[i].get();
-
                   D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
                   uav_desc.Format = DXGI_FORMAT(-1);
                   if (uavs[i]) uavs[i]->GetDesc(&uav_desc);
@@ -507,6 +501,7 @@ namespace Trace
                native_device_context->CSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0]);
             for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; i++)
             {
+               trace_draw_call_data.cb_buffers[i] = cbs[i].get();
                if ((cbs[i] != nullptr || (show_used_unbound_resources && cached_shader->cbs[i])) && (show_unused_bound || cached_shader->cbs[i]))
                {
                   trace_draw_call_data.cbs[i] = true;
@@ -520,6 +515,7 @@ namespace Trace
             native_device_context->CSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, &sampler_states[0]);
             for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
             {
+               trace_draw_call_data.sampler_states[i] = sampler_states[i].get();
                if ((sampler_states[i] != nullptr || (show_used_unbound_resources && cached_shader->samplers[i])) && (show_unused_bound || cached_shader->samplers[i]))
                {
                   D3D11_SAMPLER_DESC desc = {};
@@ -533,32 +529,106 @@ namespace Trace
             }
          }
       }
+
+      // Needs "s_mutex_generic" (shared). Returns the shader stage whose state a game draw's entry records, and its reflections.
+      reshade::api::shader_stage FindStage(const DeviceData& device_data, uint64_t pipeline_handle, const CachedShader** cached_shader)
+      {
+         *cached_shader = nullptr;
+         // Note that the pipelines can be run more than once so this will return the first one matching (there's only one actually, we don't have separate settings for their running instance, as that's runtime stuff)
+         const auto pipeline_pair = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle);
+         if (pipeline_pair == device_data.pipeline_cache_by_pipeline_handle.end() || pipeline_pair->second == nullptr)
+            return reshade::api::shader_stage(0);
+         const CachedPipeline* pipeline = pipeline_pair->second;
+         if (const auto shader = !pipeline->shader_hashes.empty() ? shader_cache.find(pipeline->shader_hashes[0]) : shader_cache.end(); shader != shader_cache.end()) // DX10/11 exclusive behaviour
+            *cached_shader = shader->second;
+         assert(*cached_shader);
+         if (pipeline->HasPixelShader())
+            return reshade::api::shader_stage::pixel;
+         if (pipeline->HasVertexShader())
+            return reshade::api::shader_stage::vertex;
+         if (pipeline->HasComputeShader())
+            return reshade::api::shader_stage::compute;
+         return reshade::api::shader_stage(0);
+      }
+
+      // Luma passes don't have their command list's data at hand
+      DeviceData* FindDeviceData(ID3D11DeviceContext* native_device_context)
+      {
+         com_ptr<ID3D11Device> native_device;
+         native_device_context->GetDevice(&native_device);
+         const std::shared_lock lock(s_mutex_device);
+         const auto device_data = std::ranges::find(global_devices_data, native_device.get(), &DeviceData::native_device);
+         return device_data != global_devices_data.end() ? *device_data : nullptr;
+      }
+
+      // Needs "device_data.mutex" (shared). The "native_shaders_definitions" key of the bound pixel (or compute) shader, 0 if it isn't one of Luma's.
+      uint32_t FindNativeShaderHash(const DeviceData& device_data, ID3D11DeviceContext* native_device_context, reshade::api::shader_stage stage)
+      {
+         const auto find = [](const auto& native_shaders, const auto* shader) -> uint32_t
+         {
+            const auto it = std::ranges::find_if(native_shaders, [shader](const auto& native_shader)
+               { return native_shader.second.get() == shader; });
+            return it != native_shaders.end() ? it->first : 0;
+         };
+         if (stage == reshade::api::shader_stage::compute)
+         {
+            com_ptr<ID3D11ComputeShader> shader;
+            native_device_context->CSGetShader(&shader, nullptr, nullptr);
+            return shader ? find(device_data.native_compute_shaders, shader.get()) : 0;
+         }
+         com_ptr<ID3D11PixelShader> shader;
+         native_device_context->PSGetShader(&shader, nullptr, nullptr);
+         return shader ? find(device_data.native_pixel_shaders, shader.get()) : 0;
+      }
+
+      void RecordCustomPass(ID3D11DeviceContext* native_device_context, const char* name, reshade::api::shader_stage stage, const DrawDispatchData& draw_dispatch_data)
+      {
+         const bool debug_draw = debug_draw_custom_pass != 0 && debug_draw_custom_pass == Math::CompileTimeStringHash(name) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id());
+         if (!debug_draw && !trace_running)
+            return;
+         DeviceData* device_data = FindDeviceData(native_device_context);
+         if (!device_data)
+            return;
+         // The pass drew right before, its state is still bound
+         if (debug_draw)
+         {
+            const int32_t instance = debug_draw_custom_pass_instance.fetch_add(1);
+            if (debug_draw_pipeline_target_instance == -1 || instance == debug_draw_pipeline_target_instance)
+               CopyDebugDrawTexture(debug_draw_mode, debug_draw_view_index, native_device_context, *device_data, stage == reshade::api::shader_stage::compute);
+         }
+         if (!trace_running)
+            return;
+         TraceDrawCallData trace_draw_call_data;
+         trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+         trace_draw_call_data.custom_name = name;
+         trace_draw_call_data.custom_stage = stage;
+         {
+            const std::shared_lock lock_device(device_data->mutex);
+            CaptureState(trace_draw_call_data, *device_data, native_device_context, stage, nullptr, draw_dispatch_data);
+            trace_draw_call_data.custom_shader_hash = FindNativeShaderHash(*device_data, native_device_context, stage);
+         }
+         // The pixel shader state doesn't include the draw arguments
+         trace_draw_call_data.draw_dispatch_data = draw_dispatch_data;
+         queued_entries.push_back(std::move(trace_draw_call_data));
+      }
    }
 
-   void RecordCustomPass(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const char* name, uint32_t shader_hash, reshade::api::shader_stage stage, bool before_current_draw)
+   void Draw(ID3D11DeviceContext* native_device_context, const char* name, UINT vertex_count)
    {
-      // The debug draw of a Luma pass, its state is still bound
-      if (debug_draw_custom_pass != 0 && debug_draw_custom_pass == Math::CompileTimeStringHash(name) && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id()))
-      {
-         const int32_t instance = debug_draw_custom_pass_instance.fetch_add(1);
-         if (debug_draw_pipeline_target_instance == -1 || instance == debug_draw_pipeline_target_instance)
-            CopyDebugDrawTexture(debug_draw_mode, debug_draw_view_index, native_device_context, device_data, stage == reshade::api::shader_stage::compute);
-      }
-      if (!trace_running)
-         return;
-      TraceDrawCallData trace_draw_call_data;
-      trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
-      trace_draw_call_data.custom_name = name;
-      trace_draw_call_data.custom_stage = stage;
-      trace_draw_call_data.custom_shader_hash = shader_hash;
-      {
-         const std::shared_lock lock_device(device_data.mutex);
-         CaptureState(trace_draw_call_data, device_data, native_device_context, stage, nullptr, {});
-      }
-      queued_entries.push_back({std::move(trace_draw_call_data), before_current_draw});
+      DrawDispatchData draw_dispatch_data;
+      draw_dispatch_data.vertex_count = vertex_count;
+      draw_dispatch_data.instance_count = 1;
+      RecordCustomPass(native_device_context, name, reshade::api::shader_stage::pixel, draw_dispatch_data);
    }
 
-   void Marker(ID3D11DeviceContext* native_device_context, const char* name, ID3D11DeviceChild* target, bool before_current_draw)
+   void Dispatch(ID3D11DeviceContext* native_device_context, const char* name, UINT thread_group_count_x, UINT thread_group_count_y, UINT thread_group_count_z)
+   {
+      DrawDispatchData draw_dispatch_data;
+      draw_dispatch_data.dispatch_count = {thread_group_count_x, thread_group_count_y, thread_group_count_z};
+      RecordCustomPass(native_device_context, name, reshade::api::shader_stage::compute, draw_dispatch_data);
+   }
+
+   void Marker(ID3D11DeviceContext* native_device_context, const char* name, ID3D11DeviceChild* target)
    {
       if (!trace_running)
          return;
@@ -575,7 +645,7 @@ namespace Trace
       {
          GetResourceInfo(resource.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
       }
-      queued_entries.push_back({std::move(trace_draw_call_data), before_current_draw});
+      queued_entries.push_back(std::move(trace_draw_call_data));
    }
 
    void Annotate(CommandListData& cmd_list_data, std::string_view text, std::optional<int64_t> value)
@@ -600,27 +670,55 @@ namespace Trace
       }
    }
 
+   void UpdateDraw(CommandListData& cmd_list_data, DeviceData& device_data, ID3D11DeviceContext* native_device_context)
+   {
+      if (!trace_running) // Cheap early out for the hot path, rechecked under the lock
+         return;
+      const std::shared_lock lock_trace(s_mutex_trace);
+      if (!trace_running)
+         return;
+      const std::shared_lock lock_generic(s_mutex_generic);
+      const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+      const std::lock_guard<std::recursive_mutex> lock_dumping(s_mutex_dumping);
+      const std::shared_lock lock_device(device_data.mutex);
+      const auto [first, count] = cmd_list_data.trace_current_draw;
+      for (size_t i = first; i < first + count && i < cmd_list_data.trace_draw_calls_data.size(); i++)
+      {
+         TraceDrawCallData& entry = cmd_list_data.trace_draw_calls_data[i];
+         if (entry.type != TraceDrawCallData::TraceDrawCallType::Shader)
+            continue;
+         // Every bound slot, the replacement shader can read slots the original one didn't
+         const CachedShader* cached_shader;
+         auto current = std::make_shared<TraceDrawCallData>();
+         CaptureState(*current, device_data, native_device_context, FindStage(device_data, entry.pipeline_handle, &cached_shader), nullptr, entry.draw_dispatch_data);
+
+         entry.replaced_slots.clear();
+         const auto compare = [&](TraceDrawCallData::SlotKind kind, const auto* original, const auto* replaced, size_t size)
+         {
+            for (size_t slot = 0; slot < size; slot++)
+            {
+               if (original[slot] == replaced[slot])
+                  continue;
+               const auto change = !original[slot] ? TraceDrawCallData::SlotChange::Added : (!replaced[slot] ? TraceDrawCallData::SlotChange::Unbound : TraceDrawCallData::SlotChange::Replaced);
+               entry.replaced_slots.push_back({kind, uint32_t(slot), change});
+            }
+         };
+         compare(TraceDrawCallData::SlotKind::RTV, entry.rtvs, current->rtvs, TraceDrawCallData::rtvs_size);
+         compare(TraceDrawCallData::SlotKind::SRV, entry.srvs, current->srvs, TraceDrawCallData::srvs_size);
+         compare(TraceDrawCallData::SlotKind::UAV, entry.uavs, current->uavs, TraceDrawCallData::uavs_size);
+         compare(TraceDrawCallData::SlotKind::DSV, &entry.dsv, &current->dsv, 1);
+         compare(TraceDrawCallData::SlotKind::CB, entry.cb_buffers, current->cb_buffers, std::size(entry.cb_buffers));
+         compare(TraceDrawCallData::SlotKind::Sampler, entry.sampler_states, current->sampler_states, std::size(entry.sampler_states));
+         entry.replaced_state = entry.replaced_slots.empty() ? nullptr : std::move(current);
+      }
+   }
+
    void AddDrawCall(std::vector<TraceDrawCallData>& trace_draw_calls_data, const DeviceData& device_data, ID3D11DeviceContext* native_device_context, uint64_t pipeline_handle, const DrawDispatchData& draw_dispatch_data)
    {
       TraceDrawCallData trace_draw_call_data;
       trace_draw_call_data.pipeline_handle = pipeline_handle;
-
-      // Note that the pipelines can be run more than once so this will return the first one matching (there's only one actually, we don't have separate settings for their running instance, as that's runtime stuff)
-      reshade::api::shader_stage stage = reshade::api::shader_stage(0);
-      const CachedShader* cached_shader = nullptr;
-      if (const auto pipeline_pair = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle); pipeline_pair != device_data.pipeline_cache_by_pipeline_handle.end() && pipeline_pair->second != nullptr)
-      {
-         const CachedPipeline* pipeline = pipeline_pair->second;
-         if (const auto shader = !pipeline->shader_hashes.empty() ? shader_cache.find(pipeline->shader_hashes[0]) : shader_cache.end(); shader != shader_cache.end()) // DX10/11 exclusive behaviour
-            cached_shader = shader->second;
-         assert(cached_shader);
-         if (pipeline->HasPixelShader())
-            stage = reshade::api::shader_stage::pixel;
-         else if (pipeline->HasVertexShader())
-            stage = reshade::api::shader_stage::vertex;
-         else if (pipeline->HasComputeShader())
-            stage = reshade::api::shader_stage::compute;
-      }
+      const CachedShader* cached_shader;
+      const reshade::api::shader_stage stage = FindStage(device_data, pipeline_handle, &cached_shader);
       CaptureState(trace_draw_call_data, device_data, native_device_context, stage, cached_shader, draw_dispatch_data);
 
       if (trace_draw_calls_data.capacity() - trace_draw_calls_data.size() <= 1)
@@ -628,21 +726,15 @@ namespace Trace
       trace_draw_calls_data.push_back(std::move(trace_draw_call_data));
    }
 
-   size_t MoveQueued(std::vector<TraceDrawCallData>& trace_draw_calls_data, ID3D11DeviceContext* native_device_context, size_t current_draw_index)
+   size_t MoveQueued(std::vector<TraceDrawCallData>& trace_draw_calls_data, ID3D11DeviceContext* native_device_context, size_t index)
    {
-      current_draw_index = (std::min)(current_draw_index, trace_draw_calls_data.size());
-      const size_t first_draw_index = current_draw_index;
-      for (QueuedEntry& queued_entry : queued_entries)
-      {
-         if (queued_entry.entry.command_list.get() != native_device_context)
-            continue;
-         if (queued_entry.before_current_draw)
-            trace_draw_calls_data.insert(trace_draw_calls_data.begin() + current_draw_index++, std::move(queued_entry.entry));
-         else
-            trace_draw_calls_data.push_back(std::move(queued_entry.entry));
-      }
+      const size_t first_index = (std::min)(index, trace_draw_calls_data.size());
+      std::erase_if(queued_entries, [native_device_context](const TraceDrawCallData& entry)
+         { return entry.command_list.get() != native_device_context; });
+      trace_draw_calls_data.insert(trace_draw_calls_data.begin() + first_index, std::make_move_iterator(queued_entries.begin()), std::make_move_iterator(queued_entries.end()));
+      const size_t count = queued_entries.size();
       queued_entries.clear();
-      return current_draw_index - first_draw_index;
+      return count;
    }
 
    void EndDraw(CommandListData& cmd_list_data, bool cancelled_or_replaced)

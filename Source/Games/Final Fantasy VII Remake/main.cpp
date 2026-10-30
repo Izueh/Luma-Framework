@@ -1161,14 +1161,15 @@ public:
          SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
 
          // Issue the game's original draw call with our tonemap PS
-         Trace::CustomDraw(native_device_context, device_data, "Output HDR Tonemap", [&]
-            {
-               if (original_draw_dispatch_func)
-                  (*original_draw_dispatch_func)();
-               else
-                  native_device_context->DrawIndexed(3, 6, 0);
-            },
-            tm_ps_it->first);
+         if (original_draw_dispatch_func)
+         {
+            (*original_draw_dispatch_func)();
+         }
+         else
+         {
+            native_device_context->DrawIndexed(3, 6, 0);
+         }
+         Trace::Draw(native_device_context, "Output HDR Tonemap", 3);
 
          // ===== Pass 2: UI Composition to final RT =====
          // Restore original RTV
@@ -1190,7 +1191,8 @@ public:
          updated_cbuffers = true;
 
          // Draw fullscreen quad
-         Trace::CustomDraw(native_device_context, device_data, "Output HDR UI Composition", [&] { native_device_context->Draw(4, 0); }, ui_ps_it->first);
+         native_device_context->Draw(4, 0);
+         Trace::Draw(native_device_context, "Output HDR UI Composition", 4);
 
          // Restore VS, PS, topology
          native_device_context->VSSetShader(prev_vs.get(), nullptr, 0);
@@ -1307,14 +1309,15 @@ public:
          updated_cbuffers = true;
 
          // Issue the game's original draw call with our tonemap PS
-         Trace::CustomDraw(native_device_context, device_data, "Output SDR Tonemap", [&]
-            {
-               if (original_draw_dispatch_func)
-                  (*original_draw_dispatch_func)();
-               else
-                  native_device_context->DrawIndexed(3, 6, 0);
-            },
-            tm_ps_it->first);
+         if (original_draw_dispatch_func)
+         {
+            (*original_draw_dispatch_func)();
+         }
+         else
+         {
+            native_device_context->DrawIndexed(3, 6, 0);
+         }
+         Trace::Draw(native_device_context, "Output SDR Tonemap", 3);
 
          // ===== Pass 2: UI Composition to final RT =====
          ID3D11RenderTargetView* const* restored_rtvs = (ID3D11RenderTargetView**)std::addressof(original_rtvs[0]);
@@ -1335,7 +1338,8 @@ public:
          updated_cbuffers = true;
 
          // Draw fullscreen quad
-         Trace::CustomDraw(native_device_context, device_data, "Output SDR UI Composition", [&] { native_device_context->Draw(4, 0); }, ui_ps_it->first);
+         native_device_context->Draw(4, 0);
+         Trace::Draw(native_device_context, "Output SDR UI Composition", 4);
 
          // Restore VS, PS, topology
          native_device_context->VSSetShader(prev_vs.get(), nullptr, 0);
@@ -1559,7 +1563,8 @@ public:
                   // native_device_context->RSSetState(nullptr); // Seemengly not needed
 
                   // Finally draw:
-                  Trace::CustomDraw(native_device_context, device_data, "DLSS Decode Motion Vectors", [&] { native_device_context->Draw(4, 0); }, CompileTimeStringHash("Decode MVs"), true);
+                  native_device_context->Draw(4, 0);
+                  Trace::Draw(native_device_context, "DLSS Decode Motion Vectors", 4);
                   // native_device_context->DrawIndexed(3, 6, 0); // Original call would have been this, but we swap the pixel and vertex shaders
 
                   // Restore the state

@@ -852,10 +852,7 @@ public:
             ASSERT_ONCE(rtv_desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2DMS || rtv_desc.ViewDimension == D3D11_RTV_DIMENSION_TEXTURE2D);
          
             // Clip all negative values, like vanilla (I tried to clamp to the closest valid luminance instead, but it created weird colors)
-            const uint32_t shader_hash = ms ? Math::CompileTimeStringHash("Copy RGB Max 0 A Sat MS") : Math::CompileTimeStringHash("Copy RGB Max 0 A Sat");
-            Trace::CustomDraw(native_device_context, device_data, "Sanitize Subtractive Blends", [&]
-               { DrawCustomPixelShaderPass(native_device, native_device_context, rtv.get(), device_data, shader_hash, game_device_data.correct_subtractive_blends_data); },
-               shader_hash);
+            DrawCustomPixelShaderPass(native_device, native_device_context, rtv.get(), device_data, ms ? Math::CompileTimeStringHash("Copy RGB Max 0 A Sat MS") : Math::CompileTimeStringHash("Copy RGB Max 0 A Sat"), game_device_data.correct_subtractive_blends_data, "Sanitize Subtractive Blends");
 
             draw_state_stack.Restore(native_device_context);
 

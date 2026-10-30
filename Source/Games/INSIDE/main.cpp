@@ -609,19 +609,16 @@ public:
                // Note: this is possibly not needed anymore given we patch some shaders that draw on the lighting buffer to avoid nans (we could patch even more).
                if (test_index != 19)
                {
-                  Trace::CustomDraw(native_device_context, device_data, "Sanitize Lighting Buffer", [&]
-                     {
-                        DrawCustomPixelShader(native_device_context,
-                           device_data.default_depth_stencil_state.get(),
-                           device_data.default_blend_state.get(),
-                           nullptr,
-                           device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(),
-                           device_data.native_pixel_shaders[CompileTimeStringHash("Sanitize Lighting")].get(),
-                           game_device_data.lighting_buffer_srv.get(),
-                           game_device_data.lighting_buffer_rtv.get(),
-                           game_device_data.lighting_buffer_width, game_device_data.lighting_buffer_height);
-                     },
-                     CompileTimeStringHash("Sanitize Lighting"), true);
+                  DrawCustomPixelShader(native_device_context,
+                     device_data.default_depth_stencil_state.get(),
+                     device_data.default_blend_state.get(),
+                     nullptr,
+                     device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(),
+                     device_data.native_pixel_shaders[CompileTimeStringHash("Sanitize Lighting")].get(),
+                     game_device_data.lighting_buffer_srv.get(),
+                     game_device_data.lighting_buffer_rtv.get(),
+                     game_device_data.lighting_buffer_width, game_device_data.lighting_buffer_height,
+                     true, "Sanitize Lighting Buffer");
                }
                Trace::Marker(native_device_context, "Start Drawing Scene Color");
 
@@ -651,9 +648,7 @@ public:
          // Avoids nans spreading over the transparency phase and TAA etc (character shaders occasionally spit out some)
          // Note: this is likely not needed anymore given we patch (almost) all shaders that draw on the scene buffer to avoid nans.
          if (test_index != 18)
-            Trace::CustomDraw(native_device_context, device_data, "Sanitize Scene Color NaNs", [&]
-               { SanitizeNaNs(native_device, native_device_context, game_device_data.scene_color_rtv.get(), device_data, game_device_data.sanitize_nans_data, true); },
-               CompileTimeStringHash("Sanitize RGBA Mipped"), true);
+            SanitizeNaNs(native_device, native_device_context, game_device_data.scene_color_rtv.get(), device_data, game_device_data.sanitize_nans_data, true, "Sanitize Scene Color NaNs");
 
          Trace::Marker(native_device_context, "Stop Drawing Scene Color");
          Trace::Marker(native_device_context, "Start Drawing Transparency"); // TODO: add stop event for these (when post process ends)

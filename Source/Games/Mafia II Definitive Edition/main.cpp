@@ -113,7 +113,7 @@ public:
             constexpr FLOAT clear_color[4] = { 0.f, 0.f, 0.f, 1.f };
             native_device_context->ClearRenderTargetView(display_composition_rtv.get(), clear_color);
 
-            Trace::Marker(native_device_context, "Clear Swapchain", display_composition_rtv.get(), true);
+            Trace::Marker(native_device_context, "Clear Swapchain", display_composition_rtv.get());
          }
          game_device_data.has_drawn_anything = true;
       }

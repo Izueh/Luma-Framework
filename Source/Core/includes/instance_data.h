@@ -157,6 +157,10 @@ struct TraceDrawCallData
    FLOAT blend_factor[4] = { 1.f, 1.f, 1.f, 1.f };
 
    bool cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+   // The views and buffers bound to every slot (only compared, never dereferenced), including the slots the shader doesn't use, see "Trace::UpdateDraw()"
+   const ID3D11Buffer* cb_buffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
+   const ID3D11SamplerState* sampler_states[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
+   const ID3D11DepthStencilView* dsv = nullptr;
    std::string cb_hash[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {}; // Ptr hash (not content hash)
    // D3D11.1 partial buffer binding offsets (0/0 means data not available or full-buffer bind via legacy API)
    UINT cb_first_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
@@ -257,6 +261,30 @@ struct TraceDrawCallData
    Shader::CloneOrigin drawn_origin = Shader::CloneOrigin::None;
    // The draw callbacks didn't let the draw through: they cancelled it, or drew something else in its place
    bool cancelled_or_replaced = false;
+   // Slots a draw callback changed ("Trace::UpdateDraw()"), their new state is in "replaced_state" (at the same slot)
+   enum class SlotKind : uint8_t
+   {
+      RTV,
+      SRV,
+      UAV,
+      DSV,
+      CB,
+      Sampler,
+   };
+   enum class SlotChange : uint8_t
+   {
+      Added,
+      Replaced,
+      Unbound,
+   };
+   struct ReplacedSlot
+   {
+      SlotKind kind;
+      uint32_t slot;
+      SlotChange change;
+   };
+   std::vector<ReplacedSlot> replaced_slots;
+   std::shared_ptr<const TraceDrawCallData> replaced_state;
 
    // TODO: these might not always be filled up!
    bool any_input_resources_format_upgraded = false;
@@ -270,7 +298,7 @@ struct TraceDrawCallData
    bool IsDSVValid() const { return dsv_format != DXGI_FORMAT_UNKNOWN && dsv_format != DXGI_FORMAT(-1); }
 
    const char* custom_name = "Unknown";
-   // Luma passes ("Trace::CustomDraw"): the stage whose state was recorded (none for markers), and its "native_shaders_definitions" key
+   // Luma passes ("Trace::Draw()"): the stage whose state was recorded (none for markers), and its "native_shaders_definitions" key
    reshade::api::shader_stage custom_stage = reshade::api::shader_stage(0);
    uint32_t custom_shader_hash = 0;
 };

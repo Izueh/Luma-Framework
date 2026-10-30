@@ -669,9 +669,7 @@ public:
          // Cache state before motion vector decode
          DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
          compute_state_stack.Cache(native_device_context, device_data.uav_max_count);
-         Trace::CustomDispatch(native_device_context, device_data, "SR Decode Motion Vectors", [&]
-            { DecodeMotionVectors(native_device_context, cmd_list_data, device_data, depth_srv, velocity_srv, game_device_data.sr_motion_vectors_uav.get()); },
-            CompileTimeStringHash("Decode MVs CS"), true);
+         DecodeMotionVectors(native_device_context, cmd_list_data, device_data, depth_srv, velocity_srv, game_device_data.sr_motion_vectors_uav.get());
          compute_state_stack.Restore(native_device_context);
          game_device_data.taa_state.Restore(native_device_context);
          game_device_data.depth_buffer = nullptr;

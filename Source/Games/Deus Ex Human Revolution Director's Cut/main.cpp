@@ -854,9 +854,7 @@ public:
                   // This game has hull shaders, we need to restore that too, and temporarily disable it!
                   native_device_context->HSGetShader(&hs, nullptr, nullptr);
 
-                  Trace::CustomDraw(native_device_context, device_data, "Modulate Lighting", [&]
-                     { DrawCustomPixelShaderPass(native_device, native_device_context, game_device_data.lighting_buffer_rtv.get(), device_data, Math::CompileTimeStringHash("Modulate Lighting"), game_device_data.modulate_lighting_buffer_pass_data); },
-                     Math::CompileTimeStringHash("Modulate Lighting"), true);
+                  DrawCustomPixelShaderPass(native_device, native_device_context, game_device_data.lighting_buffer_rtv.get(), device_data, Math::CompileTimeStringHash("Modulate Lighting"), game_device_data.modulate_lighting_buffer_pass_data, "Modulate Lighting");
                   game_device_data.has_modulated_lighting = true;
 
                   native_device_context->HSSetShader(hs.get(), nullptr, 0);
@@ -918,9 +916,7 @@ public:
                      draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
 
                      game_device_data.has_drawn_opaque_geometry = true;
-                     Trace::CustomDraw(native_device_context, device_data, "Sanitize Scene Color NaNs", [&]
-                        { SanitizeNaNs(native_device, native_device_context, rtv.get(), device_data, game_device_data.sanitize_nans_data); },
-                        Math::CompileTimeStringHash("Sanitize RGBA PS"), true);
+                     SanitizeNaNs(native_device, native_device_context, rtv.get(), device_data, game_device_data.sanitize_nans_data, false, "Sanitize Scene Color NaNs");
 
                      draw_state_stack.Restore(native_device_context);
                   }
