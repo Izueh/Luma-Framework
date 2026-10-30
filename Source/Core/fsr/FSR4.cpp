@@ -2,16 +2,14 @@
 
 #if ENABLE_FSR4
 
-#include <d3d11_4.h>
-#include <d3d12.h>
-#include <dxgi1_4.h>
-
 #include "ffx_api/ffx_api.h"
 #include "ffx_api/ffx_upscale.h"
 #include "ffx_api/dx12/ffx_api_dx12.h"
 
 #include "../includes/debug.h"
 #include "../utils/system.h"
+#include "../interop/D3D12Interop.h"
+#include "../hooks/FidelityFXHooks.h"
 
 #include <include/reshade.hpp>
 
@@ -27,13 +25,10 @@ namespace FidelityFX
    namespace
    {
       constexpr int fsr4_default_phase_count = 16;
-      // Max number of DX12 command lists in flight
-      constexpr size_t fsr4_command_allocators_count = 4;
-      // Max CPU wait on the DX12 GPU work (these waits are rare), to never hang the game if the GPU is stuck
-      constexpr ULONGLONG fsr4_fence_timeout_ms = 2000;
-
-      // ReShade's interface ID to query the original object from its proxies (see "com_utils.hpp")
-      constexpr GUID IID_UnwrappedObject = {0x7f2c9a11, 0x3b4e, 0x4d6a, {0x81, 0x2f, 0x5e, 0x9c, 0xd3, 0x7a, 0x1b, 0x42}};
+      constexpr UINT vendor_id_amd = 0x1002;
+      // Shipped next to the Luma addon (see "UseLumaFSR4" in "Luma.Features.props"), the loader then loads the upscaler
+      constexpr const wchar_t* ffx_loader_dll_name = L"amd_fidelityfx_loader_dx12.dll";
+      constexpr const wchar_t* ffx_upscaler_dll_name = L"amd_fidelityfx_upscaler_dx12.dll";
 
       void Log(reshade::log::level level, const std::string& message)
       {
@@ -42,155 +37,153 @@ namespace FidelityFX
 
       void FFXMessageCallback(uint32_t type, const wchar_t* message)
       {
-         char buffer[512] = {};
-         size_t converted = 0;
-         wcstombs_s(&converted, buffer, message ? message : L"", sizeof(buffer) - 1);
 #if !DEVELOPMENT && !TEST
          if (type != FFX_API_MESSAGE_TYPE_ERROR)
             return;
 #endif
+         char buffer[512] = {};
+         size_t converted = 0;
+         wcstombs_s(&converted, buffer, message ? message : L"", sizeof(buffer) - 1);
          Log(type == FFX_API_MESSAGE_TYPE_ERROR ? reshade::log::level::error : reshade::log::level::warning, std::string("FidelityFX: ") + buffer);
       }
-   }
 
-   // A texture created on DX11 and opened on DX12, used to pass data between the two
-   struct FSR4SharedTexture
-   {
-      ComPtr<ID3D11Texture2D> resource_11;
-      ComPtr<ID3D12Resource> resource_12;
-      UINT width = 0;
-      UINT height = 0;
-      DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-   };
-
-   struct FSR4InstanceData : public SR::InstanceData
-   {
-      // The shared textures, in the order of "DrawData"
-      enum TextureIndex : size_t
+      struct FSR4InstanceData : public SR::InstanceData
       {
-         Color,
-         Depth,
-         MotionVectors,
-         Exposure,
-         Reactive,
-         Transparency,
-         Output,
-         TexturesCount
+         // The shared textures, in the order of "DrawData"
+         enum TextureIndex : size_t
+         {
+            Color,
+            Depth,
+            MotionVectors,
+            Exposure,
+            Reactive,
+            Transparency,
+            Output,
+            TexturesCount
+         };
+
+         HMODULE ffx_loader_module = nullptr;
+         HMODULE ffx_upscaler_module = nullptr;
+         PfnFfxCreateContext ffx_create_context = nullptr;
+         PfnFfxDestroyContext ffx_destroy_context = nullptr;
+         PfnFfxQuery ffx_query = nullptr;
+         PfnFfxDispatch ffx_dispatch = nullptr;
+         ffxContext context = nullptr;
+         int phase_count = fsr4_default_phase_count;
+         bool spoof_amd = false; // Whether the FFX dlls need to see an AMD GPU (the real one isn't)
+
+         D3D12Interop::Context interop;
+         D3D12Interop::SharedTexture textures[TexturesCount];
+         ComPtr<ID3D11Resource> depth_source; // Kept alive to make sure the pointer can't be reused by another resource while we cache its view
+         ComPtr<ID3D11ShaderResourceView> depth_source_srv;
+         std::function<ID3D11ComputeShader*()> get_depth_copy_shader;
+
+         unsigned int logged_errors = 0;
       };
 
-      HMODULE ffx_module = nullptr;
-      PfnFfxCreateContext ffx_create_context = nullptr;
-      PfnFfxDestroyContext ffx_destroy_context = nullptr;
-      PfnFfxQuery ffx_query = nullptr;
-      PfnFfxDispatch ffx_dispatch = nullptr;
-      ffxContext context = nullptr;
-      int phase_count = fsr4_default_phase_count;
-
-      ComPtr<ID3D11Device> device_11;
-      ComPtr<ID3D12Device> device_12; // Native (not wrapped by ReShade)
-      ComPtr<ID3D12Device> device_12_wrapped; // Kept alive just in case, if ReShade wrapped our device
-      ComPtr<ID3D12CommandQueue> command_queue;
-      ComPtr<ID3D12CommandAllocator> command_allocators[fsr4_command_allocators_count];
-      UINT64 command_allocators_fence_values[fsr4_command_allocators_count] = {};
-      size_t command_allocator_index = 0;
-      ComPtr<ID3D12GraphicsCommandList> command_list_12;
-
-      // Shared between DX11 and DX12, to sync their GPU work without CPU waits
-      ComPtr<ID3D12Fence> fence_12;
-      ComPtr<ID3D11Fence> fence_11;
-      UINT64 fence_value = 0; // The last signaled one
-      HANDLE fence_event = nullptr; // For the rare CPU waits (e.g. on resources destruction)
-
-      FSR4SharedTexture textures[TexturesCount];
-      ComPtr<ID3D11UnorderedAccessView> depth_uav;
-      ComPtr<ID3D11Resource> depth_source; // Kept alive to make sure the pointer can't be reused by another resource while we cache its view
-      ComPtr<ID3D11ShaderResourceView> depth_source_srv;
-      std::function<ID3D11ComputeShader*()> get_depth_copy_shader;
-
-      unsigned int logged_errors = 0;
-      bool poisoned = false; // The GPU sync broke, so we can't know when the DX12 work completes, never use or release the resources again
-
-      void Poison()
+      void LogError(FSR4InstanceData& data, const std::string& message)
       {
-         poisoned = true;
-         is_supported = false;
-      }
-
-      void LogError(const std::string& message)
-      {
-         if (logged_errors++ < 10) // Don't spam the log
+         if (data.logged_errors++ < 10) // Don't spam the log
             Log(reshade::log::level::error, message);
       }
 
-      // Returns false if the GPU didn't reach the value in time (and the device wasn't removed), in which case the resources it uses can't be safely released
-      bool WaitForFence(UINT64 value)
+      // The FFX dlls only check the GPU when queried for the upscaler versions and on context creation.
+      // Returns whether the spoofing started (and thus needs to be ended).
+      bool BeginAMDSpoofing(const FSR4InstanceData& data)
       {
-         const ULONGLONG deadline = GetTickCount64() + fsr4_fence_timeout_ms;
-         while (fence_12->GetCompletedValue() < value)
-         {
-            if (FAILED(device_12->GetDeviceRemovedReason()))
-               return true; // Nothing will run anymore
-            const ULONGLONG now = GetTickCount64();
-            if (now >= deadline || FAILED(fence_12->SetEventOnCompletion(value, fence_event)))
-            {
-               LogError(std::format("Timed out waiting for the DX12 GPU work (fence {}, completed {})", value, fence_12->GetCompletedValue()));
-               return false;
-            }
-            WaitForSingleObject(fence_event, DWORD(deadline - now)); // Loop to check the value, the event might have been signaled by a previous (timed out) wait
-         }
-         return true;
+         if (!data.spoof_amd)
+            return false;
+         const bool spoofing = FidelityFXHooks::BeginAMDSpoofing(data.ffx_upscaler_module);
+         if (!spoofing)
+            Log(reshade::log::level::error, "Failed to spoof an AMD GPU");
+         return spoofing;
       }
 
-      void DestroyContext()
+      void EndAMDSpoofing(bool spoofing)
       {
-         if (context && ffx_destroy_context(&context, nullptr) != FFX_API_RETURN_OK)
+         if (spoofing)
+            FidelityFXHooks::EndAMDSpoofing();
+      }
+
+      void DestroyContext(FSR4InstanceData& data)
+      {
+         if (data.context && data.ffx_destroy_context(&data.context, nullptr) != FFX_API_RETURN_OK)
             Log(reshade::log::level::warning, "ffxDestroyContext failed");
-         context = nullptr;
+         data.context = nullptr;
       }
 
-      bool CreateSharedTexture(FSR4SharedTexture& texture, UINT width, UINT height, DXGI_FORMAT format, bool unordered_access)
+      // Returns the name of the newest FSR 4 upscaler version, or an empty string if there's none
+      std::string QueryFSR4Version(FSR4InstanceData& data)
       {
-         // Created on DX11 (the game device) with a legacy (non NT) shared handle, and opened on DX12.
-         // DX12 created textures failed to open on DX11 in some setups (E_INVALIDARG), legacy handles are also the most compatible (e.g. with the ReShade proxy).
-         texture = {};
-         D3D11_TEXTURE2D_DESC desc = {};
-         desc.Width = width;
-         desc.Height = height;
-         desc.MipLevels = 1;
-         desc.ArraySize = 1;
-         desc.Format = format;
-         desc.SampleDesc.Count = 1;
-         desc.Usage = D3D11_USAGE_DEFAULT;
-         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (unordered_access ? D3D11_BIND_UNORDERED_ACCESS : 0);
-         desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
-         ComPtr<IDXGIResource> dxgi_resource;
-         HANDLE shared_handle = nullptr; // Legacy handles aren't real handles and must not be closed
-         HRESULT hr = device_11->CreateTexture2D(&desc, nullptr, &texture.resource_11);
-         if (SUCCEEDED(hr))
-            hr = texture.resource_11.As(&dxgi_resource);
-         if (SUCCEEDED(hr))
-            hr = dxgi_resource->GetSharedHandle(&shared_handle);
-         if (SUCCEEDED(hr))
-            hr = device_12->OpenSharedHandle(shared_handle, IID_PPV_ARGS(&texture.resource_12));
-         if (FAILED(hr))
+         uint64_t versions_count = 0;
+         ffxQueryDescGetVersions versions_desc = {};
+         versions_desc.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
+         versions_desc.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
+         versions_desc.device = data.interop.device_12.Get();
+         versions_desc.outputCount = &versions_count;
+         std::vector<uint64_t> version_ids;
+         std::vector<const char*> version_names;
+         const bool spoofing = BeginAMDSpoofing(data);
+         if (data.ffx_query(nullptr, &versions_desc.header) == FFX_API_RETURN_OK && versions_count > 0)
          {
-            LogError(std::format("Failed to share a DX11 texture with DX12 ({}x{} format {}), hr = {:#010x}", width, height, int(format), unsigned(hr)));
-            texture = {};
+            version_ids.resize(versions_count);
+            version_names.resize(versions_count);
+            versions_desc.versionIds = version_ids.data();
+            versions_desc.versionNames = version_names.data();
+            if (data.ffx_query(nullptr, &versions_desc.header) != FFX_API_RETURN_OK)
+               version_names.clear();
+         }
+         EndAMDSpoofing(spoofing);
+
+         // Sorted from the newest
+         std::string available_versions;
+         for (const char* name : version_names)
+         {
+            if (name && name[0] == '4' && name[1] == '.')
+               return name;
+            available_versions += std::format("{}{}", available_versions.empty() ? "" : ", ", name ? name : "(null)");
+         }
+         Log(reshade::log::level::info, std::format("No FSR 4 upscaler available on this GPU (available versions: [{}])", available_versions));
+         return {};
+      }
+
+      bool InitInstance(FSR4InstanceData& data, ID3D11Device* device, IDXGIAdapter* adapter)
+      {
+         data.ffx_create_context = reinterpret_cast<PfnFfxCreateContext>(GetProcAddress(data.ffx_loader_module, "ffxCreateContext"));
+         data.ffx_destroy_context = reinterpret_cast<PfnFfxDestroyContext>(GetProcAddress(data.ffx_loader_module, "ffxDestroyContext"));
+         data.ffx_query = reinterpret_cast<PfnFfxQuery>(GetProcAddress(data.ffx_loader_module, "ffxQuery"));
+         data.ffx_dispatch = reinterpret_cast<PfnFfxDispatch>(GetProcAddress(data.ffx_loader_module, "ffxDispatch"));
+         if (!data.ffx_create_context || !data.ffx_destroy_context || !data.ffx_query || !data.ffx_dispatch)
+         {
+            Log(reshade::log::level::error, "The FidelityFX loader dll is missing exports");
             return false;
          }
-         texture.width = width;
-         texture.height = height;
-         texture.format = format;
+
+         if (!D3D12Interop::Init(data.interop, device, adapter))
+            return false;
+
+         // The FFX dlls only offer FSR 4 on AMD GPUs, on the others they get to offer the INT8 model if they see an AMD RDNA 3 GPU
+         if (data.interop.adapter_desc.VendorId != vendor_id_amd)
+         {
+            data.spoof_amd = FidelityFXHooks::Init(data.interop.adapter.Get());
+            if (!data.spoof_amd)
+               Log(reshade::log::level::error, "Failed to create the hooks to spoof an AMD GPU");
+         }
+
+         const std::string fsr4_version = QueryFSR4Version(data);
+         if (fsr4_version.empty())
+            return false;
+         Log(reshade::log::level::info, std::format("Initialized FSR {}{}", fsr4_version, data.spoof_amd ? std::format(" (spoofing an AMD GPU, the real vendor id is {:#06x})", data.interop.adapter_desc.VendorId) : ""));
          return true;
       }
 
       // (Re)creates the shared texture if the source changed size or format
-      bool UpdateSharedTexture(TextureIndex index, ID3D11Resource* source)
+      bool UpdateSharedTexture(FSR4InstanceData& data, FSR4InstanceData::TextureIndex index, ID3D11Resource* source)
       {
          ComPtr<ID3D11Texture2D> source_texture;
          if (FAILED(source->QueryInterface(IID_PPV_ARGS(&source_texture))))
          {
-            LogError("An input/output resource is not a 2D texture");
+            LogError(data, "An input/output resource is not a 2D texture");
             return false;
          }
          D3D11_TEXTURE2D_DESC source_desc;
@@ -199,41 +192,24 @@ namespace FidelityFX
          // sRGB isn't supported (it would need to be known on context creation), Luma generally feeds SR with linear colors anyway.
          const auto source_format = reshade::api::format(source_desc.Format);
          const bool is_srgb = reshade::api::format_to_default_typed(source_format, 1) == source_format && reshade::api::format_to_default_typed(source_format, 0) != source_format;
-         if (index != Depth && (source_desc.MipLevels != 1 || source_desc.ArraySize != 1 || source_desc.SampleDesc.Count != 1 || is_srgb))
+         const bool is_depth = index == FSR4InstanceData::Depth;
+         if (!is_depth && (source_desc.MipLevels != 1 || source_desc.ArraySize != 1 || source_desc.SampleDesc.Count != 1 || is_srgb))
          {
-            LogError(std::format("Unsupported input/output texture (mips {}, array size {}, samples {}, format {})", source_desc.MipLevels, source_desc.ArraySize, source_desc.SampleDesc.Count, int(source_desc.Format)));
+            LogError(data, std::format("Unsupported input/output texture (mips {}, array size {}, samples {}, format {})", source_desc.MipLevels, source_desc.ArraySize, source_desc.SampleDesc.Count, int(source_desc.Format)));
             return false;
          }
-         // Shared textures need a typed format for FSR to create views on them
-         const DXGI_FORMAT format = index == Depth ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT(reshade::api::format_to_default_typed(source_format));
-         FSR4SharedTexture& texture = textures[index];
-         if (texture.resource_11 && texture.width == source_desc.Width && texture.height == source_desc.Height && texture.format == format)
-            return true;
-
-         // The previous one might still be in use by DX12
-         const bool unordered_access = index == Depth || index == Output;
-         if (!WaitForFence(fence_value) || !CreateSharedTexture(texture, source_desc.Width, source_desc.Height, format, unordered_access))
-            return false;
-         if (index == Depth)
-         {
-            depth_uav = nullptr;
-            const HRESULT hr = device_11->CreateUnorderedAccessView(texture.resource_11.Get(), nullptr, &depth_uav);
-            if (FAILED(hr))
-            {
-               LogError(std::format("Failed to create the shared depth UAV, hr = {:#010x}", unsigned(hr)));
-               texture = {};
-               return false;
-            }
-         }
-         return true;
+         // FSR needs typed formats to create views. The depth is converted to R32F by a shader, as FSR can't read DX11 depth stencil textures.
+         const DXGI_FORMAT format = is_depth ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT(reshade::api::format_to_default_typed(source_format));
+         const bool unordered_access = is_depth || index == FSR4InstanceData::Output;
+         return D3D12Interop::UpdateSharedTexture(data.interop, data.textures[index], source_desc.Width, source_desc.Height, format, unordered_access);
       }
 
-      bool UpdateDepthSourceSRV(ID3D11Resource* source)
+      bool UpdateDepthSourceSRV(FSR4InstanceData& data, ID3D11Resource* source)
       {
-         if (depth_source_srv && depth_source.Get() == source)
+         if (data.depth_source_srv && data.depth_source.Get() == source)
             return true;
-         depth_source_srv = nullptr;
-         depth_source = source;
+         data.depth_source_srv = nullptr;
+         data.depth_source = source;
          D3D11_TEXTURE2D_DESC desc;
          static_cast<ID3D11Texture2D*>(source)->GetDesc(&desc); // Already verified to be a 2D texture
          // The depth (not stencil) view of the typeless depth formats ("format_to_default_typed()" would pick float for 16 bit)
@@ -241,137 +217,16 @@ namespace FidelityFX
          srv_desc.Format = desc.Format == DXGI_FORMAT_R16_TYPELESS ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT(reshade::api::format_to_default_typed(reshade::api::format(desc.Format)));
          srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
          srv_desc.Texture2D.MipLevels = 1;
-         const HRESULT hr = desc.SampleDesc.Count > 1 ? E_INVALIDARG : device_11->CreateShaderResourceView(source, &srv_desc, &depth_source_srv);
+         const HRESULT hr = desc.SampleDesc.Count > 1 ? E_INVALIDARG : data.interop.device_11->CreateShaderResourceView(source, &srv_desc, &data.depth_source_srv);
          if (FAILED(hr))
          {
-            LogError(std::format("Failed to create the depth SRV (format {}, samples {}), hr = {:#010x}", int(desc.Format), desc.SampleDesc.Count, unsigned(hr)));
-            depth_source = nullptr;
+            LogError(data, std::format("Failed to create the depth SRV (format {}, samples {}), hr = {:#010x}", int(desc.Format), desc.SampleDesc.Count, unsigned(hr)));
+            data.depth_source = nullptr;
             return false;
          }
          return true;
       }
-
-      bool Init(ID3D11Device* device, IDXGIAdapter* adapter)
-      {
-         ffx_create_context = reinterpret_cast<PfnFfxCreateContext>(GetProcAddress(ffx_module, "ffxCreateContext"));
-         ffx_destroy_context = reinterpret_cast<PfnFfxDestroyContext>(GetProcAddress(ffx_module, "ffxDestroyContext"));
-         ffx_query = reinterpret_cast<PfnFfxQuery>(GetProcAddress(ffx_module, "ffxQuery"));
-         ffx_dispatch = reinterpret_cast<PfnFfxDispatch>(GetProcAddress(ffx_module, "ffxDispatch"));
-         if (!ffx_create_context || !ffx_destroy_context || !ffx_query || !ffx_dispatch)
-         {
-            Log(reshade::log::level::error, "The FidelityFX API dll is missing exports");
-            return false;
-         }
-
-         // DX11 fences sharing requires Windows 10 1703+
-         device_11 = device;
-         ComPtr<ID3D11Device5> device_11_5;
-         if (FAILED(device->QueryInterface(IID_PPV_ARGS(&device_11_5))))
-         {
-            Log(reshade::log::level::error, "ID3D11Device5 is not supported, can't share fences between DX11 and DX12");
-            return false;
-         }
-
-         // Create the DX12 device on the same adapter as the DX11 one
-         ComPtr<IDXGIAdapter> dxgi_adapter = adapter;
-         ComPtr<IDXGIDevice> dxgi_device;
-         if (!dxgi_adapter && SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&dxgi_device))))
-            dxgi_device->GetAdapter(&dxgi_adapter);
-         DXGI_ADAPTER_DESC adapter_desc = {};
-         const auto d3d12_create_device = reinterpret_cast<PFN_D3D12_CREATE_DEVICE>(GetProcAddress(LoadLibraryW(L"d3d12.dll"), "D3D12CreateDevice")); // Never freed, it's a system dll
-         if (!dxgi_adapter || FAILED(dxgi_adapter->GetDesc(&adapter_desc)) || !d3d12_create_device)
-         {
-            Log(reshade::log::level::error, "Couldn't retrieve the DX11 adapter or load DX12");
-            return false;
-         }
-         const HRESULT create_hr = d3d12_create_device(dxgi_adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&device_12));
-         if (FAILED(create_hr))
-         {
-            Log(reshade::log::level::error, std::format("D3D12CreateDevice failed, hr = {:#010x}", unsigned(create_hr)));
-            return false;
-         }
-         // ReShade wraps any DX12 device created in the process, use the original one, so none of our DX12 work goes through ReShade (and its addons)
-         ComPtr<ID3D12Device> unwrapped_device_12;
-         if (SUCCEEDED(device_12->QueryInterface(IID_UnwrappedObject, reinterpret_cast<void**>(unwrapped_device_12.GetAddressOf()))))
-         {
-            device_12_wrapped = std::move(device_12);
-            device_12 = std::move(unwrapped_device_12);
-         }
-         const LUID device_12_luid = device_12->GetAdapterLuid();
-         if (device_12_luid.LowPart != adapter_desc.AdapterLuid.LowPart || device_12_luid.HighPart != adapter_desc.AdapterLuid.HighPart)
-         {
-            Log(reshade::log::level::error, "The DX12 device adapter doesn't match the DX11 one");
-            return false;
-         }
-
-         D3D12_COMMAND_QUEUE_DESC queue_desc = {};
-         queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-         HRESULT hr = device_12->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&command_queue));
-         for (auto& command_allocator : command_allocators)
-         {
-            if (SUCCEEDED(hr))
-               hr = device_12->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&command_allocator));
-         }
-         if (SUCCEEDED(hr))
-            hr = device_12->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, command_allocators[0].Get(), nullptr, IID_PPV_ARGS(&command_list_12));
-         if (SUCCEEDED(hr))
-            hr = command_list_12->Close();
-         // The fence is created on DX12 and opened on DX11 (through an NT handle)
-         HANDLE fence_handle = nullptr;
-         if (SUCCEEDED(hr))
-            hr = device_12->CreateFence(0, D3D12_FENCE_FLAG_SHARED, IID_PPV_ARGS(&fence_12));
-         if (SUCCEEDED(hr))
-            hr = device_12->CreateSharedHandle(fence_12.Get(), nullptr, GENERIC_ALL, nullptr, &fence_handle);
-         if (SUCCEEDED(hr))
-         {
-            hr = device_11_5->OpenSharedFence(fence_handle, IID_PPV_ARGS(&fence_11));
-            CloseHandle(fence_handle);
-         }
-         if (SUCCEEDED(hr))
-         {
-            fence_event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
-            hr = fence_event ? S_OK : HRESULT_FROM_WIN32(GetLastError());
-         }
-         if (FAILED(hr))
-         {
-            Log(reshade::log::level::error, std::format("Failed to create the DX12 queue/command list/shared fence, hr = {:#010x}", unsigned(hr)));
-            return false;
-         }
-
-         // Only claim support if the GPU (driver) offers an FSR 4 upscaler, otherwise FSR 3 is better used directly. The FidelityFX loader picks the newest version by default.
-         uint64_t versions_count = 0;
-         ffxQueryDescGetVersions versions_desc = {};
-         versions_desc.header.type = FFX_API_QUERY_DESC_TYPE_GET_VERSIONS;
-         versions_desc.createDescType = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
-         versions_desc.device = device_12.Get();
-         versions_desc.outputCount = &versions_count;
-         std::vector<uint64_t> version_ids;
-         std::vector<const char*> version_names;
-         if (ffx_query(nullptr, &versions_desc.header) == FFX_API_RETURN_OK && versions_count > 0)
-         {
-            version_ids.resize(versions_count);
-            version_names.resize(versions_count);
-            versions_desc.versionIds = version_ids.data();
-            versions_desc.versionNames = version_names.data();
-            if (ffx_query(nullptr, &versions_desc.header) != FFX_API_RETURN_OK)
-               version_names.clear();
-         }
-         const auto fsr4_version = std::find_if(version_names.begin(), version_names.end(), [](const char* name) { return name && name[0] == '4' && name[1] == '.'; });
-         if (fsr4_version == version_names.end())
-         {
-            Log(reshade::log::level::info, "No FSR 4 upscaler available on this GPU/driver (is \"amd_fidelityfx_upscaler_dx12.dll\" next to the loader dll?)");
-            return false;
-         }
-
-         // Make sure textures can actually be shared (otherwise FSR 3 will be automatically used instead)
-         FSR4SharedTexture test_texture;
-         if (!CreateSharedTexture(test_texture, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, true))
-            return false;
-
-         Log(reshade::log::level::info, std::format("Initialized DX11->DX12 interop with FSR {}{}", *fsr4_version, device_12_wrapped ? " (unwrapped the ReShade DX12 device)" : ""));
-         return true;
-      }
-   };
+   }
 
    void FidelityFX::FSR4::SetDepthCopyShader(SR::InstanceData* data, std::function<ID3D11ComputeShader*()> get_depth_copy_shader)
    {
@@ -386,18 +241,17 @@ namespace FidelityFX
          Deinit(data); // This will also null the pointer
       }
 
-      // The FidelityFX API loader dll (which then loads the upscaler dll next to it) isn't shipped with Luma, it's expected to be in the game executable folder
-      const std::filesystem::path game_folder = System::GetModulePath().parent_path();
-      HMODULE ffx_module = nullptr;
-      for (const wchar_t* dll_name : {L"amd_fidelityfx_loader_dx12.dll", L"amd_fidelityfx_dx12.dll"})
+      HMODULE luma_module = nullptr;
+      GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&FFXMessageCallback), &luma_module);
+      const std::filesystem::path luma_folder = System::GetModulePath(luma_module).parent_path();
+      // The upscaler is loaded before the loader would, so we know its module (the loader then gets the same one)
+      HMODULE ffx_upscaler_module = LoadLibraryExW((luma_folder / ffx_upscaler_dll_name).c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
+      HMODULE ffx_loader_module = ffx_upscaler_module ? LoadLibraryExW((luma_folder / ffx_loader_dll_name).c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH) : nullptr;
+      if (!ffx_loader_module)
       {
-         ffx_module = LoadLibraryExW((game_folder / dll_name).c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
-         if (ffx_module)
-            break;
-      }
-      if (!ffx_module)
-      {
-         Log(reshade::log::level::info, "FidelityFX API DX12 loader dll not found next to the game executable, FSR 4 won't be available");
+         if (ffx_upscaler_module)
+            FreeLibrary(ffx_upscaler_module);
+         Log(reshade::log::level::info, "The FidelityFX DX12 dlls weren't found next to Luma, FSR 4 won't be available");
          return false;
       }
 
@@ -405,8 +259,9 @@ namespace FidelityFX
       custom_data = new FSR4InstanceData();
       custom_data->automatically_restores_pipeline_state = false;
       custom_data->min_resolution = 32; // Not 100% accurate but should be a decent start
-      custom_data->ffx_module = ffx_module;
-      custom_data->is_supported = custom_data->Init(device, adapter);
+      custom_data->ffx_loader_module = ffx_loader_module;
+      custom_data->ffx_upscaler_module = ffx_upscaler_module;
+      custom_data->is_supported = InitInstance(*custom_data, device, adapter);
       return custom_data->is_supported;
    }
 
@@ -417,20 +272,21 @@ namespace FidelityFX
          return;
 
       // If the GPU is stuck (but the device wasn't removed), leak everything instead of hanging or risking a crash
-      if (custom_data->poisoned || (custom_data->fence_12 && !custom_data->WaitForFence(custom_data->fence_value)))
+      if (!D3D12Interop::WaitForIdle(custom_data->interop))
       {
          Log(reshade::log::level::warning, "Leaking the DX12 interop resources, as the GPU might still be using them");
          custom_data = nullptr;
          return;
       }
 
-      custom_data->DestroyContext();
-      if (custom_data->fence_event)
-         CloseHandle(custom_data->fence_event);
-      HMODULE ffx_module = custom_data->ffx_module;
+      DestroyContext(*custom_data);
+      D3D12Interop::Deinit(custom_data->interop);
+      HMODULE ffx_loader_module = custom_data->ffx_loader_module;
+      HMODULE ffx_upscaler_module = custom_data->ffx_upscaler_module;
       delete custom_data;
       custom_data = nullptr;
-      FreeLibrary(ffx_module);
+      FreeLibrary(ffx_loader_module);
+      FreeLibrary(ffx_upscaler_module);
    }
 
    bool FidelityFX::FSR4::HasInit(const SR::InstanceData* data) const
@@ -454,9 +310,9 @@ namespace FidelityFX
          return true;
 
       // The previous context might still be in use by DX12
-      if (!custom_data->WaitForFence(custom_data->fence_value))
+      if (!D3D12Interop::WaitForIdle(custom_data->interop))
          return false;
-      custom_data->DestroyContext();
+      DestroyContext(*custom_data);
 
       ffxCreateContextDescUpscale context_desc = {};
       context_desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_UPSCALE;
@@ -475,13 +331,13 @@ namespace FidelityFX
       if (settings_data.mvs_jittered)
          context_desc.flags |= FFX_UPSCALE_ENABLE_MOTION_VECTORS_JITTER_CANCELLATION;
 #if DEVELOPMENT
-      context_desc.flags |= FFX_UPSCALE_ENABLE_DEBUG_CHECKING;
+      context_desc.flags |= FFX_UPSCALE_ENABLE_DEBUG_CHECKING | FFX_UPSCALE_ENABLE_DEBUG_VISUALIZATION; // The latter is needed by "SR::debug_view"
 #endif
       context_desc.fpMessage = FFXMessageCallback;
 
       ffxCreateBackendDX12Desc backend_desc = {};
       backend_desc.header.type = FFX_API_CREATE_CONTEXT_DESC_TYPE_BACKEND_DX12;
-      backend_desc.device = custom_data->device_12.Get();
+      backend_desc.device = custom_data->interop.device_12.Get();
       context_desc.header.pNext = &backend_desc.header;
 
       // Required for ABI compatibility with the dll
@@ -490,10 +346,12 @@ namespace FidelityFX
       api_version_desc.version = FFX_UPSCALER_VERSION;
       backend_desc.header.pNext = &api_version_desc.header;
 
+      const bool spoofing = BeginAMDSpoofing(*custom_data);
       const ffxReturnCode_t ret = custom_data->ffx_create_context(&custom_data->context, &context_desc.header, nullptr);
+      EndAMDSpoofing(spoofing);
       if (ret != FFX_API_RETURN_OK)
       {
-         custom_data->LogError(std::format("ffxCreateContext failed (render {}x{}, output {}x{}), error = {}", settings_data.render_width, settings_data.render_height, settings_data.output_width, settings_data.output_height, ret));
+         LogError(*custom_data, std::format("ffxCreateContext failed (render {}x{}, output {}x{}), error = {}", settings_data.render_width, settings_data.render_height, settings_data.output_width, settings_data.output_height, ret));
          ASSERT_ONCE_MSG(false, "Couldn't create FSR4 context");
          custom_data->context = nullptr;
          return false;
@@ -529,24 +387,20 @@ namespace FidelityFX
       // We need to update our sync state and resources even if this is "const"
       auto* custom_data = const_cast<T*>(static_cast<const T*>(data));
 
-      ComPtr<ID3D11DeviceContext4> command_list_11_4;
       ComPtr<ID3D11ComputeShader> depth_copy_cs;
       if (custom_data && custom_data->get_depth_copy_shader)
          depth_copy_cs.Attach(custom_data->get_depth_copy_shader());
-      if (!custom_data || !custom_data->is_supported || !custom_data->context || !depth_copy_cs || !draw_data.source_color || !draw_data.output_color || !draw_data.depth_buffer || !draw_data.motion_vectors
-         || FAILED(command_list->QueryInterface(IID_PPV_ARGS(&command_list_11_4))))
-      {
+      if (!custom_data || !custom_data->is_supported || !custom_data->context || !depth_copy_cs || !draw_data.source_color || !draw_data.output_color || !draw_data.depth_buffer || !draw_data.motion_vectors)
          return false;
-      }
 
       // Make sure all the shared textures are up to date with the game ones (the optional ones are skipped)
       ID3D11Resource* const sources[T::TexturesCount] = {draw_data.source_color, draw_data.depth_buffer, draw_data.motion_vectors, draw_data.exposure, draw_data.bias_mask, draw_data.transparency_alpha, draw_data.output_color};
       for (size_t i = 0; i < T::TexturesCount; i++)
       {
-         if (sources[i] && !custom_data->UpdateSharedTexture(T::TextureIndex(i), sources[i]))
+         if (sources[i] && !UpdateSharedTexture(*custom_data, T::TextureIndex(i), sources[i]))
             return false;
       }
-      if (!custom_data->UpdateDepthSourceSRV(draw_data.depth_buffer))
+      if (!UpdateDepthSourceSRV(*custom_data, draw_data.depth_buffer))
          return false;
 
       // DX11: copy the inputs into the shared textures, and convert the depth (the pipeline state is restored by the caller)
@@ -557,45 +411,22 @@ namespace FidelityFX
       }
       command_list->OMSetRenderTargets(0, nullptr, nullptr); // The depth might still be bound as depth stencil, which would null its SRV
       ID3D11ShaderResourceView* const depth_srv = custom_data->depth_source_srv.Get();
-      ID3D11UnorderedAccessView* const depth_uav = custom_data->depth_uav.Get();
+      ID3D11UnorderedAccessView* const depth_uav = custom_data->textures[T::Depth].uav_11.Get();
       command_list->CSSetShader(depth_copy_cs.Get(), nullptr, 0);
       command_list->CSSetShaderResources(0, 1, &depth_srv);
       command_list->CSSetUnorderedAccessViews(0, 1, &depth_uav, nullptr);
       command_list->Dispatch((custom_data->textures[T::Depth].width + 7) / 8, (custom_data->textures[T::Depth].height + 7) / 8, 1);
 
-      // DX11 -> DX12 sync. Flush to make sure DX11 submits its work (and the signal) before DX12 waits on it.
-      const UINT64 inputs_ready_fence_value = custom_data->fence_value + 1;
-      HRESULT hr = command_list_11_4->Signal(custom_data->fence_11.Get(), inputs_ready_fence_value);
-      if (FAILED(hr))
-      {
-         custom_data->LogError(std::format("Failed to signal the DX11 fence, hr = {:#010x}", unsigned(hr)));
+      ID3D12GraphicsCommandList* const command_list_12 = D3D12Interop::BeginCommandList(custom_data->interop, command_list);
+      if (!command_list_12)
          return false;
-      }
-      custom_data->fence_value = inputs_ready_fence_value;
-      command_list->Flush();
-
-      // DX12: record the FSR dispatch
-      const size_t allocator_index = custom_data->command_allocator_index;
-      custom_data->command_allocator_index = (allocator_index + 1) % fsr4_command_allocators_count;
-      ID3D12CommandAllocator* const command_allocator = custom_data->command_allocators[allocator_index].Get();
-      ID3D12GraphicsCommandList* const command_list_12 = custom_data->command_list_12.Get();
-      hr = custom_data->WaitForFence(custom_data->command_allocators_fence_values[allocator_index]) ? S_OK : HRESULT_FROM_WIN32(WAIT_TIMEOUT); // Usually already done, as DX11 waited on it
-      if (SUCCEEDED(hr))
-         hr = command_allocator->Reset();
-      if (SUCCEEDED(hr))
-         hr = command_list_12->Reset(command_allocator, nullptr);
-      if (FAILED(hr))
-      {
-         custom_data->LogError(std::format("Failed to reset the DX12 command list, hr = {:#010x}", unsigned(hr)));
-         return false;
-      }
 
       // Mirrors the FSR 3 implementation
       ffxDispatchDescUpscale dispatch_upscale = {};
       dispatch_upscale.header.type = FFX_API_DISPATCH_DESC_TYPE_UPSCALE;
       dispatch_upscale.commandList = command_list_12;
 
-      // Simultaneous access resources are in the common state at the beginning and end of every command list, transition them to what FSR expects and back
+      // Transition the shared textures from the common state to what FSR expects, and back
       FfxApiResource* const dispatch_resources[T::TexturesCount] = {&dispatch_upscale.color, &dispatch_upscale.depth, &dispatch_upscale.motionVectors, &dispatch_upscale.exposure, &dispatch_upscale.reactive, &dispatch_upscale.transparencyAndComposition, &dispatch_upscale.output};
       D3D12_RESOURCE_BARRIER barriers[T::TexturesCount] = {};
       UINT barriers_count = 0;
@@ -634,42 +465,24 @@ namespace FidelityFX
       dispatch_upscale.enableSharpening = draw_data.user_sharpness >= 0.f;
       dispatch_upscale.sharpness = dispatch_upscale.enableSharpening ? draw_data.user_sharpness : 0.f;
       dispatch_upscale.frameTimeDelta = (draw_data.time_delta > 0.f ? draw_data.time_delta : (1.f / 60.f)) * 1000.f; // FSR expects milliseconds
+#if DEVELOPMENT
+      if (SR::debug_view)
+         dispatch_upscale.flags |= FFX_UPSCALE_FLAG_DRAW_DEBUG_VIEW;
+#endif
 
       const ffxReturnCode_t ret = custom_data->ffx_dispatch(&custom_data->context, &dispatch_upscale.header);
       if (ret != FFX_API_RETURN_OK)
-         custom_data->LogError(std::format("ffxDispatch failed, error = {}", ret));
+         LogError(*custom_data, std::format("ffxDispatch failed, error = {}", ret));
 
       for (UINT i = 0; i < barriers_count; i++)
          std::swap(barriers[i].Transition.StateBefore, barriers[i].Transition.StateAfter);
       command_list_12->ResourceBarrier(barriers_count, barriers);
-      hr = command_list_12->Close();
 
-      // DX12: wait for the DX11 inputs, run FSR, and signal back
-      const UINT64 output_ready_fence_value = custom_data->fence_value + 1;
-      if (SUCCEEDED(hr))
-         hr = custom_data->command_queue->Wait(custom_data->fence_12.Get(), inputs_ready_fence_value);
-      if (SUCCEEDED(hr))
+      // Still submitted if FSR failed, to keep the DX11/DX12 sync consistent
+      if (!D3D12Interop::ExecuteCommandList(custom_data->interop, command_list))
       {
-         ID3D12CommandList* const command_lists[] = {command_list_12};
-         custom_data->command_queue->ExecuteCommandLists(1, command_lists);
-         hr = custom_data->command_queue->Signal(custom_data->fence_12.Get(), output_ready_fence_value);
-      }
-      else
-      {
-         custom_data->LogError(std::format("Failed to submit the DX12 work, hr = {:#010x}", unsigned(hr)));
-         return false;
-      }
-      if (SUCCEEDED(hr))
-      {
-         custom_data->fence_value = output_ready_fence_value;
-         custom_data->command_allocators_fence_values[allocator_index] = output_ready_fence_value;
-         // DX11: wait for DX12 (on the GPU) and copy back the output
-         hr = command_list_11_4->Wait(custom_data->fence_11.Get(), output_ready_fence_value);
-      }
-      if (FAILED(hr))
-      {
-         custom_data->LogError(std::format("Failed to sync the DX12 work with DX11, hr = {:#010x}", unsigned(hr)));
-         custom_data->Poison();
+         if (custom_data->interop.poisoned)
+            custom_data->is_supported = false;
          return false;
       }
       if (ret != FFX_API_RETURN_OK)

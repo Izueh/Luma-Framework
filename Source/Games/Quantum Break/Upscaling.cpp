@@ -636,7 +636,7 @@ namespace QuantumBreakUpscaling
       draw_data.reset = reset_sr;
       draw_data.render_width = render_width;
       draw_data.render_height = render_height;
-      draw_data.user_sharpness = device_data.sr_type == SR::Type::FSR ? fsr_sharpness : -1.f;
+      draw_data.user_sharpness = (device_data.sr_type == SR::Type::FSR || device_data.sr_type == SR::Type::FSR_4) ? fsr_sharpness : -1.f;
       DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
       DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
       draw_state_stack.Cache(native_device_context, device_data.uav_max_count);

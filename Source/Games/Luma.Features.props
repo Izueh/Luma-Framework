@@ -4,9 +4,13 @@
     <UseLumaDXP Condition="'$(UseLumaDXP)'==''">false</UseLumaDXP>
     <UseLumaNGX Condition="'$(UseLumaNGX)'==''">false</UseLumaNGX>
     <UseLumaFSR Condition="'$(UseLumaFSR)'==''">false</UseLumaFSR>
-    <!-- FSR 4 through DX11->DX12 interop (needs UseLumaFSR). The FidelityFX API DX12 dlls are loaded from the game folder at runtime, they aren't shipped. -->
+    <!-- FSR 4 through DX11->DX12 interop (needs UseLumaFSR, x64 only). The FidelityFX API DX12 dlls are shipped next to the addon. -->
     <UseLumaFSR4 Condition="'$(UseLumaFSR4)'==''">false</UseLumaFSR4>
-    <!-- Shared hooking library (SafetyHook and Zydis submodules) -->
+    <!-- DX11->DX12 interop (see "D3D12Interop.h"), enabled automatically by the features that need it -->
+    <UseLumaD3D12Interop Condition="'$(UseLumaD3D12Interop)'=='' and '$(UseLumaFSR)'=='true' and '$(UseLumaFSR4)'=='true'">true</UseLumaD3D12Interop>
+    <UseLumaD3D12Interop Condition="'$(UseLumaD3D12Interop)'==''">false</UseLumaD3D12Interop>
+    <!-- Shared hooking library (SafetyHook and Zydis submodules), enabled automatically by the features that need it -->
+    <UseLumaSafetyHook Condition="'$(UseLumaSafetyHook)'=='' and '$(UseLumaFSR)'=='true' and '$(UseLumaFSR4)'=='true'">true</UseLumaSafetyHook>
     <UseLumaSafetyHook Condition="'$(UseLumaSafetyHook)'==''">false</UseLumaSafetyHook>
     <UseLumaFastNoise Condition="'$(UseLumaFastNoise)'==''">false</UseLumaFastNoise>
     <!-- On by default: NVAPI is a static lib that loads the driver's DLL at runtime, so it's harmless on non NVIDIA GPUs (init just fails). -->
@@ -103,6 +107,9 @@
     <ClCompile Condition="'$(UseLumaFSR)'=='true' and '$(UseLumaFSR4)'=='true'">
       <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_FSR4=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <ClCompile Condition="'$(UseLumaD3D12Interop)'=='true'">
+      <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_D3D12_INTEROP=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Condition="'$(UseLumaSafetyHook)'=='true'">
       <AdditionalIncludeDirectories>$(LumaSafetyHookRoot)\include;$(LumaZydisRoot)\include;$(LumaZydisRoot)\dependencies\zycore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;ENABLE_SAFETYHOOK=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -133,6 +140,13 @@
 
   <Target Name="LumaCopyNgxRuntime" AfterTargets="Build" Condition="'$(UseLumaNGX)'=='true' and Exists('$(LumaNGXRuntimePath)') and Exists('$(TargetDir)')">
     <Copy SourceFiles="$(LumaNGXRuntimePath)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+  </Target>
+
+  <Target Name="LumaCopyFfxRuntime" AfterTargets="Build" Condition="'$(UseLumaFSR)'=='true' and '$(UseLumaFSR4)'=='true' and '$(Platform)'!='Win32' and Exists('$(TargetDir)')">
+    <ItemGroup>
+      <_LumaFfxRuntimeFiles Include="$(MSBuildThisFileDirectory)..\External\FidelityFX\bin\*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_LumaFfxRuntimeFiles)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
   </Target>
 
   <Target Name="LumaCopyDxpRuntime" AfterTargets="Build" Condition="false" />

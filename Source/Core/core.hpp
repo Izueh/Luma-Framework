@@ -13460,7 +13460,7 @@ namespace
             case SR::UserType::FSR_3:
                selected_sr_user_type = "FSR 3"; break;
             case SR::UserType::FSR_4:
-               selected_sr_user_type = "FSR 4"; break;
+               selected_sr_user_type = "FSR 4 (DX12 Interop)"; break;
             }
 
             SR::Type sr_type = device_data.sr_type;
@@ -13502,7 +13502,7 @@ namespace
                AddComboItem("DLSS", SR::UserType::DLSS, SR::Type::DLSS, device_data.sr_implementations_instances.contains(SR::Type::DLSS));
                AddComboItem("FSR 3", SR::UserType::FSR_3, SR::Type::FSR, device_data.sr_implementations_instances.contains(SR::Type::FSR));
 #if ENABLE_FSR4
-               AddComboItem("FSR 4", SR::UserType::FSR_4, SR::Type::FSR_4, device_data.sr_implementations_instances.contains(SR::Type::FSR_4));
+               AddComboItem("FSR 4 (DX12 Interop)", SR::UserType::FSR_4, SR::Type::FSR_4, device_data.sr_implementations_instances.contains(SR::Type::FSR_4));
 #endif
                ImGui::EndCombo();
             }
@@ -13545,6 +13545,15 @@ namespace
                   size.y += style.FramePadding.y;
                   ImGui::InvisibleButton("##Super Resolution reset placeholder", ImVec2(size.x, size.y));
                }
+
+#if DEVELOPMENT
+               if (sr_type == SR::Type::FSR || sr_type == SR::Type::FSR_4)
+               {
+                  ImGui::Checkbox("SR Debug View", &SR::debug_view);
+                  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                     ImGui::SetTooltip("Makes FSR draw its debug views in its output.");
+               }
+#endif
 
                const char* selected_dlss_preset = nullptr;
                switch (dlss_render_preset)

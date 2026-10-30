@@ -1,12 +1,14 @@
 #pragma once
 
 #include "FSR.h"
+#include "../interop/D3D12Interop.h"
+#include "../hooks/Hooks.h"
 
 #include <functional>
 
-// FSR 4 (through the FidelityFX API DX12 dlls, loaded at runtime, not shipped with Luma), run on DX11 games through DX11->DX12 interop.
-// Opt in per game with "ENABLE_FSR4" (see "UseLumaFSR4" in "Luma.Features.props"). Requires the FSR 3 SDK to also be enabled.
-#if defined(_WIN64) && ENABLE_FIDELITY_SK && defined(ENABLE_FSR4) && ENABLE_FSR4 && __has_include("ffx_api/ffx_upscale.h")
+// FSR 4 (through the FidelityFX API DX12 dlls shipped with Luma), run on DX11 games through DX11->DX12 interop.
+// Opt in per game with "ENABLE_FSR4" (see "UseLumaFSR4" in "Luma.Features.props"), which also enables the interop and SafetyHook. Requires the FSR 3 SDK to also be enabled.
+#if defined(_WIN64) && ENABLE_FIDELITY_SK && defined(ENABLE_FSR4) && ENABLE_FSR4 && ENABLE_D3D12_INTEROP && ENABLE_SAFETYHOOK && __has_include("ffx_api/ffx_upscale.h")
 #undef ENABLE_FSR4
 #define ENABLE_FSR4 1
 #else
@@ -22,7 +24,7 @@ struct ID3D11ComputeShader;
 
 namespace FidelityFX
 {
-	// FSR 4 SR (DX12 FidelityFX API, through interop). Only supported if the GPU (driver) offers an FSR 4 upscaler.
+	// FSR 4 SR (DX12 FidelityFX API, through interop). Only supported if the FidelityFX dlls offer an FSR 4 upscaler for the GPU.
 	class FSR4 : public SR::SuperResolutionImpl
 	{
 	public:

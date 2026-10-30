@@ -6,6 +6,11 @@
 
 #include "utils/system.cpp"
 
+#include "interop/D3D12Interop.cpp"
+#include "hooks/DXGIHooks.cpp"
+#include "hooks/SystemHooks.cpp"
+#include "hooks/FidelityFXHooks.cpp"
+
 #include "dlss/DLSS.cpp"
 #include "fsr/FSR.cpp"
 #include "fsr/FSR4.cpp"

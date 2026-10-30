@@ -602,12 +602,23 @@
     <ClCompile Include="dlss\DLSS.cpp" />
     <ClCompile Include="core.hpp" />
     <ClCompile Include="fsr\FSR.cpp" />
+    <ClCompile Include="fsr\FSR4.cpp" />
+    <ClCompile Include="hooks\DXGIHooks.cpp" />
+    <ClCompile Include="hooks\FidelityFXHooks.cpp" />
+    <ClCompile Include="hooks\SystemHooks.cpp" />
+    <ClCompile Include="interop\D3D12Interop.cpp" />
     <ClCompile Include="includes\instance_data.cpp" />
     <ClCompile Include="utils\system.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="dlss\DLSS.h" />
     <ClInclude Include="fsr\FSR.h" />
+    <ClInclude Include="fsr\FSR4.h" />
+    <ClInclude Include="hooks\DXGIHooks.h" />
+    <ClInclude Include="hooks\FidelityFXHooks.h" />
+    <ClInclude Include="hooks\Hooks.h" />
+    <ClInclude Include="hooks\SystemHooks.h" />
+    <ClInclude Include="interop\D3D12Interop.h" />
     <ClInclude Include="includes\callbacks.h" />
     <ClInclude Include="includes\cbuffers.h" />
     <ClInclude Include="includes\com_ptr.h" />

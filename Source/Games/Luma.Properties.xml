@@ -28,11 +28,11 @@
                   Category="Features" />
     <BoolProperty Name="UseLumaFSR4"
                   DisplayName="FSR 4 (FidelityFX API DX12 interop)"
-                  Description="Enables FSR 4 through DX11->DX12 interop (requires FSR). The FidelityFX API DX12 dlls are loaded from the game folder at runtime."
+                  Description="Enables FSR 4 through DX11->DX12 interop (requires FSR, x64 only). Also enables SafetyHook, and ships the FidelityFX API DX12 dlls next to the addon."
                   Category="Features" />
     <BoolProperty Name="UseLumaSafetyHook"
                   DisplayName="SafetyHook"
-                  Description="Compiles the shared SafetyHook (and Zydis) hooking library."
+                  Description="Compiles the shared SafetyHook (and Zydis) hooking library. Automatically enabled by FSR 4."
                   Category="Features" />
     <BoolProperty Name="UseLumaNVAPI"
                   DisplayName="NVAPI"
