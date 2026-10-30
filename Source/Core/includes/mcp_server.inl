@@ -771,36 +771,22 @@ namespace Mcp
                return false;
             }
             const TraceDrawCallData& entry = cmd_list_data.trace_draw_calls_data[index];
-            const bool deferred = IsDeferred(entry);
-            job->thread = deferred ? entry.thread_id : std::thread::id();
-            if (entry.type == TraceDrawCallData::TraceDrawCallType::Custom && entry.custom_stage != reshade::api::shader_stage(0))
-            {
-               // Instances of a Luma pass are counted by name, see "Trace::RecordCustomPass()"
-               job->instance = 0;
-               for (size_t i = 0; i < index; i++)
-               {
-                  const auto& other = cmd_list_data.trace_draw_calls_data[i];
-                  if (other.type == TraceDrawCallData::TraceDrawCallType::Custom && strcmp(other.custom_name, entry.custom_name) == 0 && (!deferred || other.thread_id == entry.thread_id))
-                     job->instance++;
-               }
-               job->custom_pass = Math::CompileTimeStringHash(entry.custom_name);
-               job->shader_hash = entry.custom_shader_hash;
-               job->stage = entry.custom_stage == reshade::api::shader_stage::compute ? "CS" : "PS";
-               return true;
-            }
-            pipeline = entry.type == TraceDrawCallData::TraceDrawCallType::Shader ? FindPipeline(device_data, entry.pipeline_handle) : nullptr;
-            if (!pipeline)
+            const auto target = Trace::FindPassTarget(device_data, cmd_list_data, index, IsDeferred(entry));
+            if (!target)
             {
                job->error = std::format("Trace index {} is not a shader pass with a live pipeline, or a Luma pass", index);
                return false;
             }
-            job->instance = 0;
-            for (size_t i = 0; i < index; i++)
+            job->instance = target->instance;
+            job->thread = target->thread;
+            if (target->custom_pass != 0)
             {
-               const auto& other = cmd_list_data.trace_draw_calls_data[i];
-               if (other.pipeline_handle == entry.pipeline_handle && (!deferred || other.thread_id == entry.thread_id))
-                  job->instance++;
+               job->custom_pass = target->custom_pass;
+               job->shader_hash = target->shader_hash;
+               job->stage = target->stage == reshade::api::shader_stage::compute ? "CS" : "PS";
+               return true;
             }
+            pipeline = FindPipeline(device_data, target->pipeline);
          }
          else if (const auto hash = job->HashArg("hash"))
          {
