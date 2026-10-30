@@ -323,76 +323,7 @@ namespace Mcp
             { return other.name == dev_value.name; });
          dev_values.push_back(std::move(dev_value));
       }
-   }
 
-   void RegisterToggles(std::initializer_list<std::pair<const char*, bool*>> values)
-   {
-      for (const auto& [name, value] : values)
-         RegisterDevValue({name, DevValueKind::Toggle, value});
-   }
-   void RegisterMirroredToggle(const char* name, bool* value, float* mirror)
-   {
-      RegisterDevValue({name, DevValueKind::Toggle, value, nullptr, -DBL_MAX, DBL_MAX, nullptr, [value, mirror](DeviceData&, double new_value)
-         {
-            *value = new_value != 0.0;
-            *mirror = *value ? 1.f : 0.f;
-            return std::string(); }});
-   }
-   void RegisterValues(std::initializer_list<FloatValue> values)
-   {
-      for (const auto& [name, value, min, max] : values)
-         RegisterDevValue({name, DevValueKind::Float, value, nullptr, min, max});
-   }
-   void RegisterInts(std::initializer_list<IntValue> values)
-   {
-      for (const auto& [name, value, min, max, set] : values)
-         RegisterDevValue({name, DevValueKind::Int, value, nullptr, double(min), double(max), nullptr, set});
-   }
-   void RegisterCounter(std::string name, const uint32_t* value, const void* owner)
-   {
-      RegisterDevValue({std::move(name), DevValueKind::Counter, const_cast<uint32_t*>(value), owner}); // Never written
-   }
-   void RegisterCounters(std::initializer_list<std::pair<const char*, const uint32_t*>> values, const void* owner)
-   {
-      for (const auto& [name, value] : values)
-         RegisterCounter(name, value, owner);
-   }
-   void RegisterTextures(std::initializer_list<std::pair<const char*, DevTextureGetter>> textures)
-   {
-      for (const auto& [name, get] : textures)
-         RegisterDevValue({name, DevValueKind::Texture, nullptr, nullptr, -DBL_MAX, DBL_MAX, get});
-   }
-   void Unregister(const void* owner)
-   {
-      const std::lock_guard lock(s_mutex_dev_values);
-      std::erase_if(dev_values, [&](const DevValue& dev_value)
-         { return dev_value.owner == owner; });
-   }
-
-   void Annotate(CommandListData& cmd_list_data, std::string_view text, std::optional<int64_t> value)
-   {
-      if (!trace_running) // Cheap early out for the hot path, rechecked under the lock
-         return;
-      const std::shared_lock lock_trace(s_mutex_trace);
-      if (!trace_running)
-         return;
-      const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-      // Games can push their own custom entries after the shader ones
-      for (auto it = cmd_list_data.trace_draw_calls_data.rbegin(); it != cmd_list_data.trace_draw_calls_data.rend(); ++it)
-      {
-         if (it->type != TraceDrawCallData::TraceDrawCallType::Shader)
-            continue;
-         if (!it->note.empty())
-            it->note += ' ';
-         it->note += text;
-         if (value)
-            std::format_to(std::back_inserter(it->note), "={}", *value);
-         return;
-      }
-   }
-
-   namespace
-   {
       // "texture" is the game's code: call it without "s_mutex_dev_values"
       com_ptr<ID3D11Resource> GetTexture(DevTextureGetter texture, DeviceData& device_data)
       {
@@ -2611,6 +2542,72 @@ namespace Mcp
          }
          LocalFree(security_attributes.lpSecurityDescriptor);
          server_running = false;
+      }
+   }
+
+   void RegisterToggles(std::initializer_list<std::pair<const char*, bool*>> values)
+   {
+      for (const auto& [name, value] : values)
+         RegisterDevValue({name, DevValueKind::Toggle, value});
+   }
+   void RegisterMirroredToggle(const char* name, bool* value, float* mirror)
+   {
+      RegisterDevValue({name, DevValueKind::Toggle, value, nullptr, -DBL_MAX, DBL_MAX, nullptr, [value, mirror](DeviceData&, double new_value)
+         {
+            *value = new_value != 0.0;
+            *mirror = *value ? 1.f : 0.f;
+            return std::string(); }});
+   }
+   void RegisterValues(std::initializer_list<FloatValue> values)
+   {
+      for (const auto& [name, value, min, max] : values)
+         RegisterDevValue({name, DevValueKind::Float, value, nullptr, min, max});
+   }
+   void RegisterInts(std::initializer_list<IntValue> values)
+   {
+      for (const auto& [name, value, min, max, set] : values)
+         RegisterDevValue({name, DevValueKind::Int, value, nullptr, double(min), double(max), nullptr, set});
+   }
+   void RegisterCounter(std::string name, const uint32_t* value, const void* owner)
+   {
+      RegisterDevValue({std::move(name), DevValueKind::Counter, const_cast<uint32_t*>(value), owner}); // Never written
+   }
+   void RegisterCounters(std::initializer_list<std::pair<const char*, const uint32_t*>> values, const void* owner)
+   {
+      for (const auto& [name, value] : values)
+         RegisterCounter(name, value, owner);
+   }
+   void RegisterTextures(std::initializer_list<std::pair<const char*, DevTextureGetter>> textures)
+   {
+      for (const auto& [name, get] : textures)
+         RegisterDevValue({name, DevValueKind::Texture, nullptr, nullptr, -DBL_MAX, DBL_MAX, get});
+   }
+   void Unregister(const void* owner)
+   {
+      const std::lock_guard lock(s_mutex_dev_values);
+      std::erase_if(dev_values, [&](const DevValue& dev_value)
+         { return dev_value.owner == owner; });
+   }
+
+   void Annotate(CommandListData& cmd_list_data, std::string_view text, std::optional<int64_t> value)
+   {
+      if (!trace_running) // Cheap early out for the hot path, rechecked under the lock
+         return;
+      const std::shared_lock lock_trace(s_mutex_trace);
+      if (!trace_running)
+         return;
+      const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+      // Games can push their own custom entries after the shader ones
+      for (auto it = cmd_list_data.trace_draw_calls_data.rbegin(); it != cmd_list_data.trace_draw_calls_data.rend(); ++it)
+      {
+         if (it->type != TraceDrawCallData::TraceDrawCallType::Shader)
+            continue;
+         if (!it->note.empty())
+            it->note += ' ';
+         it->note += text;
+         if (value)
+            std::format_to(std::back_inserter(it->note), "={}", *value);
+         return;
       }
    }
 
