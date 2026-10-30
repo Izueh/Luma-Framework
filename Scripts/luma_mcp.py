@@ -194,7 +194,7 @@ TOOLS = [
     ),
     tool(
         "luma_read_cbuffer",
-        "Read a constant buffer bound to a pass at draw time (VS, PS or CS). Returns float4 rows with float and uint views. "
+        "Read a constant buffer bound to a pass at draw time (VS, PS or CS, Luma passes included by index). Returns float4 rows with float and uint views. "
         "With 'frames' it reads it on N consecutive frames (jitter sequences, camera latches, half rate updates) and reports which rows change.",
         {**TARGET, "slot": {"type": "integer", "description": "Constant buffer register b<slot>"},
          "frames": {"type": "integer", "description": "Consecutive frames to read (default 1)"},

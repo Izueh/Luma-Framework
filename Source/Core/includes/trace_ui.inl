@@ -43,6 +43,7 @@ namespace Trace
                device_data.debug_draw_texture_size = {};
 
                track_buffer_pipeline = 0;
+               track_buffer_custom_pass = 0;
                track_buffer_pipeline_target_instance = -1;
                track_buffer_index = 0;
 
@@ -726,6 +727,98 @@ namespace Trace
          ImGui::EndChild(); // HashList
 
          ImGui::SameLine();
+         // The constant buffer the tracking read back (of a game pipeline, or a Luma pass by name) and the slot it reads
+         const auto draw_tracked_buffer = [&](const TraceDrawCallData& draw_call_data)
+         {
+            ImGui::SliderInt("Constant Buffer Tracked Index", &track_buffer_index, 0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT - 1);
+
+            // Hacky way of retrieving the data if the tracked buffer was in a deferred command list and hence couldn't be mapped there
+            if (!device_data.track_buffer_data.data_valid && device_data.track_buffer_data.cb)
+            {
+               // Make sure we have the immediate context, because MapBufferData will fail otherwise.
+               ComPtr<ID3D11Device> native_device;
+               draw_call_data.command_list->GetDevice(native_device.put());
+               ComPtr<ID3D11DeviceContext> native_device_context;
+               native_device->GetImmediateContext(native_device_context.put());
+
+               D3D11_BUFFER_DESC desc = {};
+               device_data.track_buffer_data.cb->GetDesc(&desc);
+               device_data.track_buffer_data.data_valid = MapBufferData(device_data.track_buffer_data.cb, native_device_context.get(), device_data.track_buffer_data.data, desc.ByteWidth);
+            }
+
+            if (device_data.track_buffer_data.data_valid && !device_data.track_buffer_data.data.empty())
+            {
+               ImGui::NewLine();
+               ImGui::Text("Tracked Constant Buffer:");
+               ImGui::Text("Resource Hash: %s", device_data.track_buffer_data.hash.c_str());
+               const UINT tb_first = device_data.track_buffer_data.first_constant;
+               const UINT tb_num = device_data.track_buffer_data.num_constants;
+               // Each D3D11.1 "constant" is a float4 = 4 floats in our data vector.
+               // tb_num == 0 means D3D11.0 path (no partial-bind info): show the whole buffer.
+               const size_t tb_display_begin = (tb_num != 0) ? (size_t)tb_first * 4 : 0;
+               const size_t tb_display_end = (tb_num != 0) ? (size_t)(tb_first + tb_num) * 4 : device_data.track_buffer_data.data.size();
+               const size_t tb_display_end_clamped = (std::min)(tb_display_end, device_data.track_buffer_data.data.size());
+               if (tb_num != 0)
+               {
+                  ImGui::Text("Partial Bind: first constant %u, %u constants (floats %zu..%zu)", tb_first, tb_num, tb_display_begin, tb_display_end_clamped);
+               }
+               if (ImGui::BeginChild("TrackBufferScroll", ImVec2(0, 500), ImGuiChildFlags_Borders))
+               {
+                  // TODO: match with the shader assembly cbs etc (if the data is available)
+                  // TODO: add a matrix 4x4 view?
+                  if (ImGui::BeginTable("TrackBufferTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
+                     ImGui::TableSetupColumn("Index", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                     ImGui::TableSetupColumn("Float Value", ImGuiTableColumnFlags_WidthStretch);
+                     ImGui::TableSetupColumn("Int Value", ImGuiTableColumnFlags_WidthStretch);
+                     ImGui::TableHeadersRow();
+
+                     for (size_t i = tb_display_begin; i < tb_display_end_clamped; ++i)
+                     {
+                        float this_data = device_data.track_buffer_data.data[i];
+                        ImGui::TableNextRow();
+                        ImGui::TableSetColumnIndex(0);
+                        static const char* components[] = { "x", "y", "z", "w" };
+                        size_t relative_i = i - tb_display_begin; // 0-based offset within the visible slice
+                        size_t group = relative_i / 4; // Split index by float4
+                        size_t comp_index = relative_i % 4; // Print out the x/y/w/z identifier
+                        ImGui::Text("%zu:%s", group, components[comp_index]);
+                        // First print as float
+                        ImGui::TableSetColumnIndex(1);
+                        // I'm not sure whether the auto float printing handles nan/inf
+                        if (std::isnan(this_data))
+                        {
+                           ImGui::Text("NaN");
+                        }
+                        else if (std::isinf(this_data))
+                        {
+                           ImGui::Text("Inf");
+                        }
+                        else
+                        {
+                           ImGui::Text("%.7f", this_data); // We need to show quite a bit of precision
+                        }
+                        // Then print as int (should work as uint/bool as well)
+                        ImGui::TableSetColumnIndex(2);
+                        ImGui::Text("%i", Math::AsInt(this_data));
+                     }
+                     ImGui::EndTable();
+                  }
+               }
+               ImGui::EndChild(); // TrackBufferScroll
+
+               if (ImGui::Button("Copy Constant Buffer Data to Clipboard (float)"))
+               {
+                  std::ostringstream oss;
+                  for (size_t i = tb_display_begin; i < tb_display_end_clamped; ++i) {
+                     oss << device_data.track_buffer_data.data[i];
+                     if (i + 1 < tb_display_end_clamped)
+                        oss << '\n';
+                  }
+                  System::CopyToClipboard(oss.str());
+               }
+            }
+         };
+
          // The state a trace entry recorded: a game draw's ("pipeline"), or a Luma pass's without one ("CustomDraw()").
          // Slots a draw callback changed ("UpdateDraw()") show what it bound, the replaced ones can show the game's original too.
          const auto draw_state_analysis = [&](const TraceDrawCallData& draw_call_data, CachedPipeline* pipeline, bool debug_draw_shader_enabled)
@@ -1983,6 +2076,7 @@ namespace Trace
                                     if (!track_buffer_enabled)
                                     {
                                        track_buffer_pipeline = pipeline_pair->first;
+                                       track_buffer_custom_pass = 0;
                                        track_buffer_pipeline_target_instance = target_instance;
                                        track_buffer_index = 0;
                                     }
@@ -1996,93 +2090,7 @@ namespace Trace
 
                                  if (track_buffer_enabled)
                                  {
-                                    ImGui::SliderInt("Constant Buffer Tracked Index", &track_buffer_index, 0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT - 1);
-
-                                    // Hacky way of retrieving the data if the tracked buffer was in a deferred command list and hence couldn't be mapped there
-                                    if (!device_data.track_buffer_data.data_valid && device_data.track_buffer_data.cb)
-                                    {
-                                       // Make sure we have the immediate context, because MapBufferData will fail otherwise.
-                                       ComPtr<ID3D11Device> native_device;
-                                       draw_call_data.command_list->GetDevice(native_device.put());
-                                       ComPtr<ID3D11DeviceContext> native_device_context;
-                                       native_device->GetImmediateContext(native_device_context.put());
-
-                                       D3D11_BUFFER_DESC desc = {};
-                                       device_data.track_buffer_data.cb->GetDesc(&desc);
-                                       device_data.track_buffer_data.data_valid = MapBufferData(device_data.track_buffer_data.cb, native_device_context.get(), device_data.track_buffer_data.data, desc.ByteWidth);
-                                    }
-
-                                    if (device_data.track_buffer_data.data_valid && !device_data.track_buffer_data.data.empty())
-                                    {
-                                       ImGui::NewLine();
-                                       ImGui::Text("Tracked Constant Buffer:");
-                                       ImGui::Text("Resource Hash: %s", device_data.track_buffer_data.hash.c_str());
-                                       const UINT tb_first = device_data.track_buffer_data.first_constant;
-                                       const UINT tb_num = device_data.track_buffer_data.num_constants;
-                                       // Each D3D11.1 "constant" is a float4 = 4 floats in our data vector.
-                                       // tb_num == 0 means D3D11.0 path (no partial-bind info): show the whole buffer.
-                                       const size_t tb_display_begin = (tb_num != 0) ? (size_t)tb_first * 4 : 0;
-                                       const size_t tb_display_end = (tb_num != 0) ? (size_t)(tb_first + tb_num) * 4 : device_data.track_buffer_data.data.size();
-                                       const size_t tb_display_end_clamped = (std::min)(tb_display_end, device_data.track_buffer_data.data.size());
-                                       if (tb_num != 0)
-                                       {
-                                          ImGui::Text("Partial Bind: first constant %u, %u constants (floats %zu..%zu)", tb_first, tb_num, tb_display_begin, tb_display_end_clamped);
-                                       }
-                                       if (ImGui::BeginChild("TrackBufferScroll", ImVec2(0, 500), ImGuiChildFlags_Borders))
-                                       {
-                                          // TODO: match with the shader assembly cbs etc (if the data is available)
-                                          // TODO: add a matrix 4x4 view?
-                                          if (ImGui::BeginTable("TrackBufferTable", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable)) {
-                                             ImGui::TableSetupColumn("Index", ImGuiTableColumnFlags_WidthFixed, 60.0f);
-                                             ImGui::TableSetupColumn("Float Value", ImGuiTableColumnFlags_WidthStretch);
-                                             ImGui::TableSetupColumn("Int Value", ImGuiTableColumnFlags_WidthStretch);
-                                             ImGui::TableHeadersRow();
-
-                                             for (size_t i = tb_display_begin; i < tb_display_end_clamped; ++i)
-                                             {
-                                                float this_data = device_data.track_buffer_data.data[i];
-                                                ImGui::TableNextRow();
-                                                ImGui::TableSetColumnIndex(0);
-                                                static const char* components[] = { "x", "y", "z", "w" };
-                                                size_t relative_i = i - tb_display_begin; // 0-based offset within the visible slice
-                                                size_t group = relative_i / 4; // Split index by float4
-                                                size_t comp_index = relative_i % 4; // Print out the x/y/w/z identifier
-                                                ImGui::Text("%zu:%s", group, components[comp_index]);
-                                                // First print as float
-                                                ImGui::TableSetColumnIndex(1);
-                                                // I'm not sure whether the auto float printing handles nan/inf
-                                                if (std::isnan(this_data))
-                                                {
-                                                   ImGui::Text("NaN");
-                                                }
-                                                else if (std::isinf(this_data))
-                                                {
-                                                   ImGui::Text("Inf");
-                                                }
-                                                else
-                                                {
-                                                   ImGui::Text("%.7f", this_data); // We need to show quite a bit of precision
-                                                }
-                                                // Then print as int (should work as uint/bool as well)
-                                                ImGui::TableSetColumnIndex(2);
-                                                ImGui::Text("%i", Math::AsInt(this_data));
-                                             }
-                                             ImGui::EndTable();
-                                          }
-                                       }
-                                       ImGui::EndChild(); // TrackBufferScroll
-
-                                       if (ImGui::Button("Copy Constant Buffer Data to Clipboard (float)"))
-                                       {
-                                          std::ostringstream oss;
-                                          for (size_t i = tb_display_begin; i < tb_display_end_clamped; ++i) {
-                                             oss << device_data.track_buffer_data.data[i];
-                                             if (i + 1 < tb_display_end_clamped)
-                                                oss << '\n';
-                                          }
-                                          System::CopyToClipboard(oss.str());
-                                       }
-                                    }
+                                    draw_tracked_buffer(draw_call_data);
                                  }
                                  // Hacky: clear the data here...
                                  else
@@ -2109,6 +2117,29 @@ namespace Trace
                            {
                               if (const auto definition = native_shaders_definitions.find(draw_call_data.custom_shader_hash); definition != native_shaders_definitions.end() && definition->second.file_name)
                                  ImGui::Text("Luma Shader: %s", definition->second.file_name);
+
+                              // Instances of a Luma pass are counted by name, see "Trace::CustomDraw()"
+                              int32_t target_instance = 0;
+                              for (int32_t i = 0; i < selected_index; i++)
+                              {
+                                 const auto& other = cmd_list_data.trace_draw_calls_data.at(i);
+                                 if (other.type == TraceDrawCallData::TraceDrawCallType::Custom && strcmp(other.custom_name, draw_call_data.custom_name) == 0 && other.thread_id == draw_call_data.thread_id)
+                                    target_instance++;
+                              }
+                              const uint32_t custom_pass = CompileTimeStringHash(draw_call_data.custom_name);
+                              bool track_buffer_enabled = track_buffer_custom_pass == custom_pass && (track_buffer_pipeline_target_instance < 0 || track_buffer_pipeline_target_instance == target_instance);
+                              if (track_buffer_enabled ? ImGui::Button("Disable Constant Buffer Tracking") : ImGui::Button("Enable Constant Buffer Tracking"))
+                              {
+                                 track_buffer_custom_pass = track_buffer_enabled ? 0 : custom_pass;
+                                 track_buffer_pipeline = 0;
+                                 track_buffer_pipeline_target_instance = track_buffer_enabled ? -1 : target_instance;
+                                 track_buffer_index = 0;
+                                 track_buffer_enabled = !track_buffer_enabled;
+                              }
+                              if (track_buffer_enabled)
+                              {
+                                 draw_tracked_buffer(draw_call_data);
+                              }
                               ImGui::NewLine();
                               ImGui::Text("State Analysis:");
                               if (ImGui::BeginChild("StateAnalysisScroll", ImVec2(0, -FLT_MIN), ImGuiChildFlags_Borders))
@@ -2334,6 +2365,18 @@ namespace Trace
                            disasm_string.assign(cache ? cache->disasm : "");
                         }
                      }
+                     else if (const auto& entry = cmd_list_data.trace_draw_calls_data.at(selected_index); entry.custom_shader_hash != 0)
+                     {
+                        const std::unique_lock lock_loading(s_mutex_loading);
+                        const auto custom_shader = custom_shaders_cache.find(Shader::ShiftHash32ToHash64(entry.custom_shader_hash));
+                        auto* cache = custom_shader != custom_shaders_cache.end() ? custom_shader->second : nullptr;
+                        if (cache && cache->disasm.empty())
+                        {
+                           auto disasm_code = Shader::DisassembleShader(cache->code.data(), cache->code.size());
+                           cache->disasm.assign(disasm_code.has_value() ? disasm_code.value() : "DISASSEMBLY FAILED");
+                        }
+                        disasm_string.assign(cache ? cache->disasm : "");
+                     }
                      else
                      {
                         disasm_string.clear();
@@ -2383,12 +2426,16 @@ namespace Trace
                      const auto pipeline_handle = cmd_list_data.trace_draw_calls_data.at(selected_index).pipeline_handle;
 
                      const std::shared_lock lock(s_mutex_generic);
-                     if (auto pipeline_pair = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle);
-                        pipeline_pair != device_data.pipeline_cache_by_pipeline_handle.end() && pipeline_pair->second != nullptr)
+                     const auto pipeline_pair = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle);
+                     const bool has_pipeline = pipeline_pair != device_data.pipeline_cache_by_pipeline_handle.end() && pipeline_pair->second != nullptr;
+                     const uint32_t luma_shader_hash = cmd_list_data.trace_draw_calls_data.at(selected_index).custom_shader_hash;
+                     if (has_pipeline || luma_shader_hash != 0)
                      {
-                        const auto pipeline = pipeline_pair->second;
                         const std::shared_lock lock_loading(s_mutex_loading);
-                        const auto custom_shader = !pipeline->shader_hashes.empty() ? custom_shaders_cache[pipeline->shader_hashes[0]] : nullptr;
+                        // The game shader's replacement, or a Luma pass's native shader
+                        const auto custom_shader_it = has_pipeline ? (pipeline_pair->second->shader_hashes.empty() ? custom_shaders_cache.end() : custom_shaders_cache.find(pipeline_pair->second->shader_hashes[0]))
+                           : custom_shaders_cache.find(Shader::ShiftHash32ToHash64(luma_shader_hash));
+                        const auto custom_shader = custom_shader_it != custom_shaders_cache.end() ? custom_shader_it->second : nullptr;
                         // If the custom shader has a compilation error, print that, otherwise read the file text
                         if (custom_shader != nullptr && !custom_shader->compilation_errors.empty())
                         {

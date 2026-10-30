@@ -191,14 +191,16 @@ namespace Mcp
          uint64_t pipeline;
          int32_t target_instance;
          int32_t index;
+         uint32_t custom_pass;
 
          static TrackBufferSelection Current()
          {
-            return {Trace::track_buffer_pipeline, Trace::track_buffer_pipeline_target_instance, Trace::track_buffer_index};
+            return {Trace::track_buffer_pipeline, Trace::track_buffer_pipeline_target_instance, Trace::track_buffer_index, Trace::track_buffer_custom_pass};
          }
          void Apply() const
          {
             Trace::track_buffer_pipeline = pipeline;
+            Trace::track_buffer_custom_pass = custom_pass;
             Trace::track_buffer_pipeline_target_instance = target_instance;
             Trace::track_buffer_index = index;
          }
@@ -1510,9 +1512,9 @@ namespace Mcp
          {
             if (!ResolveTarget(job, device_data, cmd_list_data))
                return true;
-            if (job->stage == std::string_view("GS") || job->stage == std::string_view("XS") || job->custom_pass)
+            if (job->stage == std::string_view("GS") || job->stage == std::string_view("XS"))
             {
-               job->error = std::format("Constant buffer tracking doesn't support {} passes", job->custom_pass ? "Luma" : job->stage);
+               job->error = std::format("Constant buffer tracking doesn't support {} passes", job->stage);
                return true;
             }
             const int64_t slot = job->IntArg("slot", 0);
@@ -1523,7 +1525,7 @@ namespace Mcp
             }
             // Restored in "OnPresent" once the job finishes. The tracking has no thread filter.
             job->saved_track_buffer = TrackBufferSelection::Current();
-            TrackBufferSelection{job->pipeline_handle, job->instance, int32_t(slot)}.Apply();
+            TrackBufferSelection{job->pipeline_handle, job->instance, int32_t(slot), job->custom_pass}.Apply();
             device_data.track_buffer_data.Clear();
             job->result.Hash("hash", job->shader_hash).Field("stage", job->stage).Field("instance", job->instance).Field("slot", slot);
             job->phase = 1;
