@@ -11,6 +11,21 @@
     <ClCompile Include="fsr\FSR.cpp">
       <Filter>FSR</Filter>
     </ClCompile>
+    <ClCompile Include="fsr\FSR4.cpp">
+      <Filter>FSR</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\DXGIHooks.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\FidelityFXHooks.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\SystemHooks.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="interop\D3D12Interop.cpp">
+      <Filter>Interop</Filter>
+    </ClCompile>
     <ClCompile Include="includes\instance_data.cpp">
       <Filter>Includes</Filter>
     </ClCompile>
@@ -27,6 +42,12 @@
     </Filter>
     <Filter Include="FSR">
       <UniqueIdentifier>{7373d656-7d70-4fc5-8b73-efa2b6af7433}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Hooks">
+      <UniqueIdentifier>{3f6d2a1e-8c4b-4f7a-9e2d-5b1c0a7e6d41}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Interop">
+      <UniqueIdentifier>{a2c94e17-6b3d-4d58-8f1a-0e7b9c3d2f65}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
@@ -92,6 +113,24 @@
     </ClInclude>
     <ClInclude Include="fsr\FSR.h">
       <Filter>FSR</Filter>
+    </ClInclude>
+    <ClInclude Include="fsr\FSR4.h">
+      <Filter>FSR</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\DXGIHooks.h">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\FidelityFXHooks.h">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\Hooks.h">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\SystemHooks.h">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="interop\D3D12Interop.h">
+      <Filter>Interop</Filter>
     </ClInclude>
     <ClInclude Include="includes\super_resolution.h">
       <Filter>Includes</Filter>

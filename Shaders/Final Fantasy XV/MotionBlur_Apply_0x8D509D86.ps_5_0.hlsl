@@ -67,31 +67,17 @@ void main(
   float2 v1 : TEXCOORD0,
   out float4 o0 : SV_TARGET0)
 {
+  // Metadata retains the render jitter; resolved color uses stable coordinates.
+  float2 colorJitter = LumaData.GameData.TemporalJitterUV;
+  v1.xy += colorJitter;
   float4 r0,r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r13,r14,r15,r16,r17,r18;
   uint4 bitmask, uiDest;
   uint u0,u1,u2,u3,u4,u5,u6,u7,u8,u9,u10,u11,u12,u13,u14,u15,u16,u17,u18,u19;
   float4 fDest;
-  float2 luma_fullscreen_dims = g_fullscreenDims.xy;
-  float2 luma_scale_from_dims = float2(1.0, 1.0);
   bool aboveThreshold;
   float h, w, d;
 
-  g_halfColorTex.GetDimensions(0, w, h, d);
-  luma_scale_from_dims = float2(w, h) / max(float2(1.0, 1.0), g_fullscreenDims.xy);
-
-  if (LumaData.GameData.IsUpscaling != 0)
-  {
-    const float luma_rs = max(1.0e-6, LumaData.RenderResolutionScale.x);
-    const float luma_scale_from_cb = max(luma_rs, 1.0 / luma_rs);
-    const bool luma_dims_scale_valid =
-      all(luma_scale_from_dims > float2(0.25, 0.25)) &&
-      all(luma_scale_from_dims < float2(4.0, 4.0));
-
-    luma_fullscreen_dims = g_fullscreenDims.xy *
-      (luma_dims_scale_valid ? luma_scale_from_dims : luma_scale_from_cb.xx);
-  }
-
-  r0.xyz = g_halfColorTex.SampleLevel(linearClampSampler_s, v1.xy, 0).xyz;
+  r0.xyz = g_halfColorTex.SampleLevel(linearClampSampler_s, (v1.xy) - colorJitter, 0).xyz;
   r1.x = g_velMaskTex.SampleLevel(linearClampSampler_s, v1.xy, 0).x;
   float velMaskValue = r1.x;
   if (velMaskValue == 0.0f) {
@@ -141,7 +127,7 @@ void main(
   r5.w = 1 + -r4.z;
   r4.z = r4.w * r5.w + r4.z;
   r3.xyz = r4.zzz * r6.yzw + r3.xyz;
-  r4.zw = luma_fullscreen_dims * r3.xy;
+  r4.zw = g_fullscreenDims.xy * r3.xy;
   r4.z = dot(r4.zw, r4.zw);
   r4.z = sqrt(r4.z);
   r4.w = (45.0 < r4.z) ? 1.0 : 0.0;
@@ -149,23 +135,23 @@ void main(
   r6.xy = r4.zz * r3.xy;
   r3.xy = r4.ww ? r6.xy : r3.xy;
   r6.xyzw = r3.xyxy * float4(-0.400000006,-0.400000006,0.200000003,0.200000003) + v1.xyxy;
-  r7.xyz = g_halfColorTex.SampleLevel(pointClampSampler_s, r6.xy, 0).xyz;
+  r7.xyz = g_halfColorTex.SampleLevel(pointClampSampler_s, (r6.xy) - colorJitter, 0).xyz;
   r4.z = max(r7.x, r7.y);
   r4.z = max(r4.z, r7.z);
   r4.w = ddx_fine(r4.z);
   r4.z = ddy_fine(r4.z);
   r8.xyzw = r3.xyxy * float4(0.200000003,0.200000003,0.200000003,0.200000003) + r6.xyzw;
-  r9.xyz = g_halfColorTex.SampleLevel(pointClampSampler_s, r8.xy, 0).xyz;
+  r9.xyz = g_halfColorTex.SampleLevel(pointClampSampler_s, (r8.xy) - colorJitter, 0).xyz;
   r5.w = max(r9.x, r9.y);
   r5.w = max(r5.w, r9.z);
   r7.w = ddx_fine(r5.w);
   r5.w = ddy_fine(r5.w);
-  r10.xyz = g_halfColorTex.SampleLevel(pointClampSampler_s, r6.zw, 0).xyz;
+  r10.xyz = g_halfColorTex.SampleLevel(pointClampSampler_s, (r6.zw) - colorJitter, 0).xyz;
   r9.w = max(r10.x, r10.y);
   r9.w = max(r9.w, r10.z);
   r10.w = ddx_fine(r9.w);
   r9.w = ddy_fine(r9.w);
-  r11.xyz = g_halfColorTex.SampleLevel(pointClampSampler_s, r8.zw, 0).xyz;
+  r11.xyz = g_halfColorTex.SampleLevel(pointClampSampler_s, (r8.zw) - colorJitter, 0).xyz;
   r11.w = max(r11.x, r11.y);
   r11.w = max(r11.w, r11.z);
   r12.x = ddx_fine(r11.w);
@@ -306,7 +292,7 @@ void main(
         r1.x = r1.x * r2.x + 1;
         r0.w = r1.x * r0.w;
         r8.w = r0.w * r15.x;
-        r9.xyz = g_halfColorTex.SampleLevel(pointClampSampler_s, r7.xy, 0).xyz;
+        r9.xyz = g_halfColorTex.SampleLevel(pointClampSampler_s, (r7.xy) - colorJitter, 0).xyz;
         r8.xyz = r9.xyz * r8.www;
         r8.xyzw = r8.xyzw + r6.xyzw;
         r9.xyzw = vel0.xyxy * float4(0.200000003,0.200000003,0.200000003,0.200000003) + r7.xyzw;
@@ -327,7 +313,7 @@ void main(
         r1.x = r1.x * r2.x + 1;
         r0.w = r1.x * r0.w;
         r10.w = r0.w * r15.y;
-        r5.xyw = g_halfColorTex.SampleLevel(pointClampSampler_s, r9.xy, 0).xyz;
+        r5.xyw = g_halfColorTex.SampleLevel(pointClampSampler_s, (r9.xy) - colorJitter, 0).xyz;
         r10.xyz = r5.xyw * r10.www;
         r8.xyzw = r10.xyzw + r8.xyzw;
         r2.xy = r7.zw * r4.xy + -r2.zw;
@@ -347,7 +333,7 @@ void main(
         r1.x = r1.x * r2.x + 1;
         r0.w = r1.x * r0.w;
         r10.w = r0.w * r15.z;
-        r5.xyw = g_halfColorTex.SampleLevel(pointClampSampler_s, r7.zw, 0).xyz;
+        r5.xyw = g_halfColorTex.SampleLevel(pointClampSampler_s, (r7.zw) - colorJitter, 0).xyz;
         r10.xyz = r5.xyw * r10.www;
         r7.xyzw = r10.xyzw + r8.xyzw;
         r2.xy = r9.zw * r4.xy + -r2.zw;
@@ -367,7 +353,7 @@ void main(
         r1.x = r1.x * r2.x + 1;
         r0.w = r1.x * r0.w;
         r2.w = r0.w * r15.x;
-        r3.xyz = g_halfColorTex.SampleLevel(pointClampSampler_s, r9.zw, 0).xyz;
+        r3.xyz = g_halfColorTex.SampleLevel(pointClampSampler_s, (r9.zw) - colorJitter, 0).xyz;
         r2.xyz = r3.xyz * r2.www;
         r6.xyzw = r7.xyzw + r2.xyzw;
       }

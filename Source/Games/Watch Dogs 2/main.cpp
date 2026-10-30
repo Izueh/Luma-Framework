@@ -14,7 +14,7 @@
 #include "..\..\Core\core.hpp"
 #include "includes\shader_patches.h"
 #include "includes\hooks.hpp"
-#include "includes\safetyhook.hpp"
+#include <safetyhook.hpp>
 #include "includes\hooks.cpp"
 #include "includes\stretchy_buffer.hpp"
 
@@ -1209,7 +1209,7 @@ public:
             settings_data.hdr = true;
             settings_data.inverted_depth = true;
             settings_data.mvs_jittered = false;
-            settings_data.auto_exposure = device_data.sr_type != SR::Type::FSR;
+            settings_data.auto_exposure = device_data.sr_type != SR::Type::FSR && device_data.sr_type != SR::Type::FSR_4;
             settings_data.mvs_x_scale = -g_perFrame.RenderResolution.x;
             settings_data.mvs_y_scale = -g_perFrame.RenderResolution.y;
             settings_data.render_preset = dlss_render_preset;

@@ -66,6 +66,7 @@
   <PropertyGroup>
     <UseLumaNGX>true</UseLumaNGX>
     <UseLumaFSR>true</UseLumaFSR>
+    <UseLumaFSR4>true</UseLumaFSR4>
     <LumaPackage>false</LumaPackage>
   </PropertyGroup>
 

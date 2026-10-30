@@ -38,13 +38,12 @@ void main(uint2 tid : SV_DispatchThreadID, uint3 gid : SV_GroupId, uint gix : SV
 		prevTS /= prevTS.w;
 		velocity = prevTS.xy - texCoord;
 	}
-	// else
-	// {
-	// 	if(abs(velocity.x) >= 4.0f)
-	// 	{
-	// 		velocity.x += (velocity.x > 0.0f) ? 4.0f : -4.0f;
-	// 	}
-	// }
+	else if (abs(velocity.x) >= 4.0f)
+	{
+		// Native TAA strips this response marker before using geometry motion.
+		// The depth/camera sentinel above takes precedence over this encoding.
+		velocity.x -= sign(velocity.x) * 4.0f;
+	}
 	// velocity = g_uvJitterOffset.xy * 0.5f + velocity;
 	g_updatedVelocityTex[tid] = velocity * g_screenSize.xy;
 }

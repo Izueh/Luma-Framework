@@ -24,10 +24,10 @@ void main(uint2 tid : SV_DispatchThreadID, uint3 gid : SV_GroupId, uint gix : SV
 	float depth = g_depthTex[tid];
 	if(g_depthTex[tid] == 1.0f)
 	{
-		float2 texCoord = tid / LumaSettings.GameSettings.RenderRes;
-		float4 prevTS = mul(float4(texCoord * 2.0f - 1.0f, depth, 1.0f), reprojectionMatrix);
+		float2 texCoord = (float2(tid.xy) + 0.5f) / LumaSettings.GameSettings.RenderRes;
+		float4 prevTS = mul(float4(texCoord * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f), depth, 1.0f), reprojectionMatrix);
 		prevTS /= prevTS.w;
-		prevTS = (prevTS + 1.0f) * 0.5f;
+		prevTS.xy = (prevTS.xy + float2(1.0f, -1.0f)) * float2(0.5f, -0.5f);
 		velocity = prevTS.xy - texCoord;
 	}
 	

@@ -1,14 +1,11 @@
 #define GAME_FINALFANTASYXV 1
+#define ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE 1
+#define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
 
 #ifdef _DEBUG
 #define ALLOW_SHADERS_DUMPING 1
 #define ALLOW_SHADER_PATCHES_DUMPING 1
 #endif
-
-#define ENABLE_BLOOM 1
-#define LUMA_PATCH_RECIPE_ASYNC 1
-
-#define DEBUG_LOG 0
 
 #include <d3d11.h>
 #include <memory>
@@ -22,28 +19,33 @@
 #include "includes/common.hpp"
 #include "includes/sr_helpers.hpp"
 
-#if LUMA_HAS_RECIPE_PROVIDERS
-static constexpr uint32_t FFXV_DEPTH_DITHERING_RECIPE_HASH = "FFXV Depth Dithering"_h;
-#endif
-
 #if ENABLE_FAST_NOISE_TEXTURES
 static constexpr uint32_t kCoreFastNoiseTextureHash = "FAST Noise"_h;
+#endif
+#if LUMA_HAS_RECIPE_PROVIDERS
+static constexpr const char* kDitheringFixRecipe = "PS/FFXV_Dithering_Fixes.recipe.yml";
 #endif
 
 namespace
 {
    ShaderHashesList shader_hashes_tonemap;
    ShaderHashesList shader_hashes_TAA;
+   ShaderHashesList shader_hashes_dof_coc;
+   ShaderHashesList shader_hashes_dof_composite;
+   ShaderHashesList shader_hashes_motion_blur;
+   ShaderHashesList shader_hashes_lens_distortion;
+   ShaderHashesList shader_hashes_scene_tonemap;
    ShaderHashesList shader_hashes_OutputScaled;
    ShaderHashesList shader_hashes_bloom_highpass;
-   ShaderHashesList shader_hashes_bloom_skip;
    ShaderHashesList shader_hashes_bloom_glare_vignette;
-   ShaderHashesList shader_hashes_attach_fast_noise;
+   ShaderHashesList shader_hashes_rain;
    ShaderHashesList shader_hashes_directional_light;
    const uint32_t CBTemporalAA_buffer_size = 256;
    const uint32_t CBView_buffer_size = 768;
 
    bool enable_directional_shadows = false;
+
+   int rain_composition = 0; // 0 = after AA, 1 = after game DoF
 
 #if ENABLE_FAST_NOISE_TEXTURES
    ID3D11ShaderResourceView* GetFastNoiseSrv(DeviceData& device_data)
@@ -77,7 +79,6 @@ namespace
          snprintf(log_buf, sizeof(log_buf),
             "FFXV: FAST noise bind verify failed (%s) slot=%u expected=%p got=%p",
             path_label, bind_point, expected_srv, bound_srv);
-         Log_Debug(reshade::log::level::error, log_buf);
          ASSERT_ONCE(false);
       }
 
@@ -86,62 +87,6 @@ namespace
          bound_srv->Release();
       }
    }
-#endif
-
-#if ENABLE_BLOOM
-   bool g_luma_bloom_enable = true;
-   int g_bloom_nmips = 6;
-   std::vector<float> g_bloom_sigmas;
-#endif
-
-#if LUMA_HAS_RECIPE_PROVIDERS
-   bool BindPatchedResources(ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, reshade::api::shader_stage stages, bool& updated_cbuffers)
-   {
-      if ((stages & reshade::api::shader_stage::pixel) == 0 || original_shader_hashes.pixel_shaders[0] == SHADER_HASH_NONE)
-      {
-         return false;
-      }
-
-      // Resolved per shader at patch-apply time; read every draw on the render
-      // thread (finalized map only, updated on present — no lock needed).
-      // Resources are bound only once the clone was published (ready), so they
-      // never reach a shader that is still running its original bytecode.
-      auto& game_device_data = *static_cast<GameDeviceDataFFXV*>(device_data.game);
-      const auto binding_it = game_device_data.dxp_bindings.find(static_cast<uint32_t>(original_shader_hashes.pixel_shaders[0]));
-      const bool patch_ready = binding_it != game_device_data.dxp_bindings.end() && binding_it->second.ready;
-      const uint32_t fast_noise_bind_point = patch_ready ? binding_it->second.fast_noise_bind_point : UINT32_MAX;
-      const uint32_t frame_constants_bind_point = patch_ready ? binding_it->second.frame_constants_bind_point : UINT32_MAX;
-
-      bool any_bound = false;
-
-      if (fast_noise_bind_point != UINT32_MAX)
-      {
-         ID3D11ShaderResourceView* fast_noise_srv = GetFastNoiseSrv(device_data);
-         if (fast_noise_srv)
-         {
-            native_device_context->PSSetShaderResources(fast_noise_bind_point, 1, &fast_noise_srv);
-#if DEVELOPMENT
-            VerifyFastNoiseBinding(native_device_context, fast_noise_bind_point, fast_noise_srv, "DXP");
-#endif
-            any_bound = true;
-         }
-      }
-
-      if (frame_constants_bind_point != UINT32_MAX)
-      {
-         // The recipe reads the frame index from Luma's own settings cbuffer
-         // (cb13[2].y). Upload the current settings (FrameIndex) if dirty and
-         // bind it at the recipe's fixed slot (register 13).
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-         ID3D11Buffer* luma_settings_cb = device_data.luma_global_settings.get();
-         native_device_context->PSSetConstantBuffers(frame_constants_bind_point, 1, &luma_settings_cb);
-         updated_cbuffers = true;
-         any_bound = true;
-      }
-
-      return any_bound;
-   }
-
 #endif
 
 } // namespace
@@ -158,11 +103,314 @@ class FinalFantasyXV final : public Game
       return *static_cast<GameDeviceDataFFXV*>(device_data.game);
    }
 
-public:
-   std::atomic<bool> dithering_patch_enabled = true;
+   bool CompositeRain(ID3D11Device* device, ID3D11DeviceContext* context, DeviceData& device_data,
+      ID3D11RenderTargetView* target, bool resolved)
+   {
+      auto& rain = GetGameDeviceData(device_data).rain;
+      if (!rain.pending || !target) return false;
+      ComPtr<ID3D11Resource> resource;
+      target->GetResource(resource.put());
+      D3D11_RENDER_TARGET_VIEW_DESC target_desc;
+      target->GetDesc(&target_desc);
+      if (target_desc.ViewDimension != D3D11_RTV_DIMENSION_TEXTURE2D) return false;
+      D3D11_SHADER_RESOURCE_VIEW_DESC desc = {};
+      desc.Format = target_desc.Format;
+      desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+      desc.Texture2D.MostDetailedMip = target_desc.Texture2D.MipSlice;
+      desc.Texture2D.MipLevels = 1;
+      ComPtr<ID3D11ShaderResourceView> scene;
+      if (FAILED(device->CreateShaderResourceView(resource.get(), &desc, scene.put()))) return false;
+      return CompositeRainInput(device, context, device_data, scene.get(), resolved);
+   }
 
+   bool CompositeRainInput(ID3D11Device* device, ID3D11DeviceContext* context, DeviceData& device_data,
+      ID3D11ShaderResourceView* scene, bool resolved)
+   {
+      DrawStateStack<DrawStateStackType::FullGraphics> graphics;
+      DrawStateStack<DrawStateStackType::Compute> compute;
+      graphics.Cache(context, device_data.uav_max_count);
+      compute.Cache(context, device_data.uav_max_count);
+      ID3D11UnorderedAccessView* null_uavs[D3D11_1_UAV_SLOT_COUNT] = {};
+      context->CSSetUnorderedAccessViews(0, device_data.uav_max_count, null_uavs, nullptr);
+      auto& rain = GetGameDeviceData(device_data).rain;
+      rain.resolved = resolved;
+      const bool result = rain.Composite(device, context, scene);
+      compute.Restore(context);
+      graphics.Restore(context);
+      return result;
+   }
+
+   static bool InitializeUpscaledTarget(ID3D11Device* device, ID3D11DeviceContext* context,
+      DeviceData& device_data, ID3D11Texture2D* source, DXGI_FORMAT format, ID3D11RenderTargetView* target)
+   {
+      ComPtr<ID3D11VertexShader> vs;
+      ComPtr<ID3D11PixelShader> ps;
+      {
+         const std::shared_lock lock(s_mutex_shader_objects);
+         auto vertex = device_data.native_vertex_shaders.find(CompileTimeStringHash("Scale VS"));
+         auto pixel = device_data.native_pixel_shaders.find(CompileTimeStringHash("Scale PS"));
+         if (vertex == device_data.native_vertex_shaders.end() || pixel == device_data.native_pixel_shaders.end())
+            return false;
+         vs = vertex->second.get();
+         ps = pixel->second.get();
+      }
+      if (!source || !target || !vs || !ps || !device_data.sampler_state_linear ||
+          !device_data.default_blend_state || !device_data.default_depth_stencil_state)
+         return false;
+      UINT format_support = 0;
+      if (FAILED(device->CheckFormatSupport(format, &format_support)) ||
+          (format_support & D3D11_FORMAT_SUPPORT_SHADER_SAMPLE) == 0)
+         return false; // Scale PS samples float colors; integer/load-only views need another path.
+      D3D11_TEXTURE2D_DESC desc{};
+      source->GetDesc(&desc);
+      ComPtr<ID3D11Texture2D> readable = source;
+      const bool needs_copy = (desc.BindFlags & D3D11_BIND_SHADER_RESOURCE) == 0;
+      if (needs_copy)
+      {
+         desc.Usage = D3D11_USAGE_DEFAULT;
+         desc.CPUAccessFlags = 0;
+         desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+         desc.MiscFlags = 0;
+         readable.reset();
+         if (FAILED(device->CreateTexture2D(&desc, nullptr, readable.put())))
+            return false;
+      }
+      D3D11_SHADER_RESOURCE_VIEW_DESC view{};
+      view.Format = format;
+      view.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+      view.Texture2D.MipLevels = 1;
+      ComPtr<ID3D11ShaderResourceView> input;
+      if (FAILED(device->CreateShaderResourceView(readable.get(), &view, input.put())))
+         return false;
+      ComPtr<ID3D11Resource> target_resource;
+      ComPtr<ID3D11Texture2D> target_texture;
+      target->GetResource(target_resource.put());
+      if (FAILED(target_resource->QueryInterface(target_texture.put())))
+         return false;
+      D3D11_TEXTURE2D_DESC target_desc{};
+      target_texture->GetDesc(&target_desc);
+
+      DrawStateStack<DrawStateStackType::FullGraphics> graphics;
+      DrawStateStack<DrawStateStackType::Compute> compute;
+      graphics.Cache(context, device_data.uav_max_count);
+      compute.Cache(context, device_data.uav_max_count);
+      ID3D11UnorderedAccessView* null_uavs[D3D11_1_UAV_SLOT_COUNT] = {};
+      context->CSSetUnorderedAccessViews(0, device_data.uav_max_count, null_uavs, nullptr);
+      context->OMSetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, device_data.uav_max_count, null_uavs, nullptr);
+      // The fullscreen copy must not inherit geometry/tessellation or predication.
+      ComPtr<ID3D11GeometryShader> gs;
+      ComPtr<ID3D11HullShader> hs;
+      ComPtr<ID3D11DomainShader> ds;
+      ComPtr<ID3D11Predicate> predicate;
+      BOOL predicate_value = FALSE;
+      ID3D11ClassInstance* gs_instances[256] = {};
+      ID3D11ClassInstance* hs_instances[256] = {};
+      ID3D11ClassInstance* ds_instances[256] = {};
+      UINT gs_count = ARRAYSIZE(gs_instances), hs_count = ARRAYSIZE(hs_instances), ds_count = ARRAYSIZE(ds_instances);
+      context->GSGetShader(gs.put(), gs_instances, &gs_count);
+      context->HSGetShader(hs.put(), hs_instances, &hs_count);
+      context->DSGetShader(ds.put(), ds_instances, &ds_count);
+      context->GetPredication(predicate.put(), &predicate_value);
+      context->GSSetShader(nullptr, nullptr, 0);
+      context->HSSetShader(nullptr, nullptr, 0);
+      context->DSSetShader(nullptr, nullptr, 0);
+      context->SetPredication(nullptr, FALSE);
+      if (needs_copy)
+         context->CopyResource(readable.get(), source);
+      DrawCustomPixelShader(context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(),
+         device_data.sampler_state_linear.get(), vs.get(), ps.get(), input.get(), target, target_desc.Width, target_desc.Height);
+      context->OMSetRenderTargets(0, nullptr, nullptr);
+      ID3D11ShaderResourceView* null_srv = nullptr;
+      context->PSSetShaderResources(0, 1, &null_srv);
+      compute.Restore(context);
+      graphics.Restore(context);
+      context->GSSetShader(gs.get(), gs_instances, gs_count);
+      context->HSSetShader(hs.get(), hs_instances, hs_count);
+      context->DSSetShader(ds.get(), ds_instances, ds_count);
+      for (UINT i = 0; i < gs_count; ++i) gs_instances[i]->Release();
+      for (UINT i = 0; i < hs_count; ++i) hs_instances[i]->Release();
+      for (UINT i = 0; i < ds_count; ++i) ds_instances[i]->Release();
+      context->SetPredication(predicate.get(), predicate_value);
+      return true;
+   }
+
+   bool DrawAA(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ID3D11ShaderResourceView* scene_srv, ID3D11RenderTargetView* scene_rtv)
+   {
+
+      auto& game_device_data = GetGameDeviceData(device_data);
+      if (device_data.sr_type == SR::Type::None || device_data.sr_suppressed || device_data.has_drawn_sr || !scene_srv || !scene_rtv || !game_device_data.taa_state.IsValid())
+         return false;
+
+      ComPtr<ID3D11Resource> scene_resource;
+      scene_srv->GetResource(scene_resource.put());
+      ComPtr<ID3D11Resource> output_resource;
+      scene_rtv->GetResource(output_resource.put());
+      D3D11_SHADER_RESOURCE_VIEW_DESC scene_view_desc{};
+      scene_srv->GetDesc(&scene_view_desc);
+
+      ComPtr<ID3D11Texture2D> scene_texture;
+      if (FAILED(scene_resource->QueryInterface(scene_texture.put())))
+         return false;
+      D3D11_TEXTURE2D_DESC output_desc{};
+      scene_texture->GetDesc(&output_desc);
+      const DXGI_FORMAT view_format = output_desc.Format != scene_view_desc.Format ? scene_view_desc.Format : DXGI_FORMAT_UNKNOWN;
+
+      // Only treat as upscaling when render < output (DLSS/FSR).
+      // Supersampling (render > output) and DLAA (render == output) both use the DLAA path.
+      const bool is_upscaling = device_data.render_resolution.x < device_data.output_resolution.x && device_data.render_resolution.y < device_data.output_resolution.y;
+      const float2 target_resolution = is_upscaling ? device_data.output_resolution : device_data.render_resolution;
+      auto& tracking = game_device_data.upscale_tracking;
+      tracking.InvalidatePoolIfScaleChanged(device_data.output_resolution, device_data.render_resolution);
+      std::lock_guard lock(tracking.mutex);
+      UpscaledResource* result = nullptr;
+      ComPtr<ID3D11ShaderResourceView> result_srv;
+
+      result = AcquireUpscaledFromPool(native_device, native_device_context, tracking, output_desc, target_resolution, true, view_format);
+      if (result)
+      {
+         device_data.sr_output_color = result->texture.get();
+         result_srv = result->srv.get();
+      }
+
+      DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
+      DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
+      draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
+      compute_state_stack.Cache(native_device_context, device_data.uav_max_count);
+      native_device_context->OMSetRenderTargets(0, nullptr, nullptr);
+      auto* sr_instance_data = device_data.GetSRInstanceData();
+      const auto implementation = sr_implementations.find(device_data.sr_type);
+      if (result_srv && sr_instance_data && implementation != sr_implementations.end() && implementation->second)
+      {
+         // When upscaling, SR output dimensions are output_resolution, not the RTV size
+         SR::SettingsData settings_data;
+         settings_data.output_width = static_cast<uint>(target_resolution.x);
+         settings_data.output_height = static_cast<uint>(target_resolution.y);
+         settings_data.render_width = static_cast<uint>(device_data.render_resolution.x);
+         settings_data.render_height = static_cast<uint>(device_data.render_resolution.y);
+         settings_data.dynamic_resolution = false;
+         settings_data.hdr = true;
+         settings_data.auto_exposure = true;
+         settings_data.inverted_depth = false;
+         settings_data.mvs_jittered = false;
+         settings_data.render_preset = dlss_render_preset;
+         if (implementation->second->UpdateSettings(sr_instance_data, native_device_context, settings_data))
+         {
+            // Prepare SR draw data
+            bool reset_sr = device_data.force_reset_sr;
+            device_data.force_reset_sr = false;
+
+            float2 jitters = game_device_data.taa_jitters;
+
+            SR::SuperResolutionImpl::DrawData draw_data;
+            draw_data.source_color = scene_resource.get();
+            draw_data.output_color = device_data.sr_output_color.get();
+            draw_data.motion_vectors = game_device_data.sr_motion_vectors.get();
+            draw_data.depth_buffer = game_device_data.depth_buffer.get();
+            draw_data.jitter_x = jitters.x;
+            draw_data.jitter_y = jitters.y;
+            draw_data.vert_fov = game_device_data.camera_fov;
+            draw_data.far_plane = game_device_data.camera_far;
+            draw_data.near_plane = game_device_data.camera_near;
+            draw_data.reset = reset_sr;
+            draw_data.render_width = static_cast<uint>(device_data.render_resolution.x);
+            draw_data.render_height = static_cast<uint>(device_data.render_resolution.y);
+
+            // Execute SR
+            device_data.has_drawn_sr = implementation->second->Draw(sr_instance_data, native_device_context, draw_data);
+
+#if DEVELOPMENT
+            // Add trace info for DLSS/FSR execution
+            if (device_data.has_drawn_sr)
+            {
+               const std::shared_lock lock_trace(s_mutex_trace);
+               if (trace_running)
+               {
+                  const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+                  TraceDrawCallData trace_draw_call_data;
+                  trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
+                  trace_draw_call_data.command_list = native_device_context;
+                  trace_draw_call_data.custom_name = device_data.sr_type == SR::Type::DLSS ? "DLSS" : "FSR";
+                  GetResourceInfo(device_data.sr_output_color.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
+                  cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
+               }
+            }
+#endif
+         }
+      }
+      if (!device_data.has_drawn_sr)
+      {
+         if (result)
+            result->in_use_this_frame = false;
+         result = AcquireUpscaledFromPool(native_device, native_device_context, tracking, output_desc, device_data.render_resolution, false, view_format);
+         if (result)
+         {
+            // Fall back to native TAA, retaining its integer history output.
+            game_device_data.taa_state.Restore(native_device_context);
+            ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+            for (UINT i = 0; i < ARRAYSIZE(rtvs); ++i)
+               rtvs[i] = game_device_data.taa_state.state->render_target_views[i].get();
+            rtvs[0] = result->rtv.get();
+            native_device_context->OMSetRenderTargets(game_device_data.taa_state.state->valid_render_target_views_bound, rtvs, game_device_data.taa_state.state->depth_stencil_view.get());
+            native_device_context->PSSetShaderResources(0, 1, &scene_srv);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+            native_device_context->Draw(4, 0);
+            result_srv = result->srv.get();
+         }
+         else
+            result_srv.reset();
+         device_data.force_reset_sr = true;
+      }
+
+      if (result_srv)
+      {
+         game_device_data.rain.resolved = true;
+         // need to copyback the upscaled result to the original TAA output. It is used as previous frame input for SSR.
+         ID3D11RenderTargetView* output_rtv = game_device_data.taa_state.state->render_target_views[0].get();
+         native_device_context->OMSetRenderTargets(0, nullptr, nullptr);
+         if (device_data.has_drawn_sr && is_upscaling)
+            DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), device_data.sampler_state_linear.get(), device_data.native_vertex_shaders[CompileTimeStringHash("Scale VS")].get(), device_data.native_pixel_shaders[CompileTimeStringHash("Scale PS")].get(), result_srv.get(), output_rtv, static_cast<UINT>(device_data.render_resolution.x), static_cast<UINT>(device_data.render_resolution.y));
+         else
+         {
+            ComPtr<ID3D11Resource> taa_output;
+            output_rtv->GetResource(taa_output.put());
+            native_device_context->CopyResource(taa_output.get(), result->texture.get());
+         }
+
+         if (device_data.has_drawn_sr && is_upscaling)
+         {
+            // Publish the resolved AA scene for downstream post-processing.
+            tracking.frame_links[reinterpret_cast<uintptr_t>(output_resource.get())] = FindPoolIndexByPtr(tracking, result);
+            tracking.post_taa_upscale_active = true;
+         }
+      }
+      device_data.sr_output_color = nullptr;
+      compute_state_stack.Restore(native_device_context);
+      draw_state_stack.Restore(native_device_context);
+      if (result_srv && game_device_data.rain.WantsComposition(FFXVRainComposition::AfterAA))
+      {
+         ID3D11RenderTargetView* target = device_data.has_drawn_sr && is_upscaling ? result->rtv.get() : scene_rtv;
+         CompositeRain(native_device, native_device_context, device_data, target, true);
+      }
+      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+      // Consume the replay state after TAA fallback; has_drawn_sr only marks successful SR.
+      if (result_srv && !device_data.has_drawn_sr)
+         game_device_data.taa_state.state.reset();
+      return result_srv != nullptr;
+   }
+
+public:
    void OnInit(bool async) override
    {
+#if LUMA_HAS_RECIPE_PROVIDERS
+      Patch::RegisterRecipe({
+         .identity = kDitheringFixRecipe,
+         .display_name = "Dithering Fix",
+         .description = "Fixes issues with low quality dithering. (Noisy transparency, etc...)",
+         .default_enabled = true,
+         .visibility = Patch::RecipeVisibility::Always,
+      });
+#endif
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');
       GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetDefaultValue('0');
       GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0');
@@ -178,31 +426,34 @@ public:
       use_os_reference_white_level = false;
 
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs CS"), ShaderDefinition{"Luma_FFXV_MotionVec_Decode", reshade::api::pipeline_subobject_type::compute_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Rain Composite PS"), ShaderDefinition{"Luma_RainComposite", reshade::api::pipeline_subobject_type::pixel_shader});
       native_shaders_definitions.emplace(0x2100CE9BU, ShaderDefinition{"Luma_Directional_Light", reshade::api::pipeline_subobject_type::pixel_shader});
       native_shaders_definitions.emplace(0xA315F1E7U, ShaderDefinition{"Luma_Directional_Light_CSM", reshade::api::pipeline_subobject_type::pixel_shader});
       native_shaders_definitions.emplace(0x4B8E0FF8U, ShaderDefinition{"Luma_Directional_Light_CSM_AO", reshade::api::pipeline_subobject_type::pixel_shader});
-
 
       default_luma_global_game_settings.BloomStrength = 1.f;
       default_luma_global_game_settings.Sharpness = 0.3f;
       default_luma_global_game_settings.UseSDROverHDR = 1;
       default_luma_global_game_settings.UseVanillaGamutRatio = 0;
+      default_luma_global_game_settings.VignetteStrength = 1.f;
+      default_luma_global_game_settings.EnableDoF = 1;
 
       cb_luma_global_settings.GameSettings = default_luma_global_game_settings;
 
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12; // #w## Update this (find the right value) ###
-
-#if ENABLE_BLOOM
-      g_bloom_sigmas.resize(g_bloom_nmips);
-      g_bloom_sigmas[0] = 1.5f;
-      g_bloom_sigmas[1] = 2.0f;
-      g_bloom_sigmas[2] = 2.0f;
-      g_bloom_sigmas[3] = 2.0f;
-      g_bloom_sigmas[4] = 1.0f;
-      g_bloom_sigmas[5] = 1.0f;
-#endif
    }
+
+#if LUMA_HAS_RECIPE_PROVIDERS
+   void OnInitDevice(ID3D11Device* native_device, DeviceData& device_data) override
+   {
+      constexpr size_t frame_index_offset = offsetof(CB::LumaGlobalSettings, FrameIndex);
+      static_assert(frame_index_offset % sizeof(float4) == sizeof(uint32_t)); // Recipe selects the y component.
+      dxp::PatchOptions options;
+      options.SetEnv("frame_index_offset", uint32_t(frame_index_offset / sizeof(float4)));
+      Patch::SetOptions(device_data, CompileTimeStringHash(kDitheringFixRecipe), std::move(options));
+   }
+#endif
 
    void OnLoad(std::filesystem::path& file_path, bool failed) override
    {
@@ -211,18 +462,8 @@ public:
          reshade::register_event<reshade::addon_event::map_buffer_region>(FinalFantasyXV::OnMapBufferRegion);
          reshade::register_event<reshade::addon_event::unmap_buffer_region>(FinalFantasyXV::OnUnmapBufferRegion);
          reshade::register_event<reshade::addon_event::update_buffer_region>(FinalFantasyXV::OnUpdateBufferRegion);
+         reshade::register_event<reshade::addon_event::clear_render_target_view>(FinalFantasyXV::OnClearRenderTargetView);
       }
-   }
-
-   void OnInitDevice(ID3D11Device* native_device, DeviceData& device_data) override
-   {
-      auto& game_device_data = GetGameDeviceData(device_data);
-
-#if LUMA_HAS_RECIPE_PROVIDERS
-      reshade::log::message(reshade::log::level::info, std::format("Recipe directory: {}", device_data.recipes.GetRootPath().string()).c_str());
-      bool loaded = device_data.recipes.LoadFromFile(FFXV_DEPTH_DITHERING_RECIPE_HASH, "FFXV_Dithering_Fixes");
-      ASSERT_ONCE_MSG(loaded, "Failed to load FFXV depth dithering DXP recipe");
-#endif
    }
 
    void LoadConfigs() override
@@ -230,6 +471,12 @@ public:
       reshade::api::effect_runtime* runtime = nullptr;
       reshade::get_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
       reshade::get_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
+      reshade::get_config_value(runtime, NAME, "VignetteStrength", cb_luma_global_settings.GameSettings.VignetteStrength);
+      cb_luma_global_settings.GameSettings.VignetteStrength = std::clamp(cb_luma_global_settings.GameSettings.VignetteStrength, 0.f, 2.f);
+
+      bool enable_dof = true;
+      reshade::get_config_value(runtime, NAME, "EnableDoF", enable_dof);
+      cb_luma_global_settings.GameSettings.EnableDoF = enable_dof ? 1 : 0;
 
       bool use_sdr_over_hdr = true;
       reshade::get_config_value(runtime, NAME, "UseSDROverHDR", use_sdr_over_hdr);
@@ -238,13 +485,11 @@ public:
       enable_directional_shadows = false;
       reshade::get_config_value(runtime, NAME, "DirectionalShadows", enable_directional_shadows);
 
-      bool dithering_patch_enabled = true;
-      reshade::get_config_value(runtime, NAME, "DitheringFix", dithering_patch_enabled);
-      this->dithering_patch_enabled.store(dithering_patch_enabled, std::memory_order_relaxed);
-
       bool use_vanilla_gamut_ratio = false;
       reshade::get_config_value(runtime, NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
       cb_luma_global_settings.GameSettings.UseVanillaGamutRatio = use_vanilla_gamut_ratio ? 1 : 0;
+      reshade::get_config_value(runtime, NAME, "RainComposition", rain_composition);
+      rain_composition = std::clamp(rain_composition, 0, 1);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
@@ -253,7 +498,24 @@ public:
 
       if (ImGui::TreeNodeEx("Post Process", ImGuiTreeNodeFlags_DefaultOpen))
       {
-
+         bool enable_dof = cb_luma_global_settings.GameSettings.EnableDoF != 0;
+         if (ImGui::Checkbox("Enable DoF", &enable_dof))
+         {
+            cb_luma_global_settings.GameSettings.EnableDoF = enable_dof ? 1 : 0;
+            device_data.force_reset_sr = true;
+            reshade::set_config_value(runtime, NAME, "EnableDoF", enable_dof);
+         }
+         if (DrawResetButton(enable_dof, true, "EnableDoF", runtime))
+         {
+            cb_luma_global_settings.GameSettings.EnableDoF = 1;
+            device_data.force_reset_sr = true;
+            reshade::set_config_value(runtime, NAME, "EnableDoF", enable_dof);
+         }
+         const char* rain_timings[] = {"After TAA / DLSS", "After DoF"};
+         if (ImGui::Combo("Rain Composition", &rain_composition, rain_timings, IM_ARRAYSIZE(rain_timings)))
+            reshade::set_config_value(runtime, NAME, "RainComposition", rain_composition);
+         if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("After TAA / DLSS: rain receives game DoF and motion blur.\nAfter DoF: rain bypasses DoF and still receives motion blur when enabled.\nRequires active SR.");
          if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
          {
             bool use_sdr_over_hdr = cb_luma_global_settings.GameSettings.UseSDROverHDR == 1;
@@ -290,35 +552,6 @@ public:
             reshade::set_config_value(runtime, NAME, "DirectionalShadows", enable_directional_shadows);
          }
 
-#if LUMA_HAS_RECIPE_PROVIDERS
-         bool dithering_patch_enabled = this->dithering_patch_enabled.load(std::memory_order_relaxed);
-         if (ImGui::Checkbox("Dithering Fix", &dithering_patch_enabled))
-         {
-            this->dithering_patch_enabled.store(dithering_patch_enabled, std::memory_order_relaxed);
-            reshade::set_config_value(runtime, NAME, "DitheringFix", dithering_patch_enabled);
-
-         }
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Fixes issues with low quality dithering. (Noisy transparency, etc...)");
-         if (DrawResetButton(dithering_patch_enabled, true, "DitheringFix", runtime))
-         {
-            this->dithering_patch_enabled.store(true, std::memory_order_relaxed);
-            reshade::set_config_value(runtime, NAME, "DitheringFix", dithering_patch_enabled);
-         }
-#endif
-
-#if ENABLE_BLOOM
-         if (ImGui::Checkbox("Enable Luma Bloom", &g_luma_bloom_enable))
-         {
-            reshade::set_config_value(runtime, NAME, "UseLumaBloom", g_luma_bloom_enable);
-         }
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Replaces game bloom, fixes blockyness issues.");
-
-         if (DrawResetButton(g_luma_bloom_enable, true, "UseLumaBloom", runtime))
-         {
-            reshade::set_config_value(runtime, NAME, "UseLumaBloom", g_luma_bloom_enable);
-         }
          if (ImGui::SliderFloat("Bloom Strength", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
             reshade::set_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
@@ -328,7 +561,15 @@ public:
             cb_luma_global_settings.GameSettings.BloomStrength = 1.f;
             reshade::set_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
          }
-#endif
+
+         if (ImGui::SliderFloat("Vignette Strength", &cb_luma_global_settings.GameSettings.VignetteStrength, 0.f, 2.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
+         {
+            reshade::set_config_value(runtime, NAME, "VignetteStrength", cb_luma_global_settings.GameSettings.VignetteStrength);
+         }
+         if (DrawResetButton(cb_luma_global_settings.GameSettings.VignetteStrength, 1.f, "VignetteStrength", runtime))
+         {
+            cb_luma_global_settings.GameSettings.VignetteStrength = 1.f;
+         }
 
          if (ImGui::SliderFloat("Sharpness", &cb_luma_global_settings.GameSettings.Sharpness, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
@@ -342,128 +583,33 @@ public:
 
          ImGui::TreePop();
       }
-
-#if DEVELOPMENT
-#if ENABLE_BLOOM
-
-      ImGui::NewLine();
-
-      if (ImGui::SliderInt("Luma Bloom Mips", &g_bloom_nmips, 1, 10))
-         g_bloom_sigmas.resize(g_bloom_nmips, 2.0f);
-      for (int i = 0; i < g_bloom_nmips; ++i)
-      {
-         ImGui::PushID(i); // Unique ID per slider, otherwise ImGui flags the loop items as conflicting IDs
-         const std::string name = "Luma Bloom Sigma " + std::to_string(i);
-         ImGui::SliderFloat(name.c_str(), &g_bloom_sigmas[i], 0.0f, 15.0f, "%.3f");
-         ImGui::PopID();
-      }
-#endif
-#endif
    }
-
-#if LUMA_PATCH_RECIPE_ASYNC
-   // Recipe provider (DXP), asynchronous: runs on the background thread; the
-   // patched container is applied via a pipeline clone (bind-time swap).
-   std::optional<dxp::RecipeReport> PatchShaderRecipeAsync(DeviceData& device_data, const Patch::ShaderPatchRequest& request) override
-   {
-      std::shared_ptr<dxp::sm5::Recipe> recipe = device_data.recipes.GetRecipe(FFXV_DEPTH_DITHERING_RECIPE_HASH);
-      if (recipe == nullptr || request.shader_container == nullptr || request.shader_container_size < sizeof(DXBCHeader))
-      {
-         return std::nullopt;
-      }
-
-      if (request.type != reshade::api::pipeline_subobject_type::pixel_shader)
-      {
-         return std::nullopt;
-      }
-
-      dxp::PatchOptions options;
-      options.logger = [](dxp::LogLevel level, const std::string& message)
-      {
-         reshade::log::level reshade_level = reshade::log::level::info;
-         switch (level)
-         {
-         case dxp::LogLevel::Error:
-            reshade_level = reshade::log::level::error;
-            break;
-         case dxp::LogLevel::Warning:
-            reshade_level = reshade::log::level::warning;
-            break;
-         case dxp::LogLevel::Debug:
-            reshade_level = reshade::log::level::debug;
-            break;
-         case dxp::LogLevel::Info:
-            break;
-         }
-         reshade::log::message(reshade_level, ("[Luma] [Patch] " + message).c_str());
-      };
-      options.log_level = dxp::LogLevel::Warning;
-
-      std::span<const uint8_t> input_container;
-      if (request.shader_container_owned != nullptr)
-      {
-         input_container = *request.shader_container_owned;
-      }
-      else
-      {
-         input_container = {reinterpret_cast<const uint8_t*>(request.shader_container), request.shader_container_size};
-      }
-
-      auto result = recipe->Execute(input_container, options);
-      if (!result || result->output_bytes.empty())
-      {
-         reshade::log::message(reshade::log::level::warning,
-            std::format("[Patch] recipe execution failed for shader {:08X}", request.shader_hash).c_str());
-         return std::nullopt;
-      }
-
-      if (!result->modified)
-      {
-         return std::nullopt;
-      }
-
-      {
-         auto& game_device_data = *static_cast<GameDeviceDataFFXV*>(device_data.game);
-         GameDeviceDataFFXV::FFXVDxpBindingEntry entry{};
-         for (const auto& binding_pair : result->new_bindings)
-         {
-            const auto& handle = binding_pair.first;
-            const auto& binding = binding_pair.second;
-            if (handle == "fast_noise" && binding.binding_class == dxp::BindingClass::Texture)
-            {
-               entry.fast_noise_bind_point = binding.register_index;
-            }
-            else if (handle == "frame_constants" && binding.binding_class == dxp::BindingClass::CBuffer)
-            {
-               entry.frame_constants_bind_point = binding.register_index;
-            }
-         }
-         // Pending until the clone is published on present (ready).
-         const std::lock_guard lock(game_device_data.pending_mutex);
-         game_device_data.pending_dxp_bindings.insert_or_assign(request.shader_hash, std::move(entry));
-      }
-
-#if DEVELOPMENT || TEST
-      reshade::log::message(reshade::log::level::debug,
-         std::format("[Patch] patched shader {:08X} ({} bytes, {} new bindings)", request.shader_hash, result->output_bytes.size(), result->new_bindings.size()).c_str());
-#endif
-      return std::move(*result);
-   }
-#endif
 
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
-#if LUMA_HAS_RECIPE_PROVIDERS
-      // Bind recipe resources only when toggle is ON and this shader was patched.
-      if ((stages & reshade::api::shader_stage::pixel) != 0 && dithering_patch_enabled.load(std::memory_order_relaxed) && !original_shader_hashes.pixel_shaders.empty())
+      if (original_shader_hashes.Contains(shader_hashes_rain) &&
+          device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && !device_data.has_drawn_sr &&
+          original_draw_dispatch_func)
       {
-         BindPatchedResources(native_device_context, cmd_list_data, device_data, original_shader_hashes, stages, updated_cbuffers);
+         const auto vs = device_data.native_vertex_shaders.find(CompileTimeStringHash("Copy VS"));
+         const auto ps = device_data.native_pixel_shaders.find(CompileTimeStringHash("Rain Composite PS"));
+         if (game_device_data.rain.Capture(native_device, native_device_context,
+             vs != device_data.native_vertex_shaders.end() ? vs->second.get() : nullptr,
+             ps != device_data.native_pixel_shaders.end() ? ps->second.get() : nullptr, [&]()
+             {
+                if (is_custom_pass)
+                {
+                   SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
+                   SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData);
+                }
+                (*original_draw_dispatch_func)();
+             }, static_cast<FFXVRainComposition>(rain_composition)))
+            return DrawOrDispatchOverrideType::Replaced;
+         // Preparation failed before any redirect: let the original draw run.
+         return DrawOrDispatchOverrideType::None;
       }
-#endif
-
-
       if (original_shader_hashes.Contains(shader_hashes_directional_light) && enable_directional_shadows)
       {
 
@@ -478,266 +624,72 @@ public:
             if (fast_noise_srv)
             {
                native_device_context->PSSetShaderResources(42, 1, &fast_noise_srv);
-#if DEVELOPMENT
-               VerifyFastNoiseBinding(native_device_context, 42, fast_noise_srv, "AttachFastNoise");
-#endif
             }
          }
 
          return DrawOrDispatchOverrideType::None;
       }
 
-      // Mark baseline logging flag when sr_type is None and TAA shader is detected
-      // (This runs separately from the sr_type != None TAA handler above)
-#if DEVELOPMENT || TEST
-      if (device_data.sr_type == SR::Type::None && original_shader_hashes.Contains(shader_hashes_TAA))
+      if (original_shader_hashes.Contains(shader_hashes_TAA))
       {
-         game_device_data.dbg_log_baseline_state = true;
-      }
-
-      // When sr_type is None, log baseline viewport/scissor state for passes between TAA and Upscale
-      if (device_data.sr_type == SR::Type::None && game_device_data.dbg_log_baseline_state)
-      {
-         // Helper lambda to log viewport and scissor state
-         auto log_state = [&](const char* label)
-         {
-            UINT num_viewports = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-            D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
-            native_device_context->RSGetViewports(&num_viewports, viewports);
-
-            UINT num_scissors = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-            D3D11_RECT scissors[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
-            native_device_context->RSGetScissorRects(&num_scissors, scissors);
-
-            char log_buf[1024];
-            snprintf(log_buf, sizeof(log_buf),
-               "[FFXV Baseline] %s sr_type=None  stages=%u  VPs=%u  scissors=%u",
-               label, static_cast<unsigned>(stages), num_viewports, num_scissors);
-            Log_Debug(reshade::log::level::info, log_buf);
-
-            if (num_viewports > 0)
-            {
-               for (UINT i = 0; i < num_viewports; ++i)
-               {
-                  snprintf(log_buf, sizeof(log_buf),
-                     "[FFXV Baseline]   VP[%u] = {%f, %f, %f, %f, %f, %f}",
-                     i, viewports[i].TopLeftX, viewports[i].TopLeftY,
-                     viewports[i].Width, viewports[i].Height,
-                     viewports[i].MinDepth, viewports[i].MaxDepth);
-                  Log_Debug(reshade::log::level::info, log_buf);
-               }
-            }
-
-            if (num_scissors > 0)
-            {
-               for (UINT i = 0; i < num_scissors; ++i)
-               {
-                  snprintf(log_buf, sizeof(log_buf),
-                     "[FFXV Baseline]   Scissor[%u] = [%d, %d, %d, %d] (%dx%d)",
-                     i, scissors[i].left, scissors[i].top, scissors[i].right, scissors[i].bottom,
-                     scissors[i].right - scissors[i].left, scissors[i].bottom - scissors[i].top);
-                  Log_Debug(reshade::log::level::info, log_buf);
-               }
-            }
-         };
-
-         if (original_shader_hashes.Contains(shader_hashes_OutputScaled))
-         {
-            // Upscale shader detected - this is the terminal pass, log and reset flag
-            log_state("[terminal]");
-            game_device_data.dbg_log_baseline_state = false;
-         }
-         else
-         {
-            // Intermediate pass between TAA and Upscale - log viewport/scissor state
-            log_state("[intermediate]");
-         }
-      }
-#endif
-
-      if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && original_shader_hashes.Contains(shader_hashes_TAA))
-      {
-
          device_data.taa_detected = true;
-         if (!game_device_data.found_taa_cb || !game_device_data.has_processed_view_buffer)
+         auto native_taa_fallback = [&]()
          {
-            std::string reason = std::format("{} {}", (!game_device_data.found_taa_cb ? "TAA constant buffer not found" : ""), (!game_device_data.has_processed_view_buffer ? "per-view global buffer not processed yet" : ""));
-            Log_Debug(
-               reshade::log::level::warning,
-               ("TAA constant buffer not found or view buffer not processed yet - skipping TAA pass handling: " + reason).c_str());
-            device_data.force_reset_sr = true;
-            return DrawOrDispatchOverrideType::None;
+            if (!game_device_data.rain.pending || !original_draw_dispatch_func)
+               return DrawOrDispatchOverrideType::None;
+            ComPtr<ID3D11RenderTargetView> target;
+            native_device_context->OMGetRenderTargets(1, target.put(), nullptr);
+            if (is_custom_pass)
+            {
+               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
+               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData);
+            }
+            (*original_draw_dispatch_func)();
+            game_device_data.rain.resolved = true;
+            if (game_device_data.rain.WantsComposition(FFXVRainComposition::AfterAA))
+               CompositeRain(native_device, native_device_context, device_data, target.get(), true);
+            return DrawOrDispatchOverrideType::Replaced;
+         };
+         game_device_data.rain.capture_closed = true;
+         if (game_device_data.found_taa_cb && game_device_data.taa_cb_data)
+         {
+            game_device_data.rain.jitter_x = game_device_data.taa_cb_data->g_uvJitterOffset.x;
+            game_device_data.rain.jitter_y = game_device_data.taa_cb_data->g_uvJitterOffset.y;
+         }
+         if (device_data.sr_type == SR::Type::None || device_data.sr_suppressed || !game_device_data.taa_cb_data || !game_device_data.found_taa_cb || !game_device_data.has_processed_view_buffer)
+         {
+            return native_taa_fallback();
          }
 
          // Extract jitter from cached TAA cbuffer (guaranteed to have correct values at this point)
-         if (game_device_data.taa_cb_data)
+         game_device_data.taa_jitters.x = game_device_data.taa_cb_data->g_uvJitterOffset.x * game_device_data.taa_cb_data->g_screenSize.x;
+         game_device_data.taa_jitters.y = game_device_data.taa_cb_data->g_uvJitterOffset.y * game_device_data.taa_cb_data->g_screenSize.y;
+         device_data.render_resolution = {game_device_data.taa_cb_data->g_screenSize.x, game_device_data.taa_cb_data->g_screenSize.y};
+         game_device_data.taa_jitter_uv = {game_device_data.taa_cb_data->g_uvJitterOffset.x, game_device_data.taa_cb_data->g_uvJitterOffset.y};
+         game_device_data.taa_state.Cache(native_device_context, device_data.uav_max_count);
+         auto& taa_state = *game_device_data.taa_state.state;
+         if (!taa_state.shader_resource_views[0] || !taa_state.shader_resource_views[3] || !taa_state.shader_resource_views[6] || !taa_state.constant_buffers[0] || !taa_state.render_target_views[0])
          {
-            game_device_data.taa_jitters.x = game_device_data.taa_cb_data->g_uvJitterOffset.x * game_device_data.taa_cb_data->g_screenSize.x;
-            game_device_data.taa_jitters.y = game_device_data.taa_cb_data->g_uvJitterOffset.y * game_device_data.taa_cb_data->g_screenSize.y;
-            device_data.render_resolution = {game_device_data.taa_cb_data->g_screenSize.x, game_device_data.taa_cb_data->g_screenSize.y};
+            game_device_data.rain.resolved = true;
+            game_device_data.taa_state.state.reset();
+            return native_taa_fallback();
          }
-
-         // Check if the motion vector decode shader is available
-         if (device_data.native_compute_shaders[CompileTimeStringHash("Decode MVs CS")].get() == nullptr)
+         ComPtr<ID3D11Resource> taa_output;
+         taa_state.render_target_views[0]->GetResource(taa_output.put());
+         ID3D11ShaderResourceView* depth_srv = taa_state.shader_resource_views[3].get();
+         ID3D11ShaderResourceView* velocity_srv = taa_state.shader_resource_views[6].get();
+         if (!device_data.native_compute_shaders[CompileTimeStringHash("Decode MVs CS")] || !SetupMotionVectorDecodeTarget(native_device, game_device_data, velocity_srv))
          {
-            Log_Debug(
-               reshade::log::level::warning,
-               "Motion vector decode compute shader not available - skipping TAA pass handling");
-            device_data.force_reset_sr = true;
-            return DrawOrDispatchOverrideType::None;
+            game_device_data.rain.resolved = true;
+            game_device_data.taa_state.state.reset();
+            return native_taa_fallback();
          }
-
-         // Extract TAA shader resources (source color, depth, motion vectors)
-         Log_Debug(
-            reshade::log::level::info,
-            "TAA pass detected - extracting shader resources");
-         com_ptr<ID3D11ShaderResourceView> depth_srv;
-         com_ptr<ID3D11ShaderResourceView> velocity_srv;
-         if (!ExtractTAAShaderResources(native_device, native_device_context, game_device_data, &depth_srv, &velocity_srv))
-         {
-            Log_Debug(
-               reshade::log::level::warning,
-               "Failed to extract TAA shader resources (depth or velocity SRV missing) - skipping TAA pass handling");
-            ASSERT_ONCE(false);
-            return DrawOrDispatchOverrideType::None;
-         }
-
-         // Get render targets
-         com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
-
-         ID3D11RenderTargetView* output_rtv = render_target_views[0].get();
-         if (!output_rtv)
-         {
-            Log_Debug(
-               reshade::log::level::warning,
-               "No render target view bound - skipping TAA pass handling");
-            return DrawOrDispatchOverrideType::None;
-         }
-
-         // Setup output texture
-         com_ptr<ID3D11Texture2D> output_color;
-         D3D11_TEXTURE2D_DESC output_texture_desc = {};
-         bool output_supports_uav = false;
-         bool output_changed = false;
-         uintptr_t taa_output_key = 0;
-         bool taa_upscaled_mapping_ready = false;
-
-         Log_Debug(
-            reshade::log::level::info,
-            "Setting up SR output texture for TAA pass");
-         // Only treat as upscaling when render < output (DLSS/FSR).
-         // Supersampling (render > output) and DLAA (render == output) both use the DLAA path.
-         const bool is_upscaling = device_data.render_resolution.x < device_data.output_resolution.x &&
-                                   device_data.render_resolution.y < device_data.output_resolution.y;
-         const float2* sr_target_res = is_upscaling ? &device_data.output_resolution : nullptr;
-
-         if (is_upscaling)
-         {
-            // Link TAA output to its upscaled replacement for this frame.
-            // SR draw writes directly into the linked pooled texture.
-            ComPtr<ID3D11Resource> output_resource;
-            output_rtv->GetResource(output_resource.put());
-            output_resource->QueryInterface(&output_color);
-            output_color->GetDesc(&output_texture_desc); // The upscale branch also fills the copyback size below
-
-            UpscaledResource* taa_upscaled = LinkUpscaledResource(
-               native_device,
-               native_device_context,
-               output_resource.get(),
-               game_device_data.upscale_tracking,
-               device_data.output_resolution,
-               true);
-            if (!taa_upscaled || !taa_upscaled->texture)
-            {
-               Log_Debug(
-                  reshade::log::level::warning,
-                  "Failed to prepare pooled upscaled output for TAA pass - skipping TAA pass handling");
-               return DrawOrDispatchOverrideType::None;
-            }
-            device_data.sr_output_color = taa_upscaled->texture.get();
-            game_device_data.sr_output_srv = taa_upscaled->srv.get();
-            taa_output_key = reinterpret_cast<uintptr_t>(output_resource.get());
-            game_device_data.upscale_tracking.post_taa_upscale_active = true;
-            taa_upscaled_mapping_ready = true;
-
-#if DEVELOPMENT || TEST
-            {
-               D3D11_TEXTURE2D_DESC orig_desc{}, up_desc{};
-               output_color->GetDesc(&orig_desc);
-               taa_upscaled->texture->GetDesc(&up_desc);
-               char taa_log[512];
-               snprintf(taa_log, sizeof(taa_log),
-                  "[FFXV UpscaleChain] TAA link established:"
-                  "  orig=%p %ux%u fmt=%u"
-                  "  ->  tex=%p srv=%p %ux%u fmt=%u",
-                  static_cast<void*>(output_resource.get()),
-                  orig_desc.Width, orig_desc.Height, static_cast<uint32_t>(orig_desc.Format),
-                  static_cast<void*>(taa_upscaled->texture.get()),
-                  static_cast<void*>(taa_upscaled->srv.get()),
-                  up_desc.Width, up_desc.Height, static_cast<uint32_t>(up_desc.Format));
-               Log_Debug(reshade::log::level::info, taa_log);
-            }
-#endif
-         }
-         else
-         {
-            if (!SetupSROutput(native_device, device_data, output_rtv, output_color, output_texture_desc, output_supports_uav, output_changed))
-         {
-            Log_Debug(
-               reshade::log::level::warning,
-               "Failed to set up SR output texture for TAA pass - skipping TAA pass handling");
-            return DrawOrDispatchOverrideType::None;
-         }
-         }
-
-         // auto clear_upscale_frame_tracking = [&]()
-         // {
-         //    if (!taa_upscaled_mapping_ready)
-         //       return;
-
-         //    UnlinkUpscaledResource(game_device_data.upscale_tracking, taa_output_key);
-         //    game_device_data.upscale_tracking.post_taa_upscale_active = false;
-         //    taa_upscaled_mapping_ready = false;
-         // };
-
-         // Setup motion vector decode target
-         if (!SetupMotionVectorDecodeTarget(native_device, game_device_data, velocity_srv.get()))
-         {
-            Log_Debug(
-               reshade::log::level::warning,
-               "Failed to set up motion vector decode target - skipping TAA pass handling");
-            // Roll back tracking activation: SR never ran so the pool texture has no valid data.
-            if (taa_upscaled_mapping_ready)
-            {
-               UnlinkUpscaledResource(game_device_data.upscale_tracking, taa_output_key);
-               game_device_data.upscale_tracking.post_taa_upscale_active = false;
-            }
-            return DrawOrDispatchOverrideType::None;
-         }
-
          // Cache state before motion vector decode
-         DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
          DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
-         draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
          compute_state_stack.Cache(native_device_context, device_data.uav_max_count);
-
-         Log_Debug(
-            reshade::log::level::info,
-            "Starting Decode Motion Vectors compute shader");
-         // Decode motion vectors
-         DecodeMotionVectors(
-            native_device_context,
-            cmd_list_data,
-            device_data,
-            depth_srv.get(),
-            velocity_srv.get(),
-            game_device_data.sr_motion_vectors_uav.get());
-
-         Log_Debug(
-            reshade::log::level::info,
-            "Finished Decode Motion Vectors compute shader");
+         DecodeMotionVectors(native_device_context, cmd_list_data, device_data, depth_srv, velocity_srv, game_device_data.sr_motion_vectors_uav.get());
+         compute_state_stack.Restore(native_device_context);
+         game_device_data.taa_state.Restore(native_device_context);
 #if DEVELOPMENT
          // Add trace info for motion vector decode pass
          {
@@ -755,523 +707,110 @@ public:
             }
          }
 #endif
-         // Get SR instance data
-         auto* sr_instance_data = device_data.GetSRInstanceData();
-         if (!sr_instance_data)
-         {
-            ASSERT_ONCE(false);
-            if (output_supports_uav)
-            {
-            game_device_data.sr_output_srv = nullptr;
-            device_data.sr_output_color = nullptr;
-            }
-            // Roll back tracking activation: SR never ran so the pool texture has no valid data.
-            if (taa_upscaled_mapping_ready)
-            {
-               UnlinkUpscaledResource(game_device_data.upscale_tracking, taa_output_key);
-               game_device_data.upscale_tracking.post_taa_upscale_active = false;
-            }
-            return DrawOrDispatchOverrideType::None;
-         }
-
-         // When upscaling, SR output dimensions are output_resolution, not the RTV size
-         SR::SettingsData settings_data;
-         settings_data.output_width = is_upscaling ? static_cast<uint>(device_data.output_resolution.x) : output_texture_desc.Width;
-         settings_data.output_height = is_upscaling ? static_cast<uint>(device_data.output_resolution.y) : output_texture_desc.Height;
-         settings_data.render_width = static_cast<uint>(device_data.render_resolution.x);
-         settings_data.render_height = static_cast<uint>(device_data.render_resolution.y);
-         settings_data.dynamic_resolution = false;
-         settings_data.hdr = true;
-         settings_data.auto_exposure = true;
-         settings_data.inverted_depth = false;
-         settings_data.mvs_jittered = false;
-         settings_data.render_preset = dlss_render_preset;
-         sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
-
-         // Prepare SR draw data
-         bool reset_sr = device_data.force_reset_sr || output_changed;
-         device_data.force_reset_sr = false;
-
-         float2 jitters = game_device_data.taa_jitters;
-
-         SR::SuperResolutionImpl::DrawData draw_data;
-         draw_data.source_color = game_device_data.sr_source_color.get();
-         draw_data.output_color = device_data.sr_output_color.get();
-         draw_data.motion_vectors = game_device_data.sr_motion_vectors.get();
-         draw_data.depth_buffer = game_device_data.depth_buffer.get();
-
-         draw_data.jitter_x = jitters.x;
-         draw_data.jitter_y = jitters.y;
-         draw_data.vert_fov = game_device_data.camera_fov;
-         draw_data.far_plane = game_device_data.camera_far;
-         draw_data.near_plane = game_device_data.camera_near;
-         draw_data.reset = reset_sr;
-         draw_data.render_width = static_cast<uint>(device_data.render_resolution.x);
-         draw_data.render_height = static_cast<uint>(device_data.render_resolution.y);
-
-         Log_Debug(
-            reshade::log::level::info,
-            "Prepared SR draw data; executing SR draw");
-
-         std::string sr_data = std::format("SR draw data: source_color={:x}, output_color={:x}, motion_vectors={:x}, depth_buffer={:x}, jitter=({}, {}), fov={}, near_plane={}, far_plane={}, render_dims=({}x{}), reset={}",
-            (size_t)draw_data.source_color, (size_t)draw_data.output_color, (size_t)draw_data.motion_vectors, (size_t)draw_data.depth_buffer,
-            draw_data.jitter_x, draw_data.jitter_y, draw_data.vert_fov, draw_data.near_plane, draw_data.far_plane,
-            draw_data.render_width, draw_data.render_height, draw_data.reset);
-         Log_Debug(reshade::log::level::info, sr_data.c_str());
-         // Execute SR
-         device_data.has_drawn_sr = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
-
-#if DEVELOPMENT
-         // Add trace info for DLSS/FSR execution
-         if (device_data.has_drawn_sr)
-         {
-            const std::shared_lock lock_trace(s_mutex_trace);
-            if (trace_running)
-            {
-               const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-               TraceDrawCallData trace_draw_call_data;
-               trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
-               trace_draw_call_data.command_list = native_device_context;
-               trace_draw_call_data.custom_name = device_data.sr_type == SR::Type::DLSS ? "DLSS" : "FSR";
-               GetResourceInfo(device_data.sr_output_color.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-               cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
-            }
-         }
-#endif
-
-         // Clear temporary resources
-         game_device_data.sr_source_color = nullptr;
          game_device_data.depth_buffer = nullptr;
-
-         // Handle SR result
-         if (device_data.has_drawn_sr)
-         {
-            if (is_upscaling)
-            {
-#if DEVELOPMENT || TEST
-               Log_Debug(reshade::log::level::info, "[FFXV UpscaleChain] Pooled TAA mapping ready - tracking active until Upscale shader (1B6C8C68)");
-#endif
-               // need to copyback the upscaled result to the original TAA output. It is used as previous frame input for SSR.
-
-            native_device_context->OMSetRenderTargets(0, nullptr, nullptr);
-
-            DrawCustomPixelShader(
-               native_device_context,
-               device_data.default_depth_stencil_state.get(),
-               device_data.default_blend_state.get(),
-               device_data.sampler_state_linear.get(),
-               device_data.native_vertex_shaders[CompileTimeStringHash("Scale VS")].get(),
-               device_data.native_pixel_shaders[CompileTimeStringHash("Scale PS")].get(),
-               game_device_data.sr_output_srv.get(),
-               output_rtv,
-               output_texture_desc.Width,
-               output_texture_desc.Height);
-
-            device_data.sr_output_color = nullptr;
-            game_device_data.sr_output_srv = nullptr;
-
-            draw_state_stack.Restore(native_device_context);
-            compute_state_stack.Restore(native_device_context);
+         taa_state.shader_resource_views[3]->GetResource(game_device_data.depth_buffer.put());
+         if (DrawAA(native_device, native_device_context, cmd_list_data, device_data, taa_state.shader_resource_views[0].get(), taa_state.render_target_views[0].get()))
             return DrawOrDispatchOverrideType::Replaced;
-            }
-            else
-            {
-               // DLAA (same resolution): copy result back to the original TAA output
-               if (!output_supports_uav)
-               {
-                  native_device_context->CopyResource(output_color.get(), device_data.sr_output_color.get());
-               }
-               else
-               {
-                  device_data.sr_output_color = nullptr;
-                  game_device_data.sr_output_srv = nullptr;
-               }
-               draw_state_stack.Restore(native_device_context);
-               compute_state_stack.Restore(native_device_context);
-               return DrawOrDispatchOverrideType::Replaced;
-            }
-         }
-         else
-         {
-            Log_Debug(
-               reshade::log::level::warning,
-               "Super Resolution draw failed");
-            device_data.force_reset_sr = true;
-            if (taa_upscaled_mapping_ready)
-            {
-               UnlinkUpscaledResource(game_device_data.upscale_tracking, taa_output_key);
-               game_device_data.upscale_tracking.post_taa_upscale_active = false;
-            }
-         }
-
-         if (output_supports_uav)
-         {
-            device_data.sr_output_color = nullptr;
-         game_device_data.sr_output_srv = nullptr;
-         }
-         draw_state_stack.Restore(native_device_context);
-         compute_state_stack.Restore(native_device_context);
+         return native_taa_fallback();
       }
 
-      // Luma bloom: at the highpass pass capture the pre-bloom scene SRV, skip all intermediate
-      // passes, and at the final glare/vignette pass substitute the game's composite bloom with
-      // Luma's separable Gaussian bloom so the original shader applies its glare/vignette on top.
-#if ENABLE_BLOOM
-      if (g_luma_bloom_enable)
+      // CoC is generated from render-resolution jittered depth; retain its native grid.
+      if (device_data.has_drawn_sr && original_shader_hashes.Contains(shader_hashes_dof_coc))
       {
-         if (original_shader_hashes.Contains(shader_hashes_bloom_highpass))
-         {
-            native_device_context->PSGetShaderResources(0, 1, game_device_data.bloom_scene_srv.put());
-            native_device_context->PSGetConstantBuffers(0, 1, game_device_data.bloom_globals_cb.put());
-            game_device_data.captured_bloom_scene = true;
-            return DrawOrDispatchOverrideType::Skip;
-         }
-
-         if (original_shader_hashes.Contains(shader_hashes_bloom_skip))
-            return DrawOrDispatchOverrideType::Skip;
-
-         if (original_shader_hashes.Contains(shader_hashes_bloom_glare_vignette) && game_device_data.captured_bloom_scene)
-         {
-            // Rebind the highpass cbuffer to b0 so bloom_prefilter_ps can read
-            // highpass_gamma and highpass_threshold directly from the game's data.
-            ComPtr<ID3D11Buffer> prev_cb;
-            native_device_context->PSGetConstantBuffers(0, 1, prev_cb.put());
-            native_device_context->PSSetConstantBuffers(0, 1, &game_device_data.bloom_globals_cb);
-
-            // If upscaling is active, prefer the upscaled version of the captured scene SRV
-            // so bloom operates at output resolution rather than render resolution.
-            ID3D11ShaderResourceView* bloom_input_srv = game_device_data.bloom_scene_srv.get();
-            if (game_device_data.upscale_tracking.post_taa_upscale_active && bloom_input_srv)
-            {
-               ComPtr<ID3D11Resource> srv_resource;
-               bloom_input_srv->GetResource(srv_resource.put());
-               if (srv_resource)
-               {
-                  const uintptr_t key = reinterpret_cast<uintptr_t>(srv_resource.get());
-                  UpscaledResource* upscaled = GetLinkedUpscaled(game_device_data.upscale_tracking, key);
-                  if (upscaled && upscaled->srv)
-                     bloom_input_srv = upscaled->srv.get();
-               }
-            }
-
-            ComPtr<ID3D11ShaderResourceView> srv_bloom;
-            DrawBloom(native_device, native_device_context, device_data,
-               bloom_input_srv, g_bloom_nmips, g_bloom_sigmas.data(), srv_bloom.put());
-
-            native_device_context->PSSetConstantBuffers(0, 1, &prev_cb);
-
-            if (srv_bloom)
-            {
-               ID3D11ShaderResourceView* p = srv_bloom.get();
-               native_device_context->PSSetShaderResources(0, 1, &p);
-            }
-         }
+         ForgetNativeUpscaleOutputs(native_device_context, game_device_data.upscale_tracking);
+         return DrawOrDispatchOverrideType::None;
       }
-#endif
-      // Post-TAA upscale tracking: replace inputs/outputs/viewports for all passes
-      // between TAA and the Upscale shader (1B6C8C68) when DLSS upscaling is active.
-      // Chain propagation is restricted to render-resolution RTV replacements.
-      if (game_device_data.upscale_tracking.post_taa_upscale_active)
+
+      // Track post-TAA processing through render-sized Output Scaled copies.
+      // The chain ends when Output Scaled writes to a native output-sized target.
+      auto& tracking = game_device_data.upscale_tracking;
+      if (tracking.post_taa_upscale_active)
       {
          const bool is_tonemap = original_shader_hashes.Contains(shader_hashes_tonemap);
          const bool is_upscale_pass = original_shader_hashes.Contains(shader_hashes_OutputScaled);
-         const bool is_compute = (stages == reshade::api::shader_stage::compute);
-
-         // Always check the terminal pass first, even for compute dispatches, so the tracking
-         // window is closed regardless of shader stage. The upscale shader is a pixel shader
-         // in practice, but ordering this first prevents a future regression.
-         if (is_upscale_pass && game_device_data.has_drawn_tonemap)
+         const bool is_compute = stages == reshade::api::shader_stage::compute;
+         if (is_upscale_pass && game_device_data.has_drawn_tonemap &&
+             OutputScaledWritesOutputResolution(native_device_context, tracking, device_data.output_resolution))
          {
-            game_device_data.upscale_tracking.post_taa_upscale_active = false;
-
-            // Replace SRVs bound to the Upscale shader so it reads the upscaled pool texture.
-            // This is unconditional (not dev-only) so the fix is live in all build configs.
-            uint32_t upscale_srv_swapped = 0;
-#if DEVELOPMENT || TEST
-            {
-               std::vector<UpscaleSwapDetail> upscale_details;
-               const uint32_t upscale_hits = ReplaceUpscaledInputs(
-                  native_device_context, game_device_data.upscale_tracking,
-                  is_compute, &upscale_srv_swapped, &upscale_details);
-
-               const uint32_t upscale_hash = static_cast<uint32_t>(original_shader_hashes.pixel_shaders[0]);
-               char log_buf[384];
-               snprintf(log_buf, sizeof(log_buf),
-                  "[FFXV UpscaleChain] [Upscale shader=%08X] Chain terminated - SRV hits=%u swapped=%u",
-                  upscale_hash, upscale_hits, upscale_srv_swapped);
-               Log_Debug(reshade::log::level::info, log_buf);
-
-               for (const auto& d : upscale_details)
-               {
-                  snprintf(log_buf, sizeof(log_buf),
-                     "[FFXV UpscaleChain]   shader=%08X  SRV slot=%u  orig=%p  tex=%p  view=%p  %ux%u fmt=%u",
-                     upscale_hash, d.slot, d.original, d.texture_ptr, d.replacement,
-                     d.width, d.height, d.format);
-                  Log_Debug(reshade::log::level::info, log_buf);
-               }
-            }
-#else
-            ReplaceUpscaledInputs(
-               native_device_context, game_device_data.upscale_tracking,
-               is_compute, &upscale_srv_swapped);
-#endif
+            tracking.post_taa_upscale_active = false;
+            ReplaceUpscaledInputs(native_device_context, tracking, is_compute, 1);
             return DrawOrDispatchOverrideType::None;
          }
-
          if (is_tonemap)
-         {
             game_device_data.has_drawn_tonemap = true;
-         }
-
          if (is_compute)
-            return DrawOrDispatchOverrideType::None; // It's just Motion Blur, we scale it in the pixel shader instead
+            return DrawOrDispatchOverrideType::None; // Motion blur is scaled in its pixel shader.
 
-         // All intermediate passes get RTV+viewport replacement.
-         // (The Upscale shader returns early above so replace_outputs is always true here.)
+         // Ignore slots these shaders do not read when following scene inputs.
+         const UINT active_srv_slots = is_upscale_pass ? 1u
+            : original_shader_hashes.Contains(shader_hashes_bloom_glare_vignette)
+               ? (original_shader_hashes.pixel_shaders[0] == 0xB6934A17u ? 2u : 1u)
+               : 16u;
+         const uint32_t chain_hits = ReplaceUpscaledInputs(native_device_context, tracking, false, active_srv_slots, false);
+         float2 source_resolution = {};
+         float2 target_resolution = {};
+         bool preparation_failed = false;
+         const uint32_t replaced_outputs = ReplaceUpscaledOutputs(native_device, native_device_context, tracking,
+             device_data.render_resolution, device_data.output_resolution, chain_hits > 0,
+             source_resolution, target_resolution,
+             [&](ID3D11Texture2D* source, DXGI_FORMAT format, ID3D11RenderTargetView* target)
+             {
+                return InitializeUpscaledTarget(native_device, native_device_context, device_data, source, format, target);
+             }, preparation_failed);
+         if (!preparation_failed)
+            ReplaceUpscaledInputs(native_device_context, tracking, false, active_srv_slots);
+         else
+            ForgetNativeUpscaleOutputs(native_device_context, tracking);
+         if (replaced_outputs > 0)
+            ReplaceViewports(native_device_context, cmd_list_data, source_resolution, target_resolution);
+      }
 
-         // Replace input SRVs that reference upscaled resources
-         uint32_t srv_swapped = 0;
-#if DEVELOPMENT || TEST
-         std::vector<UpscaleSwapDetail> swap_details;
-         UpscaleRtvDecisionDebug rtv_debug;
-         uint32_t chain_hits = ReplaceUpscaledInputs(native_device_context, game_device_data.upscale_tracking, is_compute, &srv_swapped, &swap_details);
-#else
-         uint32_t chain_hits = ReplaceUpscaledInputs(native_device_context, game_device_data.upscale_tracking, is_compute, &srv_swapped);
-#endif
-
-         uint32_t rtv_count = 0;
-         uint32_t vp_count = 0;
-
-         // Replace output RTVs at render_resolution and propagate the chain.
-         // Called unconditionally: ReplaceUpscaledOutputs already checks frame_links
-         // against every bound RTV, so it naturally catches blend-accumulate passes
-         // (e.g. 0xBBC1036C) that write to a tracked target without reading any
-         // tracked SRV input. rtv_count == 0 when nothing is tracked.
-#if DEVELOPMENT || TEST
-         rtv_count = ReplaceUpscaledOutputs(native_device, native_device_context, game_device_data.upscale_tracking, device_data.render_resolution, device_data.output_resolution, &swap_details, &rtv_debug);
-#else
-         rtv_count = ReplaceUpscaledOutputs(native_device, native_device_context, game_device_data.upscale_tracking, device_data.render_resolution, device_data.output_resolution);
-#endif
-
-#if DEVELOPMENT || TEST
+      auto& rain = game_device_data.rain;
+      if (rain.WantsComposition(FFXVRainComposition::AfterDoF))
+      {
+         if (original_shader_hashes.Contains(shader_hashes_dof_composite) && original_draw_dispatch_func)
          {
-            const uint32_t active_hash = static_cast<uint32_t>(original_shader_hashes.pixel_shaders[0]);
-            if (rtv_count == 0)
+            // Use RTV0 after upscale-chain replacement, and finish the game draw
+            // before blending rain. The callback is consumed exactly once here.
+            ComPtr<ID3D11RenderTargetView> target;
+            native_device_context->OMGetRenderTargets(1, target.put(), nullptr);
+            if (is_custom_pass)
             {
-               char log_buf[512];
-               snprintf(log_buf, sizeof(log_buf),
-                  "[FFXV UpscaleChain] [shader=%08X] RTV not replaced: reason=%s src=%ux%u fmt=%u view_fmt=%u render=%ux%u output=%ux%u target=%ux%u ar=%.6f render_ar=%.6f res=%p",
-                  active_hash,
-                  UpscaleRtvDecisionToString(rtv_debug.decision),
-                  rtv_debug.source_width, rtv_debug.source_height,
-                  static_cast<uint32_t>(rtv_debug.source_format),
-                  static_cast<uint32_t>(rtv_debug.view_format),
-                  rtv_debug.render_width, rtv_debug.render_height,
-                  rtv_debug.output_width, rtv_debug.output_height,
-                  rtv_debug.target_width, rtv_debug.target_height,
-                  rtv_debug.source_aspect_ratio, rtv_debug.render_aspect_ratio,
-                  reinterpret_cast<void*>(rtv_debug.source_key));
-               Log_Debug(reshade::log::level::info, log_buf);
+               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
+               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData);
             }
-         }
-#endif
-
-         if (chain_hits > 0 || rtv_count > 0)
-         {
-
-            // DEBUG: Verify RTVs right after ReplaceUpscaledOutputs returns
-#if DEVELOPMENT || TEST
-            if (rtv_count > 0)
-            {
-               ID3D11RenderTargetView* post_rtv_rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-               ComPtr<ID3D11DepthStencilView> post_rtv_dsv;
-               native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, post_rtv_rtvs, post_rtv_dsv.put());
-               char post_rtv_log[512];
-               int po = snprintf(post_rtv_log, sizeof(post_rtv_log), "[RTV AFTER ReplaceOutputs] ");
-               for (UINT j = 0; j < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++j)
-               {
-                  if (post_rtv_rtvs[j])
-                  {
-                     ComPtr<ID3D11Resource> pr;
-                     post_rtv_rtvs[j]->GetResource(pr.put());
-                     D3D11_TEXTURE2D_DESC pdtd = {};
-                     ComPtr<ID3D11Texture2D> pdt;
-                     D3D11_RESOURCE_DIMENSION prdim;
-                     if (pr)
-                     {
-                        pr->GetType(&prdim);
-                        if (prdim == D3D11_RESOURCE_DIMENSION_TEXTURE2D)
-                        {
-                           pr->QueryInterface(pdt.put());
-                           if (pdt)
-                              pdt->GetDesc(&pdtd);
-                        }
-                     }
-                     po += snprintf(post_rtv_log + po, sizeof(post_rtv_log) - po, "slot[%u]=%p %ux%u ", j, post_rtv_rtvs[j], pdtd.Width, pdtd.Height);
-                  }
-                  else
-                  {
-                     po += snprintf(post_rtv_log + po, sizeof(post_rtv_log) - po, "slot[%u]=NULL ", j);
-                  }
-                  if (post_rtv_rtvs[j])
-                     post_rtv_rtvs[j]->Release();
-               }
-               Log_Debug(reshade::log::level::debug, post_rtv_log);
-            }
-#endif
-
-            // // Disable scissor rects during upscaling passes
-            // UINT saved_scissors_count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-            // D3D11_RECT saved_scissors[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
-            // native_device_context->RSGetScissorRects(&saved_scissors_count, saved_scissors);
-
-            // Replace viewports matching render_resolution (scissors are disabled below)
-            uint32_t scissors_count = 0;
-            if (rtv_count > 0)
-            {
-               // Disable all scissor rects during upscaling passes
-               // native_device_context->RSSetScissorRects(0, nullptr);
-               vp_count = ReplaceViewports(native_device_context, device_data.render_resolution, device_data.output_resolution, &scissors_count);
-            }
-            // DEBUG: Log RTVs right before draw call
-#if DEVELOPMENT || TEST
-            {
-               ID3D11RenderTargetView* pre_draw_rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-               ComPtr<ID3D11DepthStencilView> pre_draw_dsv;
-               native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, pre_draw_rtvs, pre_draw_dsv.put());
-               char pre_draw_log[512];
-               int po = snprintf(pre_draw_log, sizeof(pre_draw_log), "[RTV BEFORE DRAW] ");
-               for (UINT j = 0; j < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++j)
-               {
-                  if (pre_draw_rtvs[j])
-                  {
-                     ComPtr<ID3D11Resource> pr;
-                     pre_draw_rtvs[j]->GetResource(pr.put());
-                     D3D11_TEXTURE2D_DESC pdtd = {};
-                     ComPtr<ID3D11Texture2D> pdt;
-                     D3D11_RESOURCE_DIMENSION prdim;
-                     if (pr)
-                     {
-                        pr->GetType(&prdim);
-                        if (prdim == D3D11_RESOURCE_DIMENSION_TEXTURE2D)
-                        {
-                           pr->QueryInterface(pdt.put());
-                           if (pdt)
-                              pdt->GetDesc(&pdtd);
-                        }
-                     }
-                     po += snprintf(pre_draw_log + po, sizeof(pre_draw_log) - po, "slot[%u]=%p %ux%u ", j, pre_draw_rtvs[j], pdtd.Width, pdtd.Height);
-                  }
-                  else
-                  {
-                     po += snprintf(pre_draw_log + po, sizeof(pre_draw_log) - po, "slot[%u]=NULL ", j);
-                  }
-                  if (pre_draw_rtvs[j])
-                     pre_draw_rtvs[j]->Release();
-               }
-               Log_Debug(reshade::log::level::debug, pre_draw_log);
-            }
-            {
-               const uint32_t active_hash = static_cast<uint32_t>(original_shader_hashes.pixel_shaders[0]);
-               char log_buf[256];
-               snprintf(log_buf, sizeof(log_buf),
-                  "[FFXV UpscaleChain] [shader=%08X] pass applied: hits=%u srv_swapped=%u rtv_replaced=%u vp_replaced=%u",
-                  active_hash, chain_hits, srv_swapped, rtv_count, vp_count);
-               Log_Debug(reshade::log::level::info, log_buf);
-            }
-#endif
-            return DrawOrDispatchOverrideType::None;
-            // (*original_draw_dispatch_func)();
-
-            // Restore original scissor rects
-            // native_device_context->RSSetScissorRects(saved_scissors_count, saved_scissors);
-
-#if DEVELOPMENT || TEST
-            game_device_data.dbg_replaced_srvs += srv_swapped;
-            game_device_data.dbg_replaced_rtvs += rtv_count;
-            game_device_data.dbg_replaced_viewports += vp_count;
-            game_device_data.dbg_replaced_scissors += 0; // Scissors disabled during upscaling
-
-            {
-               // Retrieve the active shader hash from the OneShaderPerPipeline container.
-               // pixel_shaders[0] holds a uint64_t; cast to uint32_t to get the CRC32 hash.
-               const uint32_t active_hash = static_cast<uint32_t>(original_shader_hashes.pixel_shaders[0]);
-               const char* label = is_tonemap ? " [tonemap]" : " [intermediate]";
-               char log_buf[512];
-               snprintf(log_buf, sizeof(log_buf),
-                  "[FFXV UpscaleChain]%s  shader=%08X  hits=%u swapped=%u RTVs=%u VPs=%u Scissors=%u  pool=%zu links=%zu",
-                  label, active_hash, chain_hits, srv_swapped, rtv_count, vp_count, scissors_count,
-                  game_device_data.upscale_tracking.pool.size(),
-                  game_device_data.upscale_tracking.frame_links.size());
-               Log_Debug(reshade::log::level::info, log_buf);
-
-               // Log scissor rect state: whether enabled and first scissor rect details
-               {
-                  UINT num_scissors = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-                  D3D11_RECT scissors[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
-                  native_device_context->RSGetScissorRects(&num_scissors, scissors);
-                  if (num_scissors > 0)
-                  {
-                     const D3D11_RECT& first = scissors[0];
-                     snprintf(log_buf, sizeof(log_buf),
-                        "[FFXV UpscaleChain]  scissors_enabled=true  count=%u  first=[%d, %d, %d, %d] (%dx%d)",
-                        num_scissors, first.left, first.top, first.right, first.bottom,
-                        first.right - first.left, first.bottom - first.top);
-                     Log_Debug(reshade::log::level::info, log_buf);
-                  }
-                  else
-                  {
-                     snprintf(log_buf, sizeof(log_buf),
-                        "[FFXV UpscaleChain]  scissors_enabled=false  (no scissor rects set)");
-                     Log_Debug(reshade::log::level::info, log_buf);
-                  }
-               }
-
-               // Per-resource detail: one line per upgraded SRV or RTV
-               for (const auto& d : swap_details)
-               {
-                  snprintf(log_buf, sizeof(log_buf),
-                     "[FFXV UpscaleChain]   shader=%08X  %s slot=%u  orig=%p  tex=%p  view=%p  %ux%u fmt=%u",
-                     active_hash,
-                     d.is_rtv ? "RTV" : "SRV",
-                     d.slot,
-                     d.original,
-                     d.texture_ptr,
-                     d.replacement,
-                     d.width, d.height, d.format);
-                  Log_Debug(reshade::log::level::info, log_buf);
-               }
-            }
-#endif
+            (*original_draw_dispatch_func)();
+            CompositeRain(native_device, native_device_context, device_data, target.get(), true);
             return DrawOrDispatchOverrideType::Replaced;
          }
-      }
-
-      return DrawOrDispatchOverrideType::None;
-   }
-
-   void OnPatchedShadersPublished(DeviceData& device_data, const std::vector<uint32_t>& published_shader_hashes) override
-   {
-      auto& game_device_data = GetGameDeviceData(device_data);
-      // Only hashes whose clone actually went live this present become usable.
-      const std::lock_guard lock(game_device_data.pending_mutex);
-      for (uint32_t shader_hash : published_shader_hashes)
-      {
-         auto it = game_device_data.pending_dxp_bindings.find(shader_hash);
-         if (it == game_device_data.pending_dxp_bindings.end())
+         if (original_shader_hashes.Contains(shader_hashes_motion_blur) ||
+             original_shader_hashes.Contains(shader_hashes_lens_distortion) ||
+             original_shader_hashes.Contains(shader_hashes_bloom_highpass) ||
+             original_shader_hashes.Contains(shader_hashes_scene_tonemap))
          {
-            continue;
+            // DoF may be omitted. These captured scene consumers all read their
+            // full scene at t0; never blend into their output or a bloom mip.
+            ComPtr<ID3D11ShaderResourceView> scene;
+            native_device_context->PSGetShaderResources(0, 1, scene.put());
+            ComPtr<ID3D11Resource> resource;
+            ComPtr<ID3D11Texture2D> texture;
+            if (scene)
+            {
+               scene->GetResource(resource.put());
+               if (SUCCEEDED(resource->QueryInterface(texture.put())))
+               {
+                  D3D11_TEXTURE2D_DESC desc;
+                  texture->GetDesc(&desc);
+                  const bool upscaled = game_device_data.upscale_tracking.post_taa_upscale_active;
+                  const UINT width = upscaled ? static_cast<UINT>(device_data.output_resolution.x) : rain.width;
+                  const UINT height = upscaled ? static_cast<UINT>(device_data.output_resolution.y) : rain.height;
+                  if (desc.Width == width && desc.Height == height)
+                     CompositeRainInput(native_device, native_device_context, device_data, scene.get(), true);
+               }
+            }
          }
-         it->second.ready = true;
-         game_device_data.dxp_bindings.insert_or_assign(shader_hash, std::move(it->second));
-         game_device_data.pending_dxp_bindings.erase(it);
       }
-   }
-
-   bool OnBindPatchedShader(DeviceData& device_data, uint32_t shader_hash, reshade::api::pipeline_subobject_type type) override
-   {
-      return dithering_patch_enabled.load(std::memory_order_relaxed)
-         && type == reshade::api::pipeline_subobject_type::pixel_shader;
+      return DrawOrDispatchOverrideType::None;
    }
 
    static void UpdateLODBias(reshade::api::device* device)
@@ -1321,7 +860,34 @@ public:
       }
    }
 
-   static bool ExecuteUpscaledCopy(const char* hook_name, ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint64_t& src_resource)
+   static bool OnClearRenderTargetView(reshade::api::command_list* cmd_list, reshade::api::resource_view rtv,
+      const float color[4], uint32_t rect_count, const reshade::api::rect*)
+   {
+      auto* device = cmd_list->get_device();
+      if (device->get_api() != reshade::api::device_api::d3d11 || rtv.handle == 0)
+         return false;
+      auto* device_data = device->get_private_data<DeviceData>();
+      if (!device_data || !device_data->game)
+         return false;
+
+      ComPtr<ID3D11RenderTargetView> effective_rtv;
+      {
+         const std::shared_lock lock(device_data->mutex);
+         auto upgraded_view = device_data->resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(rtv.handle);
+         const auto effective_handle = !ignore_indirect_upgraded_textures &&
+            upgraded_view != device_data->resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.end()
+            ? upgraded_view->second : rtv.handle;
+         effective_rtv = reinterpret_cast<ID3D11RenderTargetView*>(effective_handle);
+      }
+      // Resolve upgrades ourselves: the core event performs its native clear
+      // separately, and its redirected clear does not emit another event.
+      TrackAndClearUpscaleTarget(reinterpret_cast<ID3D11Device*>(device->get_native()),
+         reinterpret_cast<ID3D11DeviceContext*>(cmd_list->get_native()), GetGameDeviceData(*device_data).upscale_tracking,
+         effective_rtv.get(), color, rect_count, device_data->render_resolution, device_data->output_resolution);
+      return false;
+   }
+
+   static bool ExecuteUpscaledCopy(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint64_t& src_resource)
    {
       if (!native_device || !device_data.game)
          return false;
@@ -1332,53 +898,24 @@ public:
       if (!tracking.post_taa_upscale_active)
          return false;
 
-#if DEVELOPMENT || TEST
-      {
-         size_t pool_size = 0;
-         size_t link_count = 0;
-         {
-            std::lock_guard lock(tracking.mutex);
-            pool_size = tracking.pool.size();
-            link_count = tracking.frame_links.size();
-         }
-         char buf[384];
-         snprintf(buf, sizeof(buf),
-            "[FFXV UpscaleChain] %s src=%p dst=%p active=%d pool=%zu links=%zu",
-            hook_name,
-            (void*)src_resource, (void*)dst_resource,
-            tracking.post_taa_upscale_active ? 1 : 0,
-            pool_size, link_count);
-         Log_Debug(reshade::log::level::info, buf);
-      }
-#endif
-
       ID3D11Resource* source_resource = reinterpret_cast<ID3D11Resource*>(src_resource);
       ID3D11Resource* dest_resource = reinterpret_cast<ID3D11Resource*>(dst_resource);
 
       if (!source_resource || !dest_resource)
          return false;
 
+      if (game_device_data.taa_state.IsValid())
+      {
+         ComPtr<ID3D11Resource> taa_output;
+         game_device_data.taa_state.state->render_target_views[0]->GetResource(taa_output.put());
+         if (dest_resource == taa_output.get())
+            return false;
+      }
+
       const uintptr_t source_key = reinterpret_cast<uintptr_t>(source_resource);
       UpscaledResource* upscaled_source = GetLinkedUpscaled(tracking, source_key);
       if (!upscaled_source || !upscaled_source->texture)
-      {
-#if DEVELOPMENT || TEST
-         char buf[384];
-         snprintf(buf, sizeof(buf),
-            "[FFXV UpscaleChain] %s src={:#x} NOT_FOUND in frame_links - skipping",
-            hook_name,
-            source_key);
-         Log_Debug(reshade::log::level::info, buf);
-#endif
          return false;
-      }
-
-      const uintptr_t dest_key = reinterpret_cast<uintptr_t>(dest_resource);
-      bool dest_already_linked = false;
-      {
-         std::lock_guard lock(tracking.mutex);
-         dest_already_linked = tracking.frame_links.find(dest_key) != tracking.frame_links.end();
-      }
 
       ComPtr<ID3D11DeviceContext> native_context;
       native_device->GetImmediateContext(native_context.put());
@@ -1394,37 +931,28 @@ public:
          tracking,
          src_target_res);
       if (!upscaled_dest || !upscaled_dest->texture)
-      {
-#if DEVELOPMENT || TEST
-         char buf[384];
-         snprintf(buf, sizeof(buf),
-            "[FFXV UpscaleChain] %s dest={:#x} LinkUpscaledResource FAILED",
-            hook_name,
-            dest_key);
-         Log_Debug(reshade::log::level::warning, buf);
-#endif
          return false;
-      }
-
-#if DEVELOPMENT || TEST
-      {
-         D3D11_TEXTURE2D_DESC src_desc, dst_desc;
-         upscaled_source->texture->GetDesc(&src_desc);
-         upscaled_dest->texture->GetDesc(&dst_desc);
-         char buf[384];
-         snprintf(buf, sizeof(buf),
-            "[FFXV UpscaleChain] %s copying upscaled src=%p(%ux%u fmt=%u) -> dst=%p(%ux%u fmt=%u) dest_was_linked=%d",
-            hook_name,
-            upscaled_source->texture.get(), src_desc.Width, src_desc.Height, (uint32_t)src_desc.Format,
-            upscaled_dest->texture.get(), dst_desc.Width, dst_desc.Height, (uint32_t)dst_desc.Format,
-            dest_already_linked ? 1 : 0);
-         Log_Debug(reshade::log::level::info, buf);
-      }
-#endif
 
       native_context->CopyResource(upscaled_dest->texture.get(), upscaled_source->texture.get());
 
       return true;
+   }
+
+   static void ForgetNativeCopyDestination(DeviceData& device_data, uint64_t dst_resource)
+   {
+      auto& game_device_data = GetGameDeviceData(device_data);
+      auto& tracking = game_device_data.upscale_tracking;
+      if (!tracking.post_taa_upscale_active || dst_resource == 0)
+         return;
+      auto* destination = reinterpret_cast<ID3D11Resource*>(dst_resource);
+      if (game_device_data.taa_state.IsValid())
+      {
+         ComPtr<ID3D11Resource> taa_output;
+         game_device_data.taa_state.state->render_target_views[0]->GetResource(taa_output.put());
+         if (destination == taa_output.get())
+            return; // Preserve the DLSS/TAA history target's established link semantics.
+      }
+      UnlinkUpscaledResource(tracking, reinterpret_cast<uintptr_t>(destination));
    }
 
    bool OverrideCopyResource(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint64_t& src_resource) override
@@ -1435,7 +963,10 @@ public:
       if (!device_data.game)
          return false;
 
-      return ExecuteUpscaledCopy("OverrideCopyResource", native_device, device_data, dst_resource, src_resource);
+      const bool redirected = ExecuteUpscaledCopy(native_device, device_data, dst_resource, src_resource);
+      if (!redirected)
+         ForgetNativeCopyDestination(device_data, dst_resource);
+      return redirected;
    }
 
    bool OverrideCopyTextureRegion(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint32_t dst_subresource, const D3D11_BOX* dst_box, uint64_t& src_resource, uint32_t src_subresource, const D3D11_BOX* src_box) override
@@ -1451,120 +982,18 @@ public:
       if (!tracking.post_taa_upscale_active)
          return false;
 
-#if DEVELOPMENT || TEST
-      {
-         char buf[384];
-         snprintf(buf, sizeof(buf),
-            "[FFXV UpscaleChain] OverrideCopyTextureRegion src=%p dst=%p src_sub=%u dst_sub=%u src_box=%p dst_box=%p",
-            (void*)src_resource, (void*)dst_resource,
-            src_subresource, dst_subresource,
-            (const void*)src_box, (const void*)dst_box);
-         Log_Debug(reshade::log::level::info, buf);
-      }
-#endif
-
       // Only intercept full-texture copies (subresource 0, no source/dest box) that
       // act like a CopyResource. Partial copies are left to the original call.
       if (src_subresource != 0 || dst_subresource != 0 || src_box != nullptr || dst_box != nullptr)
       {
-#if DEVELOPMENT || TEST
-         Log_Debug(reshade::log::level::info, "[FFXV UpscaleChain] OverrideCopyTextureRegion skipped: partial/boxed copy");
-#endif
+         ForgetNativeCopyDestination(device_data, dst_resource);
          return false;
       }
 
-      ID3D11Resource* source_resource = reinterpret_cast<ID3D11Resource*>(src_resource);
-      ID3D11Resource* dest_resource = reinterpret_cast<ID3D11Resource*>(dst_resource);
-      if (!source_resource || !dest_resource)
-         return false;
-
-      // Keep CopyTextureRegion interception conservative: only reuse already linked resources.
-      // Avoid creating new pooled links on this path, which can happen on load-time copies.
-      const uintptr_t source_key = reinterpret_cast<uintptr_t>(source_resource);
-      const uintptr_t dest_key = reinterpret_cast<uintptr_t>(dest_resource);
-      UpscaledResource* upscaled_source = GetLinkedUpscaled(tracking, source_key);
-      if (!upscaled_source || !upscaled_source->texture)
-      {
-#if DEVELOPMENT || TEST
-         Log_Debug(reshade::log::level::info, "[FFXV UpscaleChain] OverrideCopyTextureRegion skipped: source link missing");
-#endif
-         return false;
-      }
-
-      ComPtr<ID3D11DeviceContext> native_context;
-      native_device->GetImmediateContext(native_context.put());
-      if (!native_context)
-         return false;
-
-      UpscaledResource* upscaled_dest = GetLinkedUpscaled(tracking, dest_key);
-      if (!upscaled_dest || !upscaled_dest->texture)
-      {
-         // For chain continuity, create a destination link only for safe full-resource Texture2D copies.
-         ComPtr<ID3D11Texture2D> src_tex;
-         ComPtr<ID3D11Texture2D> dst_tex;
-         if (FAILED(source_resource->QueryInterface(src_tex.put())) || FAILED(dest_resource->QueryInterface(dst_tex.put())) || !src_tex || !dst_tex)
-         {
-#if DEVELOPMENT || TEST
-            Log_Debug(reshade::log::level::info, "[FFXV UpscaleChain] OverrideCopyTextureRegion skipped: non-Texture2D copy target");
-#endif
-            return false;
-         }
-
-         D3D11_TEXTURE2D_DESC src_orig_desc{}, dst_orig_desc{};
-         src_tex->GetDesc(&src_orig_desc);
-         dst_tex->GetDesc(&dst_orig_desc);
-
-         const bool safe_full_copy_match =
-            src_orig_desc.Width == dst_orig_desc.Width &&
-            src_orig_desc.Height == dst_orig_desc.Height &&
-            src_orig_desc.MipLevels == dst_orig_desc.MipLevels &&
-            src_orig_desc.ArraySize == dst_orig_desc.ArraySize &&
-            src_orig_desc.SampleDesc.Count == dst_orig_desc.SampleDesc.Count &&
-            src_orig_desc.SampleDesc.Quality == dst_orig_desc.SampleDesc.Quality &&
-            AreFormatsCopyCompatible(src_orig_desc.Format, dst_orig_desc.Format);
-
-         if (!safe_full_copy_match)
-         {
-#if DEVELOPMENT || TEST
-            Log_Debug(reshade::log::level::info, "[FFXV UpscaleChain] OverrideCopyTextureRegion skipped: source/dest descriptors not copy-compatible");
-#endif
-            return false;
-         }
-
-         upscaled_dest = LinkUpscaledResource(
-            native_device, native_context.get(),
-            dest_resource,
-            tracking,
-            device_data.output_resolution);
-         if (!upscaled_dest || !upscaled_dest->texture)
-         {
-#if DEVELOPMENT || TEST
-            Log_Debug(reshade::log::level::warning, "[FFXV UpscaleChain] OverrideCopyTextureRegion failed: could not create destination upscaled link");
-#endif
-            return false;
-         }
-
-#if DEVELOPMENT || TEST
-         Log_Debug(reshade::log::level::info, "[FFXV UpscaleChain] OverrideCopyTextureRegion created destination link for chain continuity");
-#endif
-      }
-
-#if DEVELOPMENT || TEST
-      {
-         D3D11_TEXTURE2D_DESC src_desc{}, dst_desc{};
-         upscaled_source->texture->GetDesc(&src_desc);
-         upscaled_dest->texture->GetDesc(&dst_desc);
-         char buf[384];
-         snprintf(buf, sizeof(buf),
-            "[FFXV UpscaleChain] OverrideCopyTextureRegion copying linked upscaled src=%p(%ux%u fmt=%u) -> dst=%p(%ux%u fmt=%u)",
-            upscaled_source->texture.get(), src_desc.Width, src_desc.Height, (uint32_t)src_desc.Format,
-            upscaled_dest->texture.get(), dst_desc.Width, dst_desc.Height, (uint32_t)dst_desc.Format);
-         Log_Debug(reshade::log::level::info, buf);
-      }
-#endif
-
-      native_context->CopyResource(upscaled_dest->texture.get(), upscaled_source->texture.get());
-      return true;
+      const bool redirected = ExecuteUpscaledCopy(native_device, device_data, dst_resource, src_resource);
+      if (!redirected)
+         ForgetNativeCopyDestination(device_data, dst_resource);
+      return redirected;
    }
 
    static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
@@ -1654,12 +1083,9 @@ public:
    void UpdateLumaInstanceDataCB(CB::LumaInstanceDataPadded& data, CommandListData& cmd_list_data, DeviceData& device_data) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
-      if (!game_device_data.taa_cb_data)
-         return;
-
-      // Copy the motion matrix byte-for-byte - the game's cbuffer already has the matrix
-      // in the correct format for the shader (we're just replicating what the game does)
       data.GameData.IsUpscaling = game_device_data.upscale_tracking.post_taa_upscale_active ? 1 : 0;
+      // Capture jitter at TAA; later native draws can reuse the tracked buffer.
+      data.GameData.TemporalJitterUV = device_data.has_drawn_sr ? game_device_data.taa_jitter_uv : float2{};
    }
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
    {
@@ -1744,26 +1170,6 @@ public:
          ImGui::TableNextColumn();
          ImGui::Text("%.4f", game_device_data.projection_jitters.y);
 
-         // Add more rows as needed for other information
-
-         ImGui::TableNextRow();
-         ImGui::TableNextColumn();
-         ImGui::Text("Upscale Pool Size");
-         ImGui::TableNextColumn();
-         ImGui::Text("%zu", game_device_data.upscale_tracking.pool.size());
-
-         ImGui::TableNextRow();
-         ImGui::TableNextColumn();
-         ImGui::Text("Upscale Links (frame)");
-         ImGui::TableNextColumn();
-         ImGui::Text("%zu", game_device_data.upscale_tracking.frame_links.size());
-
-         ImGui::TableNextRow();
-         ImGui::TableNextColumn();
-         ImGui::Text("Replaced SRVs / RTVs / VPs / Scissors");
-         ImGui::TableNextColumn();
-         ImGui::Text("%u / %u / %u / %u", game_device_data.dbg_replaced_srvs, game_device_data.dbg_replaced_rtvs, game_device_data.dbg_replaced_viewports, game_device_data.dbg_replaced_scissors);
-
          ImGui::EndTable();
       }
    }
@@ -1783,26 +1189,23 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::Playable;
       Globals::VERSION = 1;
 
-      shader_hashes_tonemap.pixel_shaders.emplace(std::stoul("75DFE4B0", nullptr, 16)); // Main game tonemapping
-      shader_hashes_tonemap.pixel_shaders.emplace(std::stoul("18EF8C72", nullptr, 16)); // Title screen tonemapping
+      shader_hashes_scene_tonemap.pixel_shaders.emplace(std::stoul("75DFE4B0", nullptr, 16)); // Main game tonemapping
+      shader_hashes_scene_tonemap.pixel_shaders.emplace(std::stoul("18EF8C72", nullptr, 16)); // Title screen tonemapping
+      shader_hashes_tonemap.pixel_shaders = shader_hashes_scene_tonemap.pixel_shaders;
       shader_hashes_tonemap.pixel_shaders.emplace(std::stoul("DD4C5B74", nullptr, 16)); // Post-processing / swapchain
 
       shader_hashes_OutputScaled.pixel_shaders.emplace(std::stoul("1B6C8C68", nullptr, 16));
       shader_hashes_TAA.pixel_shaders.emplace(std::stoul("0DF0A97D", nullptr, 16));
+      shader_hashes_dof_coc.pixel_shaders.emplace(std::stoul("F6FD9C57", nullptr, 16));
+      shader_hashes_dof_composite.pixel_shaders.emplace(std::stoul("982A3A44", nullptr, 16));
+      shader_hashes_motion_blur.pixel_shaders.emplace(std::stoul("8D509D86", nullptr, 16));
+      shader_hashes_motion_blur.pixel_shaders.emplace(std::stoul("37FAF8C5", nullptr, 16));
+      shader_hashes_lens_distortion.pixel_shaders.emplace(std::stoul("91A3307D", nullptr, 16));
 
-      // Bloom: highpass captures the pre-bloom scene, all intermediate passes are skipped,
-      // and the glare/vignette pass is the final combine that receives the Luma bloom.
       shader_hashes_bloom_highpass.pixel_shaders.emplace(0xFF665135u);       // Highpass
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0xD1F0305Eu);           // Blur3Tap
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0xDB66D833u);           // Blur5Tap
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0x2558DE2Fu);           // Blur9Tap
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0x6150AEF2u);           // Blur17Tap
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0x1B5AC203u);           // Blur33Tap
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0x635313E0u);           // Blur65Tap
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0xA6FC2BA8u);           // Copy
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0x22F93AE1u);           // ConstantColor
-      shader_hashes_bloom_skip.pixel_shaders.emplace(0xDDF4077Eu);           // Composite
-      shader_hashes_bloom_glare_vignette.pixel_shaders.emplace(0xBBC1036Cu); // GlareVignette
+      shader_hashes_bloom_glare_vignette.pixel_shaders.emplace(0xBBC1036Cu); // Glare/vignette
+      shader_hashes_bloom_glare_vignette.pixel_shaders.emplace(0xB6934A17u); // Glare/vignette with sparks
+      shader_hashes_rain.pixel_shaders.emplace(0x047D130Bu); // VFXRain_Material, both captured rain draws
       shader_hashes_directional_light.pixel_shaders.emplace(std::stoul("2100CE9B", nullptr, 16)); // Directional Light
       shader_hashes_directional_light.pixel_shaders.emplace(std::stoul("A315F1E7", nullptr, 16)); // CSM
       shader_hashes_directional_light.pixel_shaders.emplace(std::stoul("4B8E0FF8", nullptr, 16)); // CSM_AO
@@ -1836,6 +1239,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(0x22F93AE1u, "Bloom ConstantColor");
       forced_shader_names.emplace(0xDDF4077Eu, "Bloom Composite");
       forced_shader_names.emplace(0xBBC1036Cu, "Bloom GlareVignette");
+      forced_shader_names.emplace(0xB6934A17u, "Bloom GlareVignette Spark");
 #endif
 
       // texture_upgrade_formats = {
@@ -1864,6 +1268,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       reshade::unregister_event<reshade::addon_event::map_buffer_region>(FinalFantasyXV::OnMapBufferRegion);
       reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(FinalFantasyXV::OnUnmapBufferRegion);
       reshade::unregister_event<reshade::addon_event::update_buffer_region>(FinalFantasyXV::OnUpdateBufferRegion);
+      reshade::unregister_event<reshade::addon_event::clear_render_target_view>(FinalFantasyXV::OnClearRenderTargetView);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

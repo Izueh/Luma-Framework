@@ -39,22 +39,18 @@ struct SPIRV_Cross_Output
 
 void frag_main()
 {
+    // Kernel xy is in native UV units; z is a pixel radius and does not scale with resolution.
+    float2 resolutionScale = LumaData.GameData.IsUpscaling != 0 ? LumaData.RenderResolutionScale.xy : float2(1.0f, 1.0f);
     float2 _166 = float2(TEXCOORD.x, TEXCOORD.y);
     float4 _168 = t2.SampleLevel(s1, _166, 0.0f);
     float _169 = _168.x;
-    float _170 = max(t1.SampleLevel(s1, float2(mad(cb1_m6.x, -0.5f, TEXCOORD.x), mad(cb1_m6.y, -0.5f, TEXCOORD.y)), 0.0f).y, t1.SampleLevel(s1, float2(mad(cb1_m6.x, 0.5f, TEXCOORD.x), mad(cb1_m6.y, 0.5f, TEXCOORD.y)), 0.0f).y);
+    float _170 = max(t1.SampleLevel(s1, float2(mad(cb1_m6.x * resolutionScale.x, -0.5f, TEXCOORD.x), mad(cb1_m6.y * resolutionScale.y, -0.5f, TEXCOORD.y)), 0.0f).y, t1.SampleLevel(s1, float2(mad(cb1_m6.x * resolutionScale.x, 0.5f, TEXCOORD.x), mad(cb1_m6.y * resolutionScale.y, 0.5f, TEXCOORD.y)), 0.0f).y);
     float4 _173 = t0.SampleLevel(s1, _166, 0.0f);
     float _174 = _173.x;
     float _175 = _173.y;
     float _176 = _173.z;
     float _179 = max(_169, max(_169, _170));
     float _183 = _179 * cb1_m1.w;
-    float resolutionScale = 1.0f;
-    if (LumaData.GameData.IsUpscaling != 0)
-    {
-        resolutionScale = LumaData.RenderResolutionScale.x;
-    }
-
     float _5881;
     float _5882;
     float _5883;
@@ -66,10 +62,10 @@ void frag_main()
         float _5880;
         if (max(_170 * cb1_m1.w, _189) == _189)
         {
-            float2 _206 = float2(mad(_179, cb0_m[0u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[0u].y / resolutionScale, TEXCOORD.y));
+            float2 _206 = float2(mad(_179, cb0_m[0u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[0u].y * resolutionScale.y, TEXCOORD.y));
             float4 _208 = t1.SampleLevel(s1, _206, 0.0f);
             float _212 = cb1_m1.w * 0.5f;
-            float _215 = clamp((max(_208.x, _208.y) * _212) - (_179 * cb0_m[0u].z / resolutionScale), 0.0f, 1.0f);
+            float _215 = clamp((max(_208.x, _208.y) * _212) - (_179 * cb0_m[0u].z), 0.0f, 1.0f);
             float _233;
             float _234;
             float _235;
@@ -89,9 +85,9 @@ void frag_main()
                 _235 = _175 + _175;
                 _236 = _174 + _174;
             }
-            float2 _246 = float2(mad(_179, cb0_m[1u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[1u].y / resolutionScale, TEXCOORD.y));
+            float2 _246 = float2(mad(_179, cb0_m[1u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[1u].y * resolutionScale.y, TEXCOORD.y));
             float4 _248 = t1.SampleLevel(s1, _246, 0.0f);
-            float _254 = clamp((_212 * max(_248.x, _248.y)) - (_179 * cb0_m[1u].z / resolutionScale), 0.0f, 1.0f);
+            float _254 = clamp((_212 * max(_248.x, _248.y)) - (_179 * cb0_m[1u].z), 0.0f, 1.0f);
             float _273;
             float _274;
             float _275;
@@ -111,9 +107,9 @@ void frag_main()
                 _275 = _175 + _235;
                 _276 = _174 + _236;
             }
-            float2 _286 = float2(mad(_179, cb0_m[2u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[2u].y / resolutionScale, TEXCOORD.y));
+            float2 _286 = float2(mad(_179, cb0_m[2u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[2u].y * resolutionScale.y, TEXCOORD.y));
             float4 _288 = t1.SampleLevel(s1, _286, 0.0f);
-            float _294 = clamp((_212 * max(_288.x, _288.y)) - (_179 * cb0_m[2u].z / resolutionScale), 0.0f, 1.0f);
+            float _294 = clamp((_212 * max(_288.x, _288.y)) - (_179 * cb0_m[2u].z), 0.0f, 1.0f);
             float _313;
             float _314;
             float _315;
@@ -133,9 +129,9 @@ void frag_main()
                 _315 = _175 + _275;
                 _316 = _174 + _276;
             }
-            float2 _326 = float2(mad(_179, cb0_m[3u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[3u].y / resolutionScale, TEXCOORD.y));
+            float2 _326 = float2(mad(_179, cb0_m[3u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[3u].y * resolutionScale.y, TEXCOORD.y));
             float4 _328 = t1.SampleLevel(s1, _326, 0.0f);
-            float _334 = clamp((_212 * max(_328.x, _328.y)) - (_179 * cb0_m[3u].z / resolutionScale), 0.0f, 1.0f);
+            float _334 = clamp((_212 * max(_328.x, _328.y)) - (_179 * cb0_m[3u].z), 0.0f, 1.0f);
             float _353;
             float _354;
             float _355;
@@ -155,9 +151,9 @@ void frag_main()
                 _355 = _175 + _315;
                 _356 = _174 + _316;
             }
-            float2 _366 = float2(mad(_179, cb0_m[4u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[4u].y / resolutionScale, TEXCOORD.y));
+            float2 _366 = float2(mad(_179, cb0_m[4u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[4u].y * resolutionScale.y, TEXCOORD.y));
             float4 _368 = t1.SampleLevel(s1, _366, 0.0f);
-            float _374 = clamp((_212 * max(_368.x, _368.y)) - (_179 * cb0_m[4u].z / resolutionScale), 0.0f, 1.0f);
+            float _374 = clamp((_212 * max(_368.x, _368.y)) - (_179 * cb0_m[4u].z), 0.0f, 1.0f);
             float _393;
             float _394;
             float _395;
@@ -177,9 +173,9 @@ void frag_main()
                 _395 = _175 + _355;
                 _396 = _174 + _356;
             }
-            float2 _406 = float2(mad(_179, cb0_m[5u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[5u].y / resolutionScale, TEXCOORD.y));
+            float2 _406 = float2(mad(_179, cb0_m[5u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[5u].y * resolutionScale.y, TEXCOORD.y));
             float4 _408 = t1.SampleLevel(s1, _406, 0.0f);
-            float _414 = clamp((_212 * max(_408.x, _408.y)) - (_179 * cb0_m[5u].z / resolutionScale), 0.0f, 1.0f);
+            float _414 = clamp((_212 * max(_408.x, _408.y)) - (_179 * cb0_m[5u].z), 0.0f, 1.0f);
             float _433;
             float _434;
             float _435;
@@ -199,9 +195,9 @@ void frag_main()
                 _435 = _175 + _395;
                 _436 = _174 + _396;
             }
-            float2 _446 = float2(mad(_179, cb0_m[6u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[6u].y / resolutionScale, TEXCOORD.y));
+            float2 _446 = float2(mad(_179, cb0_m[6u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[6u].y * resolutionScale.y, TEXCOORD.y));
             float4 _448 = t1.SampleLevel(s1, _446, 0.0f);
-            float _454 = clamp((_212 * max(_448.x, _448.y)) - (_179 * cb0_m[6u].z / resolutionScale), 0.0f, 1.0f);
+            float _454 = clamp((_212 * max(_448.x, _448.y)) - (_179 * cb0_m[6u].z), 0.0f, 1.0f);
             float _473;
             float _474;
             float _475;
@@ -221,9 +217,9 @@ void frag_main()
                 _475 = _175 + _435;
                 _476 = _174 + _436;
             }
-            float2 _486 = float2(mad(_179, cb0_m[7u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[7u].y / resolutionScale, TEXCOORD.y));
+            float2 _486 = float2(mad(_179, cb0_m[7u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[7u].y * resolutionScale.y, TEXCOORD.y));
             float4 _488 = t1.SampleLevel(s1, _486, 0.0f);
-            float _494 = clamp((_212 * max(_488.x, _488.y)) - (_179 * cb0_m[7u].z / resolutionScale), 0.0f, 1.0f);
+            float _494 = clamp((_212 * max(_488.x, _488.y)) - (_179 * cb0_m[7u].z), 0.0f, 1.0f);
             float _513;
             float _514;
             float _515;
@@ -243,9 +239,9 @@ void frag_main()
                 _515 = _175 + _475;
                 _516 = _174 + _476;
             }
-            float2 _526 = float2(mad(_179, cb0_m[8u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[8u].y / resolutionScale, TEXCOORD.y));
+            float2 _526 = float2(mad(_179, cb0_m[8u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[8u].y * resolutionScale.y, TEXCOORD.y));
             float4 _528 = t1.SampleLevel(s1, _526, 0.0f);
-            float _534 = clamp((_212 * max(_528.x, _528.y)) - (_179 * cb0_m[8u].z / resolutionScale), 0.0f, 1.0f);
+            float _534 = clamp((_212 * max(_528.x, _528.y)) - (_179 * cb0_m[8u].z), 0.0f, 1.0f);
             float _553;
             float _554;
             float _555;
@@ -265,9 +261,9 @@ void frag_main()
                 _555 = _175 + _515;
                 _556 = _174 + _516;
             }
-            float2 _566 = float2(mad(_179, cb0_m[9u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[9u].y / resolutionScale, TEXCOORD.y));
+            float2 _566 = float2(mad(_179, cb0_m[9u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[9u].y * resolutionScale.y, TEXCOORD.y));
             float4 _568 = t1.SampleLevel(s1, _566, 0.0f);
-            float _574 = clamp((_212 * max(_568.x, _568.y)) - (_179 * cb0_m[9u].z / resolutionScale), 0.0f, 1.0f);
+            float _574 = clamp((_212 * max(_568.x, _568.y)) - (_179 * cb0_m[9u].z), 0.0f, 1.0f);
             float _593;
             float _594;
             float _595;
@@ -287,9 +283,9 @@ void frag_main()
                 _595 = _175 + _555;
                 _596 = _174 + _556;
             }
-            float2 _606 = float2(mad(_179, cb0_m[10u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[10u].y / resolutionScale, TEXCOORD.y));
+            float2 _606 = float2(mad(_179, cb0_m[10u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[10u].y * resolutionScale.y, TEXCOORD.y));
             float4 _608 = t1.SampleLevel(s1, _606, 0.0f);
-            float _614 = clamp((_212 * max(_608.x, _608.y)) - (_179 * cb0_m[10u].z / resolutionScale), 0.0f, 1.0f);
+            float _614 = clamp((_212 * max(_608.x, _608.y)) - (_179 * cb0_m[10u].z), 0.0f, 1.0f);
             float _633;
             float _634;
             float _635;
@@ -309,9 +305,9 @@ void frag_main()
                 _635 = _175 + _595;
                 _636 = _174 + _596;
             }
-            float2 _646 = float2(mad(_179, cb0_m[11u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[11u].y / resolutionScale, TEXCOORD.y));
+            float2 _646 = float2(mad(_179, cb0_m[11u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[11u].y * resolutionScale.y, TEXCOORD.y));
             float4 _648 = t1.SampleLevel(s1, _646, 0.0f);
-            float _654 = clamp((_212 * max(_648.x, _648.y)) - (_179 * cb0_m[11u].z / resolutionScale), 0.0f, 1.0f);
+            float _654 = clamp((_212 * max(_648.x, _648.y)) - (_179 * cb0_m[11u].z), 0.0f, 1.0f);
             float _673;
             float _674;
             float _675;
@@ -331,9 +327,9 @@ void frag_main()
                 _675 = _175 + _635;
                 _676 = _174 + _636;
             }
-            float2 _686 = float2(mad(_179, cb0_m[12u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[12u].y / resolutionScale, TEXCOORD.y));
+            float2 _686 = float2(mad(_179, cb0_m[12u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[12u].y * resolutionScale.y, TEXCOORD.y));
             float4 _688 = t1.SampleLevel(s1, _686, 0.0f);
-            float _694 = clamp((_212 * max(_688.x, _688.y)) - (_179 * cb0_m[12u].z / resolutionScale), 0.0f, 1.0f);
+            float _694 = clamp((_212 * max(_688.x, _688.y)) - (_179 * cb0_m[12u].z), 0.0f, 1.0f);
             float _713;
             float _714;
             float _715;
@@ -353,9 +349,9 @@ void frag_main()
                 _715 = _175 + _675;
                 _716 = _174 + _676;
             }
-            float2 _726 = float2(mad(_179, cb0_m[13u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[13u].y / resolutionScale, TEXCOORD.y));
+            float2 _726 = float2(mad(_179, cb0_m[13u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[13u].y * resolutionScale.y, TEXCOORD.y));
             float4 _728 = t1.SampleLevel(s1, _726, 0.0f);
-            float _734 = clamp((_212 * max(_728.x, _728.y)) - (_179 * cb0_m[13u].z / resolutionScale), 0.0f, 1.0f);
+            float _734 = clamp((_212 * max(_728.x, _728.y)) - (_179 * cb0_m[13u].z), 0.0f, 1.0f);
             float _753;
             float _754;
             float _755;
@@ -375,9 +371,9 @@ void frag_main()
                 _755 = _175 + _715;
                 _756 = _174 + _716;
             }
-            float2 _766 = float2(mad(_179, cb0_m[14u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[14u].y / resolutionScale, TEXCOORD.y));
+            float2 _766 = float2(mad(_179, cb0_m[14u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[14u].y * resolutionScale.y, TEXCOORD.y));
             float4 _768 = t1.SampleLevel(s1, _766, 0.0f);
-            float _774 = clamp((_212 * max(_768.x, _768.y)) - (_179 * cb0_m[14u].z / resolutionScale), 0.0f, 1.0f);
+            float _774 = clamp((_212 * max(_768.x, _768.y)) - (_179 * cb0_m[14u].z), 0.0f, 1.0f);
             float _793;
             float _794;
             float _795;
@@ -397,9 +393,9 @@ void frag_main()
                 _795 = _175 + _755;
                 _796 = _174 + _756;
             }
-            float2 _806 = float2(mad(_179, cb0_m[15u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[15u].y / resolutionScale, TEXCOORD.y));
+            float2 _806 = float2(mad(_179, cb0_m[15u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[15u].y * resolutionScale.y, TEXCOORD.y));
             float4 _808 = t1.SampleLevel(s1, _806, 0.0f);
-            float _814 = clamp((_212 * max(_808.x, _808.y)) - (_179 * cb0_m[15u].z / resolutionScale), 0.0f, 1.0f);
+            float _814 = clamp((_212 * max(_808.x, _808.y)) - (_179 * cb0_m[15u].z), 0.0f, 1.0f);
             float _833;
             float _834;
             float _835;
@@ -419,9 +415,9 @@ void frag_main()
                 _835 = _175 + _795;
                 _836 = _174 + _796;
             }
-            float2 _846 = float2(mad(_179, cb0_m[16u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[16u].y / resolutionScale, TEXCOORD.y));
+            float2 _846 = float2(mad(_179, cb0_m[16u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[16u].y * resolutionScale.y, TEXCOORD.y));
             float4 _848 = t1.SampleLevel(s1, _846, 0.0f);
-            float _854 = clamp((_212 * max(_848.x, _848.y)) - (_179 * cb0_m[16u].z / resolutionScale), 0.0f, 1.0f);
+            float _854 = clamp((_212 * max(_848.x, _848.y)) - (_179 * cb0_m[16u].z), 0.0f, 1.0f);
             float _873;
             float _874;
             float _875;
@@ -441,9 +437,9 @@ void frag_main()
                 _875 = _175 + _835;
                 _876 = _174 + _836;
             }
-            float2 _886 = float2(mad(_179, cb0_m[17u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[17u].y / resolutionScale, TEXCOORD.y));
+            float2 _886 = float2(mad(_179, cb0_m[17u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[17u].y * resolutionScale.y, TEXCOORD.y));
             float4 _888 = t1.SampleLevel(s1, _886, 0.0f);
-            float _894 = clamp((_212 * max(_888.x, _888.y)) - (_179 * cb0_m[17u].z / resolutionScale), 0.0f, 1.0f);
+            float _894 = clamp((_212 * max(_888.x, _888.y)) - (_179 * cb0_m[17u].z), 0.0f, 1.0f);
             float _913;
             float _914;
             float _915;
@@ -463,9 +459,9 @@ void frag_main()
                 _915 = _175 + _875;
                 _916 = _174 + _876;
             }
-            float2 _926 = float2(mad(_179, cb0_m[18u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[18u].y / resolutionScale, TEXCOORD.y));
+            float2 _926 = float2(mad(_179, cb0_m[18u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[18u].y * resolutionScale.y, TEXCOORD.y));
             float4 _928 = t1.SampleLevel(s1, _926, 0.0f);
-            float _934 = clamp((_212 * max(_928.x, _928.y)) - (_179 * cb0_m[18u].z / resolutionScale), 0.0f, 1.0f);
+            float _934 = clamp((_212 * max(_928.x, _928.y)) - (_179 * cb0_m[18u].z), 0.0f, 1.0f);
             float _953;
             float _954;
             float _955;
@@ -485,9 +481,9 @@ void frag_main()
                 _955 = _175 + _915;
                 _956 = _174 + _916;
             }
-            float2 _966 = float2(mad(_179, cb0_m[19u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[19u].y / resolutionScale, TEXCOORD.y));
+            float2 _966 = float2(mad(_179, cb0_m[19u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[19u].y * resolutionScale.y, TEXCOORD.y));
             float4 _968 = t1.SampleLevel(s1, _966, 0.0f);
-            float _974 = clamp((_212 * max(_968.x, _968.y)) - (_179 * cb0_m[19u].z / resolutionScale), 0.0f, 1.0f);
+            float _974 = clamp((_212 * max(_968.x, _968.y)) - (_179 * cb0_m[19u].z), 0.0f, 1.0f);
             float _993;
             float _994;
             float _995;
@@ -507,9 +503,9 @@ void frag_main()
                 _995 = _175 + _955;
                 _996 = _174 + _956;
             }
-            float2 _1006 = float2(mad(_179, cb0_m[20u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[20u].y / resolutionScale, TEXCOORD.y));
+            float2 _1006 = float2(mad(_179, cb0_m[20u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[20u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1008 = t1.SampleLevel(s1, _1006, 0.0f);
-            float _1014 = clamp((_212 * max(_1008.x, _1008.y)) - (_179 * cb0_m[20u].z / resolutionScale), 0.0f, 1.0f);
+            float _1014 = clamp((_212 * max(_1008.x, _1008.y)) - (_179 * cb0_m[20u].z), 0.0f, 1.0f);
             float _1033;
             float _1034;
             float _1035;
@@ -529,9 +525,9 @@ void frag_main()
                 _1035 = _175 + _995;
                 _1036 = _174 + _996;
             }
-            float2 _1046 = float2(mad(_179, cb0_m[21u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[21u].y / resolutionScale, TEXCOORD.y));
+            float2 _1046 = float2(mad(_179, cb0_m[21u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[21u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1048 = t1.SampleLevel(s1, _1046, 0.0f);
-            float _1054 = clamp((_212 * max(_1048.x, _1048.y)) - (_179 * cb0_m[21u].z / resolutionScale), 0.0f, 1.0f);
+            float _1054 = clamp((_212 * max(_1048.x, _1048.y)) - (_179 * cb0_m[21u].z), 0.0f, 1.0f);
             float _1073;
             float _1074;
             float _1075;
@@ -551,9 +547,9 @@ void frag_main()
                 _1075 = _175 + _1035;
                 _1076 = _174 + _1036;
             }
-            float2 _1086 = float2(mad(_179, cb0_m[22u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[22u].y / resolutionScale, TEXCOORD.y));
+            float2 _1086 = float2(mad(_179, cb0_m[22u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[22u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1088 = t1.SampleLevel(s1, _1086, 0.0f);
-            float _1094 = clamp((_212 * max(_1088.x, _1088.y)) - (_179 * cb0_m[22u].z / resolutionScale), 0.0f, 1.0f);
+            float _1094 = clamp((_212 * max(_1088.x, _1088.y)) - (_179 * cb0_m[22u].z), 0.0f, 1.0f);
             float _1113;
             float _1114;
             float _1115;
@@ -573,9 +569,9 @@ void frag_main()
                 _1115 = _175 + _1075;
                 _1116 = _174 + _1076;
             }
-            float2 _1126 = float2(mad(_179, cb0_m[23u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[23u].y / resolutionScale, TEXCOORD.y));
+            float2 _1126 = float2(mad(_179, cb0_m[23u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[23u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1128 = t1.SampleLevel(s1, _1126, 0.0f);
-            float _1134 = clamp((_212 * max(_1128.x, _1128.y)) - (_179 * cb0_m[23u].z / resolutionScale), 0.0f, 1.0f);
+            float _1134 = clamp((_212 * max(_1128.x, _1128.y)) - (_179 * cb0_m[23u].z), 0.0f, 1.0f);
             float _1153;
             float _1154;
             float _1155;
@@ -595,9 +591,9 @@ void frag_main()
                 _1155 = _175 + _1115;
                 _1156 = _174 + _1116;
             }
-            float2 _1166 = float2(mad(_179, cb0_m[24u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[24u].y / resolutionScale, TEXCOORD.y));
+            float2 _1166 = float2(mad(_179, cb0_m[24u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[24u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1168 = t1.SampleLevel(s1, _1166, 0.0f);
-            float _1174 = clamp((_212 * max(_1168.x, _1168.y)) - (_179 * cb0_m[24u].z / resolutionScale), 0.0f, 1.0f);
+            float _1174 = clamp((_212 * max(_1168.x, _1168.y)) - (_179 * cb0_m[24u].z), 0.0f, 1.0f);
             float _1193;
             float _1194;
             float _1195;
@@ -617,9 +613,9 @@ void frag_main()
                 _1195 = _175 + _1155;
                 _1196 = _174 + _1156;
             }
-            float2 _1206 = float2(mad(_179, cb0_m[25u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[25u].y / resolutionScale, TEXCOORD.y));
+            float2 _1206 = float2(mad(_179, cb0_m[25u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[25u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1208 = t1.SampleLevel(s1, _1206, 0.0f);
-            float _1214 = clamp((_212 * max(_1208.x, _1208.y)) - (_179 * cb0_m[25u].z / resolutionScale), 0.0f, 1.0f);
+            float _1214 = clamp((_212 * max(_1208.x, _1208.y)) - (_179 * cb0_m[25u].z), 0.0f, 1.0f);
             float _1233;
             float _1234;
             float _1235;
@@ -639,9 +635,9 @@ void frag_main()
                 _1235 = _175 + _1195;
                 _1236 = _174 + _1196;
             }
-            float2 _1246 = float2(mad(_179, cb0_m[26u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[26u].y / resolutionScale, TEXCOORD.y));
+            float2 _1246 = float2(mad(_179, cb0_m[26u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[26u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1248 = t1.SampleLevel(s1, _1246, 0.0f);
-            float _1254 = clamp((_212 * max(_1248.x, _1248.y)) - (_179 * cb0_m[26u].z / resolutionScale), 0.0f, 1.0f);
+            float _1254 = clamp((_212 * max(_1248.x, _1248.y)) - (_179 * cb0_m[26u].z), 0.0f, 1.0f);
             float _1273;
             float _1274;
             float _1275;
@@ -661,9 +657,9 @@ void frag_main()
                 _1275 = _175 + _1235;
                 _1276 = _174 + _1236;
             }
-            float2 _1286 = float2(mad(_179, cb0_m[27u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[27u].y / resolutionScale, TEXCOORD.y));
+            float2 _1286 = float2(mad(_179, cb0_m[27u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[27u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1288 = t1.SampleLevel(s1, _1286, 0.0f);
-            float _1294 = clamp((_212 * max(_1288.x, _1288.y)) - (_179 * cb0_m[27u].z / resolutionScale), 0.0f, 1.0f);
+            float _1294 = clamp((_212 * max(_1288.x, _1288.y)) - (_179 * cb0_m[27u].z), 0.0f, 1.0f);
             float _1313;
             float _1314;
             float _1315;
@@ -683,9 +679,9 @@ void frag_main()
                 _1315 = _175 + _1275;
                 _1316 = _174 + _1276;
             }
-            float2 _1326 = float2(mad(_179, cb0_m[28u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[28u].y / resolutionScale, TEXCOORD.y));
+            float2 _1326 = float2(mad(_179, cb0_m[28u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[28u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1328 = t1.SampleLevel(s1, _1326, 0.0f);
-            float _1334 = clamp((_212 * max(_1328.x, _1328.y)) - (_179 * cb0_m[28u].z / resolutionScale), 0.0f, 1.0f);
+            float _1334 = clamp((_212 * max(_1328.x, _1328.y)) - (_179 * cb0_m[28u].z), 0.0f, 1.0f);
             float _1353;
             float _1354;
             float _1355;
@@ -705,9 +701,9 @@ void frag_main()
                 _1355 = _175 + _1315;
                 _1356 = _174 + _1316;
             }
-            float2 _1366 = float2(mad(_179, cb0_m[29u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[29u].y / resolutionScale, TEXCOORD.y));
+            float2 _1366 = float2(mad(_179, cb0_m[29u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[29u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1368 = t1.SampleLevel(s1, _1366, 0.0f);
-            float _1374 = clamp((_212 * max(_1368.x, _1368.y)) - (_179 * cb0_m[29u].z / resolutionScale), 0.0f, 1.0f);
+            float _1374 = clamp((_212 * max(_1368.x, _1368.y)) - (_179 * cb0_m[29u].z), 0.0f, 1.0f);
             float _1393;
             float _1394;
             float _1395;
@@ -727,9 +723,9 @@ void frag_main()
                 _1395 = _175 + _1355;
                 _1396 = _174 + _1356;
             }
-            float2 _1406 = float2(mad(_179, cb0_m[30u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[30u].y / resolutionScale, TEXCOORD.y));
+            float2 _1406 = float2(mad(_179, cb0_m[30u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[30u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1408 = t1.SampleLevel(s1, _1406, 0.0f);
-            float _1414 = clamp((_212 * max(_1408.x, _1408.y)) - (_179 * cb0_m[30u].z / resolutionScale), 0.0f, 1.0f);
+            float _1414 = clamp((_212 * max(_1408.x, _1408.y)) - (_179 * cb0_m[30u].z), 0.0f, 1.0f);
             float _1433;
             float _1434;
             float _1435;
@@ -749,9 +745,9 @@ void frag_main()
                 _1435 = _175 + _1395;
                 _1436 = _174 + _1396;
             }
-            float2 _1446 = float2(mad(_179, cb0_m[31u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[31u].y / resolutionScale, TEXCOORD.y));
+            float2 _1446 = float2(mad(_179, cb0_m[31u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[31u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1448 = t1.SampleLevel(s1, _1446, 0.0f);
-            float _1454 = clamp((_212 * max(_1448.x, _1448.y)) - (_179 * cb0_m[31u].z / resolutionScale), 0.0f, 1.0f);
+            float _1454 = clamp((_212 * max(_1448.x, _1448.y)) - (_179 * cb0_m[31u].z), 0.0f, 1.0f);
             float _1473;
             float _1474;
             float _1475;
@@ -771,9 +767,9 @@ void frag_main()
                 _1475 = _175 + _1435;
                 _1476 = _174 + _1436;
             }
-            float2 _1486 = float2(mad(_179, cb0_m[32u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[32u].y / resolutionScale, TEXCOORD.y));
+            float2 _1486 = float2(mad(_179, cb0_m[32u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[32u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1488 = t1.SampleLevel(s1, _1486, 0.0f);
-            float _1494 = clamp((_212 * max(_1488.x, _1488.y)) - (_179 * cb0_m[32u].z / resolutionScale), 0.0f, 1.0f);
+            float _1494 = clamp((_212 * max(_1488.x, _1488.y)) - (_179 * cb0_m[32u].z), 0.0f, 1.0f);
             float _1513;
             float _1514;
             float _1515;
@@ -793,9 +789,9 @@ void frag_main()
                 _1515 = _175 + _1475;
                 _1516 = _174 + _1476;
             }
-            float2 _1526 = float2(mad(_179, cb0_m[33u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[33u].y / resolutionScale, TEXCOORD.y));
+            float2 _1526 = float2(mad(_179, cb0_m[33u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[33u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1528 = t1.SampleLevel(s1, _1526, 0.0f);
-            float _1534 = clamp((_212 * max(_1528.x, _1528.y)) - (_179 * cb0_m[33u].z / resolutionScale), 0.0f, 1.0f);
+            float _1534 = clamp((_212 * max(_1528.x, _1528.y)) - (_179 * cb0_m[33u].z), 0.0f, 1.0f);
             float _1553;
             float _1554;
             float _1555;
@@ -815,9 +811,9 @@ void frag_main()
                 _1555 = _175 + _1515;
                 _1556 = _174 + _1516;
             }
-            float2 _1566 = float2(mad(_179, cb0_m[34u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[34u].y / resolutionScale, TEXCOORD.y));
+            float2 _1566 = float2(mad(_179, cb0_m[34u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[34u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1568 = t1.SampleLevel(s1, _1566, 0.0f);
-            float _1574 = clamp((_212 * max(_1568.x, _1568.y)) - (_179 * cb0_m[34u].z / resolutionScale), 0.0f, 1.0f);
+            float _1574 = clamp((_212 * max(_1568.x, _1568.y)) - (_179 * cb0_m[34u].z), 0.0f, 1.0f);
             float _1593;
             float _1594;
             float _1595;
@@ -837,9 +833,9 @@ void frag_main()
                 _1595 = _175 + _1555;
                 _1596 = _174 + _1556;
             }
-            float2 _1606 = float2(mad(_179, cb0_m[35u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[35u].y / resolutionScale, TEXCOORD.y));
+            float2 _1606 = float2(mad(_179, cb0_m[35u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[35u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1608 = t1.SampleLevel(s1, _1606, 0.0f);
-            float _1614 = clamp((_212 * max(_1608.x, _1608.y)) - (_179 * cb0_m[35u].z / resolutionScale), 0.0f, 1.0f);
+            float _1614 = clamp((_212 * max(_1608.x, _1608.y)) - (_179 * cb0_m[35u].z), 0.0f, 1.0f);
             float _1633;
             float _1634;
             float _1635;
@@ -859,9 +855,9 @@ void frag_main()
                 _1635 = _175 + _1595;
                 _1636 = _174 + _1596;
             }
-            float2 _1646 = float2(mad(_179, cb0_m[36u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[36u].y / resolutionScale, TEXCOORD.y));
+            float2 _1646 = float2(mad(_179, cb0_m[36u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[36u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1648 = t1.SampleLevel(s1, _1646, 0.0f);
-            float _1654 = clamp((_212 * max(_1648.x, _1648.y)) - (_179 * cb0_m[36u].z / resolutionScale), 0.0f, 1.0f);
+            float _1654 = clamp((_212 * max(_1648.x, _1648.y)) - (_179 * cb0_m[36u].z), 0.0f, 1.0f);
             float _1673;
             float _1674;
             float _1675;
@@ -881,9 +877,9 @@ void frag_main()
                 _1675 = _175 + _1635;
                 _1676 = _174 + _1636;
             }
-            float2 _1686 = float2(mad(_179, cb0_m[37u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[37u].y / resolutionScale, TEXCOORD.y));
+            float2 _1686 = float2(mad(_179, cb0_m[37u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[37u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1688 = t1.SampleLevel(s1, _1686, 0.0f);
-            float _1694 = clamp((_212 * max(_1688.x, _1688.y)) - (_179 * cb0_m[37u].z / resolutionScale), 0.0f, 1.0f);
+            float _1694 = clamp((_212 * max(_1688.x, _1688.y)) - (_179 * cb0_m[37u].z), 0.0f, 1.0f);
             float _1713;
             float _1714;
             float _1715;
@@ -903,9 +899,9 @@ void frag_main()
                 _1715 = _175 + _1675;
                 _1716 = _174 + _1676;
             }
-            float2 _1726 = float2(mad(_179, cb0_m[38u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[38u].y / resolutionScale, TEXCOORD.y));
+            float2 _1726 = float2(mad(_179, cb0_m[38u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[38u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1728 = t1.SampleLevel(s1, _1726, 0.0f);
-            float _1734 = clamp((_212 * max(_1728.x, _1728.y)) - (_179 * cb0_m[38u].z / resolutionScale), 0.0f, 1.0f);
+            float _1734 = clamp((_212 * max(_1728.x, _1728.y)) - (_179 * cb0_m[38u].z), 0.0f, 1.0f);
             float _1753;
             float _1754;
             float _1755;
@@ -925,9 +921,9 @@ void frag_main()
                 _1755 = _175 + _1715;
                 _1756 = _174 + _1716;
             }
-            float2 _1766 = float2(mad(_179, cb0_m[39u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[39u].y / resolutionScale, TEXCOORD.y));
+            float2 _1766 = float2(mad(_179, cb0_m[39u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[39u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1768 = t1.SampleLevel(s1, _1766, 0.0f);
-            float _1774 = clamp((_212 * max(_1768.x, _1768.y)) - (_179 * cb0_m[39u].z / resolutionScale), 0.0f, 1.0f);
+            float _1774 = clamp((_212 * max(_1768.x, _1768.y)) - (_179 * cb0_m[39u].z), 0.0f, 1.0f);
             float _1793;
             float _1794;
             float _1795;
@@ -947,9 +943,9 @@ void frag_main()
                 _1795 = _175 + _1755;
                 _1796 = _174 + _1756;
             }
-            float2 _1806 = float2(mad(_179, cb0_m[40u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[40u].y / resolutionScale, TEXCOORD.y));
+            float2 _1806 = float2(mad(_179, cb0_m[40u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[40u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1808 = t1.SampleLevel(s1, _1806, 0.0f);
-            float _1814 = clamp((_212 * max(_1808.x, _1808.y)) - (_179 * cb0_m[40u].z / resolutionScale), 0.0f, 1.0f);
+            float _1814 = clamp((_212 * max(_1808.x, _1808.y)) - (_179 * cb0_m[40u].z), 0.0f, 1.0f);
             float _1833;
             float _1834;
             float _1835;
@@ -969,9 +965,9 @@ void frag_main()
                 _1835 = _175 + _1795;
                 _1836 = _174 + _1796;
             }
-            float2 _1846 = float2(mad(_179, cb0_m[41u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[41u].y / resolutionScale, TEXCOORD.y));
+            float2 _1846 = float2(mad(_179, cb0_m[41u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[41u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1848 = t1.SampleLevel(s1, _1846, 0.0f);
-            float _1854 = clamp((_212 * max(_1848.x, _1848.y)) - (_179 * cb0_m[41u].z / resolutionScale), 0.0f, 1.0f);
+            float _1854 = clamp((_212 * max(_1848.x, _1848.y)) - (_179 * cb0_m[41u].z), 0.0f, 1.0f);
             float _1873;
             float _1874;
             float _1875;
@@ -991,9 +987,9 @@ void frag_main()
                 _1875 = _175 + _1835;
                 _1876 = _174 + _1836;
             }
-            float2 _1886 = float2(mad(_179, cb0_m[42u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[42u].y / resolutionScale, TEXCOORD.y));
+            float2 _1886 = float2(mad(_179, cb0_m[42u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[42u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1888 = t1.SampleLevel(s1, _1886, 0.0f);
-            float _1894 = clamp((_212 * max(_1888.x, _1888.y)) - (_179 * cb0_m[42u].z / resolutionScale), 0.0f, 1.0f);
+            float _1894 = clamp((_212 * max(_1888.x, _1888.y)) - (_179 * cb0_m[42u].z), 0.0f, 1.0f);
             float _1913;
             float _1914;
             float _1915;
@@ -1013,9 +1009,9 @@ void frag_main()
                 _1915 = _175 + _1875;
                 _1916 = _174 + _1876;
             }
-            float2 _1926 = float2(mad(_179, cb0_m[43u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[43u].y / resolutionScale, TEXCOORD.y));
+            float2 _1926 = float2(mad(_179, cb0_m[43u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[43u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1928 = t1.SampleLevel(s1, _1926, 0.0f);
-            float _1934 = clamp((_212 * max(_1928.x, _1928.y)) - (_179 * cb0_m[43u].z / resolutionScale), 0.0f, 1.0f);
+            float _1934 = clamp((_212 * max(_1928.x, _1928.y)) - (_179 * cb0_m[43u].z), 0.0f, 1.0f);
             float _1953;
             float _1954;
             float _1955;
@@ -1035,9 +1031,9 @@ void frag_main()
                 _1955 = _175 + _1915;
                 _1956 = _174 + _1916;
             }
-            float2 _1966 = float2(mad(_179, cb0_m[44u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[44u].y / resolutionScale, TEXCOORD.y));
+            float2 _1966 = float2(mad(_179, cb0_m[44u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[44u].y * resolutionScale.y, TEXCOORD.y));
             float4 _1968 = t1.SampleLevel(s1, _1966, 0.0f);
-            float _1974 = clamp((_212 * max(_1968.x, _1968.y)) - (_179 * cb0_m[44u].z / resolutionScale), 0.0f, 1.0f);
+            float _1974 = clamp((_212 * max(_1968.x, _1968.y)) - (_179 * cb0_m[44u].z), 0.0f, 1.0f);
             float _1993;
             float _1994;
             float _1995;
@@ -1057,9 +1053,9 @@ void frag_main()
                 _1995 = _175 + _1955;
                 _1996 = _174 + _1956;
             }
-            float2 _2006 = float2(mad(_179, cb0_m[45u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[45u].y / resolutionScale, TEXCOORD.y));
+            float2 _2006 = float2(mad(_179, cb0_m[45u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[45u].y * resolutionScale.y, TEXCOORD.y));
             float4 _2008 = t1.SampleLevel(s1, _2006, 0.0f);
-            float _2014 = clamp((_212 * max(_2008.x, _2008.y)) - (_179 * cb0_m[45u].z / resolutionScale), 0.0f, 1.0f);
+            float _2014 = clamp((_212 * max(_2008.x, _2008.y)) - (_179 * cb0_m[45u].z), 0.0f, 1.0f);
             float _2033;
             float _2034;
             float _2035;
@@ -1079,9 +1075,9 @@ void frag_main()
                 _2035 = _175 + _1995;
                 _2036 = _174 + _1996;
             }
-            float2 _2046 = float2(mad(_179, cb0_m[46u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[46u].y / resolutionScale, TEXCOORD.y));
+            float2 _2046 = float2(mad(_179, cb0_m[46u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[46u].y * resolutionScale.y, TEXCOORD.y));
             float4 _2048 = t1.SampleLevel(s1, _2046, 0.0f);
-            float _2054 = clamp((_212 * max(_2048.x, _2048.y)) - (_179 * cb0_m[46u].z / resolutionScale), 0.0f, 1.0f);
+            float _2054 = clamp((_212 * max(_2048.x, _2048.y)) - (_179 * cb0_m[46u].z), 0.0f, 1.0f);
             float _2073;
             float _2074;
             float _2075;
@@ -1101,9 +1097,9 @@ void frag_main()
                 _2075 = _175 + _2035;
                 _2076 = _174 + _2036;
             }
-            float2 _2086 = float2(mad(_179, cb0_m[47u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[47u].y / resolutionScale, TEXCOORD.y));
+            float2 _2086 = float2(mad(_179, cb0_m[47u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[47u].y * resolutionScale.y, TEXCOORD.y));
             float4 _2088 = t1.SampleLevel(s1, _2086, 0.0f);
-            float _2094 = clamp((_212 * max(_2088.x, _2088.y)) - (_179 * cb0_m[47u].z / resolutionScale), 0.0f, 1.0f);
+            float _2094 = clamp((_212 * max(_2088.x, _2088.y)) - (_179 * cb0_m[47u].z), 0.0f, 1.0f);
             float _2113;
             float _2114;
             float _2115;
@@ -1140,10 +1136,10 @@ void frag_main()
                 float _5871;
                 if (_183 < 14.0f)
                 {
-                    float2 _2137 = float2(mad(_179, cb0_m[0u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[0u].y / resolutionScale, TEXCOORD.y));
+                    float2 _2137 = float2(mad(_179, cb0_m[0u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[0u].y * resolutionScale.y, TEXCOORD.y));
                     float4 _2139 = t1.SampleLevel(s1, _2137, 0.0f);
                     float _2143 = cb1_m1.w * 0.5f;
-                    float _2146 = clamp((max(_2139.x, _2139.y) * _2143) - (_179 * cb0_m[0u].z / resolutionScale), 0.0f, 1.0f);
+                    float _2146 = clamp((max(_2139.x, _2139.y) * _2143) - (_179 * cb0_m[0u].z), 0.0f, 1.0f);
                     float _2164;
                     float _2165;
                     float _2166;
@@ -1178,9 +1174,9 @@ void frag_main()
                         _2170 = _175;
                         _2171 = _174;
                     }
-                    float2 _2181 = float2(mad(_179, cb0_m[1u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[1u].y / resolutionScale, TEXCOORD.y));
+                    float2 _2181 = float2(mad(_179, cb0_m[1u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[1u].y * resolutionScale.y, TEXCOORD.y));
                     float4 _2183 = t1.SampleLevel(s1, _2181, 0.0f);
-                    float _2189 = clamp((_2143 * max(_2183.x, _2183.y)) - (_179 * cb0_m[1u].z / resolutionScale), 0.0f, 1.0f);
+                    float _2189 = clamp((_2143 * max(_2183.x, _2183.y)) - (_179 * cb0_m[1u].z), 0.0f, 1.0f);
                     float _2211;
                     float _2212;
                     float _2213;
@@ -1215,9 +1211,9 @@ void frag_main()
                         _2217 = _2166 + _2170;
                         _2218 = _2167 + _2171;
                     }
-                    float2 _2228 = float2(mad(_179, cb0_m[2u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[2u].y / resolutionScale, TEXCOORD.y));
+                    float2 _2228 = float2(mad(_179, cb0_m[2u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[2u].y * resolutionScale.y, TEXCOORD.y));
                     float4 _2230 = t1.SampleLevel(s1, _2228, 0.0f);
-                    float _2236 = clamp((_2143 * max(_2230.x, _2230.y)) - (_179 * cb0_m[2u].z / resolutionScale), 0.0f, 1.0f);
+                    float _2236 = clamp((_2143 * max(_2230.x, _2230.y)) - (_179 * cb0_m[2u].z), 0.0f, 1.0f);
                     float _2258;
                     float _2259;
                     float _2260;
@@ -1252,9 +1248,9 @@ void frag_main()
                         _2264 = _2213 + _2217;
                         _2265 = _2214 + _2218;
                     }
-                    float2 _2275 = float2(mad(_179, cb0_m[3u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[3u].y / resolutionScale, TEXCOORD.y));
+                    float2 _2275 = float2(mad(_179, cb0_m[3u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[3u].y * resolutionScale.y, TEXCOORD.y));
                     float4 _2277 = t1.SampleLevel(s1, _2275, 0.0f);
-                    float _2283 = clamp((_2143 * max(_2277.x, _2277.y)) - (_179 * cb0_m[3u].z / resolutionScale), 0.0f, 1.0f);
+                    float _2283 = clamp((_2143 * max(_2277.x, _2277.y)) - (_179 * cb0_m[3u].z), 0.0f, 1.0f);
                     float _2305;
                     float _2306;
                     float _2307;
@@ -1289,9 +1285,9 @@ void frag_main()
                         _2311 = _2264 + _2260;
                         _2312 = _2261 + _2265;
                     }
-                    float2 _2322 = float2(mad(_179, cb0_m[4u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[4u].y / resolutionScale, TEXCOORD.y));
+                    float2 _2322 = float2(mad(_179, cb0_m[4u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[4u].y * resolutionScale.y, TEXCOORD.y));
                     float4 _2324 = t1.SampleLevel(s1, _2322, 0.0f);
-                    float _2330 = clamp((_2143 * max(_2324.x, _2324.y)) - (_179 * cb0_m[4u].z / resolutionScale), 0.0f, 1.0f);
+                    float _2330 = clamp((_2143 * max(_2324.x, _2324.y)) - (_179 * cb0_m[4u].z), 0.0f, 1.0f);
                     float _2352;
                     float _2353;
                     float _2354;
@@ -1326,9 +1322,9 @@ void frag_main()
                         _2358 = _2307 + _2311;
                         _2359 = _2308 + _2312;
                     }
-                    float2 _2369 = float2(mad(_179, cb0_m[5u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[5u].y / resolutionScale, TEXCOORD.y));
+                    float2 _2369 = float2(mad(_179, cb0_m[5u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[5u].y * resolutionScale.y, TEXCOORD.y));
                     float4 _2371 = t1.SampleLevel(s1, _2369, 0.0f);
-                    float _2377 = clamp((_2143 * max(_2371.x, _2371.y)) - (_179 * cb0_m[5u].z / resolutionScale), 0.0f, 1.0f);
+                    float _2377 = clamp((_2143 * max(_2371.x, _2371.y)) - (_179 * cb0_m[5u].z), 0.0f, 1.0f);
                     float _2399;
                     float _2400;
                     float _2401;
@@ -1363,9 +1359,9 @@ void frag_main()
                         _2405 = _2354 + _2358;
                         _2406 = _2355 + _2359;
                     }
-                    float2 _2416 = float2(mad(_179, cb0_m[6u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[6u].y / resolutionScale, TEXCOORD.y));
+                    float2 _2416 = float2(mad(_179, cb0_m[6u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[6u].y * resolutionScale.y, TEXCOORD.y));
                     float4 _2418 = t1.SampleLevel(s1, _2416, 0.0f);
-                    float _2424 = clamp((_2143 * max(_2418.x, _2418.y)) - (_179 * cb0_m[6u].z / resolutionScale), 0.0f, 1.0f);
+                    float _2424 = clamp((_2143 * max(_2418.x, _2418.y)) - (_179 * cb0_m[6u].z), 0.0f, 1.0f);
                     float _2446;
                     float _2447;
                     float _2448;
@@ -1400,9 +1396,9 @@ void frag_main()
                         _2452 = _2401 + _2405;
                         _2453 = _2402 + _2406;
                     }
-                    float2 _2463 = float2(mad(_179, cb0_m[7u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[7u].y / resolutionScale, TEXCOORD.y));
+                    float2 _2463 = float2(mad(_179, cb0_m[7u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[7u].y * resolutionScale.y, TEXCOORD.y));
                     float4 _2465 = t1.SampleLevel(s1, _2463, 0.0f);
-                    float _2471 = clamp((_2143 * max(_2465.x, _2465.y)) - (_179 * cb0_m[7u].z / resolutionScale), 0.0f, 1.0f);
+                    float _2471 = clamp((_2143 * max(_2465.x, _2465.y)) - (_179 * cb0_m[7u].z), 0.0f, 1.0f);
                     float _2490;
                     float _2491;
                     float _2492;
@@ -1435,10 +1431,10 @@ void frag_main()
                     float _5867;
                     if (_183 < 21.0f)
                     {
-                        float2 _2508 = float2(mad(_179, cb0_m[0u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[0u].y / resolutionScale, TEXCOORD.y));
+                        float2 _2508 = float2(mad(_179, cb0_m[0u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[0u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _2510 = t1.SampleLevel(s1, _2508, 0.0f);
                         float _2514 = cb1_m1.w * 0.5f;
-                        float _2517 = clamp((max(_2510.x, _2510.y) * _2514) - (_179 * cb0_m[0u].z / resolutionScale), 0.0f, 1.0f);
+                        float _2517 = clamp((max(_2510.x, _2510.y) * _2514) - (_179 * cb0_m[0u].z), 0.0f, 1.0f);
                         float _2535;
                         float _2536;
                         float _2537;
@@ -1473,9 +1469,9 @@ void frag_main()
                             _2541 = _175;
                             _2542 = _174;
                         }
-                        float2 _2552 = float2(mad(_179, cb0_m[1u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[1u].y / resolutionScale, TEXCOORD.y));
+                        float2 _2552 = float2(mad(_179, cb0_m[1u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[1u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _2554 = t1.SampleLevel(s1, _2552, 0.0f);
-                        float _2560 = clamp((_2514 * max(_2554.x, _2554.y)) - (_179 * cb0_m[1u].z / resolutionScale), 0.0f, 1.0f);
+                        float _2560 = clamp((_2514 * max(_2554.x, _2554.y)) - (_179 * cb0_m[1u].z), 0.0f, 1.0f);
                         float _2582;
                         float _2583;
                         float _2584;
@@ -1510,9 +1506,9 @@ void frag_main()
                             _2588 = _2537 + _2541;
                             _2589 = _2538 + _2542;
                         }
-                        float2 _2599 = float2(mad(_179, cb0_m[2u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[2u].y / resolutionScale, TEXCOORD.y));
+                        float2 _2599 = float2(mad(_179, cb0_m[2u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[2u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _2601 = t1.SampleLevel(s1, _2599, 0.0f);
-                        float _2607 = clamp((_2514 * max(_2601.x, _2601.y)) - (_179 * cb0_m[2u].z / resolutionScale), 0.0f, 1.0f);
+                        float _2607 = clamp((_2514 * max(_2601.x, _2601.y)) - (_179 * cb0_m[2u].z), 0.0f, 1.0f);
                         float _2629;
                         float _2630;
                         float _2631;
@@ -1547,9 +1543,9 @@ void frag_main()
                             _2635 = _2584 + _2588;
                             _2636 = _2585 + _2589;
                         }
-                        float2 _2646 = float2(mad(_179, cb0_m[3u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[3u].y / resolutionScale, TEXCOORD.y));
+                        float2 _2646 = float2(mad(_179, cb0_m[3u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[3u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _2648 = t1.SampleLevel(s1, _2646, 0.0f);
-                        float _2654 = clamp((_2514 * max(_2648.x, _2648.y)) - (_179 * cb0_m[3u].z / resolutionScale), 0.0f, 1.0f);
+                        float _2654 = clamp((_2514 * max(_2648.x, _2648.y)) - (_179 * cb0_m[3u].z), 0.0f, 1.0f);
                         float _2676;
                         float _2677;
                         float _2678;
@@ -1584,9 +1580,9 @@ void frag_main()
                             _2682 = _2631 + _2635;
                             _2683 = _2632 + _2636;
                         }
-                        float2 _2693 = float2(mad(_179, cb0_m[4u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[4u].y / resolutionScale, TEXCOORD.y));
+                        float2 _2693 = float2(mad(_179, cb0_m[4u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[4u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _2695 = t1.SampleLevel(s1, _2693, 0.0f);
-                        float _2701 = clamp((_2514 * max(_2695.x, _2695.y)) - (_179 * cb0_m[4u].z / resolutionScale), 0.0f, 1.0f);
+                        float _2701 = clamp((_2514 * max(_2695.x, _2695.y)) - (_179 * cb0_m[4u].z), 0.0f, 1.0f);
                         float _2723;
                         float _2724;
                         float _2725;
@@ -1621,9 +1617,9 @@ void frag_main()
                             _2729 = _2678 + _2682;
                             _2730 = _2679 + _2683;
                         }
-                        float2 _2740 = float2(mad(_179, cb0_m[5u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[5u].y / resolutionScale, TEXCOORD.y));
+                        float2 _2740 = float2(mad(_179, cb0_m[5u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[5u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _2742 = t1.SampleLevel(s1, _2740, 0.0f);
-                        float _2748 = clamp((_2514 * max(_2742.x, _2742.y)) - (_179 * cb0_m[5u].z / resolutionScale), 0.0f, 1.0f);
+                        float _2748 = clamp((_2514 * max(_2742.x, _2742.y)) - (_179 * cb0_m[5u].z), 0.0f, 1.0f);
                         float _2770;
                         float _2771;
                         float _2772;
@@ -1658,9 +1654,9 @@ void frag_main()
                             _2776 = _2725 + _2729;
                             _2777 = _2726 + _2730;
                         }
-                        float2 _2787 = float2(mad(_179, cb0_m[6u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[6u].y / resolutionScale, TEXCOORD.y));
+                        float2 _2787 = float2(mad(_179, cb0_m[6u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[6u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _2789 = t1.SampleLevel(s1, _2787, 0.0f);
-                        float _2795 = clamp((_2514 * max(_2789.x, _2789.y)) - (_179 * cb0_m[6u].z / resolutionScale), 0.0f, 1.0f);
+                        float _2795 = clamp((_2514 * max(_2789.x, _2789.y)) - (_179 * cb0_m[6u].z), 0.0f, 1.0f);
                         float _2817;
                         float _2818;
                         float _2819;
@@ -1695,9 +1691,9 @@ void frag_main()
                             _2823 = _2772 + _2776;
                             _2824 = _2777 + _2773;
                         }
-                        float2 _2834 = float2(mad(_179, cb0_m[7u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[7u].y / resolutionScale, TEXCOORD.y));
+                        float2 _2834 = float2(mad(_179, cb0_m[7u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[7u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _2836 = t1.SampleLevel(s1, _2834, 0.0f);
-                        float _2842 = clamp((_2514 * max(_2836.x, _2836.y)) - (_179 * cb0_m[7u].z / resolutionScale), 0.0f, 1.0f);
+                        float _2842 = clamp((_2514 * max(_2836.x, _2836.y)) - (_179 * cb0_m[7u].z), 0.0f, 1.0f);
                         float _2864;
                         float _2865;
                         float _2866;
@@ -1732,9 +1728,9 @@ void frag_main()
                             _2870 = _2819 + _2823;
                             _2871 = _2820 + _2824;
                         }
-                        float2 _2881 = float2(mad(_179, cb0_m[8u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[8u].y / resolutionScale, TEXCOORD.y));
+                        float2 _2881 = float2(mad(_179, cb0_m[8u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[8u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _2883 = t1.SampleLevel(s1, _2881, 0.0f);
-                        float _2889 = clamp((_2514 * max(_2883.x, _2883.y)) - (_179 * cb0_m[8u].z / resolutionScale), 0.0f, 1.0f);
+                        float _2889 = clamp((_2514 * max(_2883.x, _2883.y)) - (_179 * cb0_m[8u].z), 0.0f, 1.0f);
                         float _2911;
                         float _2912;
                         float _2913;
@@ -1769,9 +1765,9 @@ void frag_main()
                             _2917 = _2866 + _2870;
                             _2918 = _2867 + _2871;
                         }
-                        float2 _2928 = float2(mad(_179, cb0_m[9u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[9u].y / resolutionScale, TEXCOORD.y));
+                        float2 _2928 = float2(mad(_179, cb0_m[9u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[9u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _2930 = t1.SampleLevel(s1, _2928, 0.0f);
-                        float _2936 = clamp((_2514 * max(_2930.x, _2930.y)) - (_179 * cb0_m[9u].z / resolutionScale), 0.0f, 1.0f);
+                        float _2936 = clamp((_2514 * max(_2930.x, _2930.y)) - (_179 * cb0_m[9u].z), 0.0f, 1.0f);
                         float _2958;
                         float _2959;
                         float _2960;
@@ -1806,9 +1802,9 @@ void frag_main()
                             _2964 = _2913 + _2917;
                             _2965 = _2914 + _2918;
                         }
-                        float2 _2975 = float2(mad(_179, cb0_m[10u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[10u].y / resolutionScale, TEXCOORD.y));
+                        float2 _2975 = float2(mad(_179, cb0_m[10u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[10u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _2977 = t1.SampleLevel(s1, _2975, 0.0f);
-                        float _2983 = clamp((_2514 * max(_2977.x, _2977.y)) - (_179 * cb0_m[10u].z / resolutionScale), 0.0f, 1.0f);
+                        float _2983 = clamp((_2514 * max(_2977.x, _2977.y)) - (_179 * cb0_m[10u].z), 0.0f, 1.0f);
                         float _3005;
                         float _3006;
                         float _3007;
@@ -1843,9 +1839,9 @@ void frag_main()
                             _3011 = _2960 + _2964;
                             _3012 = _2961 + _2965;
                         }
-                        float2 _3022 = float2(mad(_179, cb0_m[11u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[11u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3022 = float2(mad(_179, cb0_m[11u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[11u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3024 = t1.SampleLevel(s1, _3022, 0.0f);
-                        float _3030 = clamp((_2514 * max(_3024.x, _3024.y)) - (_179 * cb0_m[11u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3030 = clamp((_2514 * max(_3024.x, _3024.y)) - (_179 * cb0_m[11u].z), 0.0f, 1.0f);
                         float _3052;
                         float _3053;
                         float _3054;
@@ -1880,9 +1876,9 @@ void frag_main()
                             _3058 = _3007 + _3011;
                             _3059 = _3008 + _3012;
                         }
-                        float2 _3069 = float2(mad(_179, cb0_m[12u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[12u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3069 = float2(mad(_179, cb0_m[12u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[12u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3071 = t1.SampleLevel(s1, _3069, 0.0f);
-                        float _3077 = clamp((_2514 * max(_3071.x, _3071.y)) - (_179 * cb0_m[12u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3077 = clamp((_2514 * max(_3071.x, _3071.y)) - (_179 * cb0_m[12u].z), 0.0f, 1.0f);
                         float _3099;
                         float _3100;
                         float _3101;
@@ -1917,9 +1913,9 @@ void frag_main()
                             _3105 = _3054 + _3058;
                             _3106 = _3055 + _3059;
                         }
-                        float2 _3116 = float2(mad(_179, cb0_m[13u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[13u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3116 = float2(mad(_179, cb0_m[13u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[13u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3118 = t1.SampleLevel(s1, _3116, 0.0f);
-                        float _3124 = clamp((_2514 * max(_3118.x, _3118.y)) - (_179 * cb0_m[13u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3124 = clamp((_2514 * max(_3118.x, _3118.y)) - (_179 * cb0_m[13u].z), 0.0f, 1.0f);
                         float _3146;
                         float _3147;
                         float _3148;
@@ -1954,9 +1950,9 @@ void frag_main()
                             _3152 = _3101 + _3105;
                             _3153 = _3102 + _3106;
                         }
-                        float2 _3163 = float2(mad(_179, cb0_m[14u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[14u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3163 = float2(mad(_179, cb0_m[14u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[14u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3165 = t1.SampleLevel(s1, _3163, 0.0f);
-                        float _3171 = clamp((_2514 * max(_3165.x, _3165.y)) - (_179 * cb0_m[14u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3171 = clamp((_2514 * max(_3165.x, _3165.y)) - (_179 * cb0_m[14u].z), 0.0f, 1.0f);
                         float _3193;
                         float _3194;
                         float _3195;
@@ -1991,9 +1987,9 @@ void frag_main()
                             _3199 = _3148 + _3152;
                             _3200 = _3149 + _3153;
                         }
-                        float2 _3210 = float2(mad(_179, cb0_m[15u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[15u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3210 = float2(mad(_179, cb0_m[15u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[15u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3212 = t1.SampleLevel(s1, _3210, 0.0f);
-                        float _3218 = clamp((_2514 * max(_3212.x, _3212.y)) - (_179 * cb0_m[15u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3218 = clamp((_2514 * max(_3212.x, _3212.y)) - (_179 * cb0_m[15u].z), 0.0f, 1.0f);
                         float _3240;
                         float _3241;
                         float _3242;
@@ -2028,9 +2024,9 @@ void frag_main()
                             _3246 = _3195 + _3199;
                             _3247 = _3196 + _3200;
                         }
-                        float2 _3257 = float2(mad(_179, cb0_m[16u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[16u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3257 = float2(mad(_179, cb0_m[16u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[16u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3259 = t1.SampleLevel(s1, _3257, 0.0f);
-                        float _3265 = clamp((_2514 * max(_3259.x, _3259.y)) - (_179 * cb0_m[16u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3265 = clamp((_2514 * max(_3259.x, _3259.y)) - (_179 * cb0_m[16u].z), 0.0f, 1.0f);
                         float _3287;
                         float _3288;
                         float _3289;
@@ -2065,9 +2061,9 @@ void frag_main()
                             _3293 = _3242 + _3246;
                             _3294 = _3243 + _3247;
                         }
-                        float2 _3304 = float2(mad(_179, cb0_m[17u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[17u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3304 = float2(mad(_179, cb0_m[17u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[17u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3306 = t1.SampleLevel(s1, _3304, 0.0f);
-                        float _3312 = clamp((_2514 * max(_3306.x, _3306.y)) - (_179 * cb0_m[17u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3312 = clamp((_2514 * max(_3306.x, _3306.y)) - (_179 * cb0_m[17u].z), 0.0f, 1.0f);
                         float _3334;
                         float _3335;
                         float _3336;
@@ -2102,9 +2098,9 @@ void frag_main()
                             _3340 = _3289 + _3293;
                             _3341 = _3290 + _3294;
                         }
-                        float2 _3351 = float2(mad(_179, cb0_m[18u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[18u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3351 = float2(mad(_179, cb0_m[18u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[18u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3353 = t1.SampleLevel(s1, _3351, 0.0f);
-                        float _3359 = clamp((_2514 * max(_3353.x, _3353.y)) - (_179 * cb0_m[18u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3359 = clamp((_2514 * max(_3353.x, _3353.y)) - (_179 * cb0_m[18u].z), 0.0f, 1.0f);
                         float _3381;
                         float _3382;
                         float _3383;
@@ -2139,9 +2135,9 @@ void frag_main()
                             _3387 = _3336 + _3340;
                             _3388 = _3341 + _3337;
                         }
-                        float2 _3398 = float2(mad(_179, cb0_m[19u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[19u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3398 = float2(mad(_179, cb0_m[19u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[19u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3400 = t1.SampleLevel(s1, _3398, 0.0f);
-                        float _3406 = clamp((_2514 * max(_3400.x, _3400.y)) - (_179 * cb0_m[19u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3406 = clamp((_2514 * max(_3400.x, _3400.y)) - (_179 * cb0_m[19u].z), 0.0f, 1.0f);
                         float _3428;
                         float _3429;
                         float _3430;
@@ -2176,9 +2172,9 @@ void frag_main()
                             _3434 = _3383 + _3387;
                             _3435 = _3384 + _3388;
                         }
-                        float2 _3445 = float2(mad(_179, cb0_m[20u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[20u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3445 = float2(mad(_179, cb0_m[20u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[20u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3447 = t1.SampleLevel(s1, _3445, 0.0f);
-                        float _3453 = clamp((_2514 * max(_3447.x, _3447.y)) - (_179 * cb0_m[20u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3453 = clamp((_2514 * max(_3447.x, _3447.y)) - (_179 * cb0_m[20u].z), 0.0f, 1.0f);
                         float _3475;
                         float _3476;
                         float _3477;
@@ -2213,9 +2209,9 @@ void frag_main()
                             _3481 = _3430 + _3434;
                             _3482 = _3431 + _3435;
                         }
-                        float2 _3492 = float2(mad(_179, cb0_m[21u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[21u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3492 = float2(mad(_179, cb0_m[21u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[21u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3494 = t1.SampleLevel(s1, _3492, 0.0f);
-                        float _3500 = clamp((_2514 * max(_3494.x, _3494.y)) - (_179 * cb0_m[21u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3500 = clamp((_2514 * max(_3494.x, _3494.y)) - (_179 * cb0_m[21u].z), 0.0f, 1.0f);
                         float _3522;
                         float _3523;
                         float _3524;
@@ -2250,9 +2246,9 @@ void frag_main()
                             _3528 = _3477 + _3481;
                             _3529 = _3478 + _3482;
                         }
-                        float2 _3539 = float2(mad(_179, cb0_m[22u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[22u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3539 = float2(mad(_179, cb0_m[22u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[22u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3541 = t1.SampleLevel(s1, _3539, 0.0f);
-                        float _3547 = clamp((_2514 * max(_3541.x, _3541.y)) - (_179 * cb0_m[22u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3547 = clamp((_2514 * max(_3541.x, _3541.y)) - (_179 * cb0_m[22u].z), 0.0f, 1.0f);
                         float _3569;
                         float _3570;
                         float _3571;
@@ -2287,9 +2283,9 @@ void frag_main()
                             _3575 = _3528 + _3524;
                             _3576 = _3525 + _3529;
                         }
-                        float2 _3586 = float2(mad(_179, cb0_m[23u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[23u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3586 = float2(mad(_179, cb0_m[23u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[23u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3588 = t1.SampleLevel(s1, _3586, 0.0f);
-                        float _3594 = clamp((_2514 * max(_3588.x, _3588.y)) - (_179 * cb0_m[23u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3594 = clamp((_2514 * max(_3588.x, _3588.y)) - (_179 * cb0_m[23u].z), 0.0f, 1.0f);
                         float _3613;
                         float _3614;
                         float _3615;
@@ -2316,10 +2312,10 @@ void frag_main()
                     }
                     else
                     {
-                        float2 _3627 = float2(mad(_179, cb0_m[0u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[0u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3627 = float2(mad(_179, cb0_m[0u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[0u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3629 = t1.SampleLevel(s1, _3627, 0.0f);
                         float _3633 = cb1_m1.w * 0.5f;
-                        float _3636 = clamp((max(_3629.x, _3629.y) * _3633) - (_179 * cb0_m[0u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3636 = clamp((max(_3629.x, _3629.y) * _3633) - (_179 * cb0_m[0u].z), 0.0f, 1.0f);
                         float _3654;
                         float _3655;
                         float _3656;
@@ -2354,9 +2350,9 @@ void frag_main()
                             _3660 = _175;
                             _3661 = _174;
                         }
-                        float2 _3671 = float2(mad(_179, cb0_m[1u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[1u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3671 = float2(mad(_179, cb0_m[1u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[1u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3673 = t1.SampleLevel(s1, _3671, 0.0f);
-                        float _3679 = clamp((_3633 * max(_3673.x, _3673.y)) - (_179 * cb0_m[1u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3679 = clamp((_3633 * max(_3673.x, _3673.y)) - (_179 * cb0_m[1u].z), 0.0f, 1.0f);
                         float _3701;
                         float _3702;
                         float _3703;
@@ -2391,9 +2387,9 @@ void frag_main()
                             _3707 = _3660 + _3656;
                             _3708 = _3657 + _3661;
                         }
-                        float2 _3718 = float2(mad(_179, cb0_m[2u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[2u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3718 = float2(mad(_179, cb0_m[2u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[2u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3720 = t1.SampleLevel(s1, _3718, 0.0f);
-                        float _3726 = clamp((_3633 * max(_3720.x, _3720.y)) - (_179 * cb0_m[2u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3726 = clamp((_3633 * max(_3720.x, _3720.y)) - (_179 * cb0_m[2u].z), 0.0f, 1.0f);
                         float _3748;
                         float _3749;
                         float _3750;
@@ -2428,9 +2424,9 @@ void frag_main()
                             _3754 = _3703 + _3707;
                             _3755 = _3704 + _3708;
                         }
-                        float2 _3765 = float2(mad(_179, cb0_m[3u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[3u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3765 = float2(mad(_179, cb0_m[3u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[3u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3767 = t1.SampleLevel(s1, _3765, 0.0f);
-                        float _3773 = clamp((_3633 * max(_3767.x, _3767.y)) - (_179 * cb0_m[3u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3773 = clamp((_3633 * max(_3767.x, _3767.y)) - (_179 * cb0_m[3u].z), 0.0f, 1.0f);
                         float _3795;
                         float _3796;
                         float _3797;
@@ -2465,9 +2461,9 @@ void frag_main()
                             _3801 = _3750 + _3754;
                             _3802 = _3751 + _3755;
                         }
-                        float2 _3812 = float2(mad(_179, cb0_m[4u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[4u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3812 = float2(mad(_179, cb0_m[4u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[4u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3814 = t1.SampleLevel(s1, _3812, 0.0f);
-                        float _3820 = clamp((_3633 * max(_3814.x, _3814.y)) - (_179 * cb0_m[4u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3820 = clamp((_3633 * max(_3814.x, _3814.y)) - (_179 * cb0_m[4u].z), 0.0f, 1.0f);
                         float _3842;
                         float _3843;
                         float _3844;
@@ -2502,9 +2498,9 @@ void frag_main()
                             _3848 = _3797 + _3801;
                             _3849 = _3798 + _3802;
                         }
-                        float2 _3859 = float2(mad(_179, cb0_m[5u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[5u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3859 = float2(mad(_179, cb0_m[5u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[5u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3861 = t1.SampleLevel(s1, _3859, 0.0f);
-                        float _3867 = clamp((_3633 * max(_3861.x, _3861.y)) - (_179 * cb0_m[5u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3867 = clamp((_3633 * max(_3861.x, _3861.y)) - (_179 * cb0_m[5u].z), 0.0f, 1.0f);
                         float _3889;
                         float _3890;
                         float _3891;
@@ -2539,9 +2535,9 @@ void frag_main()
                             _3895 = _3844 + _3848;
                             _3896 = _3845 + _3849;
                         }
-                        float2 _3906 = float2(mad(_179, cb0_m[6u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[6u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3906 = float2(mad(_179, cb0_m[6u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[6u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3908 = t1.SampleLevel(s1, _3906, 0.0f);
-                        float _3914 = clamp((_3633 * max(_3908.x, _3908.y)) - (_179 * cb0_m[6u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3914 = clamp((_3633 * max(_3908.x, _3908.y)) - (_179 * cb0_m[6u].z), 0.0f, 1.0f);
                         float _3936;
                         float _3937;
                         float _3938;
@@ -2576,9 +2572,9 @@ void frag_main()
                             _3942 = _3891 + _3895;
                             _3943 = _3892 + _3896;
                         }
-                        float2 _3953 = float2(mad(_179, cb0_m[7u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[7u].y / resolutionScale, TEXCOORD.y));
+                        float2 _3953 = float2(mad(_179, cb0_m[7u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[7u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _3955 = t1.SampleLevel(s1, _3953, 0.0f);
-                        float _3961 = clamp((_3633 * max(_3955.x, _3955.y)) - (_179 * cb0_m[7u].z / resolutionScale), 0.0f, 1.0f);
+                        float _3961 = clamp((_3633 * max(_3955.x, _3955.y)) - (_179 * cb0_m[7u].z), 0.0f, 1.0f);
                         float _3983;
                         float _3984;
                         float _3985;
@@ -2613,9 +2609,9 @@ void frag_main()
                             _3989 = _3938 + _3942;
                             _3990 = _3939 + _3943;
                         }
-                        float2 _4000 = float2(mad(_179, cb0_m[8u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[8u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4000 = float2(mad(_179, cb0_m[8u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[8u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4002 = t1.SampleLevel(s1, _4000, 0.0f);
-                        float _4008 = clamp((_3633 * max(_4002.x, _4002.y)) - (_179 * cb0_m[8u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4008 = clamp((_3633 * max(_4002.x, _4002.y)) - (_179 * cb0_m[8u].z), 0.0f, 1.0f);
                         float _4030;
                         float _4031;
                         float _4032;
@@ -2650,9 +2646,9 @@ void frag_main()
                             _4036 = _3985 + _3989;
                             _4037 = _3986 + _3990;
                         }
-                        float2 _4047 = float2(mad(_179, cb0_m[9u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[9u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4047 = float2(mad(_179, cb0_m[9u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[9u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4049 = t1.SampleLevel(s1, _4047, 0.0f);
-                        float _4055 = clamp((_3633 * max(_4049.x, _4049.y)) - (_179 * cb0_m[9u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4055 = clamp((_3633 * max(_4049.x, _4049.y)) - (_179 * cb0_m[9u].z), 0.0f, 1.0f);
                         float _4077;
                         float _4078;
                         float _4079;
@@ -2687,9 +2683,9 @@ void frag_main()
                             _4083 = _4032 + _4036;
                             _4084 = _4033 + _4037;
                         }
-                        float2 _4094 = float2(mad(_179, cb0_m[10u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[10u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4094 = float2(mad(_179, cb0_m[10u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[10u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4096 = t1.SampleLevel(s1, _4094, 0.0f);
-                        float _4102 = clamp((_3633 * max(_4096.x, _4096.y)) - (_179 * cb0_m[10u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4102 = clamp((_3633 * max(_4096.x, _4096.y)) - (_179 * cb0_m[10u].z), 0.0f, 1.0f);
                         float _4124;
                         float _4125;
                         float _4126;
@@ -2724,9 +2720,9 @@ void frag_main()
                             _4130 = _4079 + _4083;
                             _4131 = _4080 + _4084;
                         }
-                        float2 _4141 = float2(mad(_179, cb0_m[11u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[11u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4141 = float2(mad(_179, cb0_m[11u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[11u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4143 = t1.SampleLevel(s1, _4141, 0.0f);
-                        float _4149 = clamp((_3633 * max(_4143.x, _4143.y)) - (_179 * cb0_m[11u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4149 = clamp((_3633 * max(_4143.x, _4143.y)) - (_179 * cb0_m[11u].z), 0.0f, 1.0f);
                         float _4171;
                         float _4172;
                         float _4173;
@@ -2761,9 +2757,9 @@ void frag_main()
                             _4177 = _4126 + _4130;
                             _4178 = _4127 + _4131;
                         }
-                        float2 _4188 = float2(mad(_179, cb0_m[12u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[12u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4188 = float2(mad(_179, cb0_m[12u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[12u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4190 = t1.SampleLevel(s1, _4188, 0.0f);
-                        float _4196 = clamp((_3633 * max(_4190.x, _4190.y)) - (_179 * cb0_m[12u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4196 = clamp((_3633 * max(_4190.x, _4190.y)) - (_179 * cb0_m[12u].z), 0.0f, 1.0f);
                         float _4218;
                         float _4219;
                         float _4220;
@@ -2798,9 +2794,9 @@ void frag_main()
                             _4224 = _4173 + _4177;
                             _4225 = _4174 + _4178;
                         }
-                        float2 _4235 = float2(mad(_179, cb0_m[13u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[13u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4235 = float2(mad(_179, cb0_m[13u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[13u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4237 = t1.SampleLevel(s1, _4235, 0.0f);
-                        float _4243 = clamp((_3633 * max(_4237.x, _4237.y)) - (_179 * cb0_m[13u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4243 = clamp((_3633 * max(_4237.x, _4237.y)) - (_179 * cb0_m[13u].z), 0.0f, 1.0f);
                         float _4265;
                         float _4266;
                         float _4267;
@@ -2835,9 +2831,9 @@ void frag_main()
                             _4271 = _4220 + _4224;
                             _4272 = _4221 + _4225;
                         }
-                        float2 _4282 = float2(mad(_179, cb0_m[14u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[14u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4282 = float2(mad(_179, cb0_m[14u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[14u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4284 = t1.SampleLevel(s1, _4282, 0.0f);
-                        float _4290 = clamp((_3633 * max(_4284.x, _4284.y)) - (_179 * cb0_m[14u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4290 = clamp((_3633 * max(_4284.x, _4284.y)) - (_179 * cb0_m[14u].z), 0.0f, 1.0f);
                         float _4312;
                         float _4313;
                         float _4314;
@@ -2872,9 +2868,9 @@ void frag_main()
                             _4318 = _4267 + _4271;
                             _4319 = _4272 + _4268;
                         }
-                        float2 _4329 = float2(mad(_179, cb0_m[15u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[15u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4329 = float2(mad(_179, cb0_m[15u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[15u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4331 = t1.SampleLevel(s1, _4329, 0.0f);
-                        float _4337 = clamp((_3633 * max(_4331.x, _4331.y)) - (_179 * cb0_m[15u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4337 = clamp((_3633 * max(_4331.x, _4331.y)) - (_179 * cb0_m[15u].z), 0.0f, 1.0f);
                         float _4359;
                         float _4360;
                         float _4361;
@@ -2909,9 +2905,9 @@ void frag_main()
                             _4365 = _4314 + _4318;
                             _4366 = _4315 + _4319;
                         }
-                        float2 _4376 = float2(mad(_179, cb0_m[16u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[16u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4376 = float2(mad(_179, cb0_m[16u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[16u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4378 = t1.SampleLevel(s1, _4376, 0.0f);
-                        float _4384 = clamp((_3633 * max(_4378.x, _4378.y)) - (_179 * cb0_m[16u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4384 = clamp((_3633 * max(_4378.x, _4378.y)) - (_179 * cb0_m[16u].z), 0.0f, 1.0f);
                         float _4406;
                         float _4407;
                         float _4408;
@@ -2946,9 +2942,9 @@ void frag_main()
                             _4412 = _4361 + _4365;
                             _4413 = _4362 + _4366;
                         }
-                        float2 _4423 = float2(mad(_179, cb0_m[17u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[17u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4423 = float2(mad(_179, cb0_m[17u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[17u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4425 = t1.SampleLevel(s1, _4423, 0.0f);
-                        float _4431 = clamp((_3633 * max(_4425.x, _4425.y)) - (_179 * cb0_m[17u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4431 = clamp((_3633 * max(_4425.x, _4425.y)) - (_179 * cb0_m[17u].z), 0.0f, 1.0f);
                         float _4453;
                         float _4454;
                         float _4455;
@@ -2983,9 +2979,9 @@ void frag_main()
                             _4459 = _4408 + _4412;
                             _4460 = _4409 + _4413;
                         }
-                        float2 _4470 = float2(mad(_179, cb0_m[18u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[18u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4470 = float2(mad(_179, cb0_m[18u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[18u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4472 = t1.SampleLevel(s1, _4470, 0.0f);
-                        float _4478 = clamp((_3633 * max(_4472.x, _4472.y)) - (_179 * cb0_m[18u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4478 = clamp((_3633 * max(_4472.x, _4472.y)) - (_179 * cb0_m[18u].z), 0.0f, 1.0f);
                         float _4500;
                         float _4501;
                         float _4502;
@@ -3020,9 +3016,9 @@ void frag_main()
                             _4506 = _4459 + _4455;
                             _4507 = _4456 + _4460;
                         }
-                        float2 _4517 = float2(mad(_179, cb0_m[19u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[19u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4517 = float2(mad(_179, cb0_m[19u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[19u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4519 = t1.SampleLevel(s1, _4517, 0.0f);
-                        float _4525 = clamp((_3633 * max(_4519.x, _4519.y)) - (_179 * cb0_m[19u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4525 = clamp((_3633 * max(_4519.x, _4519.y)) - (_179 * cb0_m[19u].z), 0.0f, 1.0f);
                         float _4547;
                         float _4548;
                         float _4549;
@@ -3057,9 +3053,9 @@ void frag_main()
                             _4553 = _4502 + _4506;
                             _4554 = _4503 + _4507;
                         }
-                        float2 _4564 = float2(mad(_179, cb0_m[20u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[20u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4564 = float2(mad(_179, cb0_m[20u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[20u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4566 = t1.SampleLevel(s1, _4564, 0.0f);
-                        float _4572 = clamp((_3633 * max(_4566.x, _4566.y)) - (_179 * cb0_m[20u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4572 = clamp((_3633 * max(_4566.x, _4566.y)) - (_179 * cb0_m[20u].z), 0.0f, 1.0f);
                         float _4594;
                         float _4595;
                         float _4596;
@@ -3094,9 +3090,9 @@ void frag_main()
                             _4600 = _4549 + _4553;
                             _4601 = _4550 + _4554;
                         }
-                        float2 _4611 = float2(mad(_179, cb0_m[21u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[21u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4611 = float2(mad(_179, cb0_m[21u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[21u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4613 = t1.SampleLevel(s1, _4611, 0.0f);
-                        float _4619 = clamp((_3633 * max(_4613.x, _4613.y)) - (_179 * cb0_m[21u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4619 = clamp((_3633 * max(_4613.x, _4613.y)) - (_179 * cb0_m[21u].z), 0.0f, 1.0f);
                         float _4641;
                         float _4642;
                         float _4643;
@@ -3131,9 +3127,9 @@ void frag_main()
                             _4647 = _4596 + _4600;
                             _4648 = _4597 + _4601;
                         }
-                        float2 _4658 = float2(mad(_179, cb0_m[22u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[22u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4658 = float2(mad(_179, cb0_m[22u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[22u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4660 = t1.SampleLevel(s1, _4658, 0.0f);
-                        float _4666 = clamp((_3633 * max(_4660.x, _4660.y)) - (_179 * cb0_m[22u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4666 = clamp((_3633 * max(_4660.x, _4660.y)) - (_179 * cb0_m[22u].z), 0.0f, 1.0f);
                         float _4688;
                         float _4689;
                         float _4690;
@@ -3168,9 +3164,9 @@ void frag_main()
                             _4694 = _4643 + _4647;
                             _4695 = _4644 + _4648;
                         }
-                        float2 _4705 = float2(mad(_179, cb0_m[23u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[23u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4705 = float2(mad(_179, cb0_m[23u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[23u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4707 = t1.SampleLevel(s1, _4705, 0.0f);
-                        float _4713 = clamp((_3633 * max(_4707.x, _4707.y)) - (_179 * cb0_m[23u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4713 = clamp((_3633 * max(_4707.x, _4707.y)) - (_179 * cb0_m[23u].z), 0.0f, 1.0f);
                         float _4735;
                         float _4736;
                         float _4737;
@@ -3205,9 +3201,9 @@ void frag_main()
                             _4741 = _4690 + _4694;
                             _4742 = _4691 + _4695;
                         }
-                        float2 _4752 = float2(mad(_179, cb0_m[24u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[24u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4752 = float2(mad(_179, cb0_m[24u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[24u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4754 = t1.SampleLevel(s1, _4752, 0.0f);
-                        float _4760 = clamp((_3633 * max(_4754.x, _4754.y)) - (_179 * cb0_m[24u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4760 = clamp((_3633 * max(_4754.x, _4754.y)) - (_179 * cb0_m[24u].z), 0.0f, 1.0f);
                         float _4782;
                         float _4783;
                         float _4784;
@@ -3242,9 +3238,9 @@ void frag_main()
                             _4788 = _4737 + _4741;
                             _4789 = _4738 + _4742;
                         }
-                        float2 _4799 = float2(mad(_179, cb0_m[25u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[25u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4799 = float2(mad(_179, cb0_m[25u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[25u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4801 = t1.SampleLevel(s1, _4799, 0.0f);
-                        float _4807 = clamp((_3633 * max(_4801.x, _4801.y)) - (_179 * cb0_m[25u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4807 = clamp((_3633 * max(_4801.x, _4801.y)) - (_179 * cb0_m[25u].z), 0.0f, 1.0f);
                         float _4829;
                         float _4830;
                         float _4831;
@@ -3279,9 +3275,9 @@ void frag_main()
                             _4835 = _4784 + _4788;
                             _4836 = _4785 + _4789;
                         }
-                        float2 _4846 = float2(mad(_179, cb0_m[26u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[26u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4846 = float2(mad(_179, cb0_m[26u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[26u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4848 = t1.SampleLevel(s1, _4846, 0.0f);
-                        float _4854 = clamp((_3633 * max(_4848.x, _4848.y)) - (_179 * cb0_m[26u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4854 = clamp((_3633 * max(_4848.x, _4848.y)) - (_179 * cb0_m[26u].z), 0.0f, 1.0f);
                         float _4876;
                         float _4877;
                         float _4878;
@@ -3316,9 +3312,9 @@ void frag_main()
                             _4882 = _4831 + _4835;
                             _4883 = _4832 + _4836;
                         }
-                        float2 _4893 = float2(mad(_179, cb0_m[27u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[27u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4893 = float2(mad(_179, cb0_m[27u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[27u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4895 = t1.SampleLevel(s1, _4893, 0.0f);
-                        float _4901 = clamp((_3633 * max(_4895.x, _4895.y)) - (_179 * cb0_m[27u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4901 = clamp((_3633 * max(_4895.x, _4895.y)) - (_179 * cb0_m[27u].z), 0.0f, 1.0f);
                         float _4923;
                         float _4924;
                         float _4925;
@@ -3353,9 +3349,9 @@ void frag_main()
                             _4929 = _4878 + _4882;
                             _4930 = _4883 + _4879;
                         }
-                        float2 _4940 = float2(mad(_179, cb0_m[28u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[28u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4940 = float2(mad(_179, cb0_m[28u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[28u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4942 = t1.SampleLevel(s1, _4940, 0.0f);
-                        float _4948 = clamp((_3633 * max(_4942.x, _4942.y)) - (_179 * cb0_m[28u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4948 = clamp((_3633 * max(_4942.x, _4942.y)) - (_179 * cb0_m[28u].z), 0.0f, 1.0f);
                         float _4970;
                         float _4971;
                         float _4972;
@@ -3390,9 +3386,9 @@ void frag_main()
                             _4976 = _4925 + _4929;
                             _4977 = _4926 + _4930;
                         }
-                        float2 _4987 = float2(mad(_179, cb0_m[29u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[29u].y / resolutionScale, TEXCOORD.y));
+                        float2 _4987 = float2(mad(_179, cb0_m[29u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[29u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _4989 = t1.SampleLevel(s1, _4987, 0.0f);
-                        float _4995 = clamp((_3633 * max(_4989.x, _4989.y)) - (_179 * cb0_m[29u].z / resolutionScale), 0.0f, 1.0f);
+                        float _4995 = clamp((_3633 * max(_4989.x, _4989.y)) - (_179 * cb0_m[29u].z), 0.0f, 1.0f);
                         float _5017;
                         float _5018;
                         float _5019;
@@ -3427,9 +3423,9 @@ void frag_main()
                             _5023 = _4972 + _4976;
                             _5024 = _4973 + _4977;
                         }
-                        float2 _5034 = float2(mad(_179, cb0_m[30u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[30u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5034 = float2(mad(_179, cb0_m[30u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[30u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5036 = t1.SampleLevel(s1, _5034, 0.0f);
-                        float _5042 = clamp((_3633 * max(_5036.x, _5036.y)) - (_179 * cb0_m[30u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5042 = clamp((_3633 * max(_5036.x, _5036.y)) - (_179 * cb0_m[30u].z), 0.0f, 1.0f);
                         float _5064;
                         float _5065;
                         float _5066;
@@ -3464,9 +3460,9 @@ void frag_main()
                             _5070 = _5019 + _5023;
                             _5071 = _5020 + _5024;
                         }
-                        float2 _5081 = float2(mad(_179, cb0_m[31u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[31u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5081 = float2(mad(_179, cb0_m[31u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[31u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5083 = t1.SampleLevel(s1, _5081, 0.0f);
-                        float _5089 = clamp((_3633 * max(_5083.x, _5083.y)) - (_179 * cb0_m[31u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5089 = clamp((_3633 * max(_5083.x, _5083.y)) - (_179 * cb0_m[31u].z), 0.0f, 1.0f);
                         float _5111;
                         float _5112;
                         float _5113;
@@ -3501,9 +3497,9 @@ void frag_main()
                             _5117 = _5070 + _5066;
                             _5118 = _5067 + _5071;
                         }
-                        float2 _5128 = float2(mad(_179, cb0_m[32u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[32u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5128 = float2(mad(_179, cb0_m[32u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[32u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5130 = t1.SampleLevel(s1, _5128, 0.0f);
-                        float _5136 = clamp((_3633 * max(_5130.x, _5130.y)) - (_179 * cb0_m[32u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5136 = clamp((_3633 * max(_5130.x, _5130.y)) - (_179 * cb0_m[32u].z), 0.0f, 1.0f);
                         float _5158;
                         float _5159;
                         float _5160;
@@ -3538,9 +3534,9 @@ void frag_main()
                             _5164 = _5113 + _5117;
                             _5165 = _5114 + _5118;
                         }
-                        float2 _5175 = float2(mad(_179, cb0_m[33u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[33u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5175 = float2(mad(_179, cb0_m[33u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[33u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5177 = t1.SampleLevel(s1, _5175, 0.0f);
-                        float _5183 = clamp((_3633 * max(_5177.x, _5177.y)) - (_179 * cb0_m[33u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5183 = clamp((_3633 * max(_5177.x, _5177.y)) - (_179 * cb0_m[33u].z), 0.0f, 1.0f);
                         float _5205;
                         float _5206;
                         float _5207;
@@ -3575,9 +3571,9 @@ void frag_main()
                             _5211 = _5160 + _5164;
                             _5212 = _5161 + _5165;
                         }
-                        float2 _5222 = float2(mad(_179, cb0_m[34u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[34u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5222 = float2(mad(_179, cb0_m[34u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[34u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5224 = t1.SampleLevel(s1, _5222, 0.0f);
-                        float _5230 = clamp((_3633 * max(_5224.x, _5224.y)) - (_179 * cb0_m[34u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5230 = clamp((_3633 * max(_5224.x, _5224.y)) - (_179 * cb0_m[34u].z), 0.0f, 1.0f);
                         float _5252;
                         float _5253;
                         float _5254;
@@ -3612,9 +3608,9 @@ void frag_main()
                             _5258 = _5207 + _5211;
                             _5259 = _5208 + _5212;
                         }
-                        float2 _5269 = float2(mad(_179, cb0_m[35u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[35u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5269 = float2(mad(_179, cb0_m[35u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[35u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5271 = t1.SampleLevel(s1, _5269, 0.0f);
-                        float _5277 = clamp((_3633 * max(_5271.x, _5271.y)) - (_179 * cb0_m[35u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5277 = clamp((_3633 * max(_5271.x, _5271.y)) - (_179 * cb0_m[35u].z), 0.0f, 1.0f);
                         float _5299;
                         float _5300;
                         float _5301;
@@ -3649,9 +3645,9 @@ void frag_main()
                             _5305 = _5254 + _5258;
                             _5306 = _5255 + _5259;
                         }
-                        float2 _5316 = float2(mad(_179, cb0_m[36u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[36u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5316 = float2(mad(_179, cb0_m[36u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[36u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5318 = t1.SampleLevel(s1, _5316, 0.0f);
-                        float _5324 = clamp((_3633 * max(_5318.x, _5318.y)) - (_179 * cb0_m[36u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5324 = clamp((_3633 * max(_5318.x, _5318.y)) - (_179 * cb0_m[36u].z), 0.0f, 1.0f);
                         float _5346;
                         float _5347;
                         float _5348;
@@ -3686,9 +3682,9 @@ void frag_main()
                             _5352 = _5301 + _5305;
                             _5353 = _5302 + _5306;
                         }
-                        float2 _5363 = float2(mad(_179, cb0_m[37u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[37u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5363 = float2(mad(_179, cb0_m[37u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[37u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5365 = t1.SampleLevel(s1, _5363, 0.0f);
-                        float _5371 = clamp((_3633 * max(_5365.x, _5365.y)) - (_179 * cb0_m[37u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5371 = clamp((_3633 * max(_5365.x, _5365.y)) - (_179 * cb0_m[37u].z), 0.0f, 1.0f);
                         float _5393;
                         float _5394;
                         float _5395;
@@ -3723,9 +3719,9 @@ void frag_main()
                             _5399 = _5348 + _5352;
                             _5400 = _5349 + _5353;
                         }
-                        float2 _5410 = float2(mad(_179, cb0_m[38u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[38u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5410 = float2(mad(_179, cb0_m[38u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[38u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5412 = t1.SampleLevel(s1, _5410, 0.0f);
-                        float _5418 = clamp((_3633 * max(_5412.x, _5412.y)) - (_179 * cb0_m[38u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5418 = clamp((_3633 * max(_5412.x, _5412.y)) - (_179 * cb0_m[38u].z), 0.0f, 1.0f);
                         float _5440;
                         float _5441;
                         float _5442;
@@ -3760,9 +3756,9 @@ void frag_main()
                             _5446 = _5395 + _5399;
                             _5447 = _5396 + _5400;
                         }
-                        float2 _5457 = float2(mad(_179, cb0_m[39u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[39u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5457 = float2(mad(_179, cb0_m[39u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[39u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5459 = t1.SampleLevel(s1, _5457, 0.0f);
-                        float _5465 = clamp((_3633 * max(_5459.x, _5459.y)) - (_179 * cb0_m[39u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5465 = clamp((_3633 * max(_5459.x, _5459.y)) - (_179 * cb0_m[39u].z), 0.0f, 1.0f);
                         float _5487;
                         float _5488;
                         float _5489;
@@ -3797,9 +3793,9 @@ void frag_main()
                             _5493 = _5442 + _5446;
                             _5494 = _5443 + _5447;
                         }
-                        float2 _5504 = float2(mad(_179, cb0_m[40u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[40u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5504 = float2(mad(_179, cb0_m[40u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[40u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5506 = t1.SampleLevel(s1, _5504, 0.0f);
-                        float _5512 = clamp((_3633 * max(_5506.x, _5506.y)) - (_179 * cb0_m[40u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5512 = clamp((_3633 * max(_5506.x, _5506.y)) - (_179 * cb0_m[40u].z), 0.0f, 1.0f);
                         float _5534;
                         float _5535;
                         float _5536;
@@ -3834,9 +3830,9 @@ void frag_main()
                             _5540 = _5489 + _5493;
                             _5541 = _5490 + _5494;
                         }
-                        float2 _5551 = float2(mad(_179, cb0_m[41u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[41u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5551 = float2(mad(_179, cb0_m[41u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[41u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5553 = t1.SampleLevel(s1, _5551, 0.0f);
-                        float _5559 = clamp((_3633 * max(_5553.x, _5553.y)) - (_179 * cb0_m[41u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5559 = clamp((_3633 * max(_5553.x, _5553.y)) - (_179 * cb0_m[41u].z), 0.0f, 1.0f);
                         float _5581;
                         float _5582;
                         float _5583;
@@ -3871,9 +3867,9 @@ void frag_main()
                             _5587 = _5536 + _5540;
                             _5588 = _5537 + _5541;
                         }
-                        float2 _5598 = float2(mad(_179, cb0_m[42u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[42u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5598 = float2(mad(_179, cb0_m[42u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[42u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5600 = t1.SampleLevel(s1, _5598, 0.0f);
-                        float _5606 = clamp((_3633 * max(_5600.x, _5600.y)) - (_179 * cb0_m[42u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5606 = clamp((_3633 * max(_5600.x, _5600.y)) - (_179 * cb0_m[42u].z), 0.0f, 1.0f);
                         float _5628;
                         float _5629;
                         float _5630;
@@ -3908,9 +3904,9 @@ void frag_main()
                             _5634 = _5583 + _5587;
                             _5635 = _5584 + _5588;
                         }
-                        float2 _5645 = float2(mad(_179, cb0_m[43u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[43u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5645 = float2(mad(_179, cb0_m[43u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[43u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5647 = t1.SampleLevel(s1, _5645, 0.0f);
-                        float _5653 = clamp((_3633 * max(_5647.x, _5647.y)) - (_179 * cb0_m[43u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5653 = clamp((_3633 * max(_5647.x, _5647.y)) - (_179 * cb0_m[43u].z), 0.0f, 1.0f);
                         float _5675;
                         float _5676;
                         float _5677;
@@ -3945,9 +3941,9 @@ void frag_main()
                             _5681 = _5630 + _5634;
                             _5682 = _5631 + _5635;
                         }
-                        float2 _5692 = float2(mad(_179, cb0_m[44u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[44u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5692 = float2(mad(_179, cb0_m[44u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[44u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5694 = t1.SampleLevel(s1, _5692, 0.0f);
-                        float _5700 = clamp((_3633 * max(_5694.x, _5694.y)) - (_179 * cb0_m[44u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5700 = clamp((_3633 * max(_5694.x, _5694.y)) - (_179 * cb0_m[44u].z), 0.0f, 1.0f);
                         float _5722;
                         float _5723;
                         float _5724;
@@ -3982,9 +3978,9 @@ void frag_main()
                             _5728 = _5677 + _5681;
                             _5729 = _5678 + _5682;
                         }
-                        float2 _5739 = float2(mad(_179, cb0_m[45u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[45u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5739 = float2(mad(_179, cb0_m[45u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[45u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5741 = t1.SampleLevel(s1, _5739, 0.0f);
-                        float _5747 = clamp((_3633 * max(_5741.x, _5741.y)) - (_179 * cb0_m[45u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5747 = clamp((_3633 * max(_5741.x, _5741.y)) - (_179 * cb0_m[45u].z), 0.0f, 1.0f);
                         float _5769;
                         float _5770;
                         float _5771;
@@ -4019,9 +4015,9 @@ void frag_main()
                             _5775 = _5724 + _5728;
                             _5776 = _5729 + _5725;
                         }
-                        float2 _5786 = float2(mad(_179, cb0_m[46u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[46u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5786 = float2(mad(_179, cb0_m[46u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[46u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5788 = t1.SampleLevel(s1, _5786, 0.0f);
-                        float _5794 = clamp((_3633 * max(_5788.x, _5788.y)) - (_179 * cb0_m[46u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5794 = clamp((_3633 * max(_5788.x, _5788.y)) - (_179 * cb0_m[46u].z), 0.0f, 1.0f);
                         float _5816;
                         float _5817;
                         float _5818;
@@ -4056,9 +4052,9 @@ void frag_main()
                             _5822 = _5771 + _5775;
                             _5823 = _5772 + _5776;
                         }
-                        float2 _5833 = float2(mad(_179, cb0_m[47u].x / resolutionScale, TEXCOORD.x), mad(_179, cb0_m[47u].y / resolutionScale, TEXCOORD.y));
+                        float2 _5833 = float2(mad(_179, cb0_m[47u].x * resolutionScale.x, TEXCOORD.x), mad(_179, cb0_m[47u].y * resolutionScale.y, TEXCOORD.y));
                         float4 _5835 = t1.SampleLevel(s1, _5833, 0.0f);
-                        float _5841 = clamp((_3633 * max(_5835.x, _5835.y)) - (_179 * cb0_m[47u].z / resolutionScale), 0.0f, 1.0f);
+                        float _5841 = clamp((_3633 * max(_5835.x, _5835.y)) - (_179 * cb0_m[47u].z), 0.0f, 1.0f);
                         float _5860;
                         float _5861;
                         float _5862;

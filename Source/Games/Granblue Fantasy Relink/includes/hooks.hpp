@@ -4,7 +4,7 @@
 #include <atomic>
 
 #include "hook_constants.hpp"
-#include "safetyhook.hpp"
+#include <safetyhook.hpp>
 
 struct GBFRResolvedAddresses
 {

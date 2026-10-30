@@ -26,6 +26,14 @@
                   DisplayName="FSR (FidelityFX)"
                   Description="Links AMD FidelityFX Super Resolution libraries."
                   Category="Features" />
+    <BoolProperty Name="UseLumaFSR4"
+                  DisplayName="FSR 4 (FidelityFX API DX12 interop)"
+                  Description="Enables FSR 4 through DX11->DX12 interop (requires FSR, x64 only). Also enables SafetyHook, and ships the FidelityFX API DX12 dlls next to the addon."
+                  Category="Features" />
+    <BoolProperty Name="UseLumaSafetyHook"
+                  DisplayName="SafetyHook"
+                  Description="Compiles the shared SafetyHook (and Zydis) hooking library. Automatically enabled by FSR 4."
+                  Category="Features" />
     <BoolProperty Name="UseLumaNVAPI"
                   DisplayName="NVAPI"
                   Description="Links NVIDIA NVAPI (on by default), used to engage HDR10+ GAMING and read the HDR10+ peak brightness on NVIDIA GPUs. Harmless on other GPUs."

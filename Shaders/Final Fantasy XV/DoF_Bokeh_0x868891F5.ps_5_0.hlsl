@@ -47,15 +47,15 @@ void frag_main()
     float _287;
     float _288;
     float _289;
-    float resolutionScale = 1.0f;
+    float2 resolutionScale = float2(1.0f, 1.0f);
     if (LumaData.GameData.IsUpscaling != 0)
     {
-        resolutionScale = LumaData.RenderResolutionScale.x;
+        resolutionScale = LumaData.RenderResolutionScale.xy;
     }
     if (_61 > cb1_m4.w)
     {
-        float _78 = mad(cb0_m1.x * resolutionScale, -0.5f, TEXCOORD.x);
-        float _79 = mad(cb0_m1.y * resolutionScale, -0.5f, TEXCOORD.y);
+        float _78 = mad(cb0_m1.x * resolutionScale.x, -0.5f, TEXCOORD.x);
+        float _79 = mad(cb0_m1.y * resolutionScale.y, -0.5f, TEXCOORD.y);
         float2 _84 = float2(_78, _79);
         float4 _86 = t0.GatherRed(s0, _84);
         float4 _92 = t0.GatherGreen(s0, _84);
@@ -66,7 +66,7 @@ void frag_main()
         float _126 = clamp(mad(max(_104.y, _110.y), cb1_m1.w, -1.0f), 0.0f, 1.0f);
         float _127 = clamp(mad(max(_104.z, _110.z), cb1_m1.w, -1.0f), 0.0f, 1.0f);
         float _128 = clamp(mad(max(_104.w, _110.w), cb1_m1.w, -1.0f), 0.0f, 1.0f);
-        float2 _169 = float2(mad(cb0_m1.x * resolutionScale, 0.5f, TEXCOORD.x), _79);
+        float2 _169 = float2(mad(cb0_m1.x * resolutionScale.x, 0.5f, TEXCOORD.x), _79);
         float4 _171 = t0.GatherRed(s0, _169);
         float4 _175 = t0.GatherGreen(s0, _169);
         float4 _179 = t0.GatherBlue(s0, _169);
@@ -74,7 +74,7 @@ void frag_main()
         float4 _187 = t1.GatherGreen(s0, _169);
         float _194 = clamp(mad(max(_183.y, _187.y), cb1_m1.w, -1.0f), 0.0f, 1.0f);
         float _195 = clamp(mad(max(_183.z, _187.z), cb1_m1.w, -1.0f), 0.0f, 1.0f);
-        float2 _216 = float2(_78, mad(cb0_m1.y * resolutionScale, 0.5f, TEXCOORD.y));
+        float2 _216 = float2(_78, mad(cb0_m1.y * resolutionScale.y, 0.5f, TEXCOORD.y));
         float4 _218 = t0.GatherRed(s0, _216);
         float4 _222 = t0.GatherGreen(s0, _216);
         float4 _226 = t0.GatherBlue(s0, _216);
@@ -82,7 +82,7 @@ void frag_main()
         float4 _234 = t1.GatherGreen(s0, _216);
         float _241 = clamp(mad(max(_230.x, _234.x), cb1_m1.w, -1.0f), 0.0f, 1.0f);
         float _242 = clamp(mad(max(_230.y, _234.y), cb1_m1.w, -1.0f), 0.0f, 1.0f);
-        float2 _263 = float2(TEXCOORD.x + cb0_m1.x * resolutionScale, TEXCOORD.y + cb0_m1.y * resolutionScale);
+        float2 _263 = float2(TEXCOORD.x + cb0_m1.x * resolutionScale.x, TEXCOORD.y + cb0_m1.y * resolutionScale.y);
         float4 _265 = t0.SampleLevel(s0, _263, 0.0f);
         float4 _270 = t1.SampleLevel(s0, _263, 0.0f);
         float _275 = clamp(mad(max(_270.x, _270.y), cb1_m1.w, -1.0f), 0.0f, 1.0f);

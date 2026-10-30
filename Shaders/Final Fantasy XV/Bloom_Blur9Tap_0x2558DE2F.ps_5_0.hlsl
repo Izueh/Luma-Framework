@@ -32,21 +32,6 @@ cbuffer _Globals : register(b0)
 SamplerState srcSampler_s : register(s0);
 Texture2D<float4> srcSamplerTexture : register(t0);
 
-// VS packs offsets[0,2,4,...,16]: ascending, center at offsets[8] = v3.xy.
-// Gaussian sigma=1.5.
-static const float kGaussianWeights9[9] =
-{
-  0.00762,  // v1.xy  offsets[0]  (x=-4)
-  0.03608,  // v1.zw  offsets[2]  (x=-3)
-  0.10959,  // v2.xy  offsets[4]  (x=-2)
-  0.21343,  // v2.zw  offsets[6]  (x=-1)
-  0.26656,  // v3.xy  offsets[8]  (center)
-  0.21343,  // v3.zw  offsets[10] (x=+1)
-  0.10959,  // v4.xy  offsets[12] (x=+2)
-  0.03608,  // v4.zw  offsets[14] (x=+3)
-  0.00762,  // v5.xy  offsets[16] (x=+4)
-};
-
 void main(
   float4 v0 : SV_POSITION0,
   float4 v1 : TEXCOORD0,
@@ -61,21 +46,20 @@ void main(
 
   if (LumaData.GameData.IsUpscaling != 0)
   {
-    const float2 renderScaleInv = rcp(LumaData.RenderResolutionScale.xy);
-    minUV = saturate(minUV * renderScaleInv);
-    maxUV = saturate(maxUV * renderScaleInv);
+    minUV *= LumaData.RenderResolutionScale.xy;
+    maxUV = 1.0 - (1.0 - maxUV) * LumaData.RenderResolutionScale.xy;
   }
 
   float3 blurColor = 0.0;
-  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v1.xy, minUV, maxUV), 0).xyz * kGaussianWeights9[0];
-  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v1.zw, minUV, maxUV), 0).xyz * kGaussianWeights9[1];
-  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v2.xy, minUV, maxUV), 0).xyz * kGaussianWeights9[2];
-  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v2.zw, minUV, maxUV), 0).xyz * kGaussianWeights9[3];
-  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v3.xy, minUV, maxUV), 0).xyz * kGaussianWeights9[4];
-  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v3.zw, minUV, maxUV), 0).xyz * kGaussianWeights9[5];
-  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v4.xy, minUV, maxUV), 0).xyz * kGaussianWeights9[6];
-  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v4.zw, minUV, maxUV), 0).xyz * kGaussianWeights9[7];
-  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v5.xy, minUV, maxUV), 0).xyz * kGaussianWeights9[8];
+  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v1.xy, minUV, maxUV), 0).xyz * gauss_weights[0].xyz;
+  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v1.zw, minUV, maxUV), 0).xyz * gauss_weights[1].xyz;
+  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v2.xy, minUV, maxUV), 0).xyz * gauss_weights[2].xyz;
+  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v2.zw, minUV, maxUV), 0).xyz * gauss_weights[3].xyz;
+  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v3.xy, minUV, maxUV), 0).xyz * gauss_weights[4].xyz;
+  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v3.zw, minUV, maxUV), 0).xyz * gauss_weights[5].xyz;
+  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v4.xy, minUV, maxUV), 0).xyz * gauss_weights[6].xyz;
+  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v4.zw, minUV, maxUV), 0).xyz * gauss_weights[7].xyz;
+  blurColor += srcSamplerTexture.SampleLevel(srcSampler_s, clamp(v5.xy, minUV, maxUV), 0).xyz * gauss_weights[8].xyz;
 
   o0.xyz = gauss_mix.xyz * blurColor;
   o0.w = 0.0;

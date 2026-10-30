@@ -25,7 +25,6 @@
 #define HIGHLIGHT_SATURATION LumaSettings.GameSettings.HighlightSaturation
 #define HUE_EMULATION LumaSettings.GameSettings.HueEmulation
 #define PURITY_EMULATION LumaSettings.GameSettings.PurityEmulation
-#define BLOOM_TYPE LumaSettings.GameSettings.BloomType
 #define BLOOM_STRENGTH LumaSettings.GameSettings.BloomStrength
 #define SHARPNESS LumaSettings.GameSettings.Sharpness
 

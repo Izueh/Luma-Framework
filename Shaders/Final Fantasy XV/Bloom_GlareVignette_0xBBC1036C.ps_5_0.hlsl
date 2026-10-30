@@ -59,7 +59,7 @@ void main(
   r0.w = vignettParam2.z / r0.w;
   r0.w = r0.w * r0.w;
   r0.w = r0.w * vignettParam2.x + -vignettParam2.x;
-  r1.xyz = r0.www * compo_vignetteParam1.xyz + float3(1, 1, 1);
+  r1.xyz = max(0, r0.www * compo_vignetteParam1.xyz * LumaSettings.GameSettings.VignetteStrength + float3(1, 1, 1));
   o0.xyz = r1.xyz * r0.xyz * BLOOM_STRENGTH;
   o1.xyz = compo_glareWeightsSumInv.xyz * r1.xyz;
   o0.w = 0;

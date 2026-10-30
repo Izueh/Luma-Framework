@@ -1,16 +1,16 @@
 # Keep the SHA512 in sync with the released zip (bump together with the version).
 if(VCPKG_TARGET_ARCHITECTURE STREQUAL "x86")
     set(DXP_ARCH "x86")
-    set(DXP_SHA512 "236d32a959c6354801ffb10ed464f0add17506ebefdc91510d0ef64e68f48276f1272972b5c898ccf67a2d62769ce4a11091d4a6dd4e7c0032a02712f0a0bc1a")
+    set(DXP_SHA512 "5bf7f9c893e00fcf778b662f221b7623ca15b992d1f6c5a2af0b1d192dc54c942727319f824c1737784d3a614e5d4f85da977dbf6a714a63967c7e8184729c4a")
 elseif(VCPKG_TARGET_ARCHITECTURE STREQUAL "x64")
     set(DXP_ARCH "x64")
-    set(DXP_SHA512 "6bc450b7263722b17e27888a12565010cbe0d67b405f36d080eae93e38f0a04c3a256cde5603b46d6682a6e3697faf79701d314018d2adca24cce80eadc37c56")
+    set(DXP_SHA512 "bdd8f5ba678311b5504d7d18336ddbcb708a131a940063115a74b3a87a867de66cc4a82ef18cf689da428c61349663aa5612b7630829f729e830f34b5f69252e")
 else()
     message(FATAL_ERROR "DXP supports only x64 and x86, got ${VCPKG_TARGET_ARCHITECTURE}")
 endif()
 
 vcpkg_download_distfile(DXP_ARCHIVE
-    URLS "https://github.com/Izueh/DirectXShaderPatcher/releases/download/v${VERSION}/DirectXShaderPatcher-${VERSION}-ninja-${DXP_ARCH}.zip"
+    URLS "https://github.com/Izueh/DirectXShaderPatcher/releases/download/v${VERSION}/DirectXShaderPatcher-ninja-${DXP_ARCH}.zip"
     FILENAME "dxp-${VERSION}-ninja-${DXP_ARCH}.zip"
     SHA512 ${DXP_SHA512}
 )

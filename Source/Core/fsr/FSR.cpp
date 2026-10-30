@@ -339,8 +339,8 @@ namespace FidelityFX
       dispatch_upscale.frameID = draw_data.frame_index; // This is ignored so it doesn't matter (it's for FG)
 
       dispatch_upscale.flags = 0;
-#if DEVELOPMENT && !defined(NDEBUG)
-      if (true) // For now we always do this in development // TODO: expose a toggle
+#if DEVELOPMENT
+      if (SR::debug_view)
       {
          dispatch_upscale.flags |= FFX_FSR3_UPSCALER_FLAG_DRAW_DEBUG_VIEW;
       }

@@ -692,7 +692,7 @@ public:
                settings_data.hdr = true; // At this point we are linear and "HDR" though the image is partially tonemapped if we are after SMAA
                settings_data.inverted_depth = true;
                settings_data.mvs_jittered = false; // See shader 0xA1037803, they were partially jittered (with the current frame jitter but not the previous one, so we fixed that up and completely removed jitters, so it also makes motion blur independent from them)
-               settings_data.auto_exposure = device_data.sr_type != SR::Type::FSR; // Exp is ~1 given it's all after post processing (and the game's auto exposure). FSR breaks with auto exposure in this game (it heavily clips highlights). DLSS looks fine with it.
+               settings_data.auto_exposure = device_data.sr_type != SR::Type::FSR && device_data.sr_type != SR::Type::FSR_4; // Exp is ~1 given it's all after post processing (and the game's auto exposure). FSR breaks with auto exposure in this game (it heavily clips highlights). DLSS looks fine with it.
                // MVs in UV space, so we need to scale by the render resolution to transform to pixel space
                settings_data.mvs_x_scale = -device_data.render_resolution.x;
                settings_data.mvs_y_scale = -device_data.render_resolution.y;

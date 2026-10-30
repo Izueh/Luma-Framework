@@ -130,6 +130,9 @@
 #ifndef ENABLE_DRAW_DISPATCH_DATA_CACHE
 #define ENABLE_DRAW_DISPATCH_DATA_CACHE 0
 #endif // ENABLE_DRAW_DISPATCH_DATA_CACHE
+#ifndef ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
+#define ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE 0
+#endif // ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
 #ifndef TEST_DUPLICATE_SHADER_HASH
 #define TEST_DUPLICATE_SHADER_HASH 0
 #endif // TEST_DUPLICATE_SHADER_HASH
@@ -180,6 +183,7 @@
 
 #include "dlss/DLSS.h" // see "ENABLE_NGX"
 #include "fsr/FSR.h" // see "ENABLE_FIDELITY_SK"
+#include "fsr/FSR4.h" // see "ENABLE_FSR4"
 
 #include "includes/containers.h"
 #include "includes/globals.h"
@@ -233,137 +237,6 @@ using namespace Luma;
 using namespace Shader;
 using namespace Math;
 
-#if LUMA_PATCH_PROVIDERS != 0
-namespace Patch
-{
-   // TODO(Patch module): these dispatch functions are declared in patch.hpp but
-   // defined here because they need the complete Game/DeviceData types, which
-   // would create a circular include (instance_data.h includes patch.hpp). Move
-   // them into a dedicated header (e.g. includes/patch_dispatch.hpp included
-   // after instance_data.h/game.h) when the header order is reworked.
-
-   // Runs the sync providers for one shader and stores any patch produced.
-   // Returns the stored patch (reused or fresh), or nullptr if none. Attempted
-   // providers are marked processed on any definitive outcome (patched or
-   // no-patch-needed — deterministic per method+hash, so they are never re-run
-   // for the same shader). "providers" is the game's effective provider mask.
-   std::shared_ptr<PatchedShaderData> PatchShaderSync(Game& game, DeviceData& device_data, const ShaderPatchRequest& request, const ByteCodeView& view, uint32_t providers)
-   {
-      const uint32_t shader_hash = request.shader_hash;
-
-      // 1. Reuse an already stored patch (previous sync or async outcome).
-      if (auto stored = device_data.patch_context.GetShaderData(shader_hash); stored)
-      {
-         return stored;
-      }
-
-      // 2. Bytecode sync provider (manual wins on conflicts).
-#if LUMA_PATCH_BYTECODE_SYNC
-      if ((providers & LUMA_PATCH_PROVIDER_BYTECODE_SYNC) != 0 && !device_data.patch_context.IsProcessed(Method::Bytecode, shader_hash))
-      {
-         size_t new_byte_code_size = view.valid ? view.bytecode_size : 0;
-         std::unique_ptr<std::byte[]> patched_byte_code = game.PatchShaderBytecodeSync(reinterpret_cast<const std::byte*>(view.bytecode), new_byte_code_size, request.type, shader_hash, request.shader_container, request.shader_container_size);
-         if (patched_byte_code && new_byte_code_size != 0 && view.valid)
-         {
-            auto data = std::make_shared<PatchedShaderData>();
-            data->method = Method::Bytecode;
-            data->code = BuildPatchedContainer(request.shader_container, request.shader_container_size, view.bytecode_offset, patched_byte_code.get(), new_byte_code_size);
-            if (!data->code.empty())
-            {
-               data->md5 = *reinterpret_cast<const Hash::MD5::Digest*>(data->code.data() + offsetof(DXBCHeader, hash));
-               device_data.patch_context.StorePatched(shader_hash, std::move(data));
-               return device_data.patch_context.GetShaderData(shader_hash);
-            }
-         }
-         device_data.patch_context.SetProcessed(Method::Bytecode, shader_hash);
-      }
-#endif
-
-      // 3. Recipe sync provider.
-#if LUMA_PATCH_RECIPE_SYNC
-      if ((providers & LUMA_PATCH_PROVIDER_RECIPE_SYNC) != 0 && !device_data.patch_context.IsProcessed(Method::Recipe, shader_hash))
-      {
-         auto patch_report = game.PatchShaderRecipeSync(device_data, request);
-         if (patch_report && !patch_report->output_bytes.empty())
-         {
-            auto data = std::make_shared<PatchedShaderData>();
-            data->method = Method::Recipe;
-            data->code = std::move(patch_report->output_bytes);
-            data->report = std::move(*patch_report);
-            device_data.patch_context.StorePatched(shader_hash, std::move(data));
-            return device_data.patch_context.GetShaderData(shader_hash);
-         }
-         device_data.patch_context.SetProcessed(Method::Recipe, shader_hash);
-      }
-#endif
-
-      return nullptr;
-   }
-
-   // Runs the declared async providers for one job (bytecode first, then
-   // recipe: manual wins on conflicts). Stores the result and marks the
-   // provider processed on any definitive outcome. Returns true if a patch
-   // was stored.
-   bool ProcessAsyncPatchJob(Game& game, DeviceData& device_data, PatchJob& job, uint32_t providers)
-   {
-      if (device_data.patch_context.HasPatch(job.shader_hash))
-      {
-         return false;
-      }
-
-      const ByteCodeView view = FindShaderByteCode(job.shader_container.data(), job.shader_container.size());
-
-      // Bytecode async provider (manual wins on conflicts).
-#if LUMA_PATCH_BYTECODE_ASYNC
-      if ((providers & LUMA_PATCH_PROVIDER_BYTECODE_ASYNC) != 0 && !device_data.patch_context.IsProcessed(Method::Bytecode, job.shader_hash))
-      {
-         size_t new_byte_code_size = view.valid ? view.bytecode_size : 0;
-         std::unique_ptr<std::byte[]> patched_byte_code = game.PatchShaderBytecodeAsync(reinterpret_cast<const std::byte*>(view.bytecode), new_byte_code_size, job.type, job.shader_hash, reinterpret_cast<const std::byte*>(job.shader_container.data()), job.shader_container.size());
-         if (patched_byte_code && new_byte_code_size != 0 && view.valid)
-         {
-            auto data = std::make_shared<PatchedShaderData>();
-            data->method = Method::Bytecode;
-            data->code = BuildPatchedContainer(job.shader_container.data(), job.shader_container.size(), view.bytecode_offset, patched_byte_code.get(), new_byte_code_size);
-            if (!data->code.empty())
-            {
-               data->md5 = *reinterpret_cast<const Hash::MD5::Digest*>(data->code.data() + offsetof(DXBCHeader, hash));
-               device_data.patch_context.StorePatched(job.shader_hash, std::move(data));
-               return true;
-            }
-         }
-         device_data.patch_context.SetProcessed(Method::Bytecode, job.shader_hash);
-      }
-#endif // LUMA_PATCH_BYTECODE_ASYNC
-
-      // Recipe async provider.
-#if LUMA_PATCH_RECIPE_ASYNC
-      if ((providers & LUMA_PATCH_PROVIDER_RECIPE_ASYNC) != 0 && !device_data.patch_context.IsProcessed(Method::Recipe, job.shader_hash))
-      {
-         ShaderPatchRequest request{};
-         request.type = job.type;
-         request.shader_hash = job.shader_hash;
-         request.shader_container = reinterpret_cast<const std::byte*>(job.shader_container.data());
-         request.shader_container_size = job.shader_container.size();
-         request.shader_container_owned = &job.shader_container;
-
-         auto patch_report = game.PatchShaderRecipeAsync(device_data, request);
-         if (patch_report && !patch_report->output_bytes.empty())
-         {
-            auto data = std::make_shared<PatchedShaderData>();
-            data->method = Method::Recipe;
-            data->code = std::move(patch_report->output_bytes);
-            data->report = std::move(*patch_report);
-            device_data.patch_context.StorePatched(job.shader_hash, std::move(data));
-            return true;
-         }
-         device_data.patch_context.SetProcessed(Method::Recipe, job.shader_hash);
-      }
-#endif
-
-      return false;
-   }
-} // namespace Patch
-#endif // LUMA_PATCH_PROVIDERS != 0
 
 namespace
 {
@@ -420,8 +293,7 @@ namespace
    constexpr
 #endif 
    bool custom_shaders_enabled = true;
-   // Master switch for patch clones only (files bypass it); also gates the exposed
-   // handle, so per-draw toggles no-op too. DEV/TEST UI only.
+   // Master switch for patch clones only (files bypass it). DEV/TEST UI only.
    bool allow_patches = true;
 #if (LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_SYNC | LUMA_PATCH_PROVIDER_RECIPE_SYNC)) && !LUMA_PATCH_SYNC_MODE_CLONE
    bool strip_original_shaders_debug_data = false;
@@ -650,6 +522,9 @@ namespace
       { CompileTimeStringHash("Sanitize RGBA PS"), { "Luma_SanitizeRGBA", reshade::api::pipeline_subobject_type::pixel_shader } },
       { CompileTimeStringHash("Sanitize RGBA Mipped"), { "Luma_SanitizeRGBAMipped", reshade::api::pipeline_subobject_type::pixel_shader } },
       { CompileTimeStringHash("Gen Sanitized Mip"), { "Luma_GenerateSanitizedMip_CS", reshade::api::pipeline_subobject_type::compute_shader } },
+#if ENABLE_FSR4
+      { CompileTimeStringHash("Copy Depth CS"), { "Luma_CopyDepth_CS", reshade::api::pipeline_subobject_type::compute_shader } },
+#endif
 
       { CompileTimeStringHash("Draw Purple PS"), { "Luma_DrawColor_PS", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, { { "COLOR", "float4(1.0, 0.0, 1.0, 1.0)" } } } },
       { CompileTimeStringHash("Draw Purple CS"), { "Luma_DrawColor_CS", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, { { "COLOR", "float4(1.0, 0.0, 1.0, 1.0)" } } } },
@@ -841,114 +716,6 @@ namespace
    // The actual current pre-calculated shader hash (of the live patched shader, if it was)
    thread_local uint64_t last_live_patched_shader_hash = -1;
 #endif
-   // TODO(Patch module): the job collection below (pipeline cache iteration +
-   // queue gate) belongs in the Patch module but depends on core.hpp's globals
-   // (s_mutex_generic, pipeline_cache_destruction_mutex). Move to the module
-   // once those are extracted.
-#if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
-   void GeneratePatchedShadersAsync(DeviceData& device_data, const std::unordered_set<uint64_t>& pipelines_filter)
-   {
-      std::vector<Patch::PatchJob> patch_jobs;
-      // One job per shader per cycle: many pipelines share a shader hash, and
-      // the IsProcessed markers aren't set until jobs run (after collection). A
-      // local set is used instead of a persistent "Processing" state — it dies
-      // with the call, so a stale marker can never block a shader.
-      std::unordered_set<uint32_t> queued_shader_hashes;
-
-      {
-         std::shared_lock lock_pipeline_destroy(device_data.pipeline_cache_destruction_mutex);
-         const std::shared_lock lock_generic(s_mutex_generic);
-
-         for (uint64_t pipeline_handle : pipelines_filter)
-         {
-            auto cached_pipeline_it = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle);
-            if (cached_pipeline_it == device_data.pipeline_cache_by_pipeline_handle.end() || cached_pipeline_it->second == nullptr)
-            {
-               continue;
-            }
-
-            const Shader::CachedPipeline* cached_pipeline = cached_pipeline_it->second;
-            uint32_t shader_hash = cached_pipeline->shader_hashes[0];
-
-            // Queue gate: nothing to do if a patch already exists, or if every
-            // declared async provider already reached a definitive outcome
-            // (patched or no-patch-needed) for this shader.
-            if (device_data.patch_context.HasPatch(shader_hash))
-            {
-               continue;
-            }
-
-            bool any_declared_async_unprocessed = false;
-            if ((LUMA_PATCH_PROVIDERS & LUMA_PATCH_PROVIDER_BYTECODE_ASYNC) != 0 && !device_data.patch_context.IsProcessed(Patch::Method::Bytecode, shader_hash))
-            {
-               any_declared_async_unprocessed = true;
-            }
-            if ((LUMA_PATCH_PROVIDERS & LUMA_PATCH_PROVIDER_RECIPE_ASYNC) != 0 && !device_data.patch_context.IsProcessed(Patch::Method::Recipe, shader_hash))
-            {
-               any_declared_async_unprocessed = true;
-            }
-            if (!any_declared_async_unprocessed)
-            {
-               continue;
-            }
-
-            for (uint32_t i = 0; i < cached_pipeline->subobject_count; ++i)
-            {
-               const auto& subobject = cached_pipeline->subobjects_cache[i];
-               switch (subobject.type)
-               {
-#if GEOMETRY_SHADER_SUPPORT
-               case reshade::api::pipeline_subobject_type::geometry_shader:
-#endif
-               case reshade::api::pipeline_subobject_type::vertex_shader:
-               case reshade::api::pipeline_subobject_type::compute_shader:
-               case reshade::api::pipeline_subobject_type::pixel_shader:
-               {
-                  const auto* shader_desc = static_cast<const reshade::api::shader_desc*>(subobject.data);
-                  if (shader_desc == nullptr || shader_desc->code == nullptr || shader_desc->code_size < sizeof(DXBCHeader))
-                  {
-                     break;
-                  }
-
-                  const auto* shader_header = reinterpret_cast<const DXBCHeader*>(shader_desc->code);
-                  if (memcmp(shader_header->format_name, "DXBC", 4) != 0 || shader_header->file_size != shader_desc->code_size)
-                  {
-                     break;
-                  }
-
-                  if (!queued_shader_hashes.emplace(shader_hash).second)
-                  {
-                     break; // Already queued this cycle
-                  }
-
-                  Patch::PatchJob patch_job;
-                  patch_job.shader_hash = shader_hash;
-                  patch_job.type = subobject.type;
-                  patch_job.shader_container.assign(static_cast<const uint8_t*>(shader_desc->code), static_cast<const uint8_t*>(shader_desc->code) + shader_desc->code_size);
-
-                  const Patch::ByteCodeView view = Patch::FindShaderByteCode(patch_job.shader_container.data(), patch_job.shader_container.size());
-                  if (!view.valid)
-                  {
-                     break;
-                  }
-                  patch_job.bytecode_offset = view.bytecode_offset;
-
-                  patch_jobs.emplace_back(std::move(patch_job));
-                  break;
-               }
-               default:
-                  break;
-               }
-            }
-         }
-      }
-
-      for (auto& patch_job : patch_jobs)
-      {
-         Patch::ProcessAsyncPatchJob(*game, device_data, patch_job, LUMA_PATCH_PROVIDERS);
-      }
-   }
-#endif
 #if ENABLE_DRAW_DISPATCH_DATA_CACHE || DEVELOPMENT
    thread_local DrawDispatchData last_draw_dispatch_data = {};
 #endif // ENABLE_DRAW_DISPATCH_DATA_CACHE || DEVELOPMENT
@@ -1018,9 +785,6 @@ namespace
    void AutoDumpShaders();
 #if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
    void AutoLoadShaders(DeviceData* device_data);
-   void NotifyAsyncCloneQueue(DeviceData& device_data);
-   void ProcessAsyncCloneBatch(DeviceData& device_data, const std::unordered_set<uint64_t>& pipelines);
-   std::vector<uint32_t> PublishReadyAsyncClones(DeviceData& device_data);
 #endif
    void OnDestroyPipeline(reshade::api::device* device, reshade::api::pipeline pipeline);
    reshade::api::format GetBestResourceUpgradeFormat(const reshade::api::resource_desc& desc);
@@ -1260,6 +1024,10 @@ namespace
                pipelines_to_destroy[pipeline_clone_handle] = cached_pipeline->device;
                cached_pipeline->pipeline_clone = {0};
             }
+            // The clone is gone: its description must not drive later re-queues
+            // (bound command lists keep their own copy of the recipe reports).
+            cached_pipeline->clone_origin = Shader::CloneOrigin::None;
+            cached_pipeline->custom_pipeline_data = {};
          }
       }
 
@@ -1275,101 +1043,6 @@ namespace
             pair.second->destroy_pipeline(reshade::api::pipeline{pair.first});
          }
       }
-   }
-
-#if LUMA_PATCH_PROVIDERS != 0
-   // Whether a pipeline needs patch work: a stored patch exists, or a declared
-   // async provider is unresolved for it (no-match is terminal).
-   bool ShouldQueuePatchPipeline(const DeviceData& device_data, uint32_t shader_hash)
-   {
-      if (device_data.patch_context.HasPatch(shader_hash)) return true;
-      if ((LUMA_PATCH_PROVIDERS & LUMA_PATCH_PROVIDER_BYTECODE_ASYNC) != 0 && !device_data.patch_context.IsProcessed(Patch::Method::Bytecode, shader_hash)) return true;
-      if ((LUMA_PATCH_PROVIDERS & LUMA_PATCH_PROVIDER_RECIPE_ASYNC) != 0 && !device_data.patch_context.IsProcessed(Patch::Method::Recipe, shader_hash)) return true;
-      return false;
-   }
-#endif
-
-   // Unloads only patch clones (files untouched): unregisters them but keeps the
-   // objects alive, so "Reload Patches" is instant. Per-draw toggles no-op while
-   // unloaded (no patched handle exposed).
-   void UnloadPatches(DeviceData& device_data)
-   {
-      patches_unloaded = true; // Also prevents new pipelines from being queued for patch cloning
-      const std::unique_lock lock(s_mutex_generic);
-      for (auto& pair : device_data.pipeline_cache_by_pipeline_handle)
-      {
-         Shader::CachedPipeline* cached_pipeline = pair.second;
-         if (cached_pipeline == nullptr || cached_pipeline->clone_origin != Shader::CloneOrigin::Patch) continue;
-         const auto pipeline_clone_handle = cached_pipeline->pipeline_clone.handle;
-         if (ClearCustomShader(device_data, cached_pipeline, false, false)) // Preserve the clone object
-         {
-            device_data.pipeline_cache_by_pipeline_clone_handle.erase(pipeline_clone_handle);
-         }
-      }
-   }
-
-   // Re-enables patches: re-registers the preserved clones and re-queues
-   // stored-but-uncloned pipelines (destroyed by a full "Unload Shaders").
-   void ReloadPatches(DeviceData& device_data)
-   {
-      patches_unloaded = false;
-      {
-         const std::unique_lock lock(s_mutex_generic);
-         for (auto& pair : device_data.pipeline_cache_by_pipeline_handle)
-         {
-            Shader::CachedPipeline* cached_pipeline = pair.second;
-            if (cached_pipeline == nullptr || cached_pipeline->cloned || cached_pipeline->clone_origin != Shader::CloneOrigin::Patch || cached_pipeline->pipeline_clone.handle == 0) continue;
-            cached_pipeline->cloned = true;
-            device_data.pipeline_cache_by_pipeline_clone_handle[cached_pipeline->pipeline_clone.handle] = cached_pipeline;
-            device_data.cloned_pipeline_count++;
-            device_data.cloned_pipelines_changed = true;
-         }
-      }
-
-#if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
-      // Stored-but-uncloned pipelines go through the async worker (providers may
-      // not have run while unloaded, hence the same predicate as the queue gate).
-      {
-         std::unordered_set<uint64_t> to_reload;
-         {
-            const std::shared_lock lock(s_mutex_generic);
-            for (auto& pair : device_data.pipeline_cache_by_pipeline_handle)
-            {
-               Shader::CachedPipeline* cached_pipeline = pair.second;
-               if (cached_pipeline == nullptr || cached_pipeline->cloned || cached_pipeline->pipeline_clone.handle != 0 || cached_pipeline->shader_hashes.size() == 0) continue;
-               if (ShouldQueuePatchPipeline(device_data, cached_pipeline->shader_hashes[0]))
-               {
-                  to_reload.emplace(cached_pipeline->pipeline.handle);
-               }
-            }
-         }
-         if (!to_reload.empty())
-         {
-            const std::unique_lock lock_loading(s_mutex_loading);
-            for (uint64_t handle : to_reload)
-            {
-               device_data.pipelines_to_reload.emplace(handle);
-            }
-            NotifyAsyncCloneQueue(device_data);
-         }
-      }
-#endif
-   }
-
-   // Registered patch clones count (for the "Unload Patches" button title).
-   uint32_t CountPatchedClones(const DeviceData& device_data)
-   {
-      uint32_t count = 0;
-      const std::shared_lock lock(s_mutex_generic);
-      for (auto& pair : device_data.pipeline_cache_by_pipeline_handle)
-      {
-         const Shader::CachedPipeline* cached_pipeline = pair.second;
-         if (cached_pipeline != nullptr && cached_pipeline->cloned && cached_pipeline->clone_origin == Shader::CloneOrigin::Patch)
-         {
-            count++;
-         }
-      }
-      return count;
    }
 
    // Registered file clone count (for the "Unload Shaders" button title).
@@ -2470,7 +2143,7 @@ namespace
          // Re-clone all the pipelines that used this shader hash (except the ones that are filtered out)
          for (CachedPipeline* cached_pipeline : pipelines_pair->second)
          {
-            if (cached_pipeline == nullptr) continue;
+            if (cached_pipeline == nullptr || cached_pipeline->manually_unloaded) continue;
             if (!pipelines_filter.empty() && !pipelines_filter.contains(cached_pipeline->pipeline.handle)) continue;
             if (!iterated_pipelines.emplace(cached_pipeline->pipeline.handle).second) continue;
             pipelines_to_clone.emplace_back(cached_pipeline);
@@ -2495,7 +2168,7 @@ namespace
 #if LUMA_PATCH_PROVIDERS != 0
       {
          const std::shared_lock lock_device(device_data.mutex);
-         device_data.patch_context.ForEachPatchedShader([&](const uint32_t shader_hash, const Patch::PatchedShaderData&)
+         Patch::ForEachPatchedShader(device_data, [&](const uint32_t shader_hash, const Patch::PatchedShaderData&)
          {
             auto pipelines_pair = device_data.pipeline_caches_by_shader_hash.find(shader_hash);
             if (pipelines_pair == device_data.pipeline_caches_by_shader_hash.end())
@@ -2505,7 +2178,7 @@ namespace
 
             for (CachedPipeline* cached_pipeline : pipelines_pair->second)
             {
-               if (cached_pipeline == nullptr) continue;
+               if (cached_pipeline == nullptr || cached_pipeline->manually_unloaded) continue;
                if (!pipelines_filter.empty() && !pipelines_filter.contains(cached_pipeline->pipeline.handle)) continue;
                if (!iterated_pipelines.emplace(cached_pipeline->pipeline.handle).second) continue;
                pipelines_to_clone.emplace_back(cached_pipeline);
@@ -2553,6 +2226,7 @@ namespace
 
           // Reset the clone provenance: it describes the clone we are about to create.
           cached_pipeline->clone_origin = Shader::CloneOrigin::None;
+          cached_pipeline->custom_pipeline_data = {};
 
           // Async-race note: the worker holds raw CachedPipeline* across the
           // clone window; a concurrent OnDestroyPipeline can free the object.
@@ -2573,7 +2247,8 @@ namespace
              subobjects, subobject_count,
              [&device_data, cached_pipeline](
                  const reshade::api::shader_desc* clone_desc,
-                 const reshade::api::shader_desc* orig_desc) -> std::optional<std::pair<const uint8_t*, uint32_t>>
+                 const reshade::api::shader_desc* orig_desc,
+                 reshade::api::pipeline_subobject_type type) -> std::optional<std::pair<const uint8_t*, uint32_t>>
              {
                 const uint32_t shader_hash = Shader::BinToHash(static_cast<const uint8_t*>(orig_desc->code), orig_desc->code_size);
 
@@ -2584,11 +2259,12 @@ namespace
                    if (custom_shader != nullptr && !custom_shader->is_luma_native && !custom_shader->code.empty())
                    {
                       cached_pipeline->clone_origin = Shader::CloneOrigin::File;
+                      Shader::RecordCloneShader(cached_pipeline->custom_pipeline_data, type);
 #if LUMA_PATCH_PROVIDERS != 0
                       // A cached file wins over the patched version on this
                       // clone. Report once per shader so developers know the
                       // patch is being shadowed (it otherwise looks broken).
-                      if (device_data.patch_context.HasPatch(shader_hash))
+                      if (Patch::HasPatch(device_data, shader_hash))
                       {
                          static std::mutex s_logged_patch_override_mutex;
                          static std::unordered_set<uint32_t> s_logged_patch_override_hashes;
@@ -2605,9 +2281,10 @@ namespace
 
                 // Check for DXP/bytecode patched shader
 #if LUMA_PATCH_PROVIDERS != 0
-                if (auto patched = device_data.patch_context.GetShaderData(shader_hash); patched)
+                if (auto patched = Patch::GetShaderData(device_data, shader_hash); !patches_unloaded && patched)
                 {
-                   cached_pipeline->clone_origin = Shader::CloneOrigin::Patch;
+                   if (cached_pipeline->clone_origin != Shader::CloneOrigin::File) cached_pipeline->clone_origin = Shader::CloneOrigin::Patch;
+                   Shader::RecordCloneShader(cached_pipeline->custom_pipeline_data, type, patched);
                    return std::make_pair(patched->code.data(), static_cast<uint32_t>(patched->code.size()));
                 }
 #endif
@@ -2649,6 +2326,13 @@ namespace
 
          assert(!cached_pipeline->cloned && cached_pipeline->pipeline_clone.handle == 0); // We destroy the potential previous one above in "UnloadCustomShaders"
          cached_pipeline->pipeline_clone = pipeline_clone;
+#if LUMA_USE_DXP
+         if (cached_pipeline->custom_pipeline_data.patch_data && (pipeline_clone.handle & 1) == 0
+             && cached_pipeline->device->get_api() == reshade::api::device_api::d3d11)
+         {
+            cached_pipeline->custom_pipeline_data.patch_data->native_pipeline_clone.reset(reinterpret_cast<ID3D11DeviceChild*>(pipeline_clone.handle));
+         }
+#endif
          cached_pipeline->cloned = true;
          // Clones registered here come from the background AutoLoadShaders thread (async).
          cached_pipeline->patch_application_mode = Shader::PatchApplicationMode::Async;
@@ -2727,7 +2411,10 @@ namespace
       device_data.reshade_device = device;
 
 #if LUMA_USE_DXP
-      device_data.recipes.SetRootPath(shaders_path);
+#if LUMA_HAS_RECIPE_PROVIDERS
+      device_data.patch_context.recipes_path = shaders_path / Globals::GAME_NAME / "Recipes";
+      Patch::LoadRecipes(device_data);
+#endif
 #endif
 
       device_data.uav_max_count = (native_device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_1) ? D3D11_1_UAV_SLOT_COUNT : D3D11_PS_CS_UAV_REGISTER_COUNT;
@@ -2899,6 +2586,27 @@ namespace
             }
          }
       }
+      {
+         const std::shared_lock lock_reshade(s_mutex_reshade);
+         if (sr_user_type == SR::UserType::Auto)
+         {
+            device_data.sr_type = SR::GetAutoType(device_data.sr_implementations_instances);
+         }
+      }
+#if ENABLE_FSR4
+      if (const auto fsr4_instance = device_data.sr_implementations_instances.find(SR::Type::FSR_4); fsr4_instance != device_data.sr_implementations_instances.end())
+      {
+         FidelityFX::FSR4::SetDepthCopyShader(fsr4_instance->second, [&device_data]() -> ID3D11ComputeShader*
+            {
+               const std::shared_lock lock(s_mutex_shader_objects); // They could be getting recompiled
+               const auto cs = device_data.native_compute_shaders.find(CompileTimeStringHash("Copy Depth CS"));
+               if (cs == device_data.native_compute_shaders.end() || !cs->second.get())
+                  return nullptr;
+               cs->second->AddRef();
+               return cs->second.get();
+            });
+      }
+#endif
       if (device_data.sr_type == SR::Type::None)
       {
          const std::unique_lock lock_reshade(s_mutex_reshade);
@@ -3009,6 +2717,20 @@ namespace
          device_data.thread_auto_loading.join();
          device_data.thread_auto_loading_running = false;
       }
+      std::deque<DeviceData::AsyncCloneEntry> unpublished;
+      {
+         const std::lock_guard lock(device_data.async_jobs_mutex);
+         unpublished.swap(device_data.async_ready_queue);
+      }
+      // The worker is stopped; release unpublished builds outside core locks.
+      for (const auto& entry : unpublished)
+      {
+#if LUMA_ASYNC_CLONE_MODE == 1
+         Shader::DestroyPipelineSubojects(entry.subobjects, entry.subobject_count);
+#else
+         entry.device->destroy_pipeline(entry.pipeline_clone);
+#endif
+      }
 #endif
 
       assert(device_data.cb_per_view_global_buffer_map_data == nullptr); // It's fine (but not great) if we map wasn't unmapped before destruction (not our fault anyway)
@@ -3026,10 +2748,13 @@ namespace
       }
 
 #if ENABLE_SR
-      auto* sr_instance_data = device_data.GetSRInstanceData();
-      if (sr_instance_data)
+      // All the initialized ones, not just the selected one (e.g. FSR 4 owns a DX12 device)
+      for (auto& sr_instance : device_data.sr_implementations_instances)
       {
-         sr_implementations[device_data.sr_type]->Deinit(sr_instance_data); // NOTE: this could stutter the game on closure as it forces unloading the SR DLL (if it's the last device instance?), but we can't avoid it
+         if (sr_instance.second)
+         {
+            sr_implementations[sr_instance.first]->Deinit(sr_instance.second); // NOTE: this could stutter the game on closure as it forces unloading the SR DLL (if it's the last device instance?), but we can't avoid it
+         }
       }
 #endif // ENABLE_SR
 
@@ -3608,6 +3333,8 @@ namespace
          {
             switch (subobject.type)
             {
+            case reshade::api::pipeline_subobject_type::input_layout:
+                return false;
 #if GEOMETRY_SHADER_SUPPORT
             case reshade::api::pipeline_subobject_type::geometry_shader:
 #endif // GEOMETRY_SHADER_SUPPORT
@@ -3669,7 +3396,7 @@ namespace
                {
                   const uint32_t pre_strip_hash = uint32_t(Shader::BinToHash(static_cast<const uint8_t*>(current_shader_data.code), current_shader_data.code_size));
 
-                  if (std::shared_ptr<const std::vector<uint8_t>> cached_stripped = device_data.patch_context.GetStrippedContainer(pre_strip_hash); cached_stripped)
+                  if (std::shared_ptr<const std::vector<uint8_t>> cached_stripped = Patch::GetStrippedContainer(device_data, pre_strip_hash); cached_stripped)
                   {
                      stripped_shader_code = std::move(cached_stripped);
                   }
@@ -3678,7 +3405,7 @@ namespace
                      const size_t stripped_shader_code_size = stripped_code_blob->GetBufferSize();
                      stripped_shader_code = std::make_shared<const std::vector<uint8_t>>(static_cast<const uint8_t*>(stripped_code_blob->GetBufferPointer()), static_cast<const uint8_t*>(stripped_code_blob->GetBufferPointer()) + stripped_shader_code_size);
                      stripped_code_blob.reset();
-                     device_data.patch_context.StoreStrippedContainer(pre_strip_hash, stripped_shader_code);
+                     Patch::StoreStrippedContainer(device_data, pre_strip_hash, stripped_shader_code);
                   }
 
                   if (stripped_shader_code)
@@ -3758,53 +3485,10 @@ namespace
                      const std::byte* byte_code = reinterpret_cast<const std::byte*>(chunk_byte_code->byte_code);
                      const size_t byte_code_offset = byte_code - (std::byte*)current_shader_data.code;
 
-                     // 1. Reuse an already stored patch (from a previous sync or async
-                     // outcome) in-place, without re-running any provider.
-                     applied_patch = device_data.patch_context.GetShaderData(uint32_t(shader_luma_hash));
-                     if (!applied_patch)
-                     {
-                        // 2. Bytecode sync provider (manual wins on conflicts).
-#if LUMA_PATCH_PROVIDERS & LUMA_PATCH_PROVIDER_BYTECODE_SYNC
-                        if (!device_data.patch_context.IsProcessed(Patch::Method::Bytecode, uint32_t(shader_luma_hash)))
-                        {
-                           size_t new_byte_code_size = byte_code_size;
-                           if (std::unique_ptr<std::byte[]> patched_byte_code = game->PatchShaderBytecodeSync(byte_code, new_byte_code_size, subobject.type, shader_luma_hash, static_cast<const std::byte*>(current_shader_data.code), current_shader_data.code_size); patched_byte_code && new_byte_code_size != 0)
-                           {
-                              auto data = std::make_shared<Patch::PatchedShaderData>();
-                              data->method = Patch::Method::Bytecode;
-                              data->code = Patch::BuildPatchedContainer(current_shader_data.code, current_shader_data.code_size, byte_code_offset, patched_byte_code.get(), new_byte_code_size);
-                              if (!data->code.empty())
-                              {
-                                 data->md5 = *reinterpret_cast<const Hash::MD5::Digest*>(data->code.data() + offsetof(Shader::DXBCHeader, hash));
-                                 applied_patch = data;
-                              }
-                           }
-                           device_data.patch_context.SetProcessed(Patch::Method::Bytecode, uint32_t(shader_luma_hash)); // Definitive outcome: never re-run for this shader.
-                        }
-#endif
-                        // 3. Recipe sync provider (only if no bytecode patch was produced).
-#if LUMA_PATCH_PROVIDERS & LUMA_PATCH_PROVIDER_RECIPE_SYNC
-                        if (!applied_patch && !device_data.patch_context.IsProcessed(Patch::Method::Recipe, uint32_t(shader_luma_hash)))
-                        {
-                           Patch::ShaderPatchRequest patch_request{};
-                           patch_request.type = subobject.type;
-                           patch_request.shader_hash = uint32_t(shader_luma_hash);
-                           patch_request.shader_container = static_cast<const std::byte*>(current_shader_data.code);
-                           patch_request.shader_container_size = current_shader_data.code_size;
-
-                           auto patch_report = game->PatchShaderRecipeSync(device_data, patch_request);
-                           if (patch_report && !patch_report->output_bytes.empty())
-                           {
-                              auto data = std::make_shared<Patch::PatchedShaderData>();
-                              data->method = Patch::Method::Recipe;
-                              data->code = std::move(patch_report->output_bytes);
-                              data->report = std::move(*patch_report);
-                              applied_patch = data;
-                           }
-                           device_data.patch_context.SetProcessed(Patch::Method::Recipe, uint32_t(shader_luma_hash));
-                        }
-#endif
-                     }
+                     Patch::ShaderPatchRequest patch_request{subobject.type, uint32_t(shader_luma_hash),
+                        static_cast<const std::byte*>(current_shader_data.code), current_shader_data.code_size};
+                     const Patch::ByteCodeView view{reinterpret_cast<const uint8_t*>(byte_code), byte_code_size, uint32_t(byte_code_offset), true};
+                     applied_patch = Patch::PatchShaderSync(*game, device_data, patch_request, view, LUMA_PATCH_PROVIDERS);
 
                      if (applied_patch)
                      {
@@ -3849,7 +3533,7 @@ namespace
                            // so it isn't retried and can't poison the patch context.
                            // Another method's provider (e.g. the recipe async path)
                            // can still take over for this shader.
-                           device_data.patch_context.SetProcessed(applied_patch->method, uint32_t(shader_luma_hash));
+                           Patch::SetProcessed(device_data, applied_patch->method, uint32_t(shader_luma_hash));
                         }
                      }
                   }
@@ -3860,7 +3544,7 @@ namespace
                      // Store only after the patch is proven compilable (kept alive by patch_context).
                      if (applied_patch)
                      {
-                        device_data.patch_context.StorePatched(uint32_t(shader_luma_hash), applied_patch);
+                        Patch::StorePatched(device_data, uint32_t(shader_luma_hash), applied_patch);
                      }
 
                      any_edited = true;
@@ -4018,7 +3702,6 @@ namespace
 
       bool found_replaceable_shader = false;
       bool found_custom_shader_file = false;
-      bool found_sync_patch_this_pipeline = false;
 
       DeviceData& device_data = *device->get_private_data<DeviceData>();
 
@@ -4046,33 +3729,6 @@ namespace
                // TODO: when out of "DEVELOPMENT" or "TEST" builds, we could early out before cloning the pipeline based on whether "custom_shaders_cache.contains(shader_hash)" is true. That'd avoid some stutters on shader loading. Note that below we might modify even shaders that we don't replace so consider that too.
                // TODO: use the native DX hash stored at the beginning of shaders binaries? It might not always be reliable though. It's too late anyway now, all of our hashes are in content.
                uint32_t shader_hash = (precalculated_shader_hash != -1) ? uint32_t(precalculated_shader_hash) : Shader::BinToHash(static_cast<const uint8_t*>(original_shader_desc->code), original_shader_desc->code_size);
-
-#if (LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_SYNC | LUMA_PATCH_PROVIDER_RECIPE_SYNC)) && LUMA_PATCH_SYNC_MODE_CLONE
-               // Sync providers in CLONE mode run here, at pipeline init: the
-               // patch is stored and the pipeline is cloned with it (swapped in
-               // at bind time). In INPLACE mode sync runs in OnCreatePipeline
-               // instead and this block is not compiled.
-               {
-                  const std::shared_lock lock_device(device_data.mutex);
-                  if (!device_data.patch_context.HasPatch(shader_hash))
-                  {
-                     Patch::ShaderPatchRequest patch_request{};
-                     patch_request.type = subobject.type;
-                     patch_request.shader_hash = shader_hash;
-                     patch_request.shader_container = static_cast<const std::byte*>(original_shader_desc->code);
-                     patch_request.shader_container_size = original_shader_desc->code_size;
-
-                     const Patch::ByteCodeView view = Patch::FindShaderByteCode(original_shader_desc->code, original_shader_desc->code_size);
-                     if (Patch::PatchShaderSync(*game, device_data, patch_request, view, LUMA_PATCH_PROVIDERS))
-                     {
-                        found_sync_patch_this_pipeline = true;
-#if DEVELOPMENT
-                        reshade::log::message(reshade::log::level::debug, std::format("[Patch] Shader {:08X} patched via sync path", shader_hash).c_str());
-#endif
-                     }
-                  }
-               }
-#endif
 
 #if ALLOW_SHADERS_DUMPING || DEVELOPMENT
                {
@@ -4581,71 +4237,13 @@ namespace
          }
       }
 
-      // Clone pipeline with injected sync patches (if any found)
-#if (LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_SYNC | LUMA_PATCH_PROVIDER_RECIPE_SYNC)) && LUMA_PATCH_SYNC_MODE_CLONE
-      if (found_sync_patch_this_pipeline)
-      {
-         auto [pipeline_clone, injected] = Patch::ClonePipelineWithPatches(
-            device, layout, subobjects_cache, subobject_count,
-            [&device_data](
-                const reshade::api::shader_desc*,
-                const reshade::api::shader_desc* orig_desc) -> std::optional<std::pair<const uint8_t*, uint32_t>>
-            {
-               uint32_t hash = Shader::BinToHash(static_cast<const uint8_t*>(orig_desc->code), orig_desc->code_size);
-               if (auto shader_data = device_data.patch_context.GetShaderData(hash); shader_data)
-                  return std::make_pair(shader_data->code.data(), static_cast<uint32_t>(shader_data->code.size()));
-               return std::nullopt;
-            });
-
-         if (injected && pipeline_clone.handle != 0)
-         {
-            cached_pipeline->pipeline_clone = pipeline_clone;
-            cached_pipeline->cloned = true;
-            cached_pipeline->patch_application_mode = Shader::PatchApplicationMode::Sync;
-            // Sync clones are patch-only by construction (files go through the load path).
-            cached_pipeline->clone_origin = Shader::CloneOrigin::Patch;
-            device_data.pipeline_cache_by_pipeline_clone_handle[pipeline_clone.handle] = cached_pipeline;
-            device_data.cloned_pipeline_count++;
-            device_data.cloned_pipelines_changed = true;
-
-#if DEVELOPMENT
-            reshade::log::message(reshade::log::level::debug, std::format("[Patch] Sync-patched pipeline {:x} -> clone {:x}", pipeline.handle, pipeline_clone.handle).c_str());
+#if LUMA_PATCH_PROVIDERS != 0
+      Patch::TryPatchPipeline(device_data, pipeline.handle);
 #endif
-
-#if DEVELOPMENT && LUMA_PATCH_PROVIDERS != 0
-            // Update live patch debug info for all patched shaders in this pipeline
-            {
-               const std::lock_guard<std::recursive_mutex> lock_dumping(s_mutex_dumping);
-               for (uint32_t i = 0; i < subobject_count; ++i)
-               {
-                  const auto& subobject = subobjects[i];
-                  if (subobject.type != reshade::api::pipeline_subobject_type::pixel_shader
-                      && subobject.type != reshade::api::pipeline_subobject_type::vertex_shader
-                      && subobject.type != reshade::api::pipeline_subobject_type::compute_shader
-#if GEOMETRY_SHADER_SUPPORT
-                      && subobject.type != reshade::api::pipeline_subobject_type::geometry_shader
-#endif
-                      ) continue;
-
-                  auto* desc = static_cast<reshade::api::shader_desc*>(subobjects_cache[i].data);
-                  uint32_t hash = Shader::BinToHash(static_cast<const uint8_t*>(desc->code), desc->code_size);
-                  if (auto shader_data = device_data.patch_context.GetShaderData(hash); shader_data)
-                  {
-                     if (auto it = shader_cache.find(hash); it != shader_cache.end() && it->second)
-                     {
-                        SetLivePatchedShaderInfo(it->second, hash, shader_data->code.data(), static_cast<uint32_t>(shader_data->code.size()));
-                     }
-                  }
-               }
-            }
-#endif
-         }
-      }
-#endif // CLONE sync mode
 
       // Automatically load any custom shaders that might have been bound to this pipeline.
       // To avoid this slowing down everything, we only do it if we detect the user already had a matching shader in its custom shaders folder.
-      if (auto_load && !last_pressed_unload && found_custom_shader_file)
+      if (auto_load && !last_pressed_unload && found_custom_shader_file && !cached_pipeline->cloned)
       {
 #if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
          // File-based custom shaders are deferred to the async worker rather
@@ -4655,29 +4253,13 @@ namespace
          // and completes at the present boundary.
          const std::unique_lock lock_loading(s_mutex_loading);
          device_data.pipelines_to_reload.emplace(pipeline.handle);
-         NotifyAsyncCloneQueue(device_data);
+         Patch::NotifyAsyncCloneQueue(device_data);
 #else
          // No async worker in this build: load/clone inline at creation (the
          // original behavior for custom shader files).
          LoadCustomShaders(device_data, { pipeline.handle }, !precompile_custom_shaders);
 #endif
       }
-
-#if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
-      // Patches are automatic: queueing must not depend on the "Auto Load
-      // Shaders" checkbox (a user tool for their own files), only on the unloaded
-      // state. Note: the clone lambda injects cached files on these clones too, so
-      // a file overrides a patch regardless of the checkbox.
-      if (!found_sync_patch_this_pipeline && live_patched_shader_code == nullptr && cached_pipeline->shader_hashes.size() > 0 && !patches_unloaded)
-      {
-         if (ShouldQueuePatchPipeline(device_data, cached_pipeline->shader_hashes[0]))
-         {
-            const std::unique_lock lock_loading(s_mutex_loading);
-            device_data.pipelines_to_reload.emplace(pipeline.handle);
-         }
-      }
-      NotifyAsyncCloneQueue(device_data);
-#endif
    }
 #pragma optimize("", on) // Restore the previous state
 
@@ -4818,6 +4400,13 @@ namespace
          }
       }
 
+#if LUMA_HAS_RECIPE_PROVIDERS
+      if (cached_pipeline)
+      {
+         Patch::TryPatchPipeline(*cmd_list->get_device()->get_private_data<DeviceData>(), cached_pipeline->pipeline.handle);
+      }
+#endif
+
       // Matches "reshade::addon_event::reset_command_list" (sometimes this is called instead of that). Reshade DX11 specific.
       if (stages == reshade::api::pipeline_stage::all && pipeline.handle == 0)
       {
@@ -4827,30 +4416,19 @@ namespace
          cmd_list_data.any_draw_done = false;
          cmd_list_data.any_dispatch_done = false;
 #endif
-         // Nothing is bound anymore: clear the variant handles/trackers (only valid while bound).
-         cmd_list_data.patch_clone_handles.clear();
       }
 
+      bool custom_pipeline_bound = false;
+      reshade::api::pipeline custom_pipeline = {};
+      const auto original_pipeline = cached_pipeline ? cached_pipeline->pipeline : pipeline;
       bool compute_changed = false;
       bool graphics_changed = false;
 
-      if ((stages & reshade::api::pipeline_stage::compute_shader) != 0 && cmd_list_data.pipeline_state_original_compute_shader != pipeline)
+      if ((stages & reshade::api::pipeline_stage::compute_shader) != 0 && cmd_list_data.pipeline_state_original_compute_shader != original_pipeline)
       {
          ASSERT_ONCE(stages == reshade::api::pipeline_stage::compute_shader || stages == reshade::api::pipeline_stage::all); // Make sure only one stage happens at a time (it does in DX11)
-         cmd_list_data.pipeline_state_original_compute_shader = pipeline;
+         cmd_list_data.pipeline_state_original_compute_shader = original_pipeline;
          compute_changed = true;
-         // Expose the clone handle for this stage (0 = no clone), gated
-         // by the master switches (per-hash defaults don't gate: per-draw overrides
-         // must work). File clones need the mod master, patch clones both.
-         if (cached_pipeline && cached_pipeline->cloned && custom_shaders_enabled
-             && (cached_pipeline->clone_origin != Shader::CloneOrigin::Patch || allow_patches))
-         {
-            for (uint32_t hash : cached_pipeline->shader_hashes)
-            {
-               cmd_list_data.patch_clone_handles[hash] = cached_pipeline->pipeline_clone;
-            }
-         }
-
          if (cached_pipeline)
          {
 #if DX12
@@ -4871,23 +4449,11 @@ namespace
             cmd_list_data.pipeline_state_has_custom_compute_shader = false;
          }
       }
-      if ((stages & reshade::api::pipeline_stage::vertex_shader) != 0 && cmd_list_data.pipeline_state_original_vertex_shader != pipeline)
+      if ((stages & reshade::api::pipeline_stage::vertex_shader) != 0 && cmd_list_data.pipeline_state_original_vertex_shader != original_pipeline)
       {
          ASSERT_ONCE(stages == reshade::api::pipeline_stage::vertex_shader || stages == reshade::api::pipeline_stage::all); // Make sure only one stage happens at a time (it does in DX11)
-         cmd_list_data.pipeline_state_original_vertex_shader = pipeline;
+         cmd_list_data.pipeline_state_original_vertex_shader = original_pipeline;
          graphics_changed = true;
-         // Expose the clone handle for this stage (0 = no clone), gated
-         // by the master switches (per-hash defaults don't gate: per-draw overrides
-         // must work). File clones need the mod master, patch clones both.
-         if (cached_pipeline && cached_pipeline->cloned && custom_shaders_enabled
-             && (cached_pipeline->clone_origin != Shader::CloneOrigin::Patch || allow_patches))
-         {
-            for (uint32_t hash : cached_pipeline->shader_hashes)
-            {
-               cmd_list_data.patch_clone_handles[hash] = cached_pipeline->pipeline_clone;
-            }
-         }
-
          if (cached_pipeline)
          {
 #if DX12
@@ -4908,23 +4474,11 @@ namespace
          }
          cmd_list_data.pipeline_state_has_custom_graphics_shader = cmd_list_data.pipeline_state_has_custom_pixel_shader || cmd_list_data.pipeline_state_has_custom_vertex_shader;
       }
-      if ((stages & reshade::api::pipeline_stage::pixel_shader) != 0 && cmd_list_data.pipeline_state_original_pixel_shader != pipeline)
+      if ((stages & reshade::api::pipeline_stage::pixel_shader) != 0 && cmd_list_data.pipeline_state_original_pixel_shader != original_pipeline)
       {
          ASSERT_ONCE(stages == reshade::api::pipeline_stage::pixel_shader || stages == reshade::api::pipeline_stage::all); // Make sure only one stage happens at a time (it does in DX11)
-         cmd_list_data.pipeline_state_original_pixel_shader = pipeline;
+         cmd_list_data.pipeline_state_original_pixel_shader = original_pipeline;
          graphics_changed = true;
-         // Expose the clone handle for this stage (0 = no clone), gated
-         // by the master switches (per-hash defaults don't gate: per-draw overrides
-         // must work). File clones need the mod master, patch clones both.
-         if (cached_pipeline && cached_pipeline->cloned && custom_shaders_enabled
-             && (cached_pipeline->clone_origin != Shader::CloneOrigin::Patch || allow_patches))
-         {
-            for (uint32_t hash : cached_pipeline->shader_hashes)
-            {
-               cmd_list_data.patch_clone_handles[hash] = cached_pipeline->pipeline_clone;
-            }
-         }
-
 #if DEVELOPMENT
          cmd_list_data.temp_custom_depth_stencil = cached_pipeline ? cached_pipeline->custom_depth_stencil : ShaderCustomDepthStencilType::None;
 #endif
@@ -5047,36 +4601,22 @@ namespace
          else
 #endif
          {
-            bool game_patch_default = true;
-            // The game decision runs without the lock: game callbacks must not
-            // take luma mutexes, and the bind below is what needs the lock.
-#if LUMA_PATCH_PROVIDERS != 0
-            if (cached_pipeline->clone_origin == Shader::CloneOrigin::Patch)
-            {
-               game_patch_default = game->OnBindPatchedShader(
-                  *cmd_list->get_device()->get_private_data<DeviceData>(),
-                  (uint32_t)cached_pipeline_shader_hash,
-                  (stages & reshade::api::pipeline_stage::compute_shader) != 0
-                     ? reshade::api::pipeline_subobject_type::compute_shader
-                     : (stages & reshade::api::pipeline_stage::vertex_shader) != 0
-                        ? reshade::api::pipeline_subobject_type::vertex_shader
-                        : reshade::api::pipeline_subobject_type::pixel_shader);
-            }
-#endif
-
             // TODO: have a high performance mode that swaps the original shader binary with the custom one on creation, so we don't have to analyze shader binding calls (probably wouldn't really speed up performance anyway).
             // This would also help save some memory in x86 games where we keep all shaders binaries in memory ("custom_shaders_cache::code").
             reshade::api::pipeline pipeline_to_bind = {};
             {
                std::shared_lock lock(s_mutex_generic);
-               // Bind-time default: clone when cloned && custom_shaders_enabled &&
-               // (patch clones also need the game's per-shader decision; per-draw
-               // UseShaderVariant overrides). Readback path (game/mod bound the
-               // clone itself) keeps the bound object as-is.
+               // Bind the clone when cloned && custom_shaders_enabled (patch clones also need "allow_patches").
+               // Recipes are toggled by re-patching, and draws can still fall back to the original shaders
+               // (see "Patch::OnDrawOrDispatchCustomPipeline()"). Readback path (game/mod bound the clone itself)
+               // goes back to the original if clones are disabled.
                const bool game_bound_clone = cached_pipeline->cloned && cached_pipeline->pipeline_clone.handle == pipeline.handle;
-               const bool swap_to_clone = !game_bound_clone && cached_pipeline->cloned && custom_shaders_enabled
-                  && (cached_pipeline->clone_origin != Shader::CloneOrigin::Patch || allow_patches)
-                  && (cached_pipeline->clone_origin != Shader::CloneOrigin::Patch || game_patch_default);
+               const bool clone_allowed = cached_pipeline->cloned && custom_shaders_enabled
+                  && (cached_pipeline->clone_origin != Shader::CloneOrigin::Patch || allow_patches);
+               const bool swap_to_clone = !game_bound_clone && clone_allowed;
+               custom_pipeline_bound = clone_allowed;
+               if (custom_pipeline_bound) custom_pipeline = cached_pipeline->pipeline_clone;
+               if (game_bound_clone && !custom_pipeline_bound) pipeline_to_bind = cached_pipeline->pipeline;
                if (swap_to_clone)
                {
                   pipeline_to_bind = cached_pipeline->pipeline_clone;
@@ -5089,6 +4629,26 @@ namespace
             }
          }
       }
+
+      if ((stages & reshade::api::pipeline_stage::compute_shader) != 0)
+      {
+         cmd_list_data.pipeline_state_has_custom_compute_shader = custom_pipeline_bound;
+         cmd_list_data.pipeline_state_custom_compute_shader = custom_pipeline;
+         cmd_list_data.custom_compute_pipeline = cached_pipeline ? cached_pipeline->custom_pipeline_data : Shader::CustomPipelineData{};
+      }
+      if ((stages & reshade::api::pipeline_stage::vertex_shader) != 0)
+      {
+         cmd_list_data.pipeline_state_has_custom_vertex_shader = custom_pipeline_bound;
+         cmd_list_data.pipeline_state_custom_vertex_shader = custom_pipeline;
+         cmd_list_data.custom_vertex_pipeline = cached_pipeline ? cached_pipeline->custom_pipeline_data : Shader::CustomPipelineData{};
+      }
+      if ((stages & reshade::api::pipeline_stage::pixel_shader) != 0)
+      {
+         cmd_list_data.pipeline_state_has_custom_pixel_shader = custom_pipeline_bound;
+         cmd_list_data.pipeline_state_custom_pixel_shader = custom_pipeline;
+         cmd_list_data.custom_pixel_pipeline = cached_pipeline ? cached_pipeline->custom_pipeline_data : Shader::CustomPipelineData{};
+      }
+      cmd_list_data.pipeline_state_has_custom_graphics_shader = cmd_list_data.pipeline_state_has_custom_pixel_shader || cmd_list_data.pipeline_state_has_custom_vertex_shader;
 
 #if DEVELOPMENT // Note: we only print the supported ones!
       const std::shared_lock lock_trace(s_mutex_trace);
@@ -5519,6 +5079,12 @@ namespace
       cmd_list_data.pipeline_state_has_custom_pixel_shader = false;
       cmd_list_data.pipeline_state_has_custom_graphics_shader = false;
       cmd_list_data.pipeline_state_has_custom_compute_shader = false;
+      cmd_list_data.custom_vertex_pipeline = {};
+      cmd_list_data.custom_pixel_pipeline = {};
+      cmd_list_data.custom_compute_pipeline = {};
+      cmd_list_data.pipeline_state_custom_vertex_shader = {};
+      cmd_list_data.pipeline_state_custom_pixel_shader = {};
+      cmd_list_data.pipeline_state_custom_compute_shader = {};
 
       cmd_list_data.draw_callback = nullptr;
       cmd_list_data.dispatch_callback = nullptr;
@@ -6240,6 +5806,74 @@ namespace
       device_data.cb_luma_global_settings_dirty = true;
    }
 
+   // Called for draws/dispatches with a custom pipeline clone selected (custom shader files or patches), before the game's draw callbacks.
+   // Binds the resources the clones' recipes need, and swaps a clone missing any of them for its original shader for this draw (game callbacks can do the same through "Shader::UsePipelineVariant()").
+   DrawOrDispatchOverrideType OnDrawOrDispatchCustomPipeline(ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, bool is_dispatch, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+   {
+      struct SelectedClone
+      {
+         reshade::api::shader_stage stage = reshade::api::shader_stage(0);
+         reshade::api::pipeline_subobject_type type = reshade::api::pipeline_subobject_type::unknown;
+         const Shader::CustomPipelineData* data = nullptr;
+         bool use_clone = true;
+      };
+      std::array<SelectedClone, 2> selected;
+      size_t selected_count = 0;
+      auto SelectClone = [&](reshade::api::shader_stage stage, reshade::api::pipeline_subobject_type type, reshade::api::pipeline clone, const Shader::CustomPipelineData& data)
+      {
+         if (clone.handle != 0)
+         {
+            selected[selected_count++] = SelectedClone{ stage, type, &data };
+         }
+      };
+      if (is_dispatch)
+      {
+         SelectClone(reshade::api::shader_stage::compute, reshade::api::pipeline_subobject_type::compute_shader, cmd_list_data.pipeline_state_custom_compute_shader, cmd_list_data.custom_compute_pipeline);
+      }
+      else
+      {
+         SelectClone(reshade::api::shader_stage::vertex, reshade::api::pipeline_subobject_type::vertex_shader, cmd_list_data.pipeline_state_custom_vertex_shader, cmd_list_data.custom_vertex_pipeline);
+         SelectClone(reshade::api::shader_stage::pixel, reshade::api::pipeline_subobject_type::pixel_shader, cmd_list_data.pipeline_state_custom_pixel_shader, cmd_list_data.custom_pixel_pipeline);
+      }
+      if (selected_count == 0)
+      {
+         return DrawOrDispatchOverrideType::None;
+      }
+
+#if LUMA_USE_DXP
+      static thread_local std::vector<Patch::RecipeBinding> recipe_bindings;
+      recipe_bindings.clear();
+      bool any_recipe = false;
+      for (size_t i = 0; i < selected_count; i++)
+      {
+         bool has_recipe = false;
+         selected[i].use_clone = Patch::ResolveRecipeBindings(device_data, *selected[i].data, selected[i].type, recipe_bindings, has_recipe);
+         any_recipe |= has_recipe && selected[i].use_clone;
+      }
+#endif // LUMA_USE_DXP
+
+      for (size_t i = 0; i < selected_count; i++)
+      {
+         Shader::UsePipelineVariant(cmd_list_data, native_device_context, selected[i].stage, selected[i].use_clone ? Shader::PipelineVariant::Custom : Shader::PipelineVariant::Original);
+      }
+
+#if LUMA_USE_DXP
+      // Recipes can read Luma's cbuffers (e.g. the frame index)
+      if (any_recipe && !updated_cbuffers)
+      {
+         const reshade::api::shader_stage stages = is_dispatch ? reshade::api::shader_stage::compute : ((cmd_list_data.pipeline_state_has_custom_vertex_shader ? reshade::api::shader_stage::vertex : reshade::api::shader_stage(0)) | (cmd_list_data.pipeline_state_has_custom_pixel_shader ? reshade::api::shader_stage::pixel : reshade::api::shader_stage(0)));
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
+#if !GAME_METAPHOR_REFANTAZIO
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData);
+#endif
+         updated_cbuffers = true;
+      }
+      Patch::SetRecipeBindings(native_device_context, cmd_list_data, recipe_bindings);
+#endif // LUMA_USE_DXP
+
+      return game->OnDrawOrDispatchCustomPipeline(native_device_context, cmd_list_data, device_data, is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader_hashes : cmd_list_data.pipeline_state_original_graphics_shader_hashes, original_draw_dispatch_func);
+   }
+
    //TODOFT3: merge all the shader permutations that use the same code in Prey (and then move shader binaries to bin folder? Add shader files to VS project?)
 
    // Return false to prevent the original draw call from running (e.g. if you replaced it or just want to skip it)
@@ -6357,9 +5991,6 @@ namespace
          cmd_list_data.any_draw_done = true;
       }
       thread_local_cmd_list = cmd_list;
-
-      // Frame capture: entries for this draw start here (stamped post-decision below).
-      const size_t trace_start_index = cmd_list_data.trace_draw_calls_data.size();
 
       {
          // Do this before any custom code runs as the state might change
@@ -6973,6 +6604,15 @@ namespace
          //TODOFT: optimize these shader searches by simply marking "CachedPipeline" with a tag on what they are (and whether they have a particular role) (also we can restrict the search to pixel shaders or compute shaders?) upfront. And move these into their own functions. Update: we optimized this enough.
 
          if (test_index == 9) return false;
+         // Runs for any selected clone, even one a previous draw swapped for its original shader
+         if (is_dispatch ? cmd_list_data.pipeline_state_custom_compute_shader.handle != 0
+             : (cmd_list_data.pipeline_state_custom_vertex_shader.handle != 0 || cmd_list_data.pipeline_state_custom_pixel_shader.handle != 0))
+         {
+            draw_or_dispatch_override_type = OnDrawOrDispatchCustomPipeline(native_device_context,
+               cmd_list_data, device_data, is_dispatch, updated_cbuffers, original_draw_dispatch_func);
+            if (draw_or_dispatch_override_type != DrawOrDispatchOverrideType::None) return true;
+         }
+         is_custom_pass = is_dispatch ? cmd_list_data.pipeline_state_has_custom_compute_shader : cmd_list_data.pipeline_state_has_custom_graphics_shader;
          // Use the specific callback if there's one, and fall back on the generic one otherwise.
          if (const DrawOrDispatchCallback draw_or_dispatch_callback = is_dispatch ? cmd_list_data.dispatch_callback : cmd_list_data.draw_callback)
          {
@@ -6984,40 +6624,11 @@ namespace
          }
 
 #if DEVELOPMENT
-         // Frame capture: stamp this draw's entries with the final clone variant
-         // (the game's calls ran in the callback above), even when the draw was
-         // cancelled/replaced.
          {
             const std::shared_lock lock_trace(s_mutex_trace);
             if (trace_running)
             {
                const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-               for (size_t i = trace_start_index; i < cmd_list_data.trace_draw_calls_data.size(); ++i)
-               {
-                  auto& entry = cmd_list_data.trace_draw_calls_data[i];
-                  if (entry.type != TraceDrawCallData::TraceDrawCallType::Shader) continue;
-                  // Determine patch_enabled from shader hash, clone_variant from bound handle.
-                  uint32_t shader_hash = 0;
-                  if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_vertex_shader.handle)
-                  {
-                     entry.clone_variant = Shader::ShaderVariant::Original;
-                     if (!cmd_list_data.pipeline_state_original_graphics_shader_hashes.vertex_shaders.empty())
-                        shader_hash = *cmd_list_data.pipeline_state_original_graphics_shader_hashes.vertex_shaders.begin();
-                  }
-                  else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_pixel_shader.handle)
-                  {
-                     entry.clone_variant = Shader::ShaderVariant::Original;
-                     if (!cmd_list_data.pipeline_state_original_graphics_shader_hashes.pixel_shaders.empty())
-                        shader_hash = *cmd_list_data.pipeline_state_original_graphics_shader_hashes.pixel_shaders.begin();
-                  }
-                  else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_compute_shader.handle)
-                  {
-                     entry.clone_variant = Shader::ShaderVariant::Original;
-                     if (!cmd_list_data.pipeline_state_original_compute_shader_hashes.compute_shaders.empty())
-                        shader_hash = *cmd_list_data.pipeline_state_original_compute_shader_hashes.compute_shaders.begin();
-                  }
-                  entry.patch_enabled = !shader_hash ? false : cmd_list_data.patch_clone_handles.contains(shader_hash);
-               }
                // Luma passes the game drew from its hook (SMAA, RCAS, bloom, SR), after the draw's own entries
                MoveInjectedPassTraces(&cmd_list_data.trace_draw_calls_data, native_device_context);
             }
@@ -7034,6 +6645,8 @@ namespace
             return true;
          }
       }
+
+      is_custom_pass = is_dispatch ? cmd_list_data.pipeline_state_has_custom_compute_shader : cmd_list_data.pipeline_state_has_custom_graphics_shader;
 
       // We have a way to track whether this data changed to avoid sending them again when not necessary, we could further optimize it by adding a flag to the shader hashes that need the cbuffers, but it really wouldn't help much
       if (is_custom_pass && !updated_cbuffers)
@@ -10317,19 +9930,10 @@ namespace
 #if (LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC))
       // Publish completed clones at the present boundary — the live clone map
       // never mutates mid-frame (see worker lifecycle: OnInitDevice).
-      std::vector<uint32_t> published_patch_hashes = PublishReadyAsyncClones(device_data);
+      Patch::PublishReadyAsyncClones(device_data);
 #endif
 
       s_mutex_loading.unlock_shared();
-
-#if (LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC))
-      // Games flip their binding state only for clones that are actually live
-      // this frame (never before the patched shader can run).
-      if (!published_patch_hashes.empty())
-      {
-         game->OnPatchedShadersPublished(device_data, published_patch_hashes);
-      }
-#endif
 
       if (needs_unload_shaders)
       {
@@ -10362,14 +9966,18 @@ namespace
 
       if (needs_unload_patches)
       {
-         UnloadPatches(device_data);
+         Patch::UnloadPatches(device_data);
          needs_unload_patches = false;
       }
       if (needs_load_patches)
       {
-         ReloadPatches(device_data);
+         Patch::ReloadPatches(device_data);
          needs_load_patches = false;
       }
+#if LUMA_HAS_RECIPE_PROVIDERS
+      // Recipe toggles/env changes (from any UI) re-patch lazily
+      Patch::ApplyRecipeSettingsChanges(device_data);
+#endif
 
       if (!block_draw_until_device_custom_shaders_creation) s_mutex_shader_objects.lock_shared();
       // Force re-load shaders (which will also end up re-creating the custom device shaders) if async shaders loading on boot finished without being able to create custom shaders
@@ -10384,6 +9992,14 @@ namespace
             for (int i = 0; i < shader_defines_data.size(); i++)
             {
                shader_defines_data_index[string_view_crc32(std::string_view(shader_defines_data[i].compiled_data.GetName()))] = i;
+            }
+         }
+         if (needs_load_shaders)
+         {
+            const std::unique_lock lock(s_mutex_generic);
+            for (auto& pair : device_data.pipeline_cache_by_pipeline_handle)
+            {
+               if (pair.second != nullptr) pair.second->manually_unloaded = false;
             }
          }
          LoadCustomShaders(device_data);
@@ -10657,342 +10273,6 @@ namespace
 #pragma optimize("", on) // Restore the previous state
 
 #if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
-   // TODO(Patch module): NotifyAsyncCloneQueue/ProcessAsyncCloneBatch/
-   // PublishReadyAsyncClones + AsyncCloneEntry belong in patch.hpp once
-   // core.hpp's globals (s_mutex_generic, pipeline_cache_destruction_mutex,
-   // custom_shaders_cache) are extracted. Include order currently prevents
-   // patch.hpp from referencing DeviceData's members.
-   // Wakes the persistent async clone worker after the job queue changed.
-   void NotifyAsyncCloneQueue(DeviceData& device_data)
-   {
-      {
-         const std::lock_guard lock(device_data.async_jobs_mutex);
-         device_data.async_queue_version++;
-      }
-      device_data.async_jobs_cv.notify_all();
-   }
-
-   // Compiles clones for one batch of pipeline handles on the worker thread.
-   // The subobject data is deep-copied under s_mutex_generic (shared) before
-   // compiling, so no raw pipeline pointers are held across locks and the
-   // game's pipeline destruction can never free memory we are still reading.
-   // Finished builds are handed to the ready queue; the present boundary
-   // publishes them (see PublishReadyAsyncClones).
-   void ProcessAsyncCloneBatch(DeviceData& device_data, const std::unordered_set<uint64_t>& pipelines)
-   {
-      for (const uint64_t pipeline_handle : pipelines)
-      {
-         reshade::api::pipeline_subobject* subobjects_copy = nullptr;
-         uint32_t subobject_count = 0;
-         reshade::api::device* device = nullptr;
-         reshade::api::pipeline_layout layout = {};
-         uint32_t shader_hash = 0;
-         {
-            const std::shared_lock lock_generic(s_mutex_generic);
-            const auto pipeline_it = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle);
-            if (pipeline_it == device_data.pipeline_cache_by_pipeline_handle.end() || pipeline_it->second == nullptr)
-            {
-               continue; // Pipeline was destroyed before we got to it
-            }
-            CachedPipeline* cached_pipeline = pipeline_it->second;
-            if (cached_pipeline->cloned || cached_pipeline->pipeline_clone.handle != 0)
-            {
-               continue; // Already cloned, or a preserved patch clone survives unloads (nothing to rebuild)
-            }
-            subobjects_copy = Shader::ClonePipelineSubobjects(cached_pipeline->subobject_count, cached_pipeline->subobjects_cache);
-            subobject_count = cached_pipeline->subobject_count;
-            device = cached_pipeline->device;
-            layout = cached_pipeline->layout;
-            shader_hash = cached_pipeline->shader_hashes[0]; // identity check for the publish step
-         }
-
-         if (subobjects_copy == nullptr)
-         {
-            continue;
-         }
-
-         Shader::CloneOrigin clone_origin = Shader::CloneOrigin::None;
-         // Build the patched subobjects here (CPU only); device calls must stay
-         // on the render thread (create_pipeline raced with binds hangs the
-         // device), so creation happens at the present boundary. "s_mutex_loading"
-         // keeps custom-shader file bytes alive through the memcpy below (worker
-         // vs. reload race).
-         reshade::api::pipeline_subobject* patched_subobjects = nullptr;
-         {
-            const std::shared_lock lock_loading(s_mutex_loading);
-            auto [built, injected] = Patch::BuildPatchedCloneSubobjects(
-               subobject_count, subobjects_copy,
-               [&device_data, &clone_origin](
-                   const reshade::api::shader_desc*,
-                   const reshade::api::shader_desc* orig_desc) -> std::optional<std::pair<const uint8_t*, uint32_t>>
-               {
-                  const uint32_t shader_hash = Shader::BinToHash(static_cast<const uint8_t*>(orig_desc->code), orig_desc->code_size);
-
-                  // Custom shader files first (same lookup order as LoadCustomShaders).
-                  if (auto custom_it = custom_shaders_cache.find(shader_hash); custom_it != custom_shaders_cache.end())
-                  {
-                     const CachedCustomShader* custom_shader = custom_it->second;
-                     if (custom_shader != nullptr && !custom_shader->is_luma_native && !custom_shader->code.empty())
-                     {
-                        clone_origin = Shader::CloneOrigin::File;
-                        return std::make_pair(custom_shader->code.data(), static_cast<uint32_t>(custom_shader->code.size()));
-                     }
-                  }
-
-                  // Recipe / bytecode patches (only exist when patch providers
-                  // are enabled; other games have no patch_context).
-#if LUMA_PATCH_PROVIDERS != 0
-                  if (auto patched = device_data.patch_context.GetShaderData(shader_hash); patched)
-                  {
-                     clone_origin = Shader::CloneOrigin::Patch;
-                     return std::make_pair(patched->code.data(), static_cast<uint32_t>(patched->code.size()));
-                  }
-#endif
-                  return std::nullopt;
-               });
-            if (injected)
-            {
-               patched_subobjects = built;
-            }
-         }
-
-         Shader::DestroyPipelineSubojects(subobjects_copy, subobject_count);
-
-#if LUMA_ASYNC_CLONE_MODE == 1
-         // Hand the build to the present boundary, which creates the pipeline
-         // on the render thread (bounded per frame by
-         // LUMA_ASYNC_CLONE_PRESENT_BUDGET).
-         if (patched_subobjects != nullptr)
-         {
-            // Single worker thread — atomic pointer is sufficient, no mutex needed.
-            auto* queue = device_data.async_ready_queue.load(std::memory_order_relaxed);
-            if (queue == nullptr)
-            {
-               queue = new DeviceData::AsyncReadyQueue{};
-               device_data.async_ready_queue.store(queue, std::memory_order_release);
-            }
-            queue->items.push_back(DeviceData::AsyncCloneEntry{pipeline_handle, patched_subobjects, subobject_count, layout, {}, device, shader_hash, clone_origin});
-#if DEVELOPMENT
-            reshade::log::message(reshade::log::level::debug,
-               std::format("[AsyncClone] queued clone build for pipeline {:x}", pipeline_handle).c_str());
-#endif
-         }
-#elif LUMA_ASYNC_CLONE_MODE == 2
-         // Device call on the worker thread: fastest on paper,
-         // but NVIDIA driver may block on Create*Shaders
-         if (patched_subobjects != nullptr)
-         {
-            reshade::api::pipeline pipeline_clone = {};
-            const bool created = device->create_pipeline(layout, subobject_count, patched_subobjects, &pipeline_clone);
-            Shader::DestroyPipelineSubojects(patched_subobjects, subobject_count);
-
-            if (created && pipeline_clone.handle != 0)
-            {
-               auto* queue = device_data.async_ready_queue.load(std::memory_order_relaxed);
-               if (queue == nullptr)
-               {
-                  queue = new DeviceData::AsyncReadyQueue{};
-                  device_data.async_ready_queue.store(queue, std::memory_order_release);
-               }
-               queue->items.push_back(DeviceData::AsyncCloneEntry{pipeline_handle, nullptr, 0, {}, pipeline_clone, device, shader_hash, clone_origin});
-#if DEVELOPMENT
-               reshade::log::message(reshade::log::level::debug,
-                  std::format("[AsyncClone] compiled clone {:x} for pipeline {:x}", pipeline_clone.handle, pipeline_handle).c_str());
-#endif
-            }
-         }
-#endif // LUMA_ASYNC_CLONE_MODE
-      }
-   }
-
-#if LUMA_ASYNC_CLONE_MODE == 1
-   // Creates and registers pending clones at the present boundary: re-resolves
-   // each pipeline handle under s_mutex_generic (unique) and registers the
-   // clone, or drops it if the pipeline was destroyed / already cloned in the
-   // meantime. Runs strictly between frames — the live clone map never mutates
-   // mid-frame. At most LUMA_ASYNC_CLONE_PRESENT_BUDGET clones are created per
-   // present; the rest stay queued for the next frame (spreads the device
-   // work, removing the hitch from a giant one-frame batch).
-#elif LUMA_ASYNC_CLONE_MODE == 2
-   // Registers worker-built clones at the present boundary: re-resolves each
-   // pipeline handle under s_mutex_generic (unique) and registers the clone,
-   // or destroys it if the pipeline was destroyed / already cloned in the
-   // meantime. Runs strictly between frames — the live clone map never mutates
-   // mid-frame.
-#endif
-   //
-   // Drain is lock-free: atomically swap the queue pointer, then process the
-   // old queue without any mutex.  Worker publishes via atomic pointer read
-   // (single worker thread, no mutex needed).
-   std::vector<uint32_t> PublishReadyAsyncClones(DeviceData& device_data)
-   {
-      std::vector<uint32_t> published_patch_hashes;
-
-      // Lock-free drain: atomically swap in a fresh queue.
-      auto* old_queue = device_data.async_ready_queue.exchange(nullptr, std::memory_order_acq_rel);
-      if (old_queue == nullptr)
-      {
-         return published_patch_hashes;
-      }
-
-#if LUMA_ASYNC_CLONE_MODE == 1
-      // Budget-gated drain: spread device work across frames.
-      std::deque<DeviceData::AsyncCloneEntry> ready;
-      const size_t budget = std::min<size_t>(LUMA_ASYNC_CLONE_PRESENT_BUDGET, old_queue->items.size());
-      for (size_t i = 0; i < budget; ++i)
-      {
-         ready.push_back(std::move(old_queue->items.front()));
-         old_queue->items.pop_front();
-      }
-#else
-      // Full drain: all worker-compiled clones are ready.
-      std::deque<DeviceData::AsyncCloneEntry> ready;
-      ready.swap(old_queue->items);
-#endif
-
-      // Return the (possibly partially drained) queue to the pool for reuse.
-      if (!old_queue->items.empty())
-      {
-         device_data.async_ready_queue.store(old_queue, std::memory_order_release);
-      }
-      else
-      {
-         delete old_queue;
-      }
-      if (ready.empty())
-      {
-         return published_patch_hashes;
-      }
-
-      // The game recycles pipeline handles heavily (destroy + recreate at the
-      // same address), so every registration re-verifies the shader identity —
-      // otherwise the wrong shader would run (possible GPU fault under churn).
-      auto IsValidTarget = [&device_data](const DeviceData::AsyncCloneEntry& entry) -> Shader::CachedPipeline*
-      {
-         const auto pipeline_it = device_data.pipeline_cache_by_pipeline_handle.find(entry.pipeline_handle);
-         if (pipeline_it == device_data.pipeline_cache_by_pipeline_handle.end() || pipeline_it->second == nullptr || pipeline_it->second->cloned
-             || pipeline_it->second->shader_hashes[0] != entry.shader_hash
-             // A preserved patch clone still owns its object; the fresh clone would overwrite and leak it.
-             || pipeline_it->second->pipeline_clone.handle != 0)
-         {
-            return nullptr;
-         }
-         return pipeline_it->second;
-      };
-
-      // Verify before creating/registering (unique lock), then create outside
-      // the lock: device calls must not happen while holding s_mutex_generic
-      // (same pattern as the destroy path).
-      std::vector<std::pair<DeviceData::AsyncCloneEntry, Shader::CachedPipeline*>> verified;
-      {
-         const std::unique_lock lock_generic(s_mutex_generic);
-         for (const auto& entry : ready)
-         {
-            if (Shader::CachedPipeline* cached_pipeline = IsValidTarget(entry); cached_pipeline != nullptr)
-            {
-               verified.emplace_back(entry, cached_pipeline);
-            }
-         }
-      }
-
-#if LUMA_ASYNC_CLONE_MODE == 1
-      // Create pipelines from subobjects on the render thread.
-      std::vector<std::pair<reshade::api::pipeline, std::pair<DeviceData::AsyncCloneEntry, Shader::CachedPipeline*>>> created;
-      for (const auto& v : verified)
-      {
-         const DeviceData::AsyncCloneEntry& entry = v.first;
-         reshade::api::pipeline pipeline_clone = {};
-         if (entry.device->create_pipeline(entry.layout, entry.subobject_count, entry.subobjects, &pipeline_clone))
-         {
-            created.emplace_back(pipeline_clone, v);
-         }
-      }
-#else
-      // Mode 2: pipelines already compiled by worker — just collect them.
-      std::vector<std::pair<reshade::api::pipeline, std::pair<DeviceData::AsyncCloneEntry, Shader::CachedPipeline*>>> created;
-      for (const auto& v : verified)
-      {
-         created.emplace_back(v.first.pipeline_clone, v);
-      }
-#endif
-
-#if LUMA_PATCH_PROVIDERS != 0
-      std::unordered_set<uint32_t> published_set;
-#endif
-      std::vector<std::pair<reshade::api::device*, reshade::api::pipeline>> orphans;
-      {
-         const std::unique_lock lock_generic(s_mutex_generic);
-         for (const auto& [clone, v] : created)
-         {
-            const DeviceData::AsyncCloneEntry& entry = v.first;
-            // The pipeline may have been destroyed/recycled since the verify
-            // above — re-check before registering.
-            const auto pipeline_it = device_data.pipeline_cache_by_pipeline_handle.find(entry.pipeline_handle);
-            if (pipeline_it == device_data.pipeline_cache_by_pipeline_handle.end() || pipeline_it->second != v.second
-                || pipeline_it->second->cloned || pipeline_it->second->shader_hashes[0] != entry.shader_hash
-                || pipeline_it->second->pipeline_clone.handle != 0)
-            {
-               orphans.emplace_back(entry.device, clone);
-               continue;
-            }
-            CachedPipeline* cached_pipeline = pipeline_it->second;
-            cached_pipeline->pipeline_clone = clone;
-            cached_pipeline->cloned = true;
-            cached_pipeline->patch_application_mode = Shader::PatchApplicationMode::Async;
-            cached_pipeline->clone_origin = entry.clone_origin;
-            device_data.pipeline_cache_by_pipeline_clone_handle[clone.handle] = cached_pipeline;
-
-#if LUMA_PATCH_PROVIDERS != 0
-            if (entry.clone_origin == Shader::CloneOrigin::Patch)
-            {
-               if (published_set.emplace(entry.shader_hash).second)
-               {
-                  published_patch_hashes.push_back(entry.shader_hash);
-               }
-               const uint32_t shader_hash = cached_pipeline->shader_hashes[0];
-#if LUMA_PATCH_PROVIDERS != 0
-               if (auto patched = device_data.patch_context.GetShaderData(shader_hash); patched)
-               {
-                  if (auto it = shader_cache.find(shader_hash); it != shader_cache.end() && it->second)
-                  {
-#if DEVELOPMENT
-                     SetLivePatchedShaderInfo(it->second, shader_hash, patched->code.data(), static_cast<uint32_t>(patched->code.size()));
-#endif
-#if ALLOW_SHADER_PATCHES_DUMPING
-                     QueuePatchedShaderForDump(shader_hash);
-#endif
-                  }
-               }
-#endif
-            }
-#endif
-            device_data.cloned_pipeline_count++;
-            device_data.cloned_pipelines_changed = true;
-#if DEVELOPMENT
-            reshade::log::message(reshade::log::level::debug,
-               std::format("[AsyncClone] published clone {:x} for pipeline {:x}", clone.handle, entry.pipeline_handle).c_str());
-#endif
-         }
-      }
-
-#if LUMA_ASYNC_CLONE_MODE == 1
-      // Free the worker's subobject copies (whether created or not).
-      for (const auto& entry : ready)
-      {
-         Shader::DestroyPipelineSubojects(entry.subobjects, entry.subobject_count);
-      }
-#endif
-
-      // Device calls must not happen while holding s_mutex_generic (same
-      // pattern as the destroy path).
-      for (const auto& [device, clone] : orphans)
-      {
-         device->destroy_pipeline(clone);
-      }
-
-      return published_patch_hashes;
-   }
-
    void AutoLoadShaders(DeviceData* device_data)
    {
       uint64_t last_processed_version = 0;
@@ -11026,9 +10306,9 @@ namespace
          if (!pipelines_to_reload_copy.empty())
          {
 #if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
-            GeneratePatchedShadersAsync(*device_data, pipelines_to_reload_copy);
+            Patch::GeneratePatchedShadersAsync(*device_data, pipelines_to_reload_copy);
 #endif
-            ProcessAsyncCloneBatch(*device_data, pipelines_to_reload_copy);
+            Patch::ProcessAsyncCloneBatch(*device_data, pipelines_to_reload_copy);
          }
       }
       device_data->thread_auto_loading_running = false;
@@ -11206,16 +10486,15 @@ namespace
 #endif
 #if DEVELOPMENT || TEST
 #if LUMA_PATCH_PROVIDERS != 0
-      // Patch-specific unload/reload: patches are preserved on unload (bytes never
-      // change at runtime), so reload is instant.
+      // Patch-specific unload/reload: reload reads the recipes again and rebuilds their clones.
       ImGui::SameLine();
-      if (ImGui::Button(std::format("Unload Patches ({})", CountPatchedClones(device_data)).c_str()))
+      if (ImGui::Button(std::format("Unload Patches ({})", Patch::CountPatchedClones(device_data)).c_str()))
       {
          needs_unload_patches = true;
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
-         ImGui::SetTooltip("Unload only the patched shaders (custom shader files are untouched).\nPatch clones are preserved, not destroyed: 'Reload Patches' re-enables them instantly.\nPer-draw patch toggles (UseShaderVariant) no-op while unloaded.");
+         ImGui::SetTooltip("Unload only the patched shaders (custom shader files are untouched).\nPatch clones are preserved until 'Reload Patches' rebuilds them.");
       }
 
       ImGui::SameLine();
@@ -11225,7 +10504,7 @@ namespace
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
-         ImGui::SetTooltip("Re-enables the unloaded patches (re-registers the preserved clones and re-clones any destroyed by a full 'Unload Shaders').");
+         ImGui::SetTooltip("Reloads recipes from disk; their pipeline clones rebuild the next time each pipeline is bound. Re-enables bytecode patches.");
       }
 #endif // LUMA_PATCH_PROVIDERS != 0
 
@@ -11255,7 +10534,7 @@ namespace
          const std::unique_lock lock(s_mutex_loading);
          device_data.pipelines_to_reload.clear();
 #if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
-         NotifyAsyncCloneQueue(device_data);
+         Patch::NotifyAsyncCloneQueue(device_data);
 #endif
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -11276,7 +10555,7 @@ namespace
       ImGui::Checkbox("Allow Patches", &allow_patches);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
-         ImGui::SetTooltip("Toggles all patched shaders from applying (without unloading them): bind-time swaps and per-draw toggles are disabled.\nCustom shader files are unaffected.");
+         ImGui::SetTooltip("Toggles all patched shaders from applying (without unloading them).\nCustom shader files are unaffected.");
       }
 #endif // LUMA_PATCH_PROVIDERS != 0
 #endif // DEVELOPMENT || TEST
@@ -11320,7 +10599,6 @@ namespace
          ImGui::PopID();
       }
 #endif // DEVELOPMENT
-
       if (ImGui::BeginTabBar("##TabBar", ImGuiTabBarFlags_None))
       {
          bool open_settings_tab = false;
@@ -12069,6 +11347,7 @@ namespace
 
                                  if (pipeline_pair->second->cloned && ImGui::Button("Unload"))
                                  {
+                                    pipeline_pair->second->manually_unloaded = true;
                                     s_mutex_generic.unlock(); // Hack to avoid deadlocks with the device destroying pipelines // TODO: use "out_pipelines_to_destroy" instead (in all similar cases too)
                                     UnloadCustomShaders(device_data, { pipeline_handle }, false);
                                     s_mutex_generic.lock();
@@ -12076,6 +11355,7 @@ namespace
 
                                  if (ImGui::Button(pipeline_pair->second->cloned ? "Recompile" : "Load"))
                                  {
+                                    pipeline_pair->second->manually_unloaded = false;
                                     reload = true;
                                     recompile = true; // If this shader wasn't cloned, we'd need to compile it probably as it might not have already been compiled. If it was cloned, then our intent is to re-compile it anyway
                                  }
@@ -14224,20 +13504,13 @@ namespace
                selected_sr_user_type = "DLSS"; break;
             case SR::UserType::FSR_3:
                selected_sr_user_type = "FSR 3"; break;
+            case SR::UserType::FSR_4:
+               selected_sr_user_type = "FSR 4 (DX12 Interop)"; break;
             }
 
             SR::Type sr_type = device_data.sr_type;
 
-            SR::Type sr_auto_type = SR::Type::None;
-            // Pick the first supported one (they are in order of priority)
-            for (const auto& sr_implementation_instance : device_data.sr_implementations_instances)
-            {
-               if (sr_implementation_instance.second && sr_implementation_instance.second->is_supported)
-               {
-                  sr_auto_type = sr_implementation_instance.first;
-                  break;
-               }
-            }
+            const SR::Type sr_auto_type = SR::GetAutoType(device_data.sr_implementations_instances);
 
             // Note: if we reached here, it's guaranteed that the selected SR type is supported
             if (ImGui::BeginCombo("Super Resolution", selected_sr_user_type))
@@ -14273,6 +13546,9 @@ namespace
                   AddComboItem("Auto", SR::UserType::Auto, sr_auto_type, !device_data.sr_implementations_instances.empty());
                AddComboItem("DLSS", SR::UserType::DLSS, SR::Type::DLSS, device_data.sr_implementations_instances.contains(SR::Type::DLSS));
                AddComboItem("FSR 3", SR::UserType::FSR_3, SR::Type::FSR, device_data.sr_implementations_instances.contains(SR::Type::FSR));
+#if ENABLE_FSR4
+               AddComboItem("FSR 4 (DX12 Interop)", SR::UserType::FSR_4, SR::Type::FSR_4, device_data.sr_implementations_instances.contains(SR::Type::FSR_4));
+#endif
                ImGui::EndCombo();
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -14314,6 +13590,15 @@ namespace
                   size.y += style.FramePadding.y;
                   ImGui::InvisibleButton("##Super Resolution reset placeholder", ImVec2(size.x, size.y));
                }
+
+#if DEVELOPMENT
+               if (sr_type == SR::Type::FSR || sr_type == SR::Type::FSR_4)
+               {
+                  ImGui::Checkbox("SR Debug View", &SR::debug_view);
+                  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                     ImGui::SetTooltip("Makes FSR draw its debug views in its output.");
+               }
+#endif
 
                const char* selected_dlss_preset = nullptr;
                switch (dlss_render_preset)
@@ -16045,6 +15330,14 @@ namespace
             ImGui::EndTabItem();
          }
 
+#if LUMA_HAS_RECIPE_PROVIDERS
+         if (ImGui::BeginTabItem("Patch Settings"))
+         {
+            Patch::DrawRecipeSettings(device_data);
+            ImGui::EndTabItem();
+         }
+#endif // LUMA_HAS_RECIPE_PROVIDERS
+
 #if DEVELOPMENT || TEST
          if (ImGui::BeginTabItem("Info"))
          {
@@ -16166,6 +15459,9 @@ namespace
 #pragma optimize("", on) // Restore the previous state
 } // namespace
 
+#include "includes/shaders.inl"
+#include "includes/patch.inl"
+
 // "async" means that this is not called from the dll loading function ("DLL_PROCESS_ATTACH"), so we can do threading related stuff in the function
 void Init(bool async)
 {
@@ -16200,6 +15496,9 @@ void Init(bool async)
 #endif
 #if ENABLE_FIDELITY_SK
    sr_implementations[SR::Type::FSR] = std::make_unique<FidelityFX::FSR>();
+#endif
+#if ENABLE_FSR4
+   sr_implementations[SR::Type::FSR_4] = std::make_unique<FidelityFX::FSR4>();
 #endif
 #if DEVELOPMENT
    Mcp::Start();

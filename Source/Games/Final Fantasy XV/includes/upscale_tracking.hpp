@@ -1,9 +1,10 @@
 #pragma once
 #include <d3d11.h>
+#include <algorithm>
 #include <deque>
+#include <functional>
 #include <mutex>
 #include <unordered_map>
-#include "log.hpp"
 
 // Tolerance for aspect ratio comparisons used when deciding whether an RTV/viewport
 // belongs to the render pipeline and should be proportionally upscaled.
@@ -29,7 +30,7 @@ struct UpscaleTrackingState
 {
    std::deque<UpscaledResource> pool;
    std::unordered_map<uintptr_t, uint32_t> frame_links; // source resource ptr -> pool index (frame-local)
-   bool post_taa_upscale_active = false;                // gate: true between TAA and tonemap
+   bool post_taa_upscale_active = false;                // gate: true until the scene reaches an output-sized target
    UINT pool_output_width = 0;
    UINT pool_output_height = 0;
    UINT pool_render_width = 0;
@@ -111,36 +112,11 @@ static UpscaledResource* AcquireUpscaledFromPool(
    const UINT target_w = static_cast<UINT>(output_resolution.x);
    const UINT target_h = static_cast<UINT>(output_resolution.y);
 
-   const UINT orig_w = original_desc.Width;
-   const UINT orig_h = original_desc.Height;
-   const UINT orig_fmt = static_cast<UINT>(original_desc.Format);
-
-#if DEVELOPMENT || TEST
-   char pool_diag[512];
-   snprintf(pool_diag, sizeof(pool_diag),
-      "[FFXV UpscaleChain] AcquireUpscaledFromPool orig=%ux%u fmt=%u target=%ux%u pool_size=%zu uav=%s",
-      orig_w, orig_h, orig_fmt, target_w, target_h, tracking.pool.size(),
-      require_uav ? "req" : "opt");
-   Log_Debug(reshade::log::level::info, pool_diag);
-#endif
-
    for (size_t pool_index = 0; pool_index < tracking.pool.size(); ++pool_index)
    {
       auto& entry = tracking.pool[pool_index];
       if (entry.in_use_this_frame || !entry.texture)
          continue;
-
-      const UINT e_fmt = static_cast<UINT>(entry.original_desc.Format);
-      const UINT e_w = entry.original_desc.Width;
-      const UINT e_h = entry.original_desc.Height;
-#if DEVELOPMENT || TEST
-      snprintf(pool_diag, sizeof(pool_diag),
-         "[FFXV UpscaleChain]   pool[%zu] check: orig=%ux%ufmt=%u in_use=%d -> %s",
-         pool_index, e_w, e_h, e_fmt,
-         entry.in_use_this_frame,
-         ((e_fmt == orig_fmt && e_w == orig_w && e_h == orig_h) ? "MATCH" : "no-match"));
-      Log_Debug(reshade::log::level::info, pool_diag);
-#endif
 
       if ((!require_uav || entry.uav) &&
           entry.view_format == view_format &&
@@ -152,12 +128,6 @@ static UpscaledResource* AcquireUpscaledFromPool(
          entry.texture->GetDesc(&existing);
          if (existing.Width == target_w && existing.Height == target_h)
          {
-#if DEVELOPMENT || TEST
-            snprintf(pool_diag, sizeof(pool_diag),
-               "[FFXV UpscaleChain]   pool[%zu] REUSED: tex=%ux%u",
-               pool_index, existing.Width, existing.Height);
-            Log_Debug(reshade::log::level::info, pool_diag);
-#endif
             entry.in_use_this_frame = true;
             return &entry;
          }
@@ -197,13 +167,6 @@ static UpscaledResource* AcquireUpscaledFromPool(
    UpscaledResource entry;
    entry.original_desc = original_desc;
    entry.view_format = view_format;
-
-#if DEVELOPMENT || TEST
-   snprintf(pool_diag, sizeof(pool_diag),
-      "[FFXV UpscaleChain] AcquireUpscaledFromPool CREATING new: desc=%ux%u fmt=%u target=%ux%u",
-      desc.Width, desc.Height, static_cast<UINT>(desc.Format), target_w, target_h);
-   Log_Debug(reshade::log::level::info, pool_diag);
-#endif
 
    if (FAILED(device->CreateTexture2D(&desc, nullptr, entry.texture.put())))
       return nullptr;
@@ -273,6 +236,80 @@ static UpscaledResource* GetLinkedUpscaled(
    return &tracking.pool[pool_index];
 }
 
+static UpscaledResource* LinkUpscaledResource(
+   ID3D11Device* device, ID3D11DeviceContext* device_context, ID3D11Resource* original_resource,
+   UpscaleTrackingState& tracking, const float2& output_resolution, bool require_uav, DXGI_FORMAT view_format);
+static void UnlinkUpscaledResource(UpscaleTrackingState& tracking, uintptr_t source_key);
+
+// Full clears of render-shaped RTVs during the active chain establish their
+// scaled target immediately. This initializes pooled/discarded MRT regions
+// before the following draw without retaining a clear that could go stale.
+static void TrackAndClearUpscaleTarget(
+   ID3D11Device* device, ID3D11DeviceContext* context, UpscaleTrackingState& tracking,
+   ID3D11RenderTargetView* rtv, const float color[4], uint32_t rect_count,
+   const float2& render_resolution, const float2& output_resolution)
+{
+   std::lock_guard<std::recursive_mutex> lock(tracking.mutex);
+   if (!tracking.post_taa_upscale_active || !device || !context || !rtv || !color ||
+       context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE || render_resolution.x <= 0.f ||
+       render_resolution.y <= 0.f || output_resolution.x <= 0.f || output_resolution.y <= 0.f)
+      return;
+   ComPtr<ID3D11Resource> resource;
+   ComPtr<ID3D11Texture2D> texture;
+   rtv->GetResource(resource.put());
+   D3D11_RENDER_TARGET_VIEW_DESC view{};
+   rtv->GetDesc(&view);
+   D3D11_TEXTURE2D_DESC desc{};
+   if (!resource || FAILED(resource->QueryInterface(texture.put())))
+      return;
+   const uintptr_t key = reinterpret_cast<uintptr_t>(resource.get());
+   if (rect_count != 0)
+   {
+      // Rect coordinates belong to the native grid. Drop any previous link so
+      // a later promotion initializes from the updated native contents.
+      UnlinkUpscaledResource(tracking, key);
+      return;
+   }
+   texture->GetDesc(&desc);
+   if (view.ViewDimension != D3D11_RTV_DIMENSION_TEXTURE2D || view.Texture2D.MipSlice != 0 ||
+       desc.ArraySize != 1 || desc.SampleDesc.Count != 1)
+   {
+      return;
+   }
+   const double render_ar = double(render_resolution.x) / render_resolution.y;
+   const double target_ar = double(desc.Width) / desc.Height;
+   if (desc.Width >= static_cast<UINT>(output_resolution.x) || desc.Height >= static_cast<UINT>(output_resolution.y) ||
+       std::abs(target_ar / render_ar - 1.0) > kAspectRatioEpsilon)
+      return;
+   for (const auto& entry : tracking.pool)
+      if (entry.in_use_this_frame && entry.texture.get() == texture.get())
+         return; // The normal clear already addresses the pool texture itself.
+   const float2 scaled_size = {
+      float((std::min)(static_cast<UINT>(std::round(desc.Width * double(output_resolution.x) / render_resolution.x)), static_cast<UINT>(output_resolution.x))),
+      float((std::min)(static_cast<UINT>(std::round(desc.Height * double(output_resolution.y) / render_resolution.y)), static_cast<UINT>(output_resolution.y))) };
+   UpscaledResource* scaled = LinkUpscaledResource(device, context, resource.get(), tracking, scaled_size, false,
+      view.Format != desc.Format ? view.Format : DXGI_FORMAT_UNKNOWN);
+   if (scaled && scaled->rtv)
+      context->ClearRenderTargetView(scaled->rtv.get(), color);
+}
+
+// Native writers must not leave a previous scaled version authoritative.
+static void ForgetNativeUpscaleOutputs(ID3D11DeviceContext* context, UpscaleTrackingState& tracking)
+{
+   ID3D11RenderTargetView* targets[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+   context->OMGetRenderTargets(ARRAYSIZE(targets), targets, nullptr);
+   std::lock_guard<std::recursive_mutex> lock(tracking.mutex);
+   for (auto* target : targets)
+   {
+      if (!target)
+         continue;
+      ComPtr<ID3D11Resource> resource;
+      target->GetResource(resource.put());
+      target->Release();
+      tracking.frame_links.erase(reinterpret_cast<uintptr_t>(resource.get()));
+   }
+}
+
 static void UnlinkUpscaledResource(
    UpscaleTrackingState& tracking,
    uintptr_t source_key)
@@ -302,33 +339,12 @@ static UpscaledResource* LinkUpscaledResource(
 {
    std::lock_guard<std::recursive_mutex> lock(tracking.mutex);
    if (!original_resource)
-   {
-      Log_Debug(
-         reshade::log::level::warning,
-         "Cannot link upscaled resource for null original resource pointer");
       return nullptr;
-   }
 
    const uintptr_t source_key = reinterpret_cast<uintptr_t>(original_resource);
 
-#if DEVELOPMENT || TEST
-   char link_diag[512];
-   snprintf(link_diag, sizeof(link_diag),
-      "[FFXV UpscaleChain] LinkUpscaledResource src=%p key=%#llx output=%.0fx%.0f uav=%s",
-      original_resource, static_cast<unsigned long long>(source_key), output_resolution.x, output_resolution.y, require_uav ? "req" : "opt");
-   Log_Debug(reshade::log::level::info, link_diag);
-#endif
-
    if (UpscaledResource* linked = GetLinkedUpscaled(tracking, source_key))
    {
-#if DEVELOPMENT || TEST
-      const uint32_t pool_index = FindPoolIndexByPtr(tracking, linked);
-      snprintf(link_diag, sizeof(link_diag),
-         "[FFXV UpscaleChain] LinkUpscaledResource -> FOUND existing link pool_idx=%u rtv=%p uav=%p",
-         pool_index,
-         static_cast<void*>(linked->rtv.get()), static_cast<void*>(linked->uav.get()));
-      Log_Debug(reshade::log::level::info, link_diag);
-#endif
       // Validate the entry still matches the requested target size and view format.
       // The target size can legitimately differ between draws on the same source pointer
       // (e.g. render-res vs a sub-res effect buffer aliasing the same texture slot).
@@ -349,44 +365,17 @@ static UpscaledResource* LinkUpscaledResource(
       linked->in_use_this_frame = false;
       tracking.frame_links.erase(source_key);
    }
-   else
-   {
-#if DEVELOPMENT || TEST
-      snprintf(link_diag, sizeof(link_diag),
-         "[FFXV UpscaleChain] LinkUpscaledResource -> NO existing link, will create new pool entry");
-      Log_Debug(reshade::log::level::info, link_diag);
-#endif
-   }
 
    ComPtr<ID3D11Texture2D> original_tex;
    if (FAILED(original_resource->QueryInterface(original_tex.put())))
-   {
-      Log_Debug(
-         reshade::log::level::warning,
-         "Failed to query original resource for texture2D interface - cannot link upscaled resource");
       return nullptr;
-   }
 
    D3D11_TEXTURE2D_DESC original_desc;
    original_tex->GetDesc(&original_desc);
 
-#if DEVELOPMENT || TEST
-   snprintf(link_diag, sizeof(link_diag),
-      "[FFXV UpscaleChain] LinkUpscaledResource original_desc=%ux%u fmt=%u",
-      original_desc.Width, original_desc.Height, static_cast<uint32_t>(original_desc.Format));
-   Log_Debug(reshade::log::level::info, link_diag);
-#endif
-
    UpscaledResource* upscaled = AcquireUpscaledFromPool(device, device_context, tracking, original_desc, output_resolution, require_uav, view_format);
    if (!upscaled)
-   {
-      Log_Debug(
-         reshade::log::level::warning,
-         std::format("Failed to acquire upscaled resource for {}x{} fmt={} (UAV {})",
-            original_desc.Width, original_desc.Height, static_cast<uint32_t>(original_desc.Format),
-            require_uav ? "required" : "not required"));
       return nullptr;
-   }
 
    const uint32_t pool_index = FindPoolIndexByPtr(tracking, upscaled);
    if (pool_index == kInvalidPoolIndex)
@@ -395,640 +384,313 @@ static UpscaledResource* LinkUpscaledResource(
    return upscaled;
 }
 
-#if DEVELOPMENT || TEST
-// Per-resource detail captured during a Replace* call (for per-shader logging).
-struct UpscaleSwapDetail
-{
-   UINT slot = 0;
-   void* original = nullptr;    // pointer to the original (render-res) resource
-   void* texture_ptr = nullptr; // pointer to the pool texture (canonical, use this to trace across passes)
-   void* replacement = nullptr; // pointer to the view object (SRV or RTV) bound by the replacement
-   UINT width = 0;
-   UINT height = 0;
-   uint32_t format = 0;
-   bool is_rtv = false; // false = SRV, true = RTV
-};
-
-enum class UpscaleRtvDecision : uint32_t
-{
-   Unknown = 0,
-   Replaced,
-   NoBoundRTV,
-   NoBoundResource,
-   NotTexture2D,
-   AlreadyOutputOrLarger,
-   AspectRatioMismatch,
-   LinkAcquireFailed,
-};
-
-struct UpscaleRtvDecisionDebug
-{
-   UpscaleRtvDecision decision = UpscaleRtvDecision::Unknown;
-   uintptr_t source_key = 0;
-   UINT source_width = 0;
-   UINT source_height = 0;
-   UINT render_width = 0;
-   UINT render_height = 0;
-   UINT output_width = 0;
-   UINT output_height = 0;
-   UINT target_width = 0;
-   UINT target_height = 0;
-   DXGI_FORMAT source_format = DXGI_FORMAT_UNKNOWN;
-   DXGI_FORMAT view_format = DXGI_FORMAT_UNKNOWN;
-   double source_aspect_ratio = 0.0;
-   double render_aspect_ratio = 0.0;
-};
-
-static const char* UpscaleRtvDecisionToString(UpscaleRtvDecision decision)
-{
-   switch (decision)
-   {
-   case UpscaleRtvDecision::Replaced:
-      return "replaced";
-   case UpscaleRtvDecision::NoBoundRTV:
-      return "no_bound_rtv";
-   case UpscaleRtvDecision::NoBoundResource:
-      return "rtv_has_no_resource";
-   case UpscaleRtvDecision::NotTexture2D:
-      return "resource_not_texture2d";
-   case UpscaleRtvDecision::AlreadyOutputOrLarger:
-      return "rtv_already_output_or_larger";
-   case UpscaleRtvDecision::AspectRatioMismatch:
-      return "aspect_ratio_mismatch";
-   case UpscaleRtvDecision::LinkAcquireFailed:
-      return "link_or_pool_acquire_failed";
-   default:
-      return "unknown";
-   }
-}
-#endif
-
-// Replace bound PS/CS SRVs that reference tracked resources. Returns count of
-// active tracked hits.
-// out_swapped is set to the number of SRVs actually replaced with upscaled versions.
+// Replace bound PS/CS SRVs that reference tracked resources. Return the number
+// of active tracked inputs; unused slots beyond active_slots are left alone.
 static uint32_t ReplaceUpscaledInputs(
    ID3D11DeviceContext* context,
    UpscaleTrackingState& tracking,
    bool is_compute,
-   uint32_t* out_swapped = nullptr
-#if DEVELOPMENT || TEST
-   ,
-   std::vector<UpscaleSwapDetail>* out_details = nullptr
-#endif
-)
+   UINT active_slots = 16,
+   bool replace = true)
 {
    constexpr UINT MAX_SLOTS = 16;
+   active_slots = (std::min)(active_slots, MAX_SLOTS);
    ID3D11ShaderResourceView* srvs[MAX_SLOTS] = {};
    if (is_compute)
-      context->CSGetShaderResources(0, MAX_SLOTS, srvs);
+      context->CSGetShaderResources(0, active_slots, srvs);
    else
-      context->PSGetShaderResources(0, MAX_SLOTS, srvs);
+      context->PSGetShaderResources(0, active_slots, srvs);
 
    uint32_t chain_hits = 0;
-   uint32_t swapped = 0;
-   for (UINT i = 0; i < MAX_SLOTS; ++i)
+   for (UINT i = 0; i < active_slots; ++i)
    {
       if (!srvs[i])
          continue;
-
       ComPtr<ID3D11Resource> resource;
       srvs[i]->GetResource(resource.put());
       srvs[i]->Release(); // balance the Get
-
       if (!resource)
          continue;
-
-      const uintptr_t source_key = reinterpret_cast<uintptr_t>(resource.get());
-      UpscaledResource* linked = GetLinkedUpscaled(tracking, source_key);
-
-      ID3D11ShaderResourceView* replacement = nullptr;
-      if (linked && linked->srv)
-      {
-         ++chain_hits;
-         replacement = linked->srv.get();
-         if (is_compute)
-            context->CSSetShaderResources(i, 1, &replacement);
-         else
-            context->PSSetShaderResources(i, 1, &replacement);
-         ++swapped;
-      }
-
-#if DEVELOPMENT || TEST
-      if (out_details)
-      {
-         UpscaleSwapDetail detail;
-         detail.slot = i;
-         detail.original = resource.get();
-         if (linked && linked->texture)
-         {
-            detail.texture_ptr = linked->texture.get(); // canonical pool texture - same across SRV/RTV views
-            ComPtr<ID3D11Texture2D> swap_tex;
-            if (SUCCEEDED(linked->texture->QueryInterface(swap_tex.put())))
-            {
-               D3D11_TEXTURE2D_DESC sd;
-               swap_tex->GetDesc(&sd);
-               detail.width = sd.Width;
-               detail.height = sd.Height;
-               detail.format = static_cast<uint32_t>(sd.Format);
-            }
-         }
-         else
-         {
-            ComPtr<ID3D11Texture2D> orig_tex;
-            if (SUCCEEDED(resource->QueryInterface(orig_tex.put())))
-            {
-               D3D11_TEXTURE2D_DESC sd;
-               orig_tex->GetDesc(&sd);
-               detail.width = sd.Width;
-               detail.height = sd.Height;
-               detail.format = static_cast<uint32_t>(sd.Format);
-            }
-         }
-         detail.replacement = replacement;
-         out_details->push_back(detail);
-      }
-#endif
+      UpscaledResource* linked = GetLinkedUpscaled(tracking, reinterpret_cast<uintptr_t>(resource.get()));
+      if (!linked || !linked->srv)
+         continue;
+      ++chain_hits;
+      if (!replace)
+         continue;
+      ID3D11ShaderResourceView* replacement = linked->srv.get();
+      if (is_compute)
+         context->CSSetShaderResources(i, 1, &replacement);
+      else
+         context->PSSetShaderResources(i, 1, &replacement);
    }
-
-   if (out_swapped)
-      *out_swapped = swapped;
    return chain_hits;
 }
 
-// Replace bound RTVs whose underlying texture matches render_resolution.
-// Only full-frame render targets are upscaled; bloom, reduction, and other
-// non-full-frame targets are left untouched to avoid chain pollution.
-// Returns count of RTVs replaced.
+// Output Scaled also copies screen effects back into render-sized scene textures.
+// Only a native output-sized destination is the final scene handoff.
+static bool OutputScaledWritesOutputResolution(
+   ID3D11DeviceContext* context,
+   const UpscaleTrackingState& tracking,
+   const float2& output_resolution)
+{
+   if (output_resolution.x <= 0.f || output_resolution.y <= 0.f)
+      return false;
+
+   ComPtr<ID3D11RenderTargetView> target;
+   context->OMGetRenderTargets(1, target.put(), nullptr);
+   ComPtr<ID3D11Resource> resource;
+   ComPtr<ID3D11Texture2D> texture;
+   if (target)
+      target->GetResource(resource.put());
+   if (!resource || FAILED(resource->QueryInterface(texture.put())))
+      return false;
+
+   D3D11_RENDER_TARGET_VIEW_DESC view_desc;
+   target->GetDesc(&view_desc);
+   if (view_desc.ViewDimension != D3D11_RTV_DIMENSION_TEXTURE2D || view_desc.Texture2D.MipSlice != 0)
+      return false;
+
+   // A pool texture can be output-sized while replacing a render-sized target.
+   std::lock_guard<std::recursive_mutex> lock(tracking.mutex);
+   for (const auto& entry : tracking.pool)
+      if (entry.in_use_this_frame && entry.texture.get() == texture.get())
+         return false;
+
+   D3D11_TEXTURE2D_DESC desc;
+   texture->GetDesc(&desc);
+   return desc.Width >= static_cast<UINT>(output_resolution.x) &&
+      desc.Height >= static_cast<UINT>(output_resolution.y);
+}
+
+// Replace bound RTVs in the upscaled post-process chain.
+// Linked effect targets are scaled proportionally, including rounded bloom levels.
+// Returns count of bound RTVs using upscaled replacements (including already-bound pool views).
 static uint32_t ReplaceUpscaledOutputs(
    ID3D11Device* device,
    ID3D11DeviceContext* context,
    UpscaleTrackingState& tracking,
    const float2& render_resolution,
-   const float2& output_resolution
-#if DEVELOPMENT || TEST
-   ,
-   std::vector<UpscaleSwapDetail>* out_details = nullptr,
-   UpscaleRtvDecisionDebug* out_debug = nullptr
-#endif
-)
-{
-   // The game only binds a single RTV during post-processing passes.
-   // Use single-RTV API to avoid array complexity.
-   ComPtr<ID3D11RenderTargetView> orig_rtv;
-   ComPtr<ID3D11DepthStencilView> dsv;
-   context->OMGetRenderTargets(1, orig_rtv.put(), dsv.put());
-
-   const UINT render_w = static_cast<UINT>(render_resolution.x);
-   const UINT render_h = static_cast<UINT>(render_resolution.y);
-
-#if DEVELOPMENT || TEST
-   if (out_debug)
-   {
-      *out_debug = UpscaleRtvDecisionDebug{};
-      out_debug->render_width = render_w;
-      out_debug->render_height = render_h;
-      out_debug->output_width = static_cast<UINT>(output_resolution.x);
-      out_debug->output_height = static_cast<UINT>(output_resolution.y);
-   }
-#endif
-
-   if (!orig_rtv)
-   {
-#if DEVELOPMENT || TEST
-      if (out_debug)
-         out_debug->decision = UpscaleRtvDecision::NoBoundRTV;
-#endif
-      return 0;
-   }
-
-   ComPtr<ID3D11Resource> resource;
-   orig_rtv->GetResource(resource.put());
-   if (!resource)
-   {
-#if DEVELOPMENT || TEST
-      if (out_debug)
-         out_debug->decision = UpscaleRtvDecision::NoBoundResource;
-#endif
-      return 0;
-   }
-
-   // Upscale any RTV smaller than output_resolution that shares the render aspect ratio.
-   // This covers full-frame render targets (at render_resolution) and proportionally smaller
-   // effect buffers (bloom, DoF, etc.) that are exact fractions of render_resolution.
-   ComPtr<ID3D11Texture2D> tex;
-   if (FAILED(resource->QueryInterface(tex.put())))
-   {
-#if DEVELOPMENT || TEST
-      if (out_debug)
-         out_debug->decision = UpscaleRtvDecision::NotTexture2D;
-#endif
-      return 0;
-   }
-
-   D3D11_TEXTURE2D_DESC tex_desc;
-   tex->GetDesc(&tex_desc);
-
-#if DEVELOPMENT || TEST
-   if (out_debug)
-   {
-      out_debug->source_key = reinterpret_cast<uintptr_t>(resource.get());
-      out_debug->source_width = tex_desc.Width;
-      out_debug->source_height = tex_desc.Height;
-      out_debug->source_format = tex_desc.Format;
-   }
-#endif
-
-   // Skip RTVs at or above output resolution (already full-size or swapchain).
-   if (tex_desc.Width >= static_cast<UINT>(output_resolution.x) ||
-       tex_desc.Height >= static_cast<UINT>(output_resolution.y))
-   {
-#if DEVELOPMENT || TEST
-      if (out_debug)
-         out_debug->decision = UpscaleRtvDecision::AlreadyOutputOrLarger;
-#endif
-      return 0;
-   }
-
-   // Resolve the typed format from the RTV view descriptor: the texture may be declared
-   // typeless, in which case null-desc SRV/RTV/UAV creation would fail in D3D11.
-   D3D11_RENDER_TARGET_VIEW_DESC rtv_view_desc{};
-   orig_rtv->GetDesc(&rtv_view_desc);
-   const DXGI_FORMAT view_format = (rtv_view_desc.Format != DXGI_FORMAT_UNKNOWN && rtv_view_desc.Format != tex_desc.Format)
-      ? rtv_view_desc.Format
-      : DXGI_FORMAT_UNKNOWN;
-
-#if DEVELOPMENT || TEST
-   if (out_debug)
-      out_debug->view_format = view_format;
-#endif
-
-   // Skip RTVs whose aspect ratio diverges from the render resolution's.
-   // Use render AR as the reference: all render-pipeline textures share the render aspect
-   // ratio, which can differ from the output's (e.g. letterboxed or cinematic crop output).
-   const double output_ar = static_cast<double>(output_resolution.x) / static_cast<double>(output_resolution.y);
-   const double render_ar = static_cast<double>(render_w) / static_cast<double>(render_h);
-   const double rtv_ar = static_cast<double>(tex_desc.Width) / static_cast<double>(tex_desc.Height);
-
-#if DEVELOPMENT || TEST
-   if (out_debug)
-   {
-      out_debug->source_aspect_ratio = rtv_ar;
-      out_debug->render_aspect_ratio = render_ar;
-   }
-#endif
-
-   if (std::abs(rtv_ar / render_ar - 1.0) > kAspectRatioEpsilon)
-   {
-#if DEVELOPMENT || TEST
-      if (out_debug)
-         out_debug->decision = UpscaleRtvDecision::AspectRatioMismatch;
-#endif
-      return 0;
-   }
-
-   // Compute per-RTV target dimensions by applying the render->output scale factor,
-   // then snapping to the nearest integer pair that best preserves the output aspect ratio.
-   const double scale_x = static_cast<double>(output_resolution.x) / static_cast<double>(render_w);
-   const double scale_y = static_cast<double>(output_resolution.y) / static_cast<double>(render_h);
-   auto [target_w, target_h] = Math::FindClosestIntegerResolutionForAspectRatio(
-      tex_desc.Width * scale_x,
-      tex_desc.Height * scale_y,
-      output_ar);
-   // Clamp so sub-res effects don't accidentally exceed the output frame.
-   target_w = (std::min)(target_w, static_cast<unsigned int>(output_resolution.x));
-   target_h = (std::min)(target_h, static_cast<unsigned int>(output_resolution.y));
-   const float2 rtv_target_res = { static_cast<float>(target_w), static_cast<float>(target_h) };
-
-#if DEVELOPMENT || TEST
-   if (out_debug)
-   {
-      out_debug->target_width = target_w;
-      out_debug->target_height = target_h;
-   }
-#endif
-
-   const uintptr_t res_key = reinterpret_cast<uintptr_t>(resource.get());
-   bool has_frame_link = false;
-   {
-      std::lock_guard<std::recursive_mutex> lock(tracking.mutex);
-      has_frame_link = tracking.frame_links.find(res_key) != tracking.frame_links.end();
-   }
-
-#if DEVELOPMENT || TEST
-   Log_Debug(
-      reshade::log::level::info,
-      std::format("[FFXV UpscaleChain] ReplaceUpscaledOutputs slot=0 res={:#x} {}x{} fmt={} render={}x{} target={}x{} has_link={}",
-         res_key, tex_desc.Width, tex_desc.Height,
-         static_cast<uint32_t>(tex_desc.Format), render_w, render_h, target_w, target_h, has_frame_link));
-#endif
-
-   UpscaledResource* upscaled = LinkUpscaledResource(device, context, resource.get(), tracking, rtv_target_res, false, view_format);
-   if (!upscaled || !upscaled->rtv)
-   {
-#if DEVELOPMENT || TEST
-      if (out_debug)
-         out_debug->decision = UpscaleRtvDecision::LinkAcquireFailed;
-#endif
-      return 0;
-   }
-
-   ID3D11RenderTargetView* new_rtv = upscaled->rtv.get();
-
-#if DEVELOPMENT || TEST
-   if (out_details)
-   {
-      UpscaleSwapDetail detail;
-      detail.slot = 0;
-      detail.original = resource.get();
-      detail.texture_ptr = upscaled->texture.get();
-      detail.replacement = upscaled->rtv.get();
-      detail.is_rtv = true;
-      detail.width = target_w;
-      detail.height = target_h;
-      detail.format = static_cast<uint32_t>(tex_desc.Format);
-      out_details->push_back(detail);
-   }
-#endif
-
-   // DEBUG: Log RTVs BEFORE OMSetRenderTargets
-#if DEVELOPMENT || TEST
-   {
-      char pre_log[512];
-      int off = snprintf(pre_log, sizeof(pre_log), "[RTV REPLACE] BEFORE OMSet ctx=%p dsv=%p orig_rtv=%p(%p): ",
-         context, dsv.get(), orig_rtv.get(), resource.get());
-      ComPtr<ID3D11Texture2D> pre_tex;
-      D3D11_TEXTURE2D_DESC pre_td = {};
-      if (SUCCEEDED(resource->QueryInterface(pre_tex.put())))
-         pre_tex->GetDesc(&pre_td);
-      off += snprintf(pre_log + off, sizeof(pre_log) - off, "orig=%ux%u ", pre_td.Width, pre_td.Height);
-      ComPtr<ID3D11Resource> new_r;
-      new_rtv->GetResource(new_r.put());
-      ComPtr<ID3D11Texture2D> new_t;
-      D3D11_RESOURCE_DIMENSION rdim;
-      if (new_r)
-      {
-         new_r->GetType(&rdim);
-         if (rdim == D3D11_RESOURCE_DIMENSION_TEXTURE2D)
-         {
-            new_r->QueryInterface(new_t.put());
-            if (new_t)
-               new_t->GetDesc(&pre_td);
-         }
-      }
-      off += snprintf(pre_log + off, sizeof(pre_log) - off, "new=%p %ux%u", new_rtv, pre_td.Width, pre_td.Height);
-      Log_Debug(reshade::log::level::debug, pre_log);
-   }
-#endif
-
-#if DEVELOPMENT || TEST
-   if (out_debug)
-      out_debug->decision = UpscaleRtvDecision::Replaced;
-#endif
-
-   // Discard the DSV from OMGetRenderTargets. It may have different dimensions
-   // than the new upscaled RTV (e.g. DSV=640x360, RTV=1280x720), which causes
-   // OMSetRenderTargets to silently fail in D3D11. Post-processing passes
-   // never need depth/stencil anyway.
-   context->OMSetRenderTargets(1, &new_rtv, nullptr);
-
-   // DEBUG: Log RTVs AFTER OMSetRenderTargets
-#if DEVELOPMENT || TEST
-   {
-      ComPtr<ID3D11RenderTargetView> verify_rtv;
-      ComPtr<ID3D11DepthStencilView> verify_dsv;
-      context->OMGetRenderTargets(1, verify_rtv.put(), verify_dsv.put());
-      char post_log[512];
-      int off = snprintf(post_log, sizeof(post_log), "[RTV REPLACE] AFTER OMSet dsv=%p: ", verify_dsv.get());
-      ComPtr<ID3D11Resource> v_r;
-      verify_rtv->GetResource(v_r.put());
-      ComPtr<ID3D11Texture2D> v_t;
-      D3D11_RESOURCE_DIMENSION vrdim;
-      D3D11_TEXTURE2D_DESC v_td = {};
-      if (v_r)
-      {
-         v_r->GetType(&vrdim);
-         if (vrdim == D3D11_RESOURCE_DIMENSION_TEXTURE2D)
-         {
-            v_r->QueryInterface(v_t.put());
-            if (v_t)
-               v_t->GetDesc(&v_td);
-         }
-      }
-      off += snprintf(post_log + off, sizeof(post_log) - off, "bound=%p(%p) %ux%u",
-         verify_rtv.get(), v_r.get(), v_td.Width, v_td.Height);
-      Log_Debug(reshade::log::level::debug, post_log);
-   }
-#endif
-
-   return 1;
-}
-
-// Replace viewports that match render_resolution with output_resolution.
-// Returns the count of viewports replaced.
-// out_scissors_replaced receives the count of scissor rects replaced (if provided).
-static uint32_t ReplaceViewports(
-   ID3D11DeviceContext* context,
-   const float2& render_resolution,
    const float2& output_resolution,
-   uint32_t* out_scissors_replaced = nullptr)
+   bool has_upscaled_input,
+   float2& rtv_source_resolution,
+   float2& rtv_target_resolution,
+   const std::function<bool(ID3D11Texture2D*, DXGI_FORMAT, ID3D11RenderTargetView*)>& initialize_from_native,
+   bool& preparation_failed)
 {
-   UINT num_viewports = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-   D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
-   context->RSGetViewports(&num_viewports, viewports);
-
-   if (num_viewports == 0)
-      return 0;
-
-   // Scale factors from render to output; applied uniformly to all matching viewports/scissors.
-   const double output_ar = static_cast<double>(output_resolution.x) / static_cast<double>(output_resolution.y);
-   const double render_ar = static_cast<double>(render_resolution.x) / static_cast<double>(render_resolution.y);
-   const double scale_x = static_cast<double>(output_resolution.x) / static_cast<double>(render_resolution.x);
-   const double scale_y = static_cast<double>(output_resolution.y) / static_cast<double>(render_resolution.y);
-
-   uint32_t replaced = 0;
-   for (UINT i = 0; i < num_viewports; ++i)
+   constexpr UINT max_targets = D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT;
+   struct Output
    {
-      const float vp_w = viewports[i].Width;
-      const float vp_h = viewports[i].Height;
-
-      // Skip viewports already at or beyond output size.
-      if (vp_w >= output_resolution.x || vp_h >= output_resolution.y)
-         continue;
-
-      // Only scale viewports that share the render aspect ratio.
-      const double vp_ar = static_cast<double>(vp_w) / static_cast<double>(vp_h);
-      if (std::abs(vp_ar / render_ar - 1.0) > kAspectRatioEpsilon)
-         continue;
-
-      auto [new_w, new_h] = Math::FindClosestIntegerResolutionForAspectRatio(
-         vp_w * scale_x, vp_h * scale_y, output_ar);
-      new_w = (std::min)(new_w, static_cast<unsigned int>(output_resolution.x));
-      new_h = (std::min)(new_h, static_cast<unsigned int>(output_resolution.y));
-      viewports[i].Width = static_cast<float>(new_w);
-      viewports[i].Height = static_cast<float>(new_h);
-      ++replaced;
-   }
-
-   if (replaced > 0)
-   {
-      context->RSSetViewports(num_viewports, viewports);
-   }
-
-   // Also replace Scissor Rects!
-   UINT num_rects = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-   D3D11_RECT rects[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
-   context->RSGetScissorRects(&num_rects, rects);
-
-   uint32_t scissors_replaced = 0;
-   if (num_rects > 0)
-   {
-      for (UINT i = 0; i < num_rects; ++i)
-      {
-         // D3D11_RECT uses LONG (left, top, right, bottom)
-         const LONG w = rects[i].right - rects[i].left;
-         const LONG h = rects[i].bottom - rects[i].top;
-
-         // Skip rects already at or beyond output size.
-         if ((float)w >= output_resolution.x || (float)h >= output_resolution.y)
-            continue;
-
-         // Only scale rects that share the render aspect ratio.
-         const double rect_ar = static_cast<double>(w) / static_cast<double>(h);
-         if (std::abs(rect_ar / render_ar - 1.0) > kAspectRatioEpsilon)
-            continue;
-
-         auto [new_w, new_h] = Math::FindClosestIntegerResolutionForAspectRatio(
-            w * scale_x, h * scale_y, output_ar);
-         new_w = (std::min)(new_w, static_cast<unsigned int>(output_resolution.x));
-         new_h = (std::min)(new_h, static_cast<unsigned int>(output_resolution.y));
-
-#if DEVELOPMENT || TEST
-         char scissor_log_buf[256];
-         snprintf(scissor_log_buf, sizeof(scissor_log_buf),
-            "[FFXV] Scissor replaced #%u: [%d, %d, %d, %d] (%dx%d) -> [%d, %d, %d, %d] (%dx%d)",
-            i, rects[i].left, rects[i].top, rects[i].right, rects[i].bottom, (int)w, (int)h,
-            rects[i].left, rects[i].top, rects[i].left + static_cast<LONG>(new_w), rects[i].top + static_cast<LONG>(new_h),
-            new_w, new_h);
-         Log_Debug(reshade::log::level::info, scissor_log_buf);
-#endif
-
-         rects[i].right = rects[i].left + static_cast<LONG>(new_w);
-         rects[i].bottom = rects[i].top + static_cast<LONG>(new_h);
-         ++scissors_replaced;
-      }
-
-      if (scissors_replaced > 0)
-      {
-         context->RSSetScissorRects(num_rects, rects);
-      }
-   }
-
-   if (out_scissors_replaced)
-      *out_scissors_replaced = scissors_replaced;
-
-   return replaced;
-}
-
-#if DEVELOPMENT || TEST
-// Dump all bound SRV/RTV state for a single draw call to identify chain gaps.
-// Logs each slot's resource pointer, dimensions, and chain membership (link/pool entry).
-static void DiagnosePassSRVs(
-   ID3D11DeviceContext* context,
-   const UpscaleTrackingState& tracking,
-   bool is_compute,
-   const char* pass_label)
-{
-   constexpr UINT MAX_SLOTS = 16;
-   ID3D11ShaderResourceView* srvs[MAX_SLOTS] = {};
-   if (is_compute)
-      context->CSGetShaderResources(0, MAX_SLOTS, srvs);
-   else
-      context->PSGetShaderResources(0, MAX_SLOTS, srvs);
-
-   char buf[384];
-   size_t frame_link_count = 0;
-   size_t pool_size = 0;
-   {
-      std::lock_guard<std::recursive_mutex> lock(tracking.mutex);
-      frame_link_count = tracking.frame_links.size();
-      pool_size = tracking.pool.size();
-   }
-   snprintf(buf, sizeof(buf),
-      "[FFXV Diag] %s  frame_link_count=%zu pool_size=%zu",
-      pass_label, frame_link_count, pool_size);
-   Log_Debug(reshade::log::level::info, buf);
-
-   for (UINT i = 0; i < MAX_SLOTS; ++i)
-   {
-      if (!srvs[i])
-         continue;
-
+      ComPtr<ID3D11RenderTargetView> original_view;
       ComPtr<ID3D11Resource> resource;
-      srvs[i]->GetResource(resource.put());
-      srvs[i]->Release();
-
-      if (!resource)
-         continue;
-
-      const uintptr_t key = reinterpret_cast<uintptr_t>(resource.get());
-      bool in_link = false;
-      bool has_pool_entry = false;
-      {
-         std::lock_guard<std::recursive_mutex> lock(tracking.mutex);
-         const auto it = tracking.frame_links.find(key);
-         in_link = it != tracking.frame_links.end();
-         has_pool_entry = in_link && it->second < tracking.pool.size();
-      }
-
-      UINT w = 0, h = 0;
-      uint32_t fmt = 0;
-      ComPtr<ID3D11Texture2D> tex;
-      if (SUCCEEDED(resource->QueryInterface(tex.put())))
-      {
-         D3D11_TEXTURE2D_DESC d;
-         tex->GetDesc(&d);
-         w = d.Width;
-         h = d.Height;
-         fmt = static_cast<uint32_t>(d.Format);
-      }
-
-      snprintf(buf, sizeof(buf),
-         "[FFXV Diag] %s  slot=%u  res=%p  %ux%u fmt=%u  link=%d pool=%d",
-         pass_label, i, reinterpret_cast<void*>(key), w, h, fmt,
-         in_link ? 1 : 0, has_pool_entry ? 1 : 0);
-      Log_Debug(reshade::log::level::info, buf);
-   }
-
-   // Also dump bound RTVs so we can see where the pass writes
-   if (!is_compute)
+      ComPtr<ID3D11Texture2D> texture;
+      ComPtr<ID3D11Texture2D> initial_contents;
+      D3D11_TEXTURE2D_DESC desc{};
+      DXGI_FORMAT view_format = DXGI_FORMAT_UNKNOWN;
+      DXGI_FORMAT typed_format = DXGI_FORMAT_UNKNOWN;
+      uintptr_t source_key = 0;
+      uint32_t pool_index = kInvalidPoolIndex;
+      bool already_pooled = false;
+      bool acquired = false;
+   };
+   Output outputs[max_targets];
+   ID3D11RenderTargetView* bound[max_targets] = {};
+   ComPtr<ID3D11DepthStencilView> dsv;
+   context->OMGetRenderTargets(max_targets, bound, dsv.put());
+   UINT target_count = 0;
+   UINT primary = max_targets;
+   for (UINT slot = 0; slot < max_targets; ++slot)
    {
-      ID3D11RenderTargetView* rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-      context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs, nullptr);
-      for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
+      if (!bound[slot])
+         continue;
+      outputs[slot].original_view = bound[slot];
+      bound[slot]->Release(); // balance OMGetRenderTargets
+      target_count = slot + 1;
+      if (primary == max_targets)
+         primary = slot;
+   }
+   rtv_source_resolution = rtv_target_resolution = {};
+   preparation_failed = false;
+   // Hold the pool lock through preparation and commit. No source links change
+   // until every bound output has a compatible replacement.
+   std::lock_guard<std::recursive_mutex> lock(tracking.mutex);
+   auto reject = [&]() -> uint32_t
+   {
+      preparation_failed = true;
+      for (auto& output : outputs)
+         if (output.acquired && output.pool_index < tracking.pool.size())
+            tracking.pool[output.pool_index].in_use_this_frame = false;
+      return 0;
+   };
+   if (primary == max_targets)
+      return 0;
+   if (render_resolution.x <= 0.f || render_resolution.y <= 0.f || output_resolution.x <= 0.f || output_resolution.y <= 0.f)
+      return reject();
+   for (UINT slot = 0; slot < target_count; ++slot)
+   {
+      auto& output = outputs[slot];
+      if (!output.original_view)
+         continue;
+      output.original_view->GetResource(output.resource.put());
+      if (!output.resource || FAILED(output.resource->QueryInterface(output.texture.put())))
+         return reject();
+      output.source_key = reinterpret_cast<uintptr_t>(output.resource.get());
+      output.texture->GetDesc(&output.desc);
+      D3D11_RENDER_TARGET_VIEW_DESC view_desc{};
+      output.original_view->GetDesc(&view_desc);
+      if (view_desc.ViewDimension != D3D11_RTV_DIMENSION_TEXTURE2D || view_desc.Texture2D.MipSlice != 0 ||
+          output.desc.ArraySize != 1 || output.desc.SampleDesc.Count != 1)
+         return reject();
+      output.view_format = view_desc.Format != DXGI_FORMAT_UNKNOWN && view_desc.Format != output.desc.Format
+         ? view_desc.Format : DXGI_FORMAT_UNKNOWN;
+      output.typed_format = view_desc.Format;
+      output.initial_contents = output.texture;
+      for (uint32_t i = 0; i < tracking.pool.size(); ++i)
       {
-         if (!rtvs[i])
-            continue;
-         ComPtr<ID3D11Resource> resource;
-         rtvs[i]->GetResource(resource.put());
-         rtvs[i]->Release();
-         if (!resource)
-            continue;
-
-         const uintptr_t key = reinterpret_cast<uintptr_t>(resource.get());
-         UINT w = 0, h = 0;
-         ComPtr<ID3D11Texture2D> tex;
-         if (SUCCEEDED(resource->QueryInterface(tex.put())))
+         const auto& entry = tracking.pool[i];
+         if (entry.in_use_this_frame && entry.texture.get() == output.texture.get())
          {
-            D3D11_TEXTURE2D_DESC d;
-            tex->GetDesc(&d);
-            w = d.Width;
-            h = d.Height;
+            output.pool_index = i;
+            output.already_pooled = true;
+            output.desc = entry.original_desc;
+            break;
          }
-         snprintf(buf, sizeof(buf),
-            "[FFXV Diag] %s  RTV slot=%u  res=%p  %ux%u",
-            pass_label, i, reinterpret_cast<void*>(key), w, h);
-         Log_Debug(reshade::log::level::info, buf);
+      }
+      if (slot != primary && (output.desc.Width != outputs[primary].desc.Width || output.desc.Height != outputs[primary].desc.Height))
+         return reject();
+   }
+   auto& first = outputs[primary];
+   if (!first.already_pooled && (first.desc.Width >= static_cast<UINT>(output_resolution.x) ||
+       first.desc.Height >= static_cast<UINT>(output_resolution.y)))
+      return 0;
+   const double render_ar = double(render_resolution.x) / render_resolution.y;
+   const double target_ar = double(first.desc.Width) / first.desc.Height;
+   const bool linked = tracking.frame_links.find(first.source_key) != tracking.frame_links.end();
+   if (!first.already_pooled && !has_upscaled_input && !linked && std::abs(target_ar / render_ar - 1.0) > kAspectRatioEpsilon)
+      return 0;
+   const UINT target_w = (std::min)(static_cast<UINT>(std::round(first.desc.Width * double(output_resolution.x) / render_resolution.x)), static_cast<UINT>(output_resolution.x));
+   const UINT target_h = (std::min)(static_cast<UINT>(std::round(first.desc.Height * double(output_resolution.y) / render_resolution.y)), static_cast<UINT>(output_resolution.y));
+   if (target_w == 0 || target_h == 0)
+      return reject();
+   const float2 target_resolution = {float(target_w), float(target_h)};
+   uint32_t replacements = 0;
+   for (UINT slot = 0; slot < target_count; ++slot)
+   {
+      auto& output = outputs[slot];
+      if (!output.original_view)
+         continue;
+      UpscaledResource* entry = output.already_pooled ? &tracking.pool[output.pool_index] : GetLinkedUpscaled(tracking, output.source_key);
+      if (entry && entry->texture && entry->rtv)
+      {
+         D3D11_TEXTURE2D_DESC desc;
+         entry->texture->GetDesc(&desc);
+         if (desc.Width != target_w || desc.Height != target_h || entry->view_format != output.view_format)
+         {
+            output.initial_contents = entry->texture;
+            entry = nullptr;
+         }
+      }
+      else
+         entry = nullptr;
+      if (!entry)
+      {
+         if (output.already_pooled)
+            return reject();
+         entry = AcquireUpscaledFromPool(device, context, tracking, output.desc, target_resolution, false, output.view_format);
+         if (!entry)
+            return reject();
+         output.acquired = true;
+      }
+      output.pool_index = FindPoolIndexByPtr(tracking, entry);
+      if (output.pool_index == kInvalidPoolIndex)
+         return reject();
+      bound[slot] = entry->rtv.get();
+      ++replacements;
+   }
+   // Preserve a compatible DSV; resized post-process outputs cannot use a DSV
+   // on the old grid. Color/CoC slots and null gaps are rebound together.
+   if (dsv)
+   {
+      ComPtr<ID3D11Resource> resource;
+      ComPtr<ID3D11Texture2D> texture;
+      dsv->GetResource(resource.put());
+      D3D11_TEXTURE2D_DESC desc{};
+      if (SUCCEEDED(resource->QueryInterface(texture.put())))
+         texture->GetDesc(&desc);
+      if (desc.Width != target_w || desc.Height != target_h || desc.SampleDesc.Count != 1 || desc.ArraySize != 1)
+         dsv.reset();
+   }
+   // Native-content fallback handles targets promoted later than their clear.
+   // Active-chain full clears are linked and mirrored immediately, so no clear
+   // value is retained across draws or native writes.
+   for (UINT slot = 0; slot < target_count; ++slot)
+   {
+      auto& output = outputs[slot];
+      if (!output.acquired)
+         continue; // Existing linked targets retain the previous scaled draws.
+      if (!initialize_from_native(output.initial_contents.get(), output.typed_format, bound[slot]))
+         return reject();
+   }
+   for (UINT slot = 0; slot < target_count; ++slot)
+   {
+      auto& output = outputs[slot];
+      if (!output.original_view)
+         continue;
+      if (!output.already_pooled)
+         tracking.frame_links[output.source_key] = output.pool_index;
+   }
+   context->OMSetRenderTargets(target_count, bound, dsv.get());
+   rtv_source_resolution = {float(first.desc.Width), float(first.desc.Height)};
+   rtv_target_resolution = target_resolution;
+   return replacements;
+}
+
+// Scale viewport/scissor edges with the bound target's replacement dimensions.
+static void ReplaceViewports(
+   ID3D11DeviceContext* context,
+   CommandListData& cmd_list_data,
+   const float2& render_resolution,
+   const float2& output_resolution)
+{
+   const double scale_x = double(output_resolution.x) / render_resolution.x;
+   const double scale_y = double(output_resolution.y) / render_resolution.y;
+   if (!cmd_list_data.viewports_scaled)
+   {
+      UINT count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+      D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+      context->RSGetViewports(&count, viewports);
+      for (UINT i = 0; i < count; ++i)
+      {
+         viewports[i].TopLeftX *= scale_x;
+         viewports[i].TopLeftY *= scale_y;
+         viewports[i].Width *= scale_x;
+         viewports[i].Height *= scale_y;
+      }
+      if (count > 0)
+         context->RSSetViewports(count, viewports);
+      cmd_list_data.viewports_scaled = true;
+   }
+   if (!cmd_list_data.scissors_scaled)
+   {
+      ComPtr<ID3D11RasterizerState> rasterizer_state;
+      context->RSGetState(rasterizer_state.put());
+      D3D11_RASTERIZER_DESC rasterizer_desc{};
+      if (rasterizer_state)
+         rasterizer_state->GetDesc(&rasterizer_desc);
+      if (rasterizer_desc.ScissorEnable)
+      {
+         UINT count = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+         D3D11_RECT rects[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
+         context->RSGetScissorRects(&count, rects);
+         for (UINT i = 0; i < count; ++i)
+         {
+            rects[i].left = static_cast<LONG>(std::floor(rects[i].left * scale_x));
+            rects[i].top = static_cast<LONG>(std::floor(rects[i].top * scale_y));
+            rects[i].right = static_cast<LONG>(std::ceil(rects[i].right * scale_x));
+            rects[i].bottom = static_cast<LONG>(std::ceil(rects[i].bottom * scale_y));
+         }
+         if (count > 0)
+            context->RSSetScissorRects(count, rects);
+         cmd_list_data.scissors_scaled = true;
       }
    }
 }
-#endif

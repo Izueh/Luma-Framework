@@ -511,8 +511,6 @@ namespace Mcp
          {
             w->Field("stage", "unknown"); // Destroyed since the capture
          }
-         if (entry.clone_variant != Shader::ShaderVariant::Original)
-            w->Field("variant", "patched");
       }
       std::string flags;
       if (entry.any_input_resources_format_upgraded)
@@ -608,7 +606,6 @@ namespace Mcp
    {
       WriteTraceEntrySummary(w, device_data, entry, index);
       w->Field("thread", entry.thread_id._Get_underlying_id());
-      w->Field("patch_enabled", entry.patch_enabled);
 
       const auto* pipeline = entry.type == TraceDrawCallData::TraceDrawCallType::Shader ? FindPipeline(device_data, entry.pipeline_handle) : nullptr;
       if (pipeline)

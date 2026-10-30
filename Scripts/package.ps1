@@ -9,7 +9,7 @@
     with the project-level (Core/Textures) folders only included when the
     project opts in via UseLumaFastNoise, plus the runtime DLLs the project
     needs (dxcompiler.dll for DXP, d3dcompiler_47.dll, ReShade as dxgi.dll,
-    NGX DLSS when opted in).
+    NGX DLSS and the FidelityFX DX12 dlls for FSR 4 when opted in).
 
 .EXAMPLE
     .\scripts\package.ps1 -Project "Final Fantasy XV" -Config "Development-Release" -Platform "x64"
@@ -87,7 +87,8 @@ $vcxproj = $vcxproj.FullName
 $useLumaFastNoise = Test-PropEnabled $vcxproj "UseLumaFastNoise"
 $useLumaDXP = Test-PropEnabled $vcxproj "UseLumaDXP"
 $useLumaNGX = Test-PropEnabled $vcxproj "UseLumaNGX"
-Write-Host "Opt-ins: UseLumaFastNoise=$useLumaFastNoise UseLumaDXP=$useLumaDXP UseLumaNGX=$useLumaNGX"
+$useLumaFSR4 = (Test-PropEnabled $vcxproj "UseLumaFSR") -and (Test-PropEnabled $vcxproj "UseLumaFSR4")
+Write-Host "Opt-ins: UseLumaFastNoise=$useLumaFastNoise UseLumaDXP=$useLumaDXP UseLumaNGX=$useLumaNGX UseLumaFSR4=$useLumaFSR4"
 
 # Locate the addon. When packaging runs from the LumaPackage build target the
 # exact build output is passed in (-AddonPath = $(TargetPath)); standalone runs
@@ -149,6 +150,13 @@ try {
         $ngxSrc = Join-Path $repoRoot "Source\External\NGX\bin\dev\nvngx_dlss.dll"
         if ($Config -notlike "Development*") { $ngxSrc = Join-Path $repoRoot "Source\External\NGX\bin\rel\nvngx_dlss.dll" }
         if (Test-Path $ngxSrc) { Copy-Item $ngxSrc -Destination $tempDir -Force }
+    }
+    # FSR 4 loads them from next to the addon (x64 only)
+    if ($useLumaFSR4 -and $Platform -ne "Win32") {
+        $ffxDir = Join-Path $repoRoot "Source\External\FidelityFX\bin"
+        Copy-Item (Join-Path $ffxDir "*.dll") -Destination $tempDir -Force
+        New-Item -ItemType Directory -Path "$tempDir\Licenses" -Force | Out-Null
+        Copy-Item (Join-Path $ffxDir "FidelityFX_LICENSE.md") -Destination "$tempDir\Licenses" -Force
     }
 
     # Addon at the zip root, under the canonical Luma-<Project>.addon name

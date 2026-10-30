@@ -32,10 +32,10 @@ void main(
     uint4 bitmask, uiDest;
     float4 fDest;
 
-    float resolutionScale = 1.f;
+    float2 resolutionScale = float2(1.0f, 1.0f);
     if (LumaData.GameData.IsUpscaling != 0)
     {
-        resolutionScale = LumaData.RenderResolutionScale.x;
+        resolutionScale = LumaData.RenderResolutionScale.xy;
     }
 
     o0.xyzw = v0.xyzw;

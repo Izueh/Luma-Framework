@@ -2,7 +2,6 @@
 // =============================================================================
 #include <cfloat>
 #include <d3d11.h>
-#include "log.hpp"
 
 // Extract shader resources from the TAA shader state and store in game_device_data
 // FFXV TAA slots: source_color=0, depth=3, velocity=6
@@ -14,9 +13,7 @@ static bool ExtractTAAShaderResources(
    ID3D11ShaderResourceView** out_depth_srv = nullptr,
    ID3D11ShaderResourceView** out_velocity_srv = nullptr)
 {
-   Log_Debug(
-      reshade::log::level::info,
-      "Extracting TAA shader resources");
+
    // Get all pixel shader resources
    ComPtr<ID3D11ShaderResourceView> ps_shader_resources[16];
    native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), reinterpret_cast<ID3D11ShaderResourceView**>(ps_shader_resources));
@@ -50,13 +47,6 @@ static bool ExtractTAAShaderResources(
          (*out_velocity_srv)->AddRef();
    }
 
-   Log_Debug(
-      reshade::log::level::info,
-      std::format("Extracted TAA shader resources: source_color={}, depth_buffer={}, velocity={}",
-         (game_device_data.sr_source_color.get() != nullptr) ? "yes" : "no",
-         (game_device_data.depth_buffer.get() != nullptr) ? "yes" : "no",
-         (original_velocity.get() != nullptr) ? "yes" : "no"));
-
    // Validate that all resources were successfully extracted
    return game_device_data.sr_source_color.get() != nullptr &&
           game_device_data.depth_buffer.get() != nullptr &&
@@ -77,6 +67,7 @@ static bool SetupSROutput(
    bool& out_supports_uav,
    bool& out_output_changed)
 {
+
    out_output_changed = false;
    out_supports_uav = false;
 
@@ -136,17 +127,6 @@ static bool SetupSROutput(
    {
       device_data.sr_output_color = out_output_color;
    }
-   {
-      D3D11_TEXTURE2D_DESC sr_out_desc;
-      device_data.sr_output_color->GetDesc(&sr_out_desc);
-      Log_Debug(
-         reshade::log::level::info,
-         std::format("SR output texture: RTV(input)={}x{} -> sr_output_color={}x{}, format={}, supports UAV={}",
-            out_texture_desc.Width, out_texture_desc.Height,
-            sr_out_desc.Width, sr_out_desc.Height,
-            static_cast<uint32_t>(sr_out_desc.Format),
-            out_supports_uav ? "yes" : "no"));
-   }
    return true;
 }
 
@@ -157,6 +137,7 @@ static bool SetupMotionVectorDecodeTarget(
    GameDeviceDataFFXV& game_device_data,
    ID3D11ShaderResourceView* velocity_srv)
 {
+
    if (!velocity_srv)
       return false;
 
@@ -217,12 +198,6 @@ static bool SetupMotionVectorDecodeTarget(
       }
    }
    // MV texture is always created at velocity source dimensions with R32G32_FLOAT
-   Log_Debug(
-      reshade::log::level::info,
-      std::format("Motion vector decode target: source={}x{}, fmt={} -> output={}x{}, fmt=R32G32_FLOAT",
-         velocity_desc.Width, velocity_desc.Height,
-         static_cast<uint32_t>(velocity_desc.Format),
-         velocity_desc.Width, velocity_desc.Height));
    return game_device_data.sr_motion_vectors_uav.get() != nullptr;
 }
 
@@ -247,9 +222,6 @@ static void DecodeMotionVectors(
    auto cs_it = device_data.native_compute_shaders.find(CompileTimeStringHash("Decode MVs CS"));
    if (cs_it == device_data.native_compute_shaders.end() || !cs_it->second.get())
    {
-      Log_Debug(
-         reshade::log::level::warning,
-         "Decode MVs compute shader not found - cannot decode motion vectors");
       return;
    }
    ComPtr<ID3D11Buffer> taa_cb_buffer;
@@ -277,10 +249,9 @@ static void DecodeMotionVectors(
    native_device_context->CSSetUnorderedAccessViews(0, 1, &null_uav, nullptr);
 }
 
-
-
 static void ExtractCameraData(DeviceData& device_data, GameDeviceDataFFXV& game_device_data, const void* view_cb_data_raw)
 {
+
    Math::Matrix44 proj;
    std::memcpy(&proj, static_cast<const uint8_t*>(view_cb_data_raw) + offsetof(IView_Combined_cbView, Projection), sizeof(Math::Matrix44));
 
@@ -325,24 +296,15 @@ static void ExtractCameraData(DeviceData& device_data, GameDeviceDataFFXV& game_
    game_device_data.camera_near = n;
    game_device_data.camera_far = f;
 
-   Log_Debug(
-      reshade::log::level::info,
-      std::format("Extracted Camera Data: FOV={:.4f}, Near={:.4f}, Far={:.4f}",
-         game_device_data.camera_fov,
-         game_device_data.camera_near,
-         game_device_data.camera_far));
 }
 
 static void CheckAndExtractPerViewGlobalsBuffer(reshade::api::device* device, reshade::api::resource resource, const void* data)
 {
+
    DeviceData& device_data = *device->get_private_data<DeviceData>();
    auto& game_device_data = *static_cast<GameDeviceDataFFXV*>(device_data.game);
 
    const uint8_t* view_cb_data_raw = reinterpret_cast<const uint8_t*>(data);
-
-   Log_Debug(
-      reshade::log::level::info,
-      "Checking projection matrix for Per-View Globals constant buffer");
 
    // Check size of the viewport in cbuffer, make sure it has reasonable values
    int2 size = {
@@ -358,10 +320,6 @@ static void CheckAndExtractPerViewGlobalsBuffer(reshade::api::device* device, re
       float output_aspect_ratio = device_data.output_resolution.x / device_data.output_resolution.y;
       if (std::abs(aspect_ratio - output_aspect_ratio) > 0.01f)
       {
-         Log_Debug(
-            reshade::log::level::info,
-            std::format("Rejected Per-View Globals candidate due to viewport size mismatch: cb_size={}x{}, output_size={}x{}",
-               size.x, size.y, width, height));
          return;
       }
    }
@@ -371,9 +329,6 @@ static void CheckAndExtractPerViewGlobalsBuffer(reshade::api::device* device, re
    std::memcpy(&proj, view_cb_data_raw, sizeof(Math::Matrix44));
    std::memcpy(&inv_proj, view_cb_data_raw + offsetof(IView_Combined_cbView, InvProjection), sizeof(Math::Matrix44));
 
-   Log_Debug(
-      reshade::log::level::info,
-      "Done copying projection matrix for Per-View Globals constant buffer");
    Math::Matrix44 identity;
    identity.SetIdentity();
 
@@ -390,17 +345,8 @@ static void CheckAndExtractPerViewGlobalsBuffer(reshade::api::device* device, re
 
       // Set render resolution from view cbuffer (first time we know it in the frame)
       device_data.render_resolution = {static_cast<float>(size.x), static_cast<float>(size.y)};
-      Log_Debug(
-         reshade::log::level::info,
-         "Found Per-View Globals constant buffer");
 
       ExtractCameraData(device_data, game_device_data, view_cb_data_raw);
       game_device_data.has_processed_view_buffer = true;
-   }
-   else
-   {
-      Log_Debug(
-         reshade::log::level::info,
-         "Rejected Per-View Globals constant buffer candidate");
    }
 }

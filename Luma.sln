@@ -139,6 +139,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Mass Effect", "Source\Games
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "Snowbreak Containment Zone", "Source\Games\Snowbreak Containment Zone\Snowbreak Containment Zone.vcxproj", "{FFBF1DD9-341B-4CFE-859D-F10F9620220E}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "NieR Replicant", "Source\Games\NieR Replicant\NieR Replicant.vcxproj", "{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Development-Debug|Win32 = Development-Debug|Win32
@@ -975,6 +977,18 @@ Global
 		{A8505E49-DA6F-4C05-ADF0-3480DC27B3FC}.Test-Release|Win32.ActiveCfg = Test-Release|Win32
 		{A8505E49-DA6F-4C05-ADF0-3480DC27B3FC}.Test-Release|Win32.Build.0 = Test-Release|Win32
 		{A8505E49-DA6F-4C05-ADF0-3480DC27B3FC}.Test-Release|x64.ActiveCfg = Test-Release|Win32
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}.Development-Debug|Win32.ActiveCfg = Development-Debug|x64
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}.Development-Debug|x64.ActiveCfg = Development-Debug|x64
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}.Development-Debug|x64.Build.0 = Development-Debug|x64
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}.Development-Release|Win32.ActiveCfg = Development-Release|x64
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}.Development-Release|x64.ActiveCfg = Development-Release|x64
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}.Development-Release|x64.Build.0 = Development-Release|x64
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}.Publishing-Release|Win32.ActiveCfg = Publishing-Release|x64
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}.Publishing-Release|x64.ActiveCfg = Publishing-Release|x64
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}.Publishing-Release|x64.Build.0 = Publishing-Release|x64
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}.Test-Release|Win32.ActiveCfg = Test-Release|x64
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}.Test-Release|x64.ActiveCfg = Test-Release|x64
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78}.Test-Release|x64.Build.0 = Test-Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1045,6 +1059,7 @@ Global
 		{D4547FAC-2A3D-4974-97C3-1063B1449D8C} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{A6A0EC5F-AFD4-4699-B489-A621FB82C431} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 		{A8505E49-DA6F-4C05-ADF0-3480DC27B3FC} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
+		{D7DCEC3D-3209-4370-8CED-8CF6A4D34D78} = {02EA681E-C7D8-13C7-8484-4AC65E1B71E8}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {8B799422-BA66-3174-B21F-B9FA07C4B2E3}

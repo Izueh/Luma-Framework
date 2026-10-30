@@ -180,7 +180,7 @@ void PatchPixelShader(std::vector<std::byte>& shader_code, uint32_t coord_input_
                uint32_t operand_token =
                   ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
                   ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_MASK_MODE) |
-                  ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(0xB0) |
+                  ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(D3D10_SB_OPERAND_4_COMPONENT_MASK_X | D3D10_SB_OPERAND_4_COMPONENT_MASK_Y | D3D10_SB_OPERAND_4_COMPONENT_MASK_W) |
                   ENCODE_D3D10_SB_OPERAND_TYPE(D3D10_SB_OPERAND_TYPE_INPUT) |
                   ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
                   ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
@@ -197,11 +197,11 @@ void PatchPixelShader(std::vector<std::byte>& shader_code, uint32_t coord_input_
                                                              operand_token, prev_coord_input_register});
                }
                shader_code.insert(shader_code.begin() + dxbc_header->chunk_offsets[i] + pos, (std::byte*)&shader_patch[0], (std::byte*)(&shader_patch[0] + shader_patch.size()));
+               dxbc_header = (DXBCHeader*)&shader_code[0];
                shex = &shader_code[dxbc_header->chunk_offsets[i]];
                shex_header = (SHEXHeader*)shex;
                shex_header->chunk_size += shader_patch.size() * sizeof(uint32_t);
                shex_header->dword_count += shader_patch.size();
-               dxbc_header = (DXBCHeader*)&shader_code[0];
                for (uint32_t j = i + 1; j < dxbc_header->chunk_count; ++j)
                {
                   dxbc_header->chunk_offsets[j] += shader_patch.size() * sizeof(uint32_t);
@@ -221,7 +221,7 @@ void PatchPixelShader(std::vector<std::byte>& shader_code, uint32_t coord_input_
                uint32_t operand_token =
                   ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
                   ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_MASK_MODE) |
-                  ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(0x30) |
+                  ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(D3D10_SB_OPERAND_4_COMPONENT_MASK_X | D3D10_SB_OPERAND_4_COMPONENT_MASK_Y) |
                   ENCODE_D3D10_SB_OPERAND_TYPE(D3D10_SB_OPERAND_TYPE_OUTPUT) |
                   ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
                   ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
@@ -230,11 +230,11 @@ void PatchPixelShader(std::vector<std::byte>& shader_code, uint32_t coord_input_
                   opcode_token,
                   operand_token, 5};
                shader_code.insert(shader_code.begin() + dxbc_header->chunk_offsets[i] + pos, (std::byte*)&shader_patch[0], (std::byte*)(&shader_patch[0] + shader_patch.size()));
+               dxbc_header = (DXBCHeader*)&shader_code[0];
                shex = &shader_code[dxbc_header->chunk_offsets[i]];
                shex_header = (SHEXHeader*)shex;
                shex_header->chunk_size += shader_patch.size() * sizeof(uint32_t);
                shex_header->dword_count += shader_patch.size();
-               dxbc_header = (DXBCHeader*)&shader_code[0];
                for (uint32_t j = i + 1; j < dxbc_header->chunk_count; ++j)
                {
                   dxbc_header->chunk_offsets[j] += shader_patch.size() * sizeof(uint32_t);
@@ -259,7 +259,7 @@ void PatchPixelShader(std::vector<std::byte>& shader_code, uint32_t coord_input_
                   uint32_t dest_0_operand_token =
                      ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
                      ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_MASK_MODE) |
-                     ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(0x30) |
+                     ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(D3D10_SB_OPERAND_4_COMPONENT_MASK_X | D3D10_SB_OPERAND_4_COMPONENT_MASK_Y) |
                      ENCODE_D3D10_SB_OPERAND_TYPE(D3D10_SB_OPERAND_TYPE_TEMP) |
                      ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
                      ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
@@ -293,7 +293,7 @@ void PatchPixelShader(std::vector<std::byte>& shader_code, uint32_t coord_input_
                   uint32_t dest_0_operand_token =
                      ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
                      ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_MASK_MODE) |
-                     ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(0x30) |
+                     ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(D3D10_SB_OPERAND_4_COMPONENT_MASK_X | D3D10_SB_OPERAND_4_COMPONENT_MASK_Y) |
                      ENCODE_D3D10_SB_OPERAND_TYPE(D3D10_SB_OPERAND_TYPE_TEMP) |
                      ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
                      ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
@@ -327,7 +327,7 @@ void PatchPixelShader(std::vector<std::byte>& shader_code, uint32_t coord_input_
                   uint32_t dest_0_operand_token =
                      ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
                      ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_MASK_MODE) |
-                     ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(0x30) |
+                     ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(D3D10_SB_OPERAND_4_COMPONENT_MASK_X | D3D10_SB_OPERAND_4_COMPONENT_MASK_Y) |
                      ENCODE_D3D10_SB_OPERAND_TYPE(D3D10_SB_OPERAND_TYPE_OUTPUT) |
                      ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
                      ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
@@ -361,11 +361,11 @@ void PatchPixelShader(std::vector<std::byte>& shader_code, uint32_t coord_input_
                {
                   shader_code.insert(shader_code.begin() + dxbc_header->chunk_offsets[i] + pos + len * 4, (std::byte*)&shader_patch[0], (std::byte*)(&shader_patch[0] + shader_patch.size()));
                }
+               dxbc_header = (DXBCHeader*)&shader_code[0];
                shex = &shader_code[dxbc_header->chunk_offsets[i]];
                shex_header = (SHEXHeader*)shex;
                shex_header->chunk_size += shader_patch.size() * sizeof(uint32_t);
                shex_header->dword_count += shader_patch.size();
-               dxbc_header = (DXBCHeader*)&shader_code[0];
                for (uint32_t j = i + 1; j < dxbc_header->chunk_count; ++j)
                {
                   dxbc_header->chunk_offsets[j] += shader_patch.size() * sizeof(uint32_t);
@@ -705,11 +705,11 @@ void PatchVertexShader(std::vector<std::byte>& shader_code, uint32_t& prev_coord
                }
 
                shader_code.insert(shader_code.begin() + dxbc_header->chunk_offsets[i] + pos, (std::byte*)&shader_patch[0], (std::byte*)(&shader_patch[0] + shader_patch.size()));
+               dxbc_header = (DXBCHeader*)&shader_code[0];
                shex = &shader_code[dxbc_header->chunk_offsets[i]];
                shex_header = (SHEXHeader*)shex;
                shex_header->chunk_size += shader_patch.size() * sizeof(uint32_t);
                shex_header->dword_count += shader_patch.size();
-               dxbc_header = (DXBCHeader*)&shader_code[0];
                for (uint32_t j = i + 1; j < dxbc_header->chunk_count; ++j)
                {
                   dxbc_header->chunk_offsets[j] += shader_patch.size() * sizeof(uint32_t);
@@ -728,7 +728,7 @@ void PatchVertexShader(std::vector<std::byte>& shader_code, uint32_t& prev_coord
                   uint32_t operand_token =
                      ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
                      ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_MASK_MODE) |
-                     ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(0x10) |
+                     ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(D3D10_SB_OPERAND_4_COMPONENT_MASK_X) |
                      ENCODE_D3D10_SB_OPERAND_TYPE(D3D10_SB_OPERAND_TYPE_INPUT) |
                      ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
                      ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
@@ -738,11 +738,11 @@ void PatchVertexShader(std::vector<std::byte>& shader_code, uint32_t& prev_coord
                                                              operand_token, vertex_id_register, 6});
 
                   shader_code.insert(shader_code.begin() + dxbc_header->chunk_offsets[i] + pos, (std::byte*)&shader_patch[0], (std::byte*)(&shader_patch[0] + shader_patch.size()));
+                  dxbc_header = (DXBCHeader*)&shader_code[0];
                   shex = &shader_code[dxbc_header->chunk_offsets[i]];
                   shex_header = (SHEXHeader*)shex;
                   shex_header->chunk_size += shader_patch.size() * sizeof(uint32_t);
                   shex_header->dword_count += shader_patch.size();
-                  dxbc_header = (DXBCHeader*)&shader_code[0];
                   for (uint32_t j = i + 1; j < dxbc_header->chunk_count; ++j)
                   {
                      dxbc_header->chunk_offsets[j] += shader_patch.size() * sizeof(uint32_t);
@@ -777,7 +777,7 @@ void PatchVertexShader(std::vector<std::byte>& shader_code, uint32_t& prev_coord
                            uint32_t dest_0_operand_token =
                               ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
                               ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_MASK_MODE) |
-                              ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(0x10) |
+                              ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(D3D10_SB_OPERAND_4_COMPONENT_MASK_X) |
                               ENCODE_D3D10_SB_OPERAND_TYPE(D3D10_SB_OPERAND_TYPE_TEMP) |
                               ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
                               ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
@@ -837,7 +837,7 @@ void PatchVertexShader(std::vector<std::byte>& shader_code, uint32_t& prev_coord
                            uint32_t dest_0_operand_token =
                               ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
                               ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_MASK_MODE) |
-                              ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(0x70) |
+                              ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(D3D10_SB_OPERAND_4_COMPONENT_MASK_X | D3D10_SB_OPERAND_4_COMPONENT_MASK_Y | D3D10_SB_OPERAND_4_COMPONENT_MASK_Z) |
                               ENCODE_D3D10_SB_OPERAND_TYPE(D3D10_SB_OPERAND_TYPE_TEMP) |
                               ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
                               ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
@@ -870,7 +870,7 @@ void PatchVertexShader(std::vector<std::byte>& shader_code, uint32_t& prev_coord
                            uint32_t dest_operand_token =
                               ENCODE_D3D10_SB_OPERAND_NUM_COMPONENTS(D3D10_SB_OPERAND_4_COMPONENT) |
                               ENCODE_D3D10_SB_OPERAND_4_COMPONENT_SELECTION_MODE(D3D10_SB_OPERAND_4_COMPONENT_MASK_MODE) |
-                              ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(0x80) |
+                              ENCODE_D3D10_SB_OPERAND_4_COMPONENT_MASK(D3D10_SB_OPERAND_4_COMPONENT_MASK_W) |
                               ENCODE_D3D10_SB_OPERAND_TYPE(D3D10_SB_OPERAND_TYPE_TEMP) |
                               ENCODE_D3D10_SB_OPERAND_INDEX_DIMENSION(D3D10_SB_OPERAND_INDEX_1D) |
                               ENCODE_D3D10_SB_OPERAND_INDEX_REPRESENTATION(0, D3D10_SB_OPERAND_INDEX_IMMEDIATE32);
@@ -886,11 +886,11 @@ void PatchVertexShader(std::vector<std::byte>& shader_code, uint32_t& prev_coord
                         }
 
                         shader_code.insert(shader_code.begin() + dxbc_header->chunk_offsets[i] + pos, (std::byte*)&shader_patch[0], (std::byte*)(&shader_patch[0] + shader_patch.size()));
+                        dxbc_header = (DXBCHeader*)&shader_code[0];
                         shex = &shader_code[dxbc_header->chunk_offsets[i]];
                         shex_header = (SHEXHeader*)shex;
                         shex_header->chunk_size += shader_patch.size() * sizeof(uint32_t);
                         shex_header->dword_count += shader_patch.size();
-                        dxbc_header = (DXBCHeader*)&shader_code[0];
                         for (uint32_t j = i + 1; j < dxbc_header->chunk_count; ++j)
                         {
                            dxbc_header->chunk_offsets[j] += shader_patch.size() * sizeof(uint32_t);

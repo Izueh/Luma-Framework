@@ -32,37 +32,31 @@ SamplerState srcSampler_s : register(s0);
 Texture2D<float4> srcSamplerTexture : register(t0);
 
 
-// 3Dmigoto declarations
-#define cmp -
-
-
 void main(
   float4 v0 : SV_POSITION0,
   float4 v1 : TEXCOORD0,
   float4 v2 : TEXCOORD1,
   out float4 o0 : SV_TARGET0)
 {
-  float4 r0,r1;
-  uint4 bitmask, uiDest;
-  float4 fDest;
+  // Positive tent filter covers the quarter-resolution downsample footprint.
+  float2 uv = (v1.xy + v2.zw) * 0.5;
+  float2 pixelOffset = (v1.zw - v2.xy) * 0.5;
+  float3 color = srcSamplerTexture.SampleLevel(srcSampler_s, uv, 0).xyz * 0.125;
+  color += srcSamplerTexture.SampleLevel(srcSampler_s, uv + pixelOffset * float2(-2, -2), 0).xyz * 0.03125;
+  color += srcSamplerTexture.SampleLevel(srcSampler_s, uv + pixelOffset * float2( 2, -2), 0).xyz * 0.03125;
+  color += srcSamplerTexture.SampleLevel(srcSampler_s, uv + pixelOffset * float2(-2,  2), 0).xyz * 0.03125;
+  color += srcSamplerTexture.SampleLevel(srcSampler_s, uv + pixelOffset * float2( 2,  2), 0).xyz * 0.03125;
+  color += srcSamplerTexture.SampleLevel(srcSampler_s, uv + pixelOffset * float2(-2,  0), 0).xyz * 0.0625;
+  color += srcSamplerTexture.SampleLevel(srcSampler_s, uv + pixelOffset * float2( 2,  0), 0).xyz * 0.0625;
+  color += srcSamplerTexture.SampleLevel(srcSampler_s, uv + pixelOffset * float2( 0, -2), 0).xyz * 0.0625;
+  color += srcSamplerTexture.SampleLevel(srcSampler_s, uv + pixelOffset * float2( 0,  2), 0).xyz * 0.0625;
+  color += srcSamplerTexture.SampleLevel(srcSampler_s, v1.xy, 0).xyz * 0.125;
+  color += srcSamplerTexture.SampleLevel(srcSampler_s, v1.zw, 0).xyz * 0.125;
+  color += srcSamplerTexture.SampleLevel(srcSampler_s, v2.xy, 0).xyz * 0.125;
+  color += srcSamplerTexture.SampleLevel(srcSampler_s, v2.zw, 0).xyz * 0.125;
 
-  r0.xyz = srcSamplerTexture.SampleLevel(srcSampler_s, v1.xy, 0).xyz;
-  r1.xyz = srcSamplerTexture.SampleLevel(srcSampler_s, v1.zw, 0).xyz;
-  r0.xyz = r1.xyz + r0.xyz;
-  r1.xyz = srcSamplerTexture.SampleLevel(srcSampler_s, v2.xy, 0).xyz;
-  r0.xyz = r1.xyz + r0.xyz;
-  r1.xyz = srcSamplerTexture.SampleLevel(srcSampler_s, v2.zw, 0).xyz;
-  r0.xyz = r1.xyz + r0.xyz;
-  r0.xyz = float3(0.25,0.25,0.25) * r0.xyz;
-  r0.w = dot(r0.xyz, float3(0.298999995,0.587000012,0.114));
-  r0.w = max(9.99999975e-06, r0.w);
-  r1.x = -highpass_threshold.x + r0.w;
-  r1.x = max(9.99999975e-06, r1.x);
-  r0.w = r1.x / r0.w;
-  r0.xyz = r0.xyz * r0.www;
-  r0.xyz = log2(r0.xyz);
-  r0.xyz = highpass_gamma.xyz * r0.xyz;
-  o0.xyz = exp2(r0.xyz);
+  float luma = max(9.99999975e-06, dot(color, float3(0.298999995, 0.587000012, 0.114)));
+  color *= max(9.99999975e-06, luma - highpass_threshold.x) / luma;
+  o0.xyz = exp2(highpass_gamma.xyz * log2(color));
   o0.w = 0;
-  return;
 }
