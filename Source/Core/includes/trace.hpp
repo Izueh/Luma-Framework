@@ -329,6 +329,7 @@ namespace Trace
    inline bool ignore_bindings = true;
    inline bool ignore_custom_draws = true; // Luma passes ("Trace::CustomDraw()")
    inline bool ignore_non_bound_shader_referenced_resources = true;
+   inline std::string highlighted_resource; // The resource the capture list and the textures tab highlight
 
    // Textures debug drawing
    inline uint32_t debug_draw_shader_hash = 0;
@@ -418,6 +419,10 @@ namespace Trace
    bool EndGameDraw(const GameDraw& game_draw, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::command_list* cmd_list, bool cancelled_or_replaced, const std::function<void()>& draw);
    // Core: at the end of every frame
    void EndFrame(DeviceData& device_data);
+
+   // The dev UI ("trace_ui.inl"): the Captured Commands tab, and the debug draw settings (in the Settings tab)
+   void DrawCaptureTab(reshade::api::effect_runtime* runtime, DeviceData& device_data, bool& open_settings_tab);
+   void DrawDebugDrawSettings(DeviceData& device_data);
    // Core: moves the entries queued on this thread for "native_device_context" into its trace at "index" (the other contexts' are dropped),
    // and returns how many. Expects the trace mutexes locked.
    size_t MoveQueued(std::vector<TraceDrawCallData>& trace_draw_calls_data, ID3D11DeviceContext* native_device_context, size_t index = SIZE_MAX);
