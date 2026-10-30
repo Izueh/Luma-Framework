@@ -581,6 +581,32 @@ namespace Trace
          return shader ? find(device_data.native_pixel_shaders, shader.get()) : 0;
       }
 
+      // Builds an event entry with "setup" and adds it to the trace, while a capture runs
+      template <typename TSetup>
+      void AddEventEntry(CommandListData& cmd_list_data, ID3D11DeviceContext* command_list, TraceDrawCallData::TraceDrawCallType type, TSetup&& setup)
+      {
+         if (!running) // Unlocked early out, rechecked under the lock
+            return;
+         const std::shared_lock lock_trace(s_mutex);
+         if (!running)
+            return;
+         TraceDrawCallData trace_draw_call_data;
+         trace_draw_call_data.type = type;
+         trace_draw_call_data.command_list = command_list;
+         setup(trace_draw_call_data);
+         const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+         cmd_list_data.trace_draw_calls_data.push_back(std::move(trace_draw_call_data));
+      }
+
+      void SetEventResources(TraceDrawCallData& trace_draw_call_data, ID3D11Resource* source, ID3D11Resource* target)
+      {
+         // Re-use the SRV and RTV data for simplicity
+         if (source)
+            GetResourceInfo(source, trace_draw_call_data.sr_size[0], trace_draw_call_data.sr_format[0], &trace_draw_call_data.sr_type_name[0], &trace_draw_call_data.sr_hash[0]);
+         if (target)
+            GetResourceInfo(target, trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
+      }
+
       struct NativeShaderReflection
       {
          const void* code = nullptr; // Read again when the shader is recompiled
@@ -731,6 +757,49 @@ namespace Trace
       DrawDispatchData draw_dispatch_data;
       draw_dispatch_data.dispatch_count = {thread_group_count_x, thread_group_count_y, thread_group_count_z};
       RecordCustomPass(native_device_context, name, reshade::api::shader_stage::compute, draw_dispatch_data);
+   }
+
+   void AddEvent(CommandListData& cmd_list_data, ID3D11DeviceContext* command_list, TraceDrawCallData::TraceDrawCallType type, ID3D11Resource* source, ID3D11Resource* target)
+   {
+      AddEventEntry(cmd_list_data, command_list, type, [&](TraceDrawCallData& trace_draw_call_data)
+         { SetEventResources(trace_draw_call_data, source, target); });
+   }
+
+   void AddClear(reshade::api::command_list* cmd_list, reshade::api::resource_view view, std::initializer_list<float> values)
+   {
+      if (view.handle == 0)
+         return;
+      AddEventEntry(*cmd_list->get_private_data<CommandListData>(), (ID3D11DeviceContext*)(cmd_list->get_native()), TraceDrawCallData::TraceDrawCallType::ClearResource, [&](TraceDrawCallData& trace_draw_call_data)
+         {
+            SetEventResources(trace_draw_call_data, nullptr, reinterpret_cast<ID3D11Resource*>(cmd_list->get_device()->get_resource_from_view(view).handle));
+            std::copy_n(values.begin(), (std::min)(values.size(), std::size(trace_draw_call_data.blend_factor)), trace_draw_call_data.blend_factor);
+         });
+   }
+
+   void AddCopy(CommandListData& cmd_list_data, ID3D11DeviceContext* command_list, ID3D11Resource* source, ID3D11Resource* target, const TraceDrawCallData::CopyInfo& copy_info)
+   {
+      AddEventEntry(cmd_list_data, command_list, TraceDrawCallData::TraceDrawCallType::CopyResource, [&](TraceDrawCallData& trace_draw_call_data)
+         {
+            trace_draw_call_data.copy_info = copy_info;
+            SetEventResources(trace_draw_call_data, source, target);
+         });
+   }
+
+   void JoinCommandList(CommandListData& cmd_list_data, CommandListData& secondary_cmd_list_data, ID3D11DeviceContext* command_list, bool is_finish_command_list)
+   {
+      if (!running)
+         return;
+      const std::shared_lock lock_trace(s_mutex);
+      if (!running)
+         return;
+      TraceDrawCallData trace_draw_call_data;
+      trace_draw_call_data.type = is_finish_command_list ? TraceDrawCallData::TraceDrawCallType::CreateCommandList : TraceDrawCallData::TraceDrawCallType::AppendCommandList;
+      trace_draw_call_data.command_list = command_list;
+      const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+      cmd_list_data.trace_draw_calls_data.push_back(std::move(trace_draw_call_data));
+      const std::unique_lock lock_trace_3(secondary_cmd_list_data.mutex_trace);
+      cmd_list_data.trace_draw_calls_data.append_range(secondary_cmd_list_data.trace_draw_calls_data);
+      secondary_cmd_list_data.trace_draw_calls_data.clear(); // Clear the command list where the data was from (given it was moved to the other one)
    }
 
    void Marker(ID3D11DeviceContext* native_device_context, const char* name, ID3D11DeviceChild* target)

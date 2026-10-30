@@ -4556,17 +4556,7 @@ namespace
       cmd_list_data.pipeline_state_has_custom_graphics_shader = cmd_list_data.pipeline_state_has_custom_pixel_shader || cmd_list_data.pipeline_state_has_custom_vertex_shader;
 
 #if DEVELOPMENT // Note: we only print the supported ones!
-      const std::shared_lock lock_trace(Trace::s_mutex);
-      if (Trace::running)
-      {
-         CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-         const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-         TraceDrawCallData trace_draw_call_data;
-         trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::BindPipeline;
-         trace_draw_call_data.command_list = (ID3D11DeviceContext*)(cmd_list->get_native());
-         //trace_draw_call_data.custom_name = std::string("Bind Shader ") + Shader::Hash_NumToStr(cached_pipeline->shader_hashes[0], true); //TODOFT: fix ...
-         cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-      }
+      Trace::AddEvent(*cmd_list->get_private_data<CommandListData>(), (ID3D11DeviceContext*)(cmd_list->get_native()), TraceDrawCallData::TraceDrawCallType::BindPipeline);
 #endif
    }
 
@@ -5028,15 +5018,7 @@ namespace
 
       cmd_list_data.temp_custom_depth_stencil = ShaderCustomDepthStencilType::None;
 
-      const std::shared_lock lock_trace(Trace::s_mutex);
-      if (Trace::running)
-      {
-         const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-         TraceDrawCallData trace_draw_call_data;
-         trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::ResetCommmandList;
-         trace_draw_call_data.command_list = (ID3D11DeviceContext*)(cmd_list->get_native());
-         cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-      }
+      Trace::AddEvent(cmd_list_data, (ID3D11DeviceContext*)(cmd_list->get_native()), TraceDrawCallData::TraceDrawCallType::ResetCommmandList);
 #endif
    }
 
@@ -5047,16 +5029,7 @@ namespace
    {
       SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api());
 
-      const std::shared_lock lock_trace(Trace::s_mutex);
-      if (Trace::running)
-      {
-         CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-         const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-         TraceDrawCallData trace_draw_call_data;
-         trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::FlushCommandList;
-         trace_draw_call_data.command_list = (ID3D11DeviceContext*)(cmd_list->get_native());
-         cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-      }
+      Trace::AddEvent(*cmd_list->get_private_data<CommandListData>(), (ID3D11DeviceContext*)(cmd_list->get_native()), TraceDrawCallData::TraceDrawCallType::FlushCommandList);
    }
 #endif
 
@@ -5128,19 +5101,8 @@ namespace
       }
       secondary_cmd_list_data.requires_join = false;
 
-      const std::shared_lock lock_trace(Trace::s_mutex);
-      if (Trace::running)
-      {
-         const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-         TraceDrawCallData trace_draw_call_data;
-         trace_draw_call_data.type = is_finish_command_list ? TraceDrawCallData::TraceDrawCallType::CreateCommandList : TraceDrawCallData::TraceDrawCallType::AppendCommandList;
-         trace_draw_call_data.command_list = is_finish_command_list ? (ID3D11DeviceContext*)(secondary_cmd_list->get_native()) : (ID3D11DeviceContext*)(cmd_list->get_native()); // Show the target command list (device context), not the source one (the source draw calls will be below)
-         cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-
-         const std::unique_lock lock_trace_3(secondary_cmd_list_data.mutex_trace);
-         cmd_list_data.trace_draw_calls_data.append_range(secondary_cmd_list_data.trace_draw_calls_data);
-         secondary_cmd_list_data.trace_draw_calls_data.clear(); // Clear the command list where the data was from (given it was moved to the other one)
-      }
+      // Show the target command list (device context), not the source one (the source draw calls will be below)
+      Trace::JoinCommandList(cmd_list_data, secondary_cmd_list_data, is_finish_command_list ? (ID3D11DeviceContext*)(secondary_cmd_list->get_native()) : (ID3D11DeviceContext*)(cmd_list->get_native()), is_finish_command_list);
 #endif
 
       if (is_finish_command_list)
@@ -5675,18 +5637,7 @@ namespace
 #endif
 
 #if DEVELOPMENT
-      {
-         const std::shared_lock lock_trace(Trace::s_mutex);
-         if (Trace::running)
-         {
-            CommandListData& cmd_list_data = *queue->get_immediate_command_list()->get_private_data<CommandListData>();
-            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-            TraceDrawCallData trace_draw_call_data;
-            trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Present;
-            trace_draw_call_data.command_list = native_device_context;
-            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-         }
-      }
+      Trace::AddEvent(*queue->get_immediate_command_list()->get_private_data<CommandListData>(), native_device_context, TraceDrawCallData::TraceDrawCallType::Present);
 #endif // DEVELOPMENT
 
       cb_luma_global_settings.FrameIndex++;
@@ -8562,18 +8513,7 @@ namespace
             ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(buffer_range.buffer.handle);
 
 #if DEVELOPMENT
-            const std::shared_lock lock_trace(Trace::s_mutex);
-            if (Trace::running)
-            {
-               CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-               const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-               TraceDrawCallData trace_draw_call_data;
-               trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::BindResource;
-               trace_draw_call_data.command_list = (ID3D11DeviceContext*)(cmd_list->get_native());
-               // Re-use the SRV data for simplicity
-               GetResourceInfo(buffer, trace_draw_call_data.sr_size[0], trace_draw_call_data.sr_format[0], &trace_draw_call_data.sr_type_name[0], &trace_draw_call_data.sr_hash[0]);
-               cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-            }
+            Trace::AddEvent(*cmd_list->get_private_data<CommandListData>(), (ID3D11DeviceContext*)(cmd_list->get_native()), TraceDrawCallData::TraceDrawCallType::BindResource, buffer);
 #endif
 
 #if ENABLE_AUTO_CBUFFER_RESTORATION
@@ -8714,22 +8654,10 @@ namespace
       DeviceData& device_data = *device->get_private_data<DeviceData>();
 
       {
-         const std::shared_lock lock_trace(Trace::s_mutex);
-         if (Trace::running)
-         {
-            auto& cmd_list_data = *device_data.primary_command_list_data;
-            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-            TraceDrawCallData trace_draw_call_data;
-            trace_draw_call_data.type = access == reshade::api::map_access::read_only ? TraceDrawCallData::TraceDrawCallType::CPURead : TraceDrawCallData::TraceDrawCallType::CPUWrite; // The writes could be read too, but we don't have a type for that yet
-            trace_draw_call_data.command_list = device_data.primary_command_list;
-            ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
-            // Re-use the SRV/RTV data for simplicity
-            if (trace_draw_call_data.type == TraceDrawCallData::TraceDrawCallType::CPURead)
-               GetResourceInfo(target_resource, trace_draw_call_data.sr_size[0], trace_draw_call_data.sr_format[0], &trace_draw_call_data.sr_type_name[0], &trace_draw_call_data.sr_hash[0]);
-            else
-               GetResourceInfo(target_resource, trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-         }
+         // The writes could be read too, but we don't have a type for that yet
+         const bool read = access == reshade::api::map_access::read_only;
+         ID3D11Resource* resource_native = reinterpret_cast<ID3D11Resource*>(resource.handle);
+         Trace::AddEvent(*device_data.primary_command_list_data, device_data.primary_command_list.get(), read ? TraceDrawCallData::TraceDrawCallType::CPURead : TraceDrawCallData::TraceDrawCallType::CPUWrite, read ? resource_native : nullptr, read ? nullptr : resource_native);
       }
    }
 
@@ -8741,21 +8669,8 @@ namespace
       }
       DeviceData& device_data = *device->get_private_data<DeviceData>();
 
-      {
-         const std::shared_lock lock_trace(Trace::s_mutex);
-         if (Trace::running)
-         {
-            auto& cmd_list_data = cmd_list ? *cmd_list->get_private_data<CommandListData>() : *device_data.primary_command_list_data;
-            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-            TraceDrawCallData trace_draw_call_data;
-            trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::CPUWrite;
-            trace_draw_call_data.command_list = cmd_list ? (ID3D11DeviceContext*)(cmd_list->get_native()) : device_data.primary_command_list;
-            ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(dest.handle);
-            // Re-use the RTV data for simplicity
-            GetResourceInfo(target_resource, trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-         }
-      }
+      Trace::AddEvent(cmd_list ? *cmd_list->get_private_data<CommandListData>() : *device_data.primary_command_list_data, cmd_list ? (ID3D11DeviceContext*)(cmd_list->get_native()) : device_data.primary_command_list.get(),
+         TraceDrawCallData::TraceDrawCallType::CPUWrite, nullptr, reinterpret_cast<ID3D11Resource*>(dest.handle));
 
       ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(dest.handle);
       // Verify that we didn't miss any changes to the global g-buffer
@@ -8785,22 +8700,10 @@ namespace
 
 #if DEVELOPMENT
       {
-         const std::shared_lock lock_trace(Trace::s_mutex);
-         if (Trace::running)
-         {
-            auto& cmd_list_data = *device_data.primary_command_list_data;
-            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-            TraceDrawCallData trace_draw_call_data;
-            trace_draw_call_data.type = access == reshade::api::map_access::read_only ? TraceDrawCallData::TraceDrawCallType::CPURead : TraceDrawCallData::TraceDrawCallType::CPUWrite; // The writes could be read too, but we don't have a type for that yet
-            trace_draw_call_data.command_list = device_data.primary_command_list;
-            ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
-            // Re-use the SRV/RTV data for simplicity
-            if (trace_draw_call_data.type == TraceDrawCallData::TraceDrawCallType::CPURead)
-               GetResourceInfo(target_resource, trace_draw_call_data.sr_size[0], trace_draw_call_data.sr_format[0], &trace_draw_call_data.sr_type_name[0], &trace_draw_call_data.sr_hash[0]);
-            else
-               GetResourceInfo(target_resource, trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-         }
+         // The writes could be read too, but we don't have a type for that yet
+         const bool read = access == reshade::api::map_access::read_only;
+         ID3D11Resource* resource_native = reinterpret_cast<ID3D11Resource*>(resource.handle);
+         Trace::AddEvent(*device_data.primary_command_list_data, device_data.primary_command_list.get(), read ? TraceDrawCallData::TraceDrawCallType::CPURead : TraceDrawCallData::TraceDrawCallType::CPUWrite, read ? resource_native : nullptr, read ? nullptr : resource_native);
       }
 
 #if GAME_PREY // For Prey only (given we manually upgrade resources through native hooks)
@@ -8923,21 +8826,7 @@ namespace
       DeviceData& device_data = *device->get_private_data<DeviceData>();
 
 #if DEVELOPMENT
-      {
-         const std::shared_lock lock_trace(Trace::s_mutex);
-         if (Trace::running)
-         {
-            auto& cmd_list_data = *device_data.primary_command_list_data;
-            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-            TraceDrawCallData trace_draw_call_data;
-            trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::CPUWrite;
-            trace_draw_call_data.command_list = device_data.primary_command_list;
-            ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
-            // Re-use the RTV data for simplicity
-            GetResourceInfo(target_resource, trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-         }
-      }
+      Trace::AddEvent(*device_data.primary_command_list_data, device_data.primary_command_list.get(), TraceDrawCallData::TraceDrawCallType::CPUWrite, nullptr, reinterpret_cast<ID3D11Resource*>(resource.handle));
 
 #if GAME_PREY // For Prey only (given we manually upgrade resources through native hooks)
       ID3D11Resource* native_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
@@ -9008,24 +8897,7 @@ namespace
       SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api(), false);
 
 #if DEVELOPMENT
-      {
-         const std::shared_lock lock_trace(Trace::s_mutex);
-         if (Trace::running && dsv.handle != 0)
-         {
-            CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-            TraceDrawCallData trace_draw_call_data;
-            trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::ClearResource;
-            trace_draw_call_data.command_list = (ID3D11DeviceContext*)(cmd_list->get_native());
-            ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(cmd_list->get_device()->get_resource_from_view(dsv).handle);
-            // Re-use the RTV data for simplicity
-            GetResourceInfo(target_resource, trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-            // Re-use the blend factor for simplicity
-            trace_draw_call_data.blend_factor[0] = depth ? *depth : 0.f;
-            trace_draw_call_data.blend_factor[1] = stencil ? float(*stencil) : 0.f;
-            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-         }
-      }
+      Trace::AddClear(cmd_list, dsv, {depth ? *depth : 0.f, stencil ? float(*stencil) : 0.f});
 #endif
       
       DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
@@ -9047,26 +8919,7 @@ namespace
       SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api(), false);
 
 #if DEVELOPMENT
-      {
-         const std::shared_lock lock_trace(Trace::s_mutex);
-         if (Trace::running && rtv.handle != 0)
-         {
-            CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-            TraceDrawCallData trace_draw_call_data;
-            trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::ClearResource;
-            trace_draw_call_data.command_list = (ID3D11DeviceContext*)(cmd_list->get_native());
-            ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(cmd_list->get_device()->get_resource_from_view(rtv).handle);
-            // Re-use the RTV data for simplicity
-            GetResourceInfo(target_resource, trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-            // Re-use the blend factor for simplicity
-            trace_draw_call_data.blend_factor[0] = color[0];
-            trace_draw_call_data.blend_factor[1] = color[1];
-            trace_draw_call_data.blend_factor[2] = color[2];
-            trace_draw_call_data.blend_factor[3] = color[3];
-            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-         }
-      }
+      Trace::AddClear(cmd_list, rtv, {color[0], color[1], color[2], color[3]});
 #endif
 
       DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
@@ -9088,26 +8941,7 @@ namespace
       SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api(), false);
 
 #if DEVELOPMENT
-      {
-         const std::shared_lock lock_trace(Trace::s_mutex);
-         if (Trace::running)
-         {
-            CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-            TraceDrawCallData trace_draw_call_data;
-            trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::ClearResource;
-            trace_draw_call_data.command_list = (ID3D11DeviceContext*)(cmd_list->get_native());
-            ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(cmd_list->get_device()->get_resource_from_view(uav).handle);
-            // Re-use the RTV data for simplicity
-            GetResourceInfo(target_resource, trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-            // Re-use the blend factor for simplicity
-            trace_draw_call_data.blend_factor[0] = float(values[0]);
-            trace_draw_call_data.blend_factor[1] = float(values[1]);
-            trace_draw_call_data.blend_factor[2] = float(values[2]);
-            trace_draw_call_data.blend_factor[3] = float(values[3]);
-            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-         }
-      }
+      Trace::AddClear(cmd_list, uav, {float(values[0]), float(values[1]), float(values[2]), float(values[3])});
 #endif
 
       DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
@@ -9141,26 +8975,7 @@ namespace
       SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api(), false);
 
 #if DEVELOPMENT
-      {
-         const std::shared_lock lock_trace(Trace::s_mutex);
-         if (Trace::running)
-         {
-            CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-            TraceDrawCallData trace_draw_call_data;
-            trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::ClearResource;
-            trace_draw_call_data.command_list = (ID3D11DeviceContext*)(cmd_list->get_native());
-            ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(cmd_list->get_device()->get_resource_from_view(uav).handle);
-            // Re-use the RTV data for simplicity
-            GetResourceInfo(target_resource, trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-            // Re-use the blend factor for simplicity
-            trace_draw_call_data.blend_factor[0] = values[0];
-            trace_draw_call_data.blend_factor[1] = values[1];
-            trace_draw_call_data.blend_factor[2] = values[2];
-            trace_draw_call_data.blend_factor[3] = values[3];
-            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-         }
-      }
+      Trace::AddClear(cmd_list, uav, {values[0], values[1], values[2], values[3]});
 #endif
 
       DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
@@ -9180,25 +8995,7 @@ namespace
    void OnCopyResource_Debug(reshade::api::command_list* cmd_list, reshade::api::resource source, reshade::api::resource dest, const TraceDrawCallData::CopyInfo& copy_info = {})
    {
 #if DEVELOPMENT
-      if (Trace::running) // Unlocked early out, every copy (including buffer ones) comes through here
-      {
-         const std::shared_lock lock_trace(Trace::s_mutex);
-         if (Trace::running)
-         {
-            CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-            TraceDrawCallData trace_draw_call_data;
-            trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::CopyResource;
-            trace_draw_call_data.command_list = (ID3D11DeviceContext*)(cmd_list->get_native());
-            trace_draw_call_data.copy_info = copy_info;
-            ID3D11Resource* source_resource = reinterpret_cast<ID3D11Resource*>(source.handle);
-            ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(dest.handle);
-            // Re-use the SRV and RTV data for simplicity
-            GetResourceInfo(source_resource, trace_draw_call_data.sr_size[0], trace_draw_call_data.sr_format[0], &trace_draw_call_data.sr_type_name[0], &trace_draw_call_data.sr_hash[0]);
-            GetResourceInfo(target_resource, trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-            cmd_list_data.trace_draw_calls_data.push_back(trace_draw_call_data);
-         }
-      }
+      Trace::AddCopy(*cmd_list->get_private_data<CommandListData>(), (ID3D11DeviceContext*)(cmd_list->get_native()), reinterpret_cast<ID3D11Resource*>(source.handle), reinterpret_cast<ID3D11Resource*>(dest.handle), copy_info);
 #endif
    }
 
