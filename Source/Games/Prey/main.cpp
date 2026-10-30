@@ -557,22 +557,7 @@ public:
             native_device_context->PSSetShader(device_data.native_pixel_shaders[CompileTimeStringHash("Draw Final Exposure")].get(), nullptr, 0);
             ID3D11RenderTargetView* render_target_view_const = game_device_data.exposure_buffer_rtv.get();
             native_device_context->OMSetRenderTargets(1, &render_target_view_const, nullptr);
-            native_device_context->Draw(3, 0);
-
-#if DEVELOPMENT
-            const std::shared_lock lock_trace(s_mutex_trace);
-            if (trace_running)
-            {
-               const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-               TraceDrawCallData trace_draw_call_data;
-               trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
-               trace_draw_call_data.command_list = native_device_context;
-               trace_draw_call_data.custom_name = "Super Resolution Draw Exposure"; // TODO: rename ~all text with DLSS in the name to "SR"
-               // Re-use the RTV data for simplicity
-               GetResourceInfo(game_device_data.exposure_buffer_gpu.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-               cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
-            }
-#endif
+            Trace::CustomDraw(native_device_context, device_data, "Super Resolution Draw Exposure", [&] { native_device_context->Draw(3, 0); }, CompileTimeStringHash("Draw Final Exposure"), true);
 
             // Copy it back as CPU buffer and read+store it
             native_device_context->CopyResource(game_device_data.exposure_buffers_cpu[game_device_data.exposure_buffers_cpu_index].get(), game_device_data.exposure_buffer_gpu.get());
@@ -1423,21 +1408,6 @@ public:
                if (sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data))
                {
                   device_data.has_drawn_sr = true;
-
-#if DEVELOPMENT
-                  const std::shared_lock lock_trace(s_mutex_trace);
-                  if (trace_running)
-                  {
-                     const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-                     TraceDrawCallData trace_draw_call_data;
-                     trace_draw_call_data.type = TraceDrawCallData::TraceDrawCallType::Custom;
-                     trace_draw_call_data.command_list = native_device_context;
-                     trace_draw_call_data.custom_name = "DLSS";
-                     // Re-use the RTV data for simplicity
-                     GetResourceInfo(device_data.sr_output_color.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
-                     cmd_list_data.trace_draw_calls_data.insert(cmd_list_data.trace_draw_calls_data.end() - 1, trace_draw_call_data);
-                  }
-#endif
                }
 
                // Fully reset the state of the RTs given that CryEngine is very delicate with it and uses some push and pop technique (simply resetting caching and resetting the first RT seemed fine for DLSS in case optimization is needed).

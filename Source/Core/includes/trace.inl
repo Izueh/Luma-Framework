@@ -535,7 +535,7 @@ namespace Trace
       }
    }
 
-   void RecordCustomPass(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const char* name, uint32_t shader_hash, reshade::api::shader_stage stage)
+   void RecordCustomPass(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const char* name, uint32_t shader_hash, reshade::api::shader_stage stage, bool before_current_draw)
    {
       if (!trace_running)
          return;
@@ -548,7 +548,7 @@ namespace Trace
          const std::shared_lock lock_device(device_data.mutex);
          CaptureState(trace_draw_call_data, device_data, native_device_context, stage, nullptr, {});
       }
-      queued_entries.push_back({std::move(trace_draw_call_data)});
+      queued_entries.push_back({std::move(trace_draw_call_data), before_current_draw});
    }
 
    void Marker(ID3D11DeviceContext* native_device_context, const char* name, ID3D11DeviceChild* target, bool before_current_draw)

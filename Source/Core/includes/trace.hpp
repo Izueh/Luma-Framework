@@ -19,25 +19,26 @@ namespace Trace
 {
 #if DEVELOPMENT
    // Records the state a Luma pass left bound (views, cbuffers, samplers, viewports, blend, depth/stencil and rasterizer state), see "CustomDraw"
-   void RecordCustomPass(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const char* name, uint32_t shader_hash, reshade::api::shader_stage stage);
+   void RecordCustomPass(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const char* name, uint32_t shader_hash, reshade::api::shader_stage stage, bool before_current_draw);
 #endif
 
    // Runs a Luma pass ("draw") and records it like a game draw, with the state bound after it: restore the previous state outside of "draw".
    // "name" is kept by the capture (a string literal). "shader_hash" is the "native_shaders_definitions" key of its pixel (or compute) shader.
+   // From a draw callback, "before_current_draw" places it before the entries of the game draw (that runs after it).
    template <typename TDraw>
-   void CustomDraw(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const char* name, TDraw&& draw, uint32_t shader_hash = 0)
+   void CustomDraw(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const char* name, TDraw&& draw, uint32_t shader_hash = 0, bool before_current_draw = false)
    {
       draw();
 #if DEVELOPMENT
-      RecordCustomPass(native_device_context, device_data, name, shader_hash, reshade::api::shader_stage::pixel);
+      RecordCustomPass(native_device_context, device_data, name, shader_hash, reshade::api::shader_stage::pixel, before_current_draw);
 #endif
    }
    template <typename TDispatch>
-   void CustomDispatch(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const char* name, TDispatch&& dispatch, uint32_t shader_hash = 0)
+   void CustomDispatch(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const char* name, TDispatch&& dispatch, uint32_t shader_hash = 0, bool before_current_draw = false)
    {
       dispatch();
 #if DEVELOPMENT
-      RecordCustomPass(native_device_context, device_data, name, shader_hash, reshade::api::shader_stage::compute);
+      RecordCustomPass(native_device_context, device_data, name, shader_hash, reshade::api::shader_stage::compute, before_current_draw);
 #endif
    }
 
