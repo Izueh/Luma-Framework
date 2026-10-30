@@ -253,8 +253,10 @@ struct TraceDrawCallData
 
    // Free text game code attached to this entry during the capture (see "Trace::Annotate")
    std::string note;
-   // What the shader that ran was built from ("None" for the original), after the draw callbacks picked the variant
+   // What the shader that ran was built from ("None" for the original), after the draw callbacks picked the variant (see "Shader::UsePipelineVariant()")
    Shader::CloneOrigin drawn_origin = Shader::CloneOrigin::None;
+   // The draw callbacks didn't let the draw through: they cancelled it, or drew something else in its place
+   bool cancelled_or_replaced = false;
 
    // TODO: these might not always be filled up!
    bool any_input_resources_format_upgraded = false;
@@ -466,8 +468,8 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
 #if DEVELOPMENT
    std::shared_mutex mutex_trace;
    std::vector<TraceDrawCallData> trace_draw_calls_data;
-
-   void AddGraphicsCaptureCustomDrawCall(const char* name, class ID3D11DeviceContext* native_device_context, class ID3D11Resource* resource = nullptr, class ID3D11View* view = nullptr);
+   // The entries of the draw being processed (first, count), see "Trace::EndDraw"
+   std::pair<size_t, size_t> trace_current_draw = {};
 
    bool requires_join = false;
 

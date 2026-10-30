@@ -621,9 +621,10 @@ namespace Trace
       trace_draw_calls_data.push_back(std::move(trace_draw_call_data));
    }
 
-   void MoveQueued(std::vector<TraceDrawCallData>& trace_draw_calls_data, ID3D11DeviceContext* native_device_context, size_t current_draw_index)
+   size_t MoveQueued(std::vector<TraceDrawCallData>& trace_draw_calls_data, ID3D11DeviceContext* native_device_context, size_t current_draw_index)
    {
       current_draw_index = (std::min)(current_draw_index, trace_draw_calls_data.size());
+      const size_t first_draw_index = current_draw_index;
       for (QueuedEntry& queued_entry : queued_entries)
       {
          if (queued_entry.entry.command_list.get() != native_device_context)
@@ -634,6 +635,18 @@ namespace Trace
             trace_draw_calls_data.push_back(std::move(queued_entry.entry));
       }
       queued_entries.clear();
+      return current_draw_index - first_draw_index;
+   }
+
+   void EndDraw(CommandListData& cmd_list_data, bool cancelled_or_replaced)
+   {
+      if (!trace_running)
+         return;
+      const std::shared_lock lock_trace(s_mutex_trace);
+      const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+      const auto [first, count] = std::exchange(cmd_list_data.trace_current_draw, {});
+      for (size_t i = first; cancelled_or_replaced && i < first + count && i < cmd_list_data.trace_draw_calls_data.size(); i++)
+         cmd_list_data.trace_draw_calls_data[i].cancelled_or_replaced = true;
    }
 
    void ClearQueued()

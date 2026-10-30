@@ -6007,6 +6007,35 @@ namespace
       }
 #endif //DEVELOPMENT
 
+#if DEVELOPMENT
+      // On every way out of the draw callbacks: stamps the variant the draw's shaders ran with (see "Shader::UsePipelineVariant()"), and moves the
+      // passes queued meanwhile into the trace (see "Trace::EndDraw()")
+      const auto finish_trace = [&]
+      {
+         const std::shared_lock lock_trace(s_mutex_trace);
+         if (!trace_running)
+         {
+            Trace::ClearQueued();
+            return;
+         }
+         const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
+         auto& entries = cmd_list_data.trace_draw_calls_data;
+         const size_t draw_index = (std::min)(trace_start_index.value_or(entries.size()), entries.size());
+         for (size_t i = draw_index; i < entries.size(); i++)
+         {
+            auto& entry = entries[i];
+            if (entry.type != TraceDrawCallData::TraceDrawCallType::Shader) continue;
+            if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_compute_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::compute);
+            else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_vertex_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::vertex);
+            else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_pixel_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::pixel);
+         }
+         const size_t draw_count = entries.size() - draw_index;
+         // Luma passes the game drew from its hook (SMAA, RCAS, bloom, SR), after the draw's own entries (unless they are markers placed before it)
+         const size_t inserted_before = Trace::MoveQueued(entries, native_device_context, draw_index);
+         cmd_list_data.trace_current_draw = {draw_index + inserted_before, draw_count};
+      };
+#endif
+
       const bool mod_active = IsModActive(device_data);
 
       if (!is_dispatch && enable_ui_separation && mod_active)
@@ -6090,6 +6119,9 @@ namespace
       }
       else if (!is_dispatch && hide_ui && cmd_list_data.is_known_ui_shader_bound)
       {
+#if DEVELOPMENT
+         finish_trace();
+#endif
          return true; // Skip draw call
       }
 
@@ -6594,7 +6626,13 @@ namespace
          {
             draw_or_dispatch_override_type = OnDrawOrDispatchCustomPipeline(native_device_context,
                cmd_list_data, device_data, is_dispatch, updated_cbuffers, original_draw_dispatch_func);
-            if (draw_or_dispatch_override_type != DrawOrDispatchOverrideType::None) return true;
+            if (draw_or_dispatch_override_type != DrawOrDispatchOverrideType::None)
+            {
+#if DEVELOPMENT
+               finish_trace();
+#endif
+               return true;
+            }
          }
          is_custom_pass = is_dispatch ? cmd_list_data.pipeline_state_has_custom_compute_shader : cmd_list_data.pipeline_state_has_custom_graphics_shader;
          // Use the specific callback if there's one, and fall back on the generic one otherwise.
@@ -6608,27 +6646,7 @@ namespace
          }
 
 #if DEVELOPMENT
-         {
-            const std::shared_lock lock_trace(s_mutex_trace);
-            if (trace_running)
-            {
-               const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-               for (size_t i = trace_start_index.value_or(SIZE_MAX); i < cmd_list_data.trace_draw_calls_data.size(); i++)
-               {
-                  auto& entry = cmd_list_data.trace_draw_calls_data[i];
-                  if (entry.type != TraceDrawCallData::TraceDrawCallType::Shader) continue;
-                  if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_compute_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::compute);
-                  else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_vertex_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::vertex);
-                  else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_pixel_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::pixel);
-               }
-               // Luma passes the game drew from its hook (SMAA, RCAS, bloom, SR), after the draw's own entries
-               Trace::MoveQueued(cmd_list_data.trace_draw_calls_data, native_device_context, trace_start_index.value_or(SIZE_MAX));
-            }
-            else
-            {
-               Trace::ClearQueued();
-            }
-         }
+         finish_trace();
 #endif
 
          if (draw_or_dispatch_override_type != DrawOrDispatchOverrideType::None)
@@ -6989,20 +7007,7 @@ namespace
       // TODO: add performance tracing around these
       bool cancelled_or_replaced = OnDrawOrDispatch_Custom<false>(cmd_list, updated_cbuffers, original_draw_dispatch_func);
 #if DEVELOPMENT
-#if 0 // TODO: We should do this manually when replacing each draw call, we don't know if it was replaced or cancelled here
-      {
-         const std::shared_lock lock_trace(s_mutex_trace);
-         if (cancelled_or_replaced && trace_running)
-         {
-            const std::shared_lock lock_generic(s_mutex_generic);
-            const std::unique_lock lock_trace_2(cmd_list_data.mutex_trace);
-            if (cmd_list_data.pipeline_state_original_pixel_shader.handle != 0)
-            {
-               cmd_list_data.trace_draw_calls_data[cmd_list_data.trace_draw_calls_data.size() - 1].skipped = true;
-            }
-         }
-      }
-#endif
+      Trace::EndDraw(cmd_list_data, cancelled_or_replaced);
 
       // First run the draw call (don't delegate it to ReShade) and then copy its output
       if (wants_debug_draw)
@@ -7179,6 +7184,7 @@ namespace
       bool updated_cbuffers = false;
       bool cancelled_or_replaced = OnDrawOrDispatch_Custom<false>(cmd_list, updated_cbuffers, original_draw_dispatch_func);
 #if DEVELOPMENT
+      Trace::EndDraw(cmd_list_data, cancelled_or_replaced);
       // First run the draw call (don't delegate it to ReShade) and then copy its output
       if (wants_debug_draw)
       {
@@ -7318,6 +7324,7 @@ namespace
       bool updated_cbuffers = false;
       bool cancelled_or_replaced = OnDrawOrDispatch_Custom<true>(cmd_list, updated_cbuffers, original_draw_dispatch_func);
 #if DEVELOPMENT
+      Trace::EndDraw(cmd_list_data, cancelled_or_replaced);
       // First run the draw call (don't delegate it to ReShade) and then copy its output
       if (wants_debug_draw)
       {
@@ -7504,6 +7511,7 @@ namespace
          ? OnDrawOrDispatch_Custom<true>(cmd_list, updated_cbuffers, original_draw_dispatch_func)
          : OnDrawOrDispatch_Custom<false>(cmd_list, updated_cbuffers, original_draw_dispatch_func);
 #if DEVELOPMENT
+      Trace::EndDraw(cmd_list_data, cancelled_or_replaced);
       if (wants_debug_draw)
       {
          auto local_debug_draw_pipeline_instance = debug_draw_pipeline_instance.fetch_add(1);
@@ -10966,6 +10974,16 @@ namespace
                            if (custom_shader != nullptr && !custom_shader->compilation_errors.empty())
                            {
                               text_color = custom_shader->compilation_error ? IM_COL32(255, 0, 0, 255) : IM_COL32(255, 165, 0, 255); // Red for Error, Orange for Warning
+                           }
+
+                           if (draw_call_data.cancelled_or_replaced)
+                           {
+                              name << " (cancelled/replaced)";
+                              text_color = IM_COL32(128, 128, 128, 255); // Grey
+                           }
+                           else if (is_replaced_shader_clone && draw_call_data.drawn_origin == Shader::CloneOrigin::None)
+                           {
+                              name << " (ran original)";
                            }
 
                            if (same_as_selected)

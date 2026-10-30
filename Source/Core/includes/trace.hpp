@@ -53,8 +53,10 @@ namespace Trace
    // Core: a game draw's entry for one of its shaders. Expects "s_mutex_generic", "s_mutex_dumping" and "device_data.mutex" (shared) locked.
    void AddDrawCall(std::vector<TraceDrawCallData>& trace_draw_calls_data, const DeviceData& device_data, ID3D11DeviceContext* native_device_context, uint64_t pipeline_handle, const DrawDispatchData& draw_dispatch_data);
    // Core: moves the entries queued on this thread for "native_device_context" into its trace (the other contexts' are dropped),
-   // the "before_current_draw" ones at "current_draw_index". Expects the trace mutexes locked.
-   void MoveQueued(std::vector<TraceDrawCallData>& trace_draw_calls_data, ID3D11DeviceContext* native_device_context, size_t current_draw_index = SIZE_MAX);
+   // the "before_current_draw" ones at "current_draw_index" (returns how many). Expects the trace mutexes locked.
+   size_t MoveQueued(std::vector<TraceDrawCallData>& trace_draw_calls_data, ID3D11DeviceContext* native_device_context, size_t current_draw_index = SIZE_MAX);
+   // Core: called by the draw hooks with what the draw callbacks returned, flags the entries of the draw ("trace_current_draw") if they didn't let it through
+   void EndDraw(CommandListData& cmd_list_data, bool cancelled_or_replaced);
    void ClearQueued();
 #else
    inline void Marker(ID3D11DeviceContext*, const char*, ID3D11DeviceChild* = nullptr, bool = false) {}

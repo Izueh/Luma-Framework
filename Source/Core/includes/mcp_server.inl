@@ -429,6 +429,8 @@ namespace Mcp
                if (pipeline->cloned || entry.drawn_origin != Shader::CloneOrigin::None)
                   w->Field("variant", EnumName(clone_origin_names, size_t(entry.drawn_origin)));
             }
+            if (entry.cancelled_or_replaced)
+               w->Field("cancelled_or_replaced", true);
             else
             {
                w->Field("stage", "unknown"); // Destroyed since the capture
@@ -680,6 +682,7 @@ namespace Mcp
          bool include_bindings;
          bool include_buffer_writes;
          bool replaced_only;
+         bool cancelled_only;
          const std::string* type;
          std::optional<uint32_t> hash;
          const std::string* stage;
@@ -693,6 +696,8 @@ namespace Mcp
             if ((pipeline && pipeline->HasVertexShader() && !include_vs) || ((entry.type == Type::BindPipeline || entry.type == Type::BindResource) && !include_bindings) || (entry.type == Type::CPUWrite && entry.rt_type_name[0] == "Buffer" && !include_buffer_writes))
                return false;
             if ((type && *type != EnumName(trace_type_names, size_t(entry.type))) || (hash && (!pipeline || pipeline->shader_hashes[0] != *hash)) || (stage && (!pipeline || _stricmp(stage->c_str(), pipeline->StageName()) != 0)) || (replaced_only && (!pipeline || !IsReplaced(*pipeline))))
+               return false;
+            if (cancelled_only && !entry.cancelled_or_replaced)
                return false;
             if (variant && (entry.type != Type::Shader || *variant != EnumName(clone_origin_names, size_t(entry.drawn_origin))))
                return false;
@@ -1315,6 +1320,7 @@ namespace Mcp
             .include_bindings = job->BoolArg("include_bindings", false),
             .include_buffer_writes = job->BoolArg("include_buffer_writes", false),
             .replaced_only = job->BoolArg("replaced_only", false),
+            .cancelled_only = job->BoolArg("cancelled_only", false),
             .type = job->Arg("type"),
             .hash = job->HashArg("hash"),
             .stage = job->Arg("stage"),

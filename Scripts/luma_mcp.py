@@ -121,10 +121,11 @@ TOOLS = [
         "luma_trace_list",
         "List entries of the last capture (compact). Hides VS entries, bindings and buffer writes by default (like the dev UI). "
         "Fields: index, type, stage, hash, replaced (none/file/patch_*), variant (what ran for a cloned shader: original/file/patch, original when a "
-        "recipe resource was missing or the game picked it), upgrade_flags (^ input upgraded, v output upgraded, \\ / scaled), rt0, depth, "
+        "recipe resource was missing or the game picked it), cancelled_or_replaced (the draw callbacks didn't let the draw through), upgrade_flags (^ input upgraded, v output upgraded, \\ / scaled), rt0, depth, "
         "copy_kind, note (the game's own per draw decision, e.g. mv / jitter / unpatched / mv_reject=N).",
         {"type": {"type": "string", "description": "shader, custom, copy, clear, present, cpu_read, cpu_write, ..."},
          "variant": {"type": "string", "description": "Only shader entries that ran this variant: original, file, patch"},
+         "cancelled_only": {"type": "boolean", "description": "Only shader entries the draw callbacks cancelled or replaced"},
          "hash": {"type": "string", "description": "Only entries of this shader (0x12345678)"}, "stage": {"type": "string", "description": "PS, VS, CS, GS"},
          "resource": {"type": "string", "description": "Resource id (the 'resource' field of luma_trace_get) read or written by the entry"},
          "replaced_only": {"type": "boolean", "description": "Only entries whose shader Luma replaced or patched"},

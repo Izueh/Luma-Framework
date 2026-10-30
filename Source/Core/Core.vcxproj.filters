@@ -26,9 +26,6 @@
     <ClCompile Include="interop\D3D12Interop.cpp">
       <Filter>Interop</Filter>
     </ClCompile>
-    <ClCompile Include="includes\instance_data.cpp">
-      <Filter>Includes</Filter>
-    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <Filter Include="DLSS">
