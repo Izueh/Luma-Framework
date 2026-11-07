@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="..\..\Props\Luma2.Configurations.props" />
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <ProjectGuid>{90863F95-7FB1-4575-86F4-005003B20D8A}</ProjectGuid>
+    <RootNamespace>Core</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>StaticLibrary</ConfigurationType>
+  </PropertyGroup>
+  <Import Project="..\..\Props\Luma2.Common.props" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+
+  <ItemGroup>
+    <ClInclude Include="common\api.hpp" />
+    <ClInclude Include="common\math.hpp" />
+    <ClInclude Include="core.hpp" />
+    <ClInclude Include="game\game.hpp" />
+    <ClInclude Include="handlers\d3d11_handlers.hpp" />
+    <ClInclude Include="handlers\d3d12_handlers.hpp" />
+    <ClInclude Include="handlers\dxgi_handlers.hpp" />
+    <ClInclude Include="hooks\device_proxy.hpp" />
+    <ClInclude Include="hooks\hooks.hpp" />
+    <ClInclude Include="hooks\lifetime.hpp" />
+    <ClInclude Include="hooks\scope.hpp" />
+    <ClInclude Include="hooks\slots.h" />
+    <ClInclude Include="hooks\vtables.hpp" />
+    <ClInclude Include="settings\registry.hpp" />
+    <ClInclude Include="settings\storage.hpp" />
+    <ClInclude Include="trace\info.hpp" />
+    <ClInclude Include="trace\mcp.hpp" />
+    <ClInclude Include="ui\d3d11_renderer.hpp" />
+    <ClInclude Include="ui\d3d12_renderer.hpp" />
+    <ClInclude Include="ui\input.hpp" />
+    <ClInclude Include="ui\main_ui.hpp" />
+    <ClInclude Include="ui\overlay.hpp" />
+    <ClInclude Include="utils\depth_guard.hpp" />
+    <ClInclude Include="utils\hash.hpp" />
+    <ClInclude Include="utils\json.hpp" />
+    <ClInclude Include="utils\log.hpp" />
+    <ClInclude Include="utils\modules.hpp" />
+    <ClInclude Include="utils\strings.hpp" />
+    <ClInclude Include="utils\toml.hpp" />
+    <ClInclude Include="validation\d3d11_validation.hpp" />
+    <ClInclude Include="validation\d3d12_validation.hpp" />
+    <ClInclude Include="validation\validation.hpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="core.cpp" />
+    <ClCompile Include="game\game.cpp" />
+    <ClCompile Include="handlers\d3d11_handlers.cpp" />
+    <ClCompile Include="handlers\d3d12_handlers.cpp" />
+    <ClCompile Include="handlers\dxgi_handlers.cpp" />
+    <ClCompile Include="hooks\d3d11_hooks.cpp" />
+    <ClCompile Include="hooks\d3d12_hooks.cpp" />
+    <ClCompile Include="hooks\device_proxy.cpp" />
+    <ClCompile Include="hooks\dxgi_hooks.cpp" />
+    <ClCompile Include="hooks\hooks.cpp" />
+    <ClCompile Include="hooks\lifetime.cpp" />
+    <ClCompile Include="hooks\scope.cpp" />
+    <ClCompile Include="hooks\slots.c" />
+    <ClCompile Include="hooks\vtables.cpp" />
+    <ClCompile Include="settings\registry.cpp" />
+    <ClCompile Include="settings\storage.cpp" />
+    <ClCompile Include="system\dxgi_exports.cpp" />
+    <ClCompile Include="trace\info.cpp" />
+    <ClCompile Include="trace\mcp.cpp" />
+    <ClCompile Include="ui\d3d11_renderer.cpp" />
+    <ClCompile Include="ui\d3d12_renderer.cpp" />
+    <ClCompile Include="ui\input.cpp" />
+    <ClCompile Include="ui\main_ui.cpp" />
+    <ClCompile Include="ui\overlay.cpp" />
+    <ClCompile Include="utils\hash.cpp" />
+    <ClCompile Include="utils\log.cpp" />
+    <ClCompile Include="utils\modules.cpp" />
+    <ClCompile Include="utils\strings.cpp" />
+    <ClCompile Include="utils\toml.cpp" />
+    <ClCompile Include="validation\d3d11_validation.cpp" />
+    <ClCompile Include="validation\d3d12_validation.cpp" />
+    <ClCompile Include="validation\validation.cpp" />
+  </ItemGroup>
+
+  <!-- Third party code compiled into Core (shared with Luma 1.0 through ..\Source\External) -->
+  <ItemGroup>
+    <ClCompile Include="$(LumaExternalDir)safetyhook\src\allocator.cpp;$(LumaExternalDir)safetyhook\src\easy.cpp;$(LumaExternalDir)safetyhook\src\inline_hook.cpp;$(LumaExternalDir)safetyhook\src\mid_hook.cpp;$(LumaExternalDir)safetyhook\src\os.windows.cpp;$(LumaExternalDir)safetyhook\src\utility.cpp;$(LumaExternalDir)safetyhook\src\vmt_hook.cpp">
+      <ObjectFileName>$(IntDir)safetyhook\</ObjectFileName>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <!-- Zydis and Zycore have files with the same name (e.g. "String.c"), so they need separate object folders -->
+    <ClCompile Include="$(LumaExternalDir)zydis\src\*.c">
+      <ObjectFileName>$(IntDir)zydis\</ObjectFileName>
+      <AdditionalIncludeDirectories>$(LumaExternalDir)zydis\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="$(LumaExternalDir)zydis\dependencies\zycore\src\*.c;$(LumaExternalDir)zydis\dependencies\zycore\src\API\*.c">
+      <ObjectFileName>$(IntDir)zycore\</ObjectFileName>
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <!-- The overlay: ImGui with the Win32, DX11 and DX12 backends -->
+    <ClCompile Include="$(Luma2ExternalDir)imgui\imgui.cpp;$(Luma2ExternalDir)imgui\imgui_draw.cpp;$(Luma2ExternalDir)imgui\imgui_tables.cpp;$(Luma2ExternalDir)imgui\imgui_widgets.cpp;$(Luma2ExternalDir)imgui\backends\imgui_impl_win32.cpp;$(Luma2ExternalDir)imgui\backends\imgui_impl_dx11.cpp;$(Luma2ExternalDir)imgui\backends\imgui_impl_dx12.cpp">
+      <ObjectFileName>$(IntDir)imgui\</ObjectFileName>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>

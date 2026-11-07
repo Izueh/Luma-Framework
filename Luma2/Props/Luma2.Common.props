@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shared build settings for every Luma2 project. Import it right after "Microsoft.Cpp.Default.props". -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Luma2Root>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\'))</Luma2Root>
+    <Luma2SourceDir>$(Luma2Root)Source\</Luma2SourceDir>
+    <!-- Third party code shared with Luma 1.0 (until the merge) -->
+    <LumaExternalDir>$([System.IO.Path]::GetFullPath('$(Luma2Root)..\Source\External\'))</LumaExternalDir>
+    <!-- Third party code only Luma2 uses -->
+    <Luma2ExternalDir>$(Luma2Root)External\</Luma2ExternalDir>
+    <!-- Name of the system dll games are built as, forwarding its exports (without extension) -->
+    <LumaDllName Condition="'$(LumaDllName)'==''">dxgi</LumaDllName>
+    <!-- Optional game install folder to deploy the built mod to (set per user, e.g. in the .vcxproj.user file) -->
+    <LumaGameDir Condition="'$(LumaGameDir)'==''"></LumaGameDir>
+
+    <!-- Dependencies are submodules, keep a user wide "vcpkg integrate install" out of the build -->
+    <VcpkgEnabled>false</VcpkgEnabled>
+
+    <!-- Validation of the game's devices, for Development and Test builds (Publishing builds ignore them). Rebuild after changing.
+         "LumaDebugLayer": the D3D11 and D3D12 debug layers (Windows "Graphics Tools" optional feature), messages go to Luma.log.
+         "LumaGpuValidation": D3D12 GPU-based validation too (much slower), implies the debug layer. -->
+    <LumaDebugLayer Condition="'$(LumaDebugLayer)'==''">false</LumaDebugLayer>
+    <LumaGpuValidation Condition="'$(LumaGpuValidation)'==''">false</LumaGpuValidation>
+
+    <LumaDebugConfiguration>false</LumaDebugConfiguration>
+    <LumaDebugConfiguration Condition="'$(Configuration)'=='Development-Debug'">true</LumaDebugConfiguration>
+  </PropertyGroup>
+
+  <PropertyGroup Label="Configuration">
+    <PlatformToolset>v145</PlatformToolset>
+    <CharacterSet>Unicode</CharacterSet>
+    <UseDebugLibraries>$(LumaDebugConfiguration)</UseDebugLibraries>
+    <WholeProgramOptimization Condition="'$(LumaDebugConfiguration)'=='false'">true</WholeProgramOptimization>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <OutDir>$(Luma2Root)Binaries\$(Configuration)\</OutDir>
+    <IntDir>$(Luma2Root)Binaries\Intermediate\$(ProjectName)\$(Configuration)\</IntDir>
+    <ExternalIncludePath>$(LumaExternalDir)safetyhook\include;$(LumaExternalDir)zydis\include;$(LumaExternalDir)zydis\dependencies\zycore\include;$(Luma2ExternalDir)glaze\include;$(Luma2ExternalDir)imgui;$(Luma2ExternalDir)doctest;$(ExternalIncludePath)</ExternalIncludePath>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <LanguageStandard>stdcpplatest</LanguageStandard>
+      <LanguageStandard_C>stdclatest</LanguageStandard_C>
+      <ConformanceMode>true</ConformanceMode>
+      <WarningLevel>Level4</WarningLevel>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
+      <TreatAngleIncludeAsExternal>true</TreatAngleIncludeAsExternal>
+      <MultiProcessorCompilation>true</MultiProcessorCompilation>
+      <!-- Mirrors the source folders, so files with the same name in different folders (e.g. "D3D11/Device.cpp", "D3D12/Device.cpp") don't collide -->
+      <ObjectFileName>$(IntDir)%(RelativeDir)</ObjectFileName>
+      <!-- /Zc:preprocessor is required by glaze -->
+      <AdditionalOptions>/utf-8 /Zc:preprocessor %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(Luma2SourceDir)Core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Development-Debug' or '$(Configuration)'=='Development-Release'">DEVELOPMENT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Test-Release'">TEST=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)'!='Publishing-Release' and ('$(LumaDebugLayer)'=='true' or '$(LumaGpuValidation)'=='true')">LUMA_DEBUG_LAYER=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(Configuration)'!='Publishing-Release' and '$(LumaGpuValidation)'=='true'">LUMA_GPU_VALIDATION=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(LumaDebugConfiguration)'=='true'">_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(LumaDebugConfiguration)'=='false'">NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <RuntimeLibrary Condition="'$(LumaDebugConfiguration)'=='true'">MultiThreadedDebugDLL</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(LumaDebugConfiguration)'=='false'">MultiThreadedDLL</RuntimeLibrary>
+      <Optimization Condition="'$(LumaDebugConfiguration)'=='true'">Disabled</Optimization>
+      <Optimization Condition="'$(LumaDebugConfiguration)'=='false'">MaxSpeed</Optimization>
+      <FunctionLevelLinking Condition="'$(LumaDebugConfiguration)'=='false'">true</FunctionLevelLinking>
+      <IntrinsicFunctions Condition="'$(LumaDebugConfiguration)'=='false'">true</IntrinsicFunctions>
+      <WholeProgramOptimization Condition="'$(LumaDebugConfiguration)'=='false'">true</WholeProgramOptimization>
+      <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
+    </ClCompile>
+    <Link>
+      <GenerateDebugInformation>true</GenerateDebugInformation>
+      <EnableCOMDATFolding Condition="'$(LumaDebugConfiguration)'=='false'">true</EnableCOMDATFolding>
+      <OptimizeReferences Condition="'$(LumaDebugConfiguration)'=='false'">true</OptimizeReferences>
+      <LinkTimeCodeGeneration Condition="'$(LumaDebugConfiguration)'=='false'">UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+    </Link>
+    <Lib>
+      <LinkTimeCodeGeneration Condition="'$(LumaDebugConfiguration)'=='false'">true</LinkTimeCodeGeneration>
+    </Lib>
+  </ItemDefinitionGroup>
+</Project>

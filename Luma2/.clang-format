@@ -1,0 +1,58 @@
+# Luma 2.0's style. Style decisions go here, each with a line saying what it's for.
+BasedOnStyle: Microsoft
+
+# Indentation: 3 spaces
+IndentWidth: 3
+TabWidth: 3
+UseTab: Never
+ContinuationIndentWidth: 3
+AccessModifierOffset: -3
+
+# No line length limit. A braced list ending with a comma goes one item per line.
+ColumnLimit: 0
+ReflowComments: false
+
+# Braces on their own line, except namespaces, so nested ones don't waste lines:
+#   namespace Luma {
+#   namespace Hooks {
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: true
+  AfterClass: true
+  AfterControlStatement: Always
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: false
+  AfterStruct: true
+  AfterUnion: true
+  AfterExternBlock: true
+  BeforeCatch: true
+  BeforeElse: true
+  BeforeLambdaBody: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+
+# Namespaces don't indent: clang-format can't indent only the innermost one, and this is the same at every depth
+NamespaceIndentation: None
+FixNamespaceComments: true
+
+# Guard clauses and loops take two lines. Short functions may stay on one line, and case labels with a short body too.
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+AllowShortFunctionsOnASingleLine: All
+AllowShortLambdasOnASingleLine: All
+AllowShortCaseLabelsOnASingleLine: true
+
+# Includes are grouped by hand (system, SDK, Luma), and some Windows headers depend on the order
+SortIncludes: Never
+
+# Alignment: pointers go with the type, continuation lines aren't aligned to the bracket
+PointerAlignment: Left
+AlignAfterOpenBracket: DontAlign
+AlignOperands: DontAlign
+AlwaysBreakTemplateDeclarations: Yes
+SpacesBeforeTrailingComments: 1
+AlignTrailingComments: false
+InsertNewlineAtEOF: true

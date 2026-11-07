@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Build settings for game projects (the Luma dll). Import it right after "Luma2.Common.props". -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <!-- Every game is built as the system dll it replaces, in its own output folder so they don't overwrite each other -->
+    <TargetName>$(LumaDllName)</TargetName>
+    <OutDir>$(Luma2Root)Binaries\$(Configuration)\$(ProjectName)\</OutDir>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <Link>
+      <!-- Links "system/<dll>_exports.cpp" from Core, which nothing else references -->
+      <ForceSymbolReferences>LumaDllExports_$(LumaDllName);%(ForceSymbolReferences)</ForceSymbolReferences>
+    </Link>
+  </ItemDefinitionGroup>
+
+  <!-- Copies the dll and its pdb into the game when "LumaGameDir" is set (e.g. in the project's .vcxproj.user file) -->
+  <Target Name="LumaDeploy" AfterTargets="Build" Condition="'$(LumaGameDir)'!=''">
+    <Copy SourceFiles="$(TargetPath);$(OutDir)$(TargetName).pdb" DestinationFolder="$(LumaGameDir)" SkipUnchangedFiles="true" />
+    <Message Importance="high" Text="Deployed $(TargetFileName) to $(LumaGameDir)" />
+  </Target>
+</Project>

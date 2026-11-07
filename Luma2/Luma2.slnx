@@ -1,0 +1,14 @@
+<Solution>
+  <Configurations>
+    <BuildType Name="Development-Debug" />
+    <BuildType Name="Development-Release" />
+    <BuildType Name="Test-Release" />
+    <BuildType Name="Publishing-Release" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Folder Name="/Games/">
+    <Project Path="Source/Games/Final Fantasy VII Remake/Final Fantasy VII Remake.vcxproj" Id="f382787c-51ca-4eb8-80b1-f627ce17fe08" />
+  </Folder>
+  <Project Path="Source/Core/Core.vcxproj" Id="90863f95-7fb1-4575-86f4-005003b20d8a" />
+  <Project Path="Source/Tests/Tests.vcxproj" Id="98939f88-37cb-454c-a78c-0db8aabafe58" />
+</Solution>

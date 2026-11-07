@@ -10,3 +10,13 @@ url=https://github.com/gottyduke/DKUtil.git
 [submodule "Source/External/zydis"]
 	path = Source/External/zydis
 	url = https://github.com/zyantific/zydis.git
+[submodule "Luma2/External/imgui"]
+	path = Luma2/External/imgui
+	url = https://github.com/ocornut/imgui.git
+	branch = docking
+[submodule "Luma2/External/doctest"]
+	path = Luma2/External/doctest
+	url = https://github.com/doctest/doctest.git
+[submodule "Luma2/External/glaze"]
+	path = Luma2/External/glaze
+	url = https://github.com/stephenberry/glaze.git

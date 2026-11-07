@@ -1,0 +1,242 @@
+#include "hooks/hooks.hpp"
+
+#include <array>
+#include <cstdint>
+
+#include <dxgi1_6.h>
+#include <wrl/client.h>
+
+#include "handlers/dxgi_handlers.hpp"
+#include "hooks/device_proxy.hpp"
+#include "hooks/scope.hpp"
+#include "hooks/slots.h"
+#include "utils/depth_guard.hpp"
+
+using Microsoft::WRL::ComPtr;
+
+namespace Luma {
+namespace Hooks {
+namespace {
+using CreateDXGIFactoryFunction = HRESULT(WINAPI*)(REFIID riid, void** factory);
+using CreateDXGIFactory2Function = HRESULT(WINAPI*)(UINT flags, REFIID riid, void** factory);
+using CreateSwapChainFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** swapchain);
+using CreateSwapChainForHwndFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2* factory, IUnknown* device, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
+   const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen_desc, IDXGIOutput* output, IDXGISwapChain1** swapchain);
+using GetDeviceFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapchain, REFIID riid, void** device);
+using PresentFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags);
+using Present1Function = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters);
+using SetFullscreenStateFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutput* output);
+using ResizeBuffersFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags);
+using ResizeBuffers1Function = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags,
+   const UINT* node_masks, IUnknown* const* present_queues);
+
+CreateDXGIFactoryFunction original_create_factory = nullptr;
+CreateDXGIFactoryFunction original_create_factory1 = nullptr;
+CreateDXGIFactory2Function original_create_factory2 = nullptr;
+CreateSwapChainFunction original_create_swapchain = nullptr;
+CreateSwapChainForHwndFunction original_create_swapchain_for_hwnd = nullptr;
+GetDeviceFunction original_get_device = nullptr;
+PresentFunction original_present = nullptr;
+Present1Function original_present1 = nullptr;
+SetFullscreenStateFunction original_set_fullscreen_state = nullptr;
+ResizeBuffersFunction original_resize_buffers = nullptr;
+ResizeBuffers1Function original_resize_buffers1 = nullptr;
+
+// These forward to each other inside DXGI, and overlays hooking them may call back into Luma's: only the outermost call
+// is the game's
+thread_local uint32_t create_depth = 0;
+thread_local uint32_t swapchain_create_depth = 0;
+thread_local uint32_t present_depth = 0;
+thread_local uint32_t resize_depth = 0;
+
+const std::array FACTORY_VERSIONS = {
+   LUMA_INTERFACE_VERSION(IDXGIFactory),
+   LUMA_INTERFACE_VERSION(IDXGIFactory1),
+   LUMA_INTERFACE_VERSION(IDXGIFactory2),
+   LUMA_INTERFACE_VERSION(IDXGIFactory3),
+   LUMA_INTERFACE_VERSION(IDXGIFactory4),
+   LUMA_INTERFACE_VERSION(IDXGIFactory5),
+   LUMA_INTERFACE_VERSION(IDXGIFactory6),
+   LUMA_INTERFACE_VERSION(IDXGIFactory7),
+};
+const std::array SWAPCHAIN_VERSIONS = {
+   LUMA_INTERFACE_VERSION(IDXGISwapChain),
+   LUMA_INTERFACE_VERSION(IDXGISwapChain1),
+   LUMA_INTERFACE_VERSION(IDXGISwapChain2),
+   LUMA_INTERFACE_VERSION(IDXGISwapChain3),
+   LUMA_INTERFACE_VERSION(IDXGISwapChain4),
+};
+
+void OnFactoryCreated(HRESULT result, void** factory_pointer)
+{
+   if (FAILED(result) || !factory_pointer || !*factory_pointer)
+      return;
+   // Also inside a scope: a game may only ever use the factory D3D11CreateDevice made, through IDXGIAdapter::GetParent
+   ComPtr<IDXGIFactory> factory;
+   if (FAILED(static_cast<IUnknown*>(*factory_pointer)->QueryInterface(IID_PPV_ARGS(&factory))))
+      return;
+   const bool is_first = !Vtables::Get(Vtables::Interface::DXGIFactory);
+   Vtables::Set(Vtables::Interface::DXGIFactory, factory.Get(), FACTORY_VERSIONS);
+   if (is_first)
+      InstallPending();
+   if (!Scope::IsActive())
+      Handlers::OnFactoryCreated(factory.Get());
+}
+
+HRESULT WINAPI CreateFactory(REFIID riid, void** factory)
+{
+   Utils::DepthGuard guard(create_depth);
+   const HRESULT result = original_create_factory(riid, factory);
+   if (guard.IsOutermost())
+      OnFactoryCreated(result, factory);
+   return result;
+}
+
+HRESULT WINAPI CreateFactory1(REFIID riid, void** factory)
+{
+   Utils::DepthGuard guard(create_depth);
+   const HRESULT result = original_create_factory1(riid, factory);
+   if (guard.IsOutermost())
+      OnFactoryCreated(result, factory);
+   return result;
+}
+
+HRESULT WINAPI CreateFactory2(UINT flags, REFIID riid, void** factory)
+{
+   Utils::DepthGuard guard(create_depth);
+   const HRESULT result = original_create_factory2(flags, riid, factory);
+   if (guard.IsOutermost())
+      OnFactoryCreated(result, factory);
+   return result;
+}
+
+void ReportSwapchain(HRESULT result, IDXGISwapChain* swapchain, IUnknown* creator)
+{
+   if (FAILED(result) || !creator || !swapchain || Scope::IsActive())
+      return;
+   ComPtr<IDXGISwapChain> base;
+   if (FAILED(swapchain->QueryInterface(IID_PPV_ARGS(&base))))
+      return;
+   const bool is_first = !Vtables::Get(Vtables::Interface::DXGISwapChain);
+   Vtables::Set(Vtables::Interface::DXGISwapChain, base.Get(), SWAPCHAIN_VERSIONS);
+   if (is_first)
+   {
+      InstallPending();
+      LogSummary();
+   }
+   Handlers::OnSwapchainCreated(base.Get(), creator);
+}
+
+// D3D11 games pass their device's proxy, which DXGI must not see (D3D12 games pass a queue, never proxied)
+HRESULT STDMETHODCALLTYPE CreateSwapChain(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** swapchain)
+{
+   device = DeviceProxy::Unwrap(device);
+   Utils::DepthGuard guard(swapchain_create_depth);
+   const HRESULT result = original_create_swapchain(factory, device, desc, swapchain);
+   if (guard.IsOutermost())
+      ReportSwapchain(result, swapchain ? *swapchain : nullptr, device);
+   return result;
+}
+
+HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IDXGIFactory2* factory, IUnknown* device, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
+   const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen_desc, IDXGIOutput* output, IDXGISwapChain1** swapchain)
+{
+   device = DeviceProxy::Unwrap(device);
+   Utils::DepthGuard guard(swapchain_create_depth);
+   const HRESULT result = original_create_swapchain_for_hwnd(factory, device, hwnd, desc, fullscreen_desc, output, swapchain);
+   if (guard.IsOutermost())
+      ReportSwapchain(result, swapchain ? *swapchain : nullptr, device);
+   return result;
+}
+
+// A D3D11 swapchain returns the real device: the game gets its proxy instead
+HRESULT STDMETHODCALLTYPE GetDevice(IDXGISwapChain* swapchain, REFIID riid, void** device)
+{
+   const HRESULT result = original_get_device(swapchain, riid, device);
+   if (SUCCEEDED(result) && !Scope::IsActive())
+      DeviceProxy::Replace(device);
+   return result;
+}
+
+// DXGI_PRESENT_TEST only checks whether the swapchain could present
+bool IsGamePresent(const Utils::DepthGuard& guard, UINT flags)
+{
+   return guard.IsOutermost() && !(flags & DXGI_PRESENT_TEST) && !Scope::IsActive();
+}
+
+HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags)
+{
+   Utils::DepthGuard guard(present_depth);
+   if (IsGamePresent(guard, flags))
+      Handlers::OnPresent(swapchain);
+   return original_present(swapchain, sync_interval, flags);
+}
+
+HRESULT STDMETHODCALLTYPE Present1(IDXGISwapChain1* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters)
+{
+   Utils::DepthGuard guard(present_depth);
+   if (IsGamePresent(guard, flags))
+      Handlers::OnPresent(swapchain);
+   return original_present1(swapchain, sync_interval, flags, parameters);
+}
+
+HRESULT STDMETHODCALLTYPE SetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutput* output)
+{
+   const HRESULT result = original_set_fullscreen_state(swapchain, fullscreen, output);
+   if (SUCCEEDED(result) && !Scope::IsActive())
+      Handlers::OnFullscreenStateChanged(swapchain, fullscreen);
+   return result;
+}
+
+HRESULT STDMETHODCALLTYPE ResizeBuffers(IDXGISwapChain* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags)
+{
+   Utils::DepthGuard guard(resize_depth);
+   const HRESULT result = original_resize_buffers(swapchain, count, width, height, format, flags);
+   if (guard.IsOutermost() && SUCCEEDED(result) && !Scope::IsActive())
+      Handlers::OnSwapchainResized(swapchain);
+   return result;
+}
+
+HRESULT STDMETHODCALLTYPE ResizeBuffers1(IDXGISwapChain3* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags,
+   const UINT* node_masks, IUnknown* const* present_queues)
+{
+   Utils::DepthGuard guard(resize_depth);
+   const HRESULT result = original_resize_buffers1(swapchain, count, width, height, format, flags, node_masks, present_queues);
+   if (guard.IsOutermost() && SUCCEEDED(result) && !Scope::IsActive())
+      Handlers::OnSwapchainResized(swapchain);
+   return result;
+}
+} // namespace
+
+void InstallDXGI()
+{
+   const std::array hooks = {
+      Hook{ExportTarget{L"dxgi.dll", "CreateDXGIFactory"}, reinterpret_cast<void*>(&CreateFactory), reinterpret_cast<void**>(&original_create_factory)},
+      Hook{ExportTarget{L"dxgi.dll", "CreateDXGIFactory1"}, reinterpret_cast<void*>(&CreateFactory1), reinterpret_cast<void**>(&original_create_factory1)},
+      Hook{ExportTarget{L"dxgi.dll", "CreateDXGIFactory2"}, reinterpret_cast<void*>(&CreateFactory2), reinterpret_cast<void**>(&original_create_factory2)},
+      Hook{VtableTarget{Vtables::Interface::DXGIFactory, LumaSlot_IDXGIFactory_CreateSwapChain, "IDXGIFactory::CreateSwapChain"},
+         reinterpret_cast<void*>(&CreateSwapChain), reinterpret_cast<void**>(&original_create_swapchain)},
+      Hook{VtableTarget{Vtables::Interface::DXGIFactory, LumaSlot_IDXGIFactory2_CreateSwapChainForHwnd, "IDXGIFactory2::CreateSwapChainForHwnd", __uuidof(IDXGIFactory2)},
+         reinterpret_cast<void*>(&CreateSwapChainForHwnd), reinterpret_cast<void**>(&original_create_swapchain_for_hwnd)},
+      Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_GetDevice, "IDXGISwapChain::GetDevice"},
+         reinterpret_cast<void*>(&GetDevice), reinterpret_cast<void**>(&original_get_device)},
+      Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_SetFullscreenState, "IDXGISwapChain::SetFullscreenState"},
+         reinterpret_cast<void*>(&SetFullscreenState), reinterpret_cast<void**>(&original_set_fullscreen_state)},
+      Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_ResizeBuffers, "IDXGISwapChain::ResizeBuffers"},
+         reinterpret_cast<void*>(&ResizeBuffers), reinterpret_cast<void**>(&original_resize_buffers)},
+      Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain3_ResizeBuffers1, "IDXGISwapChain3::ResizeBuffers1", __uuidof(IDXGISwapChain3)},
+         reinterpret_cast<void*>(&ResizeBuffers1), reinterpret_cast<void**>(&original_resize_buffers1)},
+      Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_Present, "IDXGISwapChain::Present"},
+         reinterpret_cast<void*>(&Present), reinterpret_cast<void**>(&original_present)},
+      Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain1_Present1, "IDXGISwapChain1::Present1", __uuidof(IDXGISwapChain1)},
+         reinterpret_cast<void*>(&Present1), reinterpret_cast<void**>(&original_present1)},
+   };
+   Declare(hooks);
+}
+
+void OnSwapchainCreated(IDXGISwapChain* swapchain, IUnknown* creator)
+{
+   ReportSwapchain(S_OK, swapchain, creator);
+}
+} // namespace Hooks
+} // namespace Luma
