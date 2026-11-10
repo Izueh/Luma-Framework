@@ -75,19 +75,6 @@
 // Specify a define with the name of the game here (GAME_*).
 #define GAME_MAFIA_DEFINITIVE_EDITION 1
 
-// REQUIRED for coexistence with OptiScaler.
-//
-// OptiScaler injected into a DX11 game can run its upscaling/frame generation through a D3D12
-// device (Upscalers.Dx11Upscaler = dlss_12, or the "Dx11withDx12" mode). Luma only understands
-// D3D11, so it used to assert and then crash on those foreign device objects:
-//   core.hpp:2656  "api == reshade::api::device_api::d3d11"
-//   core.hpp:5470  "ASSERT_ONCE(false)"   (the command list was a D3D12 one)
-// Both come from the same root cause and both are fixed by this one define, which makes the
-// core's SKIP_UNSUPPORTED_DEVICE_API() guards (50 call sites) return early for non D3D11 calls
-// instead of asserting. This is the fix the assert message itself recommends.
-// Note: it only guards against foreign APIs, it does not change D3D11 behaviour.
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
-
 //// Define all the global "core" defines before including its files: ////
 
 // Enable support for Geometry Shaders (GS), rather rare.
@@ -831,27 +818,10 @@ class MafiaDefinitiveEditionGame final : public Game
    }
 
 public:
-   // Called from CoreMain right after reshade::register_addon() and before the load is
-   // rejected. "failed" is true when register_addon() returned false, which is the ONLY way a
-   // Luma add-on makes DllMain return FALSE (=> LoadLibrary error 1114). We log every
-   // condition that can make register_addon() fail so a load failure leaves a readable trail.
+   // Called from CoreMain before Luma hooks anything. "failed" is true when the load was rejected.
    void OnLoad(std::filesystem::path& file_path, bool failed = false) override
    {
-      std::string s = std::format("OnLoad: module = {}\n  register_addon failed = {}", file_path.string(), failed);
-      // Also log our own HMODULE. "invalid module handle" in the ReShade log means the handle that
-      // reached ReShadeRegisterAddon was null or already registered, and the only way to tell which
-      // is to have the number in this log. See the comment in LoadConfigs() about how a config API
-      // call placed before register_addon() poisons that handle.
-      s += std::format("\n  our module handle = {}", static_cast<const void*>(g_own_module));
-      HMODULE reshade_module = reshade::internal::get_reshade_module_handle(nullptr);
-      s += std::format("\n  reshade module handle = {}", static_cast<const void*>(reshade_module));
-      if (reshade_module != nullptr)
-      {
-         s += std::format("\n  ReShadeRegisterAddon found = {}",
-                          reinterpret_cast<const void*>(GetProcAddress(reshade_module, "ReShadeRegisterAddon")) != nullptr);
-      }
-      s += std::format("\n  RESHADE_API_VERSION = {}", static_cast<int>(RESHADE_API_VERSION));
-      Probe::Line(s);
+      Probe::Line(std::format("OnLoad: module = {}\n  load failed = {}\n  our module handle = {}", file_path.string(), failed, static_cast<const void*>(g_own_module)));
    }
 
    void OnInit(bool async) override
@@ -862,7 +832,7 @@ public:
 
       // Our own RCAS sharpening pass, drawn right after the SR output.
       native_shaders_definitions.emplace(CompileTimeStringHash("MafiaDE Sharpen PS"),
-         ShaderDefinition{"Luma_MafiaDE_Sharpen", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "sharpen_ps"});
+         ShaderDefinition{"Luma_MafiaDE_Sharpen", D3D11_SHVER_PIXEL_SHADER, nullptr, "sharpen_ps"});
 
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetDefaultValue('0');
@@ -1090,7 +1060,7 @@ public:
       sharpen_state.Restore(native_device_context);
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       if (is_custom_pass)
       {
@@ -1643,14 +1613,14 @@ public:
       // its TAA shaders when TAA is off, so the colours there are the raw scene colours. Here it
       // went black: the copy runs several times per frame and the first one is far too early.
       const bool is_pre_taa_copy = game_device_data.dlss_hook_mode == 1
-                                && original_shader_hashes.Contains(0xA75736C5u, reshade::api::shader_stage::pixel);
+                                && original_shader_hashes.Contains(0xA75736C5u, ShaderStages::Pixel);
       if (is_pre_taa_copy && original_draw_dispatch_func)
       {
          (*original_draw_dispatch_func)();   // let the game do its copy first
       }
 
       if (game_device_data.skip_game_sharpen
-          && original_shader_hashes.Contains(0x747C6210u, reshade::api::shader_stage::pixel))
+          && original_shader_hashes.Contains(0x747C6210u, ShaderStages::Pixel))
       {
          return DrawOrDispatchOverrideType::Replaced;   // skip the game's post-tonemap sharpener
       }
@@ -1734,7 +1704,7 @@ public:
          resolve_name = "0xA75736C5(PreTAA copy)";
          resolve_index = 2;
       }
-      else if (original_shader_hashes.Contains(0x7B9B914Fu, reshade::api::shader_stage::pixel))
+      else if (original_shader_hashes.Contains(0x7B9B914Fu, ShaderStages::Pixel))
       {
          resolve_name = "7B9B914F(TAA)";
          resolve_index = 1;
@@ -2140,11 +2110,12 @@ public:
    }
 
    // Log the game's output format without changing it.
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      const auto desc = swapchain->get_device()->get_resource_desc(swapchain->get_back_buffer(0));
+      DXGI_SWAP_CHAIN_DESC desc = {};
+      swapchain->GetDesc(&desc);
       Probe::Line(std::format("[swapchain] game back buffer format: {} ({}x{}); Luma HDR upgrade and display composition disabled",
-                              static_cast<int>(desc.texture.format), desc.texture.width, desc.texture.height));
+                              static_cast<int>(desc.BufferDesc.Format), desc.BufferDesc.Width, desc.BufferDesc.Height));
    }
 
    void OnPresent(ID3D11Device* native_device, DeviceData& device_data) override
@@ -2247,21 +2218,20 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
-      reshade::get_config_value(runtime, NAME, "GameSetting01", cb_luma_global_settings.GameSettings.GameSetting01);
-      reshade::get_config_value(runtime, NAME, "GameSetting02", cb_luma_global_settings.GameSettings.GameSetting02);
-      reshade::get_config_value(runtime, NAME, "TextureFormatUpgrades", texture_upgrades_enabled);
+      Config::Get(NAME, "GameSetting01", cb_luma_global_settings.GameSettings.GameSetting01);
+      Config::Get(NAME, "GameSetting02", cb_luma_global_settings.GameSettings.GameSetting02);
+      Config::Get(NAME, "TextureFormatUpgrades", texture_upgrades_enabled);
       ApplyTextureUpgradeSetting();
       // Same persistence as the texture upgrade switch above: "LoadConfigs" has no device, so this
       // has to be a member rather than something living in the per device data.
       float sharpen_scale_cfg = 1.f;
-      reshade::get_config_value(runtime, NAME, "GameSharpenScale", sharpen_scale_cfg);
+      Config::Get(NAME, "GameSharpenScale", sharpen_scale_cfg);
       game_sharpen_scale = (std::clamp)(sharpen_scale_cfg, 0.f, 2.f);
       // The one setting the panel exposes that the ini has to remember, because the measured best
       // answer for it contradicts the technically correct one. See "sr_mvs_jittered".
       int mvs_jittered_cfg = 0;   // shipping default is OFF, so an absent key means OFF too
-      reshade::get_config_value(runtime, NAME, "MVsJittered", mvs_jittered_cfg);
+      Config::Get(NAME, "MVsJittered", mvs_jittered_cfg);
       g_mvs_jittered_ini = mvs_jittered_cfg != 0 ? 1 : 0;
       // DLSS render preset. "Default" is an unknown by design and is the worst place to be with
       // DLSS 310.9.x: it resolved to a model that mishandles reflective and transparent content in
@@ -2303,7 +2273,7 @@ public:
       if (dlss_render_preset == 0)
       {
          dlss_render_preset = 13;   // NVSDK_NGX_DLSS_Hint_Render_Preset_M
-         reshade::set_config_value(runtime, NAME, "DLSSRenderPreset", static_cast<int>(dlss_render_preset));
+         Config::Set(NAME, "DLSSRenderPreset", static_cast<int>(dlss_render_preset));
          Probe::Line("[preset] DLSS render preset was Default, pinned to M. M is the only measured preset "
                      "whose emissive/transparent layers (neon behind a wet window) match the game's own TAA; "
                      "K/J are sharper and quieter but lose that layer entirely. See "
@@ -2418,7 +2388,7 @@ public:
       {
          game_device_data.sr_mvs_jittered = !game_device_data.sr_mvs_jittered;
          g_mvs_jittered_ini = game_device_data.sr_mvs_jittered;
-         reshade::set_config_value(nullptr, NAME, "MVsJittered", game_device_data.sr_mvs_jittered);
+         Config::Set(NAME, "MVsJittered", game_device_data.sr_mvs_jittered);
       }
 
       // The game's own post-tonemap sharpener is NOT exposed: the pass it lives in (0x747C6210) was
@@ -2572,10 +2542,9 @@ public:
       ImGui::SameLine();
       if (ImGui::Button("  Disable")) { texture_format_upgrades_type = TextureFormatUpgradesType::None; }
 
-      reshade::api::effect_runtime* runtime = nullptr;
       if (ImGui::SliderFloat("Game Setting #01", &cb_luma_global_settings.GameSettings.GameSetting01, 0.f, 1.f, "%.3f"))
-         reshade::set_config_value(runtime, NAME, "GameSetting01", cb_luma_global_settings.GameSettings.GameSetting01);
-      DrawResetButton(cb_luma_global_settings.GameSettings.GameSetting01, default_luma_global_game_settings.GameSetting01, "GameSetting01", runtime);
+         Config::Set(NAME, "GameSetting01", cb_luma_global_settings.GameSettings.GameSetting01);
+      DrawResetButton(cb_luma_global_settings.GameSettings.GameSetting01, default_luma_global_game_settings.GameSetting01, "GameSetting01");
       ImGui::Separator();
 #endif // DEVELOPMENT
 #endif // ENABLE_SR
@@ -2627,15 +2596,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          // correct colour source slot. LoadConfigs() re-applies whatever ReShade.ini holds.
          texture_format_upgrades_type = TextureFormatUpgradesType::None;
          texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::r10g10b10a2_unorm,
-            reshade::api::format::r10g10b10a2_typeless,
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_R10G10B10A2_UNORM,
+            DXGI_FORMAT_R10G10B10A2_TYPELESS,
+            DXGI_FORMAT_R11G11B10_FLOAT,
          };
          texture_format_upgrades_lut_size = 32;
          texture_format_upgrades_lut_dimensions = LUTDimensions::_2D;
@@ -2671,7 +2640,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 #endif
          Probe::Line("[DllMain] step 3/5 forced shader names OK");
 
-         game = new MafiaDefinitiveEditionGame();
+         SetGame<MafiaDefinitiveEditionGame>();
          Probe::Line("[DllMain] step 4/5 game instance created");
 
          Probe::Line("[DllMain] calling CoreMain ...");

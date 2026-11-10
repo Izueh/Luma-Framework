@@ -78,8 +78,7 @@ class UnityEngine final : public Game
 public:
    void OnInit(bool async) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "GameID", game_id);
+      Config::Get(NAME, "GameID", game_id);
 
       // If the user didn't force the mod to behave like a specific game,
       // try to identify what game this is based on the executable name, given we have a list.
@@ -158,8 +157,8 @@ public:
       if (game_id == GAME_POPTLC)
       {
          // Needed by bloom and FXAA (at least the typeless one)
-         texture_upgrade_formats.emplace(reshade::api::format::r10g10b10a2_typeless);
-         texture_upgrade_formats.emplace(reshade::api::format::r10g10b10a2_unorm);
+         texture_upgrade_formats.emplace(DXGI_FORMAT_R10G10B10A2_TYPELESS);
+         texture_upgrade_formats.emplace(DXGI_FORMAT_R10G10B10A2_UNORM);
 
          redirected_shader_hashes["PoPTLC_Tonemap"] =
             {
@@ -270,13 +269,13 @@ public:
       }
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
       // The game is locked to a maximum aspect ratio of 2.3916666666666666666666666666667, at least without mods
       // The video files, at least some (e.g. the opening video), are in 1916x1080 and downscale through bloom
       if (game_id == GAME_HOLLOW_KNIGHT_SILKSONG)
       {
-         auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+         auto& device_data = *GetSwapchainData(swapchain)->device_data;
 
          float output_aspect_ratio = device_data.output_resolution.x / device_data.output_resolution.y;
 
@@ -287,7 +286,7 @@ public:
       }
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       // TODO: make a subclass for these games?
       if (game_id == GAME_HOLLOW_KNIGHT_SILKSONG)
@@ -367,17 +366,15 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "FakeHDREffect", fake_hdr_effect);
-      reshade::get_config_value(runtime, NAME, "ExpandHDRGamut", expand_hdr_gamut);
-      reshade::get_config_value(runtime, NAME, "CharacterLightIntensity", character_light_intensity);
-      reshade::get_config_value(runtime, NAME, "CharacterLightRadius", character_light_radius);
-      reshade::get_config_value(runtime, NAME, "CharacterLightSmoothness", character_light_smoothness);
+      Config::Get(NAME, "FakeHDREffect", fake_hdr_effect);
+      Config::Get(NAME, "ExpandHDRGamut", expand_hdr_gamut);
+      Config::Get(NAME, "CharacterLightIntensity", character_light_intensity);
+      Config::Get(NAME, "CharacterLightRadius", character_light_radius);
+      Config::Get(NAME, "CharacterLightSmoothness", character_light_smoothness);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
@@ -387,23 +384,23 @@ public:
          {
             if (ImGui::SliderFloat("HDR Boost", &fake_hdr_effect, 0.f, 1.f)) // Call it "HDR Boost" instead of "Fake HDR" to make it more appealing (it's cool, it's just a highlights curve)
             {
-               reshade::set_config_value(runtime, NAME, "FakeHDREffect", fake_hdr_effect);
+               Config::Set(NAME, "FakeHDREffect", fake_hdr_effect);
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
                ImGui::SetTooltip("\"Artificially\" increases the amount of highlights in the game, given that the game's lighting was created for SDR and is fairly flat.\nHigher values are better to be reserved for lower \"Scene Paper White\" values.");
             }
-            DrawResetButton(fake_hdr_effect, 0.667f, "FakeHDREffect", runtime);
+            DrawResetButton(fake_hdr_effect, 0.667f, "FakeHDREffect");
 
             if (ImGui::SliderFloat("Expand Color Gamut", &expand_hdr_gamut, 0.f, 1.f)) // Call it "HDR Boost" instead of "Fake HDR" to make it more appealing (it's cool, it's just a highlights curve)
             {
-               reshade::set_config_value(runtime, NAME, "ExpandHDRGamut", expand_hdr_gamut);
+               Config::Set(NAME, "ExpandHDRGamut", expand_hdr_gamut);
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
                ImGui::SetTooltip("Increases the saturation of colors, expanding into HDR color gamuts.\nThe game is meant to look desaturated so don't overdo it.\n0 is neutral/vanilla.");
             }
-            DrawResetButton(expand_hdr_gamut, 0.1f, "ExpandHDRGamut", runtime);
+            DrawResetButton(expand_hdr_gamut, 0.1f, "ExpandHDRGamut");
          }
 
          ImGui::SetNextItemOpen(true, ImGuiCond_Once);
@@ -411,33 +408,33 @@ public:
          {
             if (ImGui::SliderFloat("Character Light Intensity", &character_light_intensity, 0.f, 2.f))
             {
-               reshade::set_config_value(runtime, NAME, "CharacterLightIntensity", character_light_intensity);
+               Config::Set(NAME, "CharacterLightIntensity", character_light_intensity);
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
                ImGui::SetTooltip("Allows you to change the intensity (brightness) of the light around the player character that the game uses to boost visibility for gameplay purposes.\nIt can be a bit jarring in HDR (or SDR too, depending on your taste).");
             }
-            DrawResetButton(character_light_intensity, 1.f, "CharacterLightIntensity", runtime);
+            DrawResetButton(character_light_intensity, 1.f, "CharacterLightIntensity");
 
             if (ImGui::SliderFloat("Character Light Radius", &character_light_radius, 0.f, 2.f))
             {
-               reshade::set_config_value(runtime, NAME, "CharacterLightRadius", character_light_radius);
+               Config::Set(NAME, "CharacterLightRadius", character_light_radius);
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
                ImGui::SetTooltip("Allows you to change the radius (range) of the light around the player character that the game uses to boost visibility for gameplay purposes.");
             }
-            DrawResetButton(character_light_radius, 1.f, "CharacterLightRadius", runtime);
+            DrawResetButton(character_light_radius, 1.f, "CharacterLightRadius");
 
             if (ImGui::SliderFloat("Character Light Smoothness", &character_light_smoothness, 0.f, 2.f))
             {
-               reshade::set_config_value(runtime, NAME, "CharacterLightSmoothness", character_light_smoothness);
+               Config::Set(NAME, "CharacterLightSmoothness", character_light_smoothness);
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
                ImGui::SetTooltip("Allows you to change the smoothness (falloff) of the light around the player character that the game uses to boost visibility for gameplay purposes.");
             }
-            DrawResetButton(character_light_smoothness, 1.f, "CharacterLightSmoothness", runtime);
+            DrawResetButton(character_light_smoothness, 1.f, "CharacterLightSmoothness");
 
             ImGui::TreePop();
          }
@@ -447,7 +444,6 @@ public:
 #if DEVELOPMENT
    void DrawImGuiDevSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       // This can only be changed in a development enviroment, given it's not very necessary if not for debugging,
       // and we'd need to add re-initialization code (and also expose the names ImGUI).
@@ -460,7 +456,7 @@ public:
       // TODO: turn into a drop down list (we'd need to store an extra setting)
       if (ImGui::SliderInt("Game ID", &(int&)game_id, 0, games_database.size(), game_name.c_str()))
       {
-         reshade::set_config_value(runtime, NAME, "GameID", game_id);
+         Config::Set(NAME, "GameID", game_id);
       }
 #if 0
       int current_game_id = game_id;
@@ -476,7 +472,7 @@ public:
       if (ImGui::Combo("Game ID", &current_game_id, game_names.data(), (int)game_names.size()))
       {
          game_id = current_game_id;
-         reshade::set_config_value(runtime, NAME, "GameID", game_id);
+         Config::Set(NAME, "GameID", game_id);
       }
 #endif
    }
@@ -586,10 +582,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution;
       // PoPTLC only requires r8g8b8a8_typeless (and "r10g10b10a2_typeless" with FXAA) but will work with others regardless
       texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_R11G11B10_FLOAT,
       };
 
 #if !DEVELOPMENT
@@ -602,7 +598,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       Trace::debug_draw_options |= (uint32_t)Trace::DebugDrawTextureOptionsMask::FlipY;
 #endif
 
-      game = new UnityEngine();
+      SetGame<UnityEngine>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

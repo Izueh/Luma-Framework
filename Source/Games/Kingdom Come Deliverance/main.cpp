@@ -41,9 +41,6 @@ public:
     {
        if (!failed)
        {
-          reshade::register_event<reshade::addon_event::map_buffer_region>(KingdomComeDeliverance::OnMapBufferRegion);
-          reshade::register_event<reshade::addon_event::unmap_buffer_region>(KingdomComeDeliverance::OnUnmapBufferRegion);
-          reshade::register_event<reshade::addon_event::finish_present>(OnFinishPresent);
        }
     }
 
@@ -60,27 +57,45 @@ public:
         device_data.game = new GameDeviceDataKingdomComeDeliverance;
     }
 
-    static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+    // Native hooks (buffers only)
+public:
+    void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
     {
-        auto& device_data = *device->get_private_data<DeviceData>();
+       ID3D11Buffer* buffer = AsBuffer(resource);
+       if (!buffer)
+          return;
+       if (CommandListData* cmd_list_data = GetCommandListData(context))
+          OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+    }
+
+    bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+    {
+       ID3D11Buffer* buffer = AsBuffer(resource);
+       if (!buffer)
+          return false;
+       if (CommandListData* cmd_list_data = GetCommandListData(context))
+          OnUnmapBufferRegion(*cmd_list_data->device_data, buffer);
+       return false;
+    }
+
+    static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
+    {
         auto& game_device_data = GetGameDeviceData(device_data);
 
         if (!g_has_drawn_lightning)
         {
-            auto buffer = (ID3D11Buffer*)resource.handle;
             D3D11_BUFFER_DESC desc;
             buffer->GetDesc(&desc);
 
             if (desc.BindFlags == D3D11_BIND_CONSTANT_BUFFER && desc.ByteWidth == 256)
             {
-                game_device_data.mapped_cbs[resource.handle] = *data;
+                game_device_data.mapped_cbs[reinterpret_cast<uint64_t>(buffer)] = *data;
             }
         }
     }
 
-    static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+    static void OnUnmapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer)
     {
-        auto& device_data = *device->get_private_data<DeviceData>();
         auto& game_device_data = GetGameDeviceData(device_data);
 
         // The CB we are after, from Lightning_0x0181192D_CS.
@@ -102,9 +117,9 @@ public:
         //   float4 ScreenSize : packoffset(c12); // w, h, 1/w, 1/h
         //   float4 g_vVisAreasParams[64] : packoffset(c13);
         // }
-        if (!g_has_drawn_lightning && game_device_data.mapped_cbs.contains(resource.handle))
+        if (!g_has_drawn_lightning && game_device_data.mapped_cbs.contains(reinterpret_cast<uint64_t>(buffer)))
         {
-           auto data = (float4*)game_device_data.mapped_cbs[resource.handle];
+           auto data = (float4*)game_device_data.mapped_cbs[reinterpret_cast<uint64_t>(buffer)];
 
            // Base jitters (x, y) in range [-0.5, 0.5], for "r_AntialiasingTAAPattern 4" (the game setting).
            // ( 0.0625, -0.1875), (-0.0625,  0.1875),
@@ -129,7 +144,7 @@ public:
         }
     }
 
-    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
     {
         auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -273,9 +288,13 @@ public:
         }
     }
 
-    static void OnFinishPresent(reshade::api::command_queue* queue, reshade::api::swapchain* swapchain)
+    // Restore the game's render targets after the present (ReShade's "finish_present")
+    void PostPresent(IDXGISwapChain* swapchain) override
     {
-        auto& device_data = *queue->get_device()->get_private_data<DeviceData>();
+        SwapchainData* swapchain_data = GetSwapchainData(swapchain);
+        if (!swapchain_data)
+            return;
+        auto& device_data = *swapchain_data->device_data;
         auto& game_device_data = GetGameDeviceData(device_data);
         auto& managed_resources = game_device_data.managed_resources;
 
@@ -300,19 +319,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         texture_format_upgrades_type   = TextureFormatUpgradesType::AllowedEnabled;
         // ### Check which of these are needed and remove the rest ###
         texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
         };
         // ### Check these if textures are not upgraded ###
         texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
@@ -322,7 +339,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         // TODO: Remove this later!
         Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::WorkInProgress;
 
-        game = new KingdomComeDeliverance();
+        SetGame<KingdomComeDeliverance>();
     }
 
     CoreMain(hModule, ul_reason_for_call, lpReserved);

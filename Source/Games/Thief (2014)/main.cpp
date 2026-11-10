@@ -32,9 +32,9 @@ public:
    }
 
    // Fix all luminance calculations in the game
-   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, D3D11_SHADER_VERSION_TYPE type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
    {
-      if (type != reshade::api::pipeline_subobject_type::pixel_shader) return nullptr;
+      if (type != D3D11_SHVER_PIXEL_SHADER) return nullptr;
 
       // Used by original game code (UE3)
       // float3(0.299, 0.587, 0.114)
@@ -119,7 +119,7 @@ public:
       return new_code;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       if (!device_data.has_drawn_main_post_processing && original_shader_hashes.Contains(shader_hashes_FinalPostProcess))
       {
@@ -155,17 +155,15 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "RemoveBlackBars", remove_black_bars);
+      Config::Get(NAME, "RemoveBlackBars", remove_black_bars);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       if (ImGui::Checkbox("Remove Black Bars", &remove_black_bars))
       {
-         reshade::set_config_value(runtime, NAME, "RemoveBlackBars", remove_black_bars);
+         Config::Set(NAME, "RemoveBlackBars", remove_black_bars);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
@@ -257,14 +255,14 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
 
             // For some reason thief used these as high quality SDR buffers (it seems like a mistake, but possibly the intention was to have higher quality in post processing)
-            reshade::api::format::r16g16b16a16_unorm,
+            DXGI_FORMAT_R16G16B16A16_UNORM,
 
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px;
 #if DEVELOPMENT // Seemingly not needed in this game but makes development easier. Or maybe not? It hangs the game on boot sometimes? Nah it hangs anyway
@@ -319,7 +317,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       };
       shader_hashes_BlackBars.pixel_shaders.emplace(std::stoul("E9255521", nullptr, 16));
 
-      game = new Thief();
+      SetGame<Thief>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

@@ -98,13 +98,13 @@ namespace
       {"TAA Reset Flag", kTAAResetPattern, 2, 7, 0},
    }};
 
-   // "reshade::log::message" doesn't take varargs, so format first
+   // "Utils::Log::Write" takes a finished string, so format first
    template <typename... Args>
-   void gbfr_log(reshade::log::level level, const char* fmt, const Args&... args)
+   void gbfr_log(Luma::Utils::Log::Level level, const char* fmt, const Args&... args)
    {
       char buffer[512];
       std::snprintf(buffer, sizeof(buffer), fmt, args...);
-      reshade::log::message(level, buffer);
+      Luma::Utils::Log::Write(level, buffer);
    }
 
    // Phase 1: scan a globally-unique code signature; the match address IS the function entry
@@ -132,11 +132,11 @@ namespace
       r.resolved = (*target != nullptr);
 
       if (from_scan)
-         gbfr_log(reshade::log::level::info,
+         gbfr_log(Luma::Utils::Log::Level::Info,
             "GBFR: %s @ 0x%llX (scan, %u match(es))", name, r.address, r.match_count);
       else
          gbfr_log(
-            g_gbfr_fallback_enabled ? reshade::log::level::warning : reshade::log::level::error,
+            g_gbfr_fallback_enabled ? Luma::Utils::Log::Level::Warning : Luma::Utils::Log::Level::Error,
             "GBFR: %s @ 0x%llX (%s, %u match(es))", name, r.address,
             g_gbfr_fallback_enabled ? "fallback" : "scan failed, fallback disabled", r.match_count);
    }
@@ -193,11 +193,11 @@ namespace
       r.resolved = (*target != 0);
 
       if (from_scan)
-         gbfr_log(reshade::log::level::info,
+         gbfr_log(Luma::Utils::Log::Level::Info,
             "GBFR: %s @ 0x%llX (scan, %u match(es))", name, r.address, r.match_count);
       else
          gbfr_log(
-            g_gbfr_fallback_enabled ? reshade::log::level::warning : reshade::log::level::error,
+            g_gbfr_fallback_enabled ? Luma::Utils::Log::Level::Warning : Luma::Utils::Log::Level::Error,
             "GBFR: %s @ 0x%llX (%s, %u match(es))", name, r.address,
             g_gbfr_fallback_enabled ? "fallback" : "scan failed, fallback disabled", r.match_count);
    }
@@ -236,7 +236,7 @@ bool ResolveGBFRAddresses()
 
    if (!scan_enabled)
    {
-      reshade::log::message(reshade::log::level::info,
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info,
          "GBFR: signature scan not applicable for this version, using compiled constants");
       // Compiled constants (no scan)
       g_gbfr_scan_results[0] = {"InitializeDX11RenderingPipeline", base + kInitializeDX11RenderingPipeline_RVA, true, false, 0};
@@ -323,7 +323,7 @@ bool ResolveGBFRAddresses()
       return true;
    }();
 
-   gbfr_log(all_resolved ? reshade::log::level::info : reshade::log::level::warning,
+   gbfr_log(all_resolved ? Luma::Utils::Log::Level::Info : Luma::Utils::Log::Level::Warning,
       "GBFR: address resolution %s (%s)", all_resolved ? "complete" : "INCOMPLETE",
       g_gbfr_fallback_enabled ? "fallback available" : "fallback disabled (GBFR_DISABLE_ADDRESS_FALLBACK)");
 

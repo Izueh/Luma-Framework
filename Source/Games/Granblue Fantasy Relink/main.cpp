@@ -6,7 +6,6 @@
 #define ENABLE_UI_VIEWPORT_SCALING_HOOK 0
 #define ENABLE_UI_SCALING 0
 #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 #define V2_0_6
 // Testing: disable the compiled-constants fallback so signature-scan failures
 // are loud (hooks skipped, error logged) instead of silently using stale addresses.
@@ -71,46 +70,45 @@ public:
 
       native_shaders_definitions.emplace(
          CompileTimeStringHash("GBFR Post Tonemap"),
-         ShaderDefinition{"Luma_GBFR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader});
+         ShaderDefinition{"Luma_GBFR_Tonemap", D3D11_SHVER_PIXEL_SHADER});
 
       native_shaders_definitions.emplace(
          CompileTimeStringHash("GBFR Cutscene Gamma"),
-         ShaderDefinition{"Luma_GBFR_CutsceneGamma", reshade::api::pipeline_subobject_type::pixel_shader});
+         ShaderDefinition{"Luma_GBFR_CutsceneGamma", D3D11_SHVER_PIXEL_SHADER});
 
       native_shaders_definitions.emplace(
          CompileTimeStringHash("GBFR Cutscene ColorGrade"),
-         ShaderDefinition{"Luma_GBFR_CutsceneColorGrade", reshade::api::pipeline_subobject_type::pixel_shader});
+         ShaderDefinition{"Luma_GBFR_CutsceneColorGrade", D3D11_SHVER_PIXEL_SHADER});
 
       native_shaders_definitions.emplace(
          CompileTimeStringHash("GBFR Cutscene Overlay Blend PS"),
-         ShaderDefinition{"Luma_GBFR_CutsceneOverlayBlend_PS", reshade::api::pipeline_subobject_type::pixel_shader});
+         ShaderDefinition{"Luma_GBFR_CutsceneOverlayBlend_PS", D3D11_SHVER_PIXEL_SHADER});
 
       native_shaders_definitions.emplace(
          CompileTimeStringHash("GBFR Post SR Encode"),
-         ShaderDefinition{"Luma_GBFR_PostSREncode", reshade::api::pipeline_subobject_type::pixel_shader});
+         ShaderDefinition{"Luma_GBFR_PostSREncode", D3D11_SHVER_PIXEL_SHADER});
 
       native_shaders_definitions.emplace(
          CompileTimeStringHash("GBFR UI Encode"),
-         ShaderDefinition{"Luma_GBFR_UIEncode", reshade::api::pipeline_subobject_type::pixel_shader});
+         ShaderDefinition{"Luma_GBFR_UIEncode", D3D11_SHVER_PIXEL_SHADER});
 
       native_shaders_definitions.emplace(
          CompileTimeStringHash("GBFR Pre SR Encode"),
-         ShaderDefinition{"Luma_GBFR_PreSREncode", reshade::api::pipeline_subobject_type::pixel_shader});
+         ShaderDefinition{"Luma_GBFR_PreSREncode", D3D11_SHVER_PIXEL_SHADER});
 
       native_shaders_definitions.emplace(
          CompileTimeStringHash("GBFR Fullscreen UV VS"),
-         ShaderDefinition{"Luma_GBFR_FullscreenUV_VS", reshade::api::pipeline_subobject_type::vertex_shader});
+         ShaderDefinition{"Luma_GBFR_FullscreenUV_VS", D3D11_SHVER_VERTEX_SHADER});
 
       native_shaders_definitions.emplace(
          CompileTimeStringHash("GBFR UI Background Copy"),
-         ShaderDefinition{"Luma_GBFR_UIBackgroundCopy", reshade::api::pipeline_subobject_type::pixel_shader});
+         ShaderDefinition{"Luma_GBFR_UIBackgroundCopy", D3D11_SHVER_PIXEL_SHADER});
    }
 
    void OnLoad(std::filesystem::path& file_path, bool failed) override
    {
       if (!failed)
       {
-         reshade::register_event<reshade::addon_event::execute_secondary_command_list>(GranblueFantasyRelink::OnExecuteSecondaryCommandList);
          LoadConfigs();
       }
    }
@@ -120,7 +118,7 @@ public:
       ID3D11DeviceContext* native_device_context,
       CommandListData& cmd_list_data,
       DeviceData& device_data,
-      reshade::api::shader_stage stages,
+      ShaderStages stages,
       const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes,
       bool is_custom_pass,
       bool& updated_cbuffers,
@@ -556,107 +554,86 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
 
-   static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
+   // A command list is about to be replayed on a context, usually the immediate one (ReShade's "execute_secondary_command_list" on a context)
+   bool PreExecuteCommandList(ID3D11DeviceContext* native_device_context, ID3D11CommandList* list, BOOL restore) override
    {
-      SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api());
-
-      ComPtr<ID3D11DeviceContext> native_device_context;
-      ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      HRESULT hr = device_child->QueryInterface(native_device_context.put());
-
-      ComPtr<ID3D11CommandList> native_cmd_list;
-      device_child->QueryInterface(native_cmd_list.put());
-
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      CommandListData* cmd_list_data_ptr = GetCommandListData(native_device_context);
+      if (!cmd_list_data_ptr)
+         return false;
+      CommandListData& cmd_list_data = *cmd_list_data_ptr;
+      auto& device_data = *cmd_list_data.device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      ComPtr<ID3D11DeviceContext> source_deferred_ctx;
-      ComPtr<ID3D11CommandList> secondary_native_cmd_list;
-      {
-         ID3D11DeviceChild* secondary_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         secondary_child->QueryInterface(source_deferred_ctx.put());
-         secondary_child->QueryInterface(secondary_native_cmd_list.put());
-      }
+      // This is an ExecuteCommandList callback — a command list is about to be replayed
+      // on the immediate context. Patch the ring buffer before the first one runs
+      // (Map/Unmap already happened on the immediate context at start of frame).
+      ID3D11CommandList* const native_command_list = list;
 
 #if ENABLE_UI_SCALING
-      const bool is_finish_command_list = source_deferred_ctx != nullptr;
-      if (is_finish_command_list)
+      if (native_command_list &&
+          native_command_list == game_device_data.ui_scale.ui_finish_command_list.load(std::memory_order_acquire))
       {
-         const ID3D11DeviceContext* ui_ctx = game_device_data.ui_scale.ui_detected_context.load(std::memory_order_acquire);
-         if (native_cmd_list && ui_ctx != nullptr && source_deferred_ctx.get() == ui_ctx)
+         device_data.has_drawn_main_post_processing = true;
+      }
+
+      if (
+         native_command_list == game_device_data.ui_scale.output_remainder_command_list.load(std::memory_order_acquire) &&
+         game_device_data.ui_scale.output_pending.load(std::memory_order_acquire))
+      {
+         // Unlikely to be needed this is the last shader to run
+         // DrawStateStack<DrawStateStackType::FullGraphics> ui_output_state_stack;
+         // ui_output_state_stack.Cache(native_device_context, device_data.uav_max_count);
+         if (game_device_data.ui_scale.output_partial_command_list)
          {
-            game_device_data.ui_scale.ui_finish_command_list.store(native_cmd_list.get(), std::memory_order_release);
+            native_device_context->ExecuteCommandList(game_device_data.ui_scale.output_partial_command_list.get(), FALSE);
+            game_device_data.ui_scale.output_partial_command_list.reset();
          }
+         ReplayOutputDraw(native_device_context, game_device_data);
+         game_device_data.ui_scale.output_pending.store(false, std::memory_order_release);
+         // ui_output_state_stack.Restore(native_device_context);
       }
 #endif
 
-      if (native_device_context)
+      if (native_command_list == game_device_data.remainder_command_list.load(std::memory_order_acquire) && game_device_data.partial_command_list.get() != nullptr)
       {
-         // This is an ExecuteCommandList callback — a command list is about to be replayed
-         // on the immediate context. Patch the ring buffer before the first one runs
-         // (Map/Unmap already happened on the immediate context at start of frame).
-         ComPtr<ID3D11CommandList> native_command_list;
-         native_command_list = secondary_native_cmd_list;
-
-#if ENABLE_UI_SCALING
-         if (native_command_list &&
-             native_command_list.get() == game_device_data.ui_scale.ui_finish_command_list.load(std::memory_order_acquire))
          {
-            device_data.has_drawn_main_post_processing = true;
-         }
+            native_device_context->ExecuteCommandList(game_device_data.partial_command_list.get(), FALSE);
+            game_device_data.partial_command_list.reset();
 
-         if (
-            native_command_list.get() == game_device_data.ui_scale.output_remainder_command_list.load(std::memory_order_acquire) &&
-            game_device_data.ui_scale.output_pending.load(std::memory_order_acquire))
-         {
-            // Unlikely to be needed this is the last shader to run
-            // DrawStateStack<DrawStateStackType::FullGraphics> ui_output_state_stack;
-            // ui_output_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
-            if (game_device_data.ui_scale.output_partial_command_list)
-            {
-               native_device_context->ExecuteCommandList(game_device_data.ui_scale.output_partial_command_list.get(), FALSE);
-               game_device_data.ui_scale.output_partial_command_list.reset();
-            }
-            ReplayOutputDraw(native_device_context.get(), game_device_data);
-            game_device_data.ui_scale.output_pending.store(false, std::memory_order_release);
-            // ui_output_state_stack.Restore(native_device_context.get());
-         }
-#endif
-
-         if (native_command_list.get() == game_device_data.remainder_command_list.load(std::memory_order_acquire) && game_device_data.partial_command_list.get() != nullptr)
-         {
-            {
-               native_device_context->ExecuteCommandList(game_device_data.partial_command_list.get(), FALSE);
-               game_device_data.partial_command_list.reset();
-
-               // Read jitter here, mid-frame, after geometry/camera setup but before DLSS and
-               // all custom passes. By the time the partial command list (containing TAA) has
-               // been replayed the game must have written the current-frame projection jitter.
-               RefreshFrameJitterForPostProcess(game_device_data);
-               CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-               RunLatePostProcessPasses(native_device_context.get(), cmd_list_data, device_data, game_device_data);
-            }
+            // Read jitter here, mid-frame, after geometry/camera setup but before DLSS and
+            // all custom passes. By the time the partial command list (containing TAA) has
+            // been replayed the game must have written the current-frame projection jitter.
+            RefreshFrameJitterForPostProcess(game_device_data);
+            RunLatePostProcessPasses(native_device_context, cmd_list_data, device_data, game_device_data);
          }
       }
+      return false;
+   }
 
-      ComPtr<ID3D11CommandList> finish_command_list;
-      hr = device_child->QueryInterface(finish_command_list.put());
-      if (finish_command_list)
+   // A deferred context recorded a command list (ReShade's "execute_secondary_command_list" on a command list)
+   void PostFinishCommandList(ID3D11DeviceContext* deferred_ctx, BOOL restore, ID3D11CommandList* finish_command_list) override
+   {
+      CommandListData* cmd_list_data = GetCommandListData(deferred_ctx);
+      if (!cmd_list_data)
+         return;
+      auto& device_data = *cmd_list_data->device_data;
+      auto& game_device_data = GetGameDeviceData(device_data);
+
+#if ENABLE_UI_SCALING
+      const ID3D11DeviceContext* ui_ctx = game_device_data.ui_scale.ui_detected_context.load(std::memory_order_acquire);
+      if (ui_ctx != nullptr && deferred_ctx == ui_ctx)
       {
-         ComPtr<ID3D11DeviceContext> deferred_ctx;
-         ID3D11DeviceChild* secondary_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         hr = secondary_child->QueryInterface(deferred_ctx.put());
-         if (deferred_ctx)
-         {
-            if (deferred_ctx.get() == game_device_data.draw_device_context)
-            {
-               game_device_data.remainder_command_list.store(finish_command_list.get(), std::memory_order_release);
-            }
-            if (deferred_ctx.get() == game_device_data.ui_scale.output_device_context.load(std::memory_order_acquire))
-            {
-               game_device_data.ui_scale.output_remainder_command_list.store(finish_command_list.get(), std::memory_order_release);
-            }
-         }
+         game_device_data.ui_scale.ui_finish_command_list.store(finish_command_list, std::memory_order_release);
+      }
+#endif
+
+      if (deferred_ctx == game_device_data.draw_device_context)
+      {
+         game_device_data.remainder_command_list.store(finish_command_list, std::memory_order_release);
+      }
+      if (deferred_ctx == game_device_data.ui_scale.output_device_context.load(std::memory_order_acquire))
+      {
+         game_device_data.ui_scale.output_remainder_command_list.store(finish_command_list, std::memory_order_release);
       }
    }
 
@@ -665,9 +642,9 @@ public:
       auto& game_device_data = GetGameDeviceData(device_data);
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+      auto& device_data = *GetSwapchainData(swapchain)->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
       EnsureScaledTexture(device_data, game_device_data);
    }
@@ -769,7 +746,7 @@ public:
 #if TEST || DEVELOPMENT
          if (device_data.sr_type != SR::Type::None && !device_data.sr_suppressed && game_device_data.taa_detected_this_frame)
          {
-            reshade::log::message(reshade::log::level::warning,
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
                "[GBFR][TEST] SR not drawn this frame (sr enabled, not suppressed, TAA was seen); force_reset_sr set");
          }
 #endif
@@ -852,7 +829,7 @@ public:
       {
          device_data.force_reset_sr = true;
 #if TEST || DEVELOPMENT
-         reshade::log::message(reshade::log::level::warning, "[GBFR][TEST] force_reset_sr set: render_scale_changed");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "[GBFR][TEST] force_reset_sr set: render_scale_changed");
 #endif
          render_scale_changed = false;
       }
@@ -864,32 +841,30 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "RenderScale", render_scale);
+      Config::Get(NAME, "RenderScale", render_scale);
       if (render_scale != 1.f)
       {
          render_scale_changed = true;
       }
       // Load cbuffer values directly from config
-      reshade::get_config_value(runtime, NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
-      reshade::get_config_value(runtime, NAME, "Highlights", cb_luma_global_settings.GameSettings.Highlights);
-      reshade::get_config_value(runtime, NAME, "HighlightContrast", cb_luma_global_settings.GameSettings.HighlightContrast);
-      reshade::get_config_value(runtime, NAME, "Shadows", cb_luma_global_settings.GameSettings.Shadows);
-      reshade::get_config_value(runtime, NAME, "ContrastShadows", cb_luma_global_settings.GameSettings.ShadowContrast);
-      reshade::get_config_value(runtime, NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
-      reshade::get_config_value(runtime, NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
-      reshade::get_config_value(runtime, NAME, "Gamma", cb_luma_global_settings.GameSettings.Gamma);
-      reshade::get_config_value(runtime, NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
-      reshade::get_config_value(runtime, NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
-      reshade::get_config_value(runtime, NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
-      // reshade::get_config_value(runtime, NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
-      reshade::get_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
+      Config::Get(NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
+      Config::Get(NAME, "Highlights", cb_luma_global_settings.GameSettings.Highlights);
+      Config::Get(NAME, "HighlightContrast", cb_luma_global_settings.GameSettings.HighlightContrast);
+      Config::Get(NAME, "Shadows", cb_luma_global_settings.GameSettings.Shadows);
+      Config::Get(NAME, "ContrastShadows", cb_luma_global_settings.GameSettings.ShadowContrast);
+      Config::Get(NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
+      Config::Get(NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
+      Config::Get(NAME, "Gamma", cb_luma_global_settings.GameSettings.Gamma);
+      Config::Get(NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
+      Config::Get(NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
+      Config::Get(NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
+      // Config::Get(NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
+      Config::Get(NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
-      reshade::api::effect_runtime* runtime = nullptr;
 
       // Render scale slider
       {
@@ -899,7 +874,7 @@ public:
             scale = (scale / 5) * 5;
             render_scale = scale / 100.0f;
             render_scale_changed = true;
-            reshade::set_config_value(runtime, NAME, "RenderScale", render_scale);
+            Config::Set(NAME, "RenderScale", render_scale);
          }
       }
 
@@ -920,130 +895,130 @@ public:
 
          if (ImGui::SliderFloat("Exposure", &cb_luma_global_settings.GameSettings.Exposure, 0.0f, 2.0f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
-            reshade::set_config_value(runtime, NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
+            Config::Set(NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
          }
-         if (DrawResetButton(cb_luma_global_settings.GameSettings.Exposure, 1.f, "Exposure", runtime))
+         if (DrawResetButton(cb_luma_global_settings.GameSettings.Exposure, 1.f, "Exposure"))
          {
             cb_luma_global_settings.GameSettings.Exposure = 1.f;
-            reshade::set_config_value(runtime, NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
+            Config::Set(NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
          }
 
          if (ImGui::SliderFloat("Gamma", &cb_luma_global_settings.GameSettings.Gamma, 0.75f, 1.25f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
-            reshade::set_config_value(runtime, NAME, "Gamma", cb_luma_global_settings.GameSettings.Gamma);
+            Config::Set(NAME, "Gamma", cb_luma_global_settings.GameSettings.Gamma);
          }
-         if (DrawResetButton(cb_luma_global_settings.GameSettings.Gamma, 1.f, "Gamma", runtime))
+         if (DrawResetButton(cb_luma_global_settings.GameSettings.Gamma, 1.f, "Gamma"))
          {
             cb_luma_global_settings.GameSettings.Gamma = 1.f;
-            reshade::set_config_value(runtime, NAME, "Gamma", cb_luma_global_settings.GameSettings.Gamma);
+            Config::Set(NAME, "Gamma", cb_luma_global_settings.GameSettings.Gamma);
          }
 
          if (ImGui::SliderFloat("Highlights", &highlights, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
             cb_luma_global_settings.GameSettings.Highlights = highlights * 0.02f;
-            reshade::set_config_value(runtime, NAME, "Highlights", cb_luma_global_settings.GameSettings.Highlights);
+            Config::Set(NAME, "Highlights", cb_luma_global_settings.GameSettings.Highlights);
          }
-         if (DrawResetButton(highlights, 50.f, "Highlights", runtime))
+         if (DrawResetButton(highlights, 50.f, "Highlights"))
          {
             highlights = 50.f;
             cb_luma_global_settings.GameSettings.Highlights = highlights * 0.02f;
-            reshade::set_config_value(runtime, NAME, "Highlights", cb_luma_global_settings.GameSettings.Highlights);
+            Config::Set(NAME, "Highlights", cb_luma_global_settings.GameSettings.Highlights);
          }
 
          if (ImGui::SliderFloat("Highlight Contrast", &highlight_contrast, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
             cb_luma_global_settings.GameSettings.HighlightContrast = highlight_contrast * 0.02f;
-            reshade::set_config_value(runtime, NAME, "HighlightContrast", cb_luma_global_settings.GameSettings.HighlightContrast);
+            Config::Set(NAME, "HighlightContrast", cb_luma_global_settings.GameSettings.HighlightContrast);
          }
-         if (DrawResetButton(highlight_contrast, 50.f, "HighlightContrast", runtime))
+         if (DrawResetButton(highlight_contrast, 50.f, "HighlightContrast"))
          {
             highlight_contrast = 50.f;
             cb_luma_global_settings.GameSettings.HighlightContrast = highlight_contrast * 0.02f;
-            reshade::set_config_value(runtime, NAME, "HighlightContrast", cb_luma_global_settings.GameSettings.HighlightContrast);
+            Config::Set(NAME, "HighlightContrast", cb_luma_global_settings.GameSettings.HighlightContrast);
          }
 
          if (ImGui::SliderFloat("Shadows", &shadows, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
             cb_luma_global_settings.GameSettings.Shadows = shadows * 0.02f;
-            reshade::set_config_value(runtime, NAME, "Shadows", cb_luma_global_settings.GameSettings.Shadows);
+            Config::Set(NAME, "Shadows", cb_luma_global_settings.GameSettings.Shadows);
          }
-         if (DrawResetButton(shadows, 50.f, "Shadows", runtime))
+         if (DrawResetButton(shadows, 50.f, "Shadows"))
          {
             shadows = 50.f;
             cb_luma_global_settings.GameSettings.Shadows = shadows * 0.02f;
-            reshade::set_config_value(runtime, NAME, "Shadows", cb_luma_global_settings.GameSettings.Shadows);
+            Config::Set(NAME, "Shadows", cb_luma_global_settings.GameSettings.Shadows);
          }
 
          if (ImGui::SliderFloat("Shadow Contrast", &shadow_contrast, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
             cb_luma_global_settings.GameSettings.ShadowContrast = shadow_contrast * 0.02f;
-            reshade::set_config_value(runtime, NAME, "ShadowContrast", cb_luma_global_settings.GameSettings.ShadowContrast);
+            Config::Set(NAME, "ShadowContrast", cb_luma_global_settings.GameSettings.ShadowContrast);
          }
-         if (DrawResetButton(shadow_contrast, 50.f, "ShadowContrast", runtime))
+         if (DrawResetButton(shadow_contrast, 50.f, "ShadowContrast"))
          {
             shadow_contrast = 50.f;
             cb_luma_global_settings.GameSettings.ShadowContrast = shadow_contrast * 0.02f;
-            reshade::set_config_value(runtime, NAME, "ShadowContrast", cb_luma_global_settings.GameSettings.ShadowContrast);
+            Config::Set(NAME, "ShadowContrast", cb_luma_global_settings.GameSettings.ShadowContrast);
          }
 
          if (ImGui::SliderFloat("Contrast", &contrast, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
             cb_luma_global_settings.GameSettings.Contrast = contrast * 0.02f;
-            reshade::set_config_value(runtime, NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
+            Config::Set(NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
          }
-         if (DrawResetButton(contrast, 50.f, "Contrast", runtime))
+         if (DrawResetButton(contrast, 50.f, "Contrast"))
          {
             contrast = 50.f;
             cb_luma_global_settings.GameSettings.Contrast = contrast * 0.02f;
-            reshade::set_config_value(runtime, NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
+            Config::Set(NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
          }
 
          if (ImGui::SliderFloat("Saturation", &saturation, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
             cb_luma_global_settings.GameSettings.Saturation = saturation * 0.02f;
-            reshade::set_config_value(runtime, NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
+            Config::Set(NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
          }
-         if (DrawResetButton(saturation, 50.f, "Saturation", runtime))
+         if (DrawResetButton(saturation, 50.f, "Saturation"))
          {
             saturation = 50.f;
             cb_luma_global_settings.GameSettings.Saturation = saturation * 0.02f;
-            reshade::set_config_value(runtime, NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
+            Config::Set(NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
          }
 
          if (ImGui::SliderFloat("Highlight Saturation", &highlight_saturation, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
             cb_luma_global_settings.GameSettings.HighlightSaturation = highlight_saturation * 0.02f;
-            reshade::set_config_value(runtime, NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
+            Config::Set(NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
          }
-         if (DrawResetButton(highlight_saturation, 50.f, "HighlightSaturation", runtime))
+         if (DrawResetButton(highlight_saturation, 50.f, "HighlightSaturation"))
          {
             highlight_saturation = 50.f;
             cb_luma_global_settings.GameSettings.HighlightSaturation = highlight_saturation * 0.02f;
-            reshade::set_config_value(runtime, NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
+            Config::Set(NAME, "HighlightSaturation", cb_luma_global_settings.GameSettings.HighlightSaturation);
          }
 
          if (ImGui::SliderFloat("Dechroma", &dechroma, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
             cb_luma_global_settings.GameSettings.Dechroma = dechroma * 0.01f;
-            reshade::set_config_value(runtime, NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
+            Config::Set(NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
          }
-         if (DrawResetButton(dechroma, 0.f, "Dechroma", runtime))
+         if (DrawResetButton(dechroma, 0.f, "Dechroma"))
          {
             dechroma = 0.f;
             cb_luma_global_settings.GameSettings.Dechroma = dechroma * 0.01f;
-            reshade::set_config_value(runtime, NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
+            Config::Set(NAME, "Dechroma", cb_luma_global_settings.GameSettings.Dechroma);
          }
 
          if (ImGui::SliderFloat("Flare", &flare, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
             cb_luma_global_settings.GameSettings.Flare = flare * 0.01f;
-            reshade::set_config_value(runtime, NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
+            Config::Set(NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
          }
-         if (DrawResetButton(flare, 0.f, "Flare", runtime))
+         if (DrawResetButton(flare, 0.f, "Flare"))
          {
             flare = 0.f;
             cb_luma_global_settings.GameSettings.Flare = flare * 0.01f;
-            reshade::set_config_value(runtime, NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
+            Config::Set(NAME, "Flare", cb_luma_global_settings.GameSettings.Flare);
          }
 
          // // Bloom settings
@@ -1051,25 +1026,25 @@ public:
          // if (ImGui::SliderInt("Bloom Type", &bloom_type, 0, 1, bloom_type_names[bloom_type], ImGuiSliderFlags_AlwaysClamp))
          // {
          //    cb_luma_global_settings.GameSettings.BloomType = bloom_type;
-         //    reshade::set_config_value(runtime, NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
+         //    Config::Set(NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
          // }
-         // if (DrawResetButton(bloom_type, 1, "BloomType", runtime))
+         // if (DrawResetButton(bloom_type, 1, "BloomType"))
          // {
          //    bloom_type = 1;
          //    cb_luma_global_settings.GameSettings.BloomType = bloom_type;
-         //    reshade::set_config_value(runtime, NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
+         //    Config::Set(NAME, "BloomType", cb_luma_global_settings.GameSettings.BloomType);
          // }
 
          if (ImGui::SliderFloat("Bloom Strength", &blooom_strength, 0.0f, 100.0f, "%.0f", ImGuiSliderFlags_AlwaysClamp))
          {
             cb_luma_global_settings.GameSettings.BloomStrength = blooom_strength * 0.02f;
-            reshade::set_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
+            Config::Set(NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
          }
-         if (DrawResetButton(blooom_strength, 50.f, "BloomStrength", runtime))
+         if (DrawResetButton(blooom_strength, 50.f, "BloomStrength"))
          {
             blooom_strength = 50.f;
             cb_luma_global_settings.GameSettings.BloomStrength = blooom_strength * 0.02f;
-            reshade::set_config_value(runtime, NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
+            Config::Set(NAME, "BloomStrength", cb_luma_global_settings.GameSettings.BloomStrength);
          }
 
          ImGui::TreePop();
@@ -1080,7 +1055,6 @@ public:
    void DrawImGuiDevSettings(DeviceData& device_data) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::SliderInt("Pause Trace Delay (frames)", &game_device_data.pause_trace_delay_frames, 0, 10);
       ImGui::Checkbox("Use Table Jitter for DLSS", &game_device_data.use_table_jitter_for_dlss);
@@ -1458,9 +1432,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
 
       texture_upgrade_formats = {
-          reshade::api::format::r11g11b10_float,
-          reshade::api::format::r10g10b10a2_unorm,
-          reshade::api::format::r8g8b8a8_typeless
+          DXGI_FORMAT_R11G11B10_FLOAT,
+          DXGI_FORMAT_R10G10B10A2_UNORM,
+          DXGI_FORMAT_R8G8B8A8_TYPELESS
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
       // Disable chain upgrades — Granblue uses direct RTV→SRV reads between PP passes,
@@ -1521,7 +1495,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       cb_luma_global_settings.GameSettings.BloomType = 0; // Default to HDR bloom
       cb_luma_global_settings.GameSettings.BloomStrength = 1.f;
 
-      game = new GranblueFantasyRelink();
+      SetGame<GranblueFantasyRelink>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
@@ -1529,7 +1503,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
 
 
-      reshade::unregister_event<reshade::addon_event::execute_secondary_command_list>(GranblueFantasyRelink::OnExecuteSecondaryCommandList);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

@@ -65,9 +65,9 @@ public:
    }
 
    // Add a saturate on materials and UI shaders
-   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, D3D11_SHADER_VERSION_TYPE type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
    {
-      if (type != reshade::api::pipeline_subobject_type::pixel_shader)
+      if (type != D3D11_SHVER_PIXEL_SHADER)
          return nullptr;
 
       std::unique_ptr<std::byte[]> new_code = nullptr;
@@ -202,7 +202,7 @@ public:
       return new_code;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -220,7 +220,7 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
 
-      if ((stages & reshade::api::shader_stage::pixel) == reshade::api::shader_stage::pixel)
+      if ((stages & ShaderStages::Pixel) == ShaderStages::Pixel)
       {
          com_ptr<ID3D11BlendState> blend_state;
          FLOAT blend_factor[4] = {1.f, 1.f, 1.f, 1.f};
@@ -311,12 +311,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm, // Likely all that is needed
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM, // Likely all that is needed
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
       };
       // Upgrade almost all RTs. This game does weird resizes resources before resizing/creating the swapchain, so it might break if you change the aspect ratio after boot (until you toggle MSAA to recreate some textures)!
       // The game also has a bug where in windowed mode, if the resolution matches the screen (or maybe even if not?), the swapchain is resized to a slightly higher resolution than the screen.
@@ -401,7 +401,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       pixel_shader_hashes_SubtractiveBackground.pixel_shaders = {Shader::Hash_StrToNum("0E76F7A1")}; // All the known shaders that use subtractive blending
       pixel_shader_hashes_DownscaleAndDarken.pixel_shaders = {Shader::Hash_StrToNum("AA2BFE7F")};
       
-      game = new Thumper();
+      SetGame<Thumper>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

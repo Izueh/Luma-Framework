@@ -1,7 +1,6 @@
 #define GAME_FAR_CRY_5 1
 #define DISABLE_AUTO_DEBUGGER 1
 #define DISABLE_SWAPCHAIN_FLIP_MODEL 1
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 #include "../../Core/core.hpp"
 #include "validation.h"
 #include "perf_probe.h"
@@ -27,8 +26,8 @@ namespace FC5
    {
       // ADS with some weapon sights uses a TAA permutation with the same
       // scene-color, motion-vector and output bindings as the main resolve.
-      return hashes.Contains(ShaderTAA, reshade::api::shader_stage::pixel) ||
-         hashes.Contains(ShaderTAAScope, reshade::api::shader_stage::pixel);
+      return hashes.Contains(ShaderTAA, ShaderStages::Pixel) ||
+         hashes.Contains(ShaderTAAScope, ShaderStages::Pixel);
    }
    struct Device final : GameDeviceData
    {
@@ -107,7 +106,7 @@ namespace FC5
          "[FC5 probe] frame=%llu %s=%p %ux%u fmt=%u mips=%u array=%u samples=%u bind=0x%X",
          frame, name, resource, d.Width, d.Height, d.Format, d.MipLevels,
          d.ArraySize, d.SampleDesc.Count, d.BindFlags);
-      reshade::log::message(reshade::log::level::info, line);
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
    }
    void ReadTemporalCB(ID3D11Device* device, ID3D11DeviceContext* ctx, Device& fc)
    {
@@ -145,7 +144,7 @@ namespace FC5
          {
             std::snprintf(line, sizeof(line), "[FC5 probe] frame=%llu temporal.c%u=%.9g,%.9g,%.9g,%.9g",
                fc.frame, row, values[row * 4], values[row * 4 + 1], values[row * 4 + 2], values[row * 4 + 3]);
-            reshade::log::message(reshade::log::level::info, line);
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
          }
       }
    }
@@ -155,7 +154,7 @@ namespace FC5
       D3D11_VIEWPORT viewport{}; UINT count = 1; ctx->RSGetViewports(&count, &viewport);
       std::snprintf(line, sizeof(line), "[FC5 scaling] frame=%llu PS=%08X output=%ux%u viewport=(%.0f,%.0f,%.0f,%.0f) count=%u",
          fc.frame, hash, output_width, output_height, viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height, count);
-      reshade::log::message(reshade::log::level::info, line);
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
       com_ptr<ID3D11ShaderResourceView> srvs[5]; ctx->PSGetShaderResources(0, 5, &srvs[0]);
       for (UINT i = 0; i < 5; ++i) if (srvs[i])
       {
@@ -194,7 +193,7 @@ namespace FC5
       {
          std::snprintf(line,sizeof(line),"[FC5 scaling] frame=%llu PS=%08X cb0.c%u=%.9g,%.9g,%.9g,%.9g",
             fc.frame,hash,row,values[row*4],values[row*4+1],values[row*4+2],values[row*4+3]);
-         reshade::log::message(reshade::log::level::info,line);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info,line);
       }
    }
    bool Allocate(ID3D11Device* device, Device& fc, const D3D11_TEXTURE2D_DESC& color,
@@ -268,12 +267,12 @@ class FarCry5 final : public Game
 public:
    void LoadConfigs() override
    {
-      reshade::get_config_value(nullptr, NAME, "FC5EnableDLSS", FC5::configured_enable);
-      reshade::get_config_value(nullptr, NAME, "FC5MatchDisplay", FC5::configured_upscale);
-      reshade::get_config_value(nullptr, NAME, "FC5RCASSharpness", FC5::configured_rcas_sharpness);
-      reshade::get_config_value(nullptr, NAME, "FC5AutoMipBias", FC5::configured_auto_mip_bias);
+      Config::Get(NAME, "FC5EnableDLSS", FC5::configured_enable);
+      Config::Get(NAME, "FC5MatchDisplay", FC5::configured_upscale);
+      Config::Get(NAME, "FC5RCASSharpness", FC5::configured_rcas_sharpness);
+      Config::Get(NAME, "FC5AutoMipBias", FC5::configured_auto_mip_bias);
       FC5::configured_rcas_sharpness = std::clamp(FC5::configured_rcas_sharpness, 0.f, 1.f);
-      reshade::get_config_value(nullptr, NAME, "FC5SuspendReporter", FC5::configured_suspend_reporter);
+      Config::Get(NAME, "FC5SuspendReporter", FC5::configured_suspend_reporter);
       FC5::BorderlessHDR::LoadConfiguration();
       wchar_t timing[8]{};
       FC5::gpu_timing = GetEnvironmentVariableW(L"FC5_GPU_TIMING", timing, 8) == 1 && timing[0] == L'1';
@@ -281,13 +280,13 @@ public:
    void OnInit(bool async) override
    {
       native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Inputs"),
-         ShaderDefinition{ "Luma_PrepareInputs", reshade::api::pipeline_subobject_type::compute_shader });
+         ShaderDefinition{ "Luma_PrepareInputs", D3D11_SHVER_COMPUTE_SHADER });
       native_shaders_definitions.emplace(CompileTimeStringHash("Prepare HDR Color"),
-         ShaderDefinition{ "Luma_PrepareHDRColor", reshade::api::pipeline_subobject_type::compute_shader });
+         ShaderDefinition{ "Luma_PrepareHDRColor", D3D11_SHVER_COMPUTE_SHADER });
       native_shaders_definitions.emplace(CompileTimeStringHash("Resolve SDR PS"),
-         ShaderDefinition{ "Luma_ResolveOutput", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "resolve_sdr_ps" });
+         ShaderDefinition{ "Luma_ResolveOutput", D3D11_SHVER_PIXEL_SHADER, nullptr, "resolve_sdr_ps" });
       native_shaders_definitions.emplace(CompileTimeStringHash("Resolve scRGB PS"),
-         ShaderDefinition{ "Luma_ResolveOutput", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "resolve_scrgb_ps" });
+         ShaderDefinition{ "Luma_ResolveOutput", D3D11_SHVER_PIXEL_SHADER, nullptr, "resolve_scrgb_ps" });
       luma_settings_cbuffer_index = luma_data_cbuffer_index = luma_ui_cbuffer_index = -1;
    }
    void OnCreateDevice(ID3D11Device* device, DeviceData& data) override
@@ -296,19 +295,125 @@ public:
       Data(data).enable_dlss = FC5::configured_enable;
       Data(data).upscale = FC5::configured_upscale;
       // Core initializes NGX AFTER this callback. Do not override user selection.
-      reshade::log::message(reshade::log::level::info,
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info,
          "[FC5] DLSS/DLAA initialized from saved settings; invalid inputs retain native TAA.");
    }
    void OnDestroyDeviceData(DeviceData& data) override
    {
       delete static_cast<FC5::Device*>(data.game); data.game = nullptr;
    }
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   // Native hooks, replacing ReShade's events and the upload probe's MinHook Map/Unmap hooks.
+   // They run before Core's ("Pre") or after it ("Post"), where FC5 ran after Core's ReShade events before.
+   void PreCreateSwapChain(DXGI_SWAP_CHAIN_DESC& desc) override
    {
-      if (swapchain->get_device()->get_api() != reshade::api::device_api::d3d11) return;
-      auto* data = swapchain->get_device()->get_private_data<DeviceData>();
+      FC5::BorderlessHDR::OnCreate(desc.BufferDesc.Format, desc.SampleDesc.Count, &desc.SwapEffect, desc.BufferCount, &desc.Windowed, desc.Flags);
+   }
+   void PreCreateSwapChainForHwnd(DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND hwnd) override
+   {
+      FC5::BorderlessHDR::OnCreate(desc.Format, desc.SampleDesc.Count, &desc.SwapEffect, desc.BufferCount, &fullscreen_desc.Windowed, desc.Flags);
+   }
+   void PreResizeBuffers(IDXGISwapChain* swapchain, UINT& count, UINT width, UINT height, DXGI_FORMAT& format, UINT& flags, const UINT* node_masks, IUnknown* const* present_queues) override
+   {
+      // ReShade reported a resize as a new swapchain: its swap effect and samples can't change
+      DXGI_SWAP_CHAIN_DESC current{};
+      if (FAILED(swapchain->GetDesc(&current))) return;
+      UINT buffer_count = count == 0 ? current.BufferCount : count;
+      if (FC5::BorderlessHDR::OnCreate(format == DXGI_FORMAT_UNKNOWN ? current.BufferDesc.Format : format, current.SampleDesc.Count, nullptr, buffer_count, nullptr, flags))
+         count = buffer_count;
+   }
+   void PostCreateSwapChain(IDXGISwapChain* swapchain, ID3D11Device* device) override
+   {
+      FC5::BorderlessHDR::OnInit(swapchain);
+   }
+   void PostResizeBuffers(IDXGISwapChain* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) override
+   {
+      FC5::BorderlessHDR::OnInit(swapchain);
+   }
+   void PostCreateVertexShader(ID3D11Device* device, const void* bytecode, SIZE_T length, ID3D11VertexShader* shader) override
+   {
+      FC5::CameraProbe::OnShader(bytecode, length);
+   }
+   void PostCreatePixelShader(ID3D11Device* device, const void* bytecode, SIZE_T length, ID3D11PixelShader* shader) override
+   {
+      FC5::CameraProbe::OnShader(bytecode, length);
+   }
+   void PostCreateDevice(ID3D11Device* device) override
+   {
+      FC5::UploadProbe::OnInitDevice(device);
+      com_ptr<ID3D11DeviceContext> immediate_context;
+      device->GetImmediateContext(&immediate_context);
+      FC5::UploadProbe::OnInitContext(device, immediate_context.get());
+   }
+   void OnDeviceDestroyed(ID3D11Device* device) override
+   {
+      FC5::UploadProbe::OnDestroyDevice(device);
+   }
+   void PostCreateDeferredContext(ID3D11Device* device, ID3D11DeviceContext* context) override
+   {
+      FC5::UploadProbe::OnInitContext(device, context);
+   }
+   void OnDeferredContextDestroyed(const void* context) override
+   {
+      FC5::UploadProbe::OnDestroyContext(context);
+   }
+   static ID3D11Device* GetContextDevice(ID3D11DeviceContext* context)
+   {
+      CommandListData* cmd_list_data = GetCommandListData(context);
+      return cmd_list_data ? cmd_list_data->device_data->native_device : nullptr;
+   }
+   bool PreExecuteCommandList(ID3D11DeviceContext* context, ID3D11CommandList* list, BOOL restore) override
+   {
+      if (ID3D11Device* device = GetContextDevice(context))
+         FC5::UploadProbe::OnSecondary(device);
+      return false;
+   }
+   void PostFinishCommandList(ID3D11DeviceContext* context, BOOL restore, ID3D11CommandList* list) override
+   {
+      if (ID3D11Device* device = GetContextDevice(context))
+         FC5::UploadProbe::OnSecondary(device);
+   }
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
+   {
+      FC5::UploadProbe::OnNativeMap(context, resource, subresource, type, &mapped);
+   }
+   bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+   {
+      FC5::UploadProbe::BeforeNativeUnmap(context, resource, subresource);
+      return false;
+   }
+   void PostUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+   {
+      FC5::UploadProbe::AfterNativeUnmap(context, resource, subresource);
+   }
+   bool PreCopyResource(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source) override
+   {
+      if (ID3D11Device* device = GetContextDevice(context))
+         FC5::UploadProbe::Invalidate(device, destination);
+      return false;
+   }
+   bool PreCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, UINT x, UINT y, UINT z, ID3D11Resource* source, UINT source_subresource, const D3D11_BOX* box, UINT copy_flags) override
+   {
+      if (AsBuffer(destination))
+         if (ID3D11Device* device = GetContextDevice(context))
+            FC5::UploadProbe::Invalidate(device, destination);
+      return false;
+   }
+   bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch, UINT copy_flags) override
+   {
+      if (AsBuffer(resource))
+         if (ID3D11Device* device = GetContextDevice(context))
+            FC5::UploadProbe::Invalidate(device, resource);
+      return false;
+   }
+   void OnResourceDestroyed(const void* resource) override
+   {
+      FC5::UploadProbe::OnDestroyResource(resource);
+   }
+
+   void OnInitSwapchain(IDXGISwapChain* native) override
+   {
+      auto* data = GetSwapchainData(native)->device_data;
       DXGI_SWAP_CHAIN_DESC desc{};
-      auto* native = reinterpret_cast<IDXGISwapChain*>(swapchain->get_native());
       if (data && data->game && SUCCEEDED(native->GetDesc(&desc)))
       {
          Data(*data).native_output_format = desc.BufferDesc.Format;
@@ -317,14 +422,14 @@ public:
    }
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* device,
       ID3D11DeviceContext* ctx, CommandListData& cmd, DeviceData& data,
-      reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& hashes,
+      ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& hashes,
       bool custom, bool& updated, std::function<void()>* original) override
    {
       // CPU readback cannot run on deferred contexts; need replay support first.
       if (custom || ctx->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return DrawOrDispatchOverrideType::None;
       auto& fc = Data(data);
       if (fc.scaling_frames && !fc.scaling_frame &&
-         (hashes.Contains(FC5::ShaderMotionVectorCS, reshade::api::shader_stage::compute) ||
+         (hashes.Contains(FC5::ShaderMotionVectorCS, ShaderStages::Compute) ||
           FC5::IsTemporalResolve(hashes)))
       {
          fc.scaling_frame = true; --fc.scaling_frames;
@@ -332,11 +437,11 @@ public:
       if (fc.scaling_frame)
       {
          for (const uint32_t hash : {FC5::ShaderTAA, FC5::ShaderSharpen, 0x3470C30Eu, 0x459A77B4u, 0x76DF16DFu, 0x8A10C346u})
-            if (hashes.Contains(hash, reshade::api::shader_stage::pixel))
+            if (hashes.Contains(hash, ShaderStages::Pixel))
                FC5::LogScalingPass(device, ctx, fc, hash, UINT(data.output_resolution.x), UINT(data.output_resolution.y));
       }
 #if ENABLE_SR
-      if (fc.pending_native_capture && hashes.Contains(FC5::ShaderSharpen, reshade::api::shader_stage::pixel))
+      if (fc.pending_native_capture && hashes.Contains(FC5::ShaderSharpen, ShaderStages::Pixel))
       {
          // Original TAA has already executed. Read only its exact same-frame
          // output at the verified consumer; no Release original-draw callback.
@@ -351,7 +456,7 @@ public:
          }
          fc.pending_native_capture.reset();
       }
-      if (fc.pending_taa_target && hashes.Contains(FC5::ShaderSharpen, reshade::api::shader_stage::pixel))
+      if (fc.pending_taa_target && hashes.Contains(FC5::ShaderSharpen, ShaderStages::Pixel))
       {
          // Verified route: TAA RTV becomes sharpening t0; sharpening RTV is full resolution.
          // Native TAA still runs, so every rejected handoff retains a complete native image.
@@ -406,7 +511,7 @@ public:
                char line[200];
                std::snprintf(line, sizeof(line), "[FC5 DLSS route] first handoff %ux%u -> %ux%u at F73CAD14 frame=%llu",
                   fc.size.x, fc.size.y, fc.output_size.x, fc.output_size.y, fc.frame);
-               reshade::log::message(reshade::log::level::info, line);
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
             }
             fc.status = "DLSS routed to full-resolution output; visual validation required";
             return DrawOrDispatchOverrideType::Replaced;
@@ -421,7 +526,7 @@ public:
             UINT(data.output_resolution.x), UINT(data.output_resolution.y));
          if (log) fc.camera.Capture(device, ctx, hashes.pixel_shaders[0], true, fc.frame);
       }
-      if (hashes.Contains(FC5::ShaderMotionVectorCS, reshade::api::shader_stage::compute))
+      if (hashes.Contains(FC5::ShaderMotionVectorCS, ShaderStages::Compute))
       {
          ++fc.cs_count;
          if (fc.capture_samples && !fc.probe_frame) { fc.probe_frame = true; --fc.capture_samples; }
@@ -520,7 +625,7 @@ public:
             char line[180];
             std::snprintf(line, sizeof(line), "[FC5 views] color=%u target=%u motion=%u depth=%u cameras=%zu",
                color_view.Format, target_view.Format, mv_view.Format, fc.depth_view_format, fc.camera.candidates.size());
-            if (fc.probe_frame || fc.frame % 300 == 0) reshade::log::message(reshade::log::level::info, line);
+            if (fc.probe_frame || fc.frame % 300 == 0) Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
          }
          if (mv_view.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
             color_view.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D ||
@@ -659,7 +764,7 @@ public:
             std::snprintf(line, sizeof(line), "[FC5 GPU] cumulative n=%llu dropped=%llu invalid=%llu prepare_ms=%.4f NGX_ms=%.4f finish_ms=%.4f",
                fc.gpu.samples, fc.gpu.dropped, fc.gpu.invalid, fc.gpu.milliseconds[0] / fc.gpu.samples,
                fc.gpu.milliseconds[1] / fc.gpu.samples, fc.gpu.milliseconds[2] / fc.gpu.samples);
-            reshade::log::message(reshade::log::level::info, line);
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
          }
       }
       if (fc.frame % 300 == 0)
@@ -670,7 +775,7 @@ public:
             fc.frame, fc.cs_count, fc.taa_count, fc.attempts, fc.successes, fc.routed,
             static_cast<unsigned>(fc.output_encoding), FC5::configured_rcas_sharpness, data.texture_mip_lod_bias_offset,
             fc.jitter_raw.x, fc.jitter_raw.y, fc.jitter_raw.z, fc.jitter_raw.w, fc.status);
-         reshade::log::message(reshade::log::level::info, line);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
          fc.camera.readback_cpu.Log("camera-copy-map", fc.frame);
          fc.camera.detection_cpu.Log("camera-detection-includes-readback", fc.frame);
          FC5::UploadProbe::Log(device, fc.frame);
@@ -687,7 +792,7 @@ public:
       {
          fc.reporter_startup_attempted = true; // No recurring scan/stall on failure.
          fc.reporter.Pause();
-         reshade::log::message(reshade::log::level::info, fc.reporter.Status());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, fc.reporter.Status());
       }
       fc.depth.reset(); fc.encoded_motion.reset();
       fc.pending_native_capture.reset();
@@ -703,7 +808,7 @@ public:
          if (command == FC5::TestCommand::ReporterPause || command == FC5::TestCommand::ReporterResume)
          {
             if (command == FC5::TestCommand::ReporterPause) fc.reporter.Pause(); else fc.reporter.Resume();
-            reshade::log::message(reshade::log::level::info, fc.reporter.Status());
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, fc.reporter.Status());
          }
          else if (command != FC5::TestCommand::Invalid)
          {
@@ -718,13 +823,13 @@ public:
             char line[180];
             std::snprintf(line, sizeof(line), "[FC5 test] command=%d enabled=%d mvJittered=%d jitterScale=%.0f capture=%d",
                int(command), fc.enable_dlss, fc.mvs_jittered, fc.jitter_scale.x, fc.capture_image);
-            reshade::log::message(reshade::log::level::info, line);
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
          }
       }
       if (fc.frame % 30 == 0 && fc.camera.Requested())
       {
          fc.capture_samples = 32;
-         reshade::log::message(reshade::log::level::info, "[FC5 probe] Camera capture request accepted");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "[FC5 probe] Camera capture request accepted");
       }
       ++fc.frame;
    }
@@ -740,21 +845,21 @@ public:
       if (changed)
       {
          FC5::configured_enable = fc.enable_dlss; FC5::configured_upscale = fc.upscale;
-         reshade::set_config_value(nullptr, NAME, "FC5EnableDLSS", fc.enable_dlss);
-         reshade::set_config_value(nullptr, NAME, "FC5MatchDisplay", fc.upscale);
+         Config::Set(NAME, "FC5EnableDLSS", fc.enable_dlss);
+         Config::Set(NAME, "FC5MatchDisplay", fc.upscale);
       }
       if (ImGui::SliderFloat("RCAS sharpness", &FC5::configured_rcas_sharpness, 0.f, 1.f, "%.2f"))
-         reshade::set_config_value(nullptr, NAME, "FC5RCASSharpness", FC5::configured_rcas_sharpness);
+         Config::Set(NAME, "FC5RCASSharpness", FC5::configured_rcas_sharpness);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Contrast-adaptive sharpening after DLSS/DLAA. Default: 0.50. Set 0 to disable. Higher values may create ringing around high-contrast edges.");
       if (ImGui::Checkbox("Automatic texture mip LOD bias", &FC5::configured_auto_mip_bias))
-         reshade::set_config_value(nullptr, NAME, "FC5AutoMipBias", FC5::configured_auto_mip_bias);
+         Config::Set(NAME, "FC5AutoMipBias", FC5::configured_auto_mip_bias);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Applies the upscaler-recommended bias to anisotropic texture samplers while DLSS/DLAA is active.");
       ImGui::Text("Active mip bias: %.3f", data.texture_mip_lod_bias_offset);
       ImGui::SeparatorText("Borderless HDR / RenoDX");
       if (ImGui::Checkbox("Enable borderless HDR (restart required)", &FC5::BorderlessHDR::configured))
-         reshade::set_config_value(nullptr, NAME, "FC5BorderlessHDR", FC5::BorderlessHDR::configured);
+         Config::Set(NAME, "FC5BorderlessHDR", FC5::BorderlessHDR::configured);
       ImGui::TextWrapped("Enable Windows HDR and native game scRGB HDR. Keep RenoDX installed for HDR color processing. This option keeps native HDR in a borderless window; it does not convert SDR to HDR.");
       if (FC5::BorderlessHDR::configured != FC5::BorderlessHDR::Enabled() && !FC5::BorderlessHDR::test_override)
          ImGui::TextUnformatted("Restart Far Cry 5 to apply the borderless HDR change.");
@@ -766,15 +871,15 @@ public:
       ImGui::SeparatorText("Optional RemoteDataProvider worker");
       if (ImGui::Checkbox("Suspend RemoteDataProvider worker (remember choice)", &FC5::configured_suspend_reporter))
       {
-         reshade::set_config_value(nullptr, NAME, "FC5SuspendReporter", FC5::configured_suspend_reporter);
+         Config::Set(NAME, "FC5SuspendReporter", FC5::configured_suspend_reporter);
          fc.reporter_startup_attempted = true;
          if (FC5::configured_suspend_reporter) fc.reporter.Pause(); else fc.reporter.Resume();
-         reshade::log::message(reshade::log::level::info, fc.reporter.Status());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, fc.reporter.Status());
       }
       if (fc.reporter.Suspended() && ImGui::Button("Resume RemoteDataProvider worker now"))
       {
          FC5::configured_suspend_reporter = false;
-         reshade::set_config_value(nullptr, NAME, "FC5SuspendReporter", false);
+         Config::Set(NAME, "FC5SuspendReporter", false);
          fc.reporter_startup_attempted = true;
          fc.reporter.Resume();
       }
@@ -819,7 +924,7 @@ private:
       const auto path = FC5::ControlDirectory() / filename;
       const bool ok = FC5::SaveImage(device, ctx, resource, path);
       char line[240]; std::snprintf(line, sizeof(line), "[FC5 image] %s %s", ok ? "saved" : "FAILED", filename);
-      reshade::log::message(reshade::log::level::info, line);
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
    }
 };
 
@@ -843,22 +948,7 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved)
       forced_shader_names.emplace(FC5::ShaderSharpen, "FC5 Temporal Sharpen");
       forced_shader_names.emplace(FC5::ShaderMotionVectorCS, "FC5 Motion Vectors Compute");
 #endif
-      game = new FarCry5;
+      SetGame<FarCry5>();
    }
-   if (reason == DLL_PROCESS_DETACH)
-   {
-      reshade::unregister_event<reshade::addon_event::create_swapchain>(FC5::BorderlessHDR::OnCreate);
-      reshade::unregister_event<reshade::addon_event::init_swapchain>(FC5::BorderlessHDR::OnInit);
-      reshade::unregister_event<reshade::addon_event::init_pipeline>(FC5::CameraProbe::OnPipeline);
-      FC5::UploadProbe::Unregister(reserved != nullptr);
-   }
-   const BOOL result = CoreMain(module, reason, reserved);
-   if (reason == DLL_PROCESS_ATTACH && result)
-   {
-      reshade::register_event<reshade::addon_event::create_swapchain>(FC5::BorderlessHDR::OnCreate);
-      reshade::register_event<reshade::addon_event::init_swapchain>(FC5::BorderlessHDR::OnInit);
-      FC5::UploadProbe::Register();
-      reshade::register_event<reshade::addon_event::init_pipeline>(FC5::CameraProbe::OnPipeline);
-   }
-   return result;
+   return CoreMain(module, reason, reserved);
 }

@@ -91,7 +91,7 @@ TOOLS = [
     tool("luma_list_games", "List running games that expose the Luma dev MCP pipe (Development builds only).", common={}),
     tool("luma_status", "Game, resolutions, swapchain formats (real, after Luma upgrades), mod state, replaced shader count, compilation error flag, process address space use (x86 OOM watch). "
          "Answers even when the game stopped presenting (presenting=false, ms_since_present, pending_jobs, active_tool): the other tools would time out then."),
-    tool("luma_log", "Tail of the game's ReShade.log (where Luma and the game mods log, e.g. the per 300 frames motion vector stats), optionally filtered by a regex.",
+    tool("luma_log", "Tail of Luma.log (where Luma and the game mods log, e.g. the per 300 frames motion vector stats), optionally filtered by a regex.",
          {"pattern": {"type": "string", "description": "Python regex, lines matching it are kept"},
           "lines": {"type": "integer", "description": "Last N (matching) lines, default 200"},
           "log_path": {"type": "string", "description": "Explicit log file (works without a running game)"}}),
@@ -746,7 +746,7 @@ def trace_diff(a, b, max_blocks):
             "hash_count_changes": [{"hash": h, "a": ca, "b": cb} for h, ca, cb in changes[:100]]}
 
 
-LOG_PATHS = {}  # Game pid -> its ReShade log
+LOG_PATHS = {}  # Game pid -> its Luma log
 LOG_TAIL_BYTES = 4 << 20
 
 
@@ -754,17 +754,9 @@ def find_log(pid, timeout_ms):
     status = backend.call("status", {"pid": pid, "timeout_ms": timeout_ms})
     if not status.get("ok"):
         raise RuntimeError(status.get("error", "status failed"))
-    folder = os.path.dirname(status["exe_path"])
-    path = os.path.join(folder, "ReShade.log")
-    if not os.path.isfile(path):
-        path = None
-        for candidate in sorted(glob.glob(os.path.join(folder, "*.log"))):
-            with open(candidate, "rb") as f:
-                if b"ReShade" in f.read(4096):
-                    path = candidate
-                    break
-    if not path:
-        raise RuntimeError(f"No ReShade log next to {status['exe_path']} (a custom [INSTALL] BasePath?), pass log_path")
+    path = status.get("log_path")
+    if not path or not os.path.isfile(path):
+        raise RuntimeError(f"No Luma.log at {path}, pass log_path")
     LOG_PATHS[status["pid"]] = path
     return path
 

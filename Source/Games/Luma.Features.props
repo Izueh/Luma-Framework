@@ -13,8 +13,7 @@
     <UseLumaD3D12Interop Condition="'$(UseLumaD3D12Interop)'=='' and '$(UseLumaXeSS)'=='true'">true</UseLumaD3D12Interop>
     <UseLumaD3D12Interop Condition="'$(UseLumaD3D12Interop)'==''">false</UseLumaD3D12Interop>
     <!-- Shared hooking library (SafetyHook and Zydis submodules), enabled automatically by the features that need it -->
-    <UseLumaSafetyHook Condition="'$(UseLumaSafetyHook)'=='' and '$(UseLumaFSR)'=='true' and '$(UseLumaFSR4)'=='true'">true</UseLumaSafetyHook>
-    <UseLumaSafetyHook Condition="'$(UseLumaSafetyHook)'==''">false</UseLumaSafetyHook>
+    <UseLumaSafetyHook>true</UseLumaSafetyHook>
     <UseLumaFastNoise Condition="'$(UseLumaFastNoise)'==''">false</UseLumaFastNoise>
     <!-- On by default: NVAPI is a static lib that loads the driver's DLL at runtime, so it's harmless on non NVIDIA GPUs (init just fails). -->
     <UseLumaNVAPI Condition="'$(UseLumaNVAPI)'==''">true</UseLumaNVAPI>
@@ -60,9 +59,37 @@
   <PropertyGroup Condition="'$(UseLumaSafetyHook)'=='true'">
     <LumaSafetyHookRoot>$(MSBuildThisFileDirectory)..\External\safetyhook</LumaSafetyHookRoot>
     <LumaZydisRoot>$(MSBuildThisFileDirectory)..\External\zydis</LumaZydisRoot>
+    <LumaCoreRoot>$(MSBuildThisFileDirectory)..\Core</LumaCoreRoot>
+    <LumaGlazeRoot>$(MSBuildThisFileDirectory)..\..\Luma2\External\glaze</LumaGlazeRoot>
+    <LumaImGuiRoot>$(MSBuildThisFileDirectory)..\..\Luma2\External\imgui</LumaImGuiRoot>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(UseLumaSafetyHook)'=='true'">
+    <ClCompile Include="$(LumaCoreRoot)\hooks\hooks.cpp;$(LumaCoreRoot)\hooks\vtables.cpp;$(LumaCoreRoot)\hooks\scope.cpp;$(LumaCoreRoot)\hooks\lifetime.cpp;$(LumaCoreRoot)\hooks\device_proxy.cpp;$(LumaCoreRoot)\hooks\d3d11_hooks.cpp;$(LumaCoreRoot)\hooks\d3d11_device_hooks.cpp;$(LumaCoreRoot)\hooks\d3d11_context_hooks.cpp;$(LumaCoreRoot)\hooks\dxgi_hooks.cpp;$(LumaCoreRoot)\hooks\slots.c;$(LumaCoreRoot)\system\dxgi_exports.cpp;$(LumaCoreRoot)\system\loader.cpp;$(LumaCoreRoot)\overlay\overlay.cpp;$(LumaCoreRoot)\overlay\input.cpp;$(LumaCoreRoot)\overlay\input_hooks.cpp;$(LumaCoreRoot)\overlay\d3d11_renderer.cpp">
+      <ObjectFileName>$(IntDir)luma_hooks\</ObjectFileName>
+      <AdditionalIncludeDirectories>$(LumaCoreRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="$(LumaImGuiRoot)\imgui.cpp;$(LumaImGuiRoot)\imgui_draw.cpp;$(LumaImGuiRoot)\imgui_tables.cpp;$(LumaImGuiRoot)\imgui_widgets.cpp;$(LumaImGuiRoot)\backends\imgui_impl_win32.cpp;$(LumaImGuiRoot)\backends\imgui_impl_dx11.cpp">
+      <ObjectFileName>$(IntDir)imgui\</ObjectFileName>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+      <TreatWarningAsError>false</TreatWarningAsError>
+    </ClCompile>
+    <ClCompile Include="$(LumaCoreRoot)\utils\log.cpp;$(LumaCoreRoot)\utils\modules.cpp;$(LumaCoreRoot)\utils\strings.cpp">
+      <ObjectFileName>$(IntDir)luma_utils\</ObjectFileName>
+      <AdditionalIncludeDirectories>$(LumaCoreRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Include="$(LumaCoreRoot)\utils\toml.cpp;$(LumaCoreRoot)\utils\config.cpp">
+      <ObjectFileName>$(IntDir)luma_utils\</ObjectFileName>
+      <AdditionalIncludeDirectories>$(LumaCoreRoot);$(LumaGlazeRoot)\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalOptions>/Zc:preprocessor %(AdditionalOptions)</AdditionalOptions>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
     <ClCompile Include="$(LumaSafetyHookRoot)\src\allocator.cpp;$(LumaSafetyHookRoot)\src\easy.cpp;$(LumaSafetyHookRoot)\src\inline_hook.cpp;$(LumaSafetyHookRoot)\src\mid_hook.cpp;$(LumaSafetyHookRoot)\src\os.windows.cpp;$(LumaSafetyHookRoot)\src\utility.cpp;$(LumaSafetyHookRoot)\src\vmt_hook.cpp">
       <ObjectFileName>$(IntDir)safetyhook\</ObjectFileName>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
@@ -118,7 +145,7 @@
       <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_D3D12_INTEROP=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Condition="'$(UseLumaSafetyHook)'=='true'">
-      <AdditionalIncludeDirectories>$(LumaSafetyHookRoot)\include;$(LumaZydisRoot)\include;$(LumaZydisRoot)\dependencies\zycore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(LumaImGuiRoot);$(LumaSafetyHookRoot)\include;$(LumaZydisRoot)\include;$(LumaZydisRoot)\dependencies\zycore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;ENABLE_SAFETYHOOK=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Condition="'$(UseLumaFastNoise)'=='true'">
@@ -128,6 +155,12 @@
       <AdditionalIncludeDirectories>$(LumaNVAPIRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_NVAPI=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <Link Condition="'$(Platform)'=='x64'">
+      <ForceSymbolReferences>LumaDllExports_dxgi;%(ForceSymbolReferences)</ForceSymbolReferences>
+    </Link>
+    <Link Condition="'$(Platform)'=='Win32'">
+      <ForceSymbolReferences>_LumaDllExports_dxgi;%(ForceSymbolReferences)</ForceSymbolReferences>
+    </Link>
     <Link Condition="'$(UseLumaDXP)'=='true'">
       <AdditionalDependencies>dxpatcher.lib;Ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>

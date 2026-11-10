@@ -24,7 +24,7 @@ class GameShadowOfMordor final : public Game
 public:
    void OnInit(bool async) override
    {
-      message(reshade::log::level::info, "OnInit()");
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "OnInit()");
 
       // cb
       luma_settings_cbuffer_index = 9;
@@ -74,7 +74,7 @@ public:
 
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
    {
-      message(reshade::log::level::info, "OnCreateDevice()");
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "OnCreateDevice()");
 
       // create data
       device_data.game = new GameDeviceDataShadowOfMordor;
@@ -85,7 +85,7 @@ public:
       ImGui::Text("Template Luma mod - about and credits section", "");
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       GameDeviceDataShadowOfMordor* game_device_data = static_cast<GameDeviceDataShadowOfMordor*>(device_data.game);
       DrawOrDispatchOverrideType result = DrawOrDispatchOverrideType::None;
@@ -143,7 +143,7 @@ public:
       //    if (!auto_texture_format_upgrade_shader_hashes.contains(ps))
       //    {
       //       auto_texture_format_upgrade_shader_hashes[ps] = AutoTextureFormatUpgradeShaderHash{ std::vector<uint8_t>{ 0 }, std::vector<uint8_t>() }; // DX11 logic
-      //       message(reshade::log::level::info, std::format("Auto-upgrade texture formats for shader hash 0x{:016X}", ps).c_str());
+      //       Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("Auto-upgrade texture formats for shader hash 0x{:016X}", ps).c_str());
       //    }
       // }
       //
@@ -178,7 +178,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_upgrade_formats = {};
       texture_format_upgrades_2d_size_filters = 0;
 
-      game = new GameShadowOfMordor();
+      SetGame<GameShadowOfMordor>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

@@ -85,7 +85,7 @@ namespace DisplayMode
    constexpr auto flag_file = "Luma_AlwaysHDRLaunch";
 
    // Forces user to launch in SDR mode for proper HDR upgrades.
-   static void OnInitSwapchain(reshade::api::swapchain* swapchain)
+   static void OnInitSwapchain(IDXGISwapChain* swapchain)
    {
       // gatekeep: is_first
       if (!is_first) return;
@@ -316,16 +316,15 @@ public:
    void OnLoad(std::filesystem::path& file_path, bool failed = false) override
    {
       // log
-      message(reshade::log::level::info, "OnLoad()");
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "OnLoad()");
 
       // Register reading CB for jitter
-      reshade::register_event<reshade::addon_event::update_buffer_region>(OnUpdateBufferRegion);
    }
 
    void OnInit(bool async) override
    {
       // log
-      message(reshade::log::level::info, "OnInit()");
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "OnInit()");
 
       // Shader Defines: append new
       static const std::vector<ShaderDefineData> game_shader_defines_data = {
@@ -373,25 +372,34 @@ public:
       luma_data_cbuffer_index = 12;
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain)
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
       // log
-      message(reshade::log::level::info, "OnInitSwapchain()");
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "OnInitSwapchain()");
       
       // DisplayMode force restart into SDR mode
       DisplayMode::OnInitSwapchain(swapchain);
    }
 
-   static bool OnUpdateBufferRegion(reshade::api::device* device, const void* data, reshade::api::resource resource, uint64_t offset, uint64_t size)
+   // ReShade's "update_buffer_region": buffer updates on the immediate context
+   bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch, UINT copy_flags) override
+   {
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+         return false;
+      D3D11_BUFFER_DESC desc;
+      buffer->GetDesc(&desc);
+      const uint64_t size = box ? uint64_t(box->right - box->left) : uint64_t(desc.ByteWidth);
+      OnUpdateBufferRegion(buffer, data);
+      return false;
+   }
+
+   static bool OnUpdateBufferRegion(ID3D11Buffer* buffer, const void* data)
    {
       // RETURN: no SR
       if (sr_type_copy == SR::Type::None) return false;
       
       // Find TAA jitter
-      auto native_resource = (ID3D11Resource*)resource.handle;
-      ComPtr<ID3D11Buffer> buffer;
-      auto hr = native_resource->QueryInterface(buffer.put());
-      if (SUCCEEDED(hr))
       {
          D3D11_BUFFER_DESC desc;
          buffer->GetDesc(&desc);
@@ -406,7 +414,7 @@ public:
       return false;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
       auto& managed_resources = game_device_data.managed_resources;
@@ -565,28 +573,26 @@ public:
 
    void LoadConfigs() override
    {
-      message(reshade::log::level::info, "LoadConfigs()");
-      reshade::api::effect_runtime* runtime = nullptr;
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "LoadConfigs()");
       
       // CB load user
-      reshade::get_config_value(runtime, NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
-      reshade::get_config_value(runtime, NAME, "BlowoutCorrection", cb_luma_global_settings.GameSettings.BlowoutCorrection);
-      reshade::get_config_value(runtime, NAME, "RetunedFirePeak", cb_luma_global_settings.GameSettings.RetunedFirePeak);
-      reshade::get_config_value(runtime, NAME, "RetunedFireBoost", cb_luma_global_settings.GameSettings.RetunedFireBoost);
-      reshade::get_config_value(runtime, NAME, "GodRays", cb_luma_global_settings.GameSettings.GodRays);
-      reshade::get_config_value(runtime, NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
-      reshade::get_config_value(runtime, NAME, "RCAS", cb_luma_global_settings.GameSettings.RCAS);
+      Config::Get(NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
+      Config::Get(NAME, "BlowoutCorrection", cb_luma_global_settings.GameSettings.BlowoutCorrection);
+      Config::Get(NAME, "RetunedFirePeak", cb_luma_global_settings.GameSettings.RetunedFirePeak);
+      Config::Get(NAME, "RetunedFireBoost", cb_luma_global_settings.GameSettings.RetunedFireBoost);
+      Config::Get(NAME, "GodRays", cb_luma_global_settings.GameSettings.GodRays);
+      Config::Get(NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
+      Config::Get(NAME, "RCAS", cb_luma_global_settings.GameSettings.RCAS);
 
       // SR User settings
-      reshade::get_config_value(runtime, NAME, "sr_copy_resource", sr_copy_resource);
-      reshade::get_config_value(runtime, NAME, "sr_user_allow_upgraded_samplers", sr_user_allow_upgraded_samplers);
+      Config::Get(NAME, "sr_copy_resource", sr_copy_resource);
+      Config::Get(NAME, "sr_user_allow_upgraded_samplers", sr_user_allow_upgraded_samplers);
       ignore_upgraded_samplers = !sr_user_allow_upgraded_samplers; //TODO: Find and only enable when it is safe in pipeline for upgrade.
-      reshade::get_config_value(runtime, NAME, "sr_user_mip_bias_offset", sr_user_mip_bias_offset);
+      Config::Get(NAME, "sr_user_mip_bias_offset", sr_user_mip_bias_offset);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
       
       ImGui::Separator(); ////////////////////////////////////////////////////////////////////////////
 
@@ -621,19 +627,19 @@ public:
          
          ImGui::PushID("Peak Brightness: WhiteClip");
          if (ImGui::SliderFloat("White Clip", &cb_luma_global_settings.GameSettings.WhiteClip, 0.f, 4.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
+            Config::Set(NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Increase to make rolloff compression start later, leading highlights becoming more clipped.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.WhiteClip, default_luma_global_game_settings.WhiteClip, "WhiteClip", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.WhiteClip, default_luma_global_game_settings.WhiteClip, "WhiteClip");
 
          ImGui::PushID("Peak Brightness: BlowoutCorrection");
          if (ImGui::SliderFloat("Blowout Correction", &cb_luma_global_settings.GameSettings.BlowoutCorrection, 0.f, 0.8f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "BlowoutCorrection", cb_luma_global_settings.GameSettings.BlowoutCorrection);
+            Config::Set(NAME, "BlowoutCorrection", cb_luma_global_settings.GameSettings.BlowoutCorrection);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("By extending/straightening the rolloff curve to HDR, we lose the blowout originally intended by the SDR low curve.\nSo, increase to correct the hues of the new HDR highlights using the results from SDR.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.BlowoutCorrection, default_luma_global_game_settings.BlowoutCorrection, "BlowoutCorrection", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.BlowoutCorrection, default_luma_global_game_settings.BlowoutCorrection, "BlowoutCorrection");
 
          if (ImGui::Button("Extended Tonemap (Desmos)"))
             Website::OpenWebsite("https://www.desmos.com/calculator/stnfdhk9t1");
@@ -672,11 +678,11 @@ public:
 
             ImGui::PushID("SR: copy_resource"); 
             if (ImGui::Checkbox("Enable Fix (Read Tooltip)", &sr_copy_resource))
-               reshade::set_config_value(runtime, NAME, "sr_copy_resource", sr_copy_resource);
+               Config::Set(NAME, "sr_copy_resource", sr_copy_resource);
             ImGui::PopID();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                ImGui::SetTooltip("For some reason (Motion Blur + Depth of Field?) bloom and other transparency effects may go missing after Super Resolution draws.\nEnable this to copy the output back to the input, somehow fixing the issue.");
-            DrawResetButton(sr_copy_resource, false, "sr_copy_resource", runtime);
+            DrawResetButton(sr_copy_resource, false, "sr_copy_resource");
          }
 
          ImGui::NewLine();
@@ -687,18 +693,18 @@ public:
 
          ImGui::PushID("SR: sr_user_allow_upgraded_samplers"); 
          if (ImGui::Checkbox("Enable Upgrade (Read Tooltip)", &sr_user_allow_upgraded_samplers))
-            reshade::set_config_value(runtime, NAME, "sr_user_allow_upgraded_samplers", sr_user_allow_upgraded_samplers);
+            Config::Set(NAME, "sr_user_allow_upgraded_samplers", sr_user_allow_upgraded_samplers);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Upgrade texture samplers to retain detail at a distance\n\nShould be on, but it's weird in this game:\n- Increased LOD, but texture color gets darker.\n- Broken metallic armor in rain.\n- Maybe more that idk of.\n\nUse at your own risk...");
-         DrawResetButton(sr_user_allow_upgraded_samplers, false, "sr_user_allow_upgraded_samplers", runtime);
+         DrawResetButton(sr_user_allow_upgraded_samplers, false, "sr_user_allow_upgraded_samplers");
          ignore_upgraded_samplers = !sr_user_allow_upgraded_samplers; //TODO: Find and only enable when it is safe in pipeline for upgrade.
          
          //sr_user_mip_bias_offset slider
          if (ignore_upgraded_samplers) ImGui::BeginDisabled();
          ImGui::PushID("SR: sr_user_mip_bias_offset");
          if (ImGui::SliderFloat("Mip LOD Bias Offset", &sr_user_mip_bias_offset, 0.f, -10.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "sr_user_mip_bias_offset", sr_user_mip_bias_offset);
+            Config::Set(NAME, "sr_user_mip_bias_offset", sr_user_mip_bias_offset);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Negative offset increases detail.\nSet 0 for Super Resolution recommendation.");
@@ -715,28 +721,28 @@ public:
 
          ImGui::PushID("Miscellaneous: RCAS");
          if (ImGui::SliderFloat("Sharpening", &cb_luma_global_settings.GameSettings.RCAS, 0.f, 1.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "RCAS", cb_luma_global_settings.GameSettings.RCAS);
+            Config::Set(NAME, "RCAS", cb_luma_global_settings.GameSettings.RCAS);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Newly inserted Robust Contrast Adaptive Sharpening on scene color.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.RCAS, default_luma_global_game_settings.RCAS, "RCAS", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.RCAS, default_luma_global_game_settings.RCAS, "RCAS");
          ShaderDefines::Set(RCAS_ENABLED, cb_luma_global_settings.GameSettings.RCAS > 0.f); //bruh
 
          ImGui::PushID("Miscellaneous: GodRays");
          if (ImGui::SliderFloat("God Rays Strength", &cb_luma_global_settings.GameSettings.GodRays, 0.f, 2.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "GodRays", cb_luma_global_settings.GameSettings.GodRays);
+            Config::Set(NAME, "GodRays", cb_luma_global_settings.GameSettings.GodRays);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Multiplier on God Rays results before compositing.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.GodRays, default_luma_global_game_settings.GodRays, "GodRays", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.GodRays, default_luma_global_game_settings.GodRays, "GodRays");
          
          ImGui::PushID("Miscellaneous: Bloom");
          if (ImGui::SliderFloat("Bloom Strength", &cb_luma_global_settings.GameSettings.Bloom, 0.f, 2.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
+            Config::Set(NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Multiplier on Bloom results before compositing.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.Bloom, default_luma_global_game_settings.Bloom, "Bloom", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.Bloom, default_luma_global_game_settings.Bloom, "Bloom");
 
          // TODO: AO
          
@@ -762,19 +768,19 @@ public:
 
          ImGui::PushID("Retuned Fire: RetunedFirePeak");
          if (ImGui::SliderFloat("Reduction Strength", &cb_luma_global_settings.GameSettings.RetunedFirePeak, 1.01f, 2.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "RetunedFirePeak", cb_luma_global_settings.GameSettings.RetunedFirePeak);
+            Config::Set(NAME, "RetunedFirePeak", cb_luma_global_settings.GameSettings.RetunedFirePeak);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Increase to further reduce the clipping of fire sprites, but also make them more orange.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.RetunedFirePeak, default_luma_global_game_settings.RetunedFirePeak, "RetunedFirePeak", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.RetunedFirePeak, default_luma_global_game_settings.RetunedFirePeak, "RetunedFirePeak");
 
          ImGui::PushID("Retuned Fire: RetunedFireBoost");
          if (ImGui::SliderFloat("Brightness Makeup", &cb_luma_global_settings.GameSettings.RetunedFireBoost, 1.f, 4.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "RetunedFireBoost", cb_luma_global_settings.GameSettings.RetunedFireBoost);
+            Config::Set(NAME, "RetunedFireBoost", cb_luma_global_settings.GameSettings.RetunedFireBoost);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("After reduction, we need a boost in brightness to makeup loss.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.RetunedFireBoost, default_luma_global_game_settings.RetunedFireBoost, "RetunedFireBoost", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.RetunedFireBoost, default_luma_global_game_settings.RetunedFireBoost, "RetunedFireBoost");
          
          if (!is_on) ImGui::EndDisabled();
       }
@@ -823,7 +829,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // SR
       enable_samplers_upgrade = true;
 
-      game = new MiddleEarthShadowOfWar();
+      SetGame<MiddleEarthShadowOfWar>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

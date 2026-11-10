@@ -25,11 +25,11 @@
 #include <unordered_set>
 #include <vector>
 
-#include <include/reshade.hpp>
 
 #include "debug.h"
 #include "shader_types.h"
 #include "utils/format.hpp"
+#include "utils/native_resource.hpp"
 
 // Forward-declared scale/SR state the manager needs to make scaling decisions. Passed in by
 // core.hpp rather than read from DeviceData, to avoid a circular dependency.
@@ -175,9 +175,9 @@ public:
    static inline bool ignore_indirect_upgraded_textures = false; // TODO: test why when this is turned off live in Lego City Undercover, the output breaks // TODO: restore "PUBLISHING_CONSTEXPR" here
    // List of render targets (and unordered access) textures that we upgrade to R16G16B16A16_FLOAT or other formats (depends on GetBestResourceUpgradeFormat()).
    // Most formats are supported but some might not act well when upgraded.
-   static inline std::unordered_set<reshade::api::format> texture_upgrade_formats;
+   static inline std::unordered_set<DXGI_FORMAT> texture_upgrade_formats;
    // Similar to "texture_upgrade_formats" but allows upgrading depth to R32_FLOAT/D32_FLOAT instead (e.g. useful in old games, especially when they allocated bits for stencil without using them)
-   static inline std::unordered_set<reshade::api::format> texture_depth_upgrade_formats;
+   static inline std::unordered_set<DXGI_FORMAT> texture_depth_upgrade_formats;
    // Redirect incompatible copies between UNORM and FLOAT textures to a custom pixel shader that would do the same (not globally compatible).
    // This can happen if the game uses a temp texture that isn't either a render target nor is unordered access, so we don't upgrade it.
    static inline bool enable_upgraded_texture_resource_copy_redirection = true; // TODO: delete given that we now have "enable_indirect_texture_format_upgrades"
@@ -199,7 +199,7 @@ public:
    // Width, Height, Depth/Array Layers, Samples (MS).
    // If there's multiple matches, the first one is used.
    // Set any of the filter values to 0 to ignore them.
-   static inline std::vector<std::tuple<uint4, reshade::api::format, uint4>> texture_custom_dimensions_upgrades;
+   static inline std::vector<std::tuple<uint4, DXGI_FORMAT, uint4>> texture_custom_dimensions_upgrades;
 
    // Automatically upgrade the formats of the textures this shader pass draws to. Generally best used on shaders that originally encoded from HDR (native rendering) to SDR. If the source textures were SDR too (UNORM), they'd need to be upgraded through other means.
    // "rtv_slots" are the RTV indexes to upgrade, "uav_slots" the UAVs (whether it's a pixel or compute shader).
@@ -219,8 +219,8 @@ public:
    // ------------------------------------------------------------------
    std::unordered_set<uint64_t> upgraded_resources; // All the directly upgraded resources, excluding the swapchains backbuffers, as they are created internally by DX
 #if DEVELOPMENT
-   std::unordered_map<uint64_t, reshade::api::format> original_upgraded_resources_formats; // Maps the original resource to its direct upgraded format. These include the swapchain buffers too!
-   std::unordered_map<uint64_t, std::pair<uint64_t, reshade::api::format>> original_upgraded_resource_views_formats; // All the views for direct upgraded resources, with the resource and the original resource view format
+   std::unordered_map<uint64_t, DXGI_FORMAT> original_upgraded_resources_formats; // Maps the original resource to its direct upgraded format. These include the swapchain buffers too!
+   std::unordered_map<uint64_t, std::pair<uint64_t, DXGI_FORMAT>> original_upgraded_resource_views_formats; // All the views for direct upgraded resources, with the resource and the original resource view format
 #endif
    std::unordered_map<uint64_t, IndirectUpgradedResource> original_resources_to_mirrored_upgraded_resources; // TODO: convert/copy the initial/current data from the source texture when created. Also rename to "indirect_upgraded"
    std::unordered_map<uint64_t, uint64_t> original_resource_views_to_mirrored_upgraded_resource_views;
@@ -235,15 +235,15 @@ public:
    std::unordered_map<uint64_t, uint64_t> mirror_views_to_mirror_resources; // mirror view -> mirror resource
    // Mirrors freed at present (frame boundary) instead of on original destruction, so in-flight
    // hooks/game state can never dereference a freed mirror. Guarded by `mutex`.
-   std::vector<reshade::api::resource> pending_mirror_resource_destructions;
-   std::vector<reshade::api::resource_view> pending_mirror_view_destructions;
+   std::vector<uint64_t> pending_mirror_resource_destructions;
+   std::vector<uint64_t> pending_mirror_view_destructions;
 
    // ------------------------------------------------------------------
    // Queries (all lock-free: the caller/core.hpp holds the single device mutex)
    // ------------------------------------------------------------------
 
    // View handle -> resource handle from our caches (no device call under the lock).
-   uint64_t GetCachedResourceFromView(uint64_t view_handle, bool original = true, bool mirrored = false, bool live_fallback = false, std::shared_lock<std::shared_mutex>* lock_device_read = nullptr, reshade::api::device* device = nullptr) const
+   uint64_t GetCachedResourceFromView(uint64_t view_handle, bool original = true, bool mirrored = false, bool live_fallback = false, std::shared_lock<std::shared_mutex>* lock_device_read = nullptr) const
    {
       // Put the original first as it's more likely to be found
       if (original)
@@ -261,7 +261,7 @@ public:
          // Unknown view, for some reason
          lock_device_read->unlock(); // Avoids deadlocks with the device
          ASSERT_ONCE_MSG(false, "Why do we have untracked resources? This should not ever happen"); // TODO: delete this whole path once we verified this cannot happen
-         uint64_t resource = device->get_resource_from_view({ view_handle }).handle;
+         uint64_t resource = reinterpret_cast<uint64_t>(GetResourceFromView(view_handle));
          lock_device_read->lock();
          return resource;
       }
@@ -318,80 +318,80 @@ public:
    // Format helpers
    // ------------------------------------------------------------------
 
-   reshade::api::format GetBestResourceUpgradeFormat(const reshade::api::resource_desc& desc) const
+   DXGI_FORMAT GetBestResourceUpgradeFormat(const ResourceDesc& desc) const
    {
-      const bool is_depth = (desc.usage & reshade::api::resource_usage::depth_stencil) != 0;
+      const bool is_depth = (desc.bind_flags & D3D11_BIND_DEPTH_STENCIL) != 0;
 
       if (is_depth)
       {
          // Preserve the stencil if we can!
-         if (desc.texture.format == reshade::api::format(DXGI_FORMAT_R24G8_TYPELESS)
-            || desc.texture.format == reshade::api::format(DXGI_FORMAT_D24_UNORM_S8_UINT)
-            || desc.texture.format == reshade::api::format(DXGI_FORMAT_R32G8X24_TYPELESS))
+         if (desc.format == DXGI_FORMAT_R24G8_TYPELESS
+            || desc.format == DXGI_FORMAT_D24_UNORM_S8_UINT
+            || desc.format == DXGI_FORMAT_R32G8X24_TYPELESS)
          {
-            return reshade::api::format::r32_g8_typeless;
+            return DXGI_FORMAT_R32G8X24_TYPELESS;
          }
-         return reshade::api::format::r32_typeless; // Create it as typeless of the maximum depth, so we can also cast it as SRV
+         return DXGI_FORMAT_R32_TYPELESS; // Create it as typeless of the maximum depth, so we can also cast it as SRV
       }
 
-      return reshade::api::format::r16g16b16a16_float;
+      return DXGI_FORMAT_R16G16B16A16_FLOAT;
    }
 
-   reshade::api::format GetBestResourceViewUpgradeFormat(const reshade::api::resource_view_desc& original_view_desc, reshade::api::resource_usage usage_type, const reshade::api::resource_desc& original_desc, const reshade::api::resource_desc& upgraded_desc) const
+   DXGI_FORMAT GetBestResourceViewUpgradeFormat(const ResourceViewDesc& original_view_desc, ViewKind view_kind, const ResourceDesc& original_desc, const ResourceDesc& upgraded_desc) const
    {
       // Straight forward upgrade (fast common path), couldn't really be otherwise
-      if (upgraded_desc.texture.format == reshade::api::format::r16g16b16a16_float)
+      if (upgraded_desc.format == DXGI_FORMAT_R16G16B16A16_FLOAT)
       {
-         return reshade::api::format::r16g16b16a16_float;
+         return DXGI_FORMAT_R16G16B16A16_FLOAT;
       }
       // Depth
-      else if (upgraded_desc.texture.format == reshade::api::format::r32_typeless || upgraded_desc.texture.format == reshade::api::format::r32_float || upgraded_desc.texture.format == reshade::api::format::d32_float)
+      else if (upgraded_desc.format == DXGI_FORMAT_R32_TYPELESS || upgraded_desc.format == DXGI_FORMAT_R32_FLOAT || upgraded_desc.format == DXGI_FORMAT_D32_FLOAT)
       {
-         if ((usage_type & reshade::api::resource_usage::depth_stencil) != 0)
+         if (view_kind == ViewKind::DepthStencil)
          {
-            return reshade::api::format::d32_float;
+            return DXGI_FORMAT_D32_FLOAT;
          }
          else
          {
-            ASSERT_ONCE(IsFloatFormat(DXGI_FORMAT(original_view_desc.format))); // We might not want to use a float view in this case? We probably do anyway!
-            return reshade::api::format::r32_float;
+            ASSERT_ONCE(IsFloatFormat(original_view_desc.Format())); // We might not want to use a float view in this case? We probably do anyway!
+            return DXGI_FORMAT_R32_FLOAT;
          }
       }
       // Depth + Stencil
-      else if (upgraded_desc.texture.format == reshade::api::format::r32_g8_typeless || upgraded_desc.texture.format == reshade::api::format::d32_float_s8_uint)
+      else if (upgraded_desc.format == DXGI_FORMAT_R32G8X24_TYPELESS || upgraded_desc.format == DXGI_FORMAT_D32_FLOAT_S8X24_UINT)
       {
-         if ((usage_type & reshade::api::resource_usage::depth_stencil) != 0)
+         if (view_kind == ViewKind::DepthStencil)
          {
-            return reshade::api::format::d32_float_s8_uint;
+            return DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
          }
          else
          {
             // If we got here, the game would have originally been using a depth buffer with a stencil, so preserve the right stencil/depth view
-            return (original_view_desc.format == reshade::api::format::x24_unorm_g8_uint) ? reshade::api::format::x32_float_g8_uint : reshade::api::format::r32_float_x8_uint;
+            return (original_view_desc.Format() == DXGI_FORMAT_X24_TYPELESS_G8_UINT) ? DXGI_FORMAT_X32_TYPELESS_G8X24_UINT : DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
          }
       }
       // All other
       else
       {
-         if (IsTypelessFormat(DXGI_FORMAT(original_desc.texture.format)))
+         if (IsTypelessFormat(original_desc.format))
          {
-            ASSERT_ONCE(!IsTypelessFormat(DXGI_FORMAT(original_view_desc.format)));
-            ASSERT_ONCE(GetTypelessFormat(DXGI_FORMAT(original_view_desc.format)) == DXGI_FORMAT(original_desc.texture.format));
+            ASSERT_ONCE(!IsTypelessFormat(original_view_desc.Format()));
+            ASSERT_ONCE(GetTypelessFormat(original_view_desc.Format()) == original_desc.format);
             // TODO: return the format we upgraded the resource to, if it's not typeless, otherwise restore the most common one? FLOAT?
          }
          else
          {
-            ASSERT_ONCE(GetTypelessFormat(DXGI_FORMAT(original_view_desc.format)) == GetTypelessFormat(DXGI_FORMAT(original_desc.texture.format)));
-            return upgraded_desc.texture.format;
+            ASSERT_ONCE(GetTypelessFormat(original_view_desc.Format()) == GetTypelessFormat(original_desc.format));
+            return upgraded_desc.format;
          }
       }
 
-      return original_view_desc.format; // Unchanged
+      return original_view_desc.Format(); // Unchanged
    }
 
    // Decides whether a resource should be upgraded at creation time. Uses the frame state for
    // resolution/aspect-ratio filters.
-   std::optional<reshade::api::resource_desc> GetOptionalResourceUpgradeDesc(const reshade::api::resource_desc& desc, const ResourceUpgradeFrameState& state, bool has_initial_data = false) const;
+   std::optional<ResourceDesc> GetOptionalResourceUpgradeDesc(const ResourceDesc& desc, const ResourceUpgradeFrameState& state, bool has_initial_data = false) const;
 
    // ------------------------------------------------------------------
    // Mirror creation / lookup (migrated from core.hpp)
@@ -404,25 +404,24 @@ public:
    // "should_scale" is computed by core.hpp (seed vs chain policy) and passed in; the manager only
    // applies it with the render<output + aspect checks.
    bool FindOrCreateIndirectUpgradedResource(
-      reshade::api::device* device,
+      ID3D11Device* device,
       const uint64_t in_source_resource,
       const uint64_t in_resource,
       uint64_t& out_resource,
       bool allow_create,
-      reshade::api::resource_usage initial_state,
       std::shared_lock<std::shared_mutex>& lock_device_read,
       const ResourceUpgradeFrameState& state,
       bool should_scale = false,
       bool leave_locked = true,
-      reshade::api::resource_usage additional_bind_flags = reshade::api::resource_usage(0),
+      UINT additional_bind_flags = 0,
       bool* scaled = nullptr);
 
    bool FindOrCreateIndirectUpgradedResourceView(
-      reshade::api::device* device,
+      ID3D11Device* device,
       const uint64_t in_rv,
       uint64_t& out_rv,
       bool allow_create,
-      reshade::api::resource_usage usage,
+      ViewKind view_kind,
       std::shared_lock<std::shared_mutex>& lock_device_read);
 
    // ------------------------------------------------------------------
@@ -443,7 +442,7 @@ public:
 
    // Flushes pending mirror/view destructions (call at present boundary).
    // Callers must not hold "device_mutex" (it's locked internally, but not while destroying).
-   void FlushPendingDestructions(reshade::api::device* device, std::shared_mutex& device_mutex);
+   void FlushPendingDestructions(std::shared_mutex& device_mutex);
 
    // Handles a resource being destroyed: unlink its mirror + mirror views, defer free to present.
    void OnResourceDestroyed(uint64_t resource_handle);
@@ -451,7 +450,7 @@ public:
    // Handles a resource view being destroyed: unlink the mirror view.
    void OnResourceViewDestroyed(uint64_t view_handle);
 
-   void ReUpgradeResource(uint64_t original_resource_handle, reshade::api::resource_usage additional_bind_flags = reshade::api::resource_usage(0));
+   void ReUpgradeResource(uint64_t original_resource_handle, UINT additional_bind_flags = 0);
 
 private:
    void UnlinkMirror(uint64_t mirror_handle);

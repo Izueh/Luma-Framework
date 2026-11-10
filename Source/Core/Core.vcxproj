@@ -598,6 +598,12 @@
       <AdditionalOptions>%(AdditionalOptions) /machine:x86</AdditionalOptions>
     </Lib>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir);..\..\Luma2\External\imgui;..\External\safetyhook\include;..\External\zydis\include;..\External\zydis\dependencies\zycore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="dlss\DLSS.cpp" />
     <ClCompile Include="core.hpp" />
@@ -609,6 +615,25 @@
     <ClCompile Include="hooks\SystemHooks.cpp" />
     <ClCompile Include="interop\D3D12Interop.cpp" />
     <ClCompile Include="utils\system.cpp" />
+    <ClCompile Include="hooks\hooks.cpp" />
+    <ClCompile Include="system\dxgi_exports.cpp" />
+    <ClCompile Include="system\loader.cpp" />
+    <ClCompile Include="overlay\overlay.cpp" />
+    <ClCompile Include="overlay\input.cpp" />
+    <ClCompile Include="overlay\input_hooks.cpp" />
+    <ClCompile Include="overlay\d3d11_renderer.cpp" />
+    <ClCompile Include="hooks\vtables.cpp" />
+    <ClCompile Include="hooks\scope.cpp" />
+    <ClCompile Include="hooks\lifetime.cpp" />
+    <ClCompile Include="hooks\device_proxy.cpp" />
+    <ClCompile Include="hooks\d3d11_hooks.cpp" />
+    <ClCompile Include="hooks\d3d11_device_hooks.cpp" />
+    <ClCompile Include="hooks\d3d11_context_hooks.cpp" />
+    <ClCompile Include="hooks\dxgi_hooks.cpp" />
+    <ClCompile Include="hooks\slots.c" />
+    <ClCompile Include="utils\log.cpp" />
+    <ClCompile Include="utils\modules.cpp" />
+    <ClCompile Include="utils\strings.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="dlss\DLSS.h" />
@@ -651,6 +676,26 @@
     <ClInclude Include="utils\resource.hpp" />
     <ClInclude Include="utils\shader_compiler.hpp" />
     <ClInclude Include="utils\system.h" />
+    <ClInclude Include="hooks\hooks.hpp" />
+    <ClInclude Include="system\loader.hpp" />
+    <ClInclude Include="overlay\overlay.hpp" />
+    <ClInclude Include="overlay\input.hpp" />
+    <ClInclude Include="overlay\input_hooks.hpp" />
+    <ClInclude Include="overlay\d3d11_renderer.hpp" />
+    <ClInclude Include="utils
+ative_resource.hpp" />
+    <ClInclude Include="hooks\vtables.hpp" />
+    <ClInclude Include="hooks\slots.h" />
+    <ClInclude Include="hooks\scope.hpp" />
+    <ClInclude Include="hooks\lifetime.hpp" />
+    <ClInclude Include="hooks\device_proxy.hpp" />
+    <ClInclude Include="hooks\functions.hpp" />
+    <ClInclude Include="hooks\callbacks.hpp" />
+    <ClInclude Include="hooks\detours.hpp" />
+    <ClInclude Include="utils\log.hpp" />
+    <ClInclude Include="utils\modules.hpp" />
+    <ClInclude Include="utils\strings.hpp" />
+    <ClInclude Include="utils\depth_guard.hpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="includes\resource_upgrades.inl" />

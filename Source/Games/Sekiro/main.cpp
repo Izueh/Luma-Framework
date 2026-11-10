@@ -157,7 +157,7 @@ namespace
 
       void OnLoad()
       {
-         reshade::get_config_value(nullptr, NAME, "UIBrightnessRatio", cb_luma_global_settings.GameSettings.UIBrightnessRatio);
+         Config::Get(NAME, "UIBrightnessRatio", cb_luma_global_settings.GameSettings.UIBrightnessRatio);
       }
    }
    
@@ -332,7 +332,7 @@ namespace
             {
                if (native_device_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) break;
 
-               reshade::log::message(reshade::log::level::info, std::format("SRImp::OnDrawOrDispatch: Drawn SR for ps {:08X} vs {:08X} cs {:08X}\n", ps, vs, cs).c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("SRImp::OnDrawOrDispatch: Drawn SR for ps {:08X} vs {:08X} cs {:08X}\n", ps, vs, cs).c_str());
 
                // ASSERT_ONCE( );
                // auto sr_id = device_data.GetSRInstanceData();
@@ -472,7 +472,7 @@ public:
       ShaderDefineInfo::OnInit();
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       uint32_t ps = original_shader_hashes.pixel_shaders[0];
       uint32_t vs = original_shader_hashes.vertex_shaders[0];
@@ -505,7 +505,7 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
       // MainColor16f
       MainColor16f::HardReset();
@@ -533,7 +533,7 @@ public:
          ImGui::SliderFloat("UI Brightness Ratio", &cb_luma_global_settings.GameSettings.UIBrightnessRatio, 0.0f, cb_luma_global_settings.DisplayMode == DisplayModeType::HDR ? 2.0f : 1.0f, "%.2f") || is_need_clamp_1)
       {
          if (is_need_clamp_1) cb_luma_global_settings.GameSettings.UIBrightnessRatio = 1.0f;
-         reshade::set_config_value(nullptr, NAME, "UIBrightnessRatio", cb_luma_global_settings.GameSettings.UIBrightnessRatio);
+         Config::Set(NAME, "UIBrightnessRatio", cb_luma_global_settings.GameSettings.UIBrightnessRatio);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Simple brightness multiplier on UI.");
       DrawResetButton(cb_luma_global_settings.GameSettings.UIBrightnessRatio, default_luma_global_game_settings.UIBrightnessRatio, nullptr);
@@ -590,7 +590,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       
       texture_format_upgrades_type = TextureFormatUpgradesType::None;
       
-      game = new GameSekiro();
+      SetGame<GameSekiro>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

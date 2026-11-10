@@ -46,7 +46,6 @@ public:
 
     void OnLoad(std::filesystem::path& file_path, bool failed = false) override
     {
-        reshade::register_event<reshade::addon_event::update_buffer_region>(OnUpdateBufferRegion);
     }
 
     void OnInit(bool async) override
@@ -56,7 +55,7 @@ public:
         luma_settings_cbuffer_index = 13;
         luma_data_cbuffer_index = 12;
 
-        native_shaders_definitions.emplace("TEW2 MVs PS"_h, ShaderDefinition{ "Luma_TEW2_MVs_PS", reshade::api::pipeline_subobject_type::pixel_shader });
+        native_shaders_definitions.emplace("TEW2 MVs PS"_h, ShaderDefinition{ "Luma_TEW2_MVs_PS", D3D11_SHVER_PIXEL_SHADER });
     }
 
     void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -64,9 +63,9 @@ public:
         device_data.game = new GameDeviceDataTheEvilWithin2;
     }
 
-    void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+    void OnInitSwapchain(IDXGISwapChain* swapchain) override
     {
-        auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+        auto& device_data = *GetSwapchainData(swapchain)->device_data;
         auto& game_device_data = GetGameDeviceData(device_data);
         auto& managed_resources = game_device_data.managed_resources;
 
@@ -74,7 +73,20 @@ public:
         managed_resources.textures_2d["dlss_output"_h].reset();
     }
 
-    static bool OnUpdateBufferRegion(reshade::api::device* device, const void* data, reshade::api::resource resource, uint64_t offset, uint64_t size)
+    // ReShade's "update_buffer_region": buffer updates on the immediate context
+    bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch, UINT copy_flags) override
+    {
+       ID3D11Buffer* buffer = AsBuffer(resource);
+       if (!buffer || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+          return false;
+       D3D11_BUFFER_DESC desc;
+       buffer->GetDesc(&desc);
+       const uint64_t size = box ? uint64_t(box->right - box->left) : uint64_t(desc.ByteWidth);
+       OnUpdateBufferRegion(data, size);
+       return false;
+    }
+
+    static bool OnUpdateBufferRegion(const void* data, uint64_t size)
     {
         // This should be reliable.
         if (size >= sizeof(fblock)) {
@@ -85,7 +97,7 @@ public:
         return false;
     }
 
-    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
     {
         auto& game_device_data = GetGameDeviceData(device_data);
         auto& managed_resources = game_device_data.managed_resources;
@@ -249,19 +261,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         texture_format_upgrades_type   = TextureFormatUpgradesType::AllowedEnabled;
         // ### Check which of these are needed and remove the rest ###
         texture_upgrade_formats = {
-              //reshade::api::format::r8g8b8a8_unorm,
-              //reshade::api::format::r8g8b8a8_unorm_srgb,
-              //reshade::api::format::r8g8b8a8_typeless,
-              //reshade::api::format::r8g8b8x8_unorm,
-              //reshade::api::format::r8g8b8x8_unorm_srgb,
-              //reshade::api::format::b8g8r8a8_unorm,
-              //reshade::api::format::b8g8r8a8_unorm_srgb,
-              //reshade::api::format::b8g8r8a8_typeless,
-              //reshade::api::format::b8g8r8x8_unorm,
-              //reshade::api::format::b8g8r8x8_unorm_srgb,
-              //reshade::api::format::b8g8r8x8_typeless,
+              //DXGI_FORMAT_R8G8B8A8_UNORM,
+              //DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+              //DXGI_FORMAT_R8G8B8A8_TYPELESS,
+              //DXGI_FORMAT_B8G8R8A8_UNORM,
+              //DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+              //DXGI_FORMAT_B8G8R8A8_TYPELESS,
+              //DXGI_FORMAT_B8G8R8X8_UNORM,
+              //DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+              //DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-              reshade::api::format::r11g11b10_float,
+              DXGI_FORMAT_R11G11B10_FLOAT,
         };
         // ### Check these if textures are not upgraded ###
         texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
@@ -275,7 +285,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         forced_shader_names.emplace(0xB57DD4D6, "TAA");
         #endif
 
-        game = new TheEvilWithin2();
+        SetGame<TheEvilWithin2>();
     }
 
     CoreMain(hModule, ul_reason_for_call, lpReserved);

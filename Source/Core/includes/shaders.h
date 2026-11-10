@@ -1,6 +1,8 @@
 #pragma once
 
 #include "shader_define.h"
+#include "../utils/shader_types.hpp"
+#include "../utils/pipeline.hpp"
 
 // Forward declarations
 enum class ShaderReplaceDrawType;
@@ -64,8 +66,8 @@ namespace Shader
    // What a pipeline clone was built from, per shader stage. Copied on command lists when bound.
    struct CustomPipelineData
    {
-      reshade::api::shader_stage file_stages = reshade::api::shader_stage(0);
-      reshade::api::shader_stage patch_stages = reshade::api::shader_stage(0);
+      ShaderStages file_stages = ShaderStages::None;
+      ShaderStages patch_stages = ShaderStages::None;
       // Recipe reports and clone ownership (patch.hpp), null for clones without recipes. Shared with the command lists that bound the clone.
       std::shared_ptr<Patch::ClonePatchData> patch_data;
    };
@@ -74,12 +76,11 @@ namespace Shader
    struct CachedPipeline
    {
       // Original pipeline (in DX9/10/11 it's just a ptr to a shader object, in DX12 to a PSO). Lifetime not handled by us.
-      reshade::api::pipeline pipeline;
+      Shader::Pipeline pipeline;
       // Cached device (makes it easier to access, even if there's usually only a global one in games (e.g. Prey))
-      reshade::api::device* device; // TODO: delete, this isn't necessary, they are cached by device
-      reshade::api::pipeline_layout layout; // DX12 stuff
+      ID3D11Device* device; // TODO: delete, this isn't necessary, they are cached by device
       // Cloned subojects from the original pipeline (e.g. for shaders, this is their code/blob). Need to be destroyed when the original pipeline is.
-      reshade::api::pipeline_subobject* subobjects_cache;
+      Shader::PipelineSubobject* subobjects_cache;
 #if DX12
       uint32_t subobject_count;
 #else // Always 1 if not in DX12
@@ -89,7 +90,7 @@ namespace Shader
       bool cloned = false;
       bool manually_unloaded = false;
       // Needs to be destroyed when the original pipeline is.
-      reshade::api::pipeline pipeline_clone;
+      Shader::Pipeline pipeline_clone;
       // How the patch was applied to this pipeline (for the frame capture view: "#", "#S", "#A")
       PatchApplicationMode patch_application_mode = PatchApplicationMode::None;
       // What the current clone was built from (set at clone creation, reset
@@ -140,7 +141,7 @@ namespace Shader
       {
          for (uint32_t i = 0; i < subobject_count; i++)
          {
-            if (subobjects_cache[i].type == reshade::api::pipeline_subobject_type::geometry_shader) return true;
+            if (subobjects_cache[i].type == D3D11_SHVER_GEOMETRY_SHADER) return true;
          }
          return false;
       }
@@ -148,7 +149,7 @@ namespace Shader
       {
          for (uint32_t i = 0; i < subobject_count; i++)
          {
-            if (subobjects_cache[i].type == reshade::api::pipeline_subobject_type::vertex_shader) return true;
+            if (subobjects_cache[i].type == D3D11_SHVER_VERTEX_SHADER) return true;
          }
          return false;
       }
@@ -156,7 +157,7 @@ namespace Shader
       {
          for (uint32_t i = 0; i < subobject_count; i++)
          {
-            if (subobjects_cache[i].type == reshade::api::pipeline_subobject_type::pixel_shader) return true;
+            if (subobjects_cache[i].type == D3D11_SHVER_PIXEL_SHADER) return true;
          }
          return false;
       }
@@ -164,7 +165,7 @@ namespace Shader
       {
          for (uint32_t i = 0; i < subobject_count; i++)
          {
-            if (subobjects_cache[i].type == reshade::api::pipeline_subobject_type::compute_shader) return true;
+            if (subobjects_cache[i].type == D3D11_SHVER_COMPUTE_SHADER) return true;
          }
          return false;
       }
@@ -205,7 +206,7 @@ namespace Shader
       void* data = nullptr; // Shader binary, allocated by ourselves. A copy of the original shader data. Immutable once set.
       size_t size = 0;
 #endif
-      reshade::api::pipeline_subobject_type type = reshade::api::pipeline_subobject_type::unknown;
+      D3D11_SHADER_VERSION_TYPE type = SHADER_VERSION_TYPE_UNKNOWN;
 
 #if ALLOW_SHADERS_DUMPING || DEVELOPMENT
       std::string type_and_version;
@@ -249,7 +250,7 @@ namespace Shader
    struct ShaderDefinition
    {
       const char* file_name = nullptr; // What shader code file to load from disk
-      reshade::api::pipeline_subobject_type type = reshade::api::pipeline_subobject_type::unknown; // pixel, vertex etc shader
+      D3D11_SHADER_VERSION_TYPE type = SHADER_VERSION_TYPE_UNKNOWN; // pixel, vertex etc shader
       const char* shader_target_version = nullptr; // E.g. "5_0" (do not include "ps_" or "cs_" etc). Defaults to the most appropriate version for the current API.
       const char* function_name = nullptr; // Will fall back to (e.g.) "main" if not specified
       std::vector<SimplerShaderDefine> defines_data; // Extra defines data this shader can have on top of the global ones
@@ -343,23 +344,23 @@ namespace Shader
 #endif
       [[msvc::no_unique_address]] OptionalShaderHashesContainer<Count, IgnoreCompute> compute_shaders;
 
-      bool Contains(uint32_t shader_hash, reshade::api::shader_stage shader_stage) const
+      bool Contains(uint32_t shader_hash, ShaderStages shader_stage) const
       {
          if constexpr (!IgnoreGraphics)
          {
             // NOTE: we could probably check if the value matches a specific shader stage (e.g. a switch?), but I'm not 100% sure other flags are ever set
-            if ((shader_stage & reshade::api::shader_stage::pixel) != 0)
+            if ((shader_stage & ShaderStages::Pixel) != 0)
             {
                if (ShaderHashesContains(pixel_shaders, shader_hash))
                   return true;
             }
-            if ((shader_stage & reshade::api::shader_stage::vertex) != 0)
+            if ((shader_stage & ShaderStages::Vertex) != 0)
             {
                if (ShaderHashesContains(vertex_shaders, shader_hash))
                   return true;
             }
 #if GEOMETRY_SHADER_SUPPORT
-            if ((shader_stage & reshade::api::shader_stage::geometry) != 0)
+            if ((shader_stage & ShaderStages::Geometry) != 0)
             {
                if (ShaderHashesContains(geometry_shaders, shader_hash))
                   return true;
@@ -368,7 +369,7 @@ namespace Shader
          }
          if constexpr (!IgnoreCompute)
          {
-            if ((shader_stage & reshade::api::shader_stage::compute) != 0)
+            if ((shader_stage & ShaderStages::Compute) != 0)
             {
                return ShaderHashesContains(compute_shaders, shader_hash);
             }
@@ -476,22 +477,22 @@ namespace Shader
          }
          return true;
       }
-      bool HasAny(reshade::api::shader_stage shader_stage) const
+      bool HasAny(ShaderStages shader_stage) const
       {
          if constexpr (!IgnoreGraphics)
          {
-            if ((shader_stage & reshade::api::shader_stage::pixel) != 0 && !ShaderHashesEmpty(pixel_shaders))
+            if ((shader_stage & ShaderStages::Pixel) != 0 && !ShaderHashesEmpty(pixel_shaders))
                return true;
-            if ((shader_stage & reshade::api::shader_stage::vertex) != 0 && !ShaderHashesEmpty(vertex_shaders))
+            if ((shader_stage & ShaderStages::Vertex) != 0 && !ShaderHashesEmpty(vertex_shaders))
                return true;
 #if GEOMETRY_SHADER_SUPPORT
-            if ((shader_stage & reshade::api::shader_stage::geometry) != 0 && !ShaderHashesEmpty(geometry_shaders))
+            if ((shader_stage & ShaderStages::Geometry) != 0 && !ShaderHashesEmpty(geometry_shaders))
                return true;
 #endif
          }
          if constexpr (!IgnoreCompute)
          {
-            if ((shader_stage & reshade::api::shader_stage::compute) != 0 && !ShaderHashesEmpty(compute_shaders))
+            if ((shader_stage & ShaderStages::Compute) != 0 && !ShaderHashesEmpty(compute_shaders))
                return true;
          }
          return false;
@@ -588,52 +589,52 @@ namespace Shader
    };
 
    // For "target" we mean a version identifier
-   reshade::api::pipeline_subobject_type ShaderTargetToType(const std::string& target)
+   D3D11_SHADER_VERSION_TYPE ShaderTargetToType(const std::string& target)
    {
       if (target.starts_with(template_pixel_shader_name))
       {
-         return reshade::api::pipeline_subobject_type::pixel_shader;
+         return D3D11_SHVER_PIXEL_SHADER;
       }
       else if (target.starts_with(template_vertex_shader_name))
       {
-         return reshade::api::pipeline_subobject_type::vertex_shader;
+         return D3D11_SHVER_VERTEX_SHADER;
       }
       else if (target.starts_with(template_compute_shader_name))
       {
-         return reshade::api::pipeline_subobject_type::compute_shader;
+         return D3D11_SHVER_COMPUTE_SHADER;
       }
 #if GEOMETRY_SHADER_SUPPORT
       else if (target.starts_with(template_geometry_shader_name))
       {
-         return reshade::api::pipeline_subobject_type::geometry_shader;
+         return D3D11_SHVER_GEOMETRY_SHADER;
       }
 #endif
       ASSERT_ONCE(false);
-      return reshade::api::pipeline_subobject_type::unknown;
+      return SHADER_VERSION_TYPE_UNKNOWN;
    }
 
    // Doesn't return the version, just the shader model part, including "_" after it (e.g. "ps_")
-   std::string_view ShaderTypeToTarget(reshade::api::pipeline_subobject_type type)
+   std::string_view ShaderTypeToTarget(D3D11_SHADER_VERSION_TYPE type)
    {
       std::string_view template_shader_name;
       switch (type)
       {
-      case reshade::api::pipeline_subobject_type::vertex_shader:
+      case D3D11_SHVER_VERTEX_SHADER:
       {
          template_shader_name = template_vertex_shader_name;
          break;
       }
-      case reshade::api::pipeline_subobject_type::geometry_shader:
+      case D3D11_SHVER_GEOMETRY_SHADER:
       {
          template_shader_name = template_geometry_shader_name;
          break;
       }
-      case reshade::api::pipeline_subobject_type::pixel_shader:
+      case D3D11_SHVER_PIXEL_SHADER:
       {
          template_shader_name = template_pixel_shader_name;
          break;
       }
-      case reshade::api::pipeline_subobject_type::compute_shader:
+      case D3D11_SHVER_COMPUTE_SHADER:
       {
          template_shader_name = template_compute_shader_name;
          break;
@@ -652,17 +653,17 @@ namespace Shader
    // ============================================================================
 
    // The stage of a shader subobject (0 if it isn't one).
-   reshade::api::shader_stage GetShaderStage(reshade::api::pipeline_subobject_type type);
+   ShaderStages GetShaderStage(D3D11_SHADER_VERSION_TYPE type);
    // Records a shader injected into a clone: a custom shader file, or a patch (with its recipe reports).
-   void RecordCloneShader(CustomPipelineData& data, reshade::api::pipeline_subobject_type type,
+   void RecordCloneShader(CustomPipelineData& data, D3D11_SHADER_VERSION_TYPE type,
       const std::shared_ptr<Patch::PatchedShaderData>& patch = nullptr);
    // What the clone of a pipeline (or the clone bound on a command list) was built from, for one shader stage.
-   CloneOrigin GetCloneOrigin(const CachedPipeline& pipeline, reshade::api::shader_stage stage);
-   CloneOrigin GetShaderOrigin(const CommandListData& cmd_list_data, reshade::api::shader_stage stage);
+   CloneOrigin GetCloneOrigin(const CachedPipeline& pipeline, ShaderStages stage);
+   CloneOrigin GetShaderOrigin(const CommandListData& cmd_list_data, ShaderStages stage);
    // Binds the original pipelines of "stages" or their clones, for the current draw/dispatch (callable from any draw callback):
    // the next draw binds the clones again if it can use them. Stages without a clone (selected at bind time) are left alone.
    // In DX11 a pipeline is a single shader, so stages switch independently.
-   void UsePipelineVariant(CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, reshade::api::shader_stage stages, PipelineVariant variant);
+   void UsePipelineVariant(CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, ShaderStages stages, PipelineVariant variant);
 }
 
 // TODO: delete. This is useless. If anything, make a typedef of "ShaderHashesList" with a single shader per stage.

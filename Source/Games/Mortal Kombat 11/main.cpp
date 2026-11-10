@@ -95,7 +95,6 @@ public:
     {
         if (!failed)
         {
-            reshade::register_event<reshade::addon_event::create_resource>(MortalKombat11::OnCreateResource);
         }
     }
 
@@ -107,12 +106,12 @@ public:
        luma_data_cbuffer_index = -1;
     }
 
-    static bool OnCreateResource(reshade::api::device* device, reshade::api::resource_desc& desc, reshade::api::subresource_data* initial_data, reshade::api::resource_usage initial_state)
+    void PreCreateBuffer(ID3D11Device* device, D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA*& initial_data) override
     {
         // ViewConstants CB is immutable so we have to catch it on creation.
         // The game will be recreating it at least onece per frame.
-        if ((desc.usage & reshade::api::resource_usage::constant_buffer) != 0 && (desc.flags & reshade::api::resource_flags::immutable) != 0 && desc.buffer.size == 1280) {
-            auto data = (ViewConstants*)initial_data->data;
+        if ((desc.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0 && desc.Usage == D3D11_USAGE_IMMUTABLE && desc.ByteWidth == 1280 && initial_data) {
+            auto data = (ViewConstants*)initial_data->pSysMem;
 
             // This should be reliable.
             if (data->_PRIVATE_ProjectionMatrix.m00 && !data->_PRIVATE_ProjectionMatrix.m01 && !data->_PRIVATE_ProjectionMatrix.m02 && !data->_PRIVATE_ProjectionMatrix.m03 && !data->_PRIVATE_ProjectionMatrix.m10 && data->_PRIVATE_ProjectionMatrix.m11 && data->_PRIVATE_ProjectionMatrix.m23 == 1.0f) {
@@ -120,11 +119,9 @@ public:
                 g_jitter_y = data->_PRIVATE_ProjectionMatrix.m21;
             }
         }
-
-        return false;
     }
 
-    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
     {
         auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -266,19 +263,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         texture_format_upgrades_type   = TextureFormatUpgradesType::AllowedEnabled;
         // ### Check which of these are needed and remove the rest ###
         texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
     
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
         };
         // ### Check these if textures are not upgraded ###
         texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
@@ -294,7 +289,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         forced_shader_names.emplace(0xABAF5929, "PostTAASharpen");
         #endif
 
-        game = new MortalKombat11();
+        SetGame<MortalKombat11>();
     }
 
     CoreMain(hModule, ul_reason_for_call, lpReserved);

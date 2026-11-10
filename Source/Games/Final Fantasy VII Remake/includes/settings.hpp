@@ -2,15 +2,15 @@
 #include <functional>
 #include <string>
 #include <vector>
-#include <deps/imgui/imgui.h>
-#include <include/reshade.hpp>
+#include <imgui.h>
+#include "../../../Core/utils/config.hpp"
 
-#define ICON_FK_UNDO reinterpret_cast<const char*>(u8"\uf0e2")
+#define ICON_FK_UNDO "U"
 
 namespace Luma {
 namespace Settings
 {
-    extern "C" __declspec(dllexport) const char* const NAME;
+    extern "C" const char* NAME;
 
     enum class SettingValueType
     { 
@@ -72,13 +72,13 @@ namespace Settings
         }
 
         Setting* Save() {
-            reshade::set_config_value(nullptr, NAME, this->key.c_str(), this->GetValue());
+            ::Config::Set(NAME, this->key.c_str(), this->GetValue());
             return this;
         }
 
         Setting* Load() {
             float v;
-            if(reshade::get_config_value(nullptr, NAME, this->key.c_str(), v)) {
+            if(::Config::Get(NAME, this->key.c_str(), v)) {
                 this->Set(v)->Write();
             } else {
                 this->Set(this->default_value)->Write();

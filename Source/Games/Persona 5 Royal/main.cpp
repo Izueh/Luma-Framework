@@ -220,17 +220,11 @@ class Persona5Royal final : public Game
 public:
    void OnInit(bool async) override
    {
-      native_shaders_definitions.emplace(CompileTimeStringHash("Update Shadow Constants"), ShaderDefinition{"Luma_UpdateShadowConstants", reshade::api::pipeline_subobject_type::compute_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Decode Motion Vector"), ShaderDefinition{"Luma_DecodeMotionVector", reshade::api::pipeline_subobject_type::compute_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Merge"), ShaderDefinition{"Luma_CopyDsrResult", reshade::api::pipeline_subobject_type::compute_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Copy RGB 1 A"), ShaderDefinition{"Luma_Copy_RGB", reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Update Shadow Constants"), ShaderDefinition{"Luma_UpdateShadowConstants", D3D11_SHVER_COMPUTE_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Decode Motion Vector"), ShaderDefinition{"Luma_DecodeMotionVector", D3D11_SHVER_COMPUTE_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Merge"), ShaderDefinition{"Luma_CopyDsrResult", D3D11_SHVER_COMPUTE_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Copy RGB 1 A"), ShaderDefinition{"Luma_Copy_RGB", D3D11_SHVER_PIXEL_SHADER});
 
-      reshade::register_event<reshade::addon_event::execute_secondary_command_list>(Persona5Royal::OnExecuteSecondaryCommandList);
-      reshade::register_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(Persona5Royal::OnBindRenderTargetsAndDepthStencil);
-      reshade::register_event<reshade::addon_event::map_buffer_region>(Persona5Royal::OnMapBufferRegion);
-      reshade::register_event<reshade::addon_event::update_buffer_region_command>(Persona5Royal::OnUpdateBufferRegionCommand);
-      reshade::register_event<reshade::addon_event::create_resource>(Persona5Royal::OnCreateResource);
-      reshade::register_event<reshade::addon_event::bind_viewports>(Persona5Royal::OnBindViewports);
 
       float4x4 identity = {};
       identity.m00 = 1.0f;
@@ -242,17 +236,16 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      if (!reshade::get_config_value(runtime, NAME, "ShadowMapSizeOverride", g_shadow_map_size_override))
+      if (!Config::Get(NAME, "ShadowMapSizeOverride", g_shadow_map_size_override))
       {
          // older versions were saving the setting under the wrong key
-         reshade::get_config_value(runtime, NAME, "shadow_map_size_override", g_shadow_map_size_override);
+         Config::Get(NAME, "shadow_map_size_override", g_shadow_map_size_override);
       }
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+      auto& device_data = *GetSwapchainData(swapchain)->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
       game_device_data.target_resolution.x = device_data.output_resolution.x;
       game_device_data.target_resolution.y = device_data.output_resolution.y;
@@ -622,9 +615,9 @@ public:
       return true;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
-      if ((stages & reshade::api::shader_stage::vertex) == 0)
+      if ((stages & ShaderStages::Vertex) == 0)
       {
          return DrawOrDispatchOverrideType::None;
       }
@@ -831,7 +824,7 @@ public:
 
          if (cbShadow)
          {
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaSettings);
 
             ID3D11Buffer* cbs[] = {cbShadow.get()};
             ID3D11UnorderedAccessView* uavs[] = {game_device_data.scratch_constant_buffer_uav.get()};
@@ -1055,20 +1048,17 @@ public:
       device_data.has_drawn_main_post_processing = false;
    }
 
-   static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
+   // A command list is about to be replayed on a context (ReShade's "execute_secondary_command_list" on a context)
+   bool PreExecuteCommandList(ID3D11DeviceContext* native_device_context, ID3D11CommandList* native_command_list, BOOL restore) override
    {
-      ComPtr<ID3D11DeviceContext> native_device_context;
-      ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      HRESULT hr = device_child->QueryInterface(native_device_context.put());
-
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      CommandListData* cmd_list_data_ptr = GetCommandListData(native_device_context);
+      if (!cmd_list_data_ptr)
+         return false;
+      CommandListData& cmd_list_data = *cmd_list_data_ptr;
+      auto& device_data = *cmd_list_data.device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      if (native_device_context)
       {
-         ComPtr<ID3D11CommandList> native_command_list;
-         ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         HRESULT hr = device_child->QueryInterface(native_command_list.put());
          if (native_command_list == game_device_data.remainder_command_list && game_device_data.partial_command_list)
          {
             native_device_context->ExecuteCommandList(game_device_data.partial_command_list.get(), FALSE);
@@ -1076,11 +1066,10 @@ public:
 
             if (!game_device_data.source_color || !game_device_data.depth_texture || device_data.sr_type == SR::Type::None)
             {
-               return;
+               return false;
             }
 
-            CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-            SetLumaConstantBuffers(native_device_context.get(), cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaSettings);
 
             D3D11_TEXTURE2D_DESC target_desc;
             game_device_data.source_color->GetDesc(&target_desc);
@@ -1097,7 +1086,7 @@ public:
                settings_data.inverted_depth = false;
                settings_data.mvs_jittered = false;
                settings_data.render_preset = dlss_render_preset;
-               sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context.get(), settings_data);
+               sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
             }
 
             {
@@ -1139,7 +1128,7 @@ public:
                draw_data.vert_fov = game_device_data.fov;
                draw_data.reset = device_data.force_reset_sr;
 
-               bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context.get(), draw_data);
+               bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
                game_device_data.has_drawn_upscaling = dlss_succeeded;
                device_data.has_drawn_sr = dlss_succeeded;
             }
@@ -1188,48 +1177,75 @@ public:
             }
          }
       }
+      return false;
+   }
 
-      ComPtr<ID3D11CommandList> native_command_list;
-      hr = device_child->QueryInterface(native_command_list.put());
-      if (native_command_list)
+   // A deferred context recorded a command list (ReShade's "execute_secondary_command_list" on a command list)
+   void PostFinishCommandList(ID3D11DeviceContext* native_device_context, BOOL restore, ID3D11CommandList* native_command_list) override
+   {
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return;
+      auto& game_device_data = GetGameDeviceData(*cmd_list_data->device_data);
+      if (native_device_context == game_device_data.draw_device_context)
       {
-         ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         hr = device_child->QueryInterface(native_device_context.put());
-         if (native_device_context.get() == game_device_data.draw_device_context)
-         {
-            game_device_data.remainder_command_list = native_command_list.get();
-         }
+         game_device_data.remainder_command_list = native_command_list;
       }
    }
 
-   static void OnBindRenderTargetsAndDepthStencil(reshade::api::command_list* cmd_list, uint32_t count, const reshade::api::resource_view* rtvs, reshade::api::resource_view dsv)
+   void OnRenderTargetsBound(ID3D11DeviceContext* context)
    {
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
-
-      game_device_data.render_target_changed = true;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         GetGameDeviceData(*cmd_list_data->device_data).render_target_changed = true;
    }
 
-   static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+   bool PreOMSetRenderTargets(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views, ID3D11DepthStencilView*& depth_stencil) override
    {
-      if (access != reshade::api::map_access::write_only)
+      OnRenderTargetsBound(context);
+      return false;
+   }
+
+   bool PreOMSetRenderTargetsAndUnorderedAccessViews(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views, ID3D11DepthStencilView*& depth_stencil, UINT uav_start, UINT uav_count, ID3D11UnorderedAccessView** uavs, const UINT* initial_counts) override
+   {
+      // ReShade only reported the render targets when they changed
+      if (count != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+         OnRenderTargetsBound(context);
+      return false;
+   }
+
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
+   {
+      // ReShade's "write_only" access
+      if (type != D3D11_MAP_WRITE && type != D3D11_MAP_WRITE_NO_OVERWRITE)
       {
          return;
       }
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return;
       D3D11_BUFFER_DESC bd;
-      ((ID3D11Buffer*)resource.handle)->GetDesc(&bd);
+      buffer->GetDesc(&bd);
       if (bd.BindFlags == (D3D11_BIND_VERTEX_BUFFER | D3D11_BIND_INDEX_BUFFER))
       {
-         auto& device_data = *device->get_private_data<DeviceData>();
-         auto& game_device_data = GetGameDeviceData(device_data);
+         CommandListData* cmd_list_data = GetCommandListData(context);
+         if (!cmd_list_data)
+            return;
+         auto& game_device_data = GetGameDeviceData(*cmd_list_data->device_data);
 
-         game_device_data.modifiable_index_vertex_buffer = (ID3D11Buffer*)resource.handle;
+         game_device_data.modifiable_index_vertex_buffer = buffer;
       }
    }
 
-   static bool OnUpdateBufferRegionCommand(reshade::api::command_list* cmd_list, const void* data, reshade::api::resource dest, uint64_t dest_offset, uint64_t size)
+   // ReShade's "update_buffer_region_command": buffer updates on deferred contexts
+   bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch, UINT copy_flags) override
    {
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      ID3D11Buffer* dest = AsBuffer(resource);
+      if (!dest || context->GetType() != D3D11_DEVICE_CONTEXT_DEFERRED)
+         return false;
+      CommandListData* cmd_list_data = GetCommandListData(context);
+      if (!cmd_list_data)
+         return false;
+      auto& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
 
       if (!SrActive(device_data))
@@ -1251,9 +1267,9 @@ public:
       {
          if (game_device_data.render_target_changed)
          {
-            ID3D11Buffer* buffer = (ID3D11Buffer*)dest.handle;
+            ID3D11Buffer* buffer = dest;
             D3D11_BUFFER_DESC bd;
-            ((ID3D11Buffer*)dest.handle)->GetDesc(&bd);
+            dest->GetDesc(&bd);
             // constant buffers used on draw thread are exclusively 7168 bytes in size
             // the deferred context that handles the update of skinned meshes uses
             // constant buffers sized at different powers of two
@@ -1269,57 +1285,51 @@ public:
       }
 
       // game_device_data.frame_phase == FramePhase::GBUFFER
-      if ((ID3D11Buffer*)dest.handle == game_device_data.cb_transform)
+      if (dest == game_device_data.cb_transform)
       {
-         ComPtr<ID3D11DeviceContext> native_device_context;
-         ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-         HRESULT hr = device_child->QueryInterface(native_device_context.put());
-         return HandleTransformUpdate((ID3D11Buffer*)dest.handle, data, native_device_context.get(), game_device_data, device_data);
+         return HandleTransformUpdate(dest, data, context, game_device_data, device_data);
       }
 
       return false;
    }
 
-   static void OnBindViewports(reshade::api::command_list* cmd_list, uint32_t first, uint32_t count, const reshade::api::viewport* viewports)
+   void PostRSSetViewports(ID3D11DeviceContext* native_device_context, UINT count, const D3D11_VIEWPORT* viewports) override
    {
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
+      if (count == 0 || !viewports)
+         return;
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return;
+      auto& game_device_data = GetGameDeviceData(*cmd_list_data->device_data);
 
       if (!game_device_data.draw_device_context)
       {
          return;
       }
 
-      ComPtr<ID3D11DeviceContext> native_device_context;
-      ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      device_child->QueryInterface(native_device_context.put());
-      if (native_device_context.get() == game_device_data.draw_device_context)
+      if (native_device_context == game_device_data.draw_device_context)
       {
-         game_device_data.last_viewport_size = uint2((uint32_t)viewports->width, (uint32_t)viewports->height);
+         game_device_data.last_viewport_size = uint2((uint32_t)viewports->Width, (uint32_t)viewports->Height);
       }
    }
 
-   static bool OnCreateResource(reshade::api::device* device, reshade::api::resource_desc& desc, reshade::api::subresource_data* initial_data, reshade::api::resource_usage initial_state)
+   void PreCreateTexture2D(ID3D11Device* device, D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA*& initial_data) override
    {
       // after starting the game or some scene transitions the selected shadow quality is not applied anymore
       // and the middle setting is used instead which is 2048 so we just override that
       uint32_t shadow_map_size_override = g_shadow_map_size_override;
       if (shadow_map_size_override > 0 &&
-          desc.type == reshade::api::resource_type::texture_2d &&
-          (desc.usage & reshade::api::resource_usage::depth_stencil) == reshade::api::resource_usage::depth_stencil &&
-          desc.texture.format == reshade::api::format::r32_typeless &&
-          desc.texture.width == 2048 &&
-          desc.texture.height == 2048)
+          (desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) != 0 &&
+          desc.Format == DXGI_FORMAT_R32_TYPELESS &&
+          desc.Width == 2048 &&
+          desc.Height == 2048)
       {
-         desc.texture.height = desc.texture.width = shadow_map_size_override;
-         return true;
+         desc.Height = desc.Width = shadow_map_size_override;
       }
-      return false;
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
@@ -1362,7 +1372,7 @@ public:
             if (ImGui::Selectable(name, selected))
             {
                g_shadow_map_size_override = size;
-               reshade::set_config_value(runtime, NAME, "ShadowMapSizeOverride", g_shadow_map_size_override);
+               Config::Set(NAME, "ShadowMapSizeOverride", g_shadow_map_size_override);
             }
             if (selected)
             {
@@ -1462,16 +1472,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type = SwapchainUpgradeType::None;
       force_disable_display_composition = true;
 
-      game = new Persona5Royal();
+      SetGame<Persona5Royal>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
-      reshade::unregister_event<reshade::addon_event::execute_secondary_command_list>(Persona5Royal::OnExecuteSecondaryCommandList);
-      reshade::unregister_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(Persona5Royal::OnBindRenderTargetsAndDepthStencil);
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(Persona5Royal::OnMapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::update_buffer_region_command>(Persona5Royal::OnUpdateBufferRegionCommand);
-      reshade::unregister_event<reshade::addon_event::create_resource>(Persona5Royal::OnCreateResource);
-      reshade::unregister_event<reshade::addon_event::bind_viewports>(Persona5Royal::OnBindViewports);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

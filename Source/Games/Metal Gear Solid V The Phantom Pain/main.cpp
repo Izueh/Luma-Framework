@@ -17,7 +17,6 @@
 #define GEOMETRY_SHADER_SUPPORT 0
 
 // Luma's FSR 4 runs on its own D3D12 device, which ReShade also wraps: ignore the events of non D3D11 devices
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 
 #include "..\..\Core\core.hpp"
 #include "..\..\Core\hooks\Hooks.h"
@@ -68,25 +67,26 @@ namespace
       const std::lock_guard lock(g_fxaa_targets_mutex);
       if (g_fxaa_targets.emplace(rtv_desc.Format, texture_desc.Width, texture_desc.Height).second)
       {
-         reshade::log::message(reshade::log::level::info, std::format("MGSV: new FXAA target {}x{}, view format {}", texture_desc.Width, texture_desc.Height, int(rtv_desc.Format)).c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("MGSV: new FXAA target {}x{}, view format {}", texture_desc.Width, texture_desc.Height, int(rtv_desc.Format)).c_str());
       }
    }
 #endif
 
 #if ENABLE_SAFETYHOOK
    // The game quits (exit code 0) right after creating its D3D11 device if the device's vtable isn't inside the module named "d3d11.dll",
-   // and ReShade's device wrapper lives in ReShade's own module. The game gets that module's range through psapi's "GetModuleInformation()"
+   // and Luma's device proxy (like ReShade's device wrapper before) lives in Luma's own module. The game gets that module's range through psapi's "GetModuleInformation()"
    // (which jumps to kernelbase's), so the game's own calls for "d3d11.dll" get ReShade's module instead.
    // The cause and the fix are from ghostinthecamera/mgsv-reshade-fix (MIT), which patches ReShade instead.
+   // So for the game's own calls, "d3d11.dll" answers with Luma's module range.
    safetyhook::InlineHook g_get_module_information_hook;
 
    BOOL WINAPI HookedGetModuleInformation(HANDLE process, HMODULE module, LPMODULEINFO module_info, DWORD size)
    {
-      if (module && Hooks::IsAddressInModule(_ReturnAddress(), GetModuleHandleW(nullptr)))
+      if (module && ::Hooks::IsAddressInModule(_ReturnAddress(), GetModuleHandleW(nullptr)))
       {
-         const HMODULE reshade_module = reshade::internal::get_reshade_module_handle();
+         const HMODULE luma_module = Luma::Utils::Modules::Self();
          wchar_t path[MAX_PATH];
-         if (reshade_module && module != reshade_module && GetModuleFileNameW(module, path, MAX_PATH))
+         if (luma_module && module != luma_module && GetModuleFileNameW(module, path, MAX_PATH))
          {
             const wchar_t* file_name = wcsrchr(path, L'\\');
             if (_wcsicmp(file_name ? file_name + 1 : path, L"d3d11.dll") == 0)
@@ -94,9 +94,9 @@ namespace
                static std::atomic<bool> logged = false;
                if (!logged.exchange(true))
                {
-                  reshade::log::message(reshade::log::level::info, "MGSV: the game's D3D11 device check gets ReShade's module for d3d11.dll");
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "MGSV: the game's D3D11 device check gets Luma's module for d3d11.dll");
                }
-               module = reshade_module;
+               module = luma_module;
             }
          }
       }
@@ -117,7 +117,7 @@ namespace
             return;
          }
       }
-      reshade::log::message(reshade::log::level::error, "MGSV: couldn't hook GetModuleInformation, the game quits at startup unless ReShade has its own Metal Gear Solid V fix");
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, "MGSV: couldn't hook GetModuleInformation, the game quits at startup unless ReShade has its own Metal Gear Solid V fix");
    }
 #endif
 
@@ -168,7 +168,7 @@ namespace
    {
       if (!g_sr_disabled.exchange(true))
       {
-         reshade::log::message(reshade::log::level::error, std::format("MGSV: SR disabled ({}), FXAA is back until another Super Resolution type is picked", reason).c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, std::format("MGSV: SR disabled ({}), FXAA is back until another Super Resolution type is picked", reason).c_str());
       }
    }
 
@@ -296,7 +296,7 @@ namespace
             g_logged_keys++;
             const float (&eye)[4] = rows[kRowEyePos];
             const float (&forward)[4] = rows[kRowProjectionView + 3];
-            reshade::log::message(reshade::log::level::info, std::format("MGSV: camera key {} (main frame {}, phase {}): velocity upload {}, eye ({:.4f} {:.4f} {:.4f}), forward ({:.5f} {:.5f} {:.5f} {:.4f}), projection scale ({:.4f} {:.4f})", frame, g_main_frames, frame_phase->phase, velocity_upload, eye[0], eye[1], eye[2], forward[0], forward[1], forward[2], forward[3], rows[kRowProjection][0], rows[kRowProjection + 1][1]).c_str());
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("MGSV: camera key {} (main frame {}, phase {}): velocity upload {}, eye ({:.4f} {:.4f} {:.4f}), forward ({:.5f} {:.5f} {:.5f} {:.4f}), projection scale ({:.4f} {:.4f})", frame, g_main_frames, frame_phase->phase, velocity_upload, eye[0], eye[1], eye[2], forward[0], forward[1], forward[2], forward[3], rows[kRowProjection][0], rows[kRowProjection + 1][1]).c_str());
          }
 #endif
       }
@@ -352,7 +352,7 @@ namespace
          const std::lock_guard lock(g_view_signatures_mutex);
          if (g_view_signatures.size() < 64 && g_view_signatures.insert(signature).second)
          {
-            reshade::log::message(reshade::log::level::info, std::format("MGSV: new scene view: perspective {}, aspect ratio {:.3f}, vertical scale {:.3f}, previous view projection in rows 8-11 {}, main view {}", perspective, aspect_ratio, rows[kRowProjection + 1][1], prev_projection_view, main_view).c_str());
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("MGSV: new scene view: perspective {}, aspect ratio {:.3f}, vertical scale {:.3f}, previous view projection in rows 8-11 {}, main view {}", perspective, aspect_ratio, rows[kRowProjection + 1][1], prev_projection_view, main_view).c_str());
          }
       }
 #endif
@@ -383,31 +383,29 @@ namespace
       rows[kRowCameraCenterOffset][1] += offset_y;
    }
 
-   void OnMapSceneCB(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+   void OnMapSceneCB(const DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
    {
-      SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
-      if (access != reshade::api::map_access::write_discard)
+      if (access != D3D11_MAP_WRITE_DISCARD)
          return;
       // Only SR (or the development tools) needs the scene constants: skip the per map work otherwise (the game maps thousands of buffers)
-      bool needed = SrUsable(*device->get_private_data<DeviceData>());
+      bool needed = SrUsable(device_data);
 #if DEVELOPMENT
       needed |= g_jitter_enable || g_decode_motion_vectors;
 #endif
       if (!needed)
          return;
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
       D3D11_BUFFER_DESC desc;
       buffer->GetDesc(&desc);
       if (desc.ByteWidth == kSceneCBSize && (desc.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0)
       {
-         t_pending_scene_cb_map = {resource.handle, *data};
+         t_pending_scene_cb_map = {reinterpret_cast<uint64_t>(buffer), *data};
       }
    }
 
-   // ReShade calls this before the real unmap, so the mapped memory still takes our changes
-   void OnUnmapSceneCB(reshade::api::device* device, reshade::api::resource resource)
+   // Called before the real unmap, so the mapped memory still takes our changes
+   void OnUnmapSceneCB(const DeviceData& device_data, ID3D11Buffer* buffer)
    {
-      if (t_pending_scene_cb_map.buffer != resource.handle || t_pending_scene_cb_map.data == nullptr)
+      if (t_pending_scene_cb_map.buffer != reinterpret_cast<uint64_t>(buffer) || t_pending_scene_cb_map.data == nullptr)
          return;
       void* const data = t_pending_scene_cb_map.data;
       t_pending_scene_cb_map = {};
@@ -418,7 +416,6 @@ namespace
       // Work on a copy, the mapped memory is write combined (slow to read)
       SceneRows rows;
       std::memcpy(rows, data, sizeof(rows));
-      const DeviceData& device_data = *device->get_private_data<DeviceData>();
       bool prev_projection_view = false;
       if (!IsMainView(rows, device_data.output_resolution, prev_projection_view))
          return;
@@ -636,7 +633,7 @@ class MetalGearSolidV final : public Game
       native_device_context->CSSetShaderResources(0, 2, cs_srvs);
       ID3D11UnorderedAccessView* const cs_uavs[2] = {uavs[0].get(), uavs[1].get()};
       native_device_context->CSSetUnorderedAccessViews(0, 2, cs_uavs, nullptr);
-      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData);
+      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaData);
       native_device_context->Dispatch((width + 7) / 8, (height + 7) / 8, 1);
       compute_state.Restore(native_device_context);
       return true;
@@ -801,53 +798,62 @@ class MetalGearSolidV final : public Game
       CountSRResult(drawn);
    }
 
-   // Fires on "FinishCommandList" ("cmd_list" is the new command list, "secondary_cmd_list" the deferred context that recorded it) and on
-   // "ExecuteCommandList" ("cmd_list" is the immediate context, "secondary_cmd_list" the command list), before the real call
-   static void OnSRCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
+#endif
+
+public:
+#if ENABLE_SR // The hooks are only needed for SR (and its development tools)
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
    {
-      SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api());
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnMapSceneCB(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+   }
 
-      ID3D11DeviceChild* const device_child = reinterpret_cast<ID3D11DeviceChild*>(cmd_list->get_native());
-      com_ptr<ID3D11CommandList> finished_command_list;
-      if (SUCCEEDED(device_child->QueryInterface(&finished_command_list)))
+   bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+   {
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return false;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnUnmapSceneCB(*cmd_list_data->device_data, buffer);
+      return false;
+   }
+
+   // A deferred context recorded a command list: its SR job moves with it
+   void PostFinishCommandList(ID3D11DeviceContext* deferred_context, BOOL restore, ID3D11CommandList* finished_command_list) override
+   {
+      const std::lock_guard lock(g_sr_jobs_mutex);
+      const auto it = g_sr_jobs_by_context.find(deferred_context);
+      if (it != g_sr_jobs_by_context.end())
       {
-         ID3D11DeviceContext* const deferred_context = reinterpret_cast<ID3D11DeviceContext*>(secondary_cmd_list->get_native());
-         const std::lock_guard lock(g_sr_jobs_mutex);
-         const auto it = g_sr_jobs_by_context.find(deferred_context);
-         if (it != g_sr_jobs_by_context.end())
-         {
-            g_sr_jobs_by_command_list[finished_command_list.get()] = std::move(it->second);
-            g_sr_jobs_by_context.erase(it);
-         }
-         return;
+         g_sr_jobs_by_command_list[finished_command_list] = std::move(it->second);
+         g_sr_jobs_by_context.erase(it);
       }
+   }
 
-      com_ptr<ID3D11DeviceContext> native_device_context;
-      if (FAILED(device_child->QueryInterface(&native_device_context)) || native_device_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
-         return;
-      ID3D11CommandList* const command_list = reinterpret_cast<ID3D11CommandList*>(secondary_cmd_list->get_native());
+   // Before the immediate context replays a command list
+   bool PreExecuteCommandList(ID3D11DeviceContext* native_device_context, ID3D11CommandList* command_list, BOOL restore) override
+   {
+      if (native_device_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+         return false;
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return false;
       SRJob job;
       {
          const std::lock_guard lock(g_sr_jobs_mutex);
          const auto it = g_sr_jobs_by_command_list.find(command_list);
          if (it == g_sr_jobs_by_command_list.end())
-            return;
+            return false;
          job = std::move(it->second);
          g_sr_jobs_by_command_list.erase(it);
       }
       // Restoring the state keeps the game's own immediate context state as it was around its call
       native_device_context->ExecuteCommandList(job.partial_command_list.get(), TRUE);
-      DrawSR(native_device_context.get(), *cmd_list->get_device()->get_private_data<DeviceData>(), job);
-   }
-#endif
-
-public:
-#if ENABLE_SR
-   static void UnregisterEvents()
-   {
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(OnMapSceneCB);
-      reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(OnUnmapSceneCB);
-      reshade::unregister_event<reshade::addon_event::execute_secondary_command_list>(OnSRCommandList);
+      DrawSR(native_device_context, *cmd_list_data->device_data, job);
+      return false;
    }
 #endif
 
@@ -881,16 +887,7 @@ public:
       luma_ui_cbuffer_index = -1;
 
 #if ENABLE_SR
-      native_shaders_definitions.emplace(CompileTimeStringHash("MGSV Decode Motion Vectors"), ShaderDefinition{"Luma_MGSV_DecodeMotionVectors", reshade::api::pipeline_subobject_type::compute_shader});
-
-      static bool registered_events = false;
-      if (!registered_events)
-      {
-         registered_events = true;
-         reshade::register_event<reshade::addon_event::map_buffer_region>(OnMapSceneCB);
-         reshade::register_event<reshade::addon_event::unmap_buffer_region>(OnUnmapSceneCB);
-         reshade::register_event<reshade::addon_event::execute_secondary_command_list>(OnSRCommandList);
-      }
+      native_shaders_definitions.emplace(CompileTimeStringHash("MGSV Decode Motion Vectors"), ShaderDefinition{"Luma_MGSV_DecodeMotionVectors", D3D11_SHVER_COMPUTE_SHADER});
 #endif
 
 #if DEVELOPMENT
@@ -908,9 +905,9 @@ public:
 #endif
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
-      if (original_shader_hashes.Contains(kFXAAHash, reshade::api::shader_stage::pixel))
+      if (original_shader_hashes.Contains(kFXAAHash, ShaderStages::Pixel))
       {
 #if DEVELOPMENT || TEST
          g_fxaa_draws++;
@@ -980,7 +977,7 @@ public:
          }
 #endif
       }
-      else if (original_shader_hashes.Contains(kVelocityHash, reshade::api::shader_stage::pixel))
+      else if (original_shader_hashes.Contains(kVelocityHash, ShaderStages::Pixel))
       {
 #if DEVELOPMENT || TEST
          g_velocity_draws++;
@@ -1023,7 +1020,7 @@ public:
          g_sr_failures_in_a_row = 0;
          if (g_sr_disabled.exchange(false))
          {
-            reshade::log::message(reshade::log::level::info, "MGSV: SR re-enabled (another Super Resolution type was picked)");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "MGSV: SR re-enabled (another Super Resolution type was picked)");
          }
       }
       const bool sr_drawn = game_device_data.sr_drawn.exchange(false);
@@ -1060,7 +1057,7 @@ public:
       if ((fxaa_draws != g_fxaa_draws_last_frame || velocity_draws != g_velocity_draws_last_frame) && g_logged_count_changes < kMaxLoggedCountChanges)
       {
          g_logged_count_changes++;
-         reshade::log::message(reshade::log::level::info, std::format("MGSV: per frame draws changed: FXAA {} -> {}, velocity {} -> {}", g_fxaa_draws_last_frame, fxaa_draws, g_velocity_draws_last_frame, velocity_draws).c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("MGSV: per frame draws changed: FXAA {} -> {}, velocity {} -> {}", g_fxaa_draws_last_frame, fxaa_draws, g_velocity_draws_last_frame, velocity_draws).c_str());
       }
       g_fxaa_draws_last_frame = fxaa_draws;
       g_velocity_draws_last_frame = velocity_draws;
@@ -1171,18 +1168,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // Keep the game's fullscreen behaviour as is (preventing it also adds a frame latency waitable object to the swapchain)
       prevent_fullscreen_state = false;
 
-      game = new MetalGearSolidV();
+      SetGame<MetalGearSolidV>();
    }
    else if (!attached)
    {
       return TRUE;
    }
-#if ENABLE_SR
-   else if (ul_reason_for_call == DLL_PROCESS_DETACH)
-   {
-      MetalGearSolidV::UnregisterEvents();
-   }
-#endif
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);
 

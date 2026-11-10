@@ -45,7 +45,7 @@ enum class DrawOrDispatchOverrideType
 };
 
 // Same signature as "Game::OnDrawOrDispatch()". See "draw_callbacks_by_shader_hashes" and "dispatch_callbacks_by_shader_hashes".
-using DrawOrDispatchCallback = DrawOrDispatchOverrideType(*)(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const Shader::ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func);
+using DrawOrDispatchCallback = DrawOrDispatchOverrideType(*)(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const Shader::ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func);
 
 enum class ShaderReplaceDrawType
 {
@@ -67,9 +67,11 @@ enum class ShaderCustomDepthStencilType
 
 // Applies to command lists and command queue (DirectX 11 command list and deferred or immediate contexts, though usually it's for "ID3D11DeviceContext").
 // All runtime states are thread safe as long as they were in the original implementation.
-struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
+struct CommandListData
 {
    bool is_primary = false; // Immediate/Primary (as opposed to Async/Secondary/Deferred)
+   ID3D11DeviceContext* native_device_context = nullptr; // Not owned, the data lives as long as it
+   DeviceData* device_data = nullptr; // Not owned, outlives this
 
    CB::LumaInstanceDataPadded cb_luma_instance_data = {};
    // Always start from dirty given that deferred command lists inherit the cbuffers data from the immediate ones, but we don't know when they will get joined, so we always need to assume the data was dirty and needs to be re-set from scratch
@@ -88,9 +90,9 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
    // Used when has_drawn_sr isn't available during recording, potential issue if sr fails to draw.
    bool force_scale = false;
 
-   reshade::api::pipeline pipeline_state_original_compute_shader = reshade::api::pipeline(0);
-   reshade::api::pipeline pipeline_state_original_vertex_shader = reshade::api::pipeline(0);
-   reshade::api::pipeline pipeline_state_original_pixel_shader = reshade::api::pipeline(0);
+   Shader::Pipeline pipeline_state_original_compute_shader = Shader::Pipeline(0);
+   Shader::Pipeline pipeline_state_original_vertex_shader = Shader::Pipeline(0);
+   Shader::Pipeline pipeline_state_original_pixel_shader = Shader::Pipeline(0);
 
    Shader::ShaderHashesList<OneShaderPerPipeline> pipeline_state_original_graphics_shader_hashes;
    Shader::ShaderHashesList<OneShaderPerPipeline> pipeline_state_original_compute_shader_hashes;
@@ -103,9 +105,9 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
    Shader::CustomPipelineData custom_compute_pipeline;
    // Clones selected at bind time (0 = none). "pipeline_state_has_custom_*_shader" tells whether they are bound right now,
    // as a draw can fall back to the original shaders (see "Shader::UsePipelineVariant()").
-   reshade::api::pipeline pipeline_state_custom_vertex_shader = reshade::api::pipeline(0);
-   reshade::api::pipeline pipeline_state_custom_pixel_shader = reshade::api::pipeline(0);
-   reshade::api::pipeline pipeline_state_custom_compute_shader = reshade::api::pipeline(0);
+   Shader::Pipeline pipeline_state_custom_vertex_shader = Shader::Pipeline(0);
+   Shader::Pipeline pipeline_state_custom_pixel_shader = Shader::Pipeline(0);
+   Shader::Pipeline pipeline_state_custom_compute_shader = Shader::Pipeline(0);
 
    // Determined by "draw_callbacks_by_shader_hashes" when binding shaders
    DrawOrDispatchCallback draw_callback = nullptr;
@@ -186,15 +188,15 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
       any_upgraded_cs_uavs = std::any_of(cs_uavs_state.begin(), cs_uavs_state.end(), [](auto v) { return v == ViewState::SetAndUpgraded; });
    }
 
-   static void SetConstantBuffers(ID3D11DeviceContext* device_context, reshade::api::shader_stage stages, uint32_t slot, ID3D11Buffer* const buffers, uint32_t num = 1)
+   static void SetConstantBuffers(ID3D11DeviceContext* device_context, ShaderStages stages, uint32_t slot, ID3D11Buffer* const buffers, uint32_t num = 1)
    {
-      if ((stages & reshade::api::shader_stage::vertex) == reshade::api::shader_stage::vertex)
+      if ((stages & ShaderStages::Vertex) == ShaderStages::Vertex)
          device_context->VSSetConstantBuffers(slot, num, &buffers);
-      if ((stages & reshade::api::shader_stage::geometry) == reshade::api::shader_stage::geometry)
+      if ((stages & ShaderStages::Geometry) == ShaderStages::Geometry)
          device_context->GSSetConstantBuffers(slot, num, &buffers);
-      if ((stages & reshade::api::shader_stage::pixel) == reshade::api::shader_stage::pixel)
+      if ((stages & ShaderStages::Pixel) == ShaderStages::Pixel)
          device_context->PSSetConstantBuffers(slot, num, &buffers);
-      if ((stages & reshade::api::shader_stage::compute) == reshade::api::shader_stage::compute)
+      if ((stages & ShaderStages::Compute) == ShaderStages::Compute)
          device_context->CSSetConstantBuffers(slot, num, &buffers);
    }
 
@@ -270,7 +272,7 @@ struct __declspec(uuid("90d9d05b-fdf5-44ee-8650-3bfd0810667a")) CommandListData
 #endif
 };
 
-struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
+struct DeviceData
 {
    // Only for "swapchains", "back_buffers" and "upgraded_resources" (and related) and "patch_context".
    // Device object creation etc is usually single threaded anyway, except for the destructor.
@@ -290,13 +292,12 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    {
       uint64_t pipeline_handle = 0;
       // Mode 1: subobjects built by worker, pipeline created at present boundary
-      reshade::api::pipeline_subobject* subobjects = nullptr;
+      Shader::PipelineSubobject* subobjects = nullptr;
       uint32_t subobject_count = 0;
-      reshade::api::pipeline_layout layout = {};
       // Mode 2: pipeline already compiled by worker
-      reshade::api::pipeline pipeline_clone = {};
+      Shader::Pipeline pipeline_clone = {};
       // Shared
-      reshade::api::device* device = nullptr;
+      ID3D11Device* device = nullptr;
       uint32_t shader_hash = 0; // shader the clone was built for (verify at publish)
       Shader::CloneOrigin clone_origin = Shader::CloneOrigin::None; // what the clone was built from (recorded by the worker)
       Shader::CustomPipelineData custom_pipeline_data;
@@ -325,12 +326,12 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    Patch::PatchContext patch_context;
 #endif
 
-   std::unordered_set<reshade::api::swapchain*> swapchains;
+   std::unordered_set<IDXGISwapChain*> swapchains;
    std::unordered_set<uint64_t> back_buffers; // From all the swapchains (whether they are upgraded or not)
    ID3D11Device* native_device = nullptr; // Doesn't need mutex, always valid given it's a ptr to "itself"
-   reshade::api::device* reshade_device = nullptr; // Always valid as it's our parent. Not owned by this.
    com_ptr<ID3D11DeviceContext> primary_command_list; // The immediate/primary command list is always valid
    CommandListData* primary_command_list_data = nullptr; // The immediate/primary command list is always valid
+   std::unique_ptr<CommandListData> primary_command_list_data_storage;
 
    UINT uav_max_count = D3D11_1_UAV_SLOT_COUNT; // DX11.1. Use "D3D11_PS_CS_UAV_REGISTER_COUNT" for DX11.
 
@@ -338,7 +339,7 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    {
       ASSERT_ONCE(swapchains.size() == 1);
       if (swapchains.empty()) return nullptr;
-      IDXGISwapChain* native_swapchain = (IDXGISwapChain*)((*swapchains.begin())->get_native());
+      IDXGISwapChain* native_swapchain = *swapchains.begin();
       com_ptr<IDXGISwapChain3> native_swapchain3;
       // The cast pointer is actually the same, we are just making sure the type is right.
       HRESULT hr = native_swapchain->QueryInterface(&native_swapchain3);
@@ -360,7 +361,6 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    std::unordered_map<uint32_t, std::unordered_set<Shader::CachedPipeline*>> pipeline_caches_by_shader_hash;
 
    std::unordered_set<uint64_t> pipelines_to_reload;
-   static_assert(sizeof(reshade::api::pipeline::handle) == sizeof(uint64_t));
 
    // Custom samplers mapped to original ones by texture LOD bias
    std::unordered_map<uint64_t, std::unordered_map<float, com_ptr<ID3D11SamplerState>>> custom_sampler_by_original_sampler;
@@ -525,8 +525,9 @@ struct __declspec(uuid("cfebf6d4-d184-4e1a-ac14-09d088e560ca")) DeviceData
    ManagedResources managed_resources;
 };
 
-struct __declspec(uuid("c5805458-2c02-4ebf-b139-38b85118d971")) SwapchainData
+struct SwapchainData
 {
+   DeviceData* device_data = nullptr; // Not owned, outlives this
    // Probably not particularly useful as the swapchain would be single threaded, if not for its destruction callback
    std::shared_mutex mutex;
 

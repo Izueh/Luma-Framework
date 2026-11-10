@@ -261,8 +261,6 @@ public:
 
       if (!failed)
       {
-         reshade::register_event<reshade::addon_event::map_buffer_region>(Prey::OnMapBufferRegion);
-         reshade::register_event<reshade::addon_event::unmap_buffer_region>(Prey::OnUnmapBufferRegion);
       }
    }
 
@@ -277,8 +275,8 @@ public:
       GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetDefaultValue('1'); // Gamma correction happens within LUT sampling in Prey, turning this setting off will have unexpected results (it's not meant to be changed, the off mode is not implemented)
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('1');
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("Draw Final Exposure"), ShaderDefinition{ "Luma_DrawFinalExposure", reshade::api::pipeline_subobject_type::pixel_shader }); // SR (doesn't need "ENABLE_SR)
-      native_shaders_definitions.emplace(CompileTimeStringHash("Perfect Perspective"), ShaderDefinition{ "Luma_PerfectPerspective", reshade::api::pipeline_subobject_type::pixel_shader });
+      native_shaders_definitions.emplace(CompileTimeStringHash("Draw Final Exposure"), ShaderDefinition{ "Luma_DrawFinalExposure", D3D11_SHVER_PIXEL_SHADER }); // SR (doesn't need "ENABLE_SR)
+      native_shaders_definitions.emplace(CompileTimeStringHash("Perfect Perspective"), ShaderDefinition{ "Luma_PerfectPerspective", D3D11_SHVER_PIXEL_SHADER });
    }
 
    // Prey seems to create new devices when resetting the game settings (either manually from the menu, or on boot in case the config had invalid ones), but then the new devices might not actually be used?
@@ -311,12 +309,12 @@ public:
 #endif
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
       HDR_textures_upgrade_confirmed_format = HDR_textures_upgrade_requested_format;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
       const bool had_drawn_main_post_processing = device_data.has_drawn_main_post_processing;
@@ -329,7 +327,7 @@ public:
       }
 
       // SSR
-      if (!game_device_data.has_drawn_composed_gbuffers && !game_device_data.has_drawn_ssr && original_shader_hashes.Contains(shader_hash_DeferredShadingSSRRaytrace, reshade::api::shader_stage::pixel))
+      if (!game_device_data.has_drawn_composed_gbuffers && !game_device_data.has_drawn_ssr && original_shader_hashes.Contains(shader_hash_DeferredShadingSSRRaytrace, ShaderStages::Pixel))
       {
          game_device_data.has_drawn_ssr = true;
          // There's no need to ever skip this added render target, the performance cost is tiny
@@ -444,7 +442,7 @@ public:
             game_device_data.CleanSSRResources();
          }
       }
-      if (game_device_data.has_drawn_ssr && !game_device_data.has_drawn_ssr_blend && native_device_context == game_device_data.ssr_command_list && is_custom_pass && (original_shader_hashes.Contains(shader_hash_PostEffectsGaussBlurBilinear, reshade::api::shader_stage::pixel) || original_shader_hashes.Contains(shader_hash_PostEffectsTextureToTextureResampled, reshade::api::shader_stage::pixel)))
+      if (game_device_data.has_drawn_ssr && !game_device_data.has_drawn_ssr_blend && native_device_context == game_device_data.ssr_command_list && is_custom_pass && (original_shader_hashes.Contains(shader_hash_PostEffectsGaussBlurBilinear, ShaderStages::Pixel) || original_shader_hashes.Contains(shader_hash_PostEffectsTextureToTextureResampled, ShaderStages::Pixel)))
       {
          uint32_t custom_data = 1; // This value will make the SSR mip map generation and blurring shaders take choices specifically designed for SSR
          SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
@@ -452,7 +450,7 @@ public:
          updated_cbuffers = true;
          return DrawOrDispatchOverrideType::None;
       }
-      if (game_device_data.has_drawn_ssr && !game_device_data.has_drawn_ssr_blend && original_shader_hashes.Contains(shader_hash_DeferredShadingSSReflectionComp, reshade::api::shader_stage::pixel))
+      if (game_device_data.has_drawn_ssr && !game_device_data.has_drawn_ssr_blend && original_shader_hashes.Contains(shader_hash_DeferredShadingSSReflectionComp, ShaderStages::Pixel))
       {
          game_device_data.has_drawn_ssr_blend = true;
          game_device_data.ssr_command_list = nullptr;
@@ -1018,7 +1016,7 @@ public:
       if (game_device_data.has_drawn_composed_gbuffers && !had_drawn_upscaling)
       {
          // Viewport is already fullscreen for this pass
-         if (original_shader_hashes.Contains(shader_hash_PostAAUpscaleImage, reshade::api::shader_stage::pixel))
+         if (original_shader_hashes.Contains(shader_hash_PostAAUpscaleImage, ShaderStages::Pixel))
          {
             game_device_data.has_drawn_upscaling = true;
             assert(device_data.has_drawn_main_post_processing && game_device_data.prey_drs_active);
@@ -1644,9 +1642,9 @@ public:
    // modified and fixed up data. That is a bit slower but it would be more safe, as it would guarantee us 100% that the buffer we are changing is cbuffer 13.
    // Another alternative, after storing the buffers pointers, would be to at least skip the validity check, after we verified a buffer pointer is only used for the same type of rendering etc.
    // If we were looking for the value of only one buffer in particular, we can simply store the buffer pointers from the DX state in a specific draw call, and then check for following map calls to it.
-   bool UpdateGlobalCB(const void* global_buffer_data_ptr, reshade::api::device* device) override
+   bool UpdateGlobalCB(const void* global_buffer_data_ptr, ID3D11Device* device) override
    {
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
+      DeviceData& device_data = *GetDeviceData(device);
       auto& game_device_data = GetGameDeviceData(device_data);
 
       const CBPerViewGlobal& global_buffer_data = *((const CBPerViewGlobal*)global_buffer_data_ptr);
@@ -1887,7 +1885,7 @@ public:
             // It also allows us to use the right samplers for this frame's resolution.
             if (texture_mip_lod_bias_offset_changed)
             {
-               ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
+               ID3D11Device* native_device = device;
                for (auto& samplers_handle : device_data.custom_sampler_by_original_sampler)
                {
                   if (samplers_handle.second.contains(new_texture_mip_lod_bias_offset)) continue; // Skip "resolutions" that already got their custom samplers created
@@ -1955,12 +1953,32 @@ public:
    }
 
    //TODOFT6: make these game agnostic? And possibly remove "UpdateGlobalCB"
-   static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+   // Native hooks (buffers only)
+public:
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
+   {
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+   }
+
+   bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+   {
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return false;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnUnmapBufferRegion(*cmd_list_data->device_data, buffer);
+      return false;
+   }
+
+   static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
    {
       // No need to convert to native DX11 flags
-      if (access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write)
+      if ((access == D3D11_MAP_WRITE || access == D3D11_MAP_WRITE_NO_OVERWRITE) || access == D3D11_MAP_WRITE_DISCARD || access == D3D11_MAP_READ_WRITE)
       {
-         ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
 
          D3D11_BUFFER_DESC buffer_desc;
          buffer->GetDesc(&buffer_desc);
@@ -1971,7 +1989,6 @@ public:
          // Some how these are not marked as "D3D11_BIND_CONSTANT_BUFFER", probably because it copies them over to some other buffer later?
          if (buffer_desc.ByteWidth == CBPerViewGlobal_buffer_size)
          {
-            DeviceData& device_data = *device->get_private_data<DeviceData>();
             device_data.cb_per_view_global_buffer = buffer;
             ASSERT_ONCE(!device_data.cb_per_view_global_buffer_map_data);
             device_data.cb_per_view_global_buffer_map_data = *data;
@@ -1983,10 +2000,8 @@ public:
       }
    }
 
-   static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+   static void OnUnmapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer)
    {
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
       // We assume this buffer is always unmapped before destruction.
       bool is_global_cbuffer = device_data.cb_per_view_global_buffer != nullptr && device_data.cb_per_view_global_buffer == buffer;
       ASSERT_ONCE(!device_data.cb_per_view_global_buffer_map_data || is_global_cbuffer);
@@ -1999,7 +2014,7 @@ public:
             cb_per_view_globals_last_drawn_shader.emplace_back(last_drawn_shader != SHADER_HASH_NONE ? Shader::Hash_NumToStr(last_drawn_shader) : ""); // The shader hash could we unspecified if we didn't replace the shader
 #endif // DEVELOPMENT
 #if 1
-            if (game->UpdateGlobalCB(device_data.cb_per_view_global_buffer_map_data, device))
+            if (game->UpdateGlobalCB(device_data.cb_per_view_global_buffer_map_data, device_data.native_device))
 #else // TODO: delete
             // The whole buffer size is theoretically "CBPerViewGlobal_buffer_size" but we actually don't have the data for the excessive (padding) bytes,
             // they are never read by shaders on the GPU anyway.
@@ -2022,11 +2037,10 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "TonemapUIBackground", tonemap_ui_background);
-      reshade::get_config_value(runtime, NAME, "PerspectiveCorrection", cb_luma_global_settings.GameSettings.LensDistortion);
+      Config::Get(NAME, "TonemapUIBackground", tonemap_ui_background);
+      Config::Get(NAME, "PerspectiveCorrection", cb_luma_global_settings.GameSettings.LensDistortion);
       int HDR_textures_upgrade_requested_format_int = (HDR_textures_upgrade_requested_format == RE::ETEX_Format::eTF_R11G11B10F) ? 0 : 1;
-      reshade::get_config_value(runtime, NAME, "HDRPostProcessQuality", HDR_textures_upgrade_requested_format_int);
+      Config::Get(NAME, "HDRPostProcessQuality", HDR_textures_upgrade_requested_format_int);
       HDR_textures_upgrade_requested_format = HDR_textures_upgrade_requested_format_int == 0 ? RE::ETEX_Format::eTF_R11G11B10F : RE::ETEX_Format::eTF_R16G16B16A16F;
    }
 
@@ -2053,11 +2067,10 @@ public:
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       if (ImGui::Checkbox("Tonemap UI Background", &tonemap_ui_background))
       {
-         reshade::set_config_value(runtime, NAME, "TonemapUIBackground", tonemap_ui_background);
+         Config::Set(NAME, "TonemapUIBackground", tonemap_ui_background);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
@@ -2070,7 +2083,7 @@ public:
          if (ImGui::SmallButton(ICON_FK_UNDO))
          {
             tonemap_ui_background = true;
-            reshade::set_config_value(runtime, NAME, "TonemapUIBackground", tonemap_ui_background);
+            Config::Set(NAME, "TonemapUIBackground", tonemap_ui_background);
          }
          ImGui::PopID();
       }
@@ -2088,7 +2101,7 @@ public:
       {
          cb_luma_global_settings.GameSettings.LensDistortion = lens_distortion;
          device_data.cb_luma_global_settings_dirty = true;
-         reshade::set_config_value(runtime, NAME, "PerspectiveCorrection", lens_distortion);
+         Config::Set(NAME, "PerspectiveCorrection", lens_distortion);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
@@ -2103,7 +2116,7 @@ public:
             bool lens_distortion = false;
             cb_luma_global_settings.GameSettings.LensDistortion = lens_distortion;
             device_data.cb_luma_global_settings_dirty = true;
-            reshade::set_config_value(runtime, NAME, "PerspectiveCorrection", lens_distortion);
+            Config::Set(NAME, "PerspectiveCorrection", lens_distortion);
          }
          ImGui::PopID();
       }
@@ -2134,7 +2147,7 @@ public:
       {
          HDR_textures_upgrade_requested_format = HDR_textures_upgrade_requested_format_int == 0 ? RE::ETEX_Format::eTF_R11G11B10F : RE::ETEX_Format::eTF_R16G16B16A16F;
          textures_upgrade_format_changed = true;
-         reshade::set_config_value(runtime, NAME, "HDRPostProcessQuality", HDR_textures_upgrade_requested_format_int);
+         Config::Set(NAME, "HDRPostProcessQuality", HDR_textures_upgrade_requested_format_int);
       }
       textures_upgrade_format_pending_change |= HDR_textures_upgrade_requested_format != HDR_textures_upgrade_confirmed_format;
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -2469,22 +2482,20 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-            reshade::api::format::r10g10b10a2_unorm,
-            reshade::api::format::r10g10b10a2_typeless,
+            DXGI_FORMAT_R10G10B10A2_UNORM,
+            DXGI_FORMAT_R10G10B10A2_TYPELESS,
 
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
 #endif
@@ -2496,7 +2507,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       enable_samplers_upgrade = true;
       samplers_upgrade_mode = 5; // Without bruteforcing the offset, many textures (e.g. decals) stay blurry in Prey
 
-      game = new Prey();
+      SetGame<Prey>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
@@ -2505,8 +2516,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       NativePlugin::Uninit();
 #endif // ENABLE_NATIVE_PLUGIN
 
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(Prey::OnMapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(Prey::OnUnmapBufferRegion);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

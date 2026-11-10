@@ -18,7 +18,6 @@
 
 #define LUMA_PATCH_BYTECODE_SYNC 1
 #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 
 #include "..\..\Core\core.hpp"
 #include "includes\shader_detect.hpp"
@@ -59,7 +58,7 @@ namespace
       seen_dim[seen_n][2] = out_w;
       seen_dim[seen_n][3] = out_h;
       seen_n++;
-      reshade::log::message(reshade::log::level::warning, std::format("UE4-UPSCALE: IN {}x{} OUT {}x{} fmt {}", in_w, in_h, out_w, out_h, (int)fmt).c_str());
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, std::format("UE4-UPSCALE: IN {}x{} OUT {}x{} fmt {}", in_w, in_h, out_w, out_h, (int)fmt).c_str());
    }
 
    // Number of UpdateSettings calls actually forwarded to OptiScaler. The
@@ -87,7 +86,7 @@ namespace
       }
       if (seen_n < 32)
          seen[seen_n++] = s;
-      reshade::log::message(reshade::log::level::warning, std::format(
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, std::format(
          "UE4-SRSTATE#{} calls={} updates={}: in {}x{} out {}x{} mv {}x{} ({}) mvs {:.4f}/{:.4f} dyn {} hdr {} inv {} mvj {} ae {} preset {}",
          seen_n, calls, sr_update_calls, in_w, in_h, s.output_width, s.output_height, mv_w, mv_h,
          mv_used ? "used" : "stale", s.mvs_x_scale, s.mvs_y_scale, (int)s.dynamic_resolution, (int)s.hdr,
@@ -114,7 +113,7 @@ namespace
       seen_dim[seen_n][2] = out_w;
       seen_dim[seen_n][3] = out_h;
       seen_n++;
-      reshade::log::message(reshade::log::level::warning, std::format("UE4-SKIP: {} IN {}x{} OUT {}x{}", reason, in_w, in_h, out_w, out_h).c_str());
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, std::format("UE4-SKIP: {} IN {}x{} OUT {}x{}", reason, in_w, in_h, out_w, out_h).c_str());
    }
    GlobalCBInfo global_cb_info;
    std::shared_mutex taa_mutex;
@@ -337,8 +336,6 @@ public:
    {
       if (!failed)
       {
-         reshade::register_event<reshade::addon_event::map_buffer_region>(UnrealEngine::OnMapBufferRegion);
-         reshade::register_event<reshade::addon_event::unmap_buffer_region>(UnrealEngine::OnUnmapBufferRegion);
       }
    }
    void OnInit(bool async) override
@@ -355,13 +352,13 @@ public:
          shader_defines_data.append_range(game_shader_defines_data);
       }
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs PS"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs CS"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", reshade::api::pipeline_subobject_type::compute_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs PS"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs CS"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", D3D11_SHVER_COMPUTE_SHADER});
       luma_settings_cbuffer_index = 9;
       luma_data_cbuffer_index = 8;
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("Upgrade Tonemap LUT 3D"), ShaderDefinition{"Luma_UpgradeTonemapLUT", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, {{"DIMENSIONS_3D", "1"}}});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Upgrade Tonemap LUT 2D"), ShaderDefinition{"Luma_UpgradeTonemapLUT", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, {{"DIMENSIONS_2D", "1"}}});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Upgrade Tonemap LUT 3D"), ShaderDefinition{"Luma_UpgradeTonemapLUT", D3D11_SHVER_COMPUTE_SHADER, nullptr, nullptr, {{"DIMENSIONS_3D", "1"}}});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Upgrade Tonemap LUT 2D"), ShaderDefinition{"Luma_UpgradeTonemapLUT", D3D11_SHVER_COMPUTE_SHADER, nullptr, nullptr, {{"DIMENSIONS_2D", "1"}}});
    }
 
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -372,9 +369,9 @@ public:
       game_device_data.clip_to_prev_clip_matrix.SetIdentity();
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+      auto& device_data = *GetSwapchainData(swapchain)->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
 
       // Start from here, we then update it later in case the game rendered with black bars due to forcing a different aspect ratio from the swapchain buffer
@@ -382,10 +379,10 @@ public:
       game_device_data.viewport_rect = {0.0f, 0.0f, device_data.render_resolution.x, device_data.render_resolution.y};
    }
 
-   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) override
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, D3D11_SHADER_VERSION_TYPE type, uint64_t shader_hash = -1, const std::byte* shader_object = nullptr, size_t shader_object_size = 0) override
    {
       // Only process pixel/compute shaders
-      if (type != reshade::api::pipeline_subobject_type::pixel_shader && type != reshade::api::pipeline_subobject_type::compute_shader)
+      if (type != D3D11_SHVER_PIXEL_SHADER && type != D3D11_SHVER_COMPUTE_SHADER)
          return nullptr;
 
       // Tonemap and Tonemap LUT Detection
@@ -420,7 +417,7 @@ public:
       // if (!System::ScanMemoryForPattern(code, size, pattern_aces_blue_correct_matrix.data(), pattern_aces_blue_correct_matrix.size()).empty())
       if ((!System::ScanMemoryForPattern(code, size, pattern_lut_output_scaling_a).empty() || !System::ScanMemoryForPattern(code, size, pattern_lut_output_scaling_b).empty()) && !System::ScanMemoryForPattern(code, size, pattern_srgb).empty())
       {
-         if (type == reshade::api::pipeline_subobject_type::pixel_shader)
+         if (type == D3D11_SHVER_PIXEL_SHADER)
          {
             shader_hashes_tonemap_lut_candidates.pixel_shaders.emplace(uint32_t(shader_hash));
             // Automatically upgrade these!!!
@@ -512,7 +509,7 @@ public:
       // constexpr auto pattern_lut_input_mapping_scale = MakeFloatsPattern(lut_input_mapping_scale); // TODO: turn into a mad etc, make all of these more safe!!!
       if (!System::ScanMemoryForPattern(code, size, pattern_bt_601_luminance_vector_a.data(), pattern_bt_601_luminance_vector_a.size()).empty() && !System::ScanMemoryForPattern(code, size, pattern_lut_input_scaling).empty() && (!System::ScanMemoryForPattern(code, size, pattern_lut_input_mapping_scale_a).empty() || !System::ScanMemoryForPattern(code, size, pattern_lut_input_mapping_scale_b).empty()))
       {
-         if (type == reshade::api::pipeline_subobject_type::pixel_shader)
+         if (type == D3D11_SHVER_PIXEL_SHADER)
          {
             shader_hashes_tonemap_candidates.pixel_shaders.emplace(uint32_t(shader_hash));
             auto_texture_format_upgrade_shader_hashes.try_emplace(uint32_t(shader_hash), std::vector<uint8_t>{0}, std::vector<uint8_t>{});
@@ -569,8 +566,8 @@ public:
          SSAOShaderInfo ssao_info;
          if (IsUE4SSAOCandidate(code, size, ssao_info))
          {
-            reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 SSAO shader. Hash: 0x{:08X}", shader_hash).c_str());
-            if (type == reshade::api::pipeline_subobject_type::pixel_shader)
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("UE4: Detected UE4 SSAO shader. Hash: 0x{:08X}", shader_hash).c_str());
+            if (type == D3D11_SHVER_PIXEL_SHADER)
                shader_hashes_SSAO.pixel_shaders.emplace(static_cast<unsigned long>(shader_hash));
             else
                shader_hashes_SSAO.compute_shaders.emplace(static_cast<unsigned long>(shader_hash));
@@ -596,13 +593,13 @@ public:
                break;
             }
 
-            reshade::log::message(reshade::log::level::info,
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info,
                std::format("UE4: Detected dithering shader. Hash: 0x{:08X}, Type: {}, TexSize: {}x{}, TextureReg: t{}, HasDiscard: {}, Modifiable: {}",
                   shader_hash, dither_type_str, dither_info.noise_texture_size, dither_info.noise_texture_size,
                   dither_info.noise_texture_register, dither_info.has_discard, dither_info.modification_supported)
                   .c_str());
 
-            if (type == reshade::api::pipeline_subobject_type::pixel_shader)
+            if (type == D3D11_SHVER_PIXEL_SHADER)
                shader_hashes_Dithering.pixel_shaders.emplace(static_cast<unsigned long>(shader_hash));
             else
                shader_hashes_Dithering.compute_shaders.emplace(static_cast<unsigned long>(shader_hash));
@@ -623,7 +620,7 @@ public:
                auto modified = ModifyDitheringShader(code, size, dither_info);
                if (modified)
                {
-                  reshade::log::message(reshade::log::level::info,
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info,
                      std::format("UE4: Successfully modified dithering shader. Hash: 0x{:08X}", shader_hash).c_str());
                   return modified;
                }
@@ -639,10 +636,10 @@ public:
       bool is_taa_candidate = IsUE4TAACandidate(code, size, shader_hash, taa_shader_info) && FindShaderInfo(code, size, taa_shader_info);
       if (is_taa_candidate)
       {
-         reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 TAA shader Candidate. Hash: 0x{:08X}", shader_hash).c_str());
-         if (type == reshade::api::pipeline_subobject_type::pixel_shader)
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("UE4: Detected UE4 TAA shader Candidate. Hash: 0x{:08X}", shader_hash).c_str());
+         if (type == D3D11_SHVER_PIXEL_SHADER)
             shader_hashes_TAA_Candidates.pixel_shaders.emplace(static_cast<unsigned long>(shader_hash));
-         else if (type == reshade::api::pipeline_subobject_type::compute_shader)
+         else if (type == D3D11_SHVER_COMPUTE_SHADER)
             shader_hashes_TAA_Candidates.compute_shaders.emplace(static_cast<unsigned long>(shader_hash));
          if (global_cb_info.clip_to_prev_clip_start_index == -1)
             global_cb_info.clip_to_prev_clip_start_index = taa_shader_info.clip_to_prev_clip_start_index;
@@ -656,10 +653,10 @@ public:
       return nullptr; // Return nullptr to use the original shader
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       GameDeviceDataUnrealEngine& game_device_data = GetGameDeviceData(device_data);
-      bool is_compute_shader = stages == reshade::api::shader_stage::all_compute;
+      bool is_compute_shader = stages == ShaderStages::Compute;
 
 #if ENABLE_SR
       // --- True super-resolution: replace the ScreenPercentage upscale pass ---
@@ -927,7 +924,7 @@ public:
                      native_device->CreateShaderResourceView(game_device_data.tonemap_lut_texture.get(), nullptr, &game_device_data.tonemap_lut_texture_srv);
                      native_device->CreateUnorderedAccessView(game_device_data.tonemap_lut_texture.get(), nullptr, &game_device_data.tonemap_lut_texture_uav);
                      game_device_data.tonemap_lut_texture_is_3d = false;
-                     reshade::log::message(reshade::log::level::info, std::format("UE4: Found 2D Tonemapping LUT. Shader Hash: 0x{:08X}", shader_hash).c_str());
+                     Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("UE4: Found 2D Tonemapping LUT. Shader Hash: 0x{:08X}", shader_hash).c_str());
                   }
                   lut_srv_index = i;
                   break;
@@ -948,7 +945,7 @@ public:
                      native_device->CreateShaderResourceView(game_device_data.tonemap_lut_texture.get(), nullptr, &game_device_data.tonemap_lut_texture_srv);
                      native_device->CreateUnorderedAccessView(game_device_data.tonemap_lut_texture.get(), nullptr, &game_device_data.tonemap_lut_texture_uav);
                      game_device_data.tonemap_lut_texture_is_3d = true;
-                     reshade::log::message(reshade::log::level::info, std::format("UE4: Found 3D Tonemapping LUT. Shader Hash: 0x{:08X}", shader_hash).c_str());
+                     Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("UE4: Found 3D Tonemapping LUT. Shader Hash: 0x{:08X}", shader_hash).c_str());
                   }
                   lut_srv_index = i;
                   break;
@@ -969,8 +966,8 @@ public:
                if (!updated_cbuffers)
                {
                   constexpr bool do_safety_checks = false; // No need to check as we cache the states and restore them.
-                  SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
-                  SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
+                  SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
+                  SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
                }
 
                // Always set both on slot 0 for simplicity
@@ -1149,7 +1146,7 @@ public:
                const std::unique_lock taa_lock(taa_mutex);
                taa_shader_candidate_info[shader_hash] = taa_shader_info;
             }
-            reshade::log::message(reshade::log::level::info, std::format("UE4: Detected UE4 TAA. Hash: 0x{:08X}", shader_hash).c_str());
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("UE4: Detected UE4 TAA. Hash: 0x{:08X}", shader_hash).c_str());
             if (is_compute_shader)
                shader_hashes_TAA.compute_shaders.emplace(static_cast<unsigned long>(shader_hash));
             else
@@ -1667,13 +1664,12 @@ public:
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
       if (ImGui::Checkbox("Enable Luma HDR", &next_enable_hdr))
       {
-         reshade::set_config_value(runtime, NAME, "EnableHDR", next_enable_hdr);
+         Config::Set(NAME, "EnableHDR", next_enable_hdr);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
@@ -1696,34 +1692,34 @@ public:
          {
             if (ImGui::SliderFloat("Highlights Hue Preservation", &cb_luma_global_settings.GameSettings.HDRHighlightsHuePreservation, 0.f, 1.f))
             {
-               reshade::set_config_value(runtime, NAME, "HDRHighlightsHuePreservation", cb_luma_global_settings.GameSettings.HDRHighlightsHuePreservation);
+               Config::Set(NAME, "HDRHighlightsHuePreservation", cb_luma_global_settings.GameSettings.HDRHighlightsHuePreservation);
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
                ImGui::SetTooltip("The higher the value, the more we preserve the original (SDR) highlights hue (ELI5: color), which depending on the game, might often be distorted for HDR.");
             }
-            DrawResetButton(cb_luma_global_settings.GameSettings.HDRHighlightsHuePreservation, cb_default_game_settings.HDRHighlightsHuePreservation, "HDRHighlightsHuePreservation", runtime);
+            DrawResetButton(cb_luma_global_settings.GameSettings.HDRHighlightsHuePreservation, cb_default_game_settings.HDRHighlightsHuePreservation, "HDRHighlightsHuePreservation");
 
             if (ImGui::SliderFloat("Highlights Chrominance Preservation", &cb_luma_global_settings.GameSettings.HDRHighlightsChrominancePreservation, 0.f, 1.f))
             {
-               reshade::set_config_value(runtime, NAME, "HDRHighlightsChrominancePreservation", cb_luma_global_settings.GameSettings.HDRHighlightsChrominancePreservation);
+               Config::Set(NAME, "HDRHighlightsChrominancePreservation", cb_luma_global_settings.GameSettings.HDRHighlightsChrominancePreservation);
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
                ImGui::SetTooltip("The higher the value, the more we preserve the original (SDR) highlights chrominance (ELI5: saturation), which depending on the game, might often be overly desaturated for HDR.");
             }
-            DrawResetButton(cb_luma_global_settings.GameSettings.HDRHighlightsChrominancePreservation, cb_default_game_settings.HDRHighlightsChrominancePreservation, "HDRHighlightsChrominancePreservation", runtime);
+            DrawResetButton(cb_luma_global_settings.GameSettings.HDRHighlightsChrominancePreservation, cb_default_game_settings.HDRHighlightsChrominancePreservation, "HDRHighlightsChrominancePreservation");
          }
 
          if (ImGui::SliderFloat("Saturation", &cb_luma_global_settings.GameSettings.HDRChrominance, 0.f, 2.f))
          {
-            reshade::set_config_value(runtime, NAME, "HDRChrominance", cb_luma_global_settings.GameSettings.HDRChrominance);
+            Config::Set(NAME, "HDRChrominance", cb_luma_global_settings.GameSettings.HDRChrominance);
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          {
             ImGui::SetTooltip("Controls the global saturation/chrominance.");
          }
-         DrawResetButton(cb_luma_global_settings.GameSettings.HDRChrominance, cb_default_game_settings.HDRChrominance, "HDRChrominance", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.HDRChrominance, cb_default_game_settings.HDRChrominance, "HDRChrominance");
       }
 
 #if ENABLE_SR
@@ -1760,19 +1756,36 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "HDRHighlightsHuePreservation", cb_luma_global_settings.GameSettings.HDRHighlightsHuePreservation);
-      reshade::get_config_value(runtime, NAME, "HDRHighlightsChrominancePreservation", cb_luma_global_settings.GameSettings.HDRHighlightsChrominancePreservation);
-      reshade::get_config_value(runtime, NAME, "HDRChrominance", cb_luma_global_settings.GameSettings.HDRChrominance);
+      Config::Get(NAME, "HDRHighlightsHuePreservation", cb_luma_global_settings.GameSettings.HDRHighlightsHuePreservation);
+      Config::Get(NAME, "HDRHighlightsChrominancePreservation", cb_luma_global_settings.GameSettings.HDRHighlightsChrominancePreservation);
+      Config::Get(NAME, "HDRChrominance", cb_luma_global_settings.GameSettings.HDRChrominance);
    }
 
-   static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+   // Native hooks (buffers only)
+public:
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
    {
-      SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+   }
 
-      ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
+   bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+   {
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return false;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnUnmapBufferRegion(*cmd_list_data->device_data, buffer);
+      return false;
+   }
+
+   static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
+   {
+
+      ID3D11Device* native_device = device_data.native_device;
       auto& game_device_data = GetGameDeviceData(device_data);
 
       if (game_device_data.found_per_view_globals)
@@ -1780,7 +1793,7 @@ public:
          return;
       }
 
-      if (access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write)
+      if ((access == D3D11_MAP_WRITE || access == D3D11_MAP_WRITE_NO_OVERWRITE) || access == D3D11_MAP_WRITE_DISCARD || access == D3D11_MAP_READ_WRITE)
       {
          D3D11_BUFFER_DESC buffer_desc;
          buffer->GetDesc(&buffer_desc);
@@ -1794,13 +1807,10 @@ public:
       }
    }
 
-   static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+   static void OnUnmapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer)
    {
-      SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
 
-      ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
+      ID3D11Device* native_device = device_data.native_device;
       auto& game_device_data = GetGameDeviceData(device_data);
 
       // Already decided this frame
@@ -1890,19 +1900,17 @@ public:
             }
          }
       }
-      UpdateLODBias(device);
+      UpdateLODBias(device_data);
       device_data.cb_per_view_global_buffer_map_data = nullptr;
       device_data.cb_per_view_global_buffer = nullptr;
    }
 
-   static void UpdateLODBias(reshade::api::device* device)
+   static void UpdateLODBias(DeviceData& device_data)
    {
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
 #if DEVELOPMENT
       if (!custom_texture_mip_lod_bias_offset)
 #endif
       {
-         DeviceData& device_data = *device->get_private_data<DeviceData>();
          std::shared_lock shared_lock_samplers(s_mutex_samplers);
 
          const auto prev_texture_mip_lod_bias_offset = device_data.texture_mip_lod_bias_offset;
@@ -1923,7 +1931,7 @@ public:
          // It also allows us to use the right samplers for this frame's resolution.
          if (texture_mip_lod_bias_offset_changed)
          {
-            ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
+            ID3D11Device* native_device = device_data.native_device;
             for (auto& samplers_handle : device_data.custom_sampler_by_original_sampler)
             {
                if (samplers_handle.second.contains(new_texture_mip_lod_bias_offset))
@@ -1961,12 +1969,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // UE games scale the resolution by DPI, which is generally a bad thing for games
       force_ignore_dpi = true;
 
-      game = new UnrealEngine();
+      SetGame<UnrealEngine>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(UnrealEngine::OnMapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(UnrealEngine::OnUnmapBufferRegion);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);
@@ -1975,10 +1981,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
    {
 #if !DEVELOPMENT // Force HDR in dev mode, so we can easily debug textures
-      reshade::get_config_value(nullptr, NAME, "FirstBoot", first_boot);
+      Config::Get(NAME, "FirstBoot", first_boot);
       if (first_boot)
       {
-         reshade::set_config_value(nullptr, NAME, "FirstBoot", false);
+         Config::Set(NAME, "FirstBoot", false);
 
          // Automatically enable HDR in the mod if it's supported on the primary display on first boot
          bool hdr_supported_display;
@@ -1986,11 +1992,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          Display::IsHDRSupportedAndEnabled(0, hdr_supported_display, hdr_enabled_display);
          enable_hdr = hdr_supported_display;
 
-         reshade::set_config_value(nullptr, NAME, "EnableHDR", enable_hdr);
+         Config::Set(NAME, "EnableHDR", enable_hdr);
       }
       else
       {
-         reshade::get_config_value(nullptr, NAME, "EnableHDR", enable_hdr);
+         Config::Get(NAME, "EnableHDR", enable_hdr);
       }
 #endif
       next_enable_hdr = enable_hdr;
@@ -2013,22 +2019,20 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 #if 0 // Not needed as it's done automatically now
       // TODO: automatically upgrade all textures that sample the tonemap LUT, and all textures in between tonemapping and the swapchain final write
          texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
             
             // sRGB formats are usually not used by UE post processing
-            //reshade::api::format::r8g8b8a8_unorm_srgb,
-            //reshade::api::format::r8g8b8x8_unorm_srgb,
-            //reshade::api::format::b8g8r8a8_unorm_srgb,
-            //reshade::api::format::b8g8r8x8_unorm_srgb,
+            //DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            //DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            //DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
             
-            reshade::api::format::r10g10b10a2_typeless,
-            reshade::api::format::r10g10b10a2_unorm,
+            DXGI_FORMAT_R10G10B10A2_TYPELESS,
+            DXGI_FORMAT_R10G10B10A2_UNORM,
          };
          texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution;
 #else
@@ -2038,7 +2042,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          constexpr bool extra_upgraded_formats = true;
          if (extra_upgraded_formats)
          {
-            texture_upgrade_formats.emplace(reshade::api::format::r11g11b10_float); // Some games use this format for the whole post processing
+            texture_upgrade_formats.emplace(DXGI_FORMAT_R11G11B10_FLOAT); // Some games use this format for the whole post processing
             // Allow padding to 4 as UE always does it for screen space render targets
             texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::PadTo4Px | (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px;
          }

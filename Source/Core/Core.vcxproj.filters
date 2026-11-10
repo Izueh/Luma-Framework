@@ -26,6 +26,63 @@
     <ClCompile Include="hooks\SystemHooks.cpp">
       <Filter>Hooks</Filter>
     </ClCompile>
+    <ClCompile Include="system\dxgi_exports.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="system\loader.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="overlay\overlay.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="overlay\input.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="overlay\input_hooks.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="overlay\d3d11_renderer.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\hooks.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\vtables.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\scope.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\lifetime.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\device_proxy.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\d3d11_hooks.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\d3d11_device_hooks.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\d3d11_context_hooks.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\dxgi_hooks.cpp">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="hooks\slots.c">
+      <Filter>Hooks</Filter>
+    </ClCompile>
+    <ClCompile Include="utils\log.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="utils\modules.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
+    <ClCompile Include="utils\strings.cpp">
+      <Filter>Utils</Filter>
+    </ClCompile>
     <ClCompile Include="interop\D3D12Interop.cpp">
       <Filter>Interop</Filter>
     </ClCompile>
@@ -137,6 +194,64 @@
     </ClInclude>
     <ClInclude Include="hooks\SystemHooks.h">
       <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="system\loader.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="overlay\overlay.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="overlay\input.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="overlay\input_hooks.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="overlay\d3d11_renderer.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="utils
+ative_resource.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\hooks.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\vtables.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\slots.h">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\scope.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\lifetime.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\device_proxy.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\functions.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\callbacks.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="hooks\detours.hpp">
+      <Filter>Hooks</Filter>
+    </ClInclude>
+    <ClInclude Include="utils\log.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="utils\modules.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="utils\strings.hpp">
+      <Filter>Utils</Filter>
+    </ClInclude>
+    <ClInclude Include="utils\depth_guard.hpp">
+      <Filter>Utils</Filter>
     </ClInclude>
     <ClInclude Include="interop\D3D12Interop.h">
       <Filter>Interop</Filter>

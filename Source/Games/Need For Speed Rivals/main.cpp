@@ -33,14 +33,14 @@ namespace UserSettings
       default_luma_global_game_settings.HighlightSat = cb_luma_global_settings.GameSettings.HighlightSat = 1.f;
    }
 
-   void LoadConfigs(reshade::api::effect_runtime* runtime)
+   void LoadConfigs()
    {
-      reshade::get_config_value(runtime, NAME, "UI", ui.curr);
-      reshade::get_config_value(runtime, NAME, "MipLodBias", miplodbias.curr);
+      Config::Get(NAME, "UI", ui.curr);
+      Config::Get(NAME, "MipLodBias", miplodbias.curr);
       
-      reshade::get_config_value(runtime, NAME, "Bloom", bloom.curr);
-      reshade::get_config_value(runtime, NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
-      reshade::get_config_value(runtime, NAME, "HighlightSat", cb_luma_global_settings.GameSettings.HighlightSat);
+      Config::Get(NAME, "Bloom", bloom.curr);
+      Config::Get(NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
+      Config::Get(NAME, "HighlightSat", cb_luma_global_settings.GameSettings.HighlightSat);
    }
 }
 
@@ -208,7 +208,7 @@ public:
    void OnInit(bool async) override
    {
       // log
-      message(reshade::log::level::info, "OnInit()");
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "OnInit()");
 
       // UserSettings
       UserSettings::OnInit();
@@ -227,7 +227,7 @@ public:
       luma_data_cbuffer_index = 12;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto* game_device_data = static_cast<GameDeviceDataNeedForSpeedRivals*>(device_data.game);
 
@@ -258,7 +258,7 @@ public:
          if (!seen_ps.contains(ps_prev))
          {
             seen_ps.insert(ps_prev);
-            reshade::log::message(reshade::log::level::info, std::format("New tonemap shader hash 0x{:016X}", ps_prev).c_str());
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("New tonemap shader hash 0x{:016X}", ps_prev).c_str());
          }
 #endif
          
@@ -288,20 +288,18 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       // UserSettings
-      UserSettings::LoadConfigs(runtime);
+      UserSettings::LoadConfigs();
       
       // custom_sdr_gamma
-      reshade::get_config_value(runtime, NAME, "custom_sdr_gamma", custom_sdr_gamma);
+      Config::Get(NAME, "custom_sdr_gamma", custom_sdr_gamma);
       ShaderDefines::Set(GAMMA_CORRECTION_TYPE_HASH, custom_sdr_gamma > 0);
       defines_need_recompilation = true;
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
       
       // Gamma Correction
       if (ImGui::CollapsingHeader("Gamma Correction"))
@@ -335,7 +333,7 @@ public:
             }
             ShaderDefines::Set(GAMMA_CORRECTION_TYPE_HASH, custom_sdr_gamma > 0);
             defines_need_recompilation = true;
-            reshade::set_config_value(runtime, NAME, "custom_sdr_gamma", custom_sdr_gamma);
+            Config::Set(NAME, "custom_sdr_gamma", custom_sdr_gamma);
          }
          ImGui::PopID();
       }
@@ -356,23 +354,23 @@ public:
          ImGui::Separator();
 
          if (ImGui::SliderFloat("White Clip", &cb_luma_global_settings.GameSettings.WhiteClip, 0.f, 2.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
+            Config::Set(NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Increase to straighten the rolloff, causing more clipping.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.WhiteClip, default_luma_global_game_settings.WhiteClip, "WhiteClip", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.WhiteClip, default_luma_global_game_settings.WhiteClip, "WhiteClip");
 
          if (ImGui::SliderFloat("Highlights Saturation", &cb_luma_global_settings.GameSettings.HighlightSat, 0.f, 2.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "HighlightSat", cb_luma_global_settings.GameSettings.HighlightSat);
+            Config::Set(NAME, "HighlightSat", cb_luma_global_settings.GameSettings.HighlightSat);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("How much of raw punch through the blown out color grade?\n0 is most like intended SDR, but makes HDR highlights too white.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.HighlightSat, default_luma_global_game_settings.HighlightSat, "HighlightSat", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.HighlightSat, default_luma_global_game_settings.HighlightSat, "HighlightSat");
       }
 
       // Misc.
       if (ImGui::CollapsingHeader("Miscellaneous"))
       {
          if (ImGui::SliderFloat("Bloom", &cb_luma_global_settings.GameSettings.Bloom, 0.f, 2.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
+            Config::Set(NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Bloom multiplier.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.Bloom, default_luma_global_game_settings.Bloom, "Bloom", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.Bloom, default_luma_global_game_settings.Bloom, "Bloom");
          
          ShaderDefines::UIToggleCheckmark(ShaderDefines::TONEMAP_DOF, "Depth of Field", "Allows Depth of Field pass to apply.");
          ShaderDefines::UIToggleCheckmark(ShaderDefines::TONEMAP_UVDISTORT, "Lens Distortion", "Texture coords distortion when sampling color.");
@@ -382,9 +380,9 @@ public:
          ShaderDefines::UIDropDown(ShaderDefines::TONEMAP_FXAA, "FXAA", {"Off", "On", "Extreme"}, "Enables FXAA pass.");
 
          if (ImGui::SliderFloat("Mip LOD Bias", &UserSettings::miplodbias.curr, 0.f, -1.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "u_miplodbias", UserSettings::miplodbias.curr);
+            Config::Set(NAME, "u_miplodbias", UserSettings::miplodbias.curr);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Negative bias boosts texture sharpness at a distance,\nthough too much and this game becomes coarse.");
-         DrawResetButton(UserSettings::miplodbias.curr, UserSettings::miplodbias.def, "u_miplodbias", runtime);
+         DrawResetButton(UserSettings::miplodbias.curr, UserSettings::miplodbias.def, "u_miplodbias");
 
          ImGui::Checkbox("Draw UI", &UserSettings::ui.curr);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Enable/Disable the UI rendering.");
@@ -419,7 +417,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
       enable_samplers_upgrade = true;
 
-      game = new GameNeedForSpeedRivals();
+      SetGame<GameNeedForSpeedRivals>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

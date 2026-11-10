@@ -271,7 +271,7 @@ static void DrawSettingSlider(const char* label, const char* key, float* value, 
    // Saved once the edit ends, not on every drag step
    if (ImGui::IsItemDeactivatedAfterEdit())
    {
-      reshade::set_config_value(nullptr, NAME, key, *value);
+      Config::Set(NAME, key, *value);
    }
    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
    {
@@ -290,7 +290,7 @@ static void DrawSettingCheckbox(const char* label, const char* key, T* value, st
    if (ImGui::Checkbox(label, &shown))
    {
       *value = T(shown);
-      reshade::set_config_value(nullptr, NAME, key, *value);
+      Config::Set(NAME, key, *value);
    }
    ImGui::EndDisabled();
    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -419,13 +419,13 @@ public:
       };
       cb_luma_global_settings.GameSettings = default_luma_global_game_settings;
 
-      native_shaders_definitions.emplace(shader_hash_SmaaPredication, ShaderDefinition{"Luma_SO_SMAAPredication", reshade::api::pipeline_subobject_type::compute_shader});
+      native_shaders_definitions.emplace(shader_hash_SmaaPredication, ShaderDefinition{"Luma_SO_SMAAPredication", D3D11_SHVER_COMPUTE_SHADER});
       // SMAA T2x's own passes ("SMAA_T2X" in "Luma_SMAA_impl.hlsl"). The edge detection and the vertex shaders are 1x's.
-      native_shaders_definitions.emplace(shader_hash_SmaaT2xWeights, ShaderDefinition{"Luma_SMAA_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "smaa_blending_weight_calculation_ps", {{"SMAA_T2X", "1"}}});
-      native_shaders_definitions.emplace(shader_hash_SmaaT2xBlend, ShaderDefinition{"Luma_SMAA_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "smaa_neighborhood_blending_ps", {{"SMAA_T2X", "1"}}});
-      native_shaders_definitions.emplace(shader_hash_SmaaT2xResolve, ShaderDefinition{"Luma_SMAA_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "smaa_resolve_ps", {{"SMAA_T2X", "1"}}});
-      native_shaders_definitions.emplace(shader_hash_ReactiveMask, ShaderDefinition{"Luma_SO_ReactiveMask", reshade::api::pipeline_subobject_type::compute_shader});
-      native_shaders_definitions.emplace(shader_hash_SRExposure, ShaderDefinition{"Luma_SO_SRExposure", reshade::api::pipeline_subobject_type::compute_shader});
+      native_shaders_definitions.emplace(shader_hash_SmaaT2xWeights, ShaderDefinition{"Luma_SMAA_impl", D3D11_SHVER_PIXEL_SHADER, nullptr, "smaa_blending_weight_calculation_ps", {{"SMAA_T2X", "1"}}});
+      native_shaders_definitions.emplace(shader_hash_SmaaT2xBlend, ShaderDefinition{"Luma_SMAA_impl", D3D11_SHVER_PIXEL_SHADER, nullptr, "smaa_neighborhood_blending_ps", {{"SMAA_T2X", "1"}}});
+      native_shaders_definitions.emplace(shader_hash_SmaaT2xResolve, ShaderDefinition{"Luma_SMAA_impl", D3D11_SHVER_PIXEL_SHADER, nullptr, "smaa_resolve_ps", {{"SMAA_T2X", "1"}}});
+      native_shaders_definitions.emplace(shader_hash_ReactiveMask, ShaderDefinition{"Luma_SO_ReactiveMask", D3D11_SHVER_COMPUTE_SHADER});
+      native_shaders_definitions.emplace(shader_hash_SRExposure, ShaderDefinition{"Luma_SO_SRExposure", D3D11_SHVER_COMPUTE_SHADER});
    }
 
    static SunsetOverdriveGameDeviceData& GetGameDeviceData(DeviceData& device_data)
@@ -508,7 +508,7 @@ public:
          return false;
       ID3D11ShaderResourceView* const srvs[3] = {game_device_data->reactive_opaque_scene.srv.get(), scene_srv, game_device_data->exposure_buffer_srv.get()};
       DispatchCompute(native_device_context, *device_data, reactive_mask_cs, game_device_data->reactive_mask.uav.get(), srvs, uint2{(size.x + 7) / 8, (size.y + 7) / 8}, [&]()
-         { SetLumaConstantBuffers(native_device_context, *cmd_list_data, *device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData, 0, 0, SR_REACTIVE_SCALE, SR_REACTIVE_THRESHOLD); });
+         { SetLumaConstantBuffers(native_device_context, *cmd_list_data, *device_data, ShaderStages::Compute, LumaConstantBufferType::LumaData, 0, 0, SR_REACTIVE_SCALE, SR_REACTIVE_THRESHOLD); });
       return true;
    }
 
@@ -630,7 +630,7 @@ public:
          {
             ID3D11ShaderResourceView* const srv = game_device_data->exposure_buffer_srv.get();
             DispatchCompute(native_device_context, *device_data, sr_exposure_cs, game_device_data->sr_exposure.uav.get(), {&srv, 1}, uint2{1, 1}, [&]()
-               { SetLumaConstantBuffers(native_device_context, *cmd_list_data, *device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings); });
+               { SetLumaConstantBuffers(native_device_context, *cmd_list_data, *device_data, ShaderStages::Compute, LumaConstantBufferType::LumaSettings); });
             draw_data.exposure = game_device_data->sr_exposure.texture.get();
          }
       }
@@ -765,8 +765,8 @@ public:
 
       // The SMAA shaders read the target size, the predication scale and T2x's subsample indices from the Luma data (the render
       // resolution isn't the swapchain's)
-      SetLumaConstantBuffers(native_device_context, *cmd_list_data, *device_data, reshade::api::shader_stage::vertex | reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-      SetLumaConstantBuffers(native_device_context, *cmd_list_data, *device_data, reshade::api::shader_stage::vertex | reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData, size.x, size.y, (predication ? 2.f : 1.f), subsample_indices);
+      SetLumaConstantBuffers(native_device_context, *cmd_list_data, *device_data, ShaderStages::Vertex | ShaderStages::Pixel, LumaConstantBufferType::LumaSettings);
+      SetLumaConstantBuffers(native_device_context, *cmd_list_data, *device_data, ShaderStages::Vertex | ShaderStages::Pixel, LumaConstantBufferType::LumaData, size.x, size.y, (predication ? 2.f : 1.f), subsample_indices);
       // Core creates its area texture at the first draw; ours goes in first, without the U-shape smoothing (see "SMAA_AreaTex_SharpU.h")
       if (auto& area_tex_srv = device_data->managed_resources.shader_resource_views["smaa_area_tex"_h]; !area_tex_srv)
       {
@@ -855,10 +855,10 @@ public:
       return true;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
-      if (original_shader_hashes.Contains(shader_hash_AverageLumAccum, reshade::api::shader_stage::compute))
+      if (original_shader_hashes.Contains(shader_hash_AverageLumAccum, ShaderStages::Compute))
       {
          game_device_data.exposure_downsample = nullptr;
          com_ptr<ID3D11ShaderResourceView> srv;
@@ -870,7 +870,7 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
       // The game's SMAA edges and weights aren't needed while Core's SMAA replaces its blend (which turns into a copy should ours fail)
-      if (original_shader_hashes.Contains(shader_hash_SmaaFindEdges, reshade::api::shader_stage::compute) || original_shader_hashes.Contains(shader_hash_SmaaComputeWeights, reshade::api::shader_stage::compute))
+      if (original_shader_hashes.Contains(shader_hash_SmaaFindEdges, ShaderStages::Compute) || original_shader_hashes.Contains(shader_hash_SmaaComputeWeights, ShaderStages::Compute))
       {
          const std::shared_lock lock_shader_objects(s_mutex_shader_objects);
          if (!g_smaa_enable || !HasSMAAShaders(device_data))
@@ -878,10 +878,10 @@ public:
          game_device_data.smaa_compute_skipped = true;
          return DrawOrDispatchOverrideType::Skip;
       }
-      if ((stages & reshade::api::shader_stage::pixel) != reshade::api::shader_stage::pixel)
+      if ((stages & ShaderStages::Pixel) != ShaderStages::Pixel)
          return DrawOrDispatchOverrideType::None;
       const auto is_pixel_shader = [&](uint32_t hash)
-      { return original_shader_hashes.Contains(hash, reshade::api::shader_stage::pixel); };
+      { return original_shader_hashes.Contains(hash, ShaderStages::Pixel); };
       const auto render_target_resource = [&]()
       {
          com_ptr<ID3D11RenderTargetView> rtv;
@@ -923,7 +923,7 @@ public:
          return DrawVelocityWithMotionVectors(native_device, native_device_context, &game_device_data, original_draw_dispatch_func, true);
       if (motion_vectors && is_pixel_shader(shader_hash_ObjectVelocity))
          return DrawVelocityWithMotionVectors(native_device, native_device_context, &game_device_data, original_draw_dispatch_func, false);
-      const bool is_tonemap = shader_hashes_ToneMap.Contains(original_shader_hashes.pixel_shaders[0], reshade::api::shader_stage::pixel);
+      const bool is_tonemap = shader_hashes_ToneMap.Contains(original_shader_hashes.pixel_shaders[0], ShaderStages::Pixel);
       if (is_tonemap)
       {
          game_device_data.exposure_buffer_srv = nullptr;
@@ -998,7 +998,7 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
       // Videos: AutoHDR only onto the swapchain (LumaData.CustomData1), never skipped by Hide Gameplay UI
-      if (shader_hashes_Video.Contains(original_shader_hashes.pixel_shaders[0], reshade::api::shader_stage::pixel))
+      if (shader_hashes_Video.Contains(original_shader_hashes.pixel_shaders[0], ShaderStages::Pixel))
       {
          SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
          SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData, (targets_back_buffer() ? 1 : 0));
@@ -1262,19 +1262,19 @@ public:
    void LoadConfigs() override
    {
       auto& settings = cb_luma_global_settings.GameSettings;
-      reshade::get_config_value(nullptr, NAME, "Dithering", settings.Dithering);
-      reshade::get_config_value(nullptr, NAME, "ColorGradingIntensity", settings.ColorGradingIntensity);
-      reshade::get_config_value(nullptr, NAME, "BloomIntensity", settings.BloomIntensity);
-      reshade::get_config_value(nullptr, NAME, "FilmGrainIntensity", settings.FilmGrainIntensity);
-      reshade::get_config_value(nullptr, NAME, "Exposure", settings.Exposure);
-      reshade::get_config_value(nullptr, NAME, "Contrast", settings.Contrast);
-      reshade::get_config_value(nullptr, NAME, "Saturation", settings.Saturation);
-      reshade::get_config_value(nullptr, NAME, "VideoAutoHDREnable", settings.VideoAutoHDREnable);
-      reshade::get_config_value(nullptr, NAME, "VideoAutoHDRBoost", settings.VideoAutoHDRBoost);
-      reshade::get_config_value(nullptr, NAME, "RCASSharpness", g_rcas_sharpness);
-      reshade::get_config_value(nullptr, NAME, "SMAAEnable", g_smaa_enable);
-      reshade::get_config_value(nullptr, NAME, "SMAAT2x", g_smaa_t2x);
-      reshade::get_config_value(nullptr, NAME, "FixCorruptedSaveWarning", g_fix_corrupted_save_warning);
+      Config::Get(NAME, "Dithering", settings.Dithering);
+      Config::Get(NAME, "ColorGradingIntensity", settings.ColorGradingIntensity);
+      Config::Get(NAME, "BloomIntensity", settings.BloomIntensity);
+      Config::Get(NAME, "FilmGrainIntensity", settings.FilmGrainIntensity);
+      Config::Get(NAME, "Exposure", settings.Exposure);
+      Config::Get(NAME, "Contrast", settings.Contrast);
+      Config::Get(NAME, "Saturation", settings.Saturation);
+      Config::Get(NAME, "VideoAutoHDREnable", settings.VideoAutoHDREnable);
+      Config::Get(NAME, "VideoAutoHDRBoost", settings.VideoAutoHDRBoost);
+      Config::Get(NAME, "RCASSharpness", g_rcas_sharpness);
+      Config::Get(NAME, "SMAAEnable", g_smaa_enable);
+      Config::Get(NAME, "SMAAT2x", g_smaa_t2x);
+      Config::Get(NAME, "FixCorruptedSaveWarning", g_fix_corrupted_save_warning);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
@@ -1388,8 +1388,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       texture_upgrade_formats = {
-         reshade::api::format::r10g10b10a2_unorm,
-         reshade::api::format::r10g10b10a2_typeless,
+         DXGI_FORMAT_R10G10B10A2_UNORM,
+         DXGI_FORMAT_R10G10B10A2_TYPELESS,
       };
       // The render resolution is an option independent of the window, so we also match its 16:9 aspect ratio, not only the swapchain size
       texture_format_upgrades_2d_size_filters = (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::CustomAspectRatio;
@@ -1460,7 +1460,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       }
 #endif
 
-      game = new SunsetOverdrive();
+      SetGame<SunsetOverdrive>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {

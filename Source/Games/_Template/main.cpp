@@ -28,9 +28,9 @@
 // having global defines that can be turned on and off per game, as opposed to runtime (static) parameters.
 // Hence why we specify the global defines before including the core Luma file (where near all of the generic Luma implementation is).
 // If we wanted to use a library, we'd also need to add a core "main" definition in a cpp file, to link it properly.
-// All externs that are currently defined in core would also need to be manually defined in each game's implementation (e.g. see "RESHADE_EXTERNS" above).
+// All externs that are currently defined in core would also need to be manually defined in each game's implementation.
 // The only disadvantage of not actually including the core as a library, is that we'll have to add the same include/library dependencies in our
-// game project (e.g. add ReShade, DLSS, etc), and manually add all cpp files too.
+// game project (e.g. add DLSS, etc), and manually add all cpp files too.
 //
 // To compile in different modes (e.g. "DEVELOPMENT", "TEST" etc see "global_defines.h").
 #include "..\..\Core\core.hpp"
@@ -97,7 +97,7 @@ public:
       device_data.game = new TemplateGameDeviceData;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -105,7 +105,7 @@ public:
       static uint32_t pixel_shader_hash_tonemap = Shader::Hash_StrToNum("8B2321A2");
 
       // Here you can track and customize shader passes by hash, you can do whatever you want in it
-      if (!game_device_data.has_drawn_tonemap && original_shader_hashes.Contains(pixel_shader_hash_tonemap, reshade::api::shader_stage::pixel))
+      if (!game_device_data.has_drawn_tonemap && original_shader_hashes.Contains(pixel_shader_hash_tonemap, ShaderStages::Pixel))
       {
          game_device_data.has_drawn_tonemap = true;
 
@@ -124,31 +124,29 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       // ReShade.ini is ready here, so load its values.
-      reshade::get_config_value(runtime, NAME, "GameSetting01", cb_luma_global_settings.GameSettings.GameSetting01);
-      reshade::get_config_value(runtime, NAME, "GameSetting02", cb_luma_global_settings.GameSettings.GameSetting02);
+      Config::Get(NAME, "GameSetting01", cb_luma_global_settings.GameSettings.GameSetting01);
+      Config::Get(NAME, "GameSetting02", cb_luma_global_settings.GameSettings.GameSetting02);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
       
       // Draw whatever ImGui to let users modify settings.
       if (ImGui::SliderFloat("Game Setting #01", &cb_luma_global_settings.GameSettings.GameSetting01, 0.f, 1.f, "%.3f"))
-         reshade::set_config_value(runtime, NAME, "GameSetting01", cb_luma_global_settings.GameSettings.GameSetting01);
+         Config::Set(NAME, "GameSetting01", cb_luma_global_settings.GameSettings.GameSetting01);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Hi! This changes Game Setting #01.");
-      DrawResetButton(cb_luma_global_settings.GameSettings.GameSetting01, default_luma_global_game_settings.GameSetting01, "GameSetting01", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.GameSetting01, default_luma_global_game_settings.GameSetting01, "GameSetting01");
 
       uint GameSetting02_min = 0;
       uint GameSetting02_max = 50;
       if (ImGui::SliderScalar("Game Setting #02", ImGuiDataType_U32, &cb_luma_global_settings.GameSettings.GameSetting02,  &GameSetting02_min, &GameSetting02_max, "%u"))
-         reshade::set_config_value(runtime, NAME, "GameSetting02", cb_luma_global_settings.GameSettings.GameSetting02);
+         Config::Set(NAME, "GameSetting02", cb_luma_global_settings.GameSettings.GameSetting02);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Hi! This changes Game Setting #02.");
-      DrawResetButton(cb_luma_global_settings.GameSettings.GameSetting02, default_luma_global_game_settings.GameSetting02, "GameSetting02", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.GameSetting02, default_luma_global_game_settings.GameSetting02, "GameSetting02");
    }
 
    void PrintImGuiAbout() override
@@ -177,24 +175,22 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       // Texture upgrades (8 bit unorm and 11 bit float etc to 16 bit float)
       texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-            reshade::api::format::r10g10b10a2_unorm,
-            reshade::api::format::r10g10b10a2_typeless,
+            DXGI_FORMAT_R10G10B10A2_UNORM,
+            DXGI_FORMAT_R10G10B10A2_TYPELESS,
 
-            //reshade::api::format::r16g16b16a16_unorm,
+            //DXGI_FORMAT_R16G16B16A16_UNORM,
 
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
       };
       // Set this to the size and type of the main color grading LUT you might want to upgrade (optional)
       texture_format_upgrades_lut_size = 32;
@@ -215,7 +211,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
       // Create your game sub-class instance (it will be automatically destroyed on exit).
       // You do not need to do this if you have no custom data to store.
-      game = new TemplateGame();
+      SetGame<TemplateGame>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

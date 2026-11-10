@@ -576,31 +576,24 @@ public:
 
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("Copy Depth"), ShaderDefinition{"Luma_CopyDepth", reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Copy Depth"), ShaderDefinition{"Luma_CopyDepth", D3D11_SHVER_PIXEL_SHADER});
       native_shaders_definitions.emplace(CompileTimeStringHash("Gaussian Blur Horizontal"),
-         ShaderDefinition{"Luma_GaussianBlur", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, {{"HORIZONTAL", "1"}}});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Gaussian Blur Vertical"), ShaderDefinition{"Luma_GaussianBlur", reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Motion Vector"), ShaderDefinition{"Luma_PrepareMotionVector", reshade::api::pipeline_subobject_type::compute_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Ocean Data"), ShaderDefinition{"Luma_PrepareOceanData", reshade::api::pipeline_subobject_type::compute_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Create Bias Mask"), ShaderDefinition{"Luma_CreateBiasMask", reshade::api::pipeline_subobject_type::compute_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Merge"), ShaderDefinition{"Luma_CopyDsrResult", reshade::api::pipeline_subobject_type::compute_shader});
+         ShaderDefinition{"Luma_GaussianBlur", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr, {{"HORIZONTAL", "1"}}});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Gaussian Blur Vertical"), ShaderDefinition{"Luma_GaussianBlur", D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Motion Vector"), ShaderDefinition{"Luma_PrepareMotionVector", D3D11_SHVER_COMPUTE_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Ocean Data"), ShaderDefinition{"Luma_PrepareOceanData", D3D11_SHVER_COMPUTE_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Create Bias Mask"), ShaderDefinition{"Luma_CreateBiasMask", D3D11_SHVER_COMPUTE_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Merge"), ShaderDefinition{"Luma_CopyDsrResult", D3D11_SHVER_COMPUTE_SHADER});
       native_shaders_definitions.emplace(CompileTimeStringHash("Temporal AA Depth With History"),
-         ShaderDefinition{"Luma_TemporalAADepth", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, {{"HAS_PREVIOUS_FRAME", "1"}}});
+         ShaderDefinition{"Luma_TemporalAADepth", D3D11_SHVER_COMPUTE_SHADER, nullptr, nullptr, {{"HAS_PREVIOUS_FRAME", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("Temporal AA Depth Without History"),
-         ShaderDefinition{"Luma_TemporalAADepth", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, {}});
+         ShaderDefinition{"Luma_TemporalAADepth", D3D11_SHVER_COMPUTE_SHADER, nullptr, nullptr, {}});
 
-      reshade::register_event<reshade::addon_event::execute_secondary_command_list>(MetaphorReFantazio::OnExecuteSecondaryCommandList);
-      reshade::register_event<reshade::addon_event::update_buffer_region_command>(MetaphorReFantazio::OnUpdateBufferRegionCommand);
-      reshade::register_event<reshade::addon_event::create_pipeline>(MetaphorReFantazio::OnCreatePipeline);
-      reshade::register_event<reshade::addon_event::init_resource>(MetaphorReFantazio::OnInitResource);
-      reshade::register_event<reshade::addon_event::destroy_resource>(MetaphorReFantazio::OnDestroyResource);
-      reshade::register_event<reshade::addon_event::init_command_list>(MetaphorReFantazio::OnInitCommandList);
    }
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "SceneUiMsaaSamples", g_scene_ui_msaa_samples);
+      Config::Get(NAME, "SceneUiMsaaSamples", g_scene_ui_msaa_samples);
       if (g_scene_ui_msaa_samples != 1 &&
           g_scene_ui_msaa_samples != 2 &&
           g_scene_ui_msaa_samples != 4 &&
@@ -609,10 +602,10 @@ public:
          g_scene_ui_msaa_samples = 8;
       }
       uint32_t upscaling_mode_uint = (uint32_t)UpscalingMode::Auto;
-      if (!reshade::get_config_value(runtime, NAME, "UpscalingMode", upscaling_mode_uint))
+      if (!Config::Get(NAME, "UpscalingMode", upscaling_mode_uint))
       {
          bool use_sr_for_upscaling;
-         if (reshade::get_config_value(runtime, NAME, "UseSRForUpscaling", use_sr_for_upscaling))
+         if (Config::Get(NAME, "UseSRForUpscaling", use_sr_for_upscaling))
          {
             upscaling_mode_uint = (uint32_t)(use_sr_for_upscaling ? UpscalingMode::SuperResolution : UpscalingMode::Auto);
          }
@@ -627,9 +620,9 @@ public:
       }
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+      auto& device_data = *GetSwapchainData(swapchain)->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
       if (!enable_hdr)
       {
@@ -1207,7 +1200,7 @@ public:
       context_data.frame_progress.SetReached(FrameProgress::SceneUiDrawFinished);
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -1269,7 +1262,7 @@ public:
       }
       DrawContextData& context_data = game_device_data.draw_contexts[GetContextIndex(context_tag)];
 
-      if ((stages & reshade::api::shader_stage::compute) != 0 &&
+      if ((stages & ShaderStages::Compute) != 0 &&
           original_shader_hashes.compute_shaders[0] == 0xF2DB8A9B)
       {
          ComPtr<ID3D11ShaderResourceView> srv;
@@ -1321,7 +1314,7 @@ public:
 
          return DrawOrDispatchOverrideType::None;
       }
-      else if ((stages & reshade::api::shader_stage::vertex) == 0)
+      else if ((stages & ShaderStages::Vertex) == 0)
       {
          return DrawOrDispatchOverrideType::None;
       }
@@ -1351,7 +1344,7 @@ public:
          }
          cb_luma_global_settings.GameSettings.FrameIndex++;
          device_data.cb_luma_global_settings_dirty = true;
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::all, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::All, LumaConstantBufferType::LumaSettings);
 
          int temporal_frame = cb_luma_global_settings.GameSettings.FrameIndex % phases;
          context_data.projection_jitters.x = SR::HaltonSequence(temporal_frame, 2);
@@ -1968,7 +1961,7 @@ public:
          if (context_data.vsconst_transform_data_changed ||
              is_outline_pass)
          {
-            UpdatePreviousTransformAndCache((stages & reshade::api::shader_stage::pixel) != 0, is_outline_pass, previous_skin_set, vertex_buffer.get(), native_device_context,
+            UpdatePreviousTransformAndCache((stages & ShaderStages::Pixel) != 0, is_outline_pass, previous_skin_set, vertex_buffer.get(), native_device_context,
                context_tag, game_device_data, original_shader_hashes);
          }
 
@@ -2287,7 +2280,7 @@ public:
                   ComPtr<ID3D11Buffer> vertex_buffer;
                   uint32_t stride;
                   native_device_context->IAGetVertexBuffers(0, 1, vertex_buffer.put(), &stride, nullptr);
-                  UpdatePreviousTransformAndCache((stages & reshade::api::shader_stage::pixel) != 0, false, false, vertex_buffer.get(), native_device_context,
+                  UpdatePreviousTransformAndCache((stages & ShaderStages::Pixel) != 0, false, false, vertex_buffer.get(), native_device_context,
                      context_tag, game_device_data, original_shader_hashes);
                }
                if (original_shader_hashes.pixel_shaders.front() != 0xE7F75BFE) // don't replace shader for sprites like gallica's speechbubble
@@ -2354,20 +2347,17 @@ public:
       device_data.cb_luma_global_settings_dirty = true;
    }
 
-   static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
+   // A command list is about to be replayed on a context (ReShade's "execute_secondary_command_list" on a context)
+   bool PreExecuteCommandList(ID3D11DeviceContext* native_device_context, ID3D11CommandList* native_command_list, BOOL restore) override
    {
-      ComPtr<ID3D11DeviceContext> native_device_context;
-      ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      HRESULT hr = device_child->QueryInterface(native_device_context.put());
-
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      CommandListData* cmd_list_data_ptr = GetCommandListData(native_device_context);
+      if (!cmd_list_data_ptr)
+         return false;
+      CommandListData& cmd_list_data = *cmd_list_data_ptr;
+      auto& device_data = *cmd_list_data.device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      if (native_device_context)
       {
-         ComPtr<ID3D11CommandList> native_command_list;
-         ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         HRESULT hr = device_child->QueryInterface(native_command_list.put());
 
          uint32_t context_index = UINT32_MAX;
          for (uint32_t i = 0; i < 3; ++i)
@@ -2379,7 +2369,7 @@ public:
          }
          if (context_index == UINT32_MAX)
          {
-            return;
+            return false;
          }
 
          DrawContextData& context_data = game_device_data.draw_contexts[context_index];
@@ -2394,7 +2384,7 @@ public:
 
          if (!context_data.source_color || !context_data.dest_color || !context_data.depth_texture || device_data.sr_type == SR::Type::None)
          {
-            return;
+            return false;
          }
 
          ComPtr<ID3D11Device> device;
@@ -2565,8 +2555,7 @@ public:
             }
          }
 
-         CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-         SetLumaConstantBuffers(native_device_context.get(), cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaSettings);
 
          auto* sr_instance_data = device_data.GetSRInstanceData();
          {
@@ -2580,7 +2569,7 @@ public:
             settings_data.inverted_depth = false;
             settings_data.mvs_jittered = false;
             settings_data.render_preset = dlss_render_preset;
-            sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context.get(), settings_data);
+            sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
          }
 
          {
@@ -2663,7 +2652,7 @@ public:
                locked = true;
             }
 
-            bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context.get(), draw_data);
+            bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
             game_device_data.has_drawn_upscaling = dlss_succeeded;
             device_data.has_drawn_sr = dlss_succeeded;
 
@@ -2721,15 +2710,20 @@ public:
          // release all resources from the game we got this frame
          context_data.remainder_command_list.reset();
       }
+      return false;
+   }
 
-      ComPtr<ID3D11CommandList> native_command_list;
-      hr = device_child->QueryInterface(native_command_list.put());
-      if (native_command_list)
+   // A deferred context recorded a command list (ReShade's "execute_secondary_command_list" on a command list)
+   void PostFinishCommandList(ID3D11DeviceContext* native_device_context, BOOL restore, ID3D11CommandList* native_command_list) override
+   {
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return;
+      auto& game_device_data = GetGameDeviceData(*cmd_list_data->device_data);
+
       {
-         ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         hr = device_child->QueryInterface(native_device_context.put());
 
-         ContextTag context_tag = GetContextTag(native_device_context.get());
+         ContextTag context_tag = GetContextTag(native_device_context);
          if (GetContextType(context_tag) == ContextType::Draw)
          {
             DrawContextData& context_data = game_device_data.draw_contexts[GetContextIndex(context_tag)];
@@ -2763,22 +2757,28 @@ public:
 
             if (context_data.partial_command_lists.size())
             {
-               context_data.remainder_command_list = native_command_list.get();
+               context_data.remainder_command_list = native_command_list;
             }
          }
       }
    }
 
-   static bool OnUpdateBufferRegionCommand(reshade::api::command_list* cmd_list, const void* data, reshade::api::resource dest, uint64_t dest_offset, uint64_t size)
+   // ReShade's "update_buffer_region_command": buffer updates on deferred contexts
+   bool PreUpdateSubresource(ID3D11DeviceContext* native_device_context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch, UINT copy_flags) override
    {
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      ID3D11Buffer* const dest = AsBuffer(resource);
+      if (!dest || !data || native_device_context->GetType() != D3D11_DEVICE_CONTEXT_DEFERRED)
+         return false;
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return false;
+      auto& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      ID3D11DeviceContext* native_device_context = (ID3D11DeviceContext*)(cmd_list->get_native());
       ContextTag context_tag = GetContextTag(native_device_context);
 
       if (GetContextType(context_tag) == ContextType::ShadowMap &&
-          (ID3D11Buffer*)dest.handle == game_device_data.cb_shadow_transform)
+          dest == game_device_data.cb_shadow_transform)
       {
          uint32_t context_idx = GetContextIndex(context_tag);
          game_device_data.shadow_contexts[context_idx].world_view_proj = ((GFD_VSCONST_TRANSFORM*)data)->mtxLocalToWorldViewProj;
@@ -2795,14 +2795,14 @@ public:
 
       // store values so we can find changes for the constant buffers we are interested in
       if (game_device_data.cb_viewproj == nullptr ||
-          game_device_data.cb_viewproj == (ID3D11Buffer*)dest.handle ||
+          game_device_data.cb_viewproj == dest ||
           game_device_data.cb_system == nullptr ||
-          game_device_data.cb_system == (ID3D11Buffer*)dest.handle ||
+          game_device_data.cb_system == dest ||
           game_device_data.cb_transform == nullptr)
       {
-         ID3D11Buffer* buffer = (ID3D11Buffer*)dest.handle;
+         ID3D11Buffer* buffer = dest;
          D3D11_BUFFER_DESC bd = {};
-         ((ID3D11Buffer*)dest.handle)->GetDesc(&bd);
+         dest->GetDesc(&bd);
          if (bd.ByteWidth != 208 && // GFD_VSCONST_VIEWPROJ
              bd.ByteWidth != 256 && // GFD_VSCONST_TRANSFORM
              bd.ByteWidth != 288)   // GFD_PSCONST_SYSTEM
@@ -2824,93 +2824,92 @@ public:
       }
 
       // game_device_data.frame_phase == FramePhase::GBUFFER
-      if ((ID3D11Buffer*)dest.handle == game_device_data.cb_transform)
+      if (dest == game_device_data.cb_transform)
       {
-         ComPtr<ID3D11DeviceContext> native_device_context;
-         ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-         HRESULT hr = device_child->QueryInterface(native_device_context.put());
-         HandleTransformUpdate((ID3D11Buffer*)dest.handle, data, context_data);
+         HandleTransformUpdate(dest, data, context_data);
          return context_data.frame_progress.Reached(FrameProgress::OpaqueRenderingStarted) && !context_data.frame_progress.Reached(FrameProgress::AddedParticles);
       }
 
       return false;
    }
 
-   static bool OnCreatePipeline(reshade::api::device* device, reshade::api::pipeline_layout layout, uint32_t subobject_count, const reshade::api::pipeline_subobject* subobjects)
+   // Patches the vertex shaders that output the previous position (motion vectors)
+   void PreCreateVertexShader(ID3D11Device* native_device, const void*& bytecode, SIZE_T& length) override
    {
-      auto& device_data = *device->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
-      for (uint32_t i = 0; i < subobject_count; ++i)
+      DeviceData* device_data = GetDeviceData(native_device);
+      if (!device_data || !bytecode)
+         return;
+      auto& game_device_data = GetGameDeviceData(*device_data);
+      if (System::ScanMemoryForPattern((const std::byte*)bytecode, length, (std::byte*)"mtxLocalToWorldViewProjPrev", 27, true).size() == 0)
       {
-         const auto& subobject = subobjects[i];
-         for (uint32_t j = 0; j < subobject.count; ++j)
-         {
-            if (subobject.type == reshade::api::pipeline_subobject_type::vertex_shader)
-            {
-               const auto* original_shader_desc = static_cast<reshade::api::shader_desc*>(subobjects[i].data);
-               if (System::ScanMemoryForPattern((const std::byte*)original_shader_desc->code, original_shader_desc->code_size, (std::byte*)"mtxLocalToWorldViewProjPrev", 27, true).size() == 0)
-               {
-                  continue;
-               }
-               std::vector<std::byte> shader_code((const std::byte*)original_shader_desc->code, ((const std::byte*)original_shader_desc->code) + original_shader_desc->code_size);
-
-               uint32_t prev_coord_output_register;
-               PatchVertexShader(shader_code, prev_coord_output_register);
-               if (prev_coord_output_register != 0xFFFFFFFF)
-               {
-                  uint32_t hash = Shader::BinToHash((const uint8_t*)original_shader_desc->code, original_shader_desc->code_size);
-                  game_device_data.vertex_shader_ndc_coord_indices[hash] = {prev_coord_output_register - 1, prev_coord_output_register};
-
-                  ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-                  ComPtr<ID3D11VertexShader> patched_shader;
-                  native_device->CreateVertexShader(shader_code.data(), shader_code.size(), nullptr, patched_shader.put());
-
-                  game_device_data.modified_vertex_shaders[hash] = patched_shader;
-               }
-            }
-            else if (subobject.type == reshade::api::pipeline_subobject_type::pixel_shader)
-            {
-               const auto* original_shader_desc = static_cast<reshade::api::shader_desc*>(subobjects[i].data);
-               uint32_t hash = Shader::BinToHash((const uint8_t*)original_shader_desc->code, original_shader_desc->code_size);
-               std::vector<std::byte> code;
-               code.resize(original_shader_desc->code_size);
-               memcpy(&code[0], original_shader_desc->code, original_shader_desc->code_size);
-               game_device_data.pixel_shader_code[hash] = std::move(code);
-
-               if (System::ScanMemoryForPattern((const std::byte*)original_shader_desc->code, original_shader_desc->code_size, (std::byte*)"GFD_PSCONST_SYSTEM", 18, true).size() > 0)
-               {
-                  shader_hashes_material.pixel_shaders.emplace(hash);
-               }
-            }
-            else if (subobject.type == reshade::api::pipeline_subobject_type::blend_state)
-            {
-               auto* blend_desc = static_cast<reshade::api::blend_desc*>(subobjects[i].data);
-               blend_desc->blend_enable[5] = true;
-               blend_desc->source_color_blend_factor[5] = reshade::api::blend_factor::one;
-               blend_desc->dest_color_blend_factor[5] = reshade::api::blend_factor::zero;
-               blend_desc->color_blend_op[5] = reshade::api::blend_op::add;
-               blend_desc->render_target_write_mask[5] = 15;
-               return true;
-            }
-         }
+         return;
       }
-      return false;
+      std::vector<std::byte> shader_code((const std::byte*)bytecode, ((const std::byte*)bytecode) + length);
+
+      uint32_t prev_coord_output_register;
+      PatchVertexShader(shader_code, prev_coord_output_register);
+      if (prev_coord_output_register != 0xFFFFFFFF)
+      {
+         uint32_t hash = Shader::BinToHash((const uint8_t*)bytecode, length);
+         game_device_data.vertex_shader_ndc_coord_indices[hash] = {prev_coord_output_register - 1, prev_coord_output_register};
+
+         ComPtr<ID3D11VertexShader> patched_shader;
+         native_device->CreateVertexShader(shader_code.data(), shader_code.size(), nullptr, patched_shader.put());
+
+         game_device_data.modified_vertex_shaders[hash] = patched_shader;
+      }
    }
 
-   static void OnInitResource(reshade::api::device* device, const reshade::api::resource_desc& desc, const reshade::api::subresource_data* initial_data, reshade::api::resource_usage initial_state, reshade::api::resource resource)
+   // Keeps the pixel shaders code, and finds the material ones
+   void PreCreatePixelShader(ID3D11Device* native_device, const void*& bytecode, SIZE_T& length) override
    {
-      if (desc.type != reshade::api::resource_type::buffer ||
-          (desc.usage & reshade::api::resource_usage::vertex_buffer) == 0 ||
-          (desc.flags & reshade::api::resource_flags::immutable) == 0 ||
-          desc.buffer.size < 2000)
+      DeviceData* device_data = GetDeviceData(native_device);
+      if (!device_data || !bytecode)
+         return;
+      auto& game_device_data = GetGameDeviceData(*device_data);
+      uint32_t hash = Shader::BinToHash((const uint8_t*)bytecode, length);
+      std::vector<std::byte> code;
+      code.resize(length);
+      memcpy(&code[0], bytecode, length);
+      game_device_data.pixel_shader_code[hash] = std::move(code);
+
+      if (System::ScanMemoryForPattern((const std::byte*)bytecode, length, (std::byte*)"GFD_PSCONST_SYSTEM", 18, true).size() > 0)
+      {
+         shader_hashes_material.pixel_shaders.emplace(hash);
+      }
+   }
+
+   // Render target 5 is written opaque by every blend state
+   void PreCreateBlendState(ID3D11Device* native_device, D3D11_BLEND_DESC1& desc) override
+   {
+      // Like ReShade's conversion: without independent blending, every render target uses the first one's
+      if (!desc.IndependentBlendEnable)
+      {
+         for (UINT i = 1; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++)
+            desc.RenderTarget[i] = desc.RenderTarget[0];
+         desc.IndependentBlendEnable = TRUE;
+      }
+      desc.RenderTarget[5].BlendEnable = TRUE;
+      desc.RenderTarget[5].SrcBlend = D3D11_BLEND_ONE;
+      desc.RenderTarget[5].DestBlend = D3D11_BLEND_ZERO;
+      desc.RenderTarget[5].BlendOp = D3D11_BLEND_OP_ADD;
+      desc.RenderTarget[5].RenderTargetWriteMask = 15;
+   }
+
+   void PostCreateBuffer(ID3D11Device* device, const D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Buffer* buffer) override
+   {
+      if ((desc.BindFlags & D3D11_BIND_VERTEX_BUFFER) == 0 ||
+          desc.Usage != D3D11_USAGE_IMMUTABLE ||
+          desc.ByteWidth < 2000 ||
+          !initial_data || !initial_data->pSysMem)
       {
          return;
       }
 
-      auto& device_data = *device->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
-
-      ID3D11Buffer* buffer = (ID3D11Buffer*)resource.handle;
+      DeviceData* device_data = GetDeviceData(device);
+      if (!device_data || !device_data->game)
+         return;
+      auto& game_device_data = GetGameDeviceData(*device_data);
 
       {
          const std::shared_lock shared_lock_bounding_boxes(game_device_data.bounding_box_mutex);
@@ -2927,10 +2926,10 @@ public:
          box.min = {FLT_MAX, FLT_MAX, FLT_MAX};
          box.max = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
 
-         int64_t remaining_bytes = (int64_t)desc.buffer.size;
+         int64_t remaining_bytes = (int64_t)desc.ByteWidth;
          uint32_t stride = 28;
 
-         const byte* data = (const byte*)initial_data->data;
+         const byte* data = (const byte*)initial_data->pSysMem;
          while (remaining_bytes > 0)
          {
             float3 pos = *(float3*)data;
@@ -2956,10 +2955,10 @@ public:
          box.min = {FLT_MAX, FLT_MAX, FLT_MAX};
          box.max = {-FLT_MAX, -FLT_MAX, -FLT_MAX};
 
-         int64_t remaining_bytes = (int64_t)desc.buffer.size;
+         int64_t remaining_bytes = (int64_t)desc.ByteWidth;
          uint32_t stride = 40;
 
-         const byte* data = (const byte*)initial_data->data;
+         const byte* data = (const byte*)initial_data->pSysMem;
          while (remaining_bytes > 0)
          {
             float3 pos = *(float3*)data;
@@ -2983,23 +2982,39 @@ public:
       game_device_data.bounding_boxes[buffer] = {box28, box40};
    }
 
-   static void OnDestroyResource(reshade::api::device* device, reshade::api::resource resource)
+   void OnResourceDestroyed(const void* resource) override
    {
-      auto& device_data = *device->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
-
-      const std::unique_lock lock_bounding_boxes(game_device_data.bounding_box_mutex);
-      game_device_data.bounding_boxes.erase((ID3D11Buffer*)resource.handle);
+      // The game has one device
+      const std::shared_lock lock_devices(s_mutex_device);
+      for (DeviceData* device_data : global_devices_data)
+      {
+         if (!device_data->game)
+            continue;
+         auto& game_device_data = GetGameDeviceData(*device_data);
+         const std::unique_lock lock_bounding_boxes(game_device_data.bounding_box_mutex);
+         game_device_data.bounding_boxes.erase((ID3D11Buffer*)resource);
+      }
    }
 
-   static void OnInitCommandList(reshade::api::command_list* cmd_list)
+   // ReShade reported the immediate context first ("init_command_list"), then the deferred ones: the context tags count it
+   void PostCreateDevice(ID3D11Device* device) override
    {
-      ComPtr<ID3D11DeviceContext> native_device_context;
-      ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      HRESULT hr = device_child->QueryInterface(native_device_context.put());
-      if (native_device_context)
+      ComPtr<ID3D11DeviceContext> immediate_context;
+      device->GetImmediateContext(immediate_context.put());
+      if (DeviceData* device_data = GetDeviceData(device))
+         TagContext(*device_data, immediate_context.get());
+   }
+
+   void PostCreateDeferredContext(ID3D11Device* device, ID3D11DeviceContext* context) override
+   {
+      if (DeviceData* device_data = GetDeviceData(device))
+         TagContext(*device_data, context);
+   }
+
+   static void TagContext(DeviceData& device_data, ID3D11DeviceContext* native_device_context)
+   {
+      if (native_device_context && device_data.game)
       {
-         auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
          auto& game_device_data = GetGameDeviceData(device_data);
 
          // The game creates 13 deferred contexts in total - one of unknown use
@@ -3022,13 +3037,12 @@ public:
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
       if (ImGui::Checkbox("Enable HDR", &next_enable_hdr))
       {
-         reshade::set_config_value(runtime, NAME, "EnableHDR", next_enable_hdr);
+         Config::Set(NAME, "EnableHDR", next_enable_hdr);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
@@ -3041,7 +3055,7 @@ public:
          auto ChangeDisplayMode = [&](DisplayModeType display_mode, bool enable_hdr_on_display = true, IDXGISwapChain3* swapchain = nullptr)
          {
             int display_mode_i = int(display_mode);
-            reshade::set_config_value(runtime, NAME, "DisplayMode", display_mode_i);
+            Config::Set(NAME, "DisplayMode", display_mode_i);
             cb_luma_global_settings.DisplayMode = display_mode;
             OnDisplayModeChanged();
             if (display_mode >= DisplayModeType::HDR)
@@ -3058,7 +3072,7 @@ public:
                   Display::NVAPI::SetDisplayOutputMode(game_window, NV_DISPLAY_OUTPUT_MODE_HDR10PLUS_GAMING, false, false);
 #endif
                }
-               if (!reshade::get_config_value(runtime, NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite) || cb_luma_global_settings.ScenePeakWhite <= 0.f)
+               if (!Config::Get(NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite) || cb_luma_global_settings.ScenePeakWhite <= 0.f)
                {
                   cb_luma_global_settings.ScenePeakWhite = device_data.default_user_peak_white;
                }
@@ -3077,11 +3091,11 @@ public:
                }
                if (!use_os_reference_white_level)
                {
-                  if (!reshade::get_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite))
+                  if (!Config::Get(NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite))
                   {
                      cb_luma_global_settings.ScenePaperWhite = default_paper_white;
                   }
-                  if (!reshade::get_config_value(runtime, NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite))
+                  if (!Config::Get(NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite))
                   {
                      cb_luma_global_settings.UIPaperWhite = default_paper_white;
                   }
@@ -3120,7 +3134,7 @@ public:
                   }
                }
 
-               reshade::set_config_value(runtime, NAME, "UseOSReferenceWhiteLevel", use_os_reference_white_level);
+               Config::Set(NAME, "UseOSReferenceWhiteLevel", use_os_reference_white_level);
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
@@ -3132,7 +3146,7 @@ public:
             if (ImGui::SliderFloat(has_separate_ui_paper_white ? scene_paper_white_name : paper_white_name, &cb_luma_global_settings.ScenePaperWhite, srgb_white_level, max_white_level, "%.f"))
             {
                cb_luma_global_settings.ScenePaperWhite = max(cb_luma_global_settings.ScenePaperWhite, 0.0);
-               reshade::set_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
+               Config::Set(NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
 
                if (use_os_reference_white_level)
                {
@@ -3151,7 +3165,7 @@ public:
                if (ImGui::SmallButton(ICON_FK_WARNING))
                {
                   cb_luma_global_settings.ScenePaperWhite = default_paper_white;
-                  reshade::set_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
+                  Config::Set(NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
 
                   if (use_os_reference_white_level)
                   {
@@ -3171,7 +3185,7 @@ public:
                if (ImGui::SmallButton(ICON_FK_UNDO))
                {
                   cb_luma_global_settings.ScenePaperWhite = default_paper_white;
-                  reshade::set_config_value(runtime, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
+                  Config::Set(NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite);
 
                   if (use_os_reference_white_level)
                   {
@@ -3235,11 +3249,11 @@ public:
             {
                if (cb_luma_global_settings.ScenePeakWhite == device_data.default_user_peak_white)
                {
-                  reshade::set_config_value(runtime, NAME, "ScenePeakWhite", 0.f); // Store it as 0 to highlight that it's default (whatever the current or next display peak white is)
+                  Config::Set(NAME, "ScenePeakWhite", 0.f); // Store it as 0 to highlight that it's default (whatever the current or next display peak white is)
                }
                else
                {
-                  reshade::set_config_value(runtime, NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite);
+                  Config::Set(NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite);
                }
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -3253,7 +3267,7 @@ public:
                if (ImGui::SmallButton(ICON_FK_UNDO))
                {
                   cb_luma_global_settings.ScenePeakWhite = device_data.default_user_peak_white;
-                  reshade::set_config_value(runtime, NAME, "ScenePeakWhite", 0.f);
+                  Config::Set(NAME, "ScenePeakWhite", 0.f);
                }
                ImGui::PopID();
             }
@@ -3274,7 +3288,7 @@ public:
                if (ImGui::SliderFloat("UI Paper White", supports_custom_ui_paper_white_scaling ? &cb_luma_global_settings.UIPaperWhite : &cb_luma_global_settings.ScenePaperWhite, srgb_white_level, 500.f, "%.f"))
                {
                   cb_luma_global_settings.UIPaperWhite = max(cb_luma_global_settings.UIPaperWhite, 0.0);
-                  reshade::set_config_value(runtime, NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite);
+                  Config::Set(NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite);
                }
                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                {
@@ -3287,7 +3301,7 @@ public:
                   if (ImGui::SmallButton(ICON_FK_UNDO))
                   {
                      cb_luma_global_settings.UIPaperWhite = default_paper_white;
-                     reshade::set_config_value(runtime, NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite);
+                     Config::Set(NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite);
                   }
                   ImGui::PopID();
                }
@@ -3322,7 +3336,7 @@ public:
             if (ImGui::Selectable(name, selected))
             {
                upscaling_mode = (UpscalingMode)size;
-               reshade::set_config_value(runtime, NAME, "UpscalingMode", size);
+               Config::Set(NAME, "UpscalingMode", size);
             }
             if (selected)
             {
@@ -3370,7 +3384,7 @@ public:
             if (ImGui::Selectable(name, selected))
             {
                g_scene_ui_msaa_samples = size;
-               reshade::set_config_value(runtime, NAME, "SceneUiMsaaSamples", g_scene_ui_msaa_samples);
+               Config::Set(NAME, "SceneUiMsaaSamples", g_scene_ui_msaa_samples);
             }
             if (selected)
             {
@@ -3570,26 +3584,20 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       luma_settings_cbuffer_index = 8;
       luma_data_cbuffer_index = 9;
 
-      game = new MetaphorReFantazio();
+      SetGame<MetaphorReFantazio>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
-      reshade::unregister_event<reshade::addon_event::execute_secondary_command_list>(MetaphorReFantazio::OnExecuteSecondaryCommandList);
-      reshade::unregister_event<reshade::addon_event::update_buffer_region_command>(MetaphorReFantazio::OnUpdateBufferRegionCommand);
-      reshade::unregister_event<reshade::addon_event::create_pipeline>(MetaphorReFantazio::OnCreatePipeline);
-      reshade::unregister_event<reshade::addon_event::init_resource>(MetaphorReFantazio::OnInitResource);
-      reshade::unregister_event<reshade::addon_event::destroy_resource>(MetaphorReFantazio::OnDestroyResource);
-      reshade::unregister_event<reshade::addon_event::init_command_list>(MetaphorReFantazio::OnInitCommandList);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);
 
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
    {
-      reshade::get_config_value(nullptr, NAME, "FirstBoot", first_boot);
+      Config::Get(NAME, "FirstBoot", first_boot);
       if (first_boot)
       {
-         reshade::set_config_value(nullptr, NAME, "FirstBoot", false);
+         Config::Set(NAME, "FirstBoot", false);
 
          // Automatically enable HDR in the mod if it's supported on the primary display on first boot
          bool hdr_supported_display;
@@ -3597,11 +3605,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          Display::IsHDRSupportedAndEnabled(0, hdr_supported_display, hdr_enabled_display);
          enable_hdr = hdr_supported_display;
 
-         reshade::set_config_value(nullptr, NAME, "EnableHDR", enable_hdr);
+         Config::Set(NAME, "EnableHDR", enable_hdr);
       }
       else
       {
-         reshade::get_config_value(nullptr, NAME, "EnableHDR", enable_hdr);
+         Config::Get(NAME, "EnableHDR", enable_hdr);
       }
       next_enable_hdr = enable_hdr;
 

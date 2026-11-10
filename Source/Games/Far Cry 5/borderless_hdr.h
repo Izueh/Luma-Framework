@@ -10,14 +10,14 @@ namespace FC5::BorderlessHDR
    inline bool test_override = false;
    inline void LoadConfiguration()
    {
-      reshade::get_config_value(nullptr, NAME, "FC5BorderlessHDR", configured);
+      Config::Get(NAME, "FC5BorderlessHDR", configured);
       if (initialized) return;
       wchar_t value[8]{};
       test_override = GetEnvironmentVariableW(L"FC5_TEST_BORDERLESS_HDR", value, 8) == 1 && value[0] == L'1';
       active = configured || test_override;
       initialized = true;
       prevent_fullscreen_state = force_borderless = active;
-      reshade::log::message(reshade::log::level::info, active ?
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, active ?
          "[FC5 HDR] Borderless HDR startup option enabled; native scRGB required" :
          "[FC5 HDR] Borderless HDR startup option disabled");
    }
@@ -25,22 +25,21 @@ namespace FC5::BorderlessHDR
    {
       return active;
    }
-   inline bool OnCreate(reshade::api::device_api api, reshade::api::swapchain_desc& desc, void*)
+   // ReShade's "create_swapchain" (creation and resize), with the values each DXGI function takes
+   inline bool OnCreate(DXGI_FORMAT format, UINT samples, DXGI_SWAP_EFFECT* swap_effect, UINT& buffer_count, BOOL* windowed, UINT& flags)
    {
-      if (!Enabled() || api != reshade::api::device_api::d3d11 ||
-          desc.back_buffer.texture.format != reshade::api::format::r16g16b16a16_float ||
-          desc.back_buffer.texture.samples != 1) return false;
-      desc.present_mode = DXGI_SWAP_EFFECT_FLIP_DISCARD;
-      desc.back_buffer_count = (std::max)(desc.back_buffer_count, 2u);
-      desc.fullscreen_state = false;
-      desc.present_flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
-      reshade::log::message(reshade::log::level::info, "[FC5 HDR] TEST native FP16 flip-discard requested; SDR unchanged");
+      if (!Enabled() || format != DXGI_FORMAT_R16G16B16A16_FLOAT || samples != 1) return false;
+      if (swap_effect) *swap_effect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
+      buffer_count = (std::max)(buffer_count, 2u);
+      if (windowed) *windowed = TRUE;
+      flags &= ~DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "[FC5 HDR] TEST native FP16 flip-discard requested; SDR unchanged");
       return true;
    }
-   inline void OnInit(reshade::api::swapchain* swapchain, bool)
+   // ReShade's "init_swapchain" (creation and resize)
+   inline void OnInit(IDXGISwapChain* native)
    {
-      if (!Enabled() || swapchain->get_device()->get_api() != reshade::api::device_api::d3d11) return;
-      auto* native = reinterpret_cast<IDXGISwapChain*>(swapchain->get_native());
+      if (!Enabled() || !native) return;
       DXGI_SWAP_CHAIN_DESC desc{};
       if (FAILED(native->GetDesc(&desc))) return;
       HRESULT result = E_NOINTERFACE;
@@ -61,6 +60,6 @@ namespace FC5::BorderlessHDR
       std::snprintf(line, sizeof(line), "[FC5 HDR] TEST actual %ux%u format=%u effect=%u buffers=%u windowed=%d fullscreen=%d fsHR=%08X scRGB_HR=%08X",
          desc.BufferDesc.Width, desc.BufferDesc.Height, UINT(desc.BufferDesc.Format), UINT(desc.SwapEffect), desc.BufferCount,
          desc.Windowed, fullscreen, UINT(fs), UINT(result));
-      reshade::log::message(reshade::log::level::info, line);
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
    }
 }

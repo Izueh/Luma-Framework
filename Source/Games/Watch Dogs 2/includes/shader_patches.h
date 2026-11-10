@@ -6,9 +6,9 @@
 #endif
 
 /*
-      if (type != reshade::api::pipeline_subobject_type::vertex_shader)
+      if (type != D3D11_SHVER_VERTEX_SHADER)
       {
-         if (shader_hashes_ClothPreTransformed.Contains(shader_hash, reshade::api::shader_stage::vertex))
+         if (shader_hashes_ClothPreTransformed.Contains(shader_hash, ShaderStages::Vertex))
             return nullptr;
          
          DXBCHeader* dxbc_header = (DXBCHeader*)&shader_object[0];
@@ -91,7 +91,7 @@
                         {
                            if (*(uint32_t*)(shex + pos + 28) == 20)
                            {
-                              reshade::log::message(reshade::log::level::info, "Found motion vector shader.");
+                              Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Found motion vector shader.");
                               minus_cam_insert_pos = pos;
                               world_pos_reg_slot = *(uint32_t*)(shex + pos + 16);
                               *(uint32_t*)(shex + pos + 24) = luma_data_cbuffer_index;
@@ -202,7 +202,7 @@
                shader_hashes_Materials.vertex_shaders.emplace(uint32_t(shader_hash));
             }
             
-            reshade::log::message(reshade::log::level::info, "Found motion vector shader.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Found motion vector shader.");
             std::byte* match_address = matches[0];
             instruction_operand_register.u = *reinterpret_cast<uint32_t*>(match_address+8);
             for (int i = 0; i < 4; i++)
@@ -448,7 +448,7 @@ bool PatchVertexShader(std::vector<std::byte>& shader_code)
                            if (*(uint32_t*)(shex + pos + 28) == 20)
                            {
                               //std::cout << "DP4 Match viewport cb slot 20!" << std::endl;
-                              //reshade::log::message(reshade::log::level::info, "Found motion vector shader.");
+                              //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Found motion vector shader.");
                               minus_cam_insert_pos = pos;
                               world_pos_reg_slot = *(uint32_t*)(shex + pos + 16);
                               *(uint32_t*)(shex + pos + 24) = 11;

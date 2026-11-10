@@ -299,10 +299,8 @@ static void ExtractCameraData(DeviceData& device_data, GameDeviceDataFFXV& game_
 
 }
 
-static void CheckAndExtractPerViewGlobalsBuffer(reshade::api::device* device, reshade::api::resource resource, const void* data)
+static void CheckAndExtractPerViewGlobalsBuffer(DeviceData& device_data, const void* data)
 {
-
-   DeviceData& device_data = *device->get_private_data<DeviceData>();
    auto& game_device_data = *static_cast<GameDeviceDataFFXV*>(device_data.game);
 
    const uint8_t* view_cb_data_raw = reinterpret_cast<const uint8_t*>(data);

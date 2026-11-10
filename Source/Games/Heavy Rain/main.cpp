@@ -79,7 +79,7 @@ public:
       pending_swapchain_resize |= patched;
       if (!patched)
       {
-         reshade::log::message(reshade::log::level::warning, "Heavy Rain Luma failed to patch for Ultrawide compatibility.\nIf you have already patched the executable, restore the original.\nSteam and GOG versions of the game should work.");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "Heavy Rain Luma failed to patch for Ultrawide compatibility.\nIf you have already patched the executable, restore the original.\nSteam and GOG versions of the game should work.");
       }
 #endif
    }
@@ -89,14 +89,14 @@ public:
       device_data.game = new GameDeviceDataHeavyRain;
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+      auto& device_data = *GetSwapchainData(swapchain)->device_data;
 
       bool patched = Patches::SetOutputResolution(device_data.output_resolution.x + 0.5f, device_data.output_resolution.y + 0.5f);
       if (!patched)
       {
-         reshade::log::message(reshade::log::level::warning, "Heavy Rain Luma failed to patch for Ultrawide compatibility.\nIf you have already patched the executable, restore the original.\nSteam and GOG versions of the game should work.");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "Heavy Rain Luma failed to patch for Ultrawide compatibility.\nIf you have already patched the executable, restore the original.\nSteam and GOG versions of the game should work.");
       }
       pending_swapchain_resize |= patched;
 
@@ -113,9 +113,9 @@ public:
 
    // Add a saturate on opaque/transparent materials
    // Without this, some materials output alphas beyond 0-1, messing up the results if the render target is FLOAT (as opposed to the original UNORM)
-   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, D3D11_SHADER_VERSION_TYPE type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
    {
-      if (type != reshade::api::pipeline_subobject_type::pixel_shader) return nullptr;
+      if (type != D3D11_SHVER_PIXEL_SHADER) return nullptr;
 
       std::unique_ptr<std::byte[]> new_code = nullptr;
 
@@ -230,7 +230,7 @@ public:
       return new_code;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -346,16 +346,14 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "BloomAndLensFlareIntensity", cb_luma_global_settings.GameSettings.BloomAndLensFlareIntensity);
-      reshade::get_config_value(runtime, NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
-      reshade::get_config_value(runtime, NAME, "HDRBoostAmount", cb_luma_global_settings.GameSettings.HDRBoostAmount);
+      Config::Get(NAME, "BloomAndLensFlareIntensity", cb_luma_global_settings.GameSettings.BloomAndLensFlareIntensity);
+      Config::Get(NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
+      Config::Get(NAME, "HDRBoostAmount", cb_luma_global_settings.GameSettings.HDRBoostAmount);
       // "device_data.cb_luma_global_settings_dirty" should already be true at this point
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
@@ -368,31 +366,31 @@ public:
 
       if (ImGui::SliderFloat("Bloom and Lens Flare Intensity", &cb_luma_global_settings.GameSettings.BloomAndLensFlareIntensity, 0.f, 1.f))
       {
-         reshade::set_config_value(runtime, NAME, "BloomAndLensFlareIntensity", cb_luma_global_settings.GameSettings.BloomAndLensFlareIntensity);
+         Config::Set(NAME, "BloomAndLensFlareIntensity", cb_luma_global_settings.GameSettings.BloomAndLensFlareIntensity);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Note that this might not work on every scene");
       }
-      DrawResetButton(cb_luma_global_settings.GameSettings.BloomAndLensFlareIntensity, 1.f, "BloomAndLensFlareIntensity", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.BloomAndLensFlareIntensity, 1.f, "BloomAndLensFlareIntensity");
 
       if (ImGui::SliderFloat("Color Grading Intensity", &cb_luma_global_settings.GameSettings.ColorGradingIntensity, 0.f, 1.f))
       {
-         reshade::set_config_value(runtime, NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
+         Config::Set(NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
       }
-      DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingIntensity, 0.8f, "ColorGradingIntensity", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingIntensity, 0.8f, "ColorGradingIntensity");
 
       if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR && GetShaderDefineCompiledNumericalValue(char_ptr_crc32("ENABLE_FAKE_HDR")) > 0)
       {
          if (ImGui::SliderFloat("HDR Boost", &cb_luma_global_settings.GameSettings.HDRBoostAmount, 0.f, 1.f))
          {
-            reshade::set_config_value(runtime, NAME, "HDRBoostAmount", cb_luma_global_settings.GameSettings.HDRBoostAmount);
+            Config::Set(NAME, "HDRBoostAmount", cb_luma_global_settings.GameSettings.HDRBoostAmount);
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          {
             ImGui::SetTooltip("Vanilla look at 0");
          }
-         DrawResetButton(cb_luma_global_settings.GameSettings.HDRBoostAmount, 0.5f, "HDRBoostAmount", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.HDRBoostAmount, 0.5f, "HDRBoostAmount");
       }
 
 #if DEVELOPMENT
@@ -508,19 +506,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       // Most of these are probably not needed, the game always uses B8G8R8A8_UNORM, with no SRGB views etc
       texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
       };
       // Without aspect ratio patches, the game will be fixed at 16:9
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::CustomAspectRatio;
@@ -556,7 +552,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       sub_game_shaders_appendix = "Stripped"; // Just to not pollute the original shaders dump collection
 #endif
 
-      game = new HeavyRain();
+      SetGame<HeavyRain>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {

@@ -15,7 +15,6 @@
 
 #include <d3d11.h>
 #include <d3d11shader.h>
-#include <include/reshade.hpp>
 
 #include "com_ptr.h"
 #include "shader_types.h"
@@ -259,7 +258,7 @@ struct TraceDrawCallData
 
    const char* custom_name = "Unknown";
    // Luma passes ("Trace::CustomDraw()"): the stage whose state was recorded (none for markers), and its "native_shaders_definitions" key
-   reshade::api::shader_stage custom_stage = reshade::api::shader_stage(0);
+   ShaderStages custom_stage = ShaderStages::None;
    uint32_t custom_shader_hash = 0;
 };
 
@@ -366,7 +365,7 @@ namespace Trace
    void OnPresent(CommandListData& cmd_list_data);
    // Copies the view of the pass that just drew (still bound) selected by "debug_draw_mode" and "debug_draw_view_index" into "DeviceData::debug_draw_texture"
    bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view_index, ID3D11DeviceContext* native_device_context, DeviceData& device_data, bool is_dispatch);
-   bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view_index, reshade::api::command_list* cmd_list, bool is_dispatch = false);
+   bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view_index, CommandListData& cmd_list_data, bool is_dispatch = false);
    // Reads a constant buffer back (immediate contexts only) or copies it to read it later ("CopyBuffer()"), for the constant buffer tracking
    bool MapBufferData(com_ptr<ID3D11Buffer>& cb, ID3D11DeviceContext* native_device_context, std::vector<float>& buffer_data, UINT byte_width);
    bool CopyBuffer(com_ptr<ID3D11Buffer> cb, ID3D11DeviceContext* native_device_context, std::vector<float>& buffer_data, com_ptr<ID3D11Buffer>& cb_copy);
@@ -395,7 +394,7 @@ namespace Trace
    // Core: the entries of events that aren't draws, with the resource they read ("source", in "sr_*[0]") and the one they write ("target", in "rt_*[0]")
    void AddEvent(CommandListData& cmd_list_data, ID3D11DeviceContext* command_list, TraceDrawCallData::TraceDrawCallType type, ID3D11Resource* source = nullptr, ID3D11Resource* target = nullptr);
    // "values" are stored in "blend_factor" (depth and stencil in the first two for depth clears)
-   void AddClear(reshade::api::command_list* cmd_list, reshade::api::resource_view view, std::initializer_list<float> values);
+   void AddClear(CommandListData& cmd_list_data, uint64_t view, std::initializer_list<float> values);
    void AddCopy(CommandListData& cmd_list_data, ID3D11DeviceContext* command_list, ID3D11Resource* source, ID3D11Resource* target, const TraceDrawCallData::CopyInfo& copy_info);
    // Core: a deferred command list created or appended into "cmd_list_data", with the entries it recorded
    void JoinCommandList(CommandListData& cmd_list_data, CommandListData& secondary_cmd_list_data, ID3D11DeviceContext* command_list, bool is_finish_command_list);
@@ -416,7 +415,7 @@ namespace Trace
    GameDraw BeginGameDraw(CommandListData& cmd_list_data, DeviceData& device_data, ID3D11DeviceContext* native_device_context, bool is_dispatch);
    // Flags the draw's entries if the callbacks didn't let it through ("EndDraw()"), and reads the pass back for the debug draw and constant buffer tracking.
    // Returns whether it issued the draw itself ("draw") to read it back, then the hook mustn't let it through.
-   bool EndGameDraw(const GameDraw& game_draw, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::command_list* cmd_list, bool cancelled_or_replaced, const std::function<void()>& draw);
+   bool EndGameDraw(const GameDraw& game_draw, CommandListData& cmd_list_data, DeviceData& device_data, ID3D11DeviceContext* native_device_context, bool cancelled_or_replaced, const std::function<void()>& draw);
    // Core: at the end of every frame
    void EndFrame(DeviceData& device_data);
 
@@ -426,7 +425,7 @@ namespace Trace
       uint64_t pipeline = 0;
       uint32_t shader_hash = 0; // The pipeline's (first) shader, or the Luma pass's native shader
       uint32_t custom_pass = 0;
-      reshade::api::shader_stage stage = reshade::api::shader_stage(0);
+      ShaderStages stage = ShaderStages::None;
       int32_t instance = 0; // Among the passes with the same identity in a frame, like the runtime counters
       std::thread::id thread; // Set if the instances were counted on its thread only
    };

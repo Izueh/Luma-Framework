@@ -2,7 +2,7 @@
 #include "hooks.hpp"
 
 void LogXMMatrix(const char* label, const DirectX::XMMATRIX& matrix, 
-                 reshade::log::level level = reshade::log::level::debug)
+                 Luma::Utils::Log::Level level = Luma::Utils::Log::Level::Verbose)
 {
 #if DEVELOPMENT     
     std::stringstream s;
@@ -22,7 +22,7 @@ void LogXMMatrix(const char* label, const DirectX::XMMATRIX& matrix,
         if (row < 3) s << "\n";
     }
     
-    reshade::log::message(level, s.str().c_str());
+    Luma::Utils::Log::Write(level, s.str().c_str());
 #endif
 }
 
@@ -47,7 +47,7 @@ __int64 __fastcall Hooked_UpdateActiveCameraAddress(__int64 a1, __int64 a2)
     
     CameraData = reinterpret_cast<CCamera*>(a2);
     
-    //reshade::log::message(reshade::log::level::info, std::format("Camera Active: 0x{:X}", a2).c_str());
+    //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("Camera Active: 0x{:X}", a2).c_str());
 
     return original_result;
 }
@@ -96,7 +96,7 @@ __int64 __fastcall Hooked_ComputeProjectionMatrix(__int64 a1, float a2, float a3
     if (CameraData == nullptr)
         return original_result;
     
-    //reshade::log::message(reshade::log::level::info, std::format("Near: {:6f}, Far: {:6f}", CameraData->camera_distances.x, CameraData->camera_distances.y).c_str());
+    //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("Near: {:6f}, Far: {:6f}", CameraData->camera_distances.x, CameraData->camera_distances.y).c_str());
     
     //a2 - vert fov
     //a3 - aspect ratio
@@ -122,9 +122,9 @@ __int64 __fastcall Hooked_ComputeProjectionMatrix(__int64 a1, float a2, float a3
         s << "Computing projection matrix: ";
         s << std::format("Width: {}, Height: {}", *(int*)(RenderResolution + 0x00), *(int*)(RenderResolution + 0x04));
         s << std::format(", Near: {}, Far: {}, Aspect: {}, Jitter: {}, {}, FrameIdx: {}.", a4, a5, a3, projection_jitters.x, projection_jitters.y, cb_luma_global_settings.FrameIndex);
-        reshade::log::message(reshade::log::level::info, s.str().c_str());
+        Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
         
-        reshade::log::message(reshade::log::level::info, std::format("Camera Address: 0x{:X}", (a1-184)).c_str());
+        Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("Camera Address: 0x{:X}", (a1-184)).c_str());
 #endif
     }
     
@@ -136,7 +136,7 @@ void **__fastcall PostEffectSearchModeRendererPrepare(__int64 a1, float a2)
     auto original_result = g_search_mode_hook
     .unsafe_call<void**>(a1, a2);
     
-    //reshade::log::message(reshade::log::level::info, "Search Mode: On");
+    //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Search Mode: On");
     is_search_mode_on = true;
     
     return original_result;
@@ -147,7 +147,7 @@ char __fastcall Hooked_BattleMainLoopIterate(__int64 a1)
     auto original_result = g_battle_mode_hook
     .unsafe_call<char>(a1);
     
-    //reshade::log::message(reshade::log::level::info, "Battle Mode: On");
+    //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Battle Mode: On");
     
     is_in_battle_mode = true;
 
@@ -160,7 +160,7 @@ __int64 __fastcall PostEffectHatchingRendererPrepare(__int64 a1, float a2)
     auto original_result = g_postfx_hatching_hook
     .unsafe_call<__int64>(a1, a2);
         
-    //reshade::log::message(reshade::log::level::info, "Hatching: On");
+    //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Hatching: On");
 
     is_hatching_on = true;
         

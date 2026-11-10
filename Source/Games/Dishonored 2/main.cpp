@@ -141,9 +141,6 @@ public:
    {
       if (!failed)
       {
-         reshade::register_event<reshade::addon_event::map_buffer_region>(Dishonored2::OnMapBufferRegion);
-         reshade::register_event<reshade::addon_event::unmap_buffer_region>(Dishonored2::OnUnmapBufferRegion);
-         reshade::register_event<reshade::addon_event::execute_secondary_command_list>(Dishonored2::OnExecuteSecondaryCommandList);
       }
    }
 
@@ -160,10 +157,10 @@ public:
 
       shader_defines_data.append_range(game_shader_defines_data);
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("DS2 XeGTAO Prefilter Depths CS"), ShaderDefinition{ "Luma_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
-      native_shaders_definitions.emplace(CompileTimeStringHash("DS2 XeGTAO Main Pass PS"), ShaderDefinition{ "Luma_XeGTAO", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "main_pass_ps" });
-      native_shaders_definitions.emplace(CompileTimeStringHash("DS2 Pre DLSS CS"), ShaderDefinition{ "Luma_PreDLSS_CS", reshade::api::pipeline_subobject_type::compute_shader });
-      native_shaders_definitions.emplace(CompileTimeStringHash("DS2 Post DLSS CS"), ShaderDefinition{ "Luma_PostDLSS_CS", reshade::api::pipeline_subobject_type::compute_shader });
+      native_shaders_definitions.emplace(CompileTimeStringHash("DS2 XeGTAO Prefilter Depths CS"), ShaderDefinition{ "Luma_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "prefilter_depths16x16_cs" });
+      native_shaders_definitions.emplace(CompileTimeStringHash("DS2 XeGTAO Main Pass PS"), ShaderDefinition{ "Luma_XeGTAO", D3D11_SHVER_PIXEL_SHADER, nullptr, "main_pass_ps" });
+      native_shaders_definitions.emplace(CompileTimeStringHash("DS2 Pre DLSS CS"), ShaderDefinition{ "Luma_PreDLSS_CS", D3D11_SHVER_COMPUTE_SHADER });
+      native_shaders_definitions.emplace(CompileTimeStringHash("DS2 Post DLSS CS"), ShaderDefinition{ "Luma_PostDLSS_CS", D3D11_SHVER_COMPUTE_SHADER });
    }
 
    // This needs to be overridden with your own "GameDeviceData" sub-class (destruction is automatically handled)
@@ -177,7 +174,7 @@ public:
    {
    }
 
-   bool UpdateGlobalCB(const void* global_buffer_data_ptr, reshade::api::device* device) override
+   bool UpdateGlobalCB(const void* global_buffer_data_ptr, ID3D11Device* device) override
    {
       const CBPerViewGlobals& global_buffer_data = *((const CBPerViewGlobals*)global_buffer_data_ptr);
 
@@ -206,7 +203,7 @@ public:
          return false;
       }
 
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
+      DeviceData& device_data = *GetDeviceData(device);
       auto& game_device_data = GetGameDeviceData(device_data);
 
 #if DEVELOPMENT
@@ -365,7 +362,7 @@ public:
             // It also allows us to use the right samplers for this frame's resolution.
             if (texture_mip_lod_bias_offset_changed)
             {
-               ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
+               ID3D11Device* native_device = device;
                for (auto& samplers_handle : device_data.custom_sampler_by_original_sampler)
                {
                   if (samplers_handle.second.contains(new_texture_mip_lod_bias_offset)) continue; // Skip "resolutions" that already got their custom samplers created
@@ -415,7 +412,7 @@ public:
       game_device_data.found_per_view_globals = false;
    }
    
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -481,7 +478,7 @@ public:
             native_device_context->PSGetSamplers(0, 1, smp_original.put());
 
             // We have to manually set the LumaSettings CB even it's suposed to be already set.
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel | reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel | ShaderStages::Compute, LumaConstantBufferType::LumaSettings);
 
             // XeGTAOPrefilterDepths16x16 pass
             //
@@ -862,13 +859,32 @@ public:
       return DrawOrDispatchOverrideType::None; // Return true to cancel this draw call
    }
 
-   static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+   // Native hooks (buffers only)
+public:
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
    {
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+   }
+
+   bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+   {
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return false;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnUnmapBufferRegion(*cmd_list_data->device_data, buffer);
+      return false;
+   }
+
+   static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
+   {
       // No need to convert to native DX11 flags
-      if (access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write)
+      if ((access == D3D11_MAP_WRITE || access == D3D11_MAP_WRITE_NO_OVERWRITE) || access == D3D11_MAP_WRITE_DISCARD || access == D3D11_MAP_READ_WRITE)
       {
-         auto& device_data = *device->get_private_data<DeviceData>();
          // There seems to only ever be one buffer type of this size, but it's not guaranteed (we might have found more, but it doesn't matter, they are discarded later)...
          // They seemingly all happen on the same thread.
          // Some how these are not marked as "D3D11_BIND_CONSTANT_BUFFER", probably because it copies them over to some other buffer later?
@@ -886,10 +902,8 @@ public:
       }
    }
 
-   static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+   static void OnUnmapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer)
    {
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
       // We assume this buffer is always unmapped before destruction.
       bool is_global_cbuffer = device_data.cb_per_view_global_buffer != nullptr && device_data.cb_per_view_global_buffer == buffer;
       ASSERT_ONCE(!device_data.cb_per_view_global_buffer_map_data || is_global_cbuffer);
@@ -899,7 +913,7 @@ public:
          // they are never read by shaders on the GPU anyway.
          char global_buffer_data[sizeof(CBPerViewGlobals)];
          std::memcpy(&global_buffer_data[0], device_data.cb_per_view_global_buffer_map_data, sizeof(global_buffer_data));
-         if (game->UpdateGlobalCB(&global_buffer_data[0], device))
+         if (game->UpdateGlobalCB(&global_buffer_data[0], device_data.native_device))
          {
             // Write back the cbuffer data after we have fixed it up (we always do!)
             std::memcpy(device_data.cb_per_view_global_buffer_map_data, &cb_per_view_global, sizeof(CBPerViewGlobals));
@@ -911,35 +925,26 @@ public:
       }
    }
 
-   static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
+#if ENABLE_SR // The hooks are only needed for SR
+   // A command list is about to be replayed on a context (ReShade's "execute_secondary_command_list" on a context)
+   bool PreExecuteCommandList(ID3D11DeviceContext* native_device_context, ID3D11CommandList* native_command_list, BOOL restore) override
    {
-#if ENABLE_SR
-      com_ptr<ID3D11DeviceContext> native_device_context;
-      com_ptr<ID3D11CommandList> native_command_list;
-      ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      HRESULT hr = device_child->QueryInterface(&native_device_context);
-      // ReShade calls this for both DX11's "ExecuteCommandList()" and "FinishCommandList()",
-      // we are only interested in the first case, as the second one is irrelevant.
-      // "reshade::api::command_list" is a proxy of both "ID3D11DeviceContext" and "ID3D11CommandList",
-      // though only for the "ExecuteCommandList()" call the first one passes here will be a "ID3D11DeviceContext" and the second a "ID3D11CommandList",
-      // so we branch to make sure we are in that case.
-      if (SUCCEEDED(hr))
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return false;
       {
-         device_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         hr = device_child->QueryInterface(&native_command_list);
-         if (SUCCEEDED(hr))
          {
-            auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+            auto& device_data = *cmd_list_data->device_data;
             auto& game_device_data = GetGameDeviceData(device_data);
-            if (game_device_data.final_post_process_command_list == native_command_list.get())
+            if (game_device_data.final_post_process_command_list == native_command_list)
             {
                game_device_data.final_post_process_command_list = nullptr;
                device_data.has_drawn_main_post_processing = true;
             }
 
-            if (game_device_data.sr_remainder_command_list != native_command_list.get())
+            if (game_device_data.sr_remainder_command_list != native_command_list)
             {
-               return;
+               return false;
             }
             game_device_data.sr_remainder_command_list = nullptr;
 
@@ -959,15 +964,15 @@ public:
                game_device_data.sr_source_color = nullptr;
                game_device_data.sr_motion_vectors = nullptr;
                device_data.sr_output_color = nullptr;
-               return;
+               return false;
             }
 
             // Do "delayed" DLSS:
 
             DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
             DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
-            draw_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
-            compute_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
+            draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
+            compute_state_stack.Cache(native_device_context, device_data.uav_max_count);
 
             auto* sr_instance_data = device_data.GetSRInstanceData();
             ASSERT_ONCE(sr_instance_data);
@@ -1021,7 +1026,7 @@ public:
             settings_data.mvs_x_scale = -(float)render_width_dlss;
             settings_data.mvs_y_scale = -(float)render_height_dlss;
 
-            sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context.get(), settings_data);
+            sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
 
             bool reset_dlss = device_data.force_reset_sr;
             device_data.force_reset_sr = false;
@@ -1047,7 +1052,7 @@ public:
             draw_data.far_plane = cb_per_view_global.cb_globalviewinfos.w;
             draw_data.frame_index = cb_luma_global_settings.FrameIndex;
 
-            bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context.get(), draw_data);
+            bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
             ASSERT_ONCE(dlss_succeeded); // We can't restore the original TAA pass at this point (well, we could, but it's pointless, we'll just skip one frame) // TODO: copy the resource instead?
 
             // PostDLSS pass
@@ -1071,8 +1076,8 @@ public:
             game_device_data.sr_motion_vectors = nullptr;
             device_data.sr_output_color = nullptr;
 
-            draw_state_stack.Restore(native_device_context.get());
-            compute_state_stack.Restore(native_device_context.get());
+            draw_state_stack.Restore(native_device_context);
+            compute_state_stack.Restore(native_device_context);
 
             if (dlss_succeeded)
             {
@@ -1088,48 +1093,48 @@ public:
                device_data.force_reset_sr = true; // We missed frames so it's good to do this, it might also help prevent further errors
             }
          }
-         return;
       }
-      hr = device_child->QueryInterface(&native_command_list);
+      return false;
+   }
+
+   // A deferred context recorded a command list (ReShade's "execute_secondary_command_list" on a command list)
+   void PostFinishCommandList(ID3D11DeviceContext* native_device_context, BOOL restore, ID3D11CommandList* native_command_list) override
+   {
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return;
       {
-         device_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         hr = device_child->QueryInterface(&native_device_context);
-         if (SUCCEEDED(hr))
          {
-            auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+            auto& device_data = *cmd_list_data->device_data;
             auto& game_device_data = GetGameDeviceData(device_data);
-            if (game_device_data.final_post_process_command_list == native_device_context.get())
+            if (game_device_data.final_post_process_command_list == native_device_context)
             {
-               game_device_data.final_post_process_command_list = native_command_list.get();
+               game_device_data.final_post_process_command_list = native_command_list;
             }
-            if (game_device_data.sr_deferred_command_list == native_device_context.get())
+            if (game_device_data.sr_deferred_command_list == native_device_context)
             {
                game_device_data.sr_deferred_command_list = nullptr;
-               game_device_data.sr_remainder_command_list = native_command_list.get();
+               game_device_data.sr_remainder_command_list = native_command_list;
             }
-            return;
          }
       }
-      ASSERT_ONCE(false); // Invalid case?
-#endif // ENABLE_SR
    }
+#endif // ENABLE_SR
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
-      reshade::get_config_value(runtime, NAME, "XeGTAOEnable", g_xegtao_enable);
+      Config::Get(NAME, "XeGTAOEnable", g_xegtao_enable);
 
       auto& game_settings = cb_luma_global_settings.GameSettings;
-      reshade::get_config_value(runtime, NAME, "BloomStrength", game_settings.BloomStrength);
-      reshade::get_config_value(runtime, NAME, "LensDirtStrength", game_settings.LensDirtStrength);
-      reshade::get_config_value(runtime, NAME, "LensFlareStrength", game_settings.LensFlareStrength);
-      reshade::get_config_value(runtime, NAME, "VignetteStrength", game_settings.VignetteStrength);
+      Config::Get(NAME, "BloomStrength", game_settings.BloomStrength);
+      Config::Get(NAME, "LensDirtStrength", game_settings.LensDirtStrength);
+      Config::Get(NAME, "LensFlareStrength", game_settings.LensFlareStrength);
+      Config::Get(NAME, "VignetteStrength", game_settings.VignetteStrength);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::SeparatorText("Effects");
       auto& game_settings = cb_luma_global_settings.GameSettings;
@@ -1137,7 +1142,7 @@ public:
       if (ImGui::SliderFloat("Bloom Strength", &game_settings.BloomStrength, 0.f, 2.f))
          device_data.cb_luma_global_settings_dirty = true;
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(runtime, NAME, "BloomStrength", game_settings.BloomStrength);
+         Config::Set(NAME, "BloomStrength", game_settings.BloomStrength);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Bloom strength (1 = vanilla, 0 = disabled).");
       if (DrawResetButton(game_settings.BloomStrength, default_luma_global_game_settings.BloomStrength, "BloomStrength"))
@@ -1146,7 +1151,7 @@ public:
       if (ImGui::SliderFloat("Lens Dirt Strength", &game_settings.LensDirtStrength, 0.f, 2.f))
          device_data.cb_luma_global_settings_dirty = true;
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(runtime, NAME, "LensDirtStrength", game_settings.LensDirtStrength);
+         Config::Set(NAME, "LensDirtStrength", game_settings.LensDirtStrength);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Lens dirt strength (1 = vanilla, 0 = disabled).");
       if (DrawResetButton(game_settings.LensDirtStrength, default_luma_global_game_settings.LensDirtStrength, "LensDirtStrength"))
@@ -1155,7 +1160,7 @@ public:
       if (ImGui::SliderFloat("Lens Flare Strength", &game_settings.LensFlareStrength, 0.f, 2.f))
          device_data.cb_luma_global_settings_dirty = true;
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(runtime, NAME, "LensFlareStrength", game_settings.LensFlareStrength);
+         Config::Set(NAME, "LensFlareStrength", game_settings.LensFlareStrength);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Lens flare and streak strength (1 = vanilla, 0 = disabled).");
       if (DrawResetButton(game_settings.LensFlareStrength, default_luma_global_game_settings.LensFlareStrength, "LensFlareStrength"))
@@ -1164,7 +1169,7 @@ public:
       if (ImGui::SliderFloat("Vignette Strength", &game_settings.VignetteStrength, 0.f, 2.f))
          device_data.cb_luma_global_settings_dirty = true;
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(runtime, NAME, "VignetteStrength", game_settings.VignetteStrength);
+         Config::Set(NAME, "VignetteStrength", game_settings.VignetteStrength);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Screen-overlay vignette strength (1 = vanilla, 0 = disabled).");
       if (DrawResetButton(game_settings.VignetteStrength, default_luma_global_game_settings.VignetteStrength, "VignetteStrength"))
@@ -1174,7 +1179,7 @@ public:
 
       if (ImGui::Checkbox("XeGTAO Enable", &g_xegtao_enable))
       {
-         reshade::set_config_value(runtime, NAME, "XeGTAOEnable", g_xegtao_enable);
+         Config::Set(NAME, "XeGTAOEnable", g_xegtao_enable);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
@@ -1332,19 +1337,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
       };
 
       // FIXME: These are asserting.
@@ -1357,13 +1360,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       ui_separation_use_ui_hashes_only = true;
       ui_separation_format = DXGI_FORMAT_R16G16B16A16_FLOAT; // TODO: pick the best format, it's probably DXGI_FORMAT_R16G16B16A16_UNORM or DXGI_FORMAT_R8G8B8A8_UNORM.
 
-      game = new Dishonored2();
+      SetGame<Dishonored2>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(Dishonored2::OnMapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(Dishonored2::OnUnmapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::execute_secondary_command_list>(Dishonored2::OnExecuteSecondaryCommandList);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

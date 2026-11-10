@@ -83,8 +83,8 @@ static bool DrawNativePreSREncodePass(
       return false;
    }
    constexpr bool do_safety_checks = false;
-   SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
-   SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
+   SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
+   SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
 
    ctx->OMSetRenderTargets(0, nullptr, nullptr);
 
@@ -253,8 +253,8 @@ static bool DrawNativePostSREncodePass(
    }
 
    constexpr bool do_safety_checks = false;
-   SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
-   SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
+   SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
+   SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
 
    ctx->OMSetRenderTargets(0, nullptr, nullptr);
 
@@ -302,8 +302,8 @@ static bool DrawNativeUIEncodePass(
    }
 
    constexpr bool do_safety_checks = false;
-   SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
-   SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
+   SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
+   SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
 
    ctx->OMSetRenderTargets(0, nullptr, nullptr);
 

@@ -1,6 +1,5 @@
 #pragma once
 #include "upload_snapshot.h"
-#include "native_upload_hooks.h"
 #include <mutex>
 
 namespace FC5::UploadProbe
@@ -162,60 +161,41 @@ namespace FC5::UploadProbe
       { entry.snapshot.valid = true; ++d->second.stats.uploads; }
       entry.publish_pending = false;
    }
-   inline void OnInitDevice(reshade::api::device* device)
+   inline uint64_t Key(const void* object) { return reinterpret_cast<uint64_t>(object); }
+   inline void OnInitDevice(ID3D11Device* device)
    {
-      if (device->get_api() != reshade::api::device_api::d3d11) return;
       std::lock_guard lock(mutex);
-      if (!devices.contains(device->get_native()) && devices.size() >= 8) return;
-      devices[device->get_native()].gate.device_seen = true;
+      if (!devices.contains(Key(device)) && devices.size() >= 8) return;
+      devices[Key(device)].gate.device_seen = true;
    }
-   inline void OnInitCommandList(reshade::api::command_list* list)
+   // The immediate context (with its device) and the deferred ones. Map and Unmap are Luma's native hooks.
+   inline void OnInitContext(ID3D11Device* device, ID3D11DeviceContext* ctx)
    {
-      auto* device = list->get_device();
-      if (device->get_api() != reshade::api::device_api::d3d11) return;
-      // D3D11 emits this for BOTH contexts and finished ID3D11CommandList objects.
-      // QI instead of blindly treating the native pointer as a context.
-      com_ptr<ID3D11DeviceContext> ctx;
-      auto* native = reinterpret_cast<IUnknown*>(list->get_native());
-      const bool is_context = native && SUCCEEDED(native->QueryInterface(IID_PPV_ARGS(&ctx)));
-      const bool immediate = is_context && ctx->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE;
+      if (!ctx) return;
+      const bool immediate = ctx->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE;
       {
          std::lock_guard lock(mutex);
-         if (!devices.contains(device->get_native()) && devices.size() >= 8) return;
-         auto& gate = devices[device->get_native()].gate;
+         if (!devices.contains(Key(device)) && devices.size() >= 8) return;
+         auto& gate = devices[Key(device)].gate;
          if (immediate) gate.immediate_seen = true; else gate.deferred_seen = true;
-         if (is_context)
-         {
-            if (contexts.size() >= 128) { gate.native_failed = true; return; }
-            contexts[reinterpret_cast<uint64_t>(ctx.get())] = { device->get_native(), immediate, false };
-         }
-      }
-      if (!is_context) return; // Finished lists are invalidated at secondary execution.
-      // MinHook suspends threads; never hold the capture mutex while installing.
-      const bool installed = NativeUploads::Install(ctx.get());
-      {
-         std::lock_guard lock(mutex);
-         contexts[reinterpret_cast<uint64_t>(ctx.get())].ready = installed;
-         auto& gate = devices[device->get_native()].gate;
-         if (!installed) gate.native_failed = true;
-         else if (immediate) gate.native_capture = true;
+         if (contexts.size() >= 128) { gate.native_failed = true; return; }
+         contexts[Key(ctx)] = { Key(device), immediate, true };
+         if (immediate) gate.native_capture = true;
       }
       char line[180];
-      std::snprintf(line, sizeof(line), "[FC5 upload context] native=%p immediate=%d hooks=%d", ctx.get(), immediate, installed);
-      reshade::log::message(reshade::log::level::info, line);
+      std::snprintf(line, sizeof(line), "[FC5 upload context] native=%p immediate=%d", ctx, immediate);
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
    }
-   inline void OnDestroyCommandList(reshade::api::command_list* list)
+   inline void OnDestroyContext(const void* ctx)
    {
-      if (list->get_device()->get_api() != reshade::api::device_api::d3d11) return;
       std::lock_guard lock(mutex);
-      contexts.erase(list->get_native());
+      contexts.erase(Key(ctx));
    }
-   inline void OnSecondary(reshade::api::command_list* list, reshade::api::command_list*)
+   // A command list was recorded or executed (ReShade's "execute_secondary_command_list" in both directions)
+   inline void OnSecondary(ID3D11Device* device)
    {
-      auto* device = list->get_device();
-      if (device->get_api() != reshade::api::device_api::d3d11) return;
       std::lock_guard lock(mutex);
-      if (auto d = devices.find(device->get_native()); d != devices.end())
+      if (auto d = devices.find(Key(device)); d != devices.end())
       {
          d->second.gate.deferred_seen = true;
          ++d->second.stats.secondary;
@@ -223,44 +203,34 @@ namespace FC5::UploadProbe
          { entry.snapshot.Invalidate(); entry.trust.Invalidate(); entry.publish_pending = false; }
       }
    }
-   inline void Invalidate(reshade::api::device* device, reshade::api::resource resource)
+   // A copy or update wrote the buffer
+   inline void Invalidate(ID3D11Device* device, ID3D11Resource* resource)
    {
-      if (device->get_api() != reshade::api::device_api::d3d11) return;
       std::lock_guard lock(mutex);
-      const auto d = devices.find(device->get_native());
+      const auto d = devices.find(Key(device));
       if (d == devices.end()) return;
-      const auto e = d->second.buffers.find(resource.handle);
+      const auto e = d->second.buffers.find(Key(resource));
       if (e == d->second.buffers.end()) return;
       e->second.snapshot.Invalidate(); e->second.trust.Invalidate();
       e->second.publish_pending = false;
       ++d->second.stats.invalidations;
    }
-   inline bool OnCopy(reshade::api::command_list* list, reshade::api::resource, reshade::api::resource dest)
-   { Invalidate(list->get_device(), dest); return false; }
-   inline bool OnCopyBuffer(reshade::api::command_list* list, reshade::api::resource, uint64_t,
-      reshade::api::resource dest, uint64_t, uint64_t)
-   { Invalidate(list->get_device(), dest); return false; }
-   inline bool OnUpdate(reshade::api::device* device, const void*, reshade::api::resource dest, uint64_t, uint64_t)
-   { Invalidate(device, dest); return false; }
-   inline bool OnUpdateCommand(reshade::api::command_list* list, const void*, reshade::api::resource dest, uint64_t, uint64_t)
-   { Invalidate(list->get_device(), dest); return false; }
    inline void AdvanceFrame(ID3D11Device* device)
    {
       std::lock_guard lock(mutex);
       if (auto d = devices.find(reinterpret_cast<uint64_t>(device)); d != devices.end()) ++d->second.epoch;
    }
-   inline void OnDestroyResource(reshade::api::device* device, reshade::api::resource resource)
+   // The device isn't known on destruction, the resource can only be on one
+   inline void OnDestroyResource(const void* resource)
    {
-      if (device->get_api() != reshade::api::device_api::d3d11) return;
       std::lock_guard lock(mutex);
-      if (auto d = devices.find(device->get_native()); d != devices.end()) d->second.buffers.erase(resource.handle);
+      for (auto& [key, d] : devices) d.buffers.erase(Key(resource));
    }
-   inline void OnDestroyDevice(reshade::api::device* device)
+   inline void OnDestroyDevice(ID3D11Device* device)
    {
-      if (device->get_api() != reshade::api::device_api::d3d11) return;
       std::lock_guard lock(mutex);
-      devices.erase(device->get_native());
-      std::erase_if(contexts, [&](const auto& c) { return c.second.device == device->get_native(); });
+      devices.erase(Key(device));
+      std::erase_if(contexts, [&](const auto& c) { return c.second.device == Key(device); });
    }
    inline void Log(ID3D11Device* device, uint64_t frame)
    {
@@ -279,37 +249,7 @@ namespace FC5::UploadProbe
          frame, buffers, s.comparisons, s.fast, s.gpu, s.missing, s.stale, s.exact, s.jitter_equal, s.jitter_different, s.reused, s.uploads, s.rejected, s.capped,
          s.invalidations, gate.device_seen, gate.immediate_seen, gate.deferred_seen, gate.audit_failed,
          gate.native_capture, gate.native_failed, s.deferred_uploads, s.secondary);
-      reshade::log::message(reshade::log::level::info, line);
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
       timing.Log("upload-observer-copy-only", frame);
-   }
-   inline void Register()
-   {
-      NativeUploads::on_map = OnNativeMap;
-      NativeUploads::before_unmap = BeforeNativeUnmap;
-      NativeUploads::after_unmap = AfterNativeUnmap;
-      reshade::register_event<reshade::addon_event::destroy_resource>(OnDestroyResource);
-      reshade::register_event<reshade::addon_event::destroy_device>(OnDestroyDevice);
-      reshade::register_event<reshade::addon_event::init_device>(OnInitDevice);
-      reshade::register_event<reshade::addon_event::init_command_list>(OnInitCommandList);
-      reshade::register_event<reshade::addon_event::destroy_command_list>(OnDestroyCommandList);
-      reshade::register_event<reshade::addon_event::execute_secondary_command_list>(OnSecondary);
-      reshade::register_event<reshade::addon_event::copy_resource>(OnCopy);
-      reshade::register_event<reshade::addon_event::copy_buffer_region>(OnCopyBuffer);
-      reshade::register_event<reshade::addon_event::update_buffer_region>(OnUpdate);
-      reshade::register_event<reshade::addon_event::update_buffer_region_command>(OnUpdateCommand);
-   }
-   inline void Unregister(bool process_exit = false)
-   {
-      if (!process_exit) NativeUploads::Shutdown();
-      reshade::unregister_event<reshade::addon_event::destroy_resource>(OnDestroyResource);
-      reshade::unregister_event<reshade::addon_event::destroy_device>(OnDestroyDevice);
-      reshade::unregister_event<reshade::addon_event::init_device>(OnInitDevice);
-      reshade::unregister_event<reshade::addon_event::init_command_list>(OnInitCommandList);
-      reshade::unregister_event<reshade::addon_event::destroy_command_list>(OnDestroyCommandList);
-      reshade::unregister_event<reshade::addon_event::execute_secondary_command_list>(OnSecondary);
-      reshade::unregister_event<reshade::addon_event::copy_resource>(OnCopy);
-      reshade::unregister_event<reshade::addon_event::copy_buffer_region>(OnCopyBuffer);
-      reshade::unregister_event<reshade::addon_event::update_buffer_region>(OnUpdate);
-      reshade::unregister_event<reshade::addon_event::update_buffer_region_command>(OnUpdateCommand);
    }
 }

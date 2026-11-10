@@ -86,12 +86,12 @@ public:
       device_data.game = new GameDeviceDataMafiaIIDE;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
       // Fixes the boot screen accumulating garbage because the swapchain wasn't cleared, so we forcefully clear the swapchain, which wasn't done (possibly due to luma texture upgrades?)
-      if (((stages & reshade::api::shader_stage::pixel) == reshade::api::shader_stage::pixel)) // Game only has pixel shaders (no compute)
+      if (((stages & ShaderStages::Pixel) == ShaderStages::Pixel)) // Game only has pixel shaders (no compute)
       {
 #if 0 // Doesn't work, there's likely other shaders
          if (!original_shader_hashes.Contains(shader_hashes_UI_Boot))
@@ -102,7 +102,7 @@ public:
 #endif
          if (!game_device_data.has_booted && !game_device_data.has_drawn_anything)
          {
-            SwapchainData& swapchain_data = *(*device_data.swapchains.begin())->get_private_data<SwapchainData>(); // Game only ever has 1 swapchain, so this is safe
+            SwapchainData& swapchain_data = *GetSwapchainData(*device_data.swapchains.begin()); // Game only ever has 1 swapchain, so this is safe
             com_ptr<ID3D11RenderTargetView> display_composition_rtv;
             {
                const std::shared_lock lock_swapchain(swapchain_data.mutex);
@@ -301,30 +301,28 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       texture_upgrade_formats = {
 #if 1 // Most are unused, game is all R8G8B8A8_UNORM
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
             // Most post process textures are R10G10B10A2
-            reshade::api::format::r10g10b10a2_typeless,
-            reshade::api::format::r10g10b10a2_unorm,
+            DXGI_FORMAT_R10G10B10A2_TYPELESS,
+            DXGI_FORMAT_R10G10B10A2_UNORM,
 #endif
 #if 0 // Used by bloom mips, it's seemingly overkill but it also has an extremely small scale so maybe it's necessary to be 32bit
-            reshade::api::format::r32g32b32a32_float,
+            DXGI_FORMAT_R32G32B32A32_FLOAT,
 #endif
             // Unused
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
       };
       // Depth in Mafia II was 24 bits but exhibited some z-fighting, this partially fixes it
       texture_depth_upgrade_formats = {
-            reshade::api::format(DXGI_FORMAT_D24_UNORM_S8_UINT),
+            DXGI_FORMAT_D24_UNORM_S8_UINT,
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
 #if 1 // Seemingly not necessary
@@ -411,7 +409,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(0x9C0C7512, "Bloom Blur");
 #endif
 
-      game = new MafiaIIDE();
+      SetGame<MafiaIIDE>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

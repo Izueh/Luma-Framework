@@ -118,7 +118,6 @@ public:
     {
         if (!failed)
         {
-            reshade::register_event<reshade::addon_event::clear_render_target_view>(BatmanArkhamKnight::OnClearRenderTargetView);
         }
     }
 
@@ -141,10 +140,9 @@ public:
         device_data.game = new GameDeviceDataBatmanArkhamKnight;
     }
 
-    static bool OnClearRenderTargetView(reshade::api::command_list* cmd_list, reshade::api::resource_view rtv, const float color[4], uint32_t rect_count, const reshade::api::rect* rects)
+    bool PreClearRenderTargetView(ID3D11DeviceContext* context, ID3D11RenderTargetView* native_rtv, const FLOAT color[4]) override
     {
         // Get RTV resource and try to query it to texture2d.
-        auto native_rtv = (ID3D11RenderTargetView*)rtv.handle;
         ComPtr<ID3D11Resource> resource;
         native_rtv->GetResource(resource.put());
         ComPtr<ID3D11Texture2D> tex;
@@ -159,7 +157,10 @@ public:
             // at least here.
             if (tex_desc.Format == DXGI_FORMAT_R16G16_FLOAT)
             {
-                auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+                CommandListData* cmd_list_data = GetCommandListData(context);
+                if (!cmd_list_data)
+                    return false;
+                auto& device_data = *cmd_list_data->device_data;
                 auto& game_device_data = GetGameDeviceData(device_data);
 
                 game_device_data.resource_mvs = resource;
@@ -169,7 +170,7 @@ public:
         return false;
     }
 
-    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
     {
         auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -301,19 +302,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         texture_format_upgrades_type   = TextureFormatUpgradesType::AllowedEnabled;
         // ### Check which of these are needed and remove the rest ###
         texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
         };
         // ### Check these if textures are not upgraded ###
         texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
@@ -332,7 +331,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         // TODO: Remove this later!
         Globals::DEVELOPMENT_STATE = Globals::ModDevelopmentState::WorkInProgress;
 
-        game = new BatmanArkhamKnight();
+        SetGame<BatmanArkhamKnight>();
     }
 
     CoreMain(hModule, ul_reason_for_call, lpReserved);

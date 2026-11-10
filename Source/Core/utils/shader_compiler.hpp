@@ -3,6 +3,7 @@
 #include <atlbase.h>
 #include <d3dcompiler.h>
 #include <dxcapi.h>
+#include "./log.hpp"
 
 #include <optional>
 #include <sstream>
@@ -10,7 +11,6 @@
 #include <vector>
 #include <map>
 
-#include <include/reshade.hpp>
 
 #include "system.h"
 
@@ -358,7 +358,7 @@ namespace Shader
          {
             std::stringstream s;
             s << "D3DDisassemble failed with HRESULT 0x" << std::hex << std::uppercase << hr;
-            reshade::log::message(reshade::log::level::error, s.str().c_str());
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, s.str().c_str());
          }
       }
 
@@ -371,7 +371,7 @@ namespace Shader
       HMODULE dx_compiler = LoadLibraryW(L"dxcompiler.dll");
       if (dx_compiler == nullptr)
       {
-         reshade::log::message(reshade::log::level::error, "dxcompiler.dll not loaded");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, "dxcompiler.dll not loaded");
          return -1;
       }
       auto dxc_create_instance = DxcCreateInstanceProc(GetProcAddress(dx_compiler, "DxcCreateInstance"));
@@ -385,7 +385,7 @@ namespace Shader
       HMODULE dx_compiler = LoadLibraryW(L"dxcompiler.dll");
       if (dx_compiler == nullptr)
       {
-         reshade::log::message(reshade::log::level::error, "dxcompiler.dll not loaded");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, "dxcompiler.dll not loaded");
          return -1;
       }
       auto dxc_create_instance = DxcCreateInstanceProc(GetProcAddress(dx_compiler, "DxcCreateInstance"));
@@ -653,7 +653,7 @@ namespace Shader
             *out_error = "Unknown Error";
          }
          s << ")";
-         reshade::log::message(failed ? reshade::log::level::error : reshade::log::level::warning, s.str().c_str());
+         Luma::Utils::Log::Write(failed ? Luma::Utils::Log::Level::Error : Luma::Utils::Log::Level::Warning, s.str().c_str());
       }
       else if (out_error != nullptr)
       {
@@ -900,7 +900,7 @@ namespace Shader
             *out_error = "Unknown Error";
          }
          s << ")";
-         reshade::log::message(failed ? reshade::log::level::error : reshade::log::level::warning, s.str().c_str());
+         Luma::Utils::Log::Write(failed ? Luma::Utils::Log::Level::Error : Luma::Utils::Log::Level::Warning, s.str().c_str());
       }
       else if (out_error != nullptr)
       {

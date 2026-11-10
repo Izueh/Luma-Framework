@@ -94,7 +94,7 @@ namespace QuantumBreakUpscaling
          std::snprintf(message, sizeof(message), "QB native inputs: INPUT_GATE native=%s CB0_layout=%u CB1_layout=%u action=%s sr=%u thread=%lu",
             NativeInputFallbackText(native_reason), static_cast<unsigned>(frame_binding), static_cast<unsigned>(temporal_binding),
             action_names[static_cast<size_t>(action)], static_cast<unsigned>(sr_type), GetCurrentThreadId());
-         reshade::log::message(reshade::log::level::info, message);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, message);
       }
 
       void RecordDraw(NativeInputUsage& usage, bool success) noexcept
@@ -123,12 +123,12 @@ namespace QuantumBreakUpscaling
          std::snprintf(message, sizeof(message), "QB native inputs: INPUT_USAGE reason=%s native_selected=%llu game_taa_resolves=%llu skipped_resolves=%llu native_sr_draws=%llu native_sr_successes=%llu",
             reason, counts[0], usage.taa_resolves.load(std::memory_order_relaxed), usage.transition_skips.load(std::memory_order_relaxed),
             usage.native_draws.load(std::memory_order_relaxed), usage.native_successes.load(std::memory_order_relaxed));
-         reshade::log::message(reshade::log::level::info, message);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, message);
          std::snprintf(message, sizeof(message), "QB native inputs: GATE_TOTAL missing_both=%llu CB0_only=%llu CB1_only=%llu both_valid=%llu native_missing_bindings=%llu transition_skips=%llu",
             usage.binding_states[0].load(std::memory_order_relaxed), usage.binding_states[1].load(std::memory_order_relaxed),
             usage.binding_states[2].load(std::memory_order_relaxed), usage.binding_states[3].load(std::memory_order_relaxed),
             usage.native_missing_bindings.load(std::memory_order_relaxed), usage.transition_skips.load(std::memory_order_relaxed));
-         reshade::log::message(reshade::log::level::info, message);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, message);
          for (size_t i = 1u; i < counts.size(); ++i)
          {
             if (counts[i] == 0u)
@@ -137,7 +137,7 @@ namespace QuantumBreakUpscaling
             }
             std::snprintf(message, sizeof(message), "QB native inputs: REJECTION_TOTAL reason=%s count=%llu",
                NativeInputFallbackText(static_cast<NativeInputFallback>(i)), counts[i]);
-            reshade::log::message(reshade::log::level::info, message);
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, message);
          }
       }
 #endif
@@ -186,7 +186,7 @@ namespace QuantumBreakUpscaling
    {
 #if ENABLE_SR
       sr_game_tooltip = "Super Resolution engages during the temporal resolve pass.\n";
-      native_shaders_definitions.emplace(CompileTimeStringHash("QB Pre SR Decode"), ShaderDefinition{"Luma_QB_PreSRDecode", reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("QB Pre SR Decode"), ShaderDefinition{"Luma_QB_PreSRDecode", D3D11_SHVER_PIXEL_SHADER});
 #endif
    }
 
@@ -210,7 +210,7 @@ namespace QuantumBreakUpscaling
       char message[256];
       std::snprintf(message, sizeof(message), "QB native inputs: PREPARED event=INIT_DEVICE requested=%u thread=%lu hooks=%s",
          static_cast<unsigned>(IsRequested(device_data)), GetCurrentThreadId(), NativeHooks::StatusText());
-      reshade::log::message(reshade::log::level::info, message);
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, message);
 #endif
 #else
       (void)device_data;

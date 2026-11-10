@@ -5,7 +5,7 @@ static void LogExpectedCustomDrawSkipped(const char* pass_name, const std::strin
    msg += pass_name;
    msg += " | reason: ";
    msg += reason;
-   reshade::log::message(reshade::log::level::warning, msg.c_str());
+   Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, msg.c_str());
 }
 #endif
 
@@ -740,8 +740,8 @@ static void DrawNativeTonemapPass(
 
    {
       constexpr bool do_safety_checks = false;
-      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
-      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
+      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
+      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
    }
    ctx->OMSetRenderTargets(0, nullptr, nullptr);
 
@@ -829,8 +829,8 @@ static void DrawNativeCutsceneGammaPass(
 
    {
       constexpr bool do_safety_checks = false;
-      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
-      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
+      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
+      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
    }
 
    ctx->OMSetRenderTargets(0, nullptr, nullptr);
@@ -900,8 +900,8 @@ static void DrawNativeCutsceneColorGradePass(
 
    {
       constexpr bool do_safety_checks = false;
-      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
-      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
+      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
+      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
    }
 
    ctx->OMSetRenderTargets(0, nullptr, nullptr);
@@ -1004,8 +1004,8 @@ static void DrawNativeCutsceneOverlayBlendPass(
 
    {
       constexpr bool do_safety_checks = false;
-      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
-      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
+      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
+      SetLumaConstantBuffers(ctx, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
    }
 
    ctx->OMSetRenderTargets(0, nullptr, nullptr);

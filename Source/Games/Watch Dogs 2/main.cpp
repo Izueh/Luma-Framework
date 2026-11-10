@@ -5,7 +5,6 @@
 #define DEBUG_LOG 0
 #define HDR_ENABLED 0
 #define DISABLE_FOCUS_LOSS_SUPPRESSION 1
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 #define AVOID_INPUT_LOSS 1
 #define DISABLE_SWAPCHAIN_FLIP_MODEL 1
 
@@ -38,11 +37,13 @@ struct CachedRenderTargetResource
    D3D11_TEXTURE2D_DESC desc{};
 };
 
-struct __declspec(uuid("0209D65C-08B8-4E0F-ACAE-99B44ACC0B98")) WD2CmdListCache
+// Which constant buffers are the viewport one, per thread (each context records on its own thread), so no lock is needed
+struct WD2CmdListCache
 {
    std::unordered_set<uint64_t> known_viewport_cbuffers;
    std::unordered_set<uint64_t> known_non_viewport_cbuffers;
 };
+thread_local WD2CmdListCache wd2_cbuffers_cache;
 
 #if DEVELOPMENT
 struct WD2DebugInfo
@@ -276,7 +277,7 @@ public:
       if (!results.empty())
       {
          GetExistingSharedTexture = reinterpret_cast<fnGetExistingSharedTexture>(results[0]);
-         reshade::log::message(reshade::log::level::info, "Found GetExistingSharedTexture()");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Found GetExistingSharedTexture()");
       }
 
       pattern = {
@@ -293,7 +294,7 @@ public:
       {
          std::stringstream s;
          s << "Candidate: 0x" << std::hex << (uintptr_t)addr;
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
       }
 #endif
       if (!results.empty() && !g_deferred_fx_antialias_renderer_hook)
@@ -307,11 +308,11 @@ public:
 
          if (g_deferred_fx_antialias_renderer_hook)
          {
-            reshade::log::message(reshade::log::level::info, "Hook installed successfully");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Hook installed successfully");
          }
          else
          {
-            reshade::log::message(reshade::log::level::error, "Failed to create inline hook");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, "Failed to create inline hook");
          }
       }
       
@@ -349,22 +350,22 @@ public:
 
          if (g_net_hacking_renderer_hook)
          {
-            reshade::log::message(reshade::log::level::info, "Hook installed successfully");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Hook installed successfully");
          }
          else
          {
-            reshade::log::message(reshade::log::level::error, "Failed to create inline hook");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, "Failed to create inline hook");
          }
       }
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("Unjitter Depth"), ShaderDefinition{"Luma_CopyDepth", reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Copy Luminance"), ShaderDefinition{"Luma_CopyLuminance", reshade::api::pipeline_subobject_type::compute_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Unjitter Depth"), ShaderDefinition{"Luma_CopyDepth", D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Copy Luminance"), ShaderDefinition{"Luma_CopyLuminance", D3D11_SHVER_COMPUTE_SHADER});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode Motion Vector"),
-               ShaderDefinition{"Luma_DecodeMotionVector", reshade::api::pipeline_subobject_type::compute_shader});
+               ShaderDefinition{"Luma_DecodeMotionVector", D3D11_SHVER_COMPUTE_SHADER});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Decode Motion Vector ZTD"),
-      ShaderDefinition{"Luma_DecodeMotionVector", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, 
+      ShaderDefinition{"Luma_DecodeMotionVector", D3D11_SHVER_COMPUTE_SHADER, nullptr, nullptr, 
          {{"ZERO_TIME_DELTA", "1"}}});
 
       std::vector<ShaderDefineData> game_shader_defines_data = {
@@ -380,14 +381,6 @@ public:
    {
       if (!failed)
       {
-         reshade::register_event<reshade::addon_event::execute_secondary_command_list>(WatchDogs2::OnExecuteSecondaryCommandList);
-         reshade::register_event<reshade::addon_event::clear_render_target_view>(WatchDogs2::OnClearRenderTargetView);
-         reshade::register_event<reshade::addon_event::push_descriptors>(WatchDogs2::OnPushDescriptors);
-         reshade::register_event<reshade::addon_event::init_command_list>(WatchDogs2::OnInitCommandList);
-         reshade::register_event<reshade::addon_event::destroy_command_list>(WatchDogs2::OnDestroyCommandList);
-#if DEVELOPMENT
-         reshade::log::message(reshade::log::level::info, "OnLoad: OnExecuteSecondaryCommandList()");
-#endif
       }
    }
 
@@ -435,21 +428,12 @@ public:
 #endif
    }
    
-   static void OnInitCommandList(reshade::api::command_list *cmd_list)
-   {
-      cmd_list->create_private_data<WD2CmdListCache>();
-   }
-
-   static void OnDestroyCommandList(reshade::api::command_list *cmd_list)
-   {
-      cmd_list->destroy_private_data<WD2CmdListCache>();
-   }
    
-   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, D3D11_SHADER_VERSION_TYPE type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
    {
-      if (type == reshade::api::pipeline_subobject_type::vertex_shader)
+      if (type == D3D11_SHVER_VERTEX_SHADER)
       {
-         if (shader_hashes_ClothPreTransformed.Contains(shader_hash, reshade::api::shader_stage::vertex))
+         if (shader_hashes_ClothPreTransformed.Contains(shader_hash, ShaderStages::Vertex))
             return nullptr;
          
          std::unique_ptr<std::byte[]> new_code = nullptr;
@@ -497,7 +481,7 @@ public:
                //shader_hashes_Materials.vertex_shaders.emplace(uint32_t(shader_hash));
             }
             
-            reshade::log::message(reshade::log::level::info, "Found motion vector shader.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Found motion vector shader.");
             std::byte* match_address = matches[0];
             instruction_operand_register.u = *reinterpret_cast<uint32_t*>(match_address+8);
             for (int i = 0; i < 4; i++)
@@ -554,7 +538,7 @@ public:
          return new_code;
       }
       
-      if (type != reshade::api::pipeline_subobject_type::compute_shader)
+      if (type != D3D11_SHVER_COMPUTE_SHADER)
          return nullptr;
 
       std::unique_ptr<std::byte[]> new_code = nullptr;
@@ -672,7 +656,7 @@ public:
       {
          std::stringstream s;
          s << "Depth sampler: Creation Failed";
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
          return false;
       }
       
@@ -687,7 +671,7 @@ public:
          {
             std::stringstream s;
             s << "DS: DS State Creation Failed";
-            reshade::log::message(reshade::log::level::info, s.str().c_str());
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
             return false;
          }
       }
@@ -730,7 +714,7 @@ public:
       {
          std::stringstream s;
          s << "MV: Texture Creation Failed";
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
          return false;
       }
       
@@ -740,7 +724,7 @@ public:
       {
          std::stringstream s;
          s << "Depth: Texture Creation Failed";
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
          return false;
       }
       
@@ -750,7 +734,7 @@ public:
       {
          std::stringstream s;
          s << "Post FX Mask: Texture Creation Failed";
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
          return false;
       }
       
@@ -763,7 +747,7 @@ public:
       {
          std::stringstream s;
          s << "MV: UAV Creation Failed";
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
          return false;
       }
       
@@ -773,7 +757,7 @@ public:
       {
          std::stringstream s;
          s << "Depth: UAV Creation Failed";
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
          return false;
       }
       
@@ -783,7 +767,7 @@ public:
       {
          std::stringstream s;
          s << "Post FX Mask: UAV Creation Failed";
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
          return false;
       }
       
@@ -797,7 +781,7 @@ public:
       {
          std::stringstream s;
          s << "MV: SRV Creation Failed";
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
          return false;
       }
       
@@ -807,7 +791,7 @@ public:
       {
          std::stringstream s;
          s << "Depth: SRV Creation Failed";
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
          return false;
       }
       
@@ -817,7 +801,7 @@ public:
       {
          std::stringstream s;
          s << "Post FX Mask: SRV Creation Failed";
-         reshade::log::message(reshade::log::level::info, s.str().c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.str().c_str());
          return false;
       }
       
@@ -849,15 +833,15 @@ public:
       return true;
    }
    
-   static bool OnClearRenderTargetView(reshade::api::command_list* cmd_list, reshade::api::resource_view rtv, const float color[4], uint32_t rect_count, const reshade::api::rect* rects)
+   bool PreClearRenderTargetView(ID3D11DeviceContext* context, ID3D11RenderTargetView* native_rtv, const FLOAT color[4]) override
    {
-      if (!IsSupportedGraphicsAPI(cmd_list->get_device()->get_api()))
+      if (!native_rtv)
          return false;
-      
-      if (rtv.handle == 0)
+
+      CommandListData* cmd_list_data = GetCommandListData(context);
+      if (!cmd_list_data)
          return false;
-      
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      auto& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
       
       if (device_data.sr_type == SR::Type::None)
@@ -870,17 +854,20 @@ public:
          return false;
       
       {
-         auto* device = cmd_list->get_device();
-         auto current_rtv_resource = device->get_resource_from_view(rtv);
-         auto current_rtv = device->get_resource_desc(current_rtv_resource);
+         ComPtr<ID3D11Resource> current_rtv_resource;
+         native_rtv->GetResource(current_rtv_resource.put());
+         ComPtr<ID3D11Texture2D> current_rtv_texture;
+         if (!current_rtv_resource || FAILED(current_rtv_resource->QueryInterface(current_rtv_texture.put())))
+            return false;
+         D3D11_TEXTURE2D_DESC current_rtv;
+         current_rtv_texture->GetDesc(&current_rtv);
 
          // specifically float, not typeless
-         if (current_rtv.texture.format == reshade::api::format::r16g16_float)
+         if (current_rtv.Format == DXGI_FORMAT_R16G16_FLOAT)
          {
-            if (current_rtv.texture.width != g_perFrame.RenderResolutionInt.x || current_rtv.texture.height != g_perFrame.RenderResolutionInt.y)
+            if (current_rtv.Width != g_perFrame.RenderResolutionInt.x || current_rtv.Height != g_perFrame.RenderResolutionInt.y)
                return false;
-            
-            ID3D11RenderTargetView* native_rtv = reinterpret_cast<ID3D11RenderTargetView*>(rtv.handle);
+
             game_device_data.motion_vectors_rtv = native_rtv;
          }
       }
@@ -888,72 +875,58 @@ public:
       return false;
    }
 
-   static void OnPushDescriptors(reshade::api::command_list *cmd_list, reshade::api::shader_stage stages, reshade::api::pipeline_layout layout, uint32_t layout_param, const reshade::api::descriptor_table_update &update)
+   // When the game binds its viewport cbuffer to the vertex shader, Luma's data cbuffer goes with it
+   bool PreVSSetConstantBuffers(ID3D11DeviceContext* native_device_context, UINT start, UINT count, ID3D11Buffer** buffers, const UINT* first_constant, const UINT* num_constants) override
    {
-      if (test_index == 14)
-         return;
+      if (test_index == 14 || !buffers)
+         return false;
 
-      if ((stages & reshade::api::shader_stage::vertex) == 0)
-         return;
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (cmd_list_data == nullptr)
+         return false;
+      WD2CmdListCache* luma_cache = &wd2_cbuffers_cache;
 
-      if (update.type != reshade::api::descriptor_type::constant_buffer)
-         return;
-
-      auto *native_device_context = reinterpret_cast<ID3D11DeviceContext *>(cmd_list->get_native());
-      if (native_device_context == nullptr)
-         return;
-
-      CommandListData *cmd_list_data = cmd_list->get_private_data<CommandListData>();
-      DeviceData *device_data = cmd_list->get_device()->get_private_data<DeviceData>();
-      WD2CmdListCache *luma_cache = cmd_list->get_private_data<WD2CmdListCache>();
-
-      if (cmd_list_data == nullptr || device_data == nullptr || luma_cache == nullptr)
-         return;
-
-      const auto *ranges = static_cast<const reshade::api::buffer_range *>(update.descriptors);
-
-      for (uint32_t i = 0; i < update.count; ++i)
+      for (uint32_t i = 0; i < count; ++i)
       {
-         const reshade::api::buffer_range &range = ranges[i];
-         if (range.buffer.handle == 0)
+         const uint64_t buffer_handle = reinterpret_cast<uint64_t>(buffers[i]);
+         if (buffer_handle == 0)
             continue;
 
-         if (luma_cache->known_viewport_cbuffers.contains(range.buffer.handle))
+         bool is_viewport = luma_cache->known_viewport_cbuffers.contains(buffer_handle);
+         if (!is_viewport)
          {
-            SetLumaConstantBuffers(native_device_context, *cmd_list_data, *device_data, reshade::api::shader_stage::vertex, LumaConstantBufferType::LumaData);
-            return;
-         }
-         if (luma_cache->known_non_viewport_cbuffers.contains(range.buffer.handle))
-            continue;
-
-         auto *native_buffer = reinterpret_cast<ID3D11Buffer *>(range.buffer.handle);
-         bool is_viewport = false;
-
-         if (native_buffer != nullptr)
-         {
+            if (luma_cache->known_non_viewport_cbuffers.contains(buffer_handle))
+               continue;
             D3D11_BUFFER_DESC desc{};
-            native_buffer->GetDesc(&desc);
+            buffers[i]->GetDesc(&desc);
             is_viewport = (desc.ByteWidth == 3008);
+            if (is_viewport)
+               luma_cache->known_viewport_cbuffers.insert(buffer_handle);
+            else
+               luma_cache->known_non_viewport_cbuffers.insert(buffer_handle);
          }
 
          if (is_viewport)
          {
-            luma_cache->known_viewport_cbuffers.insert(range.buffer.handle);
-            SetLumaConstantBuffers(native_device_context, *cmd_list_data, *device_data, reshade::api::shader_stage::vertex, LumaConstantBufferType::LumaData);
-            return;
-         }
-         else
-         {
-            luma_cache->known_non_viewport_cbuffers.insert(range.buffer.handle);
+            SetLumaConstantBuffers(native_device_context, *cmd_list_data, *cmd_list_data->device_data, ShaderStages::Vertex, LumaConstantBufferType::LumaData);
+            // This runs before the game's bind (ReShade's event ran after it): if its range covers Luma's slot, bind ours in it
+            if (luma_data_cbuffer_index >= 0 && UINT(luma_data_cbuffer_index) >= start && UINT(luma_data_cbuffer_index) < start + count)
+            {
+               ComPtr<ID3D11Buffer> luma_buffer;
+               native_device_context->VSGetConstantBuffers(luma_data_cbuffer_index, 1, luma_buffer.put());
+               buffers[luma_data_cbuffer_index - start] = luma_buffer.get(); // Still bound, so it stays alive
+            }
+            return false;
          }
       }
+      return false;
    }
    
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
 #if HDR_ENABLED
       // Make sure the swapchain copy shader always and only targets the swapchain RT, otherwise we'd need to branch in it!
-      if (is_custom_pass && (stages & reshade::api::shader_stage::compute) != 0 && original_shader_hashes.Contains(shader_hashes_ColorGradingLUT))
+      if (is_custom_pass && (stages & ShaderStages::Compute) != 0 && original_shader_hashes.Contains(shader_hashes_ColorGradingLUT))
       {
          // We need access to a linear sampler in the customized version of this CS, so add it (and make sure it's not overlapping with any other used slot, so we don't pollute the state)
          ID3D11SamplerState* const sampler_state_linear = device_data.sampler_state_linear.get();
@@ -970,7 +943,7 @@ public:
       }
 #endif
       
-      if ((stages & reshade::api::shader_stage::compute) != 0 && original_shader_hashes.Contains(shader_hashes_TemporalFiltering))
+      if ((stages & ShaderStages::Compute) != 0 && original_shader_hashes.Contains(shader_hashes_TemporalFiltering))
       {
          static bool has_sent_tf_warning = false;
          if (!has_sent_tf_warning && MessageBoxA(NULL, "Temporal Filtering is broken in Watch Dogs 2 depending on your GPU, Luma suggests against using it.", "Temporal Filtering detected", MB_OK | MB_SETFOREGROUND) == IDOK)
@@ -1004,7 +977,7 @@ public:
             native_device_context->VSGetConstantBuffers(luma_data_cbuffer_index, 1, cbv.put());
             if (cbv == nullptr)
             {
-               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::vertex, LumaConstantBufferType::LumaData);
+               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Vertex, LumaConstantBufferType::LumaData);
                //motion_vector_contexts.emplace(native_device_context);
             }
             return DrawOrDispatchOverrideType::None;
@@ -1019,7 +992,7 @@ public:
          native_device_context->VSGetConstantBuffers(luma_data_cbuffer_index, 1, cbv.put());
          if (cbv == nullptr)
          {
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::vertex, LumaConstantBufferType::LumaData);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Vertex, LumaConstantBufferType::LumaData);
             //motion_vector_contexts.emplace(native_device_context);
          }
 #endif
@@ -1196,7 +1169,7 @@ public:
 
       if (device_data.sr_type != SR::Type::None && !game_device_data.has_drawn_upscaling)
       {
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaSettings);
 
          auto* sr_instance_data = device_data.GetSRInstanceData();
          {
@@ -1224,7 +1197,7 @@ public:
          {
             if (CreateMVResources(native_device, game_device_data))
             {
-               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData);
+               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaData);
                
                ID3D11ShaderResourceView* srvs[] = {game_device_data.cached_motion_vectors.srv.get(), g_perFrame.LinearDepthTexture->m_texture->m_shaderResourceView};
                ID3D11UnorderedAccessView* uavs[] = {game_device_data.decoded_motion_vectors_uav.get(), game_device_data.unjittered_depth_uav.get()};
@@ -1293,7 +1266,7 @@ public:
                game_device_data.postfx_mask_rtv->GetResource(mask_resource.put());
                native_device_context->CopyResource(game_device_data.unjittered_postfx_mask.get(), mask_resource.get());
             }
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData);
 
             native_device_context->IAGetVertexBuffers(0, 1, 0, 0, 0);
             constexpr FLOAT blend_factor_alpha[4] = {1.f, 1.f, 1.f, 1.f};
@@ -1354,48 +1327,37 @@ public:
       }
    }
    
-   static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
+   // A command list is about to be replayed on a context (ReShade's "execute_secondary_command_list" on a context)
+   bool PreExecuteCommandList(ID3D11DeviceContext* native_device_context, ID3D11CommandList* native_command_list, BOOL restore) override
    {
-      SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api());
-      
-      ComPtr<ID3D11DeviceContext> native_device_context;
-      ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      HRESULT hr = device_child->QueryInterface(native_device_context.put());
-
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return false;
+      auto& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      if (native_device_context)
+      if (native_command_list == game_device_data.remainder_command_list && game_device_data.partial_command_list)
       {
-         ComPtr<ID3D11CommandList> native_command_list;
-         ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         HRESULT hr = device_child->QueryInterface(native_command_list.put());
-         if (native_command_list.get() == game_device_data.remainder_command_list && game_device_data.partial_command_list)
-         {
-            native_device_context->ExecuteCommandList(game_device_data.partial_command_list.get(), FALSE);
-            game_device_data.partial_command_list.reset();
-            game_device_data.remainder_command_list.store(nullptr, std::memory_order_relaxed);
-            
-            CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
-            
-            ComPtr<ID3D11Device> native_device;
-            native_device_context->GetDevice(native_device.put());
-            
-            DrawSR(device_data, game_device_data, cmd_list_data, native_device.get(), native_device_context.get());
-         }
+         native_device_context->ExecuteCommandList(game_device_data.partial_command_list.get(), FALSE);
+         game_device_data.partial_command_list.reset();
+         game_device_data.remainder_command_list.store(nullptr, std::memory_order_relaxed);
+
+         DrawSR(device_data, game_device_data, *cmd_list_data, device_data.native_device, native_device_context);
       }
-      
-      ComPtr<ID3D11CommandList> native_command_list;
-      hr = device_child->QueryInterface(native_command_list.put());
-      if (native_command_list)
+      return false;
+   }
+
+   // A deferred context recorded a command list (ReShade's "execute_secondary_command_list" on a command list)
+   void PostFinishCommandList(ID3D11DeviceContext* native_device_context, BOOL restore, ID3D11CommandList* native_command_list) override
+   {
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return;
+      auto& game_device_data = GetGameDeviceData(*cmd_list_data->device_data);
+      if (native_device_context == game_device_data.draw_device_context)
       {
-         ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         hr = device_child->QueryInterface(native_device_context.put());
-         if (native_device_context.get() == game_device_data.draw_device_context)
-         {
-            game_device_data.remainder_command_list.store(native_command_list.get(), std::memory_order_release);
-            game_device_data.draw_device_context = nullptr;
-         }
+         game_device_data.remainder_command_list.store(native_command_list, std::memory_order_release);
+         game_device_data.draw_device_context = nullptr;
       }
    }
    
@@ -1698,25 +1660,23 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       texture_upgrade_formats = {
 #if 0 // TODO: needed?
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
 #endif
 #if 0 // These are probably not needed (unused) but shouldn't hurt (actually they are!!!)
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 #else
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::b8g8r8a8_typeless,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
 #endif
 #if 1
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
 #endif
       };
       //texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
@@ -1879,17 +1839,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(Shader::Hash_StrToNum("4053E8B2"), "Temporal Accumulation Resolve");
 #endif
 
-      game = new WatchDogs2();
+      SetGame<WatchDogs2>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
       g_deferred_fx_antialias_renderer_hook.reset();
       g_net_hacking_renderer_hook.reset();
-      reshade::unregister_event<reshade::addon_event::execute_secondary_command_list>(WatchDogs2::OnExecuteSecondaryCommandList);
-      reshade::unregister_event<reshade::addon_event::clear_render_target_view>(WatchDogs2::OnClearRenderTargetView);
-      reshade::unregister_event<reshade::addon_event::push_descriptors>(WatchDogs2::OnPushDescriptors);
-      reshade::unregister_event<reshade::addon_event::init_command_list>(WatchDogs2::OnInitCommandList);
-      reshade::unregister_event<reshade::addon_event::destroy_command_list>(WatchDogs2::OnDestroyCommandList);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

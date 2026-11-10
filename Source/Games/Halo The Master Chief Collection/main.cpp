@@ -262,10 +262,10 @@ namespace
       
       void OnInit()
       {
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_Prefilter),    ShaderDefinition{ Luma_H2A_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_MainPass),     ShaderDefinition{ Luma_H2A_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_DenoisePass1), ShaderDefinition{ Luma_H2A_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
-         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_DenoisePass2), ShaderDefinition{ Luma_H2A_XeGTAO, reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_Prefilter),    ShaderDefinition{ Luma_H2A_XeGTAO, D3D11_SHVER_COMPUTE_SHADER, nullptr, "prefilter_depths16x16_cs" });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_MainPass),     ShaderDefinition{ Luma_H2A_XeGTAO, D3D11_SHVER_COMPUTE_SHADER, nullptr, "main_pass_cs" });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_DenoisePass1), ShaderDefinition{ Luma_H2A_XeGTAO, D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
+         native_shaders_definitions.emplace(CompileTimeStringHash(Luma_H2A_XeGTAO_DenoisePass2), ShaderDefinition{ Luma_H2A_XeGTAO, D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
       }
 
       namespace H2A
@@ -338,7 +338,7 @@ namespace
             native_device_context->CSSetConstantBuffers(0, 1, &cb7);
 
             // CB: Luma
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaSettings);
 
             // samplers
             const std::array<ID3D11SamplerState*, 2> samplers = { device_data.sampler_state_point.get(), device_data.sampler_state_linear.get() };
@@ -625,7 +625,7 @@ namespace
       
       void OnLoadConfigs()
       {
-         reshade::get_config_value(nullptr, NAME, H2A::denoise_reshadesave, H2A::denoise);
+         Config::Get(NAME, H2A::denoise_reshadesave, H2A::denoise);
       }
       
       void OnSubGameChange(SubGame prev_game, SubGame new_game)
@@ -681,7 +681,7 @@ namespace
 
       void OnLoadConfigs()
       {
-         reshade::get_config_value(nullptr, NAME, H1C::sigma_reshadesave, H1C::sigma);
+         Config::Get(NAME, H1C::sigma_reshadesave, H1C::sigma);
       }
 
       void OnSubGameChange(SubGame prev_game, SubGame new_game)
@@ -777,7 +777,7 @@ namespace
          auto sg = GetSettings(new_game);
          if (!sg) return;
 
-         message(reshade::log::level::info, std::format("SubGameUserSettingsHandler Applying SubGame settings for {}: Peak={}, ScenePaperWhite={}, GamePaperWhite={}", SubGameToString(new_game), sg->peak, sg->paper_scene, sg->paper_ui).c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("SubGameUserSettingsHandler Applying SubGame settings for {}: Peak={}, ScenePaperWhite={}, GamePaperWhite={}", SubGameToString(new_game), sg->peak, sg->paper_scene, sg->paper_ui).c_str());
 
          if (sg->peak > 0) cb_luma_global_settings.ScenePeakWhite = sg->peak;
          if (sg->paper_scene > 0) cb_luma_global_settings.ScenePaperWhite = sg->paper_scene;
@@ -794,7 +794,7 @@ namespace
       {
          if (ImGui::Checkbox("Enable Per Game Settings", &enabled))
          {
-            reshade::set_config_value(nullptr, reshade_config_section, "EnablePerGameSettings", enabled);
+            Config::Set(reshade_config_section, "EnablePerGameSettings", enabled);
             OnSubGameChange(curr_game);
          }
 
@@ -824,9 +824,9 @@ namespace
                ImGui::SliderInt("Scene Paper White", &s->paper_scene, 0, 500, GetFormat(s->paper_scene));
                ImGui::SliderInt("UI Paper White", &s->paper_ui, 0, 500, GetFormat(s->paper_ui));
                
-               if (peak != s->peak) reshade::set_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "Peak"), s->peak);
-               if (paper_scene != s->paper_scene) reshade::set_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "Scene"), s->paper_scene);
-               if (paper_ui != s->paper_ui) reshade::set_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "UI"), s->paper_ui);
+               if (peak != s->peak) Config::Set(reshade_config_section, GetSubGameSaveKey(sg.subgame, "Peak"), s->peak);
+               if (paper_scene != s->paper_scene) Config::Set(reshade_config_section, GetSubGameSaveKey(sg.subgame, "Scene"), s->paper_scene);
+               if (paper_ui != s->paper_ui) Config::Set(reshade_config_section, GetSubGameSaveKey(sg.subgame, "UI"), s->paper_ui);
 
                ImGui::TreePop();
             }
@@ -837,14 +837,14 @@ namespace
 
       void OnLoadConfigs()
       {
-         reshade::get_config_value(nullptr, reshade_config_section, "EnablePerGameSettings", enabled);
+         Config::Get(reshade_config_section, "EnablePerGameSettings", enabled);
 
          for (auto& sg : settings)
          {
             auto* s = GetSettings(sg.subgame);
-            reshade::get_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "Peak"), s->peak);
-            reshade::get_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "Scene"), s->paper_scene);
-            reshade::get_config_value(nullptr, reshade_config_section, GetSubGameSaveKey(sg.subgame, "UI"), s->paper_ui);
+            Config::Get(reshade_config_section, GetSubGameSaveKey(sg.subgame, "Peak"), s->peak);
+            Config::Get(reshade_config_section, GetSubGameSaveKey(sg.subgame, "Scene"), s->paper_scene);
+            Config::Get(reshade_config_section, GetSubGameSaveKey(sg.subgame, "UI"), s->paper_ui);
          }
 
          // try load Unknown settings
@@ -894,7 +894,7 @@ namespace
          if (!is_changed) return; 
          
          // log
-         message(reshade::log::level::info, std::format("SubGame changed from {} to {}", SubGameToString(prev), SubGameToString(curr)).c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("SubGame changed from {} to {}", SubGameToString(prev), SubGameToString(curr)).c_str());
          
          // SubGameUserSettingsHandler
          SubGameUserSettingsHandler::OnSubGameChange(curr);
@@ -984,7 +984,7 @@ namespace
          }
 
          // log amount in ResourceUpgradeManager::auto_texture_format_upgrade_shader_hashes
-         message(reshade::log::level::info, std::format("SubGameHandler: {} has {} hashes for indirect upgrades.", SubGameToString(curr), ResourceUpgradeManager::auto_texture_format_upgrade_shader_hashes.size()).c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("SubGameHandler: {} has {} hashes for indirect upgrades.", SubGameToString(curr), ResourceUpgradeManager::auto_texture_format_upgrade_shader_hashes.size()).c_str());
       }
       
       // Safe way to switch in OnDrawOrDispatch()
@@ -1018,7 +1018,7 @@ namespace
    void SetMipLodBiasOffset(float offset, bool save_to_config = true)
    {
       mip_lod_bias_offset = offset;
-      if (save_to_config) reshade::set_config_value(nullptr, NAME, "mip_lod_bias_offset", mip_lod_bias_offset);
+      if (save_to_config) Config::Set(NAME, "mip_lod_bias_offset", mip_lod_bias_offset);
    }
 #endif
    
@@ -1075,14 +1075,14 @@ public:
 
       // Native Shaders: Display Composition replacement
       native_shaders_definitions.erase(CompileTimeStringHash("Display Composition"));
-      native_shaders_definitions.emplace(CompileTimeStringHash("Display Composition"), ShaderDefinition{"Luma_HaloMCC_DisplayComposition", reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Display Composition"), ShaderDefinition{"Luma_HaloMCC_DisplayComposition", D3D11_SHVER_PIXEL_SHADER});
 
       // XeGTAOHandler & BloomHandler
       XeGTAOHandler::OnInit();
       BloomHandler::OnInit();
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
       // SubGame reset
       // SubGameHandler::Reinit(); //TODO: needs device_data. safe without call?
@@ -1091,7 +1091,7 @@ public:
       XeGTAOHandler::H2A::Reset();
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       // Setup
       // GameDeviceDataHaloTMCC* game_device_data = static_cast<GameDeviceDataHaloTMCC*>(device_data.game);
@@ -1259,7 +1259,7 @@ public:
          {
             if (!is_seen)
             {
-               reshade::log::message(reshade::log::level::info, std::format("Skipping Pause Screen Shader: {:08X}", ps).c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("Skipping Pause Screen Shader: {:08X}", ps).c_str());
                allow_pause_screen_skiphashes.insert(ps);
             }
             return DrawOrDispatchOverrideType::Skip;
@@ -1297,23 +1297,23 @@ public:
    void LoadConfigs() override
    {
       // cb
-      reshade::get_config_value(nullptr, NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
-      reshade::get_config_value(nullptr, NAME, "FilmGrain", cb_luma_global_settings.GameSettings.FilmGrain);
-      reshade::get_config_value(nullptr, NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
-      reshade::get_config_value(nullptr, NAME, "AmbientOcclusion", cb_luma_global_settings.GameSettings.AmbientOcclusion);
-      reshade::get_config_value(nullptr, NAME, "MotionBlur", cb_luma_global_settings.GameSettings.MotionBlur);
+      Config::Get(NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
+      Config::Get(NAME, "FilmGrain", cb_luma_global_settings.GameSettings.FilmGrain);
+      Config::Get(NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
+      Config::Get(NAME, "AmbientOcclusion", cb_luma_global_settings.GameSettings.AmbientOcclusion);
+      Config::Get(NAME, "MotionBlur", cb_luma_global_settings.GameSettings.MotionBlur);
 
 #if HALO_UPGRADE_SAMPLERS
       // mip_lod_bias_offset
-      reshade::get_config_value(nullptr, NAME, "mip_lod_bias_offset", mip_lod_bias_offset);
+      Config::Get(NAME, "mip_lod_bias_offset", mip_lod_bias_offset);
       SetMipLodBiasOffset(mip_lod_bias_offset, false);
 #endif
       
       // allow_gamma_slider
-      reshade::get_config_value(nullptr, NAME, "allow_gamma_slider", allow_gamma_slider);
+      Config::Get(NAME, "allow_gamma_slider", allow_gamma_slider);
 
       // custom_sdr_gamma
-      reshade::get_config_value(nullptr, NAME, "custom_sdr_gamma", custom_sdr_gamma);
+      Config::Get(NAME, "custom_sdr_gamma", custom_sdr_gamma);
       ShaderDefines::Set(GAMMA_CORRECTION_TYPE_HASH, custom_sdr_gamma > 0);
       defines_need_recompilation = true;
 
@@ -1328,10 +1328,10 @@ public:
       BloomHandler::OnLoadConfigs();
 
       //try force 400 nits
-      if (!reshade::get_config_value(nullptr, NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite)) cb_luma_global_settings.ScenePeakWhite = 400.f;
+      if (!Config::Get(NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite)) cb_luma_global_settings.ScenePeakWhite = 400.f;
 
       // seen_readme
-      reshade::get_config_value(nullptr, NAME, "seen_readme", seen_readme);
+      Config::Get(NAME, "seen_readme", seen_readme);
    }
    
    void PrintImGuiAbout() override
@@ -1378,7 +1378,7 @@ public:
          if (ImGui::Button("Dismiss"))
          {
             seen_readme = true;
-            reshade::set_config_value(nullptr, NAME, "seen_readme", seen_readme);
+            Config::Set(NAME, "seen_readme", seen_readme);
          }
 
          ImGui::Separator();
@@ -1405,10 +1405,10 @@ public:
          ImGui::PopStyleColor();
 
          if (ImGui::Checkbox("Allow In-Game Gamma Sliders", &allow_gamma_slider))
-            reshade::set_config_value(nullptr, NAME, "allow_gamma_slider", allow_gamma_slider);
+            Config::Set(NAME, "allow_gamma_slider", allow_gamma_slider);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Leaving this disabled will let main color be unaltered sRGB.");
-         DrawResetButton(allow_gamma_slider, false, "allow_gamma_slider", nullptr);
+         DrawResetButton(allow_gamma_slider, false, "allow_gamma_slider");
 
          ImGui::NewLine();
          
@@ -1431,7 +1431,7 @@ public:
                case 1: custom_sdr_gamma = 2.2f; break;
                case 2: custom_sdr_gamma = 2.4f; break;
             }
-            reshade::set_config_value(nullptr, NAME, "custom_sdr_gamma", custom_sdr_gamma);
+            Config::Set(NAME, "custom_sdr_gamma", custom_sdr_gamma);
          }
          ImGui::PopID();
 
@@ -1454,7 +1454,7 @@ public:
             SetMipLodBiasOffset(mip_lod_bias_offset, true);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Negative offset bias sharpens.\nMight make the game too coarse");
-         DrawResetButton(mip_lod_bias_offset, 0.f, "mip_lod_bias_offset", nullptr);
+         DrawResetButton(mip_lod_bias_offset, 0.f, "mip_lod_bias_offset");
       }
 #endif
       
@@ -1473,18 +1473,18 @@ public:
             }
          };
          if (ImGui::SliderFloat("Bloom", &cb_luma_global_settings.GameSettings.Bloom, 0.f, GetMaxBloomBySubGame(SubGameHandler::curr), "%.2f"))
-            reshade::set_config_value(nullptr, NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
+            Config::Set(NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Multiplier on Bloom strength when applicable.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.Bloom, 1.f, "Bloom", nullptr);
+         DrawResetButton(cb_luma_global_settings.GameSettings.Bloom, 1.f, "Bloom");
 
          ShaderDefines::UIDropDown(ShaderDefines::HALO1_BLOOM, "Halo 1 Classic: Bloom", { "Off", "On", "Bloom Only (Debug)" }, "Add a subtle bloom pass for Halo 1 Classic to aid the original sprites trying to convey the effect.");
 
          if (ImGui::SliderFloat("Halo 1 Classic: Bloom Sigma", &BloomHandler::H1C::sigma, 0.5f, 3.f, "%.2f"))
-            reshade::set_config_value(nullptr, NAME, BloomHandler::H1C::sigma_reshadesave, BloomHandler::H1C::sigma);
+            Config::Set(NAME, BloomHandler::H1C::sigma_reshadesave, BloomHandler::H1C::sigma);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Higher means more spread.");
-         DrawResetButton(BloomHandler::H1C::sigma, BloomHandler::H1C::sigma_default, BloomHandler::H1C::sigma_reshadesave, nullptr);
+         DrawResetButton(BloomHandler::H1C::sigma, BloomHandler::H1C::sigma_default, BloomHandler::H1C::sigma_reshadesave);
          
          ShaderDefines::UIDropDown(ShaderDefines::HALO3_BLOOM, "Halo 3: Bloom Mode", { "Saturation Preserved", "Blown Out (Vanilla)" }, "How should bloom be processed in Halo 3?\nSince bloom bathes the screen, this can the change the hues of the whole image.");
 
@@ -1494,10 +1494,10 @@ public:
 
          // AmbientOcclusion
          if (ImGui::SliderFloat("Ambient Occlusion", &cb_luma_global_settings.GameSettings.AmbientOcclusion, 0.f, 2.f, "%.2f"))
-            reshade::set_config_value(nullptr, NAME, "AmbientOcclusion", cb_luma_global_settings.GameSettings.AmbientOcclusion);
+            Config::Set(NAME, "AmbientOcclusion", cb_luma_global_settings.GameSettings.AmbientOcclusion);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Multiplier on AO strength when applicable.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.AmbientOcclusion, 1.f, "AmbientOcclusion", nullptr);
+         DrawResetButton(cb_luma_global_settings.GameSettings.AmbientOcclusion, 1.f, "AmbientOcclusion");
 
          // HALO2_AO
          ShaderDefines::UIDropDown(ShaderDefines::HALO2_AO, "Halo 2 Anniversary: Quality", { "Easy (Vanilla if SSAO)", "Normal", "Heroic", "Legendary", "LASO" }, "The quality of Halo 2 Ambient Occlusion for either SSAO or GTAO.");
@@ -1515,10 +1515,10 @@ public:
 
             // Denoise count
             if (ImGui::SliderInt("Halo 2 Anniversary: GTAO Denoise", &XeGTAOHandler::H2A::denoise, 0, 4, "%d", ImGuiSliderFlags_AlwaysClamp))
-               reshade::set_config_value(nullptr, NAME, XeGTAOHandler::H2A::denoise_reshadesave, XeGTAOHandler::H2A::denoise);
+               Config::Set(NAME, XeGTAOHandler::H2A::denoise_reshadesave, XeGTAOHandler::H2A::denoise);
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                ImGui::SetTooltip("The number of denoise passes to apply to GTAO.\nMore passes = smoother noise at a performance cost.");
-            DrawResetButton(XeGTAOHandler::H2A::denoise, XeGTAOHandler::H2A::denoise_default, XeGTAOHandler::H2A::denoise_reshadesave, nullptr);
+            DrawResetButton(XeGTAOHandler::H2A::denoise, XeGTAOHandler::H2A::denoise_default, XeGTAOHandler::H2A::denoise_reshadesave);
          }
          if (!gtao_enabled.first) ImGui::EndDisabled();
 
@@ -1539,28 +1539,28 @@ public:
          // WhiteClip
          if (SubGameHandler::curr == Halo4) ImGui::BeginDisabled();
          if (ImGui::SliderFloat("White Clip", &cb_luma_global_settings.GameSettings.WhiteClip, 0.f, 2.f, "%.2f"))
-            reshade::set_config_value(nullptr, NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
+            Config::Set(NAME, "WhiteClip", cb_luma_global_settings.GameSettings.WhiteClip);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Increase to straighten tonemap rolloff,\nmaking highlights more aggressive/clipped.\n(Not available for Halo 4.)");
-         DrawResetButton(cb_luma_global_settings.GameSettings.WhiteClip, 1.f, "WhiteClip", nullptr);
+         DrawResetButton(cb_luma_global_settings.GameSettings.WhiteClip, 1.f, "WhiteClip");
          if (SubGameHandler::curr == Halo4) ImGui::EndDisabled();
 
          // FilmGrain
          if (ImGui::SliderFloat("Film Grain", &cb_luma_global_settings.GameSettings.FilmGrain, 0.f, 1.f, "%.2f"))
-            reshade::set_config_value(nullptr, NAME, "FilmGrain", cb_luma_global_settings.GameSettings.FilmGrain);
+            Config::Set(NAME, "FilmGrain", cb_luma_global_settings.GameSettings.FilmGrain);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Multiplier on Film Grain strength when applicable.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.FilmGrain, 1.f, "FilmGrain", nullptr);
+         DrawResetButton(cb_luma_global_settings.GameSettings.FilmGrain, 1.f, "FilmGrain");
 
          // HALOR_FILMGRAIN_SCALE
          ShaderDefines::UIDropDown(ShaderDefines::HALOR_FILMGRAIN_SCALE, "Halo Reach: Film Grain Scale", { "Native (Vanilla)", "720p (Xbox 360)", "1080p", "1440p" }, "Scales Halo Reach's film grain size by target resolution.\nThe lower the target, the bigger the grain.");
 
          // MotionBlur
          if (ImGui::SliderFloat("Motion Blur", &cb_luma_global_settings.GameSettings.MotionBlur, 0.f, 1.f, "%.2f"))
-            reshade::set_config_value(nullptr, NAME, "MotionBlur", cb_luma_global_settings.GameSettings.MotionBlur);
+            Config::Set(NAME, "MotionBlur", cb_luma_global_settings.GameSettings.MotionBlur);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Multiplier on Motion Blur strength when applicable.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.MotionBlur, 1.f, "MotionBlur", nullptr);
+         DrawResetButton(cb_luma_global_settings.GameSettings.MotionBlur, 1.f, "MotionBlur");
          
          // ALLOW_COLORGRADE
          ShaderDefines::UIToggleCheckmark(ShaderDefines::ALLOW_COLORGRADE, "Color Grading (Debug)", "Disable to skip color grading,\nexposing the raw HDR input.");
@@ -1569,7 +1569,7 @@ public:
          ImGui::Checkbox("Pause Screen (Read Tooltip)", &allow_pause_screen);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Useful for screenshots.\nThis seems to only work for Settings screen?");
-         DrawResetButton(allow_pause_screen, true, nullptr, nullptr);
+         DrawResetButton(allow_pause_screen, true, nullptr);
       }
       
       // SubGame
@@ -1625,7 +1625,7 @@ public:
          if (ImGui::Button("Show README"))
          {
             seen_readme = false;
-            reshade::set_config_value(nullptr, NAME, "seen_readme", seen_readme);
+            Config::Set(NAME, "seen_readme", seen_readme);
          }
       }
 
@@ -1665,7 +1665,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          // ui_separation_format = DXGI_FORMAT_R16G16B16A16_FLOAT;
 
          // CREATE!
-         game = new GameHaloTMCC();
+         SetGame<GameHaloTMCC>();
          break;
       case DLL_PROCESS_DETACH:
          break;

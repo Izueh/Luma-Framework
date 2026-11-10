@@ -117,14 +117,14 @@ public:
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
 
       // XeGTAO
-      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR XeGTAO Resolve MSAA CS"), ShaderDefinition{ "Luma_ResolveMSAA", reshade::api::pipeline_subobject_type::compute_shader });
-      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR XeGTAO Prefilter Depths CS"), ShaderDefinition{ "Luma_BurnoutPR_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
-      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR XeGTAO Main Pass CS"), ShaderDefinition{ "Luma_BurnoutPR_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
-      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR XeGTAO Denoise Pass 1 CS"), ShaderDefinition{ "Luma_BurnoutPR_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
-      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR XeGTAO Denoise Pass 2 CS"), ShaderDefinition{ "Luma_BurnoutPR_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
+      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR XeGTAO Resolve MSAA CS"), ShaderDefinition{ "Luma_ResolveMSAA", D3D11_SHVER_COMPUTE_SHADER });
+      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR XeGTAO Prefilter Depths CS"), ShaderDefinition{ "Luma_BurnoutPR_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "prefilter_depths16x16_cs" });
+      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR XeGTAO Main Pass CS"), ShaderDefinition{ "Luma_BurnoutPR_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "main_pass_cs" });
+      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR XeGTAO Denoise Pass 1 CS"), ShaderDefinition{ "Luma_BurnoutPR_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
+      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR XeGTAO Denoise Pass 2 CS"), ShaderDefinition{ "Luma_BurnoutPR_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR Linearize CS"), ShaderDefinition{ "Luma_BurnoutPR_Linearize", reshade::api::pipeline_subobject_type::compute_shader });
-      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR Delinearize CS"), ShaderDefinition{ "Luma_BurnoutPR_Delinearize", reshade::api::pipeline_subobject_type::compute_shader });
+      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR Linearize CS"), ShaderDefinition{ "Luma_BurnoutPR_Linearize", D3D11_SHVER_COMPUTE_SHADER });
+      native_shaders_definitions.emplace(CompileTimeStringHash("BurnoutPR Delinearize CS"), ShaderDefinition{ "Luma_BurnoutPR_Delinearize", D3D11_SHVER_COMPUTE_SHADER });
 
       // Luma bloom.
       g_bloom_nmips = 5;
@@ -150,9 +150,9 @@ public:
       native_device->CreateBlendState(&blend_desc, game_device_data.sun_occlusion_test_blend_state.put());
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+      auto& device_data = *GetSwapchainData(swapchain)->device_data;
 
       // Assume it's the output resolution until proven otherwise
       cb_luma_global_settings.GameSettings.InvRenderRes.x = 1.f / device_data.output_resolution.x;
@@ -163,9 +163,9 @@ public:
    // Add a saturate on opaque/transparent materials
    // Without this, occasionally you get some white pixels for one frame (actually this still doesn't fix it, but it won't hurt to have, the actual fix seems to be in skipping bloom on pixels with INF values)
    // TODO: the white pixels seemengly still appear sometimes when driving around...
-   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, D3D11_SHADER_VERSION_TYPE type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
    {
-      if (type != reshade::api::pipeline_subobject_type::pixel_shader)
+      if (type != D3D11_SHVER_PIXEL_SHADER)
          return nullptr;
 
       std::unique_ptr<std::byte[]> new_code = nullptr;
@@ -241,7 +241,7 @@ public:
       return new_code;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -332,7 +332,7 @@ public:
                 native_device_context->PSGetConstantBuffers(0, 1, cb.put());
                 
                 // We have to manually set the LumaSettings CB even it's suposed to be already set.
-                SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+                SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaSettings);
 
                 ComPtr<ID3D11ShaderResourceView> srv_depth;
 
@@ -692,26 +692,25 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
-      reshade::get_config_value(runtime, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
-      reshade::get_config_value(runtime, NAME, "MotionBlurIntensity", cb_luma_global_settings.GameSettings.MotionBlurIntensity);
-      reshade::get_config_value(runtime, NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
-      reshade::get_config_value(runtime, NAME, "ColorGradingFilterReductionIntensity", cb_luma_global_settings.GameSettings.ColorGradingFilterReductionIntensity);
-      reshade::get_config_value(runtime, NAME, "HDRBoostIntensity", cb_luma_global_settings.GameSettings.HDRBoostIntensity);
-      reshade::get_config_value(runtime, NAME, "OriginalTonemapperColorIntensity", cb_luma_global_settings.GameSettings.OriginalTonemapperColorIntensity);
-      reshade::get_config_value(runtime, NAME, "LumaBloomEnable", g_luma_bloom_enable);
-      reshade::get_config_value(runtime, NAME, "XeGTAOEnable", g_xegtao_enable);
+      Config::Get(NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
+      Config::Get(NAME, "MotionBlurIntensity", cb_luma_global_settings.GameSettings.MotionBlurIntensity);
+      Config::Get(NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
+      Config::Get(NAME, "ColorGradingFilterReductionIntensity", cb_luma_global_settings.GameSettings.ColorGradingFilterReductionIntensity);
+      Config::Get(NAME, "HDRBoostIntensity", cb_luma_global_settings.GameSettings.HDRBoostIntensity);
+      Config::Get(NAME, "OriginalTonemapperColorIntensity", cb_luma_global_settings.GameSettings.OriginalTonemapperColorIntensity);
+      Config::Get(NAME, "LumaBloomEnable", g_luma_bloom_enable);
+      Config::Get(NAME, "XeGTAOEnable", g_xegtao_enable);
       // "device_data.cb_luma_global_settings_dirty" should already be true at this point
 
-      reshade::get_config_value(runtime, NAME, "HDRCarReflections", hdr_car_reflections); // Allows disabling this for performance reasons, even better it'd be to make them R11G110B10_FLOAT, given it'd be barely noticeable
+      Config::Get(NAME, "HDRCarReflections", hdr_car_reflections); // Allows disabling this for performance reasons, even better it'd be to make them R11G110B10_FLOAT, given it'd be barely noticeable
       if (hdr_car_reflections)
       {
          // Note: this is very much overkill but it will make car reflections cubemaps HDR too, given they had some clipping. This can help us make the sky brighter with an HDR boost too!
          texture_format_upgrades_2d_size_filters |= (uint32_t)TextureFormatUpgrades2DSizeFilters::Cubes;
       }
 
-      reshade::get_config_value(runtime, NAME, "PS2StyleMotionBlur", ps2_style_motion_blur);
+      Config::Get(NAME, "PS2StyleMotionBlur", ps2_style_motion_blur);
       if (ps2_style_motion_blur)
       {
          cb_luma_global_settings.GameSettings.MotionBlurIntensity = 25.f;
@@ -720,13 +719,12 @@ public:
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
       if (ImGui::Checkbox("XeGTAO Enable", &g_xegtao_enable))
       {
-         reshade::set_config_value(runtime, NAME, "XeGTAOEnable", g_xegtao_enable);
+         Config::Set(NAME, "XeGTAOEnable", g_xegtao_enable);
       }
 
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -736,7 +734,7 @@ public:
 
       if (ImGui::Checkbox("Luma Bloom Enable", &g_luma_bloom_enable))
       {
-         reshade::set_config_value(runtime, NAME, "LumaBloomEnable", g_luma_bloom_enable);
+         Config::Set(NAME, "LumaBloomEnable", g_luma_bloom_enable);
       }
 
 #if DEVELOPMENT
@@ -754,13 +752,13 @@ public:
 
       if (ImGui::SliderFloat("Bloom Intensity", &cb_luma_global_settings.GameSettings.BloomIntensity, 0.f, 2.f))
       {
-         reshade::set_config_value(runtime, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
+         Config::Set(NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
       }
-      DrawResetButton(cb_luma_global_settings.GameSettings.BloomIntensity, default_luma_global_game_settings.BloomIntensity, "BloomIntensity", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.BloomIntensity, default_luma_global_game_settings.BloomIntensity, "BloomIntensity");
 
       if (ImGui::SliderFloat("Motion Blur Intensity", &cb_luma_global_settings.GameSettings.MotionBlurIntensity, ps2_style_motion_blur ? 10.f : 0.f, ps2_style_motion_blur ? 50.f : 2.f))
       {
-         reshade::set_config_value(runtime, NAME, "MotionBlurIntensity", cb_luma_global_settings.GameSettings.MotionBlurIntensity);
+         Config::Set(NAME, "MotionBlurIntensity", cb_luma_global_settings.GameSettings.MotionBlurIntensity);
       }
       ImGui::SameLine();
       if (ImGui::Checkbox("PS2 Style Motion Blur", &ps2_style_motion_blur))
@@ -773,53 +771,53 @@ public:
          {
             cb_luma_global_settings.GameSettings.MotionBlurIntensity = default_luma_global_game_settings.MotionBlurIntensity;
          }
-         reshade::set_config_value(runtime, NAME, "MotionBlurIntensity", cb_luma_global_settings.GameSettings.MotionBlurIntensity);
-         reshade::set_config_value(runtime, NAME, "PS2StyleMotionBlur", ps2_style_motion_blur);
+         Config::Set(NAME, "MotionBlurIntensity", cb_luma_global_settings.GameSettings.MotionBlurIntensity);
+         Config::Set(NAME, "PS2StyleMotionBlur", ps2_style_motion_blur);
       }
-      if (DrawResetButton(cb_luma_global_settings.GameSettings.MotionBlurIntensity, default_luma_global_game_settings.MotionBlurIntensity, "MotionBlurIntensity", runtime))
+      if (DrawResetButton(cb_luma_global_settings.GameSettings.MotionBlurIntensity, default_luma_global_game_settings.MotionBlurIntensity, "MotionBlurIntensity"))
       {
          ps2_style_motion_blur = false;
-         reshade::set_config_value(runtime, NAME, "PS2StyleMotionBlur", ps2_style_motion_blur);
+         Config::Set(NAME, "PS2StyleMotionBlur", ps2_style_motion_blur);
       }
 
       if (ImGui::SliderFloat("Color Grading Intensity", &cb_luma_global_settings.GameSettings.ColorGradingIntensity, 0.f, 1.f))
       {
-         reshade::set_config_value(runtime, NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
+         Config::Set(NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
       }
-      DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingIntensity, default_luma_global_game_settings.ColorGradingIntensity, "ColorGradingIntensity", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingIntensity, default_luma_global_game_settings.ColorGradingIntensity, "ColorGradingIntensity");
 
       if (ImGui::SliderFloat("Color Grading Filter Reduction Intensity", &cb_luma_global_settings.GameSettings.ColorGradingFilterReductionIntensity, 0.f, 1.f))
       {
-         reshade::set_config_value(runtime, NAME, "ColorGradingFilterReductionIntensity", cb_luma_global_settings.GameSettings.ColorGradingFilterReductionIntensity);
+         Config::Set(NAME, "ColorGradingFilterReductionIntensity", cb_luma_global_settings.GameSettings.ColorGradingFilterReductionIntensity);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("The game's default color grading often applied a strong blue or yellow tint, this attempts to restore a more neutral color, without removing adjustments to contrast or saturation.");
       }
-      DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingFilterReductionIntensity, default_luma_global_game_settings.ColorGradingFilterReductionIntensity, "ColorGradingFilterReductionIntensity", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingFilterReductionIntensity, default_luma_global_game_settings.ColorGradingFilterReductionIntensity, "ColorGradingFilterReductionIntensity");
 
       if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
       {
          if (ImGui::SliderFloat("HDR Boost Intensity", &cb_luma_global_settings.GameSettings.HDRBoostIntensity, 0.f, 2.f))
          {
-            reshade::set_config_value(runtime, NAME, "HDRBoostIntensity", cb_luma_global_settings.GameSettings.HDRBoostIntensity);
+            Config::Set(NAME, "HDRBoostIntensity", cb_luma_global_settings.GameSettings.HDRBoostIntensity);
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          {
             ImGui::SetTooltip("Enable a \"Fake\" HDR boosting effect. Set to 0 for the vanilla look.");
          }
-         DrawResetButton(cb_luma_global_settings.GameSettings.HDRBoostIntensity, default_luma_global_game_settings.HDRBoostIntensity, "HDRBoostIntensity", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.HDRBoostIntensity, default_luma_global_game_settings.HDRBoostIntensity, "HDRBoostIntensity");
       }
 
       if (ImGui::SliderFloat("Original Tonemapper Color Intensity", &cb_luma_global_settings.GameSettings.OriginalTonemapperColorIntensity, 0.f, 1.f))
       {
-         reshade::set_config_value(runtime, NAME, "OriginalTonemapperColorIntensity", cb_luma_global_settings.GameSettings.OriginalTonemapperColorIntensity);
+         Config::Set(NAME, "OriginalTonemapperColorIntensity", cb_luma_global_settings.GameSettings.OriginalTonemapperColorIntensity);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Move closer to 1 to restore a look closer to the original (more desaturated).");
       }
-      DrawResetButton(cb_luma_global_settings.GameSettings.OriginalTonemapperColorIntensity, default_luma_global_game_settings.OriginalTonemapperColorIntensity, "OriginalTonemapperColorIntensity", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.OriginalTonemapperColorIntensity, default_luma_global_game_settings.OriginalTonemapperColorIntensity, "OriginalTonemapperColorIntensity");
    }
 
    void PrintImGuiAbout() override
@@ -893,19 +891,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
       // The game has issues with motion blur warping when using direct upgrades, and some particles don't draw for some reason (maybe the game checks back the resource formats and skips draw calls?)
@@ -984,7 +980,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_GenSSAO.pixel_shaders = { 0x01FF871A };
       shader_hashes_BlurDoForSSAO.pixel_shaders = { 0xEA125DFC };
 
-      game = new BurnoutParadise();
+      SetGame<BurnoutParadise>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

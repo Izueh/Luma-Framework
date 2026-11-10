@@ -327,7 +327,7 @@ namespace Shader
          defines_count = shader_defines_data.size();
       }
 
-      static void Load(std::vector<ShaderDefineData>& shader_defines_data, const std::string& config_name, reshade::api::effect_runtime* runtime = nullptr)
+      static void Load(std::vector<ShaderDefineData>& shader_defines_data, const std::string& config_name)
       {
          char char_buffer[std::string_view("Define99Value ").size()]; // Hardcoded max length (see "MAX_SHADER_DEFINES")
    #if DEVELOPMENT || TEST
@@ -348,7 +348,7 @@ namespace Shader
                   shader_defines_data.emplace_back();
                }
                size_t size = std::size(shader_defines_data[i].editable_data.name); // SHADER_DEFINES_MAX_NAME_LENGTH
-               reshade::get_config_value(runtime, config_name.c_str(), &char_buffer[0], shader_defines_data[i].editable_data.GetName(), &size);
+               Config::Get(config_name.c_str(), &char_buffer[0], shader_defines_data[i].editable_data.GetName(), &size);
                // If this name was already in the list (from another index), or is empty, ignore it and revert to default
                if ((!shader_defines_data[i].IsCustom() && shader_defines_data[i].IsNameEmpty()) || ContainsName(shader_defines_data, shader_defines_data[i].editable_data.GetName(), i))
                {
@@ -365,7 +365,7 @@ namespace Shader
             {
                char name[SHADER_DEFINES_MAX_NAME_LENGTH] = "";
                size_t size = std::size(name); // SHADER_DEFINES_MAX_NAME_LENGTH
-               reshade::get_config_value(runtime, config_name.c_str(), &char_buffer[0], &name[0], &size);
+               Config::Get(config_name.c_str(), &char_buffer[0], &name[0], &size);
                should_load_value = strcmp(shader_defines_data[i].editable_data.GetName(), &name[0]) == 0 && (&name[0] != ""); // See "ShaderDefineData::IsCustom()"
             }
 
@@ -375,7 +375,7 @@ namespace Shader
                assert(i < shader_defines_data.size());
                sprintf(&char_buffer[0], i < 10 ? "Define#%iValue" : "Define%iValue", i);
                size_t size = std::size(shader_defines_data[i].editable_data.value); // SHADER_DEFINES_MAX_VALUE_LENGTH
-               reshade::get_config_value(runtime, config_name.c_str(), &char_buffer[0], shader_defines_data[i].editable_data.GetValue(), &size);
+               Config::Get(config_name.c_str(), &char_buffer[0], shader_defines_data[i].editable_data.GetValue(), &size);
                if (!shader_defines_data[i].IsCustom() && shader_defines_data[i].IsValueEmpty())
                {
                   shader_defines_data[i].Reset();
@@ -386,7 +386,7 @@ namespace Shader
          // Clean up the ones that loaded up with empty values
          RemoveCustomData(shader_defines_data, true);
       }
-      static void Save(const std::vector<ShaderDefineData>& shader_defines_data, const std::string& config_name, reshade::api::effect_runtime* runtime = nullptr)
+      static void Save(const std::vector<ShaderDefineData>& shader_defines_data, const std::string& config_name)
       {
          char char_buffer[std::string_view("Define99Value ").size()]; // Hardcoded max length (see "MAX_SHADER_DEFINES")
          constexpr bool always_save_shader_defines = false;
@@ -395,22 +395,22 @@ namespace Shader
             sprintf(&char_buffer[0], i < 10 ? "Define#%iName" : "Define%iName", i);
             if (!shader_defines_data[i].IsDefault() || always_save_shader_defines)
             {
-               reshade::set_config_value(runtime, config_name.c_str(), &char_buffer[0], shader_defines_data[i].editable_data.GetName(), std::size(shader_defines_data[i].editable_data.name) /*SHADER_DEFINES_MAX_NAME_LENGTH*/);
+               Config::Set(config_name.c_str(), &char_buffer[0], shader_defines_data[i].editable_data.GetName(), std::size(shader_defines_data[i].editable_data.name) /*SHADER_DEFINES_MAX_NAME_LENGTH*/);
             }
             // Don't save default values, they would pollute the config file and cause issues with versioning.
             // If the shaders code change, we have other ways of detecting that we need to re-compile after launch, and if the addon code change, it would also automatically trigger a recompile.
             else
             {
-               reshade::set_config_value(runtime, config_name.c_str(), &char_buffer[0], (const char*)nullptr);
+               Config::Set(config_name.c_str(), &char_buffer[0], (const char*)nullptr);
             }
             sprintf(&char_buffer[0], i < 10 ? "Define#%iValue" : "Define%iValue", i);
             if (!shader_defines_data[i].IsDefault() || always_save_shader_defines)
             {
-               reshade::set_config_value(runtime, config_name.c_str(), &char_buffer[0], shader_defines_data[i].editable_data.GetValue(), std::size(shader_defines_data[i].editable_data.value) /*SHADER_DEFINES_MAX_VALUE_LENGTH*/);
+               Config::Set(config_name.c_str(), &char_buffer[0], shader_defines_data[i].editable_data.GetValue(), std::size(shader_defines_data[i].editable_data.value) /*SHADER_DEFINES_MAX_VALUE_LENGTH*/);
             }
             else
             {
-               reshade::set_config_value(runtime, config_name.c_str(), &char_buffer[0], (const char*)nullptr);
+               Config::Set(config_name.c_str(), &char_buffer[0], (const char*)nullptr);
             }
          }
    #if DEVELOPMENT || TEST // These are never read or set outside of these configurations, so there's no need to clear them either for now
@@ -419,9 +419,9 @@ namespace Shader
          for (uint32_t i = shader_defines_data.size(); i < MAX_SHADER_DEFINES; i++)
          {
             sprintf(&char_buffer[0], i < 10 ? "Define#%iName" : "Define%iName", i);
-            reshade::set_config_value(runtime, config_name.c_str(), &char_buffer[0], (const char*)nullptr);
+            Config::Set(config_name.c_str(), &char_buffer[0], (const char*)nullptr);
             sprintf(&char_buffer[0], i < 10 ? "Define#%iValue" : "Define%iValue", i);
-            reshade::set_config_value(runtime, config_name.c_str(), &char_buffer[0], (const char*)nullptr);
+            Config::Set(config_name.c_str(), &char_buffer[0], (const char*)nullptr);
          }
    #endif
       }

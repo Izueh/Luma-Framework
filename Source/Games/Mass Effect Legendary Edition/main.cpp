@@ -382,17 +382,17 @@ public:
       // Core registers SMAA through ENABLE_SMAA; its neighborhood blend reads a linear decode of the gamma post buffer.
       // Core registers RCAS through ENABLE_RCAS, and DrawRCAS draws it afterwards.
       native_shaders_definitions.emplace(kNameSMAALinearizeCS,
-         ShaderDefinition("Luma_MELE_SMAALinearize", reshade::api::pipeline_subobject_type::compute_shader));
+         ShaderDefinition("Luma_MELE_SMAALinearize", D3D11_SHVER_COMPUTE_SHADER));
 
       // Four XeGTAO compute entries share one source; XE_GTAO_FINAL_APPLY selects the game's R8_UNORM target.
       native_shaders_definitions.emplace(kNameGTAOPrefilterCS,
-         ShaderDefinition{"Luma_MELE_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs"});
+         ShaderDefinition{"Luma_MELE_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "prefilter_depths16x16_cs"});
       native_shaders_definitions.emplace(kNameGTAOMainPassCS,
-         ShaderDefinition{"Luma_MELE_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs"});
+         ShaderDefinition{"Luma_MELE_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "main_pass_cs"});
       native_shaders_definitions.emplace(kNameGTAODenoise1CS,
-         ShaderDefinition{"Luma_MELE_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "0"}}});
+         ShaderDefinition{"Luma_MELE_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "0"}}});
       native_shaders_definitions.emplace(kNameGTAODenoise2CS,
-         ShaderDefinition{"Luma_MELE_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "1"}}});
+         ShaderDefinition{"Luma_MELE_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "1"}}});
 
       // With no TAA, Very High slice count and two denoise passes provide spatial stability.
       std::vector<ShaderDefineData> game_shader_defines_data = {
@@ -432,7 +432,7 @@ public:
    // never stalls. OnPresent turns the live artist-authored BloomScale into the effective intensity.
    void CaptureBloomScale(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, MassEffectGameDeviceData& gd, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes)
    {
-      if (g_bloom_enable && original_shader_hashes.Contains(kBloomBrightPassHash, reshade::api::shader_stage::pixel) && !gd.bloom_scale_captured_this_frame)
+      if (g_bloom_enable && original_shader_hashes.Contains(kBloomBrightPassHash, ShaderStages::Pixel) && !gd.bloom_scale_captured_this_frame)
       {
          gd.bloom_scale_captured_this_frame = true; // Do not advance the ring twice in one frame.
 #if DEVELOPMENT
@@ -496,7 +496,7 @@ public:
    // Core uploads a dirty settings cbuffer before the replaced pass runs, so the flag applies to the same draw.
    void TagVideoTarget(ID3D11DeviceContext* native_device_context, DeviceData& device_data, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes)
    {
-      if (original_shader_hashes.Contains(kVideoBinkHash, reshade::api::shader_stage::pixel))
+      if (original_shader_hashes.Contains(kVideoBinkHash, ShaderStages::Pixel))
       {
          ComPtr<ID3D11RenderTargetView> rtv;
          native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
@@ -529,7 +529,7 @@ public:
       const TonemapPermDesc* perm = nullptr;
       for (const TonemapPermDesc& candidate : g_tonemap_perms)
       {
-         if (original_shader_hashes.Contains(candidate.hash, reshade::api::shader_stage::pixel))
+         if (original_shader_hashes.Contains(candidate.hash, ShaderStages::Pixel))
          {
             perm = &candidate;
             break;
@@ -594,7 +594,7 @@ public:
       if (g_gtao_enable)
       {
          // Deinterleave: capture half-resolution R24 depth, prepare all scratch resources, then skip native work.
-         if (original_shader_hashes.Contains(kAODeinterleaveHash, reshade::api::shader_stage::compute))
+         if (original_shader_hashes.Contains(kAODeinterleaveHash, ShaderStages::Compute))
          {
             const bool gtao_shaders_ready =
                AllShadersReady(device_data.native_compute_shaders, {kNameGTAOPrefilterCS, kNameGTAOMainPassCS, kNameGTAODenoise1CS, kNameGTAODenoise2CS});
@@ -680,7 +680,7 @@ public:
          }
 
          // Horizon march: capture packed view normals and skip native work only after a successful takeover.
-         if (original_shader_hashes.Contains(kAOHorizonHash, reshade::api::shader_stage::compute))
+         if (original_shader_hashes.Contains(kAOHorizonHash, ShaderStages::Compute))
          {
             if (!gd.gtao_active_this_frame)
                return DrawOrDispatchOverrideType::None;
@@ -693,7 +693,7 @@ public:
          }
 
          // Blur: run all XeGTAO passes and write the game's final R8_UNORM u0; native apply performs composition.
-         if (original_shader_hashes.Contains(kAOBlurHash, reshade::api::shader_stage::compute))
+         if (original_shader_hashes.Contains(kAOBlurHash, ShaderStages::Compute))
          {
             if (!gd.gtao_active_this_frame)
                return DrawOrDispatchOverrideType::None;
@@ -781,8 +781,8 @@ public:
    // Replace the in-place FXAA resolve with SMAA by taking color from u0. Disabled SMAA leaves FXAA native.
    DrawOrDispatchOverrideType RunSMAAResolve(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data, MassEffectGameDeviceData& gd, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass)
    {
-      const bool is_resolve_h = original_shader_hashes.Contains(kFXAAResolveHHash, reshade::api::shader_stage::compute);
-      const bool is_resolve_v = original_shader_hashes.Contains(kFXAAResolveVHash, reshade::api::shader_stage::compute);
+      const bool is_resolve_h = original_shader_hashes.Contains(kFXAAResolveHHash, ShaderStages::Compute);
+      const bool is_resolve_v = original_shader_hashes.Contains(kFXAAResolveVHash, ShaderStages::Compute);
       // The resolve is the final scene-post step and arms HUD suppression for subsequent draws, with or without SMAA.
       if (is_resolve_h || is_resolve_v)
          gd.scene_post_done_this_frame = true;
@@ -904,7 +904,7 @@ public:
 
    // Captures inputs for SMAA, bloom, XeGTAO and Bink, replaces the FXAA and HBAO+ dispatches, and applies Hide UI;
    // shader replacement itself stays hash-driven by Core.
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& gd = GetGameDeviceData(device_data);
 
@@ -916,7 +916,7 @@ public:
 
       // Core uploads LumaData after this callback for replaced shaders, so stage 2 and any later direct Bink draw
       // receive the updated encoding state in the same frame.
-      if (original_shader_hashes.Contains(kOutputStage2Hash, reshade::api::shader_stage::pixel))
+      if (original_shader_hashes.Contains(kOutputStage2Hash, ShaderStages::Pixel))
          gd.stage2_seen_this_frame = true;
 
       // HUD draws occur after the FXAA resolve. Suppress only plain game draws in that window so stage 1, stage 2,
@@ -994,38 +994,38 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::get_config_value(nullptr, PROJECT_NAME, "SMAAEnable", g_smaa_enable);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "RCASSharpness", g_rcas_sharpness);
+      Config::Get(PROJECT_NAME, "SMAAEnable", g_smaa_enable);
+      Config::Get(PROJECT_NAME, "RCASSharpness", g_rcas_sharpness);
       auto& gs = cb_luma_global_settings.GameSettings;
-      reshade::get_config_value(nullptr, PROJECT_NAME, "Exposure", gs.Exposure);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "Saturation", gs.Saturation);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "HighlightDechroma", gs.HighlightDechroma);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "Contrast", gs.Contrast);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "VignetteIntensity", gs.VignetteIntensity);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "FilmGrainIntensity", gs.FilmGrainIntensity);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "BloomEnable", g_bloom_enable);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "BloomIntensity", g_bloom_intensity);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "Dithering", gs.Dithering);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "VideoAutoHDREnable", g_video_auto_hdr_enable);
+      Config::Get(PROJECT_NAME, "Exposure", gs.Exposure);
+      Config::Get(PROJECT_NAME, "Saturation", gs.Saturation);
+      Config::Get(PROJECT_NAME, "HighlightDechroma", gs.HighlightDechroma);
+      Config::Get(PROJECT_NAME, "Contrast", gs.Contrast);
+      Config::Get(PROJECT_NAME, "VignetteIntensity", gs.VignetteIntensity);
+      Config::Get(PROJECT_NAME, "FilmGrainIntensity", gs.FilmGrainIntensity);
+      Config::Get(PROJECT_NAME, "BloomEnable", g_bloom_enable);
+      Config::Get(PROJECT_NAME, "BloomIntensity", g_bloom_intensity);
+      Config::Get(PROJECT_NAME, "Dithering", gs.Dithering);
+      Config::Get(PROJECT_NAME, "VideoAutoHDREnable", g_video_auto_hdr_enable);
       gs.VideoAutoHDREnable = g_video_auto_hdr_enable ? 1.f : 0.f;
-      reshade::get_config_value(nullptr, PROJECT_NAME, "VideoAutoHDRBoost", gs.VideoAutoHDRBoost);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "GTAOEnable", g_gtao_enable);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "GTAOFinalValuePower", g_gtao_final_value_power);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "GTAODepthScale", g_gtao_depth_scale);
-      reshade::get_config_value(nullptr, PROJECT_NAME, "GTAORadiusOverride", g_gtao_radius_override);
+      Config::Get(PROJECT_NAME, "VideoAutoHDRBoost", gs.VideoAutoHDRBoost);
+      Config::Get(PROJECT_NAME, "GTAOEnable", g_gtao_enable);
+      Config::Get(PROJECT_NAME, "GTAOFinalValuePower", g_gtao_final_value_power);
+      Config::Get(PROJECT_NAME, "GTAODepthScale", g_gtao_depth_scale);
+      Config::Get(PROJECT_NAME, "GTAORadiusOverride", g_gtao_radius_override);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
       ImGui::SeparatorText("Anti-Aliasing");
       if (ImGui::Checkbox("SMAA Enable", &g_smaa_enable))
-         reshade::set_config_value(nullptr, PROJECT_NAME, "SMAAEnable", g_smaa_enable);
+         Config::Set(PROJECT_NAME, "SMAAEnable", g_smaa_enable);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Replaces the game's FXAA with SMAA (requires AA enabled in the game's video settings).");
       ImGui::BeginDisabled(!g_smaa_enable);
       ImGui::SliderFloat("RCAS Sharpness", &g_rcas_sharpness, 0.f, 1.f);
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(nullptr, PROJECT_NAME, "RCASSharpness", g_rcas_sharpness);
+         Config::Set(PROJECT_NAME, "RCASSharpness", g_rcas_sharpness);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Sharpening applied on top of SMAA (0 = off).");
       ImGui::EndDisabled();
@@ -1037,13 +1037,13 @@ public:
       if (ImGui::SliderFloat("Exposure", &gs.Exposure, 0.f, 2.f))
          device_data.cb_luma_global_settings_dirty = true;
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(nullptr, PROJECT_NAME, "Exposure", gs.Exposure);
+         Config::Set(PROJECT_NAME, "Exposure", gs.Exposure);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Overall image brightness (1 = vanilla).");
       if (DrawResetButton<float, false>(gs.Exposure, gd_def.Exposure, "Exposure"))
       {
          device_data.cb_luma_global_settings_dirty = true;
-         reshade::set_config_value(nullptr, PROJECT_NAME, "Exposure", gs.Exposure); // LoadConfigs reads PROJECT_NAME, not [Luma].
+         Config::Set(PROJECT_NAME, "Exposure", gs.Exposure); // LoadConfigs reads PROJECT_NAME, not [Luma].
       }
 
       if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
@@ -1051,44 +1051,44 @@ public:
          if (ImGui::SliderFloat("Contrast", &gs.Contrast, 0.f, 2.f))
             device_data.cb_luma_global_settings_dirty = true;
          if (ImGui::IsItemDeactivatedAfterEdit())
-            reshade::set_config_value(nullptr, PROJECT_NAME, "Contrast", gs.Contrast);
+            Config::Set(PROJECT_NAME, "Contrast", gs.Contrast);
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Overall image contrast, HDR only (1 = vanilla).");
          if (DrawResetButton<float, false>(gs.Contrast, gd_def.Contrast, "Contrast"))
          {
             device_data.cb_luma_global_settings_dirty = true;
-            reshade::set_config_value(nullptr, PROJECT_NAME, "Contrast", gs.Contrast);
+            Config::Set(PROJECT_NAME, "Contrast", gs.Contrast);
          }
 
          if (ImGui::SliderFloat("Saturation", &gs.Saturation, 0.f, 2.f))
             device_data.cb_luma_global_settings_dirty = true;
          if (ImGui::IsItemDeactivatedAfterEdit())
-            reshade::set_config_value(nullptr, PROJECT_NAME, "Saturation", gs.Saturation);
+            Config::Set(PROJECT_NAME, "Saturation", gs.Saturation);
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Color saturation, HDR only (1 = vanilla).");
          if (DrawResetButton<float, false>(gs.Saturation, gd_def.Saturation, "Saturation"))
          {
             device_data.cb_luma_global_settings_dirty = true;
-            reshade::set_config_value(nullptr, PROJECT_NAME, "Saturation", gs.Saturation);
+            Config::Set(PROJECT_NAME, "Saturation", gs.Saturation);
          }
 
          if (ImGui::SliderFloat("Highlights Desaturation", &gs.HighlightDechroma, 0.f, 1.f))
             device_data.cb_luma_global_settings_dirty = true;
          if (ImGui::IsItemDeactivatedAfterEdit())
-            reshade::set_config_value(nullptr, PROJECT_NAME, "HighlightDechroma", gs.HighlightDechroma);
+            Config::Set(PROJECT_NAME, "HighlightDechroma", gs.HighlightDechroma);
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("How far the brightest sources fade to neutral white, HDR only (0 = keep color at any brightness).");
          if (DrawResetButton<float, false>(gs.HighlightDechroma, gd_def.HighlightDechroma, "HighlightDechroma"))
          {
             device_data.cb_luma_global_settings_dirty = true;
-            reshade::set_config_value(nullptr, PROJECT_NAME, "HighlightDechroma", gs.HighlightDechroma);
+            Config::Set(PROJECT_NAME, "HighlightDechroma", gs.HighlightDechroma);
          }
       }
 
       ImGui::SeparatorText("Bloom");
       if (ImGui::Checkbox("Luma Bloom Enable", &g_bloom_enable))
       {
-         reshade::set_config_value(nullptr, PROJECT_NAME, "BloomEnable", g_bloom_enable);
+         Config::Set(PROJECT_NAME, "BloomEnable", g_bloom_enable);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1097,36 +1097,36 @@ public:
       if (ImGui::SliderFloat("Bloom Intensity", &g_bloom_intensity, 0.f, 2.f))
          device_data.cb_luma_global_settings_dirty = true;
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(nullptr, PROJECT_NAME, "BloomIntensity", g_bloom_intensity);
+         Config::Set(PROJECT_NAME, "BloomIntensity", g_bloom_intensity);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Bloom strength (1 = vanilla, 0 = none).");
       if (DrawResetButton<float, false>(g_bloom_intensity, gd_def.BloomIntensity, "BloomIntensity"))
       {
          device_data.cb_luma_global_settings_dirty = true;
-         reshade::set_config_value(nullptr, PROJECT_NAME, "BloomIntensity", g_bloom_intensity);
+         Config::Set(PROJECT_NAME, "BloomIntensity", g_bloom_intensity);
       }
       ImGui::EndDisabled();
 
       ImGui::SeparatorText("Ambient Occlusion");
       if (ImGui::Checkbox("XeGTAO Enable", &g_gtao_enable))
-         reshade::set_config_value(nullptr, PROJECT_NAME, "GTAOEnable", g_gtao_enable);
+         Config::Set(PROJECT_NAME, "GTAOEnable", g_gtao_enable);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Replaces the game's HBAO+ with XeGTAO (cleaner, more accurate ambient occlusion).");
 #if DEVELOPMENT || TEST
       ImGui::BeginDisabled(!g_gtao_enable);
       ImGui::SliderFloat("GTAO Final Value Power", &g_gtao_final_value_power, 0.3f, 4.5f, "%.2f");
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(nullptr, PROJECT_NAME, "GTAOFinalValuePower", g_gtao_final_value_power);
+         Config::Set(PROJECT_NAME, "GTAOFinalValuePower", g_gtao_final_value_power);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Primary darkness dial (higher = darker AO). Calibrate to match vanilla's overall darkening.");
       ImGui::SliderFloat("GTAO Depth Scale", &g_gtao_depth_scale, 10.f, 200.f, "%.0f", ImGuiSliderFlags_Logarithmic);
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(nullptr, PROJECT_NAME, "GTAODepthScale", g_gtao_depth_scale);
+         Config::Set(PROJECT_NAME, "GTAODepthScale", g_gtao_depth_scale);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("viewZ divisor (UE3 units -> ~meters). FIRST dial if AO shows broad depth-correlated over-occlusion.");
       ImGui::SliderFloat("GTAO Radius Override", &g_gtao_radius_override, 0.f, 3.f, "%.3f");
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(nullptr, PROJECT_NAME, "GTAORadiusOverride", g_gtao_radius_override);
+         Config::Set(PROJECT_NAME, "GTAORadiusOverride", g_gtao_radius_override);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("0 = shader EFFECT_RADIUS define; > 0 overrides it to match the vanilla HBAO+ radius (uu / DepthScale).");
       ImGui::Combo("GTAO Debug View", &g_gtao_debug_view, "Off\0Depth gradient\0Normals\0AO x8\0Edges\0");
@@ -1139,32 +1139,32 @@ public:
       if (ImGui::SliderFloat("Vignette Intensity", &gs.VignetteIntensity, 0.f, 1.f))
          device_data.cb_luma_global_settings_dirty = true;
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(nullptr, PROJECT_NAME, "VignetteIntensity", gs.VignetteIntensity);
+         Config::Set(PROJECT_NAME, "VignetteIntensity", gs.VignetteIntensity);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Scales the game's vignette darkening (1 = vanilla, 0 = none).");
       if (DrawResetButton<float, false>(gs.VignetteIntensity, gd_def.VignetteIntensity, "VignetteIntensity"))
       {
          device_data.cb_luma_global_settings_dirty = true;
-         reshade::set_config_value(nullptr, PROJECT_NAME, "VignetteIntensity", gs.VignetteIntensity);
+         Config::Set(PROJECT_NAME, "VignetteIntensity", gs.VignetteIntensity);
       }
 
       if (ImGui::SliderFloat("Film Grain Intensity", &gs.FilmGrainIntensity, 0.f, 1.f))
          device_data.cb_luma_global_settings_dirty = true;
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(nullptr, PROJECT_NAME, "FilmGrainIntensity", gs.FilmGrainIntensity);
+         Config::Set(PROJECT_NAME, "FilmGrainIntensity", gs.FilmGrainIntensity);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Scales the game's film grain (1 = vanilla, 0 = off).");
       if (DrawResetButton<float, false>(gs.FilmGrainIntensity, gd_def.FilmGrainIntensity, "FilmGrainIntensity"))
       {
          device_data.cb_luma_global_settings_dirty = true;
-         reshade::set_config_value(nullptr, PROJECT_NAME, "FilmGrainIntensity", gs.FilmGrainIntensity);
+         Config::Set(PROJECT_NAME, "FilmGrainIntensity", gs.FilmGrainIntensity);
       }
 
       if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
       {
          if (ImGui::Checkbox("Video AutoHDR", &g_video_auto_hdr_enable))
          {
-            reshade::set_config_value(nullptr, PROJECT_NAME, "VideoAutoHDREnable", g_video_auto_hdr_enable);
+            Config::Set(PROJECT_NAME, "VideoAutoHDREnable", g_video_auto_hdr_enable);
             gs.VideoAutoHDREnable = g_video_auto_hdr_enable ? 1.f : 0.f;
             device_data.cb_luma_global_settings_dirty = true;
          }
@@ -1174,13 +1174,13 @@ public:
          if (ImGui::SliderFloat("Video HDR Boost", &gs.VideoAutoHDRBoost, 0.f, 1.f))
             device_data.cb_luma_global_settings_dirty = true;
          if (ImGui::IsItemDeactivatedAfterEdit())
-            reshade::set_config_value(nullptr, PROJECT_NAME, "VideoAutoHDRBoost", gs.VideoAutoHDRBoost);
+            Config::Set(PROJECT_NAME, "VideoAutoHDRBoost", gs.VideoAutoHDRBoost);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Video highlight strength (0 = off).");
          if (DrawResetButton<float, false>(gs.VideoAutoHDRBoost, gd_def.VideoAutoHDRBoost, "VideoAutoHDRBoost"))
          {
             device_data.cb_luma_global_settings_dirty = true;
-            reshade::set_config_value(nullptr, PROJECT_NAME, "VideoAutoHDRBoost", gs.VideoAutoHDRBoost);
+            Config::Set(PROJECT_NAME, "VideoAutoHDRBoost", gs.VideoAutoHDRBoost);
          }
          ImGui::EndDisabled();
       }
@@ -1190,7 +1190,7 @@ public:
       {
          gs.Dithering = dithering ? 1.f : 0.f;
          device_data.cb_luma_global_settings_dirty = true;
-         reshade::set_config_value(nullptr, PROJECT_NAME, "Dithering", gs.Dithering);
+         Config::Set(PROJECT_NAME, "Dithering", gs.Dithering);
       }
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Reduces gradient banding.");
@@ -1300,7 +1300,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       enable_samplers_upgrade = true; // Boot-time only.
       samplers_upgrade_mode = 4;
 
-      game = new MassEffectLE();
+      SetGame<MassEffectLE>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

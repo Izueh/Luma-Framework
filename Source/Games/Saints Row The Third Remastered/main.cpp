@@ -117,7 +117,7 @@ namespace
       // Saved once the edit ends, not on every drag step
       if (ImGui::IsItemDeactivatedAfterEdit())
       {
-         reshade::set_config_value(nullptr, NAME, key, *value);
+         Config::Set(NAME, key, *value);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
@@ -136,7 +136,7 @@ namespace
       if (ImGui::Checkbox(label, &shown))
       {
          *value = T(shown);
-         reshade::set_config_value(nullptr, NAME, key, *value);
+         Config::Set(NAME, key, *value);
       }
       ImGui::EndDisabled();
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -251,7 +251,7 @@ namespace
       {
          char line[128];
          std::snprintf(line, sizeof(line), "[SRTTR JIT] increment tid=%lu camera=%p counter=%d", GetCurrentThreadId(), camera, *reinterpret_cast<const int32_t*>(camera + 0x59C));
-         reshade::log::message(reshade::log::level::info, line);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
       }
       camera_counter_increment_original(camera);
    }
@@ -278,7 +278,7 @@ namespace
          const float* row_2 = reinterpret_cast<const float*>(camera + 0x100);
          char line[256];
          std::snprintf(line, sizeof(line), "[SRTTR JIT] build tid=%lu camera=%p counter=%d taa_gate=%d jitter_gate=%d row2=%.9g,%.9g,%.9g,%.9g", GetCurrentThreadId(), camera, counter, int(taa_gate), jitter_gate, row_2[0], row_2[1], row_2[2], row_2[3]);
-         reshade::log::message(reshade::log::level::info, line);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
       }
 #endif
       return result;
@@ -501,10 +501,10 @@ namespace
                for (size_t i = 0; i < count; i++)
                {
                   const size_t name = (i + 1 == count ? SRStepCount : (first_name + i)); // The last is the total
-                  reshade::log::message(reshade::log::level::info, std::format("{} {:<14} avg {:.3f} min {:.3f} max {:.3f} ms", prefix, sr_step_names[name], stats[i].sum / samples, stats[i].min, stats[i].max).c_str());
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("{} {:<14} avg {:.3f} min {:.3f} max {:.3f} ms", prefix, sr_step_names[name], stats[i].sum / samples, stats[i].min, stats[i].max).c_str());
                }
             };
-            reshade::log::message(reshade::log::level::info, std::format("[SRTTR SR] timings since the last log: CPU submission over {} frames, GPU execution over {} frames ({} dropped, {} invalid)", timings->cpu_samples, timings->gpu_samples, timings->gpu_dropped, timings->gpu_invalid).c_str());
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("[SRTTR SR] timings since the last log: CPU submission over {} frames, GPU execution over {} frames ({} dropped, {} invalid)", timings->cpu_samples, timings->gpu_samples, timings->gpu_dropped, timings->gpu_invalid).c_str());
             if (timings->cpu_samples)
             {
                log_stats("[SRTTR SR] CPU", timings->cpu, 0, SRStepCount + 1, timings->cpu_samples);
@@ -694,13 +694,13 @@ public:
       default_luma_global_game_settings.HideGameplayUI = 0.f;
       cb_luma_global_settings.GameSettings = default_luma_global_game_settings;
 
-      native_shaders_definitions.emplace(smaa_predication_shader_hash, ShaderDefinition{"Luma_SRTTR_SMAAPredication", reshade::api::pipeline_subobject_type::compute_shader});
-      native_shaders_definitions.emplace(gtao_prefilter_shader_hash, ShaderDefinition{"Luma_SRTTR_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs"});
-      native_shaders_definitions.emplace(gtao_main_shader_hash, ShaderDefinition{"Luma_SRTTR_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs"});
-      native_shaders_definitions.emplace(gtao_denoise_1_shader_hash, ShaderDefinition{"Luma_SRTTR_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "0"}}});
-      native_shaders_definitions.emplace(gtao_denoise_2_shader_hash, ShaderDefinition{"Luma_SRTTR_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "1"}}});
+      native_shaders_definitions.emplace(smaa_predication_shader_hash, ShaderDefinition{"Luma_SRTTR_SMAAPredication", D3D11_SHVER_COMPUTE_SHADER});
+      native_shaders_definitions.emplace(gtao_prefilter_shader_hash, ShaderDefinition{"Luma_SRTTR_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "prefilter_depths16x16_cs"});
+      native_shaders_definitions.emplace(gtao_main_shader_hash, ShaderDefinition{"Luma_SRTTR_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "main_pass_cs"});
+      native_shaders_definitions.emplace(gtao_denoise_1_shader_hash, ShaderDefinition{"Luma_SRTTR_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "0"}}});
+      native_shaders_definitions.emplace(gtao_denoise_2_shader_hash, ShaderDefinition{"Luma_SRTTR_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "1"}}});
 #if ENABLE_SR
-      native_shaders_definitions.emplace(sr_inputs_shader_hash, ShaderDefinition{"Luma_SRTTR_SRInputs", reshade::api::pipeline_subobject_type::compute_shader});
+      native_shaders_definitions.emplace(sr_inputs_shader_hash, ShaderDefinition{"Luma_SRTTR_SRInputs", D3D11_SHVER_COMPUTE_SHADER});
       sr_game_tooltip = "Requires \"Anti-Aliasing\" set to \"TAA\" in the game's display settings.\n";
 #endif
    }
@@ -774,8 +774,8 @@ public:
       }
 
       // The SMAA shaders read the target size from the Luma settings and the predication scale from the Luma data, in both stages
-      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::vertex | reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::vertex | reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData, 0, 0, (depth_srv ? 2.f : 1.f));
+      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Vertex | ShaderStages::Pixel, LumaConstantBufferType::LumaSettings);
+      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Vertex | ShaderStages::Pixel, LumaConstantBufferType::LumaData, 0, 0, (depth_srv ? 2.f : 1.f));
       *updated_cbuffers = true;
       // Core creates its area texture at the first draw; ours goes in first, without the U-shape smoothing (see "SMAA_AreaTex_SharpU.h")
       if (auto& area_tex_srv = device_data.managed_resources.shader_resource_views["smaa_area_tex"_h]; !area_tex_srv)
@@ -899,7 +899,7 @@ public:
          native_device_context1->CSSetConstantBuffers1(ambient_params_cb_slot, 1, &ambient_params_cb, &ambient_params_first, &ambient_params_count);
          // The noise pattern cycles only when a temporal AA accumulated last frame (the ambient runs before this frame's TAA), otherwise it would boil
          const uint32_t noise_index = (device_data.taa_detected ? (cb_luma_global_settings.FrameIndex % 64) : 0);
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData, noise_index, uint32_t(g_gtao_debug_view), g_gtao_final_value_power, g_gtao_radius_override);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaData, noise_index, uint32_t(g_gtao_debug_view), g_gtao_final_value_power, g_gtao_radius_override);
          *updated_cbuffers = true;
          ID3D11SamplerState* const point_sampler = device_data.sampler_state_point.get();
          native_device_context->CSSetSamplers(0, 1, &point_sampler);
@@ -1085,13 +1085,13 @@ public:
       device_data.game = new SaintsRowTheThirdRemasteredGameDeviceData;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
-      if ((stages & reshade::api::shader_stage::compute) != reshade::api::shader_stage::compute)
+      if ((stages & ShaderStages::Compute) != ShaderStages::Compute)
       {
          const auto is_pixel_shader = [&](uint32_t hash)
-         { return original_shader_hashes.Contains(hash, reshade::api::shader_stage::pixel); };
+         { return original_shader_hashes.Contains(hash, ShaderStages::Pixel); };
          if (is_pixel_shader(ambient_hash))
          {
             // Once per frame, and only when the game's SSAO is on
@@ -1116,8 +1116,8 @@ public:
             }
             // Core only binds the Luma settings itself when the game leaves both cbuffers to it. The flag tells the shader its target
             // (the swapchain) keeps AutoHDR highlights above 1.
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData, (rtv_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 1 : 0));
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData, (rtv_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 1 : 0));
             updated_cbuffers = true;
          }
          else if (g_smaa_enable && is_pixel_shader(fxaa_pixel_shader_hash) && DrawSMAAInPlaceOfFXAA(native_device, native_device_context, cmd_list_data, device_data, &updated_cbuffers))
@@ -1128,7 +1128,7 @@ public:
       }
 
       const auto is_compute_shader = [&](uint32_t hash)
-      { return original_shader_hashes.Contains(hash, reshade::api::shader_stage::compute); };
+      { return original_shader_hashes.Contains(hash, ShaderStages::Compute); };
       // XeGTAO writes the chain's only output at the ambient draw. While it works, the chain is skipped.
       if (is_compute_shader(ssao_prepare_1_hash))
       {
@@ -1316,20 +1316,20 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::get_config_value(nullptr, NAME, "SMAAEnable", g_smaa_enable);
-      reshade::get_config_value(nullptr, NAME, "XeGTAOEnable", g_gtao_enable);
-      reshade::get_config_value(nullptr, NAME, "FixNativeTAAJitter", g_fix_native_taa_jitter);
+      Config::Get(NAME, "SMAAEnable", g_smaa_enable);
+      Config::Get(NAME, "XeGTAOEnable", g_gtao_enable);
+      Config::Get(NAME, "FixNativeTAAJitter", g_fix_native_taa_jitter);
       auto& settings = cb_luma_global_settings.GameSettings;
-      reshade::get_config_value(nullptr, NAME, "RCASSharpness", settings.RCASSharpness);
-      reshade::get_config_value(nullptr, NAME, "Exposure", settings.Exposure);
-      reshade::get_config_value(nullptr, NAME, "Contrast", settings.Contrast);
-      reshade::get_config_value(nullptr, NAME, "Saturation", settings.Saturation);
-      reshade::get_config_value(nullptr, NAME, "ColorGradingIntensity", settings.ColorGradingIntensity);
-      reshade::get_config_value(nullptr, NAME, "VignetteIntensity", settings.VignetteIntensity);
-      reshade::get_config_value(nullptr, NAME, "FilmGrainIntensity", settings.FilmGrainIntensity);
-      reshade::get_config_value(nullptr, NAME, "Dithering", settings.Dithering);
-      reshade::get_config_value(nullptr, NAME, "VideoAutoHDREnable", settings.VideoAutoHDREnable);
-      reshade::get_config_value(nullptr, NAME, "VideoAutoHDRBoost", settings.VideoAutoHDRBoost);
+      Config::Get(NAME, "RCASSharpness", settings.RCASSharpness);
+      Config::Get(NAME, "Exposure", settings.Exposure);
+      Config::Get(NAME, "Contrast", settings.Contrast);
+      Config::Get(NAME, "Saturation", settings.Saturation);
+      Config::Get(NAME, "ColorGradingIntensity", settings.ColorGradingIntensity);
+      Config::Get(NAME, "VignetteIntensity", settings.VignetteIntensity);
+      Config::Get(NAME, "FilmGrainIntensity", settings.FilmGrainIntensity);
+      Config::Get(NAME, "Dithering", settings.Dithering);
+      Config::Get(NAME, "VideoAutoHDREnable", settings.VideoAutoHDREnable);
+      Config::Get(NAME, "VideoAutoHDRBoost", settings.VideoAutoHDRBoost);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
@@ -1451,7 +1451,7 @@ public:
       }
       if (ImGui::IsItemHovered())
       {
-         ImGui::SetTooltip("Writes the next 200 camera projection builds (counter, TAA gates, jitter row) and counter increments to ReShade.log.");
+         ImGui::SetTooltip("Writes the next 200 camera projection builds (counter, TAA gates, jitter row) and counter increments to Luma.log.");
       }
 #if ENABLE_SR
       if (ImGui::Button("Log SR Timings"))
@@ -1460,7 +1460,7 @@ public:
       }
       if (ImGui::IsItemHovered())
       {
-         ImGui::SetTooltip("Writes the average, min and max time of every DLAA / FSR 3 step since the last log to ReShade.log, on the next SR frame.\nCPU = submission time on the render thread. GPU = execution time of the inputs conversion CS and the SR draw.");
+         ImGui::SetTooltip("Writes the average, min and max time of every DLAA / FSR 3 step since the last log to Luma.log, on the next SR frame.\nCPU = submission time on the render thread. GPU = execution time of the inputs conversion CS and the SR draw.");
       }
 #endif
    }
@@ -1532,7 +1532,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // The scene, TAA and tonemap outputs are r11g11b10_float at swapchain resolution: fp16 removes banding in HDR highlights.
       // The GUI layer (with Bink video) and the TAA history stay RGBA8; the GUI layer's UNORM clamp is what bounds the Bink YCbCr conversion.
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
-      texture_upgrade_formats = {reshade::api::format::r11g11b10_float};
+      texture_upgrade_formats = {DXGI_FORMAT_R11G11B10_FLOAT};
       texture_format_upgrades_2d_size_filters = (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution;
 
       // Anisotropic samplers get 16x AF and the SR mip bias offset (added to the game's bias)
@@ -1548,7 +1548,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          redirected_shader_hashes["ComposeGUI"].insert(std::format("{:08X}", hash));
       }
 
-      game = new SaintsRowTheThirdRemastered();
+      SetGame<SaintsRowTheThirdRemastered>();
    }
    // The camera hook detour lives in this module: remove it before it unloads. On an unload (not the process exit) the game's jitter goes back
    // to vanilla too, as a later load starts from the 2x pattern (the Halton code stays, it's only reached in mode 3).

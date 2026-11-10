@@ -26,7 +26,7 @@ public:
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       if (is_custom_pass && original_shader_hashes.Contains(pixel_shader_hashes_FXAA))
       {
@@ -125,27 +125,25 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       enable_indirect_texture_format_upgrades = true; // This is generally safer, not sure it helps with this game but it works
       enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
       texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-            reshade::api::format::r10g10b10a2_unorm,
-            reshade::api::format::r10g10b10a2_typeless,
+            DXGI_FORMAT_R10G10B10A2_UNORM,
+            DXGI_FORMAT_R10G10B10A2_TYPELESS,
 
             // This game uses R16G16B16A16_SNORM for normals
-            //reshade::api::format::r16g16b16a16_unorm,
-            //reshade::api::format::r16g16b16a16_snorm,
+            //DXGI_FORMAT_R16G16B16A16_UNORM,
+            //DXGI_FORMAT_R16G16B16A16_SNORM,
 
             // Used for post processing, rendering was all HDR and linear already
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
       };
       // Force upgrade 16:9 too as some render targets are always 16:9, even in ultrawide
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::CustomAspectRatio;
@@ -168,7 +166,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       pixel_shader_hashes_Tonemap.pixel_shaders = {Shader::Hash_StrToNum("B2A7A17F"), Shader::Hash_StrToNum("21735B48"), Shader::Hash_StrToNum("F50B6A8A"), Shader::Hash_StrToNum("31AB1F7D")};
       pixel_shader_hashes_FXAA.pixel_shaders = {Shader::Hash_StrToNum("879DC513")};
 
-      game = new LaraCroftTempleOsiris();
+      SetGame<LaraCroftTempleOsiris>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

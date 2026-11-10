@@ -237,9 +237,9 @@ public:
    }
 
    // Add a saturate on materials/gbuffers
-   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, D3D11_SHADER_VERSION_TYPE type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
    {
-      if (type != reshade::api::pipeline_subobject_type::pixel_shader)
+      if (type != D3D11_SHVER_PIXEL_SHADER)
          return nullptr;
 
       std::unique_ptr<std::byte[]> new_code = nullptr;
@@ -402,7 +402,7 @@ public:
       return new_code;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       const std::shared_lock lock(materials_mutex); // Note: this could be "optimized" a bit, given that most shaders will compile on boot and on the same thread, but not all (I checked). Either way it shouldn't be too slow.
       if (enable_samplers_upgrade && original_shader_hashes.Contains(shader_hashes_TerrainMaterials) && test_index != 2)
@@ -943,16 +943,14 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
-      reshade::get_config_value(runtime, NAME, "HDRBoostSaturationAmount", cb_luma_global_settings.GameSettings.HDRBoostSaturationAmount);
-      reshade::get_config_value(runtime, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
+      Config::Get(NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
+      Config::Get(NAME, "HDRBoostSaturationAmount", cb_luma_global_settings.GameSettings.HDRBoostSaturationAmount);
+      Config::Get(NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
       // "device_data.cb_luma_global_settings_dirty" should already be true at this point
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
@@ -960,25 +958,25 @@ public:
       {
          if (ImGui::SliderFloat("Color Grading Intensity", &cb_luma_global_settings.GameSettings.ColorGradingIntensity, 0.f, 1.f))
          {
-            reshade::set_config_value(runtime, NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
+            Config::Set(NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
          }
-         DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingIntensity, 0.8f, "ColorGradingIntensity", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingIntensity, 0.8f, "ColorGradingIntensity");
 
          if (GetShaderDefineCompiledNumericalValue(char_ptr_crc32("ENABLE_HDR_BOOST")) > 0)
          {
             if (ImGui::SliderFloat("HDR Saturation Boost", &cb_luma_global_settings.GameSettings.HDRBoostSaturationAmount, 0.f, 1.f))
             {
-               reshade::set_config_value(runtime, NAME, "HDRBoostSaturationAmount", cb_luma_global_settings.GameSettings.HDRBoostSaturationAmount);
+               Config::Set(NAME, "HDRBoostSaturationAmount", cb_luma_global_settings.GameSettings.HDRBoostSaturationAmount);
             }
-            DrawResetButton(cb_luma_global_settings.GameSettings.HDRBoostSaturationAmount, 0.2f, "HDRBoostSaturationAmount", runtime);
+            DrawResetButton(cb_luma_global_settings.GameSettings.HDRBoostSaturationAmount, 0.2f, "HDRBoostSaturationAmount");
          }
       }
 
       if (ImGui::SliderFloat("Bloom Intensity", &cb_luma_global_settings.GameSettings.BloomIntensity, 0.f, 1.f))
       {
-         reshade::set_config_value(runtime, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
+         Config::Set(NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
       }
-      DrawResetButton(cb_luma_global_settings.GameSettings.BloomIntensity, 1.0f, "BloomIntensity", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.BloomIntensity, 1.0f, "BloomIntensity");
    }
 
    void PrintImGuiAbout() override
@@ -1058,19 +1056,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type         = SwapchainUpgradeType::scRGB;
       texture_format_upgrades_type   = TextureFormatUpgradesType::AllowedEnabled;
       texture_upgrade_formats = {
-         reshade::api::format::r8g8b8a8_unorm,
-         reshade::api::format::r8g8b8a8_unorm_srgb,
-         reshade::api::format::r8g8b8a8_typeless,
-         reshade::api::format::r8g8b8x8_unorm,
-         reshade::api::format::r8g8b8x8_unorm_srgb,
-         reshade::api::format::b8g8r8a8_unorm,
-         reshade::api::format::b8g8r8a8_unorm_srgb,
-         reshade::api::format::b8g8r8a8_typeless,
-         reshade::api::format::b8g8r8x8_unorm,
-         reshade::api::format::b8g8r8x8_unorm_srgb,
-         reshade::api::format::b8g8r8x8_typeless,
+         DXGI_FORMAT_R8G8B8A8_UNORM,
+         DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+         DXGI_FORMAT_R8G8B8A8_TYPELESS,
+         DXGI_FORMAT_B8G8R8A8_UNORM,
+         DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+         DXGI_FORMAT_B8G8R8A8_TYPELESS,
+         DXGI_FORMAT_B8G8R8X8_UNORM,
+         DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+         DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-         reshade::api::format::r11g11b10_float,
+         DXGI_FORMAT_R11G11B10_FLOAT,
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
       enable_indirect_texture_format_upgrades = true;
@@ -1229,7 +1225,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(Shader::Hash_StrToNum("CA7DFA32"), "GBuffers composition"); // One of the many?
 #endif
 
-      game = new JustCause3();
+      SetGame<JustCause3>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {

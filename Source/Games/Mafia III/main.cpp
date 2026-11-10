@@ -319,7 +319,7 @@ public:
 
       GetShaderDefineData(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL_HASH).SetDefaultValue('1');
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("Draw Sky Motion Vectors"), ShaderDefinition{ "Luma_DrawSkyMotionVectors", reshade::api::pipeline_subobject_type::pixel_shader });
+      native_shaders_definitions.emplace(CompileTimeStringHash("Draw Sky Motion Vectors"), ShaderDefinition{ "Luma_DrawSkyMotionVectors", D3D11_SHVER_PIXEL_SHADER });
 
       luma_settings_cbuffer_index = 13;
       luma_data_cbuffer_index = 12;
@@ -329,12 +329,6 @@ public:
    {
       if (!failed)
       {
-#if DEVELOPMENT
-         reshade::register_event<reshade::addon_event::clear_render_target_view>(MafiaIII::OnClearRenderTargetView);
-#endif
-         reshade::register_event<reshade::addon_event::map_buffer_region>(MafiaIII::OnMapBufferRegion);
-         reshade::register_event<reshade::addon_event::unmap_buffer_region>(MafiaIII::OnUnmapBufferRegion);
-         reshade::register_event<reshade::addon_event::update_buffer_region>(MafiaIII::OnUpdateBufferRegion);
 
          HMODULE module_handle = GetModuleHandle(nullptr); // Handle to the current executable
          auto dos_header = reinterpret_cast<PIMAGE_DOS_HEADER>(module_handle);
@@ -359,21 +353,21 @@ public:
       device_data.game = new GameDeviceDataMafiaIII;
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-		auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+		auto& device_data = *GetSwapchainData(swapchain)->device_data;
 
       cb_luma_global_settings.GameSettings.InvOutputRes.x = 1.f / device_data.output_resolution.x;
       cb_luma_global_settings.GameSettings.InvOutputRes.y = 1.f / device_data.output_resolution.y;
       device_data.cb_luma_global_settings_dirty = true;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
 #if DEVELOPMENT || TEST
-      ASSERT_ONCE((stages & reshade::api::shader_stage::compute) == 0); // TODO: test warning about unorm/float mismatch that DX spams, though it seems like there's no CS calls...? Maybe it was ReShade/ImGUI?
+      ASSERT_ONCE((stages & ShaderStages::Compute) == 0); // TODO: test warning about unorm/float mismatch that DX spams, though it seems like there's no CS calls...? Maybe it was ReShade/ImGUI?
 
       if (original_shader_hashes.Contains(shader_hashes_Tonemap))
       {
@@ -1192,13 +1186,12 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "EnableLUTsNormalization", enable_luts_normalization);
-      reshade::get_config_value(runtime, NAME, "LUTsStrength", luts_strength);
-      reshade::get_config_value(runtime, NAME, "LUTsYellowFilterCorrection", luts_yellow_filter_removal);
-      reshade::get_config_value(runtime, NAME, "Sharpening", sharpening);
-      reshade::get_config_value(runtime, NAME, "MotionBlur", allow_motion_blur);
-      reshade::get_config_value(runtime, NAME, "Vignette", enable_vignette);
+      Config::Get(NAME, "EnableLUTsNormalization", enable_luts_normalization);
+      Config::Get(NAME, "LUTsStrength", luts_strength);
+      Config::Get(NAME, "LUTsYellowFilterCorrection", luts_yellow_filter_removal);
+      Config::Get(NAME, "Sharpening", sharpening);
+      Config::Get(NAME, "MotionBlur", allow_motion_blur);
+      Config::Get(NAME, "Vignette", enable_vignette);
 
       cb_luma_global_settings.GameSettings.Sharpening = sharpening; // "device_data.cb_luma_global_settings_dirty" should already be true at this point
    }
@@ -1213,71 +1206,70 @@ public:
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
       if (ImGui::Checkbox("Enable Color Grading LUTs Range Normalization", &enable_luts_normalization))
       {
-         reshade::set_config_value(runtime, NAME, "EnableLUTsNormalization", enable_luts_normalization);
+         Config::Set(NAME, "EnableLUTsNormalization", enable_luts_normalization);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Fixes potential raised blacks baked into Color Grading LUTs, without changing the appearance much");
       }
-      DrawResetButton(enable_luts_normalization, true, "EnableLUTsNormalization", runtime); // Default to true even if it's not the way the original game was
+      DrawResetButton(enable_luts_normalization, true, "EnableLUTsNormalization"); // Default to true even if it's not the way the original game was
 
       if (ImGui::SliderFloat("Color Grading LUTs Strength", &luts_strength, 0.f, 1.f))
       {
-         reshade::set_config_value(runtime, NAME, "LUTsStrength", luts_strength);
+         Config::Set(NAME, "LUTsStrength", luts_strength);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Modulates the intensity of Color Grading LUTs, allowing to go for a more neutral look");
       }
-      DrawResetButton(luts_strength, 1.f, "LUTsStrength", runtime);
+      DrawResetButton(luts_strength, 1.f, "LUTsStrength");
 
       if (ImGui::SliderFloat("Color Grading LUTs Yellow Filter Correction", &luts_yellow_filter_removal, 0.f, 1.f))
       {
-         reshade::set_config_value(runtime, NAME, "LUTsYellowFilterCorrection", luts_yellow_filter_removal);
+         Config::Set(NAME, "LUTsYellowFilterCorrection", luts_yellow_filter_removal);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Attempts to remove the yellow filter (or any color filter) that Color Grading LUTs had in this game");
       }
-      DrawResetButton(luts_yellow_filter_removal, 0.f, "LUTsYellowFilterCorrection", runtime);
+      DrawResetButton(luts_yellow_filter_removal, 0.f, "LUTsYellowFilterCorrection");
 
       if (ImGui::SliderFloat("Sharpening", &sharpening, 0.f, 1.f))
       {
          cb_luma_global_settings.GameSettings.Sharpening = sharpening;
          device_data.cb_luma_global_settings_dirty = true;
-         reshade::set_config_value(runtime, NAME, "Sharpening", sharpening);
+         Config::Set(NAME, "Sharpening", sharpening);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Sharpening to fix up the blurryness of the game's native TAA");
       }
-      DrawResetButton(sharpening, 0.f, "Sharpening", runtime);
+      DrawResetButton(sharpening, 0.f, "Sharpening");
 
       if (ImGui::Checkbox("Allow Motion Blur", &allow_motion_blur)) // Called "Allow" and not "Enable" because there's already a toggle in the game settings, this is an override
       {
-         reshade::set_config_value(runtime, NAME, "MotionBlur", allow_motion_blur);
+         Config::Set(NAME, "MotionBlur", allow_motion_blur);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Allows quick Motion Blur toggling (it can be enabled in the game's settings as well)");
       }
-      DrawResetButton(allow_motion_blur, true, "MotionBlur", runtime);
+      DrawResetButton(allow_motion_blur, true, "MotionBlur");
 
       if (ImGui::Checkbox("Vignette", &enable_vignette))
       {
-         reshade::set_config_value(runtime, NAME, "Vignette", enable_vignette);
+         Config::Set(NAME, "Vignette", enable_vignette);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Hides the persistent Vignette effect the game had (in the HUD)");
       }
-      DrawResetButton(enable_vignette, true, "Vignette", runtime);
+      DrawResetButton(enable_vignette, true, "Vignette");
 
       ImGui::NewLine();
 
@@ -1287,7 +1279,7 @@ public:
       {
          ImGui::SetTooltip("Hides the whole UI outside of the main menu\nWARNING: this can cause confusion and isn't perfect (everything is hidden, even some non gameplay UI and Menus)");
       }
-      DrawResetButton<decltype(hide_gameplay_ui), false>(hide_gameplay_ui, false, "Hide Gameplay UI", runtime);
+      DrawResetButton<decltype(hide_gameplay_ui), false>(hide_gameplay_ui, false, "Hide Gameplay UI");
 
       ImGui::NewLine();
 
@@ -1298,16 +1290,16 @@ public:
          {
             ImGui::SetTooltip("Basic Camera Mode. Pause the game and enable it to be able to move the camera around and take screenshots. Works during in engine cutscenes too.\nWARNING: if you rotate the camera backwards, some geometry might not render");
          }
-         DrawResetButton<decltype(enable_camera_mode), false>(enable_camera_mode, false, "Enable Camera Mode", runtime);
+         DrawResetButton<decltype(enable_camera_mode), false>(enable_camera_mode, false, "Enable Camera Mode");
 
          ImGui::BeginDisabled(!enable_camera_mode);
 
          ImGui::SliderFloat3("Translation", &camera_mode_translation.x, -1.f, 1.f);
-         DrawResetButton<decltype(camera_mode_translation), false>(camera_mode_translation, {}, "Translation", runtime);
+         DrawResetButton<decltype(camera_mode_translation), false>(camera_mode_translation, {}, "Translation");
          ImGui::SliderFloat3("Rotation", &camera_mode_rotation.x, -M_PI, M_PI);
-         DrawResetButton<decltype(camera_mode_rotation), false>(camera_mode_rotation, {}, "Rotation", runtime);
+         DrawResetButton<decltype(camera_mode_rotation), false>(camera_mode_rotation, {}, "Rotation");
          ImGui::SliderFloat("FoV Scale", &camera_mode_fov_scale, 0.1f, 10.f);
-         DrawResetButton<decltype(camera_mode_fov_scale), false>(camera_mode_fov_scale, 1.f, "FoV Scale", runtime); // TODO: why doesn't reset work!? Or does it now?
+         DrawResetButton<decltype(camera_mode_fov_scale), false>(camera_mode_fov_scale, 1.f, "FoV Scale"); // TODO: why doesn't reset work!? Or does it now?
 
          ImGui::EndDisabled();
 
@@ -1468,13 +1460,18 @@ public:
          , "");
    }
 
-#if DEVELOPMENT
-   static bool OnClearRenderTargetView(reshade::api::command_list* cmd_list, reshade::api::resource_view rtv, const float color[4], uint32_t rect_count, const reshade::api::rect* rects)
+#if DEVELOPMENT // Development only, so the hook isn't installed otherwise
+   bool PreClearRenderTargetView(ID3D11DeviceContext* context, ID3D11RenderTargetView* rtv, const FLOAT color[4]) override
    {
-      DeviceData& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      CommandListData* cmd_list_data = GetCommandListData(context);
+      if (!cmd_list_data)
+         return false;
+      DeviceData& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      ID3D11Resource* target_resource = reinterpret_cast<ID3D11Resource*>(cmd_list->get_device()->get_resource_from_view(rtv).handle);
+      com_ptr<ID3D11Resource> target_resource_ref;
+      rtv->GetResource(&target_resource_ref);
+      ID3D11Resource* target_resource = target_resource_ref.get();
       ASSERT_ONCE(game_device_data.last_motion_vectors.get() != target_resource || (color[0] == 0.f && color[1] == 0.f));
 
       // TODOFT: fix... MVs are cleared with the camera movement, however, that is not jittered, and has a default value of non 0... so it's not right, we should re-do it ourselves?
@@ -1496,12 +1493,32 @@ public:
 #if DEVELOPMENT
 #pragma optimize("", off) //TODOFT
 #endif
-	static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+	// Native hooks (buffers only)
+public:
+	void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
 	{
-		ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-		ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
+	   ID3D11Buffer* buffer = AsBuffer(resource);
+	   if (!buffer)
+	      return;
+	   if (CommandListData* cmd_list_data = GetCommandListData(context))
+	      OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+	}
 
-		if (access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write)
+	bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+	{
+	   ID3D11Buffer* buffer = AsBuffer(resource);
+	   if (!buffer)
+	      return false;
+	   if (CommandListData* cmd_list_data = GetCommandListData(context))
+	      OnUnmapBufferRegion(*cmd_list_data->device_data, buffer);
+	   return false;
+	}
+
+	static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
+	{
+		ID3D11Device* native_device = device_data.native_device;
+
+		if ((access == D3D11_MAP_WRITE || access == D3D11_MAP_WRITE_NO_OVERWRITE) || access == D3D11_MAP_WRITE_DISCARD || access == D3D11_MAP_READ_WRITE)
 		{
 			D3D11_BUFFER_DESC buffer_desc;
 			buffer->GetDesc(&buffer_desc);
@@ -1511,7 +1528,6 @@ public:
 			// Some how these are not marked as "D3D11_BIND_CONSTANT_BUFFER", probably because it copies them over to some other buffer later?
 			if (buffer_desc.ByteWidth == CBPerViewGlobal_buffer_size)
 			{
-            DeviceData& device_data = *device->get_private_data<DeviceData>();
 				device_data.cb_per_view_global_buffer = buffer;
 #if DEVELOPMENT
 				ASSERT_ONCE(buffer_desc.Usage == D3D11_USAGE_DYNAMIC && buffer_desc.BindFlags == D3D11_BIND_CONSTANT_BUFFER && buffer_desc.CPUAccessFlags == D3D11_CPU_ACCESS_WRITE && buffer_desc.MiscFlags == 0 && buffer_desc.StructureByteStride == 0);
@@ -1525,12 +1541,10 @@ public:
 		}
 	}
 
-	static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+	static void OnUnmapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer)
 	{
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
 		auto& game_device_data = GetGameDeviceData(device_data);
-		ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-		ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
+		ID3D11Device* native_device = device_data.native_device;
 		bool is_global_cbuffer = device_data.cb_per_view_global_buffer != nullptr && device_data.cb_per_view_global_buffer == buffer;
 		ASSERT_ONCE(!device_data.cb_per_view_global_buffer_map_data || is_global_cbuffer);
 
@@ -1776,7 +1790,7 @@ public:
 
                   // Draw motion vectors for the sky, given that they don't have a separate draw call for it.
                   // We know the first time this is called, the jitters and view projection matrix are already final
-                  ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
+                  ID3D11Device* native_device = device_data.native_device;
 
                   DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack; // Use full mode because setting the RTV here might unbind the same resource being bound as SRV
                   draw_state_stack.Cache(device_data.primary_command_list.get(), device_data.uav_max_count);
@@ -1790,7 +1804,7 @@ public:
 
                   device_data.primary_command_list->GSSetShader(nullptr, nullptr, 0);
 
-                  SetLumaConstantBuffers(device_data.primary_command_list.get(), cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+                  SetLumaConstantBuffers(device_data.primary_command_list.get(), cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData);
                   DrawCustomPixelShader(device_data.primary_command_list.get(), nullptr, nullptr, device_data.sampler_state_linear.get(), device_data.native_vertex_shaders[CompileTimeStringHash("Copy VS")].get(), device_data.native_pixel_shaders[CompileTimeStringHash("Draw Sky Motion Vectors")].get(), nullptr, game_device_data.last_motion_vectors_rtv.get(), device_data.render_resolution.x, device_data.render_resolution.y, false, "Draw Sky Motion Vectors");
 
                   device_data.primary_command_list->GSSetShader(gs.get(), nullptr, 0);
@@ -1805,19 +1819,24 @@ public:
 		}
 	}
 
+#if DEVELOPMENT // Only asserts, so the hook isn't installed otherwise
    // TODO: delete, not useful
-	static bool OnUpdateBufferRegion(reshade::api::device* device, const void* data, reshade::api::resource resource, uint64_t offset, uint64_t size)
+	bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch, UINT copy_flags) override
 	{
-		ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-		//auto& game_device_data = GetGameDeviceData(*device->get_private_data<DeviceData>());
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) // ReShade's "update_buffer_region"
+         return false;
+      CommandListData* cmd_list_data = GetCommandListData(context);
+      if (!cmd_list_data)
+         return false;
 
       D3D11_BUFFER_DESC buffer_desc;
       buffer->GetDesc(&buffer_desc);
+      const uint64_t size = box ? uint64_t(box->right - box->left) : uint64_t(buffer_desc.ByteWidth);
 
 		if (size == CBPerViewGlobal_buffer_size || buffer_desc.ByteWidth == CBPerViewGlobal_buffer_size)
       {
-         DeviceData& device_data = *device->get_private_data<DeviceData>();
+         DeviceData& device_data = *cmd_list_data->device_data;
 			// It's not very nice to const cast, but we know for a fact this is dynamic memory, so it's probably fine to edit it (ReShade doesn't offer an interface for replacing it easily, and doesn't pass in the command list)
 			//float4* mutable_float_data = reinterpret_cast<float4*>(const_cast<void*>(data));
 			//const float4* float_data = reinterpret_cast<const float4*>(data);
@@ -1834,6 +1853,7 @@ public:
 		}
 		return false;
 	}
+#endif // DEVELOPMENT
 #if DEVELOPMENT
 #pragma optimize("", on)
 #endif
@@ -2012,20 +2032,18 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // Note that this game has an optional rear view mirror HUD, which has its own rendering, by default it renders to r8g8b8a8_typeless with an sRGB view. It seemingly follows the main rendering aspect ratio, or is ~32:9 anyway (low res)
       texture_upgrade_formats = {
 #if 0 // Not needed really, swapchain is all we need, though the rest wouldn't hurt.
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 #endif
 #if 1 // Most important format to upgrade
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
 #endif
       };
       // Optional, we manually upgrade LUTs, that seem to be fixed over time (they aren't render targets somehow, at least not always)
@@ -2041,16 +2059,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       enable_samplers_upgrade = true;
 #endif
 
-      game = new MafiaIII();
+      SetGame<MafiaIII>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
-#if DEVELOPMENT
-      reshade::unregister_event<reshade::addon_event::clear_render_target_view>(MafiaIII::OnClearRenderTargetView);
-#endif
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(MafiaIII::OnMapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(MafiaIII::OnUnmapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::update_buffer_region>(MafiaIII::OnUpdateBufferRegion);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

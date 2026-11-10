@@ -2,7 +2,7 @@
 #include "NativeInputs.hpp"
 
 #include "../../External/reshade/deps/minhook/include/MinHook.h"
-#include "../../External/reshade/include/reshade.hpp"
+#include "../../Core/utils/log.hpp"
 
 #include <Windows.h> // IWYU pragma: keep -- Windows API umbrella header.
 #include <array>
@@ -229,7 +229,7 @@ namespace QuantumBreakUpscaling::NativeHooks
             jitter.valid = false;
             if (!halton_faulted.exchange(true, std::memory_order_acq_rel))
             {
-               reshade::log::message(reshade::log::level::warning, "QB Halton: applied projection mismatch; further overrides disabled, native jitter retained next scene.");
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB Halton: applied projection mismatch; further overrides disabled, native jitter retained next scene.");
             }
          }
       }
@@ -391,7 +391,7 @@ namespace QuantumBreakUpscaling::NativeHooks
          if (!TemporalLayoutMatches(module))
          {
             temporal_status.store(Status::UnsupportedRenderer, std::memory_order_release);
-            reshade::log::message(reshade::log::level::warning, "QB native jitter: renderer layout mismatch; SR unavailable, game TAA retained.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native jitter: renderer layout mismatch; SR unavailable, game TAA retained.");
             return;
          }
          const auto base = reinterpret_cast<uintptr_t>(module);
@@ -402,13 +402,13 @@ namespace QuantumBreakUpscaling::NativeHooks
          if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED)
          {
             temporal_status.store(Status::HookFailed, std::memory_order_release);
-            reshade::log::message(reshade::log::level::warning, "QB native jitter: MinHook initialization failed; SR unavailable, game TAA retained.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native jitter: MinHook initialization failed; SR unavailable, game TAA retained.");
             return;
          }
          if (!CreatePair(targets, hooks, originals))
          {
             temporal_status.store(Status::HookFailed, std::memory_order_release);
-            reshade::log::message(reshade::log::level::warning, "QB native jitter: hook creation failed; SR unavailable, game TAA retained.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native jitter: hook creation failed; SR unavailable, game TAA retained.");
             return;
          }
          original_resolves[0] = reinterpret_cast<ResolveFunction>(originals[0]);
@@ -420,26 +420,26 @@ namespace QuantumBreakUpscaling::NativeHooks
          {
             RemovePair(targets);
             temporal_status.store(Status::HookFailed, std::memory_order_release);
-            reshade::log::message(reshade::log::level::warning, "QB native jitter: module pinning failed; SR unavailable, game TAA retained.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native jitter: module pinning failed; SR unavailable, game TAA retained.");
             return;
          }
          if (!QueuePair(targets))
          {
             RemovePair(targets);
             temporal_status.store(Status::HookFailed, std::memory_order_release);
-            reshade::log::message(reshade::log::level::warning, "QB native jitter: queued enable failed; SR unavailable, game TAA retained.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native jitter: queued enable failed; SR unavailable, game TAA retained.");
             return;
          }
          if (MH_ApplyQueued() != MH_OK)
          {
             temporal_status.store(Status::HookFailed, std::memory_order_release);
-            reshade::log::message(
-               reshade::log::level::warning,
+            Luma::Utils::Log::Write(
+               Luma::Utils::Log::Level::Warning,
                "QB native jitter: activation failed; game TAA retained, pinned trampolines kept until exit.");
             return;
          }
          temporal_status.store(Status::Installed, std::memory_order_release);
-         reshade::log::message(reshade::log::level::info, "QB native jitter: installed; path 0 current jitter/camera captured in live scope; other resolves use game TAA without readback.");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "QB native jitter: installed; path 0 current jitter/camera captured in live scope; other resolves use game TAA without readback.");
       }
 
       void InstallScene(HMODULE module)
@@ -449,7 +449,7 @@ namespace QuantumBreakUpscaling::NativeHooks
          if (!SceneLayoutMatches(module))
          {
             scene_status.store(Status::UnsupportedRenderer, std::memory_order_release);
-            reshade::log::message(reshade::log::level::warning, "QB native inputs: scene fingerprint mismatch; SR unavailable, game TAA retained.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native inputs: scene fingerprint mismatch; SR unavailable, game TAA retained.");
             return;
          }
          const auto base = reinterpret_cast<uintptr_t>(module);
@@ -459,7 +459,7 @@ namespace QuantumBreakUpscaling::NativeHooks
          if (!CreatePair(targets, hooks, originals))
          {
             scene_status.store(Status::HookFailed, std::memory_order_release);
-            reshade::log::message(reshade::log::level::warning, "QB native inputs: scene hook creation failed; SR unavailable, game TAA retained.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native inputs: scene hook creation failed; SR unavailable, game TAA retained.");
             return;
          }
          original_scene = reinterpret_cast<SceneFunction>(originals[0]);
@@ -469,19 +469,19 @@ namespace QuantumBreakUpscaling::NativeHooks
          {
             RemovePair(targets);
             scene_status.store(Status::HookFailed, std::memory_order_release);
-            reshade::log::message(reshade::log::level::warning, "QB native inputs: scene queued enable failed; SR unavailable, game TAA retained.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native inputs: scene queued enable failed; SR unavailable, game TAA retained.");
             return;
          }
          if (MH_ApplyQueued() != MH_OK)
          {
             scene_status.store(Status::HookFailed, std::memory_order_release);
-            reshade::log::message(
-               reshade::log::level::warning,
+            Luma::Utils::Log::Write(
+               Luma::Utils::Log::Level::Warning,
                "QB native inputs: scene activation failed; pinned trampolines retained, game TAA active.");
             return;
          }
          scene_status.store(Status::Installed, std::memory_order_release);
-         reshade::log::message(reshade::log::level::info, "QB native inputs: scene hooks installed; camera/jitter primary without CB0/CB1 byte capture on verified live scenes.");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "QB native inputs: scene hooks installed; camera/jitter primary without CB0/CB1 byte capture on verified live scenes.");
       }
 
       void InstallHalton(HMODULE module)
@@ -500,7 +500,7 @@ namespace QuantumBreakUpscaling::NativeHooks
          if (!matches)
          {
             halton_status.store(Status::UnsupportedRenderer, std::memory_order_release);
-            reshade::log::message(reshade::log::level::warning, "QB Halton: producer layout unsupported; native jitter retained.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB Halton: producer layout unsupported; native jitter retained.");
             return;
          }
          void* target = reinterpret_cast<void*>(renderer_base + 0x152500u);
@@ -508,7 +508,7 @@ namespace QuantumBreakUpscaling::NativeHooks
          if (MH_CreateHook(target, reinterpret_cast<void*>(&CaptureJitterView), &original) != MH_OK)
          {
             halton_status.store(Status::HookFailed, std::memory_order_release);
-            reshade::log::message(reshade::log::level::warning, "QB Halton: producer hook creation failed; native jitter retained.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB Halton: producer hook creation failed; native jitter retained.");
             return;
          }
          original_jitter_view = reinterpret_cast<JitterViewFunction>(original);
@@ -522,11 +522,11 @@ namespace QuantumBreakUpscaling::NativeHooks
          if (MH_ApplyQueued() != MH_OK)
          {
             halton_status.store(Status::HookFailed, std::memory_order_release);
-            reshade::log::message(reshade::log::level::warning, "QB Halton: activation failed; pass-through trampoline retained until exit.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB Halton: activation failed; pass-through trampoline retained until exit.");
             return;
          }
          halton_status.store(Status::Installed, std::memory_order_release);
-         reshade::log::message(reshade::log::level::info, "QB Halton: producer hook installed; enabled for upscaling; native table and phase indices untouched.");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "QB Halton: producer hook installed; enabled for upscaling; native table and phase indices untouched.");
       }
 
       bool IsCurrentScene() noexcept
@@ -632,7 +632,7 @@ namespace QuantumBreakUpscaling::NativeHooks
    {
       ChangeHaltonConfig(halton_enabled_bit, enabled ? halton_enabled_bit : 0u);
       if (enabled) halton_faulted.store(false, std::memory_order_release);
-      reshade::log::message(reshade::log::level::info, enabled ? "QB Halton: MODE requested=Halton." : "QB Halton: MODE requested=Native (debug comparison).");
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, enabled ? "QB Halton: MODE requested=Halton." : "QB Halton: MODE requested=Native (debug comparison).");
    }
 
    const char* StatusText() noexcept

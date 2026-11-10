@@ -183,12 +183,11 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "EnableSMAA", enable_smaa);
-      reshade::get_config_value(runtime, NAME, "EnableGTAO", enable_gtao);
+      Config::Get(NAME, "EnableSMAA", enable_smaa);
+      Config::Get(NAME, "EnableGTAO", enable_gtao);
       // TODO: add an "init config" function (or a configs struct) to pre-create these for users, so they'd learn about them
-      reshade::get_config_value(runtime, NAME, "ShadowMapsResolutionMultiplier", shadow_maps_resolution_multiplier);
-      reshade::get_config_value(runtime, NAME, "FixBloomScalingType", fix_bloom_scaling_type);
+      Config::Get(NAME, "ShadowMapsResolutionMultiplier", shadow_maps_resolution_multiplier);
+      Config::Get(NAME, "FixBloomScalingType", fix_bloom_scaling_type);
 
       // TODO: the target resolution is still guessed at this point, it will only fully work in fullscreen and unless we are at 16:9, with the UW fixes enabled.
       // The game creates all textures when it has already decided it's resolution (which cannot be changed after boot) but before sizing,
@@ -228,19 +227,19 @@ public:
          // Shadow maps (they always seem to be of these sizes)
 #if 1 // These will have been caused by other mods scaling the size before luma, bring them back to base and override the scaling with ours
       // Other Mod Extreme quality
-            {uint4(4096, 4096, 1, 1), reshade::api::format::r32_typeless, uint4(2048 * shadow_maps_resolution_multiplier, 2048 * shadow_maps_resolution_multiplier, 0, 0)},
-            {uint4(4096, 4096 * 2, 1, 1), reshade::api::format::r32_typeless, uint4(2048 * shadow_maps_resolution_multiplier, 2048 * 2 * shadow_maps_resolution_multiplier, 0, 0)},
+            {uint4(4096, 4096, 1, 1), DXGI_FORMAT_R32_TYPELESS, uint4(2048 * shadow_maps_resolution_multiplier, 2048 * shadow_maps_resolution_multiplier, 0, 0)},
+            {uint4(4096, 4096 * 2, 1, 1), DXGI_FORMAT_R32_TYPELESS, uint4(2048 * shadow_maps_resolution_multiplier, 2048 * 2 * shadow_maps_resolution_multiplier, 0, 0)},
 #endif
             // High quality
-            {uint4(2048, 2048, 1, 1), reshade::api::format::r32_typeless, uint4(2048 * shadow_maps_resolution_multiplier, 2048 * shadow_maps_resolution_multiplier, 0, 0)},
-            {uint4(2048, 2048 * 2, 1, 1), reshade::api::format::r32_typeless, uint4(2048 * shadow_maps_resolution_multiplier, 2048 * 2 * shadow_maps_resolution_multiplier, 0, 0)},
+            {uint4(2048, 2048, 1, 1), DXGI_FORMAT_R32_TYPELESS, uint4(2048 * shadow_maps_resolution_multiplier, 2048 * shadow_maps_resolution_multiplier, 0, 0)},
+            {uint4(2048, 2048 * 2, 1, 1), DXGI_FORMAT_R32_TYPELESS, uint4(2048 * shadow_maps_resolution_multiplier, 2048 * 2 * shadow_maps_resolution_multiplier, 0, 0)},
 #if 0 // Leave lower qualities unchanged, for potato PCs, no reason to upgrade them
       // Medium
-            {uint4(1024, 1024, 1, 1), reshade::api::format::r32_typeless, uint4(1024 * shadow_maps_resolution_multiplier, 1024 * shadow_maps_resolution_multiplier, 0, 0)},
-            {uint4(1024, 1024 * 2, 1, 1), reshade::api::format::r32_typeless, uint4(1024 * shadow_maps_resolution_multiplier, 1024 * 2 * shadow_maps_resolution_multiplier, 0, 0)},
+            {uint4(1024, 1024, 1, 1), DXGI_FORMAT_R32_TYPELESS, uint4(1024 * shadow_maps_resolution_multiplier, 1024 * shadow_maps_resolution_multiplier, 0, 0)},
+            {uint4(1024, 1024 * 2, 1, 1), DXGI_FORMAT_R32_TYPELESS, uint4(1024 * shadow_maps_resolution_multiplier, 1024 * 2 * shadow_maps_resolution_multiplier, 0, 0)},
             // Low quality
-            {uint4(512, 512, 1, 1), reshade::api::format::r32_typeless, uint4(512 * shadow_maps_resolution_multiplier, 512 * shadow_maps_resolution_multiplier, 0, 0)},
-            {uint4(512, 512 * 2, 1, 1), reshade::api::format::r32_typeless, uint4(512 * shadow_maps_resolution_multiplier, 512 * 2 * shadow_maps_resolution_multiplier, 0, 0)},
+            {uint4(512, 512, 1, 1), DXGI_FORMAT_R32_TYPELESS, uint4(512 * shadow_maps_resolution_multiplier, 512 * shadow_maps_resolution_multiplier, 0, 0)},
+            {uint4(512, 512 * 2, 1, 1), DXGI_FORMAT_R32_TYPELESS, uint4(512 * shadow_maps_resolution_multiplier, 512 * 2 * shadow_maps_resolution_multiplier, 0, 0)},
 #endif
          });
       }
@@ -249,37 +248,36 @@ public:
          texture_custom_dimensions_upgrades.insert(texture_custom_dimensions_upgrades.end(), {
             // Bloom/Exposure (they shouldn't have MS enabled but we allow it in the filter anyway)
             // TODO: do these scale further at 8k vertical resolution? If so, add more values.
-            {uint4(4096, 2048, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(4096 * bloom_horizontal_scale), 2048, 0, 0)},
-            {uint4(2048, 2048, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(2048 * bloom_horizontal_scale), 2048, 0, 0)},
-            {uint4(1024, 1024, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(1024 * bloom_horizontal_scale), 1024, 0, 0)},
-            {uint4(512, 512, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(512 * bloom_horizontal_scale), 512, 0, 0)},
-            {uint4(256, 512, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(256 * bloom_horizontal_scale), 512, 0, 0)},
-            {uint4(256, 256, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(256 * bloom_horizontal_scale), 256, 0, 0)},
-            {uint4(128, 256, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(128 * bloom_horizontal_scale), 256, 0, 0)},
-            {uint4(128, 128, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(128 * bloom_horizontal_scale), 128, 0, 0)},
+            {uint4(4096, 2048, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(4096 * bloom_horizontal_scale), 2048, 0, 0)},
+            {uint4(2048, 2048, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(2048 * bloom_horizontal_scale), 2048, 0, 0)},
+            {uint4(1024, 1024, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(1024 * bloom_horizontal_scale), 1024, 0, 0)},
+            {uint4(512, 512, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(512 * bloom_horizontal_scale), 512, 0, 0)},
+            {uint4(256, 512, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(256 * bloom_horizontal_scale), 512, 0, 0)},
+            {uint4(256, 256, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(256 * bloom_horizontal_scale), 256, 0, 0)},
+            {uint4(128, 256, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(128 * bloom_horizontal_scale), 256, 0, 0)},
+            {uint4(128, 128, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(128 * bloom_horizontal_scale), 128, 0, 0)},
             // Also color grading LUT texture which for some reason is marked as render target (even if it's never written/changed),
             // it uses initial data so we can skip the size change based on that.
-            {uint4(64, 64, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(64 * bloom_horizontal_scale), 64, 0, 0)},
+            {uint4(64, 64, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(64 * bloom_horizontal_scale), 64, 0, 0)},
             // Also exposure texture size so this can cause problems as it's read back by the CPU (but that one is R16G16B16A16_FLOAT!).
-            {uint4(32, 32, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(32 * bloom_horizontal_scale), 32, 0, 0)},
-            {uint4(16, 16, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(16 * bloom_horizontal_scale), 16, 0, 0)},
-            {uint4(8, 8, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(8 * bloom_horizontal_scale), 8, 0, 0)},
-            {uint4(4, 4, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(4 * bloom_horizontal_scale), 4, 0, 0)},
-            {uint4(2, 2, 1, 0), reshade::api::format::r8g8b8a8_unorm, uint4(std::lround(2 * bloom_horizontal_scale), 2, 0, 0)},
+            {uint4(32, 32, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(32 * bloom_horizontal_scale), 32, 0, 0)},
+            {uint4(16, 16, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(16 * bloom_horizontal_scale), 16, 0, 0)},
+            {uint4(8, 8, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(8 * bloom_horizontal_scale), 8, 0, 0)},
+            {uint4(4, 4, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(4 * bloom_horizontal_scale), 4, 0, 0)},
+            {uint4(2, 2, 1, 0), DXGI_FORMAT_R8G8B8A8_UNORM, uint4(std::lround(2 * bloom_horizontal_scale), 2, 0, 0)},
          });
       }
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
       auto& game_device_data = GetGameDeviceData(device_data);
       ImGui::BeginDisabled(!game_device_data.drawn_fxaa);
       if (ImGui::Checkbox("Enable SMAA", &enable_smaa))
-         reshade::set_config_value(runtime, NAME, "EnableSMAA", enable_smaa);
+         Config::Set(NAME, "EnableSMAA", enable_smaa);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Replaces the game's FXAA with SMAA, which is sharper and more temporally stable.");
       ImGui::EndDisabled();
@@ -291,7 +289,7 @@ public:
          {
             MGS4GTAO::Clear(game_device_data.gtao_data);
          }
-         reshade::set_config_value(runtime, NAME, "EnableGTAO", enable_gtao);
+         Config::Set(NAME, "EnableGTAO", enable_gtao);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Adds ambient occlusion.");
@@ -348,7 +346,7 @@ public:
    }
 #endif
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
       // The first vertex+pixel that draws on the scene color texture with depth writes should have the projection matrix for GTAO, cache it!
@@ -356,7 +354,7 @@ public:
          (!game_device_data.gtao_data.found_proj_mat_constant_buffer || !game_device_data.gtao_data.found_fog_constant_buffer) &&
          game_device_data.gtao_data.scene_resource &&
          game_device_data.gtao_data.scene_frame != cb_luma_global_settings.FrameIndex &&
-         (stages & (reshade::api::shader_stage::vertex | reshade::api::shader_stage::pixel)) == (reshade::api::shader_stage::vertex | reshade::api::shader_stage::pixel))
+         (stages & (ShaderStages::Vertex | ShaderStages::Pixel)) == (ShaderStages::Vertex | ShaderStages::Pixel))
       {
          // TODO: move to GTAO file!
 
@@ -413,7 +411,7 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
 
-   static DrawOrDispatchOverrideType OnDraw_FXAA(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+   static DrawOrDispatchOverrideType OnDraw_FXAA(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
    {
       auto& game_device_data = GetGameDeviceData(device_data);
       game_device_data.drawn_fxaa = true;
@@ -474,7 +472,7 @@ public:
       return DrawOrDispatchOverrideType::Replaced;
    }
 
-   static DrawOrDispatchOverrideType OnDraw_ComposeTranslucency(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+   static DrawOrDispatchOverrideType OnDraw_ComposeTranslucency(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
    {
       // The first composition of a frame composes hair+decals onto the opaque scene, AO is applied on its output
       if (enable_gtao)
@@ -485,7 +483,7 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
 
-   static DrawOrDispatchOverrideType OnDraw_LinearizeDepth(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+   static DrawOrDispatchOverrideType OnDraw_LinearizeDepth(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
    {
       // Add AO on the composed scene (after hair and decals), right before the depth linearization that follows the first translucency composition of the frame:
 
@@ -503,7 +501,7 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
 
-   static DrawOrDispatchOverrideType OnDraw_SwapchainCopy(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+   static DrawOrDispatchOverrideType OnDraw_SwapchainCopy(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
    {
       auto& game_device_data = GetGameDeviceData(device_data);
       //game_device_data.drawn_fxaa = false; // TODO1: delay to next frame's start, or anyway, after imgui
@@ -563,7 +561,6 @@ public:
             {
                const uint64_t srv_resource_handle = (uint64_t)srv_resource.get();
                uint64_t original_srv_resource_handle = srv_resource_handle;
-               reshade::api::device* reshade_device = device_data.reshade_device;
 
                std::unique_lock lock_device_write(device_data.mutex);
 
@@ -617,9 +614,9 @@ public:
                            lock_device_write.unlock();
                            for (const uint64_t unlinked_mirror_view : unlinked_mirror_views)
                            {
-                              reshade_device->destroy_resource_view({ unlinked_mirror_view });
+                              reinterpret_cast<ID3D11View*>(unlinked_mirror_view)->Release();
                            }
-                           reshade_device->destroy_resource({ mirrored_upgraded_resource });
+                           reinterpret_cast<ID3D11Resource*>(mirrored_upgraded_resource)->Release();
                            lock_device_write.lock();
                         }
                      }
@@ -632,7 +629,7 @@ public:
                std::shared_lock lock_device_read(device_data.mutex);
 
                uint64_t new_resource;
-               if (FindOrCreateIndirectUpgradedResource(reshade_device, 0, original_srv_resource_handle, new_resource, device_data, true, reshade::api::resource_usage::shader_resource_pixel, lock_device_read, false, false, false, reshade::api::resource_usage::unordered_access))
+               if (FindOrCreateIndirectUpgradedResource(native_device, 0, original_srv_resource_handle, new_resource, device_data, true, lock_device_read, false, false, false, D3D11_BIND_UNORDERED_ACCESS))
                {
                   // Carry the current content over, just in case it was used for multi frame motion blur or something (very unlikely)
                   native_device_context->CopyResource((ID3D11Resource*)new_resource, srv_resource.get());
@@ -644,7 +641,7 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
 
-   static DrawOrDispatchOverrideType OnDraw_ResampleWithTintAndDiscard(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+   static DrawOrDispatchOverrideType OnDraw_ResampleWithTintAndDiscard(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
    {
       D3D11_BLEND_DESC blend_desc = {};
       FLOAT blend_factor[4] = { 1.f, 1.f, 1.f, 1.f };
@@ -665,7 +662,7 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
    
-   static DrawOrDispatchOverrideType OnDraw_UI(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+   static DrawOrDispatchOverrideType OnDraw_UI(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
    {
       D3D11_BLEND_DESC blend_desc = {};
       FLOAT blend_factor[4] = { 1.f, 1.f, 1.f, 1.f };
@@ -939,23 +936,21 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type         = SwapchainUpgradeType::scRGB;
       texture_format_upgrades_type   = TextureFormatUpgradesType::AllowedEnabled;
       texture_upgrade_formats = {
-         reshade::api::format::r8g8b8a8_unorm,
-         reshade::api::format::r8g8b8a8_unorm_srgb,
-         reshade::api::format::r8g8b8a8_typeless,
-         reshade::api::format::r8g8b8x8_unorm,
-         reshade::api::format::r8g8b8x8_unorm_srgb,
-         reshade::api::format::b8g8r8a8_unorm,
-         reshade::api::format::b8g8r8a8_unorm_srgb,
-         reshade::api::format::b8g8r8a8_typeless,
-         reshade::api::format::b8g8r8x8_unorm,
-         reshade::api::format::b8g8r8x8_unorm_srgb,
-         reshade::api::format::b8g8r8x8_typeless,
+         DXGI_FORMAT_R8G8B8A8_UNORM,
+         DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+         DXGI_FORMAT_R8G8B8A8_TYPELESS,
+         DXGI_FORMAT_B8G8R8A8_UNORM,
+         DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+         DXGI_FORMAT_B8G8R8A8_TYPELESS,
+         DXGI_FORMAT_B8G8R8X8_UNORM,
+         DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+         DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
          // Overkill but whatever
-         reshade::api::format::r10g10b10a2_unorm,
-         reshade::api::format::r10g10b10a2_typeless,
+         DXGI_FORMAT_R10G10B10A2_UNORM,
+         DXGI_FORMAT_R10G10B10A2_TYPELESS,
 
-         reshade::api::format::r11g11b10_float,
+         DXGI_FORMAT_R11G11B10_FLOAT,
       };
 
       texture_format_upgrades_2d_size_filters = 0
@@ -987,13 +982,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_depth_upgrade_formats = {
 #if 0 // Already have the best format
          // For shadow maps
-         reshade::api::format(DXGI_FORMAT_D32_FLOAT),
-         reshade::api::format(DXGI_FORMAT_R32_FLOAT),
-         reshade::api::format(DXGI_FORMAT_R32_TYPELESS),
+         DXGI_FORMAT_D32_FLOAT,
+         DXGI_FORMAT_R32_FLOAT,
+         DXGI_FORMAT_R32_TYPELESS,
 #endif
          // For main rendering. MGS4 uses inverse depth but on UNORM D24 depth, which makes no sense so it'd actually benefit greatly from upgrading depth.
-         reshade::api::format(DXGI_FORMAT_D24_UNORM_S8_UINT),
-         reshade::api::format(DXGI_FORMAT_R24G8_TYPELESS),
+         DXGI_FORMAT_D24_UNORM_S8_UINT,
+         DXGI_FORMAT_R24G8_TYPELESS,
       };
 #endif
 
@@ -1030,7 +1025,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(std::stoul("9D2CEAA1", nullptr, 16), "UI TV Static");
 #endif
 
-      game = new GameMetalGearSolid4();
+      SetGame<GameMetalGearSolid4>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

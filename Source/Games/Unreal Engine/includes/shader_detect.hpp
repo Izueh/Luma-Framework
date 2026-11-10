@@ -1,5 +1,4 @@
 #include <set>
-#include <include/reshade.hpp>
 #include <d3d11TokenizedProgramFormat.hpp>
 #include "..\..\..\Core\utils\system.h"
 
@@ -487,10 +486,10 @@ static bool IsUE4TAACandidate(const std::byte* code, size_t size, uint64_t shade
    float confidence = GetTAAShaderConfidence(code, size);
    if (confidence < 60.0f)
    {
-      reshade::log::message(reshade::log::level::info, std::format("UE4 TAA Shader detection for shader {:#08X} failed with confidence: {:.2f}%", shader_hash, confidence).c_str());
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("UE4 TAA Shader detection for shader {:#08X} failed with confidence: {:.2f}%", shader_hash, confidence).c_str());
       return false;
    }
-   reshade::log::message(reshade::log::level::info, std::format("UE4 TAA Shader detection for shader {:#08X} successed with confidence: {:.2f}%", shader_hash, confidence).c_str());
+   Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("UE4 TAA Shader detection for shader {:#08X} successed with confidence: {:.2f}%", shader_hash, confidence).c_str());
    return true;
 }
 

@@ -51,14 +51,12 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "HDRHighlights", cb_luma_global_settings.GameSettings.HDRHighlights);
-      reshade::get_config_value(runtime, NAME, "HDRDesaturation", cb_luma_global_settings.GameSettings.HDRDesaturation);
+      Config::Get(NAME, "HDRHighlights", cb_luma_global_settings.GameSettings.HDRHighlights);
+      Config::Get(NAME, "HDRDesaturation", cb_luma_global_settings.GameSettings.HDRDesaturation);
    }
 
    void DrawImGuiSettings(DeviceData& device_data)
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       if (ImGui::TreeNode("Advanced Settings"))
 		{
@@ -73,7 +71,7 @@ public:
             if (ImGui::SmallButton(ICON_FK_UNDO))
             {
                cb_luma_global_settings.GameSettings.HDRHighlights = default_hdr_highlights;
-               reshade::set_config_value(runtime, NAME, "HDRHighlights", cb_luma_global_settings.GameSettings.HDRHighlights);
+               Config::Set(NAME, "HDRHighlights", cb_luma_global_settings.GameSettings.HDRHighlights);
             }
             ImGui::PopID();
          }
@@ -97,7 +95,7 @@ public:
             if (ImGui::SmallButton(ICON_FK_UNDO))
             {
                cb_luma_global_settings.GameSettings.HDRDesaturation = default_hdr_desaturation;
-               reshade::set_config_value(runtime, NAME, "HDRDesaturation", cb_luma_global_settings.GameSettings.HDRDesaturation);
+               Config::Set(NAME, "HDRDesaturation", cb_luma_global_settings.GameSettings.HDRDesaturation);
             }
             ImGui::PopID();
          }
@@ -192,7 +190,7 @@ public:
       device_data.game = new GameDeviceDataTrine5;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
       auto game_device_data_prev = game_device_data;
@@ -211,7 +209,7 @@ public:
          game_device_data.drew_tonemap = true;
 
          // If we upgrade all R10G10B10A2 textures, there's no need to do this live texture format swap
-         if (swapchain_format_upgrade_type > TextureFormatUpgradesType::None && swapchain_upgrade_type == SwapchainUpgradeType::scRGB && (texture_format_upgrades_type == TextureFormatUpgradesType::None || !texture_upgrade_formats.contains(reshade::api::format::r10g10b10a2_unorm)))
+         if (swapchain_format_upgrade_type > TextureFormatUpgradesType::None && swapchain_upgrade_type == SwapchainUpgradeType::scRGB && (texture_format_upgrades_type == TextureFormatUpgradesType::None || !texture_upgrade_formats.contains(DXGI_FORMAT_R10G10B10A2_UNORM)))
          {
             // We manually upgrade the R10G10B10A2 texture that is used as tonemapper output and sharpening input (after which the game uses the swapchain as RT).
             // If we upgrade all R10G10B10A2 the game can crash.
@@ -252,9 +250,8 @@ public:
          if (game_device_data.skip_sharpen)
          {
             ASSERT_ONCE(!device_data.swapchains.empty());
-            reshade::api::swapchain* swapchain = *device_data.swapchains.begin();
-            IDXGISwapChain* native_swapchain = (IDXGISwapChain*)(swapchain->get_native());
-            SwapchainData& swapchain_data = *swapchain->get_private_data<SwapchainData>();
+            IDXGISwapChain* native_swapchain = *device_data.swapchains.begin();
+            SwapchainData& swapchain_data = *GetSwapchainData(native_swapchain);
 #if 0
             com_ptr<IDXGISwapChain3> native_swapchain3;
             // The cast pointer is actually the same, we are just making sure the type is right.
@@ -262,7 +259,7 @@ public:
             ASSERT_ONCE(SUCCEEDED(hr));
             UINT back_buffer_index = native_swapchain3->GetCurrentBackBufferIndex();
 #else // Always 0 in DX11
-            UINT back_buffer_index = swapchain->get_current_back_buffer_index();
+            UINT back_buffer_index = 0;
 #endif
             com_ptr<ID3D11Texture2D> back_buffer;
             native_swapchain->GetBuffer(back_buffer_index, IID_PPV_ARGS(&back_buffer));
@@ -390,7 +387,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       pixel_shader_hashes_TAA.compute_shaders = { Shader::Hash_StrToNum("78D8400E"), Shader::Hash_StrToNum("C0EF3F88"), Shader::Hash_StrToNum("0910AE0F") }; // Last one is just a swapchain copy that runs if TAA is off
       pixel_shader_hashes_Tonemap.pixel_shaders = { Shader::Hash_StrToNum("2B825C00"), Shader::Hash_StrToNum("480558AD"), Shader::Hash_StrToNum("AEDB562C") };
 
-      game = new Trine5();
+      SetGame<Trine5>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

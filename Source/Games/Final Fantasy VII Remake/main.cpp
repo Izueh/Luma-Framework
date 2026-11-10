@@ -1,7 +1,6 @@
 #define GAME_FF7_REMAKE 1
 
 #define LUMA_PATCH_BYTECODE_SYNC 0
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 #ifdef _DEBUG
 #define ALLOW_SHADERS_DUMPING 1
 #define ALLOW_SHADER_PATCHES_DUMPING 1
@@ -395,16 +394,35 @@ class FF7Remake final : public Game
    }
 
 public:
-   void OnLoad(std::filesystem::path& file_path, bool failed) override
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
    {
-      if (!failed)
-      {
-         reshade::register_event<reshade::addon_event::map_buffer_region>(FF7Remake::OnMapBufferRegion);
-         reshade::register_event<reshade::addon_event::unmap_buffer_region>(FF7Remake::OnUnmapBufferRegion);
-         reshade::register_event<reshade::addon_event::bind_viewports>(FF7Remake::OnBindViewports);
-         reshade::register_event<reshade::addon_event::bind_scissor_rects>(FF7Remake::OnBindScissorRects);
-         // reshade::register_event<reshade::addon_event::update_buffer_region>(FF7Remake::OnUpdateBufferRegion);
-      }
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, mapped.pData);
+   }
+
+   bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+   {
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return false;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnUnmapBufferRegion(*cmd_list_data->device_data, buffer);
+      return false;
+   }
+
+   void PostRSSetViewports(ID3D11DeviceContext* context, UINT count, const D3D11_VIEWPORT* viewports) override
+   {
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnBindViewports(*cmd_list_data->device_data, context, count);
+   }
+
+   void PostRSSetScissorRects(ID3D11DeviceContext* context, UINT count, const D3D11_RECT* rects) override
+   {
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnBindScissorRects(*cmd_list_data->device_data, context, count);
    }
 
    void OnInit(bool async) override
@@ -424,113 +442,113 @@ public:
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('1');
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('1');
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs"), ShaderDefinition{"Luma_MotionVec_UE4_Decode", D3D11_SHVER_PIXEL_SHADER});
 
 #if ENABLE_FRAMEGEN
       // Register Output HDR UI composition pixel shaders (one per permutation)
       // Each is compiled from the wrapper file with UI_COMPOSITION_PASS=1 and the hash-specific define
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR UI 922A71D1"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_922A71D1", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR UI A8EB118F"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_A8EB118F", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR UI 3A4D858E"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_3A4D858E", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR UI D950DA01"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_D950DA01", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR UI 5CD12E67"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_5CD12E67", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR UI 3B489929"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_3B489929", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR UI 8D04181D"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_8D04181D", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR UI 6846FF90"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_6846FF90", "1"}}});
 
       // Register Output HDR tonemap pixel shaders (one per permutation)
       // Each is compiled from the tonemap wrapper file with TONEMAP_PASS=1 and the hash-specific define
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR TM 922A71D1"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_922A71D1", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR TM A8EB118F"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_A8EB118F", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR TM 3A4D858E"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_3A4D858E", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR TM D950DA01"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_D950DA01", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR TM 5CD12E67"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_5CD12E67", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR TM 3B489929"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_3B489929", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR TM 8D04181D"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_8D04181D", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output HDR TM 6846FF90"),
-         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_HDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_6846FF90", "1"}}});
 
       // Register Output SDR UI composition pixel shaders (one per permutation)
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR UI 506D5998"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_506D5998", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR UI F68D39B5"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_F68D39B5", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR UI BBB9CE42"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_BBB9CE42", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR UI 51E2B894"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_51E2B894", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR UI 803889E8"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_803889E8", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR UI D96EF76D"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_D96EF76D", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR UI 5C2D3A71"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_5C2D3A71", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR UI 66162229"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_UI_Composition", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"UI_COMPOSITION_PASS", "1"}, {"_66162229", "1"}}});
 
       // Register Output SDR tonemap pixel shaders (one per permutation)
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR TM 506D5998"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_506D5998", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR TM F68D39B5"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_F68D39B5", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR TM BBB9CE42"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_BBB9CE42", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR TM 51E2B894"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_51E2B894", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR TM 803889E8"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_803889E8", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR TM D96EF76D"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_D96EF76D", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR TM 5C2D3A71"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_5C2D3A71", "1"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("FF7R Output SDR TM 66162229"),
-         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr,
+         ShaderDefinition{"Luma_FF7R_Output_SDR_Tonemap", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr,
             {{"TONEMAP_PASS", "1"}, {"_66162229", "1"}}});
 #endif // ENABLE_FRAMEGEN
 
@@ -552,9 +570,12 @@ public:
       };
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+      SwapchainData* swapchain_data = GetSwapchainData(swapchain);
+      if (!swapchain_data)
+         return;
+      auto& device_data = *swapchain_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
 
       // Start from here, we then update it later in case the game rendered with black bars due to forcing a different aspect ratio from the swapchain buffer
@@ -568,7 +589,7 @@ public:
    }
 
    std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size,
-      reshade::api::pipeline_subobject_type type,
+      D3D11_SHADER_VERSION_TYPE type,
       uint64_t shader_hash = -1,
       const std::byte* shader_object = nullptr,
       size_t shader_object_size = 0) override
@@ -576,12 +597,12 @@ public:
 #if LUMA_HAS_RECIPE_PROVIDERS
       // Dithering fix is handled by recipe async; skip the sync path entirely.
       // Other sync patches (tonemap, output, etc.) continue below.
-      if (type == reshade::api::pipeline_subobject_type::pixel_shader || type == reshade::api::pipeline_subobject_type::compute_shader)
+      if (type == D3D11_SHVER_PIXEL_SHADER || type == D3D11_SHVER_COMPUTE_SHADER)
          return nullptr;
 #endif
       if (enabled_dithering_fix == 0.f)
          return nullptr;
-      if (type != reshade::api::pipeline_subobject_type::pixel_shader && type != reshade::api::pipeline_subobject_type::compute_shader)
+      if (type != D3D11_SHVER_PIXEL_SHADER && type != D3D11_SHVER_COMPUTE_SHADER)
          return nullptr;
 
       // Pattern: cb1[139].z + literal l(3) used around the ishl sequence
@@ -932,64 +953,42 @@ public:
       ResizeCurrentScissorForEarlyUpscaling(native_device_context, width, height);
    }
 
-   static ID3D11DeviceContext* GetNativeDeviceContext(reshade::api::command_list* cmd_list, com_ptr<ID3D11DeviceContext>& native_device_context)
+   static void OnBindViewports(DeviceData& device_data, ID3D11DeviceContext* context, UINT count)
    {
-      SKIP_UNSUPPORTED_DEVICE_API(cmd_list->get_device()->get_api(), nullptr);
-
-      auto* device_child = reinterpret_cast<ID3D11DeviceChild*>(cmd_list->get_native());
-      if (device_child == nullptr || FAILED(device_child->QueryInterface(&native_device_context)))
-      {
-         return nullptr;
-      }
-      return native_device_context.get();
-   }
-
-   static void OnBindViewports(reshade::api::command_list* cmd_list, uint32_t first, uint32_t count, const reshade::api::viewport* viewports)
-   {
-      if (first != 0 || count == 0)
+      if (count == 0)
       {
          return;
       }
 
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
-      com_ptr<ID3D11DeviceContext> native_device_context;
-      if (ID3D11DeviceContext* context = GetNativeDeviceContext(cmd_list, native_device_context))
+      UINT width = 0;
+      UINT height = 0;
+      if (GetEarlyUpscaleTargetResolution(context, device_data, game_device_data, width, height))
       {
-         UINT width = 0;
-         UINT height = 0;
-         if (GetEarlyUpscaleTargetResolution(context, device_data, game_device_data, width, height))
-         {
-            ResizeCurrentViewportForEarlyUpscaling(context, width, height);
-         }
+         ResizeCurrentViewportForEarlyUpscaling(context, width, height);
       }
    }
 
-   static void OnBindScissorRects(reshade::api::command_list* cmd_list, uint32_t first, uint32_t count, const reshade::api::rect* rects)
+   static void OnBindScissorRects(DeviceData& device_data, ID3D11DeviceContext* context, UINT count)
    {
-      if (first != 0 || count == 0)
+      if (count == 0)
       {
          return;
       }
 
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
-      com_ptr<ID3D11DeviceContext> native_device_context;
-      if (ID3D11DeviceContext* context = GetNativeDeviceContext(cmd_list, native_device_context))
+      UINT width = 0;
+      UINT height = 0;
+      if (GetEarlyUpscaleTargetResolution(context, device_data, game_device_data, width, height))
       {
-         UINT width = 0;
-         UINT height = 0;
-         if (GetEarlyUpscaleTargetResolution(context, device_data, game_device_data, width, height))
-         {
-            ResizeCurrentScissorForEarlyUpscaling(context, width, height);
-         }
+         ResizeCurrentScissorForEarlyUpscaling(context, width, height);
       }
    }
 
 #if ENABLE_FAST_NOISE_TEXTURES
-   static DrawOrDispatchOverrideType OnDraw_SSAO_Temporal(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+   static DrawOrDispatchOverrideType OnDraw_SSAO_Temporal(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
    {
-      if ((stages & reshade::api::shader_stage::pixel) != 0)
+      if ((stages & ShaderStages::Pixel) != 0)
       {
          const auto fast_noise_it = device_data.managed_resources.shader_resource_views.find(kCoreFastNoiseTextureHash);
          if (fast_noise_it != device_data.managed_resources.shader_resource_views.end() && fast_noise_it->second)
@@ -1003,17 +1002,17 @@ public:
    }
 #endif
 
-   static DrawOrDispatchOverrideType OnDraw_OutputHDR(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+   static DrawOrDispatchOverrideType OnDraw_OutputHDR(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
    {
       return OnDraw_OutputPass(native_device, native_device_context, cmd_list_data, device_data, stages, original_shader_hashes, is_custom_pass, updated_cbuffers, original_draw_dispatch_func, true);
    }
 
-   static DrawOrDispatchOverrideType OnDraw_OutputSDR(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+   static DrawOrDispatchOverrideType OnDraw_OutputSDR(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
    {
       return OnDraw_OutputPass(native_device, native_device_context, cmd_list_data, device_data, stages, original_shader_hashes, is_custom_pass, updated_cbuffers, original_draw_dispatch_func, false);
    }
 
-   static DrawOrDispatchOverrideType OnDraw_OutputPass(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func, bool is_hdr)
+   static DrawOrDispatchOverrideType OnDraw_OutputPass(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func, bool is_hdr)
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -1033,15 +1032,15 @@ public:
             Display::SetHDREnabled(game_window);
             bool dummy_bool;
             Display::IsHDRSupportedAndEnabled(game_window, dummy_bool, hdr_enabled_display, nullptr);
-            if (!reshade::get_config_value(nullptr, NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite) || cb_luma_global_settings.ScenePeakWhite <= 0.f)
+            if (!Config::Get(NAME, "ScenePeakWhite", cb_luma_global_settings.ScenePeakWhite) || cb_luma_global_settings.ScenePeakWhite <= 0.f)
             {
                cb_luma_global_settings.ScenePeakWhite = device_data.default_user_peak_white;
             }
-            if (!reshade::get_config_value(nullptr, NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite))
+            if (!Config::Get(NAME, "ScenePaperWhite", cb_luma_global_settings.ScenePaperWhite))
             {
                cb_luma_global_settings.ScenePaperWhite = default_paper_white;
             }
-            if (!reshade::get_config_value(nullptr, NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite))
+            if (!Config::Get(NAME, "UIPaperWhite", cb_luma_global_settings.UIPaperWhite))
             {
                cb_luma_global_settings.UIPaperWhite = default_paper_white;
             }
@@ -1157,8 +1156,8 @@ public:
          native_device_context->PSSetShader(tm_ps_it->second.get(), nullptr, 0);
 
          // Ensure Luma CBs are bound for the PS stage
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData);
 
          // Issue the game's original draw call with our tonemap PS
          if (original_draw_dispatch_func)
@@ -1186,8 +1185,8 @@ public:
          native_device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
 
          // Ensure Luma CBs are bound for the PS stage
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData);
          updated_cbuffers = true;
 
          // Draw fullscreen quad
@@ -1304,8 +1303,8 @@ public:
          native_device_context->PSSetShader(tm_ps_it->second.get(), nullptr, 0);
 
          // Ensure Luma CBs are bound for the PS stage
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData);
          updated_cbuffers = true;
 
          // Issue the game's original draw call with our tonemap PS
@@ -1333,8 +1332,8 @@ public:
          native_device_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
 
          // Ensure Luma CBs are bound for the PS stage
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData);
          updated_cbuffers = true;
 
          // Draw fullscreen quad
@@ -1357,7 +1356,7 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
 
-   static DrawOrDispatchOverrideType OnDraw_TAA(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+   static DrawOrDispatchOverrideType OnDraw_TAA(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -1661,7 +1660,7 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
 
-   static DrawOrDispatchOverrideType OnDraw_DOFAndMotionBlur(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+   static DrawOrDispatchOverrideType OnDraw_DOFAndMotionBlur(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -1808,9 +1807,8 @@ public:
       cb_luma_global_settings.GameSettings.can_sharpen = can_sharpen ? 1.f : 0.f;
    }
 
-   static void UpdateLODBias(reshade::api::device* device)
+   static void UpdateLODBias(DeviceData& device_data)
    {
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
 
       if (!custom_texture_mip_lod_bias_offset)
@@ -1835,7 +1833,7 @@ public:
          // It also allows us to use the right samplers for this frame's resolution.
          if (texture_mip_lod_bias_offset_changed)
          {
-            ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
+            ID3D11Device* native_device = device_data.native_device;
             for (auto& samplers_handle : device_data.custom_sampler_by_original_sampler)
             {
                if (samplers_handle.second.contains(new_texture_mip_lod_bias_offset))
@@ -1855,13 +1853,8 @@ public:
       }
    }
 
-   static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+   static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP map_type, void* data)
    {
-      SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
-
-      ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
 
       // The frames until this draw have a defaulted 1920x1080 resolution (and slightly after too)
@@ -1870,8 +1863,7 @@ public:
          return;
       }
 
-      // No need to convert to native DX11 flags
-      if (access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write)
+      if (map_type == D3D11_MAP_WRITE || map_type == D3D11_MAP_WRITE_DISCARD || map_type == D3D11_MAP_READ_WRITE)
       {
          D3D11_BUFFER_DESC buffer_desc;
          buffer->GetDesc(&buffer_desc);
@@ -1880,18 +1872,13 @@ public:
          {
             device_data.cb_per_view_global_buffer = buffer;
             ASSERT_ONCE(!device_data.cb_per_view_global_buffer_map_data);
-            device_data.cb_per_view_global_buffer_map_data = *data;
+            device_data.cb_per_view_global_buffer_map_data = data;
          }
       }
    }
 
-   static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+   static void OnUnmapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer)
    {
-      SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
-      
-      ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
       if (game_device_data.found_per_view_globals)
       {
@@ -1971,14 +1958,12 @@ public:
         
          device_data.cb_per_view_global_buffer_map_data = nullptr;
          device_data.cb_per_view_global_buffer = nullptr;
-         UpdateLODBias(device);
+         UpdateLODBias(device_data);
       }
    }
 
-   static bool OnUpdateBufferRegion(reshade::api::device* device, const void* data, reshade::api::resource resource, uint64_t offset, uint64_t size)
+   static bool OnUpdateBufferRegion(DeviceData& device_data, const void* data, uint64_t size)
    {
-      ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
 
       if (device_data.has_drawn_sr && size == 512)
@@ -2097,23 +2082,21 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // Texture upgrades (8 bit unorm and 11 bit float etc to 16 bit float)
       texture_upgrade_formats = {
 #if 0 // Probably not needed
-				reshade::api::format::r8g8b8a8_unorm,
-				reshade::api::format::r8g8b8a8_unorm_srgb,
-				reshade::api::format::r8g8b8a8_typeless,
-				reshade::api::format::r8g8b8x8_unorm,
-				reshade::api::format::r8g8b8x8_unorm_srgb,
-				reshade::api::format::b8g8r8a8_unorm,
-				reshade::api::format::b8g8r8a8_unorm_srgb,
-				//reshade::api::format::b8g8r8a8_typeless, // currently causes validation issues due to some odd 1x1x1 textures (that's just an assert Luma put for mods devs to double check though). TODO: Figure out what these textures do.
-				reshade::api::format::b8g8r8x8_unorm,
-				reshade::api::format::b8g8r8x8_unorm_srgb,
-				reshade::api::format::b8g8r8x8_typeless,
+				DXGI_FORMAT_R8G8B8A8_UNORM,
+				DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+				DXGI_FORMAT_R8G8B8A8_TYPELESS,
+				DXGI_FORMAT_B8G8R8A8_UNORM,
+				DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+				//DXGI_FORMAT_B8G8R8A8_TYPELESS, // currently causes validation issues due to some odd 1x1x1 textures (that's just an assert Luma put for mods devs to double check though). TODO: Figure out what these textures do.
+				DXGI_FORMAT_B8G8R8X8_UNORM,
+				DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+				DXGI_FORMAT_B8G8R8X8_TYPELESS,
 #endif
 
-         reshade::api::format::r10g10b10a2_unorm,
-         reshade::api::format::r10g10b10a2_typeless,
+         DXGI_FORMAT_R10G10B10A2_UNORM,
+         DXGI_FORMAT_R10G10B10A2_TYPELESS,
 
-         reshade::api::format::r11g11b10_float,
+         DXGI_FORMAT_R11G11B10_FLOAT,
       };
       // Upgrade all 16:9 render targets too, because the game defaults to that aspect ratio internally unless mods are applied
       texture_format_upgrades_2d_size_filters |= (uint32_t)TextureFormatUpgrades2DSizeFilters::CustomAspectRatio;
@@ -2181,15 +2164,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
       Luma::Settings::Initialize(&settings);
 
-      game = new FF7Remake();
-   }
-   else if (ul_reason_for_call == DLL_PROCESS_DETACH)
-   {
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(FF7Remake::OnMapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(FF7Remake::OnUnmapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::bind_viewports>(FF7Remake::OnBindViewports);
-      reshade::unregister_event<reshade::addon_event::bind_scissor_rects>(FF7Remake::OnBindScissorRects);
-      // reshade::unregister_event<reshade::addon_event::update_buffer_region>(FF7Remake::OnUpdateBufferRegion);
+      SetGame<FF7Remake>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

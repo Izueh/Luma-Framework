@@ -39,7 +39,7 @@ class GreedFall final : public Game
 public:
    void OnInit(bool async) override
    {
-      native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Inputs"), ShaderDefinition{"Luma_PrepareInputs", reshade::api::pipeline_subobject_type::compute_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Inputs"), ShaderDefinition{"Luma_PrepareInputs", D3D11_SHVER_COMPUTE_SHADER});
 
       luma_settings_cbuffer_index = 13;
    }
@@ -48,8 +48,6 @@ public:
    {
       if (!failed)
       {
-         reshade::register_event<reshade::addon_event::map_buffer_region>(GreedFall::OnMapBufferRegion);
-         reshade::register_event<reshade::addon_event::unmap_buffer_region>(GreedFall::OnUnmapBufferRegion);
       }
    }
 
@@ -58,7 +56,7 @@ public:
       ID3D11DeviceContext* native_device_context,
       CommandListData& cmd_list_data,
       DeviceData& device_data,
-      reshade::api::shader_stage stages,
+      ShaderStages stages,
       const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes,
       bool is_custom_pass,
       bool& updated_cbuffers,
@@ -91,7 +89,7 @@ public:
          uint32_t height = texture_desc.Height;
 
          cb_luma_global_settings.GameSettings.Resolution = {(float)width, (float)height};
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaSettings);
 
          if (width != game_device_data.size.x ||
              height != game_device_data.size.y)
@@ -266,23 +264,34 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
 
-   static void OnMapBufferRegion(
-      reshade::api::device* device,
-      reshade::api::resource resource,
-      uint64_t offset,
-      uint64_t size,
-      reshade::api::map_access access,
-      void** data)
+public:
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
    {
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+   }
+
+   bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+   {
+      if (!AsBuffer(resource))
+         return false;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnUnmapBufferRegion(*cmd_list_data->device_data);
+      return false;
+   }
+
+   static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
+   {
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      if (access != reshade::api::map_access::write_discard)
+      if (access != D3D11_MAP_WRITE_DISCARD)
       {
          return;
       }
 
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
       D3D11_BUFFER_DESC buffer_desc;
       buffer->GetDesc(&buffer_desc);
       if ((buffer_desc.BindFlags & D3D11_BIND_CONSTANT_BUFFER) == 0 ||
@@ -294,11 +303,8 @@ public:
       mapped_cbuffer_data = *data;
    }
 
-   static void OnUnmapBufferRegion(
-      reshade::api::device* device,
-      reshade::api::resource resource)
+   static void OnUnmapBufferRegion(DeviceData& device_data)
    {
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
 
       if (!mapped_cbuffer_data)
@@ -373,12 +379,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type = SwapchainUpgradeType::None;
       force_disable_display_composition = true;
 
-      game = new GreedFall();
+      SetGame<GreedFall>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(GreedFall::OnMapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(GreedFall::OnUnmapBufferRegion);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

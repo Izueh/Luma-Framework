@@ -4,25 +4,25 @@
 
 namespace Shader
 {
-   reshade::api::shader_stage GetShaderStage(reshade::api::pipeline_subobject_type type)
+   ShaderStages GetShaderStage(D3D11_SHADER_VERSION_TYPE type)
    {
       switch (type)
       {
-      case reshade::api::pipeline_subobject_type::vertex_shader: return reshade::api::shader_stage::vertex;
-      case reshade::api::pipeline_subobject_type::pixel_shader: return reshade::api::shader_stage::pixel;
-      case reshade::api::pipeline_subobject_type::compute_shader: return reshade::api::shader_stage::compute;
+      case D3D11_SHVER_VERTEX_SHADER: return ShaderStages::Vertex;
+      case D3D11_SHVER_PIXEL_SHADER: return ShaderStages::Pixel;
+      case D3D11_SHVER_COMPUTE_SHADER: return ShaderStages::Compute;
 #if GEOMETRY_SHADER_SUPPORT
-      case reshade::api::pipeline_subobject_type::geometry_shader: return reshade::api::shader_stage::geometry;
+      case D3D11_SHVER_GEOMETRY_SHADER: return ShaderStages::Geometry;
 #endif
-      default: return reshade::api::shader_stage(0);
+      default: return ShaderStages::None;
       }
    }
 
-   void RecordCloneShader(CustomPipelineData& data, reshade::api::pipeline_subobject_type type,
+   void RecordCloneShader(CustomPipelineData& data, D3D11_SHADER_VERSION_TYPE type,
       const std::shared_ptr<Patch::PatchedShaderData>& patch)
    {
-      const reshade::api::shader_stage stage = GetShaderStage(type);
-      if (stage == reshade::api::shader_stage(0)) return;
+      const ShaderStages stage = GetShaderStage(type);
+      if (stage == ShaderStages::None) return;
       if (!patch) data.file_stages |= stage;
       else
       {
@@ -37,7 +37,7 @@ namespace Shader
       }
    }
 
-   CloneOrigin GetCloneOrigin(const CachedPipeline& pipeline, reshade::api::shader_stage stage)
+   CloneOrigin GetCloneOrigin(const CachedPipeline& pipeline, ShaderStages stage)
    {
       if (!pipeline.cloned) return CloneOrigin::None;
       const auto& data = pipeline.custom_pipeline_data;
@@ -46,18 +46,18 @@ namespace Shader
       return CloneOrigin::None;
    }
 
-   CloneOrigin GetShaderOrigin(const CommandListData& cmd_list_data, reshade::api::shader_stage stage)
+   CloneOrigin GetShaderOrigin(const CommandListData& cmd_list_data, ShaderStages stage)
    {
       const CustomPipelineData* data = nullptr;
       switch (stage)
       {
-      case reshade::api::shader_stage::vertex:
+      case ShaderStages::Vertex:
          if (cmd_list_data.pipeline_state_has_custom_vertex_shader) data = &cmd_list_data.custom_vertex_pipeline;
          break;
-      case reshade::api::shader_stage::pixel:
+      case ShaderStages::Pixel:
          if (cmd_list_data.pipeline_state_has_custom_pixel_shader) data = &cmd_list_data.custom_pixel_pipeline;
          break;
-      case reshade::api::shader_stage::compute:
+      case ShaderStages::Compute:
          if (cmd_list_data.pipeline_state_has_custom_compute_shader) data = &cmd_list_data.custom_compute_pipeline;
          break;
       default: return CloneOrigin::None;
@@ -68,20 +68,20 @@ namespace Shader
       return CloneOrigin::None;
    }
 
-   void UsePipelineVariant(CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, reshade::api::shader_stage stages, PipelineVariant variant)
+   void UsePipelineVariant(CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, ShaderStages stages, PipelineVariant variant)
    {
       const bool custom = variant == PipelineVariant::Custom;
-      auto Use = [&](reshade::api::shader_stage stage, reshade::api::pipeline original, reshade::api::pipeline clone, bool& bound, auto set_shader)
+      auto Use = [&](ShaderStages stage, Shader::Pipeline original, Shader::Pipeline clone, bool& bound, auto set_shader)
       {
          if ((stages & stage) == 0 || clone.handle == 0 || bound == custom) return;
          set_shader(custom ? clone.handle : original.handle);
          bound = custom;
       };
-      Use(reshade::api::shader_stage::vertex, cmd_list_data.pipeline_state_original_vertex_shader, cmd_list_data.pipeline_state_custom_vertex_shader, cmd_list_data.pipeline_state_has_custom_vertex_shader,
+      Use(ShaderStages::Vertex, cmd_list_data.pipeline_state_original_vertex_shader, cmd_list_data.pipeline_state_custom_vertex_shader, cmd_list_data.pipeline_state_has_custom_vertex_shader,
          [&](uint64_t handle) { native_device_context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(handle), nullptr, 0); });
-      Use(reshade::api::shader_stage::pixel, cmd_list_data.pipeline_state_original_pixel_shader, cmd_list_data.pipeline_state_custom_pixel_shader, cmd_list_data.pipeline_state_has_custom_pixel_shader,
+      Use(ShaderStages::Pixel, cmd_list_data.pipeline_state_original_pixel_shader, cmd_list_data.pipeline_state_custom_pixel_shader, cmd_list_data.pipeline_state_has_custom_pixel_shader,
          [&](uint64_t handle) { native_device_context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(handle), nullptr, 0); });
-      Use(reshade::api::shader_stage::compute, cmd_list_data.pipeline_state_original_compute_shader, cmd_list_data.pipeline_state_custom_compute_shader, cmd_list_data.pipeline_state_has_custom_compute_shader,
+      Use(ShaderStages::Compute, cmd_list_data.pipeline_state_original_compute_shader, cmd_list_data.pipeline_state_custom_compute_shader, cmd_list_data.pipeline_state_has_custom_compute_shader,
          [&](uint64_t handle) { native_device_context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(handle), nullptr, 0); });
       cmd_list_data.pipeline_state_has_custom_graphics_shader = cmd_list_data.pipeline_state_has_custom_vertex_shader || cmd_list_data.pipeline_state_has_custom_pixel_shader;
    }

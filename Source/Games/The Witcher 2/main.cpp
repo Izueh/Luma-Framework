@@ -226,7 +226,7 @@ class TheWitcher2Game final : public Game
    // Matches a pass by both of its keyed dgVoodoo hashes.
    static bool ContainsPixelShader(const ShaderHashesList<OneShaderPerPipeline>& shader_hashes, const DgVoodooHashes& pass)
    {
-      return shader_hashes.Contains(pass.v2873, reshade::api::shader_stage::pixel) || shader_hashes.Contains(pass.v2813, reshade::api::shader_stage::pixel);
+      return shader_hashes.Contains(pass.v2873, ShaderStages::Pixel) || shader_hashes.Contains(pass.v2813, ShaderStages::Pixel);
    }
 
    static bool IsTonemap(const ShaderHashesList<OneShaderPerPipeline>& shader_hashes)
@@ -235,11 +235,11 @@ class TheWitcher2Game final : public Game
    }
 
 #if DEVELOPMENT
-   // Another process can own ReShade.log (the BL2 launcher precedent), so every line also goes to our own file
+   // Another process can own Luma.log (the BL2 launcher precedent), so every line also goes to our own file
    // beside the exe.
    static void LogVanillaLine(const std::string& line)
    {
-      reshade::log::message(reshade::log::level::info, line.c_str());
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line.c_str());
       std::ofstream file("Luma-TW2.log", std::ios::app);
       if (file)
          file << line << std::endl;
@@ -450,11 +450,11 @@ class TheWitcher2Game final : public Game
    // reads, and the shader ends "mov o1.xyzw, v7.xxxx", so src_alpha IS the depth.
    // Repair = copy RT0's blend fields onto the offending targets; write masks stay, legal per-RT in D3D9.
    // The inverse shape is only reported: enabling blending where the wrapper left it off could only add damage.
-   static DrawOrDispatchOverrideType FixImpossiblePerRTBlend(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, TheWitcher2GameDeviceData& game_device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, std::function<void()>* original_draw_dispatch_func)
+   static DrawOrDispatchOverrideType FixImpossiblePerRTBlend(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, TheWitcher2GameDeviceData& game_device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, std::function<void()>* original_draw_dispatch_func)
    {
       // Our own injected passes set their blend state deliberately. Re-issuing the draw is the only way to
       // apply a different state, so without that callback there is nothing to do.
-      if (is_custom_pass || (stages & reshade::api::shader_stage::pixel) == 0 || original_draw_dispatch_func == nullptr)
+      if (is_custom_pass || (stages & ShaderStages::Pixel) == 0 || original_draw_dispatch_func == nullptr)
          return DrawOrDispatchOverrideType::None;
 
       ComPtr<ID3D11BlendState> blend_state;
@@ -508,7 +508,7 @@ class TheWitcher2Game final : public Game
          const uint64_t pixel_shader_hash = original_shader_hashes.pixel_shaders[0];
          if (logged_shaders.emplace(pixel_shader_hash).second)
          {
-            reshade::log::message(reshade::log::level::warning,
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
                std::format("[TW2-BlendFix] impossible per-RT blend state (dgVoodoo artefact) on pixel shader 0x{:X} - {}", pixel_shader_hash, needs_fix ? "repaired" : "inverse shape, left alone").c_str());
          }
       }
@@ -755,7 +755,7 @@ class TheWitcher2Game final : public Game
       // Typeless -> typed within the same family (so CopyResource stays legal), since our UAV-written copy source needs
       // a typed format. Typed UAV store is only guaranteed for these two, and they are the only formats the upgrade
       // list can produce; anything else would fail at CreateTexture2D.
-      const DXGI_FORMAT final_fmt = (DXGI_FORMAT)reshade::api::format_to_default_typed((reshade::api::format)rt_fmt);
+      const DXGI_FORMAT final_fmt = GetDefaultTypedFormat(rt_fmt);
       if (final_fmt != DXGI_FORMAT_R8G8B8A8_UNORM && final_fmt != DXGI_FORMAT_R16G16B16A16_FLOAT)
          return DrawOrDispatchOverrideType::None;
 
@@ -939,21 +939,21 @@ public:
       // Core auto-registers the 6 SMAA passes. Edge detection reads the GAMMA canvas; the blend reads its linear
       // decode.
       native_shaders_definitions.emplace(CompileTimeStringHash("TW2 SMAA Linearize CS"),
-         ShaderDefinition("Luma_TW2_SMAALinearize", reshade::api::pipeline_subobject_type::compute_shader));
+         ShaderDefinition("Luma_TW2_SMAALinearize", D3D11_SHVER_COMPUTE_SHADER));
       // Depth-extract CS for SMAA predication: game r32f LINEAR view-space depth -> R16F edge-ness in [0,1].
       native_shaders_definitions.emplace(CompileTimeStringHash("TW2 Depth Extract CS"),
-         ShaderDefinition("Luma_TW2_DepthExtract", reshade::api::pipeline_subobject_type::compute_shader));
+         ShaderDefinition("Luma_TW2_DepthExtract", D3D11_SHVER_COMPUTE_SHADER));
 #endif
 
       // XeGTAO compute passes (Luma_TW2_XeGTAO.hlsl); the two denoisers differ only by XE_GTAO_FINAL_APPLY.
       native_shaders_definitions.emplace(CompileTimeStringHash("TW2 XeGTAO Prefilter Depths CS"),
-         ShaderDefinition{"Luma_TW2_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs"});
+         ShaderDefinition{"Luma_TW2_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "prefilter_depths16x16_cs"});
       native_shaders_definitions.emplace(CompileTimeStringHash("TW2 XeGTAO Main Pass CS"),
-         ShaderDefinition{"Luma_TW2_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs"});
+         ShaderDefinition{"Luma_TW2_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "main_pass_cs"});
       native_shaders_definitions.emplace(CompileTimeStringHash("TW2 XeGTAO Denoise Pass 1 CS"),
-         ShaderDefinition{"Luma_TW2_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "0"}}});
+         ShaderDefinition{"Luma_TW2_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "0"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("TW2 XeGTAO Denoise Pass 2 CS"),
-         ShaderDefinition{"Luma_TW2_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "1"}}});
+         ShaderDefinition{"Luma_TW2_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "1"}}});
    }
 
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -968,7 +968,7 @@ public:
       device_data.game = nullptr;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
       const bool is_final_grade = IsFinalGrade(original_shader_hashes);
@@ -1115,30 +1115,30 @@ public:
    void LoadConfigs() override
    {
 #if ENABLE_SMAA
-      reshade::get_config_value(nullptr, NAME, "SMAAEnable", g_smaa_enable);
-      reshade::get_config_value(nullptr, NAME, "RCASSharpness", g_rcas_sharpness);
-      reshade::get_config_value(nullptr, NAME, "SMAAPredication", g_smaa_predication);
+      Config::Get(NAME, "SMAAEnable", g_smaa_enable);
+      Config::Get(NAME, "RCASSharpness", g_rcas_sharpness);
+      Config::Get(NAME, "SMAAPredication", g_smaa_predication);
 #endif
-      reshade::get_config_value(nullptr, NAME, "GTAOEnable", g_gtao_enable);
+      Config::Get(NAME, "GTAOEnable", g_gtao_enable);
 
       // HDR grade sliders (cb_luma_global_settings_dirty is already true at init -> uploaded on first frame).
       auto& gs = cb_luma_global_settings.GameSettings;
-      reshade::get_config_value(nullptr, NAME, "Exposure", gs.Exposure);
-      reshade::get_config_value(nullptr, NAME, "Saturation", gs.Saturation);
-      reshade::get_config_value(nullptr, NAME, "HighlightDechroma", gs.HighlightDechroma);
-      reshade::get_config_value(nullptr, NAME, "Dithering", gs.Dithering);
-      reshade::get_config_value(nullptr, NAME, "VignetteIntensity", gs.VignetteIntensity);
-      reshade::get_config_value(nullptr, NAME, "Contrast", gs.Contrast);
-      reshade::get_config_value(nullptr, NAME, "BloomIntensity", gs.BloomIntensity);
-      reshade::get_config_value(nullptr, NAME, "ColorGradingIntensity", gs.ColorGradingIntensity);
+      Config::Get(NAME, "Exposure", gs.Exposure);
+      Config::Get(NAME, "Saturation", gs.Saturation);
+      Config::Get(NAME, "HighlightDechroma", gs.HighlightDechroma);
+      Config::Get(NAME, "Dithering", gs.Dithering);
+      Config::Get(NAME, "VignetteIntensity", gs.VignetteIntensity);
+      Config::Get(NAME, "Contrast", gs.Contrast);
+      Config::Get(NAME, "BloomIntensity", gs.BloomIntensity);
+      Config::Get(NAME, "ColorGradingIntensity", gs.ColorGradingIntensity);
       // "Hide Gameplay UI" is deliberately NOT persisted: a saved HUD-less state makes the
       // next launch look broken.
       {
          bool video_auto_hdr = gs.VideoAutoHDREnable > 0.5f;
-         reshade::get_config_value(nullptr, NAME, "VideoAutoHDREnable", video_auto_hdr);
+         Config::Get(NAME, "VideoAutoHDREnable", video_auto_hdr);
          gs.VideoAutoHDREnable = video_auto_hdr ? 1.f : 0.f;
       }
-      reshade::get_config_value(nullptr, NAME, "VideoAutoHDRBoost", gs.VideoAutoHDRBoost);
+      Config::Get(NAME, "VideoAutoHDRBoost", gs.VideoAutoHDRBoost);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
@@ -1146,19 +1146,19 @@ public:
 #if ENABLE_SMAA
       ImGui::SeparatorText("Anti-Aliasing");
       if (ImGui::Checkbox("SMAA Enable", &g_smaa_enable))
-         reshade::set_config_value(nullptr, NAME, "SMAAEnable", g_smaa_enable);
+         Config::Set(NAME, "SMAAEnable", g_smaa_enable);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Replaces the game's FXAA with SMAA (works with the game's Anti-aliasing setting on or off).");
       ImGui::BeginDisabled(!g_smaa_enable);
       ImGui::SliderFloat("RCAS Sharpness", &g_rcas_sharpness, 0.f, 1.f);
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(nullptr, NAME, "RCASSharpness", g_rcas_sharpness);
+         Config::Set(NAME, "RCASSharpness", g_rcas_sharpness);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Sharpening applied on top of SMAA (0 = off).");
       DrawResetButton(g_rcas_sharpness, 0.f, "RCASSharpness");
 #if DEVELOPMENT || TEST
       if (ImGui::Checkbox("SMAA Predication", &g_smaa_predication))
-         reshade::set_config_value(nullptr, NAME, "SMAAPredication", g_smaa_predication);
+         Config::Set(NAME, "SMAAPredication", g_smaa_predication);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Relaxes the edge threshold back to base ULTRA on geometric silhouettes only. Off = plain ULTRA everywhere (threshold scale 1.0).");
       ImGui::SliderFloat("SMAA Predication Tolerance", &g_smaa_pred_tolerance, 0.002f, 0.1f, "%.3f", ImGuiSliderFlags_Logarithmic);
@@ -1180,7 +1180,7 @@ public:
          if (ImGui::SliderFloat(label, value, 0.f, max_value))
             device_data.cb_luma_global_settings_dirty = true;
          if (ImGui::IsItemDeactivatedAfterEdit())
-            reshade::set_config_value(nullptr, NAME, key, *value);
+            Config::Set(NAME, key, *value);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("%s", tooltip);
          if (DrawResetButton(*value, default_value, key))
@@ -1207,7 +1207,7 @@ public:
 
       ImGui::SeparatorText("Ambient Occlusion");
       if (ImGui::Checkbox("XeGTAO Enable", &g_gtao_enable))
-         reshade::set_config_value(nullptr, NAME, "GTAOEnable", g_gtao_enable);
+         Config::Set(NAME, "GTAOEnable", g_gtao_enable);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Replaces the game's SSAO with XeGTAO (cleaner, more accurate ambient occlusion; requires SSAO enabled in the game's video settings).");
 #if DEVELOPMENT || TEST
@@ -1242,7 +1242,7 @@ public:
          {
             gs.VideoAutoHDREnable = video_auto_hdr ? 1.f : 0.f;
             device_data.cb_luma_global_settings_dirty = true;
-            reshade::set_config_value(nullptr, NAME, "VideoAutoHDREnable", video_auto_hdr);
+            Config::Set(NAME, "VideoAutoHDREnable", video_auto_hdr);
          }
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Adds HDR highlights to pre-rendered videos (HDR only).");
@@ -1257,7 +1257,7 @@ public:
       {
          gs.Dithering = dithering ? 1.f : 0.f;
          device_data.cb_luma_global_settings_dirty = true;
-         reshade::set_config_value(nullptr, NAME, "Dithering", gs.Dithering);
+         Config::Set(NAME, "Dithering", gs.Dithering);
       }
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Reduces gradient banding.");
@@ -1347,7 +1347,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       enable_indirect_texture_format_upgrades = true; // creation-time mirrors, substituted at bind
       enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
       texture_upgrade_formats = {
-         reshade::api::format::r8g8b8a8_typeless, // dgVoodoo's present-blit intermediates (narrow list: 32-bit VA budget)
+         DXGI_FORMAT_R8G8B8A8_TYPELESS, // dgVoodoo's present-blit intermediates (narrow list: 32-bit VA budget)
       };
       // "No1Px" as in BL2, ME1 and MoHA: dgVoodoo fills every unused SRV slot with 1x1 placeholders (devkit: a 1x1
       // r8g8b8a8 texture and a 1x1 cube on every post draw), and a 1x1 trivially passes the aspect filter, so core would
@@ -1362,7 +1362,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       samplers_upgrade_mode = 4;
       force_upgrade_linear_samplers = true;
 
-      game = new TheWitcher2Game();
+      SetGame<TheWitcher2Game>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

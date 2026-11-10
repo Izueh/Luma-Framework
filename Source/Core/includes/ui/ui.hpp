@@ -1,6 +1,5 @@
 #pragma once
 
-#include <include/reshade.hpp>
 
 struct DeviceData; // instance_data.h
 
@@ -9,6 +8,6 @@ struct DeviceData; // instance_data.h
 namespace UI
 {
    // "trace_ui.inl": the Captured Commands tab (of the frame capture, see "trace.hpp"), and the debug draw settings (in the Settings tab)
-   void DrawCaptureTab(reshade::api::effect_runtime* runtime, DeviceData& device_data, bool& open_settings_tab);
+   void DrawCaptureTab(DeviceData& device_data, bool& open_settings_tab);
    void DrawDebugDrawSettings(DeviceData& device_data);
 } // namespace UI

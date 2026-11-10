@@ -219,15 +219,15 @@ public:
       GetShaderDefineData(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL_HASH).SetDefaultValue('1'); // The game just clipped, so HDR is an extension of SDR (except for some shaders that we adjust)
 
       // SMAA
-      native_shaders_definitions.emplace(CompileTimeStringHash("SMAA Linear To sRGB CS"), ShaderDefinition("Luma_SMAA_LinearTosRGB_CS", reshade::api::pipeline_subobject_type::compute_shader));
+      native_shaders_definitions.emplace(CompileTimeStringHash("SMAA Linear To sRGB CS"), ShaderDefinition("Luma_SMAA_LinearTosRGB_CS", D3D11_SHVER_COMPUTE_SHADER));
 
       if (bioshock_game == BioShockGame::BioShock_Infinite)
       {
          // XeGTAO
-         native_shaders_definitions.emplace(CompileTimeStringHash("BSI XeGTAO Prefilter Depths CS"), ShaderDefinition{ "Luma_BSI_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
-         native_shaders_definitions.emplace(CompileTimeStringHash("BSI XeGTAO Main Pass CS"), ShaderDefinition{ "Luma_BSI_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
-         native_shaders_definitions.emplace(CompileTimeStringHash("BSI XeGTAO Denoise Pass 1 CS"), ShaderDefinition{ "Luma_BSI_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
-         native_shaders_definitions.emplace(CompileTimeStringHash("BSI XeGTAO Denoise Pass 2 CS"), ShaderDefinition{ "Luma_BSI_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
+         native_shaders_definitions.emplace(CompileTimeStringHash("BSI XeGTAO Prefilter Depths CS"), ShaderDefinition{ "Luma_BSI_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "prefilter_depths16x16_cs" });
+         native_shaders_definitions.emplace(CompileTimeStringHash("BSI XeGTAO Main Pass CS"), ShaderDefinition{ "Luma_BSI_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "main_pass_cs" });
+         native_shaders_definitions.emplace(CompileTimeStringHash("BSI XeGTAO Denoise Pass 1 CS"), ShaderDefinition{ "Luma_BSI_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
+         native_shaders_definitions.emplace(CompileTimeStringHash("BSI XeGTAO Denoise Pass 2 CS"), ShaderDefinition{ "Luma_BSI_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
       }
 
       // Luma bloom
@@ -280,31 +280,25 @@ public:
 
             if (bs2_weapon_fov_matches.size() != 1)
             {
-               reshade::log::message(reshade::log::level::warning, "BioShock 2 Remastered Luma failed to patch for Ultrawide compatibility. If you have already patched the executable, restore the original for proper dynamic Hor+ FoV on Weapons");
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "BioShock 2 Remastered Luma failed to patch for Ultrawide compatibility. If you have already patched the executable, restore the original for proper dynamic Hor+ FoV on Weapons");
             }
-         }
-
-         if (bioshock_game == BioShockGame::BioShock_Remastered || bioshock_game == BioShockGame::BioShock_2_Remastered)
-         {
-            reshade::register_event<reshade::addon_event::init_resource>(BioshockSeries::OnInitResource);
          }
       }
    }
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "FogCorrectionIntensity", cb_luma_global_settings.GameSettings.FogCorrectionIntensity);
-      reshade::get_config_value(runtime, NAME, "FogIntensity", cb_luma_global_settings.GameSettings.FogIntensity);
-      reshade::get_config_value(runtime, NAME, "SMAAEnable", g_smaa_enable);
-      reshade::get_config_value(runtime, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
-      reshade::get_config_value(runtime, NAME, "BloomRadius", cb_luma_global_settings.GameSettings.BloomRadius);
-      reshade::get_config_value(runtime, NAME, "LumaBloomEnable", g_luma_bloom_enable);
+      Config::Get(NAME, "FogCorrectionIntensity", cb_luma_global_settings.GameSettings.FogCorrectionIntensity);
+      Config::Get(NAME, "FogIntensity", cb_luma_global_settings.GameSettings.FogIntensity);
+      Config::Get(NAME, "SMAAEnable", g_smaa_enable);
+      Config::Get(NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
+      Config::Get(NAME, "BloomRadius", cb_luma_global_settings.GameSettings.BloomRadius);
+      Config::Get(NAME, "LumaBloomEnable", g_luma_bloom_enable);
 
       if (bioshock_game == BioShockGame::BioShock_Infinite)
       {
-         reshade::get_config_value(runtime, NAME, "XeGTAOEnable", g_xegtao_enable);
-         reshade::get_config_value(runtime, NAME, "LensFlareEnable", g_lens_flare_enable);
+         Config::Get(NAME, "XeGTAOEnable", g_xegtao_enable);
+         Config::Get(NAME, "LensFlareEnable", g_lens_flare_enable);
       }
 
       // "device_data.cb_luma_global_settings_dirty" should already be true at this point
@@ -312,7 +306,6 @@ public:
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
@@ -344,32 +337,32 @@ public:
 
          // TODO: re-implement Fog fixes in BS1 after fixing the fog shader errors
          if (ImGui::SliderFloat("Fog Correction Intensity", &cb_luma_global_settings.GameSettings.FogCorrectionIntensity, 0.f, 1.f))
-            reshade::set_config_value(runtime, NAME, "FogCorrectionIntensity", cb_luma_global_settings.GameSettings.FogCorrectionIntensity);
+            Config::Set(NAME, "FogCorrectionIntensity", cb_luma_global_settings.GameSettings.FogCorrectionIntensity);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Fog was \"additive\" in this game, which caused severely raised blacks, this preserves the feel of the fog without destroying contrast, making the game more atmospheric.\nNote that this also applies to underwater sections.\nSet it to 0 for the a Vanilla experience, however it will not look good on OLED.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.FogCorrectionIntensity, default_luma_global_game_settings.FogCorrectionIntensity, "FogCorrectionIntensity", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.FogCorrectionIntensity, default_luma_global_game_settings.FogCorrectionIntensity, "FogCorrectionIntensity");
 
          if (ImGui::SliderFloat("Fog Intensity", &cb_luma_global_settings.GameSettings.FogIntensity, 0.f, 2.f))
-            reshade::set_config_value(runtime, NAME, "FogIntensity", cb_luma_global_settings.GameSettings.FogIntensity);
+            Config::Set(NAME, "FogIntensity", cb_luma_global_settings.GameSettings.FogIntensity);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("You can decrease or increase fog to your liking.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.FogIntensity, default_luma_global_game_settings.FogIntensity, "FogIntensity", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.FogIntensity, default_luma_global_game_settings.FogIntensity, "FogIntensity");
       }
 
       if (bioshock_game == BioShockGame::BioShock_Infinite)
       {
          if (ImGui::Checkbox("XeGTAO Enable", &g_xegtao_enable))
-           reshade::set_config_value(runtime, NAME, "XeGTAOEnable", g_xegtao_enable);
+           Config::Set(NAME, "XeGTAOEnable", g_xegtao_enable);
 
          if (ImGui::Checkbox("Lens Flare Enable", &g_lens_flare_enable))
-           reshade::set_config_value(runtime, NAME, "LensFlareEnable", g_lens_flare_enable);
+           Config::Set(NAME, "LensFlareEnable", g_lens_flare_enable);
       }
 
       if (ImGui::Checkbox("SMAA Enable", &g_smaa_enable))
-         reshade::set_config_value(runtime, NAME, "SMAAEnable", g_smaa_enable);
+         Config::Set(NAME, "SMAAEnable", g_smaa_enable);
 
       if (ImGui::Checkbox("Luma Bloom Enable", &g_luma_bloom_enable))
-         reshade::set_config_value(runtime, NAME, "LumaBloomEnable", g_luma_bloom_enable);
+         Config::Set(NAME, "LumaBloomEnable", g_luma_bloom_enable);
 
 #if DEVELOPMENT
       if (ImGui::SliderInt("Luma Bloom nmips", &g_bloom_nmips, 1.0, 10.0))
@@ -385,16 +378,16 @@ public:
 #endif
       
       if (ImGui::SliderFloat("Bloom Intensity", &cb_luma_global_settings.GameSettings.BloomIntensity, 0.f, 2.f))
-         reshade::set_config_value(runtime, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
-      DrawResetButton(cb_luma_global_settings.GameSettings.BloomIntensity, default_luma_global_game_settings.BloomIntensity, "BloomIntensity", runtime);
+         Config::Set(NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
+      DrawResetButton(cb_luma_global_settings.GameSettings.BloomIntensity, default_luma_global_game_settings.BloomIntensity, "BloomIntensity");
 
       if (bioshock_game == BioShockGame::BioShock_2_Remastered && !g_luma_bloom_enable)
       {
          if (ImGui::SliderFloat("Bloom Radius", &cb_luma_global_settings.GameSettings.BloomRadius, 0.f, 1.f))
-            reshade::set_config_value(runtime, NAME, "BloomRadius", cb_luma_global_settings.GameSettings.BloomRadius);
+            Config::Set(NAME, "BloomRadius", cb_luma_global_settings.GameSettings.BloomRadius);
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("The bloom radius is arguably too wide for modern resolutions, customize it to your liking. 1 is the Vanilla value.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.BloomRadius, default_luma_global_game_settings.BloomRadius, "BloomRadius", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.BloomRadius, default_luma_global_game_settings.BloomRadius, "BloomRadius");
       }
 
 #if 0 // TODO
@@ -406,7 +399,7 @@ public:
       {
          ImGui::SetTooltip("Hides the whole UI outside of the main menu\nWARNING: this can cause confusion and isn't perfect (everything is hidden, even some non gameplay UI and Menus)");
       }
-      DrawResetButton<decltype(hide_gameplay_ui), false>(hide_gameplay_ui, false, "Hide Gameplay UI", runtime);
+      DrawResetButton<decltype(hide_gameplay_ui), false>(hide_gameplay_ui, false, "Hide Gameplay UI");
 
       ImGui::NewLine();
 
@@ -417,16 +410,16 @@ public:
          {
             ImGui::SetTooltip("Basic Camera Mode. Pause the game and enable it to be able to move the camera around and take screenshots. Works during in engine cutscenes too.\nWARNING: if you rotate the camera backwards, some geometry might not render");
          }
-         DrawResetButton<decltype(enable_camera_mode), false>(enable_camera_mode, false, "Enable Camera Mode", runtime);
+         DrawResetButton<decltype(enable_camera_mode), false>(enable_camera_mode, false, "Enable Camera Mode");
 
          ImGui::BeginDisabled(!enable_camera_mode);
 
          ImGui::SliderFloat3("Translation", &camera_mode_translation.x, -1.f, 1.f);
-         DrawResetButton<decltype(camera_mode_translation), false>(camera_mode_translation, {}, "Translation", runtime);
+         DrawResetButton<decltype(camera_mode_translation), false>(camera_mode_translation, {}, "Translation");
          ImGui::SliderFloat3("Rotation", &camera_mode_rotation.x, -M_PI, M_PI);
-         DrawResetButton<decltype(camera_mode_rotation), false>(camera_mode_rotation, {}, "Rotation", runtime);
+         DrawResetButton<decltype(camera_mode_rotation), false>(camera_mode_rotation, {}, "Rotation");
          ImGui::SliderFloat("FoV Scale", &camera_mode_fov_scale, 0.1f, 10.f);
-         DrawResetButton<decltype(camera_mode_fov_scale), false>(camera_mode_fov_scale, 1.f, "FoV Scale", runtime);
+         DrawResetButton<decltype(camera_mode_fov_scale), false>(camera_mode_fov_scale, 1.f, "FoV Scale");
 
          ImGui::EndDisabled();
 
@@ -519,9 +512,9 @@ public:
       device_data.game = new GameDeviceDataBioshockSeries;
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+      auto& device_data = *GetSwapchainData(swapchain)->device_data;
 
       cb_luma_global_settings.GameSettings.OutputRes.x = device_data.output_resolution.x;
       cb_luma_global_settings.GameSettings.OutputRes.y = device_data.output_resolution.y;
@@ -530,7 +523,7 @@ public:
       device_data.cb_luma_global_settings_dirty = true;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -885,7 +878,7 @@ public:
          if (bioshock_game == BioShockGame::BioShock_2_Remastered && GetModuleHandle(TEXT("steam_api.dll")) != NULL)
          {
             bool skip_crash_fix = false;
-            reshade::get_config_value(nullptr, NAME, "SkipCrashFix", skip_crash_fix);
+            Config::Get(NAME, "SkipCrashFix", skip_crash_fix);
             // In case it ever caused issues, or the game was updated, allow skipping it
             if (!skip_crash_fix)
             {
@@ -897,15 +890,19 @@ public:
       }
    }
 
-   static void OnInitResource(reshade::api::device* device, const reshade::api::resource_desc& desc, const reshade::api::subresource_data* initial_data, reshade::api::resource_usage initial_state, reshade::api::resource resource)
+   // BioShock Remastered and BioShock 2 Remastered: a SRV of the depth texture
+   void PostCreateTexture2D(ID3D11Device* native_device, const D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture2D* texture) override
    {
-      if (desc.texture.format == reshade::api::format::r24_unorm_x8_uint)
+      if (bioshock_game != BioShockGame::BioShock_Remastered && bioshock_game != BioShockGame::BioShock_2_Remastered)
+         return;
+      if (desc.Format == DXGI_FORMAT_R24_UNORM_X8_TYPELESS)
       {
-         auto& device_data = *device->get_private_data<DeviceData>();
-         auto& game_device_data = GetGameDeviceData(device_data);
-         auto native_device = (ID3D11Device*)device->get_native();
+         DeviceData* device_data = GetDeviceData(native_device);
+         if (!device_data)
+            return;
+         auto& game_device_data = GetGameDeviceData(*device_data);
          game_device_data.srv_depth.reset();
-         ensure(native_device->CreateShaderResourceView((ID3D11Resource*)resource.handle, nullptr, game_device_data.srv_depth.put()), >= 0);
+         ensure(native_device->CreateShaderResourceView(texture, nullptr, game_device_data.srv_depth.put()), >= 0);
       }
    }
 };
@@ -979,21 +976,19 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       // TODO: check if BSI need R11G11B10F to R16G16B16A16F upgrades. BS(1) needs 8bit etc?. Mix the mods in BFI? UseLowPrecisionColorBuffer=False FloatingPointRenderTargets=True
       texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-            reshade::api::format::r11g11b10_float, // Used by Bloom and maybe lens flare stuff
+            DXGI_FORMAT_R11G11B10_FLOAT, // Used by Bloom and maybe lens flare stuff
 
-            reshade::api::format::r32g32b32a32_float, // BSI uses 32bpc render targets for the scene and it's insane! So we restore them to 16bpc // TODO: verify it's not due to config edits
+            DXGI_FORMAT_R32G32B32A32_FLOAT, // BSI uses 32bpc render targets for the scene and it's insane! So we restore them to 16bpc // TODO: verify it's not due to config edits
       };
       if (bioshock_game == BioShockGame::BioShock_Infinite)
       {
@@ -1050,18 +1045,13 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          pixel_shader_hashes_AA.pixel_shaders = { Shader::Hash_StrToNum("EC834D82") };
       }
 
-      game = new BioshockSeries();
+      SetGame<BioshockSeries>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
       if (crash_fix_applied)
       {
          CloseCrashFix();
-      }
-
-      if (bioshock_game == BioShockGame::BioShock_Remastered || bioshock_game == BioShockGame::BioShock_2_Remastered)
-      {
-         reshade::unregister_event<reshade::addon_event::init_resource>(BioshockSeries::OnInitResource);
       }
    }
 

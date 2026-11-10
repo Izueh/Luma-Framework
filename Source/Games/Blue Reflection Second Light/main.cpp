@@ -2,7 +2,6 @@
 
 #define DISABLE_AUTO_DEBUGGER 1
 #define DISABLE_FOCUS_LOSS_SUPPRESSION 1
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 #define AVOID_INPUT_LOSS 1
 #define DISABLE_SWAPCHAIN_FLIP_MODEL 1
 #define ENABLE_DRAW_DISPATCH_DATA_CACHE 1
@@ -463,7 +462,7 @@ namespace MotionBlur
                return;
          }
          
-         //reshade::log::message(reshade::log::level::info, "Motion Blur: creating textures.");
+         //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Motion Blur: creating textures.");
          
          {
             auto CreateResource = [&](Texture t, const D3D11_TEXTURE2D_DESC& desc)
@@ -1112,56 +1111,48 @@ public:
       CombineViewProjectionMatrices = reinterpret_cast<fnCombineViewProjectionMatrices>(base_addr + 0x46DAE0);
       GetSettingValue = reinterpret_cast<fnGetSettingValue>(base_addr + 0x29850);   // index 15 is motion blur
       
-      //native_shaders_definitions.emplace(CompileTimeStringHash("River Clear Velocity"), ShaderDefinition{"SRIVER-GBufferNormalMap", reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Effect Merge Test"), ShaderDefinition{"Luma_EffectMerge_OutputVelocity", reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Search Mode Filter"), ShaderDefinition{"Luma_PostEffectSearchMode", reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Motion Blur Passthrough"), ShaderDefinition{"Luma_PostEffectMotionBlurWithDT", reshade::api::pipeline_subobject_type::pixel_shader});
-      //native_shaders_definitions.emplace(CompileTimeStringHash("Decode Motion Vector"), ShaderDefinition{"Luma_DecodeMotionVector", reshade::api::pipeline_subobject_type::compute_shader});
+      //native_shaders_definitions.emplace(CompileTimeStringHash("River Clear Velocity"), ShaderDefinition{"SRIVER-GBufferNormalMap", D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Effect Merge Test"), ShaderDefinition{"Luma_EffectMerge_OutputVelocity", D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Search Mode Filter"), ShaderDefinition{"Luma_PostEffectSearchMode", D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Motion Blur Passthrough"), ShaderDefinition{"Luma_PostEffectMotionBlurWithDT", D3D11_SHVER_PIXEL_SHADER});
+      //native_shaders_definitions.emplace(CompileTimeStringHash("Decode Motion Vector"), ShaderDefinition{"Luma_DecodeMotionVector", D3D11_SHVER_COMPUTE_SHADER});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Motion Blur Vertex"), 
-         ShaderDefinition{"Luma_PostEffectMotionBlur", reshade::api::pipeline_subobject_type::vertex_shader, nullptr, nullptr, 
+         ShaderDefinition{"Luma_PostEffectMotionBlur", D3D11_SHVER_VERTEX_SHADER, nullptr, nullptr, 
             {{"VERTEXSHADER", "1"}}});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Motion Blur Velocity Setup"), 
-         ShaderDefinition{"Luma_PostEffectMotionBlur", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, 
+         ShaderDefinition{"Luma_PostEffectMotionBlur", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr, 
             {{"VELOCITY_SETUP", "1"}}});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Motion Blur TileMax1"), 
-         ShaderDefinition{"Luma_PostEffectMotionBlur", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, 
+         ShaderDefinition{"Luma_PostEffectMotionBlur", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr, 
             {{"TILEMAX_1", "1"}}});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Motion Blur TileMax2"), 
-         ShaderDefinition{"Luma_PostEffectMotionBlur", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, 
+         ShaderDefinition{"Luma_PostEffectMotionBlur", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr, 
             {{"TILEMAX_2", "1"}}});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Motion Blur TileMaxV"), 
-         ShaderDefinition{"Luma_PostEffectMotionBlur", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, 
+         ShaderDefinition{"Luma_PostEffectMotionBlur", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr, 
             {{"TILEMAX_V", "1"}}});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Motion Blur NeighborMax"), 
-         ShaderDefinition{"Luma_PostEffectMotionBlur", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, 
+         ShaderDefinition{"Luma_PostEffectMotionBlur", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr, 
             {{"NEIGHBOR_MAX", "1"}}});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Motion Blur Reconstruction"), 
-         ShaderDefinition{"Luma_PostEffectMotionBlur", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, 
+         ShaderDefinition{"Luma_PostEffectMotionBlur", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr, 
             {{"RECONSTRUCTION", "1"}}});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Temporal AA Depth With History"), 
-         ShaderDefinition{"Luma_TemporalAADepth", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, 
+         ShaderDefinition{"Luma_TemporalAADepth", D3D11_SHVER_COMPUTE_SHADER, nullptr, nullptr, 
             {{"HAS_PREVIOUS_FRAME", "1"}}});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("Temporal AA Depth Without History"), 
-         ShaderDefinition{"Luma_TemporalAADepth", reshade::api::pipeline_subobject_type::compute_shader, nullptr, nullptr, 
+         ShaderDefinition{"Luma_TemporalAADepth", D3D11_SHVER_COMPUTE_SHADER, nullptr, nullptr, 
             {}});
       
-      reshade::register_event<reshade::addon_event::bind_render_targets_and_depth_stencil >(BlueReflectionSecondLight::OnBindRenderTargetsAndDepthStencil);
-      reshade::register_event<reshade::addon_event::clear_render_target_view>(BlueReflectionSecondLight::OnClearRenderTargetView);
-      reshade::register_event<reshade::addon_event::copy_texture_region>(BlueReflectionSecondLight::OnCopyTextureRegion);
-      reshade::register_event<reshade::addon_event::unmap_buffer_region>(BlueReflectionSecondLight::OnUnmapBufferRegion);
-      reshade::register_event<reshade::addon_event::map_buffer_region>(BlueReflectionSecondLight::OnMapBufferRegion);
-      reshade::register_event<reshade::addon_event::create_pipeline>(BlueReflectionSecondLight::OnCreatePipeline);
-      reshade::register_event<reshade::addon_event::execute_secondary_command_list>(BlueReflectionSecondLight::OnExecuteSecondaryCommandList);
-      reshade::register_event<reshade::addon_event::destroy_resource >(BlueReflectionSecondLight::OnDestroyResource);
    }
 
    void OnLoad(std::filesystem::path& file_path, bool failed) override
@@ -1343,12 +1334,12 @@ public:
       return XXH3_64bits(buffer, sizeof(buffer));
    };
    
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       if (device_data.sr_type == SR::Type::None)
          return DrawOrDispatchOverrideType::None;
       
-      if ((stages & reshade::api::shader_stage::pixel) == 0)
+      if ((stages & ShaderStages::Pixel) == 0)
          return DrawOrDispatchOverrideType::None;
       
       auto& game_device_data = GetGameDeviceData(device_data);
@@ -1369,14 +1360,14 @@ public:
          if (FAILED(hr))
          {
             game_device_data.source_color = nullptr;
-            reshade::log::message(reshade::log::level::error, "Failed getting color texture");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, "Failed getting color texture");
          }
          
          game_device_data.depth_texture_srv->GetResource(resource.put());
          hr = resource->QueryInterface(game_device_data.depth_texture.put());
          if (FAILED(hr))
          {
-            reshade::log::message(reshade::log::level::error, "Failed getting depth texture");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, "Failed getting depth texture");
          }
          
          game_device_data.source_color_rtv = render_target_views;
@@ -1384,7 +1375,7 @@ public:
          (*original_draw_dispatch_func)();
          
          {
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData);
             ID3D11ShaderResourceView* srvs[] = {game_device_data.motion_vectors_srv.get(), game_device_data.depth_texture_srv.get()};
             native_device_context->PSSetShaderResources(0, 2, srvs);
             auto ps = device_data.native_pixel_shaders[CompileTimeStringHash("Effect Merge Test")].get();
@@ -1533,7 +1524,7 @@ public:
       if (original_shader_hashes.Contains(shader_hashes_motion_blur))
       {
          /*
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData);
          auto ps = device_data.native_pixel_shaders[CompileTimeStringHash("Motion Blur")].get();
          ID3D11ShaderResourceView* srv = { game_device_data.decoded_motion_vectors_srv.get() };
          native_device_context->PSSetShader(ps, nullptr, 0);
@@ -1667,7 +1658,7 @@ public:
             // this is very loose because draws after this could be other types of draw
             game_device_data.frame_phase = FramePhase::FORWARD;
             counter++;
-            //reshade::log::message(reshade::log::level::info, std::format("Frame phase: Forward, count: {}.", counter).c_str());
+            //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("Frame phase: Forward, count: {}.", counter).c_str());
             Trace::Marker(native_device_context, "Forward Start");
          }
          return DrawOrDispatchOverrideType::None;
@@ -1684,7 +1675,7 @@ public:
 
       if (game_device_data.frame_phase == FramePhase::GBUFFER || game_device_data.frame_phase == FramePhase::FORWARD)
       {
-         //reshade::log::message(reshade::log::level::info, std::format("Current PS: 0x{:X}", original_shader_hashes.pixel_shaders[0]).c_str());
+         //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("Current PS: 0x{:X}", original_shader_hashes.pixel_shaders[0]).c_str());
          
          if (original_shader_hashes.pixel_shaders.empty())
             return DrawOrDispatchOverrideType::None;
@@ -1864,12 +1855,12 @@ public:
                      }
                      else
                      {
-                        //reshade::log::message(reshade::log::level::error, "context1 not supported.");
+                        //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, "context1 not supported.");
                         Luma::OverlayLog::AddError("context1 not supported.");
                         return DrawOrDispatchOverrideType::None;
                      }
                   }
-                  //reshade::log::message(reshade::log::level::info, std::format("First Constant: {}, Num Constants: {}", first_constant, num_constants).c_str());
+                  //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("First Constant: {}, Num Constants: {}", first_constant, num_constants).c_str());
                   ctx1->VSSetConstantBuffers1(5, 1, &cb, &first_constant, &num_constants);
                }
                // TODO: make a list of "static" vertex shader to check if they're wrong from last frame
@@ -2025,26 +2016,22 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
    
-   static void OnExecuteSecondaryCommandList(reshade::api::command_list* cmd_list, reshade::api::command_list* secondary_cmd_list)
+   // A command list is about to be replayed on a context (ReShade's "execute_secondary_command_list" on a context)
+   bool PreExecuteCommandList(ID3D11DeviceContext* native_device_context, ID3D11CommandList* native_command_list, BOOL restore) override
    {
-      com_ptr<ID3D11DeviceContext> native_device_context;
-      ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      HRESULT hr = device_child->QueryInterface(&native_device_context);
-
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return false;
+      auto& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      if (native_device_context)
       {
-         com_ptr<ID3D11CommandList> native_command_list;
-         ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         HRESULT hr = device_child->QueryInterface(&native_command_list);
-         if (native_command_list.get() == game_device_data.remainder_command_list && game_device_data.partial_command_list)
+         if (native_command_list == game_device_data.remainder_command_list && game_device_data.partial_command_list)
          {
             DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
             DrawStateStack<DrawStateStackType::Compute> compute_state_stack;
-            draw_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
-            compute_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
+            draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
+            compute_state_stack.Cache(native_device_context, device_data.uav_max_count);
             
             if (!is_search_mode_on)
             {
@@ -2125,10 +2112,10 @@ public:
                   game_device_data.pre_search_mode_command_list.reset();
                }
                
-               draw_state_stack.Restore(native_device_context.get());
-               compute_state_stack.Restore(native_device_context.get());
+               draw_state_stack.Restore(native_device_context);
+               compute_state_stack.Restore(native_device_context);
                
-               return;
+               return false;
             }
 
             //CommandListData& cmd_list_data = *cmd_list->get_private_data<CommandListData>();
@@ -2151,11 +2138,11 @@ public:
                settings_data.mvs_y_scale = -static_cast<float>(height);
                settings_data.auto_exposure = true;
                settings_data.render_preset = dlss_render_preset;
-               sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context.get(), settings_data);
+               sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
             }
             /*
             {
-               SetLumaConstantBuffers(native_device_context.get(), cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData);
+               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaData);
                ID3D11ShaderResourceView* srvs[] = {game_device_data.motion_vectors_srv.get(), game_device_data.depth_texture_srv.get()};
                native_device_context->CSSetShaderResources(0, 2, srvs);
                auto cs = device_data.native_compute_shaders[CompileTimeStringHash("Decode Motion Vector")].get();
@@ -2190,7 +2177,7 @@ public:
                draw_data.far_plane = CameraData->camera_distances.y;
                draw_data.reset = device_data.force_reset_sr;
 
-               bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context.get(), draw_data);
+               bool dlss_succeeded = sr_implementations[device_data.sr_type]->Draw(sr_instance_data, native_device_context, draw_data);
                game_device_data.has_drawn_upscaling = true;
                
                if (dlss_succeeded)
@@ -2218,25 +2205,27 @@ public:
                ComPtr<ID3D11Device> native_device;
                native_device_context->GetDevice(native_device.put());
          
-               game_device_data.temporal_depth_pass.Draw(native_device.get(), native_device_context.get(), device_data, draw_data);
+               game_device_data.temporal_depth_pass.Draw(native_device.get(), native_device_context, device_data, draw_data);
             }
             
-            draw_state_stack.Restore(native_device_context.get());
-            compute_state_stack.Restore(native_device_context.get());
+            draw_state_stack.Restore(native_device_context);
+            compute_state_stack.Restore(native_device_context);
          }
       }
+      return false;
+   }
 
-      com_ptr<ID3D11CommandList> native_command_list;
-      hr = device_child->QueryInterface(&native_command_list);
-      if (native_command_list)
+   // A deferred context recorded a command list (ReShade's "execute_secondary_command_list" on a command list)
+   void PostFinishCommandList(ID3D11DeviceContext* native_device_context, BOOL restore, ID3D11CommandList* native_command_list) override
+   {
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return;
+      auto& game_device_data = GetGameDeviceData(*cmd_list_data->device_data);
+      if (native_device_context == game_device_data.draw_device_context)
       {
-         ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(secondary_cmd_list->get_native());
-         hr = device_child->QueryInterface(&native_device_context);
-         if (native_device_context == game_device_data.draw_device_context)
-         {
-            game_device_data.remainder_command_list = native_command_list.get();
-            game_device_data.draw_device_context = nullptr;
-         }
+         game_device_data.remainder_command_list = native_command_list;
+         game_device_data.draw_device_context = nullptr;
       }
    }
    
@@ -2262,32 +2251,44 @@ public:
       memcpy(&data.GameData.ReprojectionMatrix, &game_device_data.reprojection_matrix, sizeof(DirectX::XMMATRIX));
    }
    
-   static void OnBindRenderTargetsAndDepthStencil(reshade::api::command_list* cmd_list, uint32_t count, const reshade::api::resource_view *rtvs, reshade::api::resource_view dsv)
+   bool PreOMSetRenderTargets(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views, ID3D11DepthStencilView*& depth_stencil) override
    {
-      ComPtr<ID3D11DeviceContext> native_device_context;
-      ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      HRESULT hr = device_child->QueryInterface(native_device_context.put());
+      OnBindRenderTargetsAndDepthStencil(context, count, views, depth_stencil);
+      return false;
+   }
 
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+   bool PreOMSetRenderTargetsAndUnorderedAccessViews(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views, ID3D11DepthStencilView*& depth_stencil, UINT uav_start, UINT uav_count, ID3D11UnorderedAccessView** uavs, const UINT* initial_counts) override
+   {
+      // ReShade only reported the render targets when they changed
+      if (count != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+         OnBindRenderTargetsAndDepthStencil(context, count, views, depth_stencil);
+      return false;
+   }
+
+   static void OnBindRenderTargetsAndDepthStencil(ID3D11DeviceContext* native_device_context, uint32_t count, ID3D11RenderTargetView* const* rtvs, ID3D11DepthStencilView* dsv)
+   {
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return;
+      auto& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
-      
+
       if (device_data.sr_type == SR::Type::None)
          return;
-      
-      for (uint32_t i = 0; i < count; i++)
+
+      for (uint32_t i = 0; i < count && i < game_device_data.current_rtvs.size(); i++)
       {
-         ID3D11RenderTargetView* native_rtv = reinterpret_cast<ID3D11RenderTargetView*>(rtvs[i].handle);
-         game_device_data.current_rtvs[i] = native_rtv;
+         game_device_data.current_rtvs[i] = rtvs ? rtvs[i] : nullptr;
       }
-      
+
       for (uint32_t i = count; i < game_device_data.current_rtvs.size(); ++i)
       {
          game_device_data.current_rtvs[i] = nullptr;
       }
-      
-      game_device_data.current_dsv = reinterpret_cast<ID3D11DepthStencilView*>(dsv.handle);
-      
-      if (count > 4 && dsv.handle != 0)
+
+      game_device_data.current_dsv = dsv;
+
+      if (count > 4 && dsv != nullptr)
       {
          // In title screen this happens for 3 times
          // 1. actual gbuffer binding
@@ -2295,18 +2296,17 @@ public:
          // 3. beginning of the next deferred context but immediately overwritten by forward render target
          game_device_data.frame_phase = FramePhase::GBUFFER;
          counter++;
-         //reshade::log::message(reshade::log::level::info, std::format("Frame phase: GBuffer, count: {}.", counter).c_str());
-         Trace::Marker(native_device_context.get(), "GBuffer Start");
+         //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("Frame phase: GBuffer, count: {}.", counter).c_str());
+         Trace::Marker(native_device_context, "GBuffer Start");
       }
    }
    
-   static bool OnClearRenderTargetView(reshade::api::command_list* cmd_list, reshade::api::resource_view rtv, const float color[4], uint32_t rect_count, const reshade::api::rect* rects)
+   bool PreClearRenderTargetView(ID3D11DeviceContext* native_device_context, ID3D11RenderTargetView* native_rtv, const FLOAT color[4]) override
    {
-      ComPtr<ID3D11DeviceContext> native_device_context;
-      ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      HRESULT hr = device_child->QueryInterface(native_device_context.put());
-
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data || !native_rtv)
+         return false;
+      auto& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
       
       if (device_data.sr_type == SR::Type::None)
@@ -2314,13 +2314,12 @@ public:
       
       if (game_device_data.frame_phase == FramePhase::NONE && game_device_data.source_color_rtv.get() == nullptr)
       {
-         ID3D11RenderTargetView* native_rtv = reinterpret_cast<ID3D11RenderTargetView*>(rtv.handle);
          D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
          native_rtv->GetDesc(&rtv_desc);
          if (rtv_desc.Format == DXGI_FORMAT_R11G11B10_FLOAT)
          {
             game_device_data.source_color_rtv = native_rtv;
-            //reshade::log::message(reshade::log::level::info, "Found source color RTV.");
+            //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Found source color RTV.");
             
             if (CameraData != nullptr)
             {
@@ -2338,12 +2337,9 @@ public:
                game_device_data.reprojection_matrix = ComputeCameraSpaceToPreviousProjectedSpaceMatrix();
             }
             
-            ComPtr<ID3D11Device> device;
-            native_device_context->GetDevice(device.put());
-            
             int width  = *(int*)(RenderResolution + 0x00);
             int height = *(int*)(RenderResolution + 0x04);
-            SetupMotionVectorTexture(device.get(), game_device_data, width, height);
+            SetupMotionVectorTexture(device_data.native_device, game_device_data, width, height);
             if (game_device_data.motion_vectors_rtv)
             {
                float clear_value[] = {0.0f, -1.0f, 0.0f, 0.0f};
@@ -2354,27 +2350,28 @@ public:
       // This is when the game clears the particle/effect rendertarget, after forward objects have drawn
       else if (game_device_data.frame_phase == FramePhase::FORWARD)
       {
-         ID3D11RenderTargetView* native_rtv = reinterpret_cast<ID3D11RenderTargetView*>(rtv.handle);
          D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
          native_rtv->GetDesc(&rtv_desc);
          if (rtv_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT)
          {
             game_device_data.frame_phase = FramePhase::UNDEFINED;
-            //reshade::log::message(reshade::log::level::info, "Frame phase: Undefined.");
-            Trace::Marker(native_device_context.get(), "Forward End");
+            //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Frame phase: Undefined.");
+            Trace::Marker(native_device_context, "Forward End");
          }
       }
 
       return false;
    }
    
-   static bool OnCopyTextureRegion(reshade::api::command_list* cmd_list, reshade::api::resource source, uint32_t source_subresource, const reshade::api::subresource_box *source_box, reshade::api::resource dest, uint32_t dest_subresource, const reshade::api::subresource_box *dest_box, reshade::api::filter_mode filter)
+   // ReShade's "copy_texture_region": "CopySubresourceRegion" on textures
+   bool PreCopySubresourceRegion(ID3D11DeviceContext* native_device_context, ID3D11Resource* destination, UINT destination_subresource, UINT x, UINT y, UINT z, ID3D11Resource* source, UINT source_subresource, const D3D11_BOX* box, UINT copy_flags) override
    {
-      ComPtr<ID3D11DeviceContext> native_device_context;
-      ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-      HRESULT hr = device_child->QueryInterface(native_device_context.put());
-
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      if (AsBuffer(destination))
+         return false;
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return false;
+      auto& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
       
       if (device_data.sr_type == SR::Type::None)
@@ -2385,23 +2382,28 @@ public:
       if (game_device_data.frame_phase == FramePhase::GBUFFER)
       {
          game_device_data.frame_phase = FramePhase::UNDEFINED;
-         //reshade::log::message(reshade::log::level::info, "Frame phase: Undefined.");
-         Trace::Marker(native_device_context.get(), "GBuffer End");
+         //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Frame phase: Undefined.");
+         Trace::Marker(native_device_context, "GBuffer End");
       }
       return false;
    }
    
-   static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP access, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
    {
-      ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return;
+      CommandListData* cmd_list_data = GetCommandListData(context);
+      if (!cmd_list_data)
+         return;
+      DeviceData& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
-      
+      void** data = &mapped.pData; // Editing it hands the game another pointer
+
       if (device_data.sr_type == SR::Type::None)
          return;
-      
-      if (access == reshade::api::map_access::write_discard)
+
+      if (access == D3D11_MAP_WRITE_DISCARD)
       {
          if (game_device_data.frame_phase == FramePhase::GBUFFER || game_device_data.frame_phase == FramePhase::FORWARD)
          {
@@ -2422,36 +2424,34 @@ public:
             }
          }
       }
-      else if (access == reshade::api::map_access::write_only)
+      else if (access == D3D11_MAP_WRITE || access == D3D11_MAP_WRITE_NO_OVERWRITE) // ReShade's "write_only"
       {
          D3D11_BUFFER_DESC bd;
-         ((ID3D11Buffer*)resource.handle)->GetDesc(&bd);
+         buffer->GetDesc(&bd);
          if (bd.BindFlags == D3D11_BIND_VERTEX_BUFFER)
          {
-            auto& device_data = *device->get_private_data<DeviceData>();
-            auto& game_device_data = GetGameDeviceData(device_data);
-
-            game_device_data.modifiable_vertex_buffer = (ID3D11Buffer*)resource.handle;
+            game_device_data.modifiable_vertex_buffer = buffer;
          }
          else if (bd.BindFlags == D3D11_BIND_INDEX_BUFFER)
          {
-            auto& device_data = *device->get_private_data<DeviceData>();
-            auto& game_device_data = GetGameDeviceData(device_data);
-
-            game_device_data.modifiable_inedx_buffer = (ID3D11Buffer*)resource.handle;
+            game_device_data.modifiable_inedx_buffer = buffer;
          }
       }
    }
    
-   static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+   bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
    {
-      ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return false;
+      CommandListData* cmd_list_data = GetCommandListData(context);
+      if (!cmd_list_data)
+         return false;
+      DeviceData& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
-      
+
       if (device_data.sr_type == SR::Type::None)
-         return;
+         return false;
 
       if (game_device_data.frame_phase == FramePhase::GBUFFER || game_device_data.frame_phase == FramePhase::FORWARD)
       {
@@ -2466,88 +2466,74 @@ public:
             }
          }
       }
-   }
-   
-   static bool OnCreatePipeline(reshade::api::device* device, reshade::api::pipeline_layout layout, uint32_t subobject_count, const reshade::api::pipeline_subobject* subobjects)
-   {
-      auto& device_data = *device->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
-      for (uint32_t i = 0; i < subobject_count; ++i)
-      {
-         const auto& subobject = subobjects[i];
-         for (uint32_t j = 0; j < subobject.count; ++j)
-         {
-            
-            if (subobject.type == reshade::api::pipeline_subobject_type::vertex_shader)
-            {
-               const auto* original_shader_desc = static_cast<reshade::api::shader_desc*>(subobjects[i].data);
-               std::vector<std::byte> shader_code((const std::byte*)original_shader_desc->code, ((const std::byte*)original_shader_desc->code) + original_shader_desc->code_size);
-               uint32_t hash = Shader::BinToHash((const uint8_t*)original_shader_desc->code, original_shader_desc->code_size);
-               
-               if (!shader_hashes_vertex.Contains(hash, reshade::api::shader_stage::vertex))
-                  return false;
-               
-               PatchVertexShader(shader_code);
-
-               ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-               com_ptr<ID3D11VertexShader> patched_shader;
-               native_device->CreateVertexShader(shader_code.data(), shader_code.size(), nullptr, &patched_shader);
-
-               game_device_data.modified_vertex_shaders[hash] = patched_shader;
-            }
-            else if (subobject.type == reshade::api::pipeline_subobject_type::pixel_shader)
-            {
-               const auto* original_shader_desc = static_cast<reshade::api::shader_desc*>(subobjects[i].data);
-               std::vector<std::byte> shader_code((const std::byte*)original_shader_desc->code, ((const std::byte*)original_shader_desc->code) + original_shader_desc->code_size);
-
-               uint32_t hash = Shader::BinToHash((const uint8_t*)original_shader_desc->code, original_shader_desc->code_size);
-               /*
-               if (!shader_hashes_pixel.Contains(hash, reshade::api::shader_stage::pixel))
-                  return false;
-               */
-               PatchPixelShader(shader_code);
-
-               ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-               com_ptr<ID3D11PixelShader> patched_shader;
-               native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, &patched_shader);
-
-               game_device_data.modified_pixel_shaders[hash] = patched_shader;
-            }
-            else if (subobject.type == reshade::api::pipeline_subobject_type::blend_state)
-            {
-               auto* blend_desc = static_cast<reshade::api::blend_desc*>(subobjects[i].data);
-               blend_desc->blend_enable[5] = true;
-               blend_desc->render_target_write_mask[5] = 15;
-               return true;
-            }
-         }
-      }
       return false;
    }
    
-   static void OnDestroyResource(reshade::api::device *device, reshade::api::resource resource)
+   void PreCreateVertexShader(ID3D11Device* native_device, const void*& bytecode, SIZE_T& length) override
    {
-      auto& device_data = *device->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
-      
-      if (device_data.sr_type == SR::Type::None)
+      DeviceData* device_data = GetDeviceData(native_device);
+      if (!device_data || !bytecode)
          return;
-#if 0      
-      if (device_data.shutting_down.load(std::memory_order_acquire))
+      auto& game_device_data = GetGameDeviceData(*device_data);
+      std::vector<std::byte> shader_code((const std::byte*)bytecode, ((const std::byte*)bytecode) + length);
+      uint32_t hash = Shader::BinToHash((const uint8_t*)bytecode, length);
+
+      if (!shader_hashes_vertex.Contains(hash, ShaderStages::Vertex))
          return;
-#endif      
-      ID3D11Buffer* buffer = nullptr;
-      ID3D11Resource* native_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
 
-      HRESULT hr = native_resource->QueryInterface(&buffer);
+      PatchVertexShader(shader_code);
 
-      if (SUCCEEDED(hr))
+      com_ptr<ID3D11VertexShader> patched_shader;
+      native_device->CreateVertexShader(shader_code.data(), shader_code.size(), nullptr, &patched_shader);
+
+      game_device_data.modified_vertex_shaders[hash] = patched_shader;
+   }
+
+   void PreCreatePixelShader(ID3D11Device* native_device, const void*& bytecode, SIZE_T& length) override
+   {
+      DeviceData* device_data = GetDeviceData(native_device);
+      if (!device_data || !bytecode)
+         return;
+      auto& game_device_data = GetGameDeviceData(*device_data);
+      std::vector<std::byte> shader_code((const std::byte*)bytecode, ((const std::byte*)bytecode) + length);
+
+      uint32_t hash = Shader::BinToHash((const uint8_t*)bytecode, length);
+      /*
+      if (!shader_hashes_pixel.Contains(hash, ShaderStages::Pixel))
+         return;
+      */
+      PatchPixelShader(shader_code);
+
+      com_ptr<ID3D11PixelShader> patched_shader;
+      native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, &patched_shader);
+
+      game_device_data.modified_pixel_shaders[hash] = patched_shader;
+   }
+
+   // Render target 5 gets blending enabled and fully written by every blend state
+   void PreCreateBlendState(ID3D11Device* native_device, D3D11_BLEND_DESC1& desc) override
+   {
+      // Like ReShade's conversion: without independent blending, every render target uses the first one's
+      if (!desc.IndependentBlendEnable)
       {
-         if (game_device_data.g_pending_cb_data.find(buffer) != game_device_data.g_pending_cb_data.end())
-         {
-            game_device_data.g_pending_cb_data.erase(buffer);
-         }
-         buffer->Release();
+         for (UINT i = 1; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++)
+            desc.RenderTarget[i] = desc.RenderTarget[0];
+         desc.IndependentBlendEnable = TRUE;
+      }
+      desc.RenderTarget[5].BlendEnable = TRUE;
+      desc.RenderTarget[5].RenderTargetWriteMask = 15;
+   }
+   
+   void OnResourceDestroyed(const void* resource) override
+   {
+      // The object can't be used anymore (not even QueryInterface): it's only looked up by address. The game has one device.
+      const std::shared_lock lock_devices(s_mutex_device);
+      for (DeviceData* device_data : global_devices_data)
+      {
+         if (!device_data->game || device_data->sr_type == SR::Type::None)
+            continue;
+         auto& game_device_data = GetGameDeviceData(*device_data);
+         game_device_data.g_pending_cb_data.erase(reinterpret_cast<ID3D11Buffer*>(const_cast<void*>(resource)));
       }
    }
    
@@ -2586,7 +2572,7 @@ public:
       native_device->GetImmediateContext(context.put());
       game_device_data.g_cbuffer.Upload(context.get(), game_device_data.g_shadow_memory.Data(), game_device_data.g_shadow_memory.size);
       
-      //(reshade::log::level::info, std::format("Cached cbuffer count: {}", game_device_data.g_pending_cb_data.size()).c_str());
+      //(Luma::Utils::Log::Level::Info, std::format("Cached cbuffer count: {}", game_device_data.g_pending_cb_data.size()).c_str());
       
       if (!custom_texture_mip_lod_bias_offset)
       {
@@ -3703,7 +3689,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       forced_shader_names.emplace(Shader::Hash_StrToNum("42696AF8"), "PostEffectWaveOutside_VS::p0.PostEffectFunctorDefault");
 #endif
 
-      game = new BlueReflectionSecondLight();
+      SetGame<BlueReflectionSecondLight>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
@@ -3714,14 +3700,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       g_search_mode_hook.reset();
       g_battle_mode_hook.reset();
       g_postfx_hatching_hook.reset();
-      reshade::unregister_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(BlueReflectionSecondLight::OnBindRenderTargetsAndDepthStencil);
-      reshade::unregister_event<reshade::addon_event::clear_render_target_view>(BlueReflectionSecondLight::OnClearRenderTargetView);
-      reshade::unregister_event<reshade::addon_event::copy_texture_region>(BlueReflectionSecondLight::OnCopyTextureRegion);
-      reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(BlueReflectionSecondLight::OnUnmapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(BlueReflectionSecondLight::OnMapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::create_pipeline>(BlueReflectionSecondLight::OnCreatePipeline);
-      reshade::unregister_event<reshade::addon_event::execute_secondary_command_list>(BlueReflectionSecondLight::OnExecuteSecondaryCommandList);
-      reshade::unregister_event<reshade::addon_event::destroy_resource >(BlueReflectionSecondLight::OnDestroyResource);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

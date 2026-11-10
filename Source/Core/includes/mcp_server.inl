@@ -415,8 +415,8 @@ namespace Mcp
          if (entry.type == TraceDrawCallData::TraceDrawCallType::Custom)
          {
             w->Field("name", entry.custom_name);
-            if (entry.custom_stage != reshade::api::shader_stage(0))
-               w->Field("stage", entry.custom_stage == reshade::api::shader_stage::compute ? "CS" : "PS");
+            if (entry.custom_stage != ShaderStages::None)
+               w->Field("stage", entry.custom_stage == ShaderStages::Compute ? "CS" : "PS");
          }
          if (entry.type == TraceDrawCallData::TraceDrawCallType::Shader)
          {
@@ -574,7 +574,7 @@ namespace Mcp
 
          w->Field("depth_state", EnumName(TraceDrawCallData::depth_state_names, size_t(entry.depth_state)));
          w->Field("stencil_state", EnumName(TraceDrawCallData::depth_state_names, size_t(entry.stencil_state)));
-         if ((pipeline && pipeline->HasPixelShader()) || entry.custom_stage == reshade::api::shader_stage::pixel)
+         if ((pipeline && pipeline->HasPixelShader()) || entry.custom_stage == ShaderStages::Pixel)
             WriteRenderState(w, entry);
          if (entry.type == TraceDrawCallData::TraceDrawCallType::CopyResource)
          {
@@ -600,7 +600,7 @@ namespace Mcp
 
          // Entries without a shader (copies, clears, CPU writes, markers) record whole resources instead of views: the target in
          // "rt_*[0]" (copy destination) and the source in "sr_*[0]" (copy source, bound buffer)
-         if (entry.type != TraceDrawCallData::TraceDrawCallType::Shader && entry.custom_stage == reshade::api::shader_stage(0))
+         if (entry.type != TraceDrawCallData::TraceDrawCallType::Shader && entry.custom_stage == ShaderStages::None)
          {
             const auto write_whole_resource = [&](const char* key, DXGI_FORMAT format, const uint4& size, const std::string& type, const std::string& hash)
             {
@@ -785,7 +785,7 @@ namespace Mcp
             {
                job->custom_pass = target->custom_pass;
                job->shader_hash = target->shader_hash;
-               job->stage = target->stage == reshade::api::shader_stage::compute ? "CS" : "PS";
+               job->stage = target->stage == ShaderStages::Compute ? "CS" : "PS";
                return true;
             }
             pipeline = FindPipeline(device_data, target->pipeline);
@@ -1194,7 +1194,8 @@ namespace Mcp
          auto& w = job->result;
          w.Field("game", Globals::GAME_NAME).Field("version", Globals::VERSION);
          w.Field("pid", GetCurrentProcessId()).Field("bits", sizeof(void*) * 8);
-         w.Path("exe_path", System::GetModulePath()); // ReShade writes its log next to it by default
+         w.Path("exe_path", System::GetModulePath());
+         w.Path("log_path", Luma::Utils::Modules::SelfDirectory() / "Luma.log");
          w.Field("frame_index", cb_luma_global_settings.FrameIndex).Field("presenting", true);
          w.Key("output_resolution").BeginArray().Value(device_data.output_resolution.x).Value(device_data.output_resolution.y).EndArray();
          w.Key("render_resolution").BeginArray().Value(device_data.render_resolution.x).Value(device_data.render_resolution.y).EndArray();
@@ -1214,10 +1215,10 @@ namespace Mcp
          {
             const std::shared_lock lock_device(device_data.mutex);
             w.Key("swapchains").BeginArray();
-            for (reshade::api::swapchain* swapchain : device_data.swapchains)
+            for (IDXGISwapChain* swapchain : device_data.swapchains)
             {
                DXGI_SWAP_CHAIN_DESC desc = {};
-               ((IDXGISwapChain*)(swapchain->get_native()))->GetDesc(&desc);
+               swapchain->GetDesc(&desc);
                w.BeginObject().Format("format", desc.BufferDesc.Format).Field("width", desc.BufferDesc.Width).Field("height", desc.BufferDesc.Height).Field("buffers", desc.BufferCount).EndObject();
             }
             w.EndArray();
@@ -1255,7 +1256,7 @@ namespace Mcp
                return false;
          }
          job->frames++;
-         // Locked after reading the list, "OnReShadePresent" locks the global trace mutex first
+         // Locked after reading the list, "OnPresentTick" locks the global trace mutex first
          const auto capture_again = [&job]
          {
             const std::unique_lock lock_trace(Trace::s_mutex);
@@ -1411,7 +1412,7 @@ namespace Mcp
          return true;
       }
 
-      bool RunReadResource(Job* job, DeviceData& device_data, CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, reshade::api::swapchain* swapchain)
+      bool RunReadResource(Job* job, DeviceData& device_data, CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, IDXGISwapChain* swapchain)
       {
          const std::string* view = job->Arg("view");
          if (job->phase == 0)
@@ -1420,7 +1421,7 @@ namespace Mcp
             if (view && (*view == "swapchain" || *view == "ui"))
             {
                const bool back_buffer = *view == "swapchain";
-               ID3D11Resource* resource = back_buffer ? reinterpret_cast<ID3D11Resource*>(swapchain->get_current_back_buffer().handle) : device_data.ui_texture.get();
+               ID3D11Resource* resource = back_buffer ? reinterpret_cast<ID3D11Resource*>(GetSwapchainBackBuffer(swapchain)) : device_data.ui_texture.get();
                if (!resource)
                {
                   job->error = back_buffer ? "The swapchain has no current back buffer" : "There's no separate UI texture (UI separation is off, or the UI hasn't drawn yet)";
@@ -1888,7 +1889,7 @@ namespace Mcp
       {
          if (job->phase == 0)
          {
-            // Like the dev UI's "Reload Shaders" / "Unload Shaders" buttons, processed in "OnReShadePresent"
+            // Like the dev UI's "Reload Shaders" / "Unload Shaders" buttons, processed in "OnPresentTick"
             ForceToggleShaders(device_data, !job->BoolArg("unload", false));
             job->phase = 1;
             return false;
@@ -1901,14 +1902,14 @@ namespace Mcp
          return true;
       }
 
-      const char* SubobjectStageName(reshade::api::pipeline_subobject_type type)
+      const char* SubobjectStageName(D3D11_SHADER_VERSION_TYPE type)
       {
          switch (type)
          {
-         case reshade::api::pipeline_subobject_type::vertex_shader: return "VS";
-         case reshade::api::pipeline_subobject_type::pixel_shader: return "PS";
-         case reshade::api::pipeline_subobject_type::compute_shader: return "CS";
-         case reshade::api::pipeline_subobject_type::geometry_shader: return "GS";
+         case D3D11_SHVER_VERTEX_SHADER: return "VS";
+         case D3D11_SHVER_PIXEL_SHADER: return "PS";
+         case D3D11_SHVER_COMPUTE_SHADER: return "CS";
+         case D3D11_SHVER_GEOMETRY_SHADER: return "GS";
          default: return "any";
          }
       }
@@ -1953,7 +1954,7 @@ namespace Mcp
       struct RecipeInfo
       {
          std::string identity;
-         reshade::api::pipeline_subobject_type stage;
+         D3D11_SHADER_VERSION_TYPE stage = SHADER_VERSION_TYPE_UNKNOWN;
          std::shared_ptr<const dxp::sm5::Recipe> recipe;
          std::optional<dxp::PatchOptions> game_options;
       };
@@ -2072,7 +2073,7 @@ namespace Mcp
                {
                   std::vector<Patch::RecipeBinding> bindings;
                   bool has_recipe = false;
-                  w.Field("recipe_bindings_resolved", Patch::ResolveRecipeBindings(device_data, data, pipeline->subobjects_cache[0].type, bindings, has_recipe));
+                  w.Field("recipe_bindings_resolved", Patch::ResolveRecipeBindings(device_data, data, (pipeline->subobjects_cache[0].type), bindings, has_recipe));
                }
 #endif
                w.EndObject();
@@ -2191,7 +2192,7 @@ namespace Mcp
 #if LUMA_PATCH_PROVIDERS != 0
          if (job->phase == 0)
          {
-            // Like the dev UI's "Reload Patches" / "Unload Patches" buttons, processed in "OnReShadePresent"
+            // Like the dev UI's "Reload Patches" / "Unload Patches" buttons, processed in "OnPresentTick"
             (job->BoolArg("unload", false) ? needs_unload_patches : needs_load_patches) = true;
             job->phase = 1;
             return false;
@@ -2328,7 +2329,7 @@ namespace Mcp
          return true;
       }
 
-      bool RunJob(Job* job, DeviceData& device_data, CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, reshade::api::swapchain* swapchain)
+      bool RunJob(Job* job, DeviceData& device_data, CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, IDXGISwapChain* swapchain)
       {
          const std::string& tool = job->tool;
          if (tool == "status")
@@ -2702,7 +2703,7 @@ namespace Mcp
       server_thread = std::thread(ServerThread);
    }
 
-   void OnPresent(DeviceData& device_data, CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, reshade::api::swapchain* swapchain)
+   void OnPresent(DeviceData& device_data, CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, IDXGISwapChain* swapchain)
    {
       last_present_ms = GetTickCount64();
       last_frame_index = cb_luma_global_settings.FrameIndex;

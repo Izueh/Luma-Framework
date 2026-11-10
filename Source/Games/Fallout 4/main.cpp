@@ -108,8 +108,8 @@ public:
 
     void LoadConfigs() override
     {
-        reshade::get_config_value(nullptr, NAME, "XeGTAOEnable", g_xegtao_enable);
-        reshade::get_config_value(nullptr, NAME, "LumaBloomEnable", g_luma_bloom_enable);
+        Config::Get(NAME, "XeGTAOEnable", g_xegtao_enable);
+        Config::Get(NAME, "LumaBloomEnable", g_luma_bloom_enable);
     }
 
     void DrawImGuiSettings(DeviceData& device_data) override
@@ -118,7 +118,7 @@ public:
 
         if (ImGui::Checkbox("Enable XeGTAO", &g_xegtao_enable))
         {
-            reshade::set_config_value(nullptr, NAME, "XeGTAOEnable", g_xegtao_enable);
+            Config::Set(NAME, "XeGTAOEnable", g_xegtao_enable);
         }
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         {
@@ -126,7 +126,7 @@ public:
         }
         if (ImGui::Checkbox("Enable Luma Bloom", &g_luma_bloom_enable))
         {
-           reshade::set_config_value(nullptr, NAME, "LumaBloomEnable", g_luma_bloom_enable);
+           Config::Set(NAME, "LumaBloomEnable", g_luma_bloom_enable);
         }
     }
 
@@ -134,8 +134,6 @@ public:
     {
         if (!failed)
         {
-            reshade::register_event<reshade::addon_event::map_buffer_region>(GameFallout4::OnMapBufferRegion);
-            reshade::register_event<reshade::addon_event::unmap_buffer_region>(GameFallout4::OnUnmapBufferRegion);
         }
     }
 
@@ -150,18 +148,18 @@ public:
         shader_defines_data.append_range(game_shader_defines_data);
 
         // XeGTAO
-        native_shaders_definitions.emplace("F4 XeGTAO Prefilter Depths CS"_h, ShaderDefinition{ "Luma_F4_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
-        native_shaders_definitions.emplace("F4 XeGTAO Main CS"_h, ShaderDefinition{ "Luma_F4_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
-        native_shaders_definitions.emplace("F4 XeGTAO Denoise Pass 1 CS"_h, ShaderDefinition{ "Luma_F4_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", {{ "XE_GTAO_FINAL_APPLY", "0" }}});
-        native_shaders_definitions.emplace("F4 XeGTAO Denoise Pass 2 CS"_h, ShaderDefinition{ "Luma_F4_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", {{ "XE_GTAO_FINAL_APPLY", "1" }}});
+        native_shaders_definitions.emplace("F4 XeGTAO Prefilter Depths CS"_h, ShaderDefinition{ "Luma_F4_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "prefilter_depths16x16_cs" });
+        native_shaders_definitions.emplace("F4 XeGTAO Main CS"_h, ShaderDefinition{ "Luma_F4_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "main_pass_cs" });
+        native_shaders_definitions.emplace("F4 XeGTAO Denoise Pass 1 CS"_h, ShaderDefinition{ "Luma_F4_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", {{ "XE_GTAO_FINAL_APPLY", "0" }}});
+        native_shaders_definitions.emplace("F4 XeGTAO Denoise Pass 2 CS"_h, ShaderDefinition{ "Luma_F4_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", {{ "XE_GTAO_FINAL_APPLY", "1" }}});
 
         // Luma bloom.
-        native_shaders_definitions.emplace("F4 Bloom Sanitize Scene PS"_h, ShaderDefinition{ "Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "sanitize_scene_ps" });
-        native_shaders_definitions.emplace("F4 Bloom Prefilter PS"_h, ShaderDefinition{ "Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "prefilter_ps" });
-        native_shaders_definitions.emplace("F4 Bloom Downsample PS"_h, ShaderDefinition{ "Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "downsample_ps" });
-        native_shaders_definitions.emplace("F4 Bloom Upsample PS"_h, ShaderDefinition{ "Luma_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "upsample_ps" });
+        native_shaders_definitions.emplace("F4 Bloom Sanitize Scene PS"_h, ShaderDefinition{ "Luma_Bloom_impl", D3D11_SHVER_PIXEL_SHADER, nullptr, "sanitize_scene_ps" });
+        native_shaders_definitions.emplace("F4 Bloom Prefilter PS"_h, ShaderDefinition{ "Luma_Bloom_impl", D3D11_SHVER_PIXEL_SHADER, nullptr, "prefilter_ps" });
+        native_shaders_definitions.emplace("F4 Bloom Downsample PS"_h, ShaderDefinition{ "Luma_Bloom_impl", D3D11_SHVER_PIXEL_SHADER, nullptr, "downsample_ps" });
+        native_shaders_definitions.emplace("F4 Bloom Upsample PS"_h, ShaderDefinition{ "Luma_Bloom_impl", D3D11_SHVER_PIXEL_SHADER, nullptr, "upsample_ps" });
         
-        native_shaders_definitions.emplace("F4 Copy PS"_h, ShaderDefinition{ "Luma_F4_Copy_PS", reshade::api::pipeline_subobject_type::pixel_shader });
+        native_shaders_definitions.emplace("F4 Copy PS"_h, ShaderDefinition{ "Luma_F4_Copy_PS", D3D11_SHVER_PIXEL_SHADER });
 
         // Bloom.
         g_bloom_nmips = 4;
@@ -194,9 +192,9 @@ public:
         Game::OnDestroyDeviceData(device_data);
     }
 
-    void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+    void OnInitSwapchain(IDXGISwapChain* swapchain) override
     {
-        auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+        auto& device_data = *GetSwapchainData(swapchain)->device_data;
         auto& game_device_data = GetGameDeviceData(device_data);
         auto& managed_resources = game_device_data.managed_resources;
 
@@ -210,29 +208,46 @@ public:
         ResetCOMArray(g_srv_bloom_mips_x);
     }
 
-    static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+    // Native hooks (buffers only)
+public:
+    void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
     {
-        auto& device_data = *device->get_private_data<DeviceData>();
+       ID3D11Buffer* buffer = AsBuffer(resource);
+       if (!buffer)
+          return;
+       if (CommandListData* cmd_list_data = GetCommandListData(context))
+          OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+    }
+
+    bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+    {
+       ID3D11Buffer* buffer = AsBuffer(resource);
+       if (!buffer)
+          return false;
+       if (CommandListData* cmd_list_data = GetCommandListData(context))
+          OnUnmapBufferRegion(*cmd_list_data->device_data, buffer);
+       return false;
+    }
+
+    static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
+    {
         auto& game_device_data = GetGameDeviceData(device_data);
 
-        auto buffer = (ID3D11Buffer*)resource.handle;
         if (buffer == game_device_data.cb_taa) {
             g_cb_taa_mapped_data = *data;
         }
     }
 
-    static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+    static void OnUnmapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer)
     {
-        auto& device_data = *device->get_private_data<DeviceData>();
         auto& game_device_data = GetGameDeviceData(device_data);
 
-        auto buffer = (ID3D11Buffer*)resource.handle;
         if (buffer == game_device_data.cb_taa) {
             std::memcpy(&g_cb_taa_data, g_cb_taa_mapped_data, sizeof(g_cb_taa_data));
         }
     }
 
-    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
     {
         auto& game_device_data = GetGameDeviceData(device_data);
         auto& managed_resources = game_device_data.managed_resources;
@@ -915,19 +930,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         texture_format_upgrades_type   = TextureFormatUpgradesType::AllowedEnabled;
         // ### Check which of these are needed and remove the rest ###
         texture_upgrade_formats = {
-            //reshade::api::format::r8g8b8a8_unorm,
-            //reshade::api::format::r8g8b8a8_unorm_srgb,
-            //reshade::api::format::r8g8b8a8_typeless,
-            //reshade::api::format::r8g8b8x8_unorm,
-            //reshade::api::format::r8g8b8x8_unorm_srgb,
-            //reshade::api::format::b8g8r8a8_unorm,
-            //reshade::api::format::b8g8r8a8_unorm_srgb,
-            //reshade::api::format::b8g8r8a8_typeless,
-            //reshade::api::format::b8g8r8x8_unorm,
-            //reshade::api::format::b8g8r8x8_unorm_srgb,
-            //reshade::api::format::b8g8r8x8_typeless,
+            //DXGI_FORMAT_R8G8B8A8_UNORM,
+            //DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            //DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            //DXGI_FORMAT_B8G8R8A8_UNORM,
+            //DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            //DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            //DXGI_FORMAT_B8G8R8X8_UNORM,
+            //DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            //DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
         };
         // ### Check these if textures are not upgraded ###
         texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
@@ -954,7 +967,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         forced_shader_names.emplace(0x61CC29E6, "TAA");
         #endif
 
-        game = new GameFallout4();
+        SetGame<GameFallout4>();
     }
 
     CoreMain(hModule, ul_reason_for_call, lpReserved);

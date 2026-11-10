@@ -36,8 +36,7 @@ namespace D3D12Interop
       Microsoft::WRL::ComPtr<ID3D11Device> device_11;
       Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
       DXGI_ADAPTER_DESC adapter_desc = {};
-      Microsoft::WRL::ComPtr<ID3D12Device> device_12; // Native (not wrapped by ReShade)
-      Microsoft::WRL::ComPtr<ID3D12Device> device_12_wrapped; // Kept alive just in case, if ReShade wrapped our device
+      Microsoft::WRL::ComPtr<ID3D12Device> device_12;
       Microsoft::WRL::ComPtr<ID3D12CommandQueue> command_queue;
       Microsoft::WRL::ComPtr<ID3D12CommandAllocator> command_allocators[command_allocators_count];
       UINT64 command_allocators_fence_values[command_allocators_count] = {};

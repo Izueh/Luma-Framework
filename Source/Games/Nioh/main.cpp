@@ -1,7 +1,6 @@
 #define GAME_NIOH 1
 
 // The game seemengly tries to create a DX9 device on boot
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 
 // The game seems to occasionally cache what last shader was set and restore it later, which can cause unexpected behaviours with Luma unless we protect against this with it
 #define ENABLE_GAME_PIPELINE_STATE_READBACK 1
@@ -62,10 +61,10 @@ public:
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       // Fix videos playback being stretched in UW. Also inform the shader that a video is playing, so we can do an HDR extrapolation effect in it.
-      if ((stages & reshade::api::shader_stage::pixel) != 0 && first_frame_draw_call && test_index != 14)
+      if ((stages & ShaderStages::Pixel) != 0 && first_frame_draw_call && test_index != 14)
       {
          first_frame_draw_call = false;
 
@@ -354,18 +353,16 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "UpgradeMaterialsSamplers", upgrade_materials_samplers);
+      Config::Get(NAME, "UpgradeMaterialsSamplers", upgrade_materials_samplers);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
       if (ImGui::Checkbox("Force Anisotropic Filtering", &upgrade_materials_samplers))
-         reshade::set_config_value(runtime, NAME, "UpgradeMaterialsSamplers", upgrade_materials_samplers);
+         Config::Set(NAME, "UpgradeMaterialsSamplers", upgrade_materials_samplers);
    }
 
    void PrintImGuiAbout() override
@@ -440,20 +437,18 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // We actually don't need to upgrade most texture formats as the game did post processing in R11G11B10_FLOAT (bloom etc) but mostly in R16G16B16A16_FLOAT, up until the final swapchain copy (after UI), so it's all HDR friendly
       texture_upgrade_formats = {
 #if 0
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 #endif
 
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px;
 #if 0 // Seemengly not needed
@@ -474,7 +469,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       shader_hashes_BeginMaterialsDrawing.compute_shaders = { 0xECE033E1, 0x37B447FE };
       shader_hashes_EndMaterialsDrawing.pixel_shaders = { 0xC155D568, 0x8D34F907 };
 
-      game = new Nioh();
+      SetGame<Nioh>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

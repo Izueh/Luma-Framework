@@ -1,4 +1,5 @@
 #include "XeSS.h"
+#include "../utils/log.hpp"
 
 #if ENABLE_XESS
 
@@ -8,7 +9,6 @@
 #include "../includes/debug.h"
 #include "../utils/system.h"
 
-#include <include/reshade.hpp>
 
 #include <dxgi.h>
 #include <wrl/client.h>
@@ -29,9 +29,9 @@ namespace Intel
       constexpr const wchar_t* xess_dx11_dll_name = L"libxess_dx11.dll";
       constexpr UINT vendor_id_intel = 0x8086;
 
-      void Log(reshade::log::level level, const std::string& message)
+      void Log(Luma::Utils::Log::Level level, const std::string& message)
       {
-         reshade::log::message(level, ("XeSS: " + message).c_str());
+         Luma::Utils::Log::Write(level, ("XeSS: " + message).c_str());
       }
 
       struct XeSSInstanceData : public SR::InstanceData
@@ -70,7 +70,7 @@ namespace Intel
       {
          if (data.logged_errors++ < 10) // Don't spam the log
          {
-            Log(reshade::log::level::error, message);
+            Log(Luma::Utils::Log::Level::Error, message);
          }
       }
 
@@ -91,7 +91,7 @@ namespace Intel
          const auto is_optimal_driver = reinterpret_cast<decltype(&xessIsOptimalDriver)>(GetProcAddress(data.module, "xessIsOptimalDriver"));
          if (!data.destroy_context || !data.get_optimal_input_resolution || !data.set_velocity_scale || !set_logging_callback || !get_version || !is_optimal_driver)
          {
-            Log(reshade::log::level::error, "The XeSS dll is missing exports");
+            Log(Luma::Utils::Log::Level::Error, "The XeSS dll is missing exports");
             return false;
          }
 
@@ -108,7 +108,7 @@ namespace Intel
             data.execute_11 = reinterpret_cast<decltype(&xessD3D11Execute)>(GetProcAddress(data.module, "xessD3D11Execute"));
             if (!create_context || !data.init_11 || !data.execute_11)
             {
-               Log(reshade::log::level::error, "The XeSS DX11 dll is missing exports");
+               Log(Luma::Utils::Log::Level::Error, "The XeSS DX11 dll is missing exports");
                return false;
             }
             result = create_context(device, &data.context);
@@ -120,7 +120,7 @@ namespace Intel
             data.execute_12 = reinterpret_cast<decltype(&xessD3D12Execute)>(GetProcAddress(data.module, "xessD3D12Execute"));
             if (!create_context || !data.init_12 || !data.execute_12)
             {
-               Log(reshade::log::level::error, "The XeSS DX12 dll is missing exports");
+               Log(Luma::Utils::Log::Level::Error, "The XeSS DX12 dll is missing exports");
                return false;
             }
             if (!D3D12Interop::Init(data.interop, device, adapter))
@@ -129,20 +129,20 @@ namespace Intel
          }
          if (Failed(result))
          {
-            Log(reshade::log::level::info, std::format("XeSS {}.{}.{} ({}) is not supported on this GPU, error = {}", version.major, version.minor, version.patch, path_name, int(result)));
+            Log(Luma::Utils::Log::Level::Info, std::format("XeSS {}.{}.{} ({}) is not supported on this GPU, error = {}", version.major, version.minor, version.patch, path_name, int(result)));
             data.context = nullptr;
             return false;
          }
          if (is_optimal_driver(data.context) == XESS_RESULT_WARNING_OLD_DRIVER)
          {
-            Log(reshade::log::level::warning, "The GPU driver is older than XeSS recommends");
+            Log(Luma::Utils::Log::Level::Warning, "The GPU driver is older than XeSS recommends");
          }
 #if DEVELOPMENT || TEST
          set_logging_callback(data.context, XESS_LOGGING_LEVEL_WARNING, [](const char* message, xess_logging_level_t level)
-            { Log((level == XESS_LOGGING_LEVEL_ERROR ? reshade::log::level::error : reshade::log::level::warning), (message ? message : "")); });
+            { Log((level == XESS_LOGGING_LEVEL_ERROR ? Luma::Utils::Log::Level::Error : Luma::Utils::Log::Level::Warning), (message ? message : "")); });
 #endif
 
-         Log(reshade::log::level::info, std::format("Initialized XeSS {}.{}.{} ({})", version.major, version.minor, version.patch, path_name));
+         Log(Luma::Utils::Log::Level::Info, std::format("Initialized XeSS {}.{}.{} ({})", version.major, version.minor, version.patch, path_name));
          return true;
       }
    } // namespace
@@ -202,7 +202,7 @@ namespace Intel
       HMODULE module = LoadLibraryExW((luma_folder / xess_dll_name).c_str(), nullptr, LOAD_WITH_ALTERED_SEARCH_PATH);
       if (!module)
       {
-         Log(reshade::log::level::info, "libxess.dll wasn't found next to Luma, XeSS won't be available");
+         Log(Luma::Utils::Log::Level::Info, "libxess.dll wasn't found next to Luma, XeSS won't be available");
          return false;
       }
       return init_instance(module, false);
@@ -217,14 +217,14 @@ namespace Intel
       // If the GPU is stuck (but the device wasn't removed), leak everything instead of hanging or risking a crash
       if (!D3D12Interop::WaitForIdle(custom_data->interop))
       {
-         Log(reshade::log::level::warning, "Leaking the DX12 interop resources, as the GPU might still be using them");
+         Log(Luma::Utils::Log::Level::Warning, "Leaking the DX12 interop resources, as the GPU might still be using them");
          custom_data = nullptr;
          return;
       }
 
       if (custom_data->context && Failed(custom_data->destroy_context(custom_data->context)))
       {
-         Log(reshade::log::level::warning, "xessDestroyContext failed");
+         Log(Luma::Utils::Log::Level::Warning, "xessDestroyContext failed");
       }
       D3D12Interop::Deinit(custom_data->interop);
       HMODULE module = custom_data->module;
@@ -353,7 +353,7 @@ namespace Intel
       // Both in pixels, from the current position to the previous one, as FSR
       custom_data->set_velocity_scale(custom_data->context, settings_data.mvs_x_scale, settings_data.mvs_y_scale);
 
-      Log(reshade::log::level::info, std::format("Initialized the context (render {}x{}, output {}x{}, quality preset {})", settings_data.render_width, settings_data.render_height, settings_data.output_width, settings_data.output_height, int(quality)));
+      Log(Luma::Utils::Log::Level::Info, std::format("Initialized the context (render {}x{}, output {}x{}, quality preset {})", settings_data.render_width, settings_data.render_height, settings_data.output_width, settings_data.output_height, int(quality)));
 
       custom_data->context_initialized = true;
       custom_data->settings_data = settings_data;

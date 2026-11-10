@@ -15,47 +15,39 @@ namespace FC5
       PerfCounter detection_cpu;
       std::filesystem::file_time_type request_time{};
 
-      static void OnPipeline(reshade::api::device* device, reshade::api::pipeline_layout,
-         uint32_t count, const reshade::api::pipeline_subobject* subobjects, reshade::api::pipeline)
+      // The vertex and pixel shaders the game creates
+      static void OnShader(const void* code, size_t code_size)
       {
-         if (device->get_api() != reshade::api::device_api::d3d11 || !Shader::d3d_reflect) return;
-         for (uint32_t i = 0; i < count; ++i)
-         {
-         if (subobjects[i].type != reshade::api::pipeline_subobject_type::vertex_shader &&
-            subobjects[i].type != reshade::api::pipeline_subobject_type::pixel_shader) continue;
-         if (subobjects[i].count != 1 || !subobjects[i].data) continue;
-         const auto& shader = *static_cast<const reshade::api::shader_desc*>(subobjects[i].data);
-         if (!shader.code || !shader.code_size) continue;
-         const auto hash = Shader::BinToHash(static_cast<const uint8_t*>(shader.code), shader.code_size);
-         { std::lock_guard lock(bindings_mutex); if (bindings.contains(hash)) continue; }
+         if (!Shader::d3d_reflect || !code || !code_size) return;
+         const auto hash = Shader::BinToHash(static_cast<const uint8_t*>(code), code_size);
+         { std::lock_guard lock(bindings_mutex); if (bindings.contains(hash)) return; }
          Binding result;
-            com_ptr<ID3D11ShaderReflection> reflection;
-            if (SUCCEEDED(Shader::d3d_reflect(shader.code, shader.code_size, IID_PPV_ARGS(&reflection))))
+         com_ptr<ID3D11ShaderReflection> reflection;
+         if (SUCCEEDED(Shader::d3d_reflect(code, code_size, IID_PPV_ARGS(&reflection))))
+         {
+            D3D11_SHADER_INPUT_BIND_DESC resource{};
+            const char* name = "CViewportShaderParameterProvider";
+            if (SUCCEEDED(reflection->GetResourceBindingDescByName(name, &resource)))
             {
-               D3D11_SHADER_INPUT_BIND_DESC resource{};
-               const char* name = "CViewportShaderParameterProvider";
-               if (SUCCEEDED(reflection->GetResourceBindingDescByName(name, &resource)))
+               auto* cb = reflection->GetConstantBufferByName(name);
+               D3D11_SHADER_VARIABLE_DESC projection{}, inverse{}, viewrot{}, previous{};
+               if (SUCCEEDED(cb->GetVariableByName("ProjectionMatrix")->GetDesc(&projection)) &&
+                  SUCCEEDED(cb->GetVariableByName("InvProjectionMatrix")->GetDesc(&inverse)) &&
+                  SUCCEEDED(cb->GetVariableByName("ViewRotProjectionMatrix")->GetDesc(&viewrot)) &&
+                  SUCCEEDED(cb->GetVariableByName("ViewRotProjectionMatrix_Previous")->GetDesc(&previous)) &&
+                  projection.StartOffset == 128 && inverse.StartOffset == 0 &&
+                  viewrot.StartOffset == 320 && previous.StartOffset == 384)
                {
-                  auto* cb = reflection->GetConstantBufferByName(name);
-                  D3D11_SHADER_VARIABLE_DESC projection{}, inverse{}, viewrot{}, previous{};
-                  if (SUCCEEDED(cb->GetVariableByName("ProjectionMatrix")->GetDesc(&projection)) &&
-                     SUCCEEDED(cb->GetVariableByName("InvProjectionMatrix")->GetDesc(&inverse)) &&
-                     SUCCEEDED(cb->GetVariableByName("ViewRotProjectionMatrix")->GetDesc(&viewrot)) &&
-                     SUCCEEDED(cb->GetVariableByName("ViewRotProjectionMatrix_Previous")->GetDesc(&previous)) &&
-                     projection.StartOffset == 128 && inverse.StartOffset == 0 &&
-                     viewrot.StartOffset == 320 && previous.StartOffset == 384)
-                  {
-                     result.used = ((projection.uFlags & D3D_SVF_USED) ? 1 : 0) |
-                        ((inverse.uFlags & D3D_SVF_USED) ? 2 : 0) |
-                        ((viewrot.uFlags & D3D_SVF_USED) ? 4 : 0) |
-                        ((previous.uFlags & D3D_SVF_USED) ? 8 : 0);
-                     if (result.used) result.slot = int(resource.BindPoint);
-                  }
+                  result.used = ((projection.uFlags & D3D_SVF_USED) ? 1 : 0) |
+                     ((inverse.uFlags & D3D_SVF_USED) ? 2 : 0) |
+                     ((viewrot.uFlags & D3D_SVF_USED) ? 4 : 0) |
+                     ((previous.uFlags & D3D_SVF_USED) ? 8 : 0);
+                  if (result.used) result.slot = int(resource.BindPoint);
                }
             }
+         }
          std::lock_guard lock(bindings_mutex);
          bindings.emplace(hash, result);
-         }
       }
       Binding Find(uint64_t hash, bool)
       {
@@ -137,14 +129,14 @@ namespace FC5
          char line[320];
          std::snprintf(line, sizeof(line), "[FC5 camera] frame=%llu hash=%08X stage=%s slot=%d buffer=%p used=0x%X",
             frame, uint32_t(hash), pixel ? "PS" : "VS", binding.slot, cb.get(), binding.used);
-         reshade::log::message(reshade::log::level::info, line);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
          for (UINT row = 0; row < 56; ++row)
          {
             if (row >= 28 && row < 31) continue;
             if (row >= 35 && row < 40) continue;
             std::snprintf(line, sizeof(line), "[FC5 camera] frame=%llu buffer=%p c%u=%.9g,%.9g,%.9g,%.9g",
                frame, cb.get(), row, data[row * 4], data[row * 4 + 1], data[row * 4 + 2], data[row * 4 + 3]);
-            reshade::log::message(reshade::log::level::info, line);
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
          }
       }
 

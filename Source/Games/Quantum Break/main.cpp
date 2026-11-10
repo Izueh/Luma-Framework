@@ -111,16 +111,16 @@ namespace
          }
       }
 
-      void Load(reshade::api::effect_runtime* runtime)
+      void Load()
       {
          for (const Descriptor& setting : k_descriptors)
          {
             float& value = cb_luma_global_settings.GameSettings.*(setting.member);
-            reshade::get_config_value(runtime, NAME, setting.label, value);
+            Config::Get(NAME, setting.label, value);
          }
       }
 
-      void DrawOne(const Descriptor& setting, reshade::api::effect_runtime* runtime)
+      void DrawOne(const Descriptor& setting)
       {
          float& value = cb_luma_global_settings.GameSettings.*(setting.member);
          const float default_value = default_luma_global_game_settings.*(setting.member);
@@ -139,21 +139,21 @@ namespace
          {
             changed = ImGui::SliderFloat(setting.label, &value, setting.min_value, setting.max_value, setting.format);
          }
-         if (changed) reshade::set_config_value(runtime, NAME, setting.label, value);
+         if (changed) Config::Set(NAME, setting.label, value);
 
          if (setting.tooltip != nullptr && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          {
             ImGui::SetTooltip("%s", setting.tooltip);
          }
 
-         DrawResetButton(value, default_value, setting.label, runtime);
+         DrawResetButton(value, default_value, setting.label);
       }
 
-      void DrawAll(reshade::api::effect_runtime* runtime)
+      void DrawAll()
       {
          for (const Descriptor& setting : k_descriptors)
          {
-            DrawOne(setting, runtime);
+            DrawOne(setting);
          }
       }
 
@@ -246,7 +246,7 @@ namespace
          texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
 
          texture_upgrade_formats = {
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
          };
          texture_format_upgrades_2d_size_filters =
             0 | static_cast<uint32_t>(TextureFormatUpgrades2DSizeFilters::SwapchainResolution) | static_cast<uint32_t>(TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio);
@@ -303,8 +303,7 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      Settings::Load(runtime);
+      Settings::Load();
    }
 
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -328,7 +327,7 @@ public:
       delete game_device_data;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       const bool depth_pass = QuantumBreakUpscaling::MatchesPass(original_shader_hashes, QuantumBreakUpscaling::depth_linearization_pass);
       const bool motion_pass = QuantumBreakUpscaling::MatchesPass(original_shader_hashes, QuantumBreakUpscaling::history_reprojection_pass);
@@ -487,12 +486,11 @@ public:
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
       // Keep user-facing grading/effects controls above the SR tuning/debug block.
-      Settings::DrawAll(runtime);
+      Settings::DrawAll();
       QuantumBreakUpscaling::DrawSettings(device_data);
 
 #if ENABLE_SR && (DEVELOPMENT || TEST)
@@ -568,7 +566,7 @@ BOOL APIENTRY DllMain(HMODULE h_module, DWORD ul_reason_for_call, LPVOID lp_rese
 
       RuntimeConfig::ConfigureSwapchainAndFormatUpgrades();
 
-      game = new QuantumBreakGame();
+      SetGame<QuantumBreakGame>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {

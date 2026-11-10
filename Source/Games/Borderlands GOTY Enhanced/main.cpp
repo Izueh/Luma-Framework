@@ -132,13 +132,11 @@ namespace BLMovieLeakFix
    }
 
    // Tag movie YUV decode buffers at creation (stack walk only for >= 2MB buffers).
-   void OnInitResource(reshade::api::device*, const reshade::api::resource_desc& desc, const reshade::api::subresource_data*, reshade::api::resource_usage, reshade::api::resource handle)
+   // Decode targets are BUFFERS (measured): only buffer creation calls this, which excludes the textures that share the
+   // streaming-fn span -> no mistag/UAF, and skips the stack walk for every texture.
+   void OnInitBuffer(const D3D11_BUFFER_DESC& desc, uint64_t handle)
    {
-      // Decode targets are BUFFERS (measured); gating on type excludes the textures that share the
-      // streaming-fn span -> no mistag/UAF, and skips the stack walk for every texture.
-      if (desc.type != reshade::api::resource_type::buffer)
-         return;
-      const uint64_t bytes = desc.buffer.size;
+      const uint64_t bytes = desc.ByteWidth;
       if (bytes < STACKWALK_MIN_BYTES)
          return;
       void* frames[MAX_FRAMES];
@@ -150,33 +148,33 @@ namespace BLMovieLeakFix
       if (g_cur_gen == 0 || (f - g_last_movie_frame) > NEW_GEN_GAP_FRAMES)
          g_cur_gen += 1;
       g_last_movie_frame = f;
-      g_movie[handle.handle] = MovieTex{bytes, g_cur_gen, f};
+      g_movie[handle] = MovieTex{bytes, g_cur_gen, f};
       g_have_movie = true;
    }
 
-   void OnDestroyResource(reshade::api::device*, reshade::api::resource handle)
+   void OnDestroyResource(uint64_t handle)
    {
       if (!g_have_movie)
          return;
       const std::lock_guard<std::mutex> lk(g_mtx);
-      g_movie.erase(handle.handle);
+      g_movie.erase(handle);
    }
 
-   void OnInitResourceView(reshade::api::device*, reshade::api::resource res, reshade::api::resource_usage, const reshade::api::resource_view_desc&, reshade::api::resource_view view)
+   void OnInitResourceView(uint64_t res, uint64_t view)
    {
-      if (!g_have_movie || !view.handle)
+      if (!g_have_movie || !view)
          return;
       const std::lock_guard<std::mutex> lk(g_mtx);
-      if (g_movie.find(res.handle) != g_movie.end())
-         g_view2res[view.handle] = res.handle;
+      if (g_movie.find(res) != g_movie.end())
+         g_view2res[view] = res;
    }
 
-   void OnDestroyResourceView(reshade::api::device*, reshade::api::resource_view view)
+   void OnDestroyResourceView(uint64_t view)
    {
       if (!g_have_movie)
          return;
       const std::lock_guard<std::mutex> lk(g_mtx);
-      g_view2res.erase(view.handle);
+      g_view2res.erase(view);
    }
 
    // Release the game's leaked COM refs on old orphaned generations. Re-entrancy-safe: our Release()
@@ -246,7 +244,7 @@ namespace BLMovieLeakFix
          snprintf(b, sizeof(b), "[BL-Leak] reclaimed %u movie textures, ~%.1f MB (cum %.1f MB)%s",
             ft, fb / 1048576.0, g_freed_bytes / 1048576.0,
             partial ? " [WARN: some buffers held extra game refs, not reclaimed]" : "");
-         reshade::log::message(reshade::log::level::info, b);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, b);
       }
 #else
       (void)partial;
@@ -349,6 +347,33 @@ class BorderlandsGoty final : public Game
    static BorderlandsGotyGameDeviceData& GetGameDeviceData(DeviceData& device_data)
    {
       return *static_cast<BorderlandsGotyGameDeviceData*>(device_data.game);
+   }
+
+public:
+   // Movie leak fix: track the movie buffers and their views (any thread)
+   void PostCreateBuffer(ID3D11Device* device, const D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Buffer* buffer) override
+   {
+      BLMovieLeakFix::OnInitBuffer(desc, reinterpret_cast<uint64_t>(buffer));
+   }
+   void OnResourceDestroyed(const void* resource) override
+   {
+      BLMovieLeakFix::OnDestroyResource(reinterpret_cast<uint64_t>(resource));
+   }
+   void PostCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_SHADER_RESOURCE_VIEW_DESC1* desc, ID3D11ShaderResourceView* view) override
+   {
+      BLMovieLeakFix::OnInitResourceView(reinterpret_cast<uint64_t>(resource), reinterpret_cast<uint64_t>(view));
+   }
+   void PostCreateRenderTargetView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_RENDER_TARGET_VIEW_DESC1* desc, ID3D11RenderTargetView* view) override
+   {
+      BLMovieLeakFix::OnInitResourceView(reinterpret_cast<uint64_t>(resource), reinterpret_cast<uint64_t>(view));
+   }
+   void PostCreateUnorderedAccessView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_UNORDERED_ACCESS_VIEW_DESC1* desc, ID3D11UnorderedAccessView* view) override
+   {
+      BLMovieLeakFix::OnInitResourceView(reinterpret_cast<uint64_t>(resource), reinterpret_cast<uint64_t>(view));
+   }
+   void OnViewDestroyed(const void* view) override
+   {
+      BLMovieLeakFix::OnDestroyResourceView(reinterpret_cast<uint64_t>(view));
    }
 
    // Named injected shaders live in unordered_maps the render thread otherwise only reads: look them up with
@@ -499,7 +524,7 @@ class BorderlandsGoty final : public Game
          g_smaa_pred_tolerance, fraction_above(0.5f), fraction_above(0.1f), fraction_above(0.25f), fraction_above(0.75f), fraction_above(0.9f),
          100.0 * (double)histogram[0] / (double)total, percentile(0.5), percentile(0.9), percentile(0.99), percentile(0.999),
          (unsigned long long)non_finite, capture.width, capture.height);
-      reshade::log::message(reshade::log::level::info, line);
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
    }
 #endif
 
@@ -540,22 +565,22 @@ public:
 
       // Linear-light decode of the SMAA input for its neighborhood blend.
       native_shaders_definitions.emplace(CompileTimeStringHash("BL SMAA Linearize CS"),
-         ShaderDefinition("Luma_BL_SMAALinearize", reshade::api::pipeline_subobject_type::compute_shader));
+         ShaderDefinition("Luma_BL_SMAALinearize", D3D11_SHVER_COMPUTE_SHADER));
       // Depth-extract CS for SMAA predication: hardware d24 -> R16F plane-deviation edge-ness.
       native_shaders_definitions.emplace(CompileTimeStringHash("BL Depth Extract CS"),
-         ShaderDefinition("Luma_BL_DepthExtract", reshade::api::pipeline_subobject_type::compute_shader));
+         ShaderDefinition("Luma_BL_DepthExtract", D3D11_SHVER_COMPUTE_SHADER));
 
       // XeGTAO (replaces the game's native HBAO+; see the AO hash block above). 4 compute passes out of one
       // file; the two denoise variants differ only by XE_GTAO_FINAL_APPLY (the final one writes the game's
       // r16g16_float AO target).
       native_shaders_definitions.emplace(CompileTimeStringHash("BL XeGTAO Prefilter Depths CS"),
-         ShaderDefinition{"Luma_BL_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs"});
+         ShaderDefinition{"Luma_BL_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "prefilter_depths16x16_cs"});
       native_shaders_definitions.emplace(CompileTimeStringHash("BL XeGTAO Main Pass CS"),
-         ShaderDefinition{"Luma_BL_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs"});
+         ShaderDefinition{"Luma_BL_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "main_pass_cs"});
       native_shaders_definitions.emplace(CompileTimeStringHash("BL XeGTAO Denoise Pass 1 CS"),
-         ShaderDefinition{"Luma_BL_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "0"}}});
+         ShaderDefinition{"Luma_BL_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "0"}}});
       native_shaders_definitions.emplace(CompileTimeStringHash("BL XeGTAO Denoise Pass 2 CS"),
-         ShaderDefinition{"Luma_BL_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "1"}}});
+         ShaderDefinition{"Luma_BL_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", {{"XE_GTAO_FINAL_APPLY", "1"}}});
 
       // Game uses CB slots b0-b3, so b11 (XeGTAO knobs) and b12/b13 are free for Luma.
       // luma_data is used by the Display Composition; luma_ui stays off (UI drawn by the game).
@@ -592,7 +617,7 @@ public:
       device_data.game = nullptr;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& gd = GetGameDeviceData(device_data);
 
@@ -624,7 +649,7 @@ public:
 
       // SMAA predication inputs: the cel-shading edge pass binds the D24S8 depth at PS t0 and linearizes it with
       // PSOffsetConstants at PS b2.
-      if (is_immediate && original_shader_hashes.Contains(kCelShadingHash, reshade::api::shader_stage::pixel))
+      if (is_immediate && original_shader_hashes.Contains(kCelShadingHash, ShaderStages::Pixel))
       {
          gd.srv_depth.reset();
          gd.cb_game_offsets.reset();
@@ -641,7 +666,7 @@ public:
       {
          // (a) Deinterleave: capture the full-res r24 scene depth (t0) + build/validate ALL scratch, then skip
          // the native dispatch. Both dispatches of the pair hit this branch (second is a cheap re-capture).
-         if (original_shader_hashes.Contains(kAODeinterleaveHash, reshade::api::shader_stage::compute))
+         if (original_shader_hashes.Contains(kAODeinterleaveHash, ShaderStages::Compute))
          {
             if (!AllShadersReady(device_data.native_compute_shaders, {CompileTimeStringHash("BL XeGTAO Prefilter Depths CS"), CompileTimeStringHash("BL XeGTAO Main Pass CS"), CompileTimeStringHash("BL XeGTAO Denoise Pass 1 CS"), CompileTimeStringHash("BL XeGTAO Denoise Pass 2 CS")}))
                return DrawOrDispatchOverrideType::None;
@@ -730,7 +755,7 @@ public:
 
          // (b) Coarse horizon march: capture the packed view normals (t0), skip the native dispatch. Only when
          // we own the chain this frame — otherwise the native pipeline is left fully intact.
-         if (original_shader_hashes.Contains(kAOCoarseHash, reshade::api::shader_stage::compute))
+         if (original_shader_hashes.Contains(kAOCoarseHash, ShaderStages::Compute))
          {
             if (!gd.srv_gtao_depth)
                return DrawOrDispatchOverrideType::None;
@@ -743,7 +768,7 @@ public:
 
          // (c) Bilateral blur: ITS u0 is the game's FINAL r16g16_float AO — run the 4 XeGTAO passes into it and
          // cancel the native dispatch. The game's apply blit (untouched) then multiplies it into the scene.
-         if (original_shader_hashes.Contains(kAOBlurHash, reshade::api::shader_stage::compute))
+         if (original_shader_hashes.Contains(kAOBlurHash, ShaderStages::Compute))
          {
             if (!gd.srv_gtao_depth)
                return DrawOrDispatchOverrideType::None;
@@ -838,7 +863,7 @@ public:
       // Replace the compute FXAA resolve with SMAA. Replace EVERY occurrence in the frame (the game can run the
       // resolve more than once — e.g. menu/transition frames have two), each with its own InColor/Color target.
       if (g_smaa_enable && is_immediate && !is_custom_pass &&
-          original_shader_hashes.Contains(kFXAAResolveHash, reshade::api::shader_stage::compute))
+          original_shader_hashes.Contains(kFXAAResolveHash, ShaderStages::Compute))
       {
          // FXAA resolve is IN-PLACE: InColor (t2) aliases Color (u0 = swapchain), so D3D auto-unbinds the SRV at
          // dispatch (t2 reads null). We therefore source the scene color from the UAV's resource (it holds the
@@ -868,7 +893,7 @@ public:
             if (!gd.logged_no_fp16)
             {
                gd.logged_no_fp16 = true;
-               reshade::log::message(reshade::log::level::warning,
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
                   "[BL-SMAA] swapchain not fp16 (HDR upgrade absent) -> SMAA skipped, native FXAA kept.");
             }
 #endif
@@ -1095,7 +1120,7 @@ public:
       {
          BLMovieLeakFix::g_build_checked = true;
          if (!BLMovieLeakFix::g_have_movie.load())
-            reshade::log::message(reshade::log::level::warning,
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
                "[BL-Leak] no movie buffers detected after warmup -- game build may differ from the one this leak fix targets; the fix is inactive (RAM-growth crash not mitigated).");
       }
 
@@ -1115,48 +1140,48 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::get_config_value(nullptr, NAME, "SMAAEnable", g_smaa_enable);
-      reshade::get_config_value(nullptr, NAME, "RCASSharpness", g_rcas_sharpness);
+      Config::Get(NAME, "SMAAEnable", g_smaa_enable);
+      Config::Get(NAME, "RCASSharpness", g_rcas_sharpness);
       // Predication has no shipping UI (see DrawImGuiSettings), but stays overridable from the ini.
-      reshade::get_config_value(nullptr, NAME, "SMAAPredication", g_smaa_predication);
-      reshade::get_config_value(nullptr, NAME, "SMAAPredicationTolerance", g_smaa_pred_tolerance);
-      reshade::get_config_value(nullptr, NAME, "XeGTAOEnable", g_gtao_enable);
+      Config::Get(NAME, "SMAAPredication", g_smaa_predication);
+      Config::Get(NAME, "SMAAPredicationTolerance", g_smaa_pred_tolerance);
+      Config::Get(NAME, "XeGTAOEnable", g_gtao_enable);
       // Grade sliders (cb_luma_global_settings_dirty is already true at init -> uploaded on first frame).
-      reshade::get_config_value(nullptr, NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
-      reshade::get_config_value(nullptr, NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
-      reshade::get_config_value(nullptr, NAME, "HighlightDechroma", cb_luma_global_settings.GameSettings.HighlightDechroma);
-      reshade::get_config_value(nullptr, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
-      reshade::get_config_value(nullptr, NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
-      reshade::get_config_value(nullptr, NAME, "Dithering", cb_luma_global_settings.GameSettings.Dithering);
-      reshade::get_config_value(nullptr, NAME, "FlareOut", cb_luma_global_settings.GameSettings.FlareOut);
-      reshade::get_config_value(nullptr, NAME, "VideoAutoHDREnable", cb_luma_global_settings.GameSettings.VideoAutoHDREnable);
-      reshade::get_config_value(nullptr, NAME, "VideoAutoHDRBoost", cb_luma_global_settings.GameSettings.VideoAutoHDRBoost);
-      reshade::get_config_value(nullptr, NAME, "HideUI", g_hide_ui);
-      reshade::get_config_value(nullptr, NAME, "FixMovieLeak", g_fix_movie_leak);
+      Config::Get(NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
+      Config::Get(NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
+      Config::Get(NAME, "HighlightDechroma", cb_luma_global_settings.GameSettings.HighlightDechroma);
+      Config::Get(NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
+      Config::Get(NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
+      Config::Get(NAME, "Dithering", cb_luma_global_settings.GameSettings.Dithering);
+      Config::Get(NAME, "FlareOut", cb_luma_global_settings.GameSettings.FlareOut);
+      Config::Get(NAME, "VideoAutoHDREnable", cb_luma_global_settings.GameSettings.VideoAutoHDREnable);
+      Config::Get(NAME, "VideoAutoHDRBoost", cb_luma_global_settings.GameSettings.VideoAutoHDRBoost);
+      Config::Get(NAME, "HideUI", g_hide_ui);
+      Config::Get(NAME, "FixMovieLeak", g_fix_movie_leak);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
       ImGui::SeparatorText("Anti-Aliasing");
       if (ImGui::Checkbox("SMAA Enable", &g_smaa_enable))
-         reshade::set_config_value(nullptr, NAME, "SMAAEnable", g_smaa_enable);
+         Config::Set(NAME, "SMAAEnable", g_smaa_enable);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Replaces the game's FXAA with SMAA (requires AA enabled in the game's video settings).");
       ImGui::BeginDisabled(!g_smaa_enable);
       ImGui::SliderFloat("RCAS Sharpness", &g_rcas_sharpness, 0.f, 1.f); // updates live; persist on release
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(nullptr, NAME, "RCASSharpness", g_rcas_sharpness);
+         Config::Set(NAME, "RCASSharpness", g_rcas_sharpness);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Sharpening applied on top of SMAA (0 = off).");
 #if DEVELOPMENT
       // Predication is not a preference: it only relaxes the edge threshold back to base ULTRA on geometry and
       // never below, so off is strictly worse. Kept as a bisect switch for devs, shipped on and out of sight.
       if (ImGui::Checkbox("SMAA Predication", &g_smaa_predication))
-         reshade::set_config_value(nullptr, NAME, "SMAAPredication", g_smaa_predication);
+         Config::Set(NAME, "SMAAPredication", g_smaa_predication);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Finds edges by geometry (scene depth) instead of by brightness alone.\nKeeps texture noise from being antialiased while still catching real silhouettes.");
       if (ImGui::SliderFloat("SMAA Predication Tolerance", &g_smaa_pred_tolerance, 0.002f, 0.2f, "%.3f", ImGuiSliderFlags_Logarithmic))
-         reshade::set_config_value(nullptr, NAME, "SMAAPredicationTolerance", g_smaa_pred_tolerance);
+         Config::Set(NAME, "SMAAPredicationTolerance", g_smaa_pred_tolerance);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("How far a surface may deviate from its local plane before it counts as an edge,\nas a fraction of view depth. Lower = more edges. This is the calibration lever,\nnot the SMAA threshold. Logarithmic: the parameter is relative.");
       ImGui::Checkbox("SMAA Predication Debug View", &g_smaa_pred_debug);
@@ -1165,7 +1190,7 @@ public:
       if (ImGui::Button("Measure Predication"))
          g_smaa_pred_measure = true;
       if (ImGui::IsItemHovered())
-         ImGui::SetTooltip("Read the mask back and log its distribution to ReShade.log.\nStand still, set a tolerance, press; repeat per value and compare the lines.\nFIRES(>0.5) is the share of the frame that regains base sensitivity.");
+         ImGui::SetTooltip("Read the mask back and log its distribution to Luma.log.\nStand still, set a tolerance, press; repeat per value and compare the lines.\nFIRES(>0.5) is the share of the frame that regains base sensitivity.");
 #endif
       ImGui::EndDisabled();
 
@@ -1175,7 +1200,7 @@ public:
 
       if (ImGui::SliderFloat("Exposure", &gs.Exposure, 0.f, 2.f))
       {
-         reshade::set_config_value(nullptr, NAME, "Exposure", gs.Exposure);
+         Config::Set(NAME, "Exposure", gs.Exposure);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1185,7 +1210,7 @@ public:
 
       if (ImGui::SliderFloat("Contrast", &gs.Contrast, 0.f, 2.f))
       {
-         reshade::set_config_value(nullptr, NAME, "Contrast", gs.Contrast);
+         Config::Set(NAME, "Contrast", gs.Contrast);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1195,7 +1220,7 @@ public:
 
       if (ImGui::SliderFloat("Saturation", &gs.Saturation, 0.f, 2.f))
       {
-         reshade::set_config_value(nullptr, NAME, "Saturation", gs.Saturation);
+         Config::Set(NAME, "Saturation", gs.Saturation);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1205,7 +1230,7 @@ public:
 
       if (ImGui::SliderFloat("Highlights Desaturation", &gs.HighlightDechroma, 0.f, 1.f))
       {
-         reshade::set_config_value(nullptr, NAME, "HighlightDechroma", gs.HighlightDechroma);
+         Config::Set(NAME, "HighlightDechroma", gs.HighlightDechroma);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1216,7 +1241,7 @@ public:
       ImGui::SeparatorText("Bloom");
       if (ImGui::SliderFloat("Bloom Intensity", &gs.BloomIntensity, 0.f, 2.f))
       {
-         reshade::set_config_value(nullptr, NAME, "BloomIntensity", gs.BloomIntensity);
+         Config::Set(NAME, "BloomIntensity", gs.BloomIntensity);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1227,7 +1252,7 @@ public:
       // --- Ambient Occlusion: XeGTAO replaces the game's native HBAO+ ---
       ImGui::SeparatorText("Ambient Occlusion");
       if (ImGui::Checkbox("XeGTAO Enable", &g_gtao_enable))
-         reshade::set_config_value(nullptr, NAME, "XeGTAOEnable", g_gtao_enable);
+         Config::Set(NAME, "XeGTAOEnable", g_gtao_enable);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Replaces the game's HBAO+ with XeGTAO (cleaner, more accurate ambient occlusion).");
 #if DEVELOPMENT || TEST
@@ -1247,7 +1272,7 @@ public:
 
       if (ImGui::SliderFloat("Lens Flare Intensity", &gs.FlareOut, 0.f, 1.f))
       {
-         reshade::set_config_value(nullptr, NAME, "FlareOut", gs.FlareOut);
+         Config::Set(NAME, "FlareOut", gs.FlareOut);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1259,7 +1284,7 @@ public:
       if (ImGui::Checkbox("Video AutoHDR", &video_auto_hdr))
       {
          gs.VideoAutoHDREnable = video_auto_hdr ? 1.f : 0.f;
-         reshade::set_config_value(nullptr, NAME, "VideoAutoHDREnable", gs.VideoAutoHDREnable);
+         Config::Set(NAME, "VideoAutoHDREnable", gs.VideoAutoHDREnable);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1269,7 +1294,7 @@ public:
       if (ImGui::SliderFloat("Video HDR Boost", &gs.VideoAutoHDRBoost, 0.f, 1.f))
          device_data.cb_luma_global_settings_dirty = true;
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(nullptr, NAME, "VideoAutoHDRBoost", gs.VideoAutoHDRBoost);
+         Config::Set(NAME, "VideoAutoHDRBoost", gs.VideoAutoHDRBoost);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Video highlight strength (0 = off).");
       if (DrawResetButton(gs.VideoAutoHDRBoost, default_luma_global_game_settings.VideoAutoHDRBoost, "VideoAutoHDRBoost"))
@@ -1280,7 +1305,7 @@ public:
       if (ImGui::Checkbox("Dithering", &dithering))
       {
          gs.Dithering = dithering ? 1.f : 0.f;
-         reshade::set_config_value(nullptr, NAME, "Dithering", gs.Dithering);
+         Config::Set(NAME, "Dithering", gs.Dithering);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1288,13 +1313,13 @@ public:
 
       ImGui::SeparatorText("UI");
       if (ImGui::Checkbox("Hide Gameplay UI", &g_hide_ui))
-         reshade::set_config_value(nullptr, NAME, "HideUI", g_hide_ui);
+         Config::Set(NAME, "HideUI", g_hide_ui);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Disables the in-game UI.");
 
       ImGui::SeparatorText("Fixes");
       if (ImGui::Checkbox("Fix Movie Memory Leak", &g_fix_movie_leak))
-         reshade::set_config_value(nullptr, NAME, "FixMovieLeak", g_fix_movie_leak);
+         Config::Set(NAME, "FixMovieLeak", g_fix_movie_leak);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Frees the loading/cutscene movie memory the game leaks on each transition (fixes the RAM-growth crash). Movies still play.");
       if (g_fix_movie_leak && !BLMovieLeakFix::g_have_movie.load() && BLMovieLeakFix::g_frame >= BLMovieLeakFix::BUILD_CHECK_FRAME)
@@ -1376,9 +1401,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // reads. r8/b8 formats are left alone deliberately - nothing downstream needs them, and _srgb -> fp16 risks a
       // sampling shift.
       texture_upgrade_formats = {
-         reshade::api::format::r10g10b10a2_unorm,
-         reshade::api::format::r10g10b10a2_typeless,
-         reshade::api::format::r11g11b10_float,
+         DXGI_FORMAT_R10G10B10A2_UNORM,
+         DXGI_FORMAT_R10G10B10A2_TYPELESS,
+         DXGI_FORMAT_R11G11B10_FLOAT,
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
       force_disable_display_composition = false; // core composition does the scRGB encode + paper white
@@ -1388,20 +1413,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       enable_samplers_upgrade = true; // boot-time only
       samplers_upgrade_mode = 4;
 
-      game = new BorderlandsGoty();
+      SetGame<BorderlandsGoty>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);
 
-   // Leak-fix resource hooks: register AFTER CoreMain's reshade::register_addon. Multiple callbacks per
-   // event are allowed (coexist with core); CoreMain's DLL_PROCESS_DETACH unregister_addon removes them.
+   // Leak fix: its resource hooks are the "BorderlandsGoty" overrides
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
    {
       BLMovieLeakFix::g_exe_base = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-      reshade::register_event<reshade::addon_event::init_resource>(BLMovieLeakFix::OnInitResource);
-      reshade::register_event<reshade::addon_event::destroy_resource>(BLMovieLeakFix::OnDestroyResource);
-      reshade::register_event<reshade::addon_event::init_resource_view>(BLMovieLeakFix::OnInitResourceView);
-      reshade::register_event<reshade::addon_event::destroy_resource_view>(BLMovieLeakFix::OnDestroyResourceView);
    }
 
    return TRUE;

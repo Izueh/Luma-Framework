@@ -286,15 +286,15 @@ public:
       forced_shader_names.emplace(Shader::Hash_StrToNum("EA5892CE"), "Gen Bloom 3");
 #endif
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("Modulate Lighting"), ShaderDefinition{ "Luma_ModulateLighting", reshade::api::pipeline_subobject_type::pixel_shader });
+      native_shaders_definitions.emplace(CompileTimeStringHash("Modulate Lighting"), ShaderDefinition{ "Luma_ModulateLighting", D3D11_SHVER_PIXEL_SHADER });
 
       // XeGTAO
-      native_shaders_definitions.emplace(CompileTimeStringHash("DXHR XeGTAO Prefilter Depths CS"), ShaderDefinition{ "Luma_DXHR_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
-      native_shaders_definitions.emplace(CompileTimeStringHash("DXHR XeGTAO Main Pass CS"), ShaderDefinition{ "Luma_DXHR_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
-      native_shaders_definitions.emplace(CompileTimeStringHash("DXHR XeGTAO Denoise Pass 1 CS"), ShaderDefinition{ "Luma_DXHR_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
-      native_shaders_definitions.emplace(CompileTimeStringHash("DXHR XeGTAO Denoise Pass 2 CS"), ShaderDefinition{ "Luma_DXHR_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
+      native_shaders_definitions.emplace(CompileTimeStringHash("DXHR XeGTAO Prefilter Depths CS"), ShaderDefinition{ "Luma_DXHR_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "prefilter_depths16x16_cs" });
+      native_shaders_definitions.emplace(CompileTimeStringHash("DXHR XeGTAO Main Pass CS"), ShaderDefinition{ "Luma_DXHR_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "main_pass_cs" });
+      native_shaders_definitions.emplace(CompileTimeStringHash("DXHR XeGTAO Denoise Pass 1 CS"), ShaderDefinition{ "Luma_DXHR_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
+      native_shaders_definitions.emplace(CompileTimeStringHash("DXHR XeGTAO Denoise Pass 2 CS"), ShaderDefinition{ "Luma_DXHR_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("DXHR SMAA Linearize CS"), ShaderDefinition{ "Luma_SMAA_Linearize", reshade::api::pipeline_subobject_type::compute_shader });
+      native_shaders_definitions.emplace(CompileTimeStringHash("DXHR SMAA Linearize CS"), ShaderDefinition{ "Luma_SMAA_Linearize", D3D11_SHVER_COMPUTE_SHADER });
    }
 
    void OnLoad(std::filesystem::path& file_path, bool failed) override
@@ -304,8 +304,6 @@ public:
       {
          if (allow_lighting_modulation)
          {
-            reshade::register_event<reshade::addon_event::map_buffer_region>(GameDeusExHumanRevolutionDC::OnMapBufferRegion);
-            reshade::register_event<reshade::addon_event::unmap_buffer_region>(GameDeusExHumanRevolutionDC::OnUnmapBufferRegion);
          }
 
          if (GetModuleHandle(TEXT("DXHRDC-GFX.asi")) != NULL)
@@ -352,9 +350,9 @@ public:
    // All materials color/lighting shaders in this game have a saturate at the end, that always gets bundled with a multiply+add instruction.
    // There's also luminance calculations for the alpha buffer, presumably for FXAA (in case it was used), or bloom (contained on alpha), but they were based of BT.601 instead of BT.709.
    // Given that there's possibly hundreds of them, we live patch them.
-   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, D3D11_SHADER_VERSION_TYPE type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
    {
-      if (type != reshade::api::pipeline_subobject_type::pixel_shader) return nullptr;
+      if (type != D3D11_SHVER_PIXEL_SHADER) return nullptr;
 
       // The last byte depends on the size of the instruction so it doesn't always match!
       const std::vector<std::byte> pattern_mad_sat = { std::byte{0x32}, std::byte{0x20}, std::byte{0x00}, std::byte{0x09} }; // mad_sat
@@ -514,9 +512,9 @@ public:
       return new_code;
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+      auto& device_data = *GetSwapchainData(swapchain)->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
       if (&game_device_data != nullptr) // TODO: is this needed? Probl not. This check is also in INSIDE
       {
@@ -552,7 +550,7 @@ public:
    // Present
    //
    // A study is available here: https://www.adriancourreges.com/blog/2015/03/10/deus-ex-human-revolution-graphics-study/
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -880,7 +878,7 @@ public:
                         depth_buffer_texture_2d->GetDesc(&texture_2d_desc);
 
                         D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-                        if (!texture_depth_upgrade_formats.contains(reshade::api::format(DXGI_FORMAT_R24G8_TYPELESS)))
+                        if (!texture_depth_upgrade_formats.contains(DXGI_FORMAT_R24G8_TYPELESS))
                         {
                            ASSERT_ONCE(texture_2d_desc.Format == DXGI_FORMAT_R24G8_TYPELESS);
                            srv_desc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
@@ -1008,11 +1006,30 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
 
-   static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+   // Native hooks (buffers only)
+public:
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
    {
-      ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+   }
+
+   bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+   {
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return false;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnUnmapBufferRegion(*cmd_list_data->device_data, buffer);
+      return false;
+   }
+
+   static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
+   {
+      ID3D11Device* native_device = device_data.native_device;
       auto& game_device_data = GetGameDeviceData(device_data);
 
       // The target cbuffer is always set once after AO, and once before materials start to render. We only care about patching the second time.
@@ -1022,7 +1039,7 @@ public:
          return;
       }
 
-      if (access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write)
+      if ((access == D3D11_MAP_WRITE || access == D3D11_MAP_WRITE_NO_OVERWRITE) || access == D3D11_MAP_WRITE_DISCARD || access == D3D11_MAP_READ_WRITE)
       {
          D3D11_BUFFER_DESC buffer_desc;
          buffer->GetDesc(&buffer_desc);
@@ -1039,12 +1056,10 @@ public:
       }
    }
 
-   static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+   static void OnUnmapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer)
    {
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
-      ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
+      ID3D11Device* native_device = device_data.native_device;
       bool is_global_cbuffer = device_data.cb_per_view_global_buffer != nullptr && device_data.cb_per_view_global_buffer == buffer;
       ASSERT_ONCE(!device_data.cb_per_view_global_buffer_map_data || is_global_cbuffer);
 
@@ -1207,36 +1222,35 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
-      reshade::get_config_value(runtime, NAME, "XeGTAOEnable", g_xegtao_enable);
-      reshade::get_config_value(runtime, NAME, "SMAAEnable", g_smaa_enable);
-      reshade::get_config_value(runtime, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
-      reshade::get_config_value(runtime, NAME, "EmissiveIntensity", cb_luma_global_settings.GameSettings.EmissiveIntensity);
-      reshade::get_config_value(runtime, NAME, "FogIntensity", cb_luma_global_settings.GameSettings.FogIntensity);
-      reshade::get_config_value(runtime, NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
-      reshade::get_config_value(runtime, NAME, "DesaturationIntensity", cb_luma_global_settings.GameSettings.DesaturationIntensity);
-      reshade::get_config_value(runtime, NAME, "AmbientLightingIntensity", cb_luma_global_settings.GameSettings.AmbientLightingIntensity);
-      reshade::get_config_value(runtime, NAME, "HDRBoostIntensity", cb_luma_global_settings.GameSettings.HDRBoostIntensity);
+      Config::Get(NAME, "XeGTAOEnable", g_xegtao_enable);
+      Config::Get(NAME, "SMAAEnable", g_smaa_enable);
+      Config::Get(NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
+      Config::Get(NAME, "EmissiveIntensity", cb_luma_global_settings.GameSettings.EmissiveIntensity);
+      Config::Get(NAME, "FogIntensity", cb_luma_global_settings.GameSettings.FogIntensity);
+      Config::Get(NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
+      Config::Get(NAME, "DesaturationIntensity", cb_luma_global_settings.GameSettings.DesaturationIntensity);
+      Config::Get(NAME, "AmbientLightingIntensity", cb_luma_global_settings.GameSettings.AmbientLightingIntensity);
+      Config::Get(NAME, "HDRBoostIntensity", cb_luma_global_settings.GameSettings.HDRBoostIntensity);
       // "device_data.cb_luma_global_settings_dirty" should already be true at this point
 
-      reshade::get_config_value(runtime, NAME, "ForceOriginalPostProcess", force_og_post_process);
+      Config::Get(NAME, "ForceOriginalPostProcess", force_og_post_process);
       if (!pattern_og_post_process_addresses.empty() && force_og_post_process)
       {
          PatchPostProcess(force_og_post_process);
       }
 
-      reshade::get_config_value(runtime, NAME, "UIScale", ui_scale);
+      Config::Get(NAME, "UIScale", ui_scale);
       if (ui_scale != 1.f)
       {
          PatchUIScale(ui_scale);
       }
 
-      reshade::get_config_value(runtime, NAME, "WarnedGoldFilterRestorationMod", warned_gold_filter_restoration_mod);
+      Config::Get(NAME, "WarnedGoldFilterRestorationMod", warned_gold_filter_restoration_mod);
       if (has_gold_filter_restoration_mod && !warned_gold_filter_restoration_mod && MessageBoxA(NULL, "The \"Gold Filer Restoration\" mod was found (\"DXHRDC-GFX.asi\"), that is largely redundant with Luma and can be removed, however it's fully compatible if you wished to use it.", "Redundant mod detected", MB_OK | MB_SETFOREGROUND) == IDOK)
       {
          warned_gold_filter_restoration_mod = true;
-         reshade::set_config_value(runtime, NAME, "WarnedGoldFilterRestorationMod", warned_gold_filter_restoration_mod);
+         Config::Set(NAME, "WarnedGoldFilterRestorationMod", warned_gold_filter_restoration_mod);
       }
    }
 
@@ -1247,7 +1261,6 @@ public:
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
@@ -1256,14 +1269,14 @@ public:
       {
          if (ImGui::Checkbox("Enable Original Post Process", &force_og_post_process))
          {
-            reshade::set_config_value(runtime, NAME, "ForceOriginalPostProcess", force_og_post_process);
+            Config::Set(NAME, "ForceOriginalPostProcess", force_og_post_process);
             PatchPostProcess(force_og_post_process);
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          {
             ImGui::SetTooltip("Allows restoring the original Color Grading (e.g. Gold Filter) and Bloom in the DC version of the game");
          }
-         DrawResetButton(force_og_post_process, true, "ForceOriginalPostProcess", runtime);
+         DrawResetButton(force_og_post_process, true, "ForceOriginalPostProcess");
 
          if (force_og_post_process)
          {
@@ -1283,7 +1296,7 @@ public:
       }
       if (ImGui::Checkbox("SMAA Enable", &g_smaa_enable))
       {
-         reshade::set_config_value(runtime, NAME, "SMAAEnable", g_smaa_enable);
+         Config::Set(NAME, "SMAAEnable", g_smaa_enable);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
@@ -1291,7 +1304,7 @@ public:
       }
       if (ImGui::Checkbox("XeGTAO Enable", &g_xegtao_enable))
       {
-         reshade::set_config_value(runtime, NAME, "XeGTAOEnable", g_xegtao_enable);
+         Config::Set(NAME, "XeGTAOEnable", g_xegtao_enable);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
@@ -1299,35 +1312,35 @@ public:
       }
       if (ImGui::SliderFloat("Bloom Intensity", &cb_luma_global_settings.GameSettings.BloomIntensity, 0.f, 2.f))
       {
-         reshade::set_config_value(runtime, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
+         Config::Set(NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Luma slightly lowers bloom by default, as it was mostly there to simulate HDR. Set it to 1 for the vanilla behavior.");
       }
-      DrawResetButton(cb_luma_global_settings.GameSettings.BloomIntensity, default_luma_global_game_settings.BloomIntensity, "BloomIntensity", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.BloomIntensity, default_luma_global_game_settings.BloomIntensity, "BloomIntensity");
 
       if (ImGui::SliderFloat("Emissive Intensity", &cb_luma_global_settings.GameSettings.EmissiveIntensity, 0.f, 1.f))
       {
-         reshade::set_config_value(runtime, NAME, "EmissiveIntensity", cb_luma_global_settings.GameSettings.EmissiveIntensity);
+         Config::Set(NAME, "EmissiveIntensity", cb_luma_global_settings.GameSettings.EmissiveIntensity);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("Luma allows emissive or lit surfaces to be boosted to increase the dynamic range of the scene.\nMostly suggested for HDR output. Avoid getting close to 1.");
       }
-      DrawResetButton(cb_luma_global_settings.GameSettings.EmissiveIntensity, default_luma_global_game_settings.EmissiveIntensity, "EmissiveIntensity", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.EmissiveIntensity, default_luma_global_game_settings.EmissiveIntensity, "EmissiveIntensity");
 
       if (is_dc)
       {
          if (ImGui::SliderFloat("Fog Intensity", &cb_luma_global_settings.GameSettings.FogIntensity, 0.f, 1.f))
          {
-            reshade::set_config_value(runtime, NAME, "FogIntensity", cb_luma_global_settings.GameSettings.FogIntensity);
+            Config::Set(NAME, "FogIntensity", cb_luma_global_settings.GameSettings.FogIntensity);
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          {
             ImGui::SetTooltip("Luma allows adding fog to the original game's bloom (in the DC), to add some depth to the scene, or to remove it completely. Tweak it to your liking.");
          }
-         DrawResetButton(cb_luma_global_settings.GameSettings.FogIntensity, default_luma_global_game_settings.FogIntensity, "FogIntensity", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.FogIntensity, default_luma_global_game_settings.FogIntensity, "FogIntensity");
       }
       // Fog isn't supported in the non DC version, it relies on cbuffers from the DC
       else
@@ -1340,42 +1353,42 @@ public:
       {
          if (ImGui::SliderFloat("Color Grading Intensity", &cb_luma_global_settings.GameSettings.ColorGradingIntensity, 0.0f, 1.f))
          {
-            reshade::set_config_value(runtime, NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
+            Config::Set(NAME, "ColorGradingIntensity", cb_luma_global_settings.GameSettings.ColorGradingIntensity);
          }
-         DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingIntensity, default_luma_global_game_settings.ColorGradingIntensity, "ColorGradingIntensity", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.ColorGradingIntensity, default_luma_global_game_settings.ColorGradingIntensity, "ColorGradingIntensity");
 
          if (ImGui::SliderFloat("Desaturation Intensity", &cb_luma_global_settings.GameSettings.DesaturationIntensity, 0.0f, 1.f))
          {
-            reshade::set_config_value(runtime, NAME, "DesaturationIntensity", cb_luma_global_settings.GameSettings.DesaturationIntensity);
+            Config::Set(NAME, "DesaturationIntensity", cb_luma_global_settings.GameSettings.DesaturationIntensity);
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          {
             ImGui::SetTooltip("The color grading pass (e.g. the gold filter) often has a strong desaturation effect, turn this off to preserve the original saturation.\nLuma lowers this by default as it was the case with the \"Definitive Edition\", set to 1 for the vanilla behaviour.\nYou can force this to negative values to boost saturation.");
          }
-         DrawResetButton(cb_luma_global_settings.GameSettings.DesaturationIntensity, default_luma_global_game_settings.DesaturationIntensity, "DesaturationIntensity", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.DesaturationIntensity, default_luma_global_game_settings.DesaturationIntensity, "DesaturationIntensity");
       }
 
       if (ImGui::SliderFloat("Ambient Lighting Intensity", &cb_luma_global_settings.GameSettings.AmbientLightingIntensity, 0.f, 1.f))
       {
-         reshade::set_config_value(runtime, NAME, "AmbientLightingIntensity", cb_luma_global_settings.GameSettings.AmbientLightingIntensity);
+         Config::Set(NAME, "AmbientLightingIntensity", cb_luma_global_settings.GameSettings.AmbientLightingIntensity);
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       {
          ImGui::SetTooltip("The game's ambient lighting was very strong, making everything glow, reduce this to increase the contrast between light and shadow (note that visibility might be decreased).");
       }
-      DrawResetButton(cb_luma_global_settings.GameSettings.AmbientLightingIntensity, default_luma_global_game_settings.AmbientLightingIntensity, "AmbientLightingIntensity", runtime);
+      DrawResetButton(cb_luma_global_settings.GameSettings.AmbientLightingIntensity, default_luma_global_game_settings.AmbientLightingIntensity, "AmbientLightingIntensity");
 
       if (cb_luma_global_settings.DisplayMode == DisplayModeType::HDR)
       {
          if (ImGui::SliderFloat("HDR Boost Intensity", &cb_luma_global_settings.GameSettings.HDRBoostIntensity, 0.f, 2.f))
          {
-            reshade::set_config_value(runtime, NAME, "HDRBoostIntensity", cb_luma_global_settings.GameSettings.HDRBoostIntensity);
+            Config::Set(NAME, "HDRBoostIntensity", cb_luma_global_settings.GameSettings.HDRBoostIntensity);
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          {
             ImGui::SetTooltip("Enable a \"Fake\" HDR boosting effect. Set to 0 for the vanilla look.");
          }
-         DrawResetButton(cb_luma_global_settings.GameSettings.HDRBoostIntensity, default_luma_global_game_settings.HDRBoostIntensity, "HDRBoostIntensity", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.HDRBoostIntensity, default_luma_global_game_settings.HDRBoostIntensity, "HDRBoostIntensity");
       }
 
 #if DEVELOPMENT
@@ -1385,14 +1398,14 @@ public:
       {
          if (ImGui::SliderFloat("UI Scale", &ui_scale, 0.25f, 4.f))
          {
-            reshade::set_config_value(runtime, NAME, "UIScale", ui_scale);
+            Config::Set(NAME, "UIScale", ui_scale);
             PatchUIScale(ui_scale); // Won't likely do anything unless the game internally re-initialized the UI (it doesn't seem to do so)
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          {
             ImGui::SetTooltip("Requires restart.");
          }
-         DrawResetButton(ui_scale, 1.0f, "UIScale", runtime);
+         DrawResetButton(ui_scale, 1.0f, "UIScale");
 
          if (allow_lighting_modulation)
          {
@@ -1400,12 +1413,12 @@ public:
             ImGui::Text("Ambient Light Color");
             ImGui::PushID(1);
             ImGui::SliderFloat3("RGB", &cb_luma_global_settings.GameSettings.AmbientLightColor.x, 0.0f, 5.0f);
-            DrawResetButton<float4, false>(cb_luma_global_settings.GameSettings.AmbientLightColor, default_luma_global_game_settings.AmbientLightColor, nullptr, runtime);
+            DrawResetButton<float4, false>(cb_luma_global_settings.GameSettings.AmbientLightColor, default_luma_global_game_settings.AmbientLightColor, nullptr);
             ImGui::PopID();
             ImGui::Text("Lights Color");
             ImGui::PushID(2);
             ImGui::SliderFloat3("RGB", &cb_luma_global_settings.GameSettings.LightingColor.x, 0.0f, 5.0f);
-            DrawResetButton<float4, false>(cb_luma_global_settings.GameSettings.LightingColor, default_luma_global_game_settings.LightingColor, nullptr, runtime);
+            DrawResetButton<float4, false>(cb_luma_global_settings.GameSettings.LightingColor, default_luma_global_game_settings.LightingColor, nullptr);
             ImGui::PopID();
          }
 
@@ -1514,25 +1527,24 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       swapchain_upgrade_type = SwapchainUpgradeType::scRGB;
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            //reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::b8g8r8a8_unorm,
-            //reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            //reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            //DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            //DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            //DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
             // Used by lighting buffers (10 bit is enough but they clip to 1 in UNORM)
-            reshade::api::format::r10g10b10a2_unorm,
+            DXGI_FORMAT_R10G10B10A2_UNORM,
 
             // Probably unused, but won't hurt
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
       };
       // Depth in DE HR was 24 bits but exhibited some z-fighting, the stencil was only ever used by "Edge Anti Aliasing", which looks bad anyway and won't work properly with Luma,
       // so just upgrade the depth (it doesn't fix it all)!
       texture_depth_upgrade_formats = {
-            reshade::api::format(DXGI_FORMAT_R24G8_TYPELESS),
-            reshade::api::format(DXGI_FORMAT_D24_UNORM_S8_UINT),
+            DXGI_FORMAT_R24G8_TYPELESS,
+            DXGI_FORMAT_D24_UNORM_S8_UINT,
       };
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
 
@@ -1577,7 +1589,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       old_shader_file_names.emplace("ColorGrading_0xBFF40A4D.ps_5_0.hlsl");
 #endif
 
-      game = new GameDeusExHumanRevolutionDC();
+      SetGame<GameDeusExHumanRevolutionDC>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
@@ -1590,8 +1602,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
       if (allow_lighting_modulation)
       {
-         reshade::unregister_event<reshade::addon_event::map_buffer_region>(GameDeusExHumanRevolutionDC::OnMapBufferRegion);
-         reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(GameDeusExHumanRevolutionDC::OnUnmapBufferRegion);
       }
    }
 

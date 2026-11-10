@@ -582,6 +582,7 @@
     <ClCompile Include="..\Core\unity_build.cpp" />
     <ClCompile Include="main.cpp" />
   </ItemGroup>
+  <Import Project="..\Games\Luma.Features.props" Condition="Exists('..\Games\Luma.Features.props')" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
   </ImportGroup>

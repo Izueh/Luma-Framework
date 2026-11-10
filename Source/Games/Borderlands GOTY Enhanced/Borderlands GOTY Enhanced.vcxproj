@@ -73,16 +73,16 @@
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup>
     <_ProjectFileVersion>10.0.20506.1</_ProjectFileVersion>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'">$(SolutionName)-$(ProjectName)</TargetName>
-    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'">.addon</TargetExt>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'">dxgi</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'">.dll</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'">true</LinkIncremental>
     <GenerateManifest Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'">true</GenerateManifest>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">$(SolutionName)-$(ProjectName)</TargetName>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">$(SolutionName)-$(ProjectName)</TargetName>
-    <TargetName Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">$(SolutionName)-$(ProjectName)</TargetName>
-    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">.addon</TargetExt>
-    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">.addon</TargetExt>
-    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">.addon</TargetExt>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">dxgi</TargetName>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">dxgi</TargetName>
+    <TargetName Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">dxgi</TargetName>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">.dll</TargetExt>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">.dll</TargetExt>
+    <TargetExt Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">.dll</TargetExt>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">false</LinkIncremental>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">false</LinkIncremental>
     <LinkIncremental Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">false</LinkIncremental>
@@ -92,19 +92,19 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Debug|x64'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
-    <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\$(ProjectName)\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
-    <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\$(ProjectName)\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
-    <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\$(ProjectName)\</OutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">
     <IntDir>$(SolutionDir)\Binaries\Intermediate\$(ShortProjectName)-$(Platform)-$(Configuration)\</IntDir>
-    <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\</OutDir>
+    <OutDir>$(SolutionDir)\Binaries\$(Platform)-$(Configuration)\$(ProjectName)\</OutDir>
   </PropertyGroup>
   <PropertyGroup Label="Vcpkg">
     <VcpkgEnableManifest>false</VcpkgEnableManifest>
@@ -138,7 +138,7 @@
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
-      <Command>IF DEFINED LUMA_BORDERLANDS_GOTY_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_BORDERLANDS_GOTY_BIN_PATH%" || exit /B 0 )</Command>
+      <Command>IF DEFINED LUMA_BORDERLANDS_GOTY_BIN_PATH ( xcopy /Y "$(TargetPath)" "%LUMA_BORDERLANDS_GOTY_BIN_PATH%" || exit /B 0 )</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Publishing-Release|x64'">
@@ -167,7 +167,7 @@
       <GenerateDebugInformation>false</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
-      <Command>IF DEFINED LUMA_BORDERLANDS_GOTY_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_BORDERLANDS_GOTY_BIN_PATH%" || exit /B 0 )</Command>
+      <Command>IF DEFINED LUMA_BORDERLANDS_GOTY_BIN_PATH ( xcopy /Y "$(TargetPath)" "%LUMA_BORDERLANDS_GOTY_BIN_PATH%" || exit /B 0 )</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Test-Release|x64'">
@@ -196,7 +196,7 @@
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
-      <Command>IF DEFINED LUMA_BORDERLANDS_GOTY_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_BORDERLANDS_GOTY_BIN_PATH%" || exit /B 0 )</Command>
+      <Command>IF DEFINED LUMA_BORDERLANDS_GOTY_BIN_PATH ( xcopy /Y "$(TargetPath)" "%LUMA_BORDERLANDS_GOTY_BIN_PATH%" || exit /B 0 )</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Development-Release|x64'">
@@ -225,7 +225,7 @@
       <GenerateDebugInformation>DebugFull</GenerateDebugInformation>
     </Link>
     <PostBuildEvent>
-      <Command>IF DEFINED LUMA_BORDERLANDS_GOTY_BIN_PATH ( xcopy /Y "$(TargetDir)*$(SolutionName)-$(ProjectName).addon" "%LUMA_BORDERLANDS_GOTY_BIN_PATH%" || exit /B 0 )</Command>
+      <Command>IF DEFINED LUMA_BORDERLANDS_GOTY_BIN_PATH ( xcopy /Y "$(TargetPath)" "%LUMA_BORDERLANDS_GOTY_BIN_PATH%" || exit /B 0 )</Command>
     </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>

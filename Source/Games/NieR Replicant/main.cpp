@@ -208,21 +208,17 @@ public:
       GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('1');
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Motion Vector"), ShaderDefinition{"Luma_PrepareMotionVector", reshade::api::pipeline_subobject_type::compute_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Prepare Motion Vector"), ShaderDefinition{"Luma_PrepareMotionVector", D3D11_SHVER_COMPUTE_SHADER});
 
-      reshade::register_event<reshade::addon_event::create_pipeline>(NierReplicant::OnCreatePipeline);
-      reshade::register_event<reshade::addon_event::map_buffer_region>(NierReplicant::OnMapBufferRegion);
-      reshade::register_event<reshade::addon_event::unmap_buffer_region>(NierReplicant::OnUnmapBufferRegion);
    }
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+      auto& device_data = *GetSwapchainData(swapchain)->device_data;
       if (!enable_hdr)
       {
          cb_luma_global_settings.DisplayMode = DisplayModeType::SDR;
@@ -269,9 +265,9 @@ public:
       }
    }
 
-   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, D3D11_SHADER_VERSION_TYPE type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
    {
-      if (type == reshade::api::pipeline_subobject_type::vertex_shader)
+      if (type == D3D11_SHVER_VERTEX_SHADER)
       {
          if (System::ScanMemoryForPattern(shader_object, shader_object_size, (std::byte*)"SystemBuffPrevBones", 19, true).size() != 0)
          {
@@ -291,9 +287,9 @@ public:
       return nullptr;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
-      if ((stages & reshade::api::shader_stage::compute) != 0)
+      if ((stages & ShaderStages::Compute) != 0)
       {
          if (original_shader_hashes.compute_shaders.front() == 0xF31783A9)
          {
@@ -306,8 +302,8 @@ public:
             linear_depth_resource->QueryInterface(game_device_data.linear_depth_texture.put());
          }
       }
-      if ((stages & reshade::api::shader_stage::vertex) == 0 &&
-          (stages & reshade::api::shader_stage::pixel) == 0)
+      if ((stages & ShaderStages::Vertex) == 0 &&
+          (stages & ShaderStages::Pixel) == 0)
       {
          return DrawOrDispatchOverrideType::None;
       }
@@ -628,7 +624,7 @@ public:
             auto* sr_instance_data = device_data.GetSRInstanceData();
 
             device_data.cb_luma_global_settings_dirty = true;
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::all_compute, LumaConstantBufferType::LumaSettings);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaSettings);
 
             {
                ComPtr<ID3D11ShaderResourceView> depth_texture_srv;
@@ -852,54 +848,64 @@ public:
       projection_jitters.y = SR::HaltonSequence(temporal_frame, 3);
    }
 
-   static bool OnCreatePipeline(reshade::api::device* device, reshade::api::pipeline_layout layout, uint32_t subobject_count, const reshade::api::pipeline_subobject* subobjects)
+   // Builds the fog and motion vector variants of the game's pixel shaders that write the previous position
+   void PreCreatePixelShader(ID3D11Device* native_device, const void*& bytecode, SIZE_T& length) override
    {
-      auto& device_data = *device->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
-      for (uint32_t i = 0; i < subobject_count; ++i)
-      {
-         const auto& subobject = subobjects[i];
-         for (uint32_t j = 0; j < subobject.count; ++j)
-         {
-            if (subobject.type == reshade::api::pipeline_subobject_type::pixel_shader)
-            {
-               const auto* original_shader_desc = static_cast<reshade::api::shader_desc*>(subobjects[i].data);
-               if (System::ScanMemoryForPattern((const std::byte*)original_shader_desc->code, original_shader_desc->code_size, (std::byte*)"PREV_POSITION_CS", 16, true).size() == 0)
-               {
-                  continue;
-               }
-               uint32_t hash = Shader::BinToHash((const uint8_t*)original_shader_desc->code, original_shader_desc->code_size);
-               std::vector<std::byte> shader_code((const std::byte*)original_shader_desc->code, ((const std::byte*)original_shader_desc->code) + original_shader_desc->code_size);
-
-               if (PatchPixelShaderFogScaling(shader_code))
-               {
-                  ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-                  ID3D11PixelShader* shader;
-                  native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, &shader);
-
-                  game_device_data.fog_patched_pixel_shaders[hash] = shader;
-               }
-               if (PatchPixelShaderMotionVectors(shader_code))
-               {
-                  ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-                  ID3D11PixelShader* shader;
-                  native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, &shader);
-
-                  game_device_data.motion_vector_pixel_shaders[hash] = shader;
-               }
-            }
-         }
-      }
-      return false;
-   }
-
-   static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
-   {
-      if (access != reshade::api::map_access::write_discard)
+      DeviceData* device_data = GetDeviceData(native_device);
+      if (!device_data || !bytecode)
+         return;
+      auto& game_device_data = GetGameDeviceData(*device_data);
+      if (System::ScanMemoryForPattern((const std::byte*)bytecode, length, (std::byte*)"PREV_POSITION_CS", 16, true).size() == 0)
       {
          return;
       }
-      ID3D11Resource* native_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
+      uint32_t hash = Shader::BinToHash((const uint8_t*)bytecode, length);
+      std::vector<std::byte> shader_code((const std::byte*)bytecode, ((const std::byte*)bytecode) + length);
+
+      if (PatchPixelShaderFogScaling(shader_code))
+      {
+         ID3D11PixelShader* shader;
+         native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, &shader);
+
+         game_device_data.fog_patched_pixel_shaders[hash] = shader;
+      }
+      if (PatchPixelShaderMotionVectors(shader_code))
+      {
+         ID3D11PixelShader* shader;
+         native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, &shader);
+
+         game_device_data.motion_vector_pixel_shaders[hash] = shader;
+      }
+   }
+
+   // Native hooks (buffers only)
+public:
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
+   {
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+   }
+
+   bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+   {
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return false;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnUnmapBufferRegion(*cmd_list_data->device_data, buffer);
+      return false;
+   }
+
+   static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
+   {
+      if (!(access == D3D11_MAP_WRITE_DISCARD))
+      {
+         return;
+      }
+      ID3D11Resource* native_resource = reinterpret_cast<ID3D11Resource*>(reinterpret_cast<uint64_t>(buffer));
 
       ComPtr<ID3D11Buffer> native_buffer;
       native_resource->QueryInterface(native_buffer.put());
@@ -912,16 +918,14 @@ public:
       if ((bd.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0 &&
           bd.ByteWidth == 912)
       {
-         auto& device_data = *device->get_private_data<DeviceData>();
          auto& game_device_data = GetGameDeviceData(device_data);
          game_device_data.mapped_system_cb_scene = (SystemCbScene*)*data;
          game_device_data.system_cb_scene = native_buffer;
       }
    }
 
-   static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+   static void OnUnmapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer)
    {
-      auto& device_data = *device->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
       if (game_device_data.mapped_system_cb_scene)
       {
@@ -933,13 +937,12 @@ public:
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
       if (ImGui::Checkbox("Enable HDR", &next_enable_hdr))
       {
-         reshade::set_config_value(runtime, NAME, "EnableHDR", next_enable_hdr);
+         Config::Set(NAME, "EnableHDR", next_enable_hdr);
       }
    }
 
@@ -975,7 +978,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       texture_upgrade_formats = {
-         reshade::api::format::r10g10b10a2_unorm};
+         DXGI_FORMAT_R10G10B10A2_UNORM};
 
       redirected_shader_hashes["Tonemap"] =
          {
@@ -1065,23 +1068,20 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       luma_data_cbuffer_index = 12;
       swapchain_upgrade_type = SwapchainUpgradeType::None;
 
-      game = new NierReplicant();
+      SetGame<NierReplicant>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
-      reshade::unregister_event<reshade::addon_event::create_pipeline>(NierReplicant::OnCreatePipeline);
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(NierReplicant::OnMapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(NierReplicant::OnUnmapBufferRegion);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);
 
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
    {
-      reshade::get_config_value(nullptr, NAME, "FirstBoot", first_boot);
+      Config::Get(NAME, "FirstBoot", first_boot);
       if (first_boot)
       {
-         reshade::set_config_value(nullptr, NAME, "FirstBoot", false);
+         Config::Set(NAME, "FirstBoot", false);
 
          // Automatically enable HDR in the mod if it's supported on the primary display on first boot
          bool hdr_supported_display;
@@ -1089,11 +1089,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          Display::IsHDRSupportedAndEnabled(0, hdr_supported_display, hdr_enabled_display);
          enable_hdr = hdr_supported_display;
 
-         reshade::set_config_value(nullptr, NAME, "EnableHDR", enable_hdr);
+         Config::Set(NAME, "EnableHDR", enable_hdr);
       }
       else
       {
-         reshade::get_config_value(nullptr, NAME, "EnableHDR", enable_hdr);
+         Config::Get(NAME, "EnableHDR", enable_hdr);
       }
       next_enable_hdr = enable_hdr;
 

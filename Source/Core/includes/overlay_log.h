@@ -15,7 +15,7 @@
 #include <atomic>
 #include <Windows.h>
 
-#include <deps/imgui/imgui.h>
+#include <imgui.h>
 
 #define ADD_OVERLAY_INFO(...) Luma::OverlayLog::AddInfo(__VA_ARGS__)
 #define ADD_OVERLAY_ERROR(...) Luma::OverlayLog::AddError(__VA_ARGS__)

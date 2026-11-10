@@ -149,13 +149,13 @@ namespace Patch
       // patched bytecode via "find_patch" (same lookup order as LoadCustomShaders:
       // files first, then patches). No device call — the async worker defers
       // creation to the present boundary (see ProcessAsyncCloneBatch).
-      std::pair<reshade::api::pipeline_subobject*, bool> BuildPatchedCloneSubobjects(
+      std::pair<Shader::PipelineSubobject*, bool> BuildPatchedCloneSubobjects(
          uint32_t subobject_count,
-         const reshade::api::pipeline_subobject* subobjects,
+         const Shader::PipelineSubobject* subobjects,
          std::function<std::optional<std::pair<const uint8_t*, uint32_t>>(
-             const reshade::api::shader_desc* clone_desc,
-             const reshade::api::shader_desc* orig_desc,
-             reshade::api::pipeline_subobject_type type)> find_patch)
+             const Shader::ShaderDesc* clone_desc,
+             const Shader::ShaderDesc* orig_desc,
+             D3D11_SHADER_VERSION_TYPE type)> find_patch)
       {
          auto* new_subobjects = Shader::ClonePipelineSubobjects(subobject_count, subobjects);
          bool injected = false;
@@ -163,19 +163,19 @@ namespace Patch
          for (uint32_t i = 0; i < subobject_count; ++i)
          {
             const auto& subobject = subobjects[i];
-            switch (subobject.type)
+            switch ((subobject.type))
             {
-            case reshade::api::pipeline_subobject_type::geometry_shader:
-            case reshade::api::pipeline_subobject_type::vertex_shader:
-            case reshade::api::pipeline_subobject_type::compute_shader:
-            case reshade::api::pipeline_subobject_type::pixel_shader:
+            case D3D11_SHVER_GEOMETRY_SHADER:
+            case D3D11_SHVER_VERTEX_SHADER:
+            case D3D11_SHVER_COMPUTE_SHADER:
+            case D3D11_SHVER_PIXEL_SHADER:
                break;
             default:
                continue;
             }
 
-            auto* clone_desc = static_cast<reshade::api::shader_desc*>(new_subobjects[i].data);
-            auto patch_opt = find_patch(clone_desc, static_cast<const reshade::api::shader_desc*>(subobject.data), subobject.type);
+            auto* clone_desc = static_cast<Shader::ShaderDesc*>(new_subobjects[i].data);
+            auto patch_opt = find_patch(clone_desc, static_cast<const Shader::ShaderDesc*>(subobject.data), (subobject.type));
             if (!patch_opt)
                continue;
 
@@ -217,7 +217,7 @@ namespace Patch
                return nullptr;
             for (const PatchContext::RecipeEntry& entry : context.recipes)
             {
-               if (!entry.enabled || (entry.stage != reshade::api::pipeline_subobject_type::unknown && entry.stage != request.type))
+               if (!entry.enabled || (entry.stage != SHADER_VERSION_TYPE_UNKNOWN && entry.stage != request.type))
                   continue;
                dxp::PatchOptions options;
                if (auto it = context.recipe_options_by_hash.find(entry.hash); it != context.recipe_options_by_hash.end())
@@ -236,10 +236,10 @@ namespace Patch
          {
             options.logger = [identity = entry.identity](dxp::LogLevel level, const std::string& message)
             {
-               const auto log_level = level == dxp::LogLevel::Error ? reshade::log::level::error
-                  : level == dxp::LogLevel::Warning ? reshade::log::level::warning
-                  : level == dxp::LogLevel::Debug ? reshade::log::level::debug : reshade::log::level::info;
-               reshade::log::message(log_level, ("[Luma] [Recipe " + identity + "] " + message).c_str());
+               const auto log_level = level == dxp::LogLevel::Error ? Luma::Utils::Log::Level::Error
+                  : level == dxp::LogLevel::Warning ? Luma::Utils::Log::Level::Warning
+                  : level == dxp::LogLevel::Debug ? Luma::Utils::Log::Level::Verbose : Luma::Utils::Log::Level::Info;
+               Luma::Utils::Log::Write(log_level, ("[Luma] [Recipe " + identity + "] " + message).c_str());
             };
             try
             {
@@ -248,7 +248,7 @@ namespace Patch
                auto report = entry.recipe->Execute(input, options);
                if (!report)
                {
-                  reshade::log::message(reshade::log::level::warning,
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
                      std::format("[Luma] Recipe {} failed for shader {:08X}: {}", entry.identity, request.shader_hash, report.error()).c_str());
                   continue;
                }
@@ -269,7 +269,7 @@ namespace Patch
             }
             catch (const std::exception& e)
             {
-               reshade::log::message(reshade::log::level::warning,
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
                   std::format("[Luma] Recipe {} failed for shader {:08X}: {}", entry.identity, request.shader_hash, e.what()).c_str());
             }
          }
@@ -406,7 +406,7 @@ namespace Patch
          case dxp::BindingClass::Uav:
          {
             // Graphics stages share UAV slots with the render targets, only compute is supported
-            if (out.stage != reshade::api::pipeline_subobject_type::compute_shader || out.slot >= device_data.uav_max_count) return false;
+            if (out.stage != D3D11_SHVER_COMPUTE_SHADER || out.slot >= device_data.uav_max_count) return false;
             const std::shared_lock lock_device(device_data.mutex);
             const auto resource = device_data.managed_resources.unordered_access_views.find(handle_hash);
             if (resource != device_data.managed_resources.unordered_access_views.end()) out.uav = resource->second.get();
@@ -434,20 +434,20 @@ namespace Patch
          ID3D11SamplerState* const sampler = binding.sampler.get();
          switch (binding.stage)
          {
-         case reshade::api::pipeline_subobject_type::vertex_shader:
+         case D3D11_SHVER_VERTEX_SHADER:
             if (view) context->VSSetShaderResources(binding.slot, 1, &view);
             else context->VSSetSamplers(binding.slot, 1, &sampler);
             break;
-         case reshade::api::pipeline_subobject_type::pixel_shader:
+         case D3D11_SHVER_PIXEL_SHADER:
             if (view) context->PSSetShaderResources(binding.slot, 1, &view);
             else context->PSSetSamplers(binding.slot, 1, &sampler);
             break;
-         case reshade::api::pipeline_subobject_type::compute_shader:
+         case D3D11_SHVER_COMPUTE_SHADER:
             if (view) context->CSSetShaderResources(binding.slot, 1, &view);
             else context->CSSetSamplers(binding.slot, 1, &sampler);
             break;
 #if GEOMETRY_SHADER_SUPPORT
-         case reshade::api::pipeline_subobject_type::geometry_shader:
+         case D3D11_SHVER_GEOMETRY_SHADER:
             if (view) context->GSSetShaderResources(binding.slot, 1, &view);
             else context->GSSetSamplers(binding.slot, 1, &sampler);
             break;
@@ -457,15 +457,14 @@ namespace Patch
 #endif
    }
 
-   inline std::pair<reshade::api::pipeline, bool> ClonePipelineWithPatches(
-      reshade::api::device* device,
-      reshade::api::pipeline_layout layout,
-      const reshade::api::pipeline_subobject* subobjects,
+   inline std::pair<Shader::Pipeline, bool> ClonePipelineWithPatches(
+      ID3D11Device* device,
+      const Shader::PipelineSubobject* subobjects,
       uint32_t subobject_count,
       std::function<std::optional<std::pair<const uint8_t*, uint32_t>>(
-          const reshade::api::shader_desc* clone_desc,
-          const reshade::api::shader_desc* orig_desc,
-          reshade::api::pipeline_subobject_type type)> find_patch)
+          const Shader::ShaderDesc* clone_desc,
+          const Shader::ShaderDesc* orig_desc,
+          D3D11_SHADER_VERSION_TYPE type)> find_patch)
    {
       auto [new_subobjects, injected] = BuildPatchedCloneSubobjects(subobject_count, subobjects, std::move(find_patch));
       if (!injected)
@@ -473,8 +472,8 @@ namespace Patch
          return {{}, false};
       }
 
-      reshade::api::pipeline pipeline_clone = {};
-      const bool ok = device->create_pipeline(layout, subobject_count, new_subobjects, &pipeline_clone);
+      Shader::Pipeline pipeline_clone = {};
+      const bool ok = Shader::CreatePipeline(device, subobject_count, new_subobjects, &pipeline_clone);
       Shader::DestroyPipelineSubojects(new_subobjects, subobject_count);
 
       if (!ok)
@@ -590,7 +589,7 @@ namespace Patch
          if (!settings.enabled)
          {
             bool enabled = settings.registration ? settings.registration->default_enabled : true;
-            reshade::get_config_value(nullptr, GetRecipeConfigSection(), settings.identity.c_str(), enabled);
+            Config::Get(GetRecipeConfigSection(), settings.identity.c_str(), enabled);
             settings.enabled = enabled;
          }
          return settings;
@@ -608,7 +607,7 @@ namespace Patch
                if (!settings.env_read.emplace(env).second) continue;
                char value[64] = {};
                size_t value_size = sizeof(value);
-               if (!reshade::get_config_value(nullptr, GetRecipeConfigSection(), (settings.identity + ":" + env).c_str(), value, &value_size)) continue;
+               if (!Config::Get(GetRecipeConfigSection(), (settings.identity + ":" + env).c_str(), value, &value_size)) continue;
                if (auto parsed = RecipeEnvFromString(std::string_view(value, strnlen(value, sizeof(value))), default_value))
                   settings.env_overrides.insert_or_assign(env, *parsed);
             }
@@ -619,14 +618,14 @@ namespace Patch
             const auto entry = std::find_if(recipes.begin(), recipes.end(), [&](const PatchContext::RecipeEntry& recipe) { return recipe.hash == hash; });
             if (entry == recipes.end())
             {
-               reshade::log::message(reshade::log::level::warning, ("[Luma] Registered recipe was not found: " + settings.identity).c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, ("[Luma] Registered recipe was not found: " + settings.identity).c_str());
                continue;
             }
             const auto& env = entry->recipe->GetEnv();
             for (const RecipeOption& option : settings.registration->options)
             {
                if (!env.contains(option.env))
-                  reshade::log::message(reshade::log::level::warning, ("[Luma] Recipe " + settings.identity + " has no env variable \"" + option.env + "\" (registered option)").c_str());
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, ("[Luma] Recipe " + settings.identity + " has no env variable \"" + option.env + "\" (registered option)").c_str());
             }
          }
       }
@@ -685,7 +684,7 @@ namespace Patch
       RecipeSettings& settings = GetRecipeSettings(identity);
       if (*settings.enabled == enabled) return;
       settings.enabled = enabled;
-      reshade::set_config_value(nullptr, GetRecipeConfigSection(), settings.identity.c_str(), enabled);
+      Config::Set(GetRecipeConfigSection(), settings.identity.c_str(), enabled);
       ++s_recipe_settings_version;
    }
 
@@ -704,7 +703,7 @@ namespace Patch
       settings.env_read.emplace(env);
       if (const auto previous = settings.env_overrides.find(env); previous != settings.env_overrides.end() && previous->second == value) return;
       settings.env_overrides.insert_or_assign(env, value);
-      reshade::set_config_value(nullptr, GetRecipeConfigSection(), (settings.identity + ":" + env).c_str(), RecipeEnvToString(value).c_str());
+      Config::Set(GetRecipeConfigSection(), (settings.identity + ":" + env).c_str(), RecipeEnvToString(value).c_str());
       ++s_recipe_settings_version;
    }
 
@@ -714,7 +713,7 @@ namespace Patch
       RecipeSettings& settings = GetRecipeSettings(identity);
       settings.env_read.emplace(env);
       if (settings.env_overrides.erase(env) == 0) return;
-      reshade::set_config_value(nullptr, GetRecipeConfigSection(), (settings.identity + ":" + env).c_str(), ""); // Empty = no override
+      Config::Set(GetRecipeConfigSection(), (settings.identity + ":" + env).c_str(), ""); // Empty = no override
       ++s_recipe_settings_version;
    }
 
@@ -744,7 +743,7 @@ namespace Patch
 
       std::vector<PatchContext::RecipeEntry> loaded;
       std::unordered_map<uint32_t, std::string> identities_by_hash;
-      auto load_directory = [&](const std::filesystem::path& directory, reshade::api::pipeline_subobject_type stage)
+      auto load_directory = [&](const std::filesystem::path& directory, D3D11_SHADER_VERSION_TYPE stage)
       {
          std::error_code error;
          if (!std::filesystem::is_directory(directory, error)) return;
@@ -774,7 +773,7 @@ namespace Patch
             const uint32_t hash = Math::CompileTimeStringHash(identity);
             if (auto collision = identities_by_hash.find(hash); collision != identities_by_hash.end() && collision->second != identity)
             {
-               reshade::log::message(reshade::log::level::error,
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error,
                   ("[Luma] Recipe identity hash collision; skipping " + identity).c_str());
                continue;
             }
@@ -782,7 +781,7 @@ namespace Patch
             auto parsed = dxp::sm5::Recipe::ParseFromFile(file.string());
             if (!parsed)
             {
-               reshade::log::message(reshade::log::level::warning,
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
                   ("[Luma] Failed to load recipe " + file.string() + ": " + parsed.error()).c_str());
                continue;
             }
@@ -795,12 +794,12 @@ namespace Patch
 
       if (!root_path.empty())
       {
-         load_directory(root_path, reshade::api::pipeline_subobject_type::unknown);
-         load_directory(root_path / "VS", reshade::api::pipeline_subobject_type::vertex_shader);
-         load_directory(root_path / "PS", reshade::api::pipeline_subobject_type::pixel_shader);
-         load_directory(root_path / "CS", reshade::api::pipeline_subobject_type::compute_shader);
+         load_directory(root_path, SHADER_VERSION_TYPE_UNKNOWN);
+         load_directory(root_path / "VS", D3D11_SHVER_VERTEX_SHADER);
+         load_directory(root_path / "PS", D3D11_SHVER_PIXEL_SHADER);
+         load_directory(root_path / "CS", D3D11_SHVER_COMPUTE_SHADER);
 #if GEOMETRY_SHADER_SUPPORT
-         load_directory(root_path / "GS", reshade::api::pipeline_subobject_type::geometry_shader);
+         load_directory(root_path / "GS", D3D11_SHVER_GEOMETRY_SHADER);
 #endif
 
          std::error_code error;
@@ -813,7 +812,7 @@ namespace Patch
                 || folder == "GS"
 #endif
                ) continue;
-            reshade::log::message(reshade::log::level::warning,
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
                ("[Luma] Recipe stage folder is not supported: " + it->path().string()).c_str());
          }
       }
@@ -917,14 +916,14 @@ namespace Patch
          for (uint32_t i = 0; i < cached_pipeline->subobject_count; ++i)
          {
             const auto& subobject = cached_pipeline->subobjects_cache[i];
-            if (subobject.type != reshade::api::pipeline_subobject_type::vertex_shader
-                && subobject.type != reshade::api::pipeline_subobject_type::pixel_shader
-                && subobject.type != reshade::api::pipeline_subobject_type::compute_shader
+            if (subobject.type != D3D11_SHVER_VERTEX_SHADER
+                && subobject.type != D3D11_SHVER_PIXEL_SHADER
+                && subobject.type != D3D11_SHVER_COMPUTE_SHADER
 #if GEOMETRY_SHADER_SUPPORT
-                && subobject.type != reshade::api::pipeline_subobject_type::geometry_shader
+                && subobject.type != D3D11_SHVER_GEOMETRY_SHADER
 #endif
                ) continue;
-            const auto* desc = static_cast<const reshade::api::shader_desc*>(subobject.data);
+            const auto* desc = static_cast<const Shader::ShaderDesc*>(subobject.data);
             if (desc->code_size == 0) continue;
             const uint32_t hash = Shader::BinToHash(static_cast<const uint8_t*>(desc->code), desc->code_size);
             if (HasPatch(device_data, hash))
@@ -945,7 +944,7 @@ namespace Patch
                if (patch->method == Method::Bytecode) StorePatched(device_data, hash, patch);
                found_sync_patch_this_pipeline = true;
 #if DEVELOPMENT
-               reshade::log::message(reshade::log::level::debug, std::format("[Patch] Shader {:08X} patched via sync path", hash).c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose, std::format("[Patch] Shader {:08X} patched via sync path", hash).c_str());
 #endif
             }
          }
@@ -960,7 +959,7 @@ namespace Patch
             {
                cached_pipeline->patch_application_mode = Shader::PatchApplicationMode::Sync;
 #if DEVELOPMENT
-               reshade::log::message(reshade::log::level::debug, std::format("[Patch] Sync-patched pipeline {:x} -> clone {:x}", cached_pipeline->pipeline.handle, pipeline_clone.handle).c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose, std::format("[Patch] Sync-patched pipeline {:x} -> clone {:x}", cached_pipeline->pipeline.handle, pipeline_clone.handle).c_str());
 #endif
 
 #if DEVELOPMENT && LUMA_PATCH_PROVIDERS != 0
@@ -970,15 +969,15 @@ namespace Patch
                   for (uint32_t i = 0; i < subobject_count; ++i)
                   {
                      const auto& subobject = cached_pipeline->subobjects_cache[i];
-                     if (subobject.type != reshade::api::pipeline_subobject_type::pixel_shader
-                         && subobject.type != reshade::api::pipeline_subobject_type::vertex_shader
-                         && subobject.type != reshade::api::pipeline_subobject_type::compute_shader
+                     if (subobject.type != D3D11_SHVER_PIXEL_SHADER
+                         && subobject.type != D3D11_SHVER_VERTEX_SHADER
+                         && subobject.type != D3D11_SHVER_COMPUTE_SHADER
 #if GEOMETRY_SHADER_SUPPORT
-                         && subobject.type != reshade::api::pipeline_subobject_type::geometry_shader
+                         && subobject.type != D3D11_SHVER_GEOMETRY_SHADER
 #endif
                          ) continue;
 
-                     auto* desc = static_cast<reshade::api::shader_desc*>(cached_pipeline->subobjects_cache[i].data);
+                     auto* desc = static_cast<Shader::ShaderDesc*>(cached_pipeline->subobjects_cache[i].data);
                      uint32_t hash = Shader::BinToHash(static_cast<const uint8_t*>(desc->code), desc->code_size);
                      if (auto shader_data = Patch::GetShaderData(device_data, hash); shader_data)
                      {
@@ -1022,8 +1021,8 @@ namespace Patch
          {
             Shader::CachedPipeline* cached_pipeline = pair.second;
             if (cached_pipeline == nullptr) continue;
-            if (cached_pipeline->custom_pipeline_data.file_stages != reshade::api::shader_stage(0)
-                && cached_pipeline->custom_pipeline_data.patch_stages != reshade::api::shader_stage(0))
+            if (cached_pipeline->custom_pipeline_data.file_stages != ShaderStages::None
+                && cached_pipeline->custom_pipeline_data.patch_stages != ShaderStages::None)
             {
                mixed.emplace(pair.first);
                continue;
@@ -1050,7 +1049,7 @@ namespace Patch
       uint64_t settings_version = 0;
       std::vector<PatchContext::RecipeEntry> recipes = ParseRecipes(device_data, settings_version); // Disk reads stay outside the core locks
       std::unordered_set<uint64_t> affected;
-      std::unordered_map<uint64_t, reshade::api::device*> to_destroy;
+      std::unordered_map<uint64_t, ID3D11Device*> to_destroy;
       {
          const std::shared_lock lock_destroy(device_data.pipeline_cache_destruction_mutex);
          const std::unique_lock lock_generic(s_mutex_generic);
@@ -1072,7 +1071,7 @@ namespace Patch
          if (!affected.empty()) UnloadCustomShaders(device_data, affected, false, &to_destroy);
          for (uint64_t handle : affected) device_data.pipelines_to_reload.erase(handle);
       }
-      for (const auto& [handle, device] : to_destroy) device->destroy_pipeline({handle});
+      for (const auto& [handle, device] : to_destroy) Shader::DestroyPipeline({handle});
    }
 
    void ApplyRecipeSettingsChanges(DeviceData& device_data)
@@ -1314,7 +1313,7 @@ namespace Patch
       for (auto& pair : device_data.pipeline_cache_by_pipeline_handle)
       {
          const Shader::CachedPipeline* cached_pipeline = pair.second;
-         if (cached_pipeline != nullptr && cached_pipeline->cloned && cached_pipeline->custom_pipeline_data.patch_stages != reshade::api::shader_stage(0))
+         if (cached_pipeline != nullptr && cached_pipeline->cloned && cached_pipeline->custom_pipeline_data.patch_stages != ShaderStages::None)
          {
             count++;
          }
@@ -1348,16 +1347,16 @@ namespace Patch
             for (uint32_t i = 0; i < cached_pipeline->subobject_count; ++i)
             {
                const auto& subobject = cached_pipeline->subobjects_cache[i];
-               switch (subobject.type)
+               switch ((subobject.type))
                {
 #if GEOMETRY_SHADER_SUPPORT
-               case reshade::api::pipeline_subobject_type::geometry_shader:
+               case D3D11_SHVER_GEOMETRY_SHADER:
 #endif
-               case reshade::api::pipeline_subobject_type::vertex_shader:
-               case reshade::api::pipeline_subobject_type::compute_shader:
-               case reshade::api::pipeline_subobject_type::pixel_shader:
+               case D3D11_SHVER_VERTEX_SHADER:
+               case D3D11_SHVER_COMPUTE_SHADER:
+               case D3D11_SHVER_PIXEL_SHADER:
                {
-                  const auto* shader_desc = static_cast<const reshade::api::shader_desc*>(subobject.data);
+                  const auto* shader_desc = static_cast<const Shader::ShaderDesc*>(subobject.data);
                   if (shader_desc == nullptr || shader_desc->code == nullptr || shader_desc->code_size < sizeof(DXBCHeader))
                   {
                      break;
@@ -1399,7 +1398,7 @@ namespace Patch
 
                   Patch::PatchJob patch_job;
                   patch_job.shader_hash = shader_hash;
-                  patch_job.type = subobject.type;
+                  patch_job.type = (subobject.type);
 #if LUMA_HAS_RECIPE_PROVIDERS
                   patch_job.generation = device_data.patch_context.reload_generation.load();
 #endif
@@ -1448,10 +1447,9 @@ namespace Patch
    {
       for (const uint64_t pipeline_handle : pipelines)
       {
-         reshade::api::pipeline_subobject* subobjects_copy = nullptr;
+         Shader::PipelineSubobject* subobjects_copy = nullptr;
          uint32_t subobject_count = 0;
-         reshade::api::device* device = nullptr;
-         reshade::api::pipeline_layout layout = {};
+         ID3D11Device* device = nullptr;
          uint32_t shader_hash = 0;
          {
             const std::shared_lock lock_generic(s_mutex_generic);
@@ -1468,7 +1466,6 @@ namespace Patch
             subobjects_copy = Shader::ClonePipelineSubobjects(cached_pipeline->subobject_count, cached_pipeline->subobjects_cache);
             subobject_count = cached_pipeline->subobject_count;
             device = cached_pipeline->device;
-            layout = cached_pipeline->layout;
             shader_hash = cached_pipeline->shader_hashes[0]; // identity check for the publish step
          }
 
@@ -1485,7 +1482,7 @@ namespace Patch
          // Build the patched subobjects here (CPU only); LUMA_ASYNC_CLONE_MODE
          // selects where the pipeline is created. "s_mutex_loading" keeps custom-shader
          // file bytes alive through the memcpy below (worker vs. reload race).
-         reshade::api::pipeline_subobject* patched_subobjects = nullptr;
+         Shader::PipelineSubobject* patched_subobjects = nullptr;
          {
             const std::shared_lock lock_loading(s_mutex_loading);
 #if LUMA_HAS_RECIPE_PROVIDERS
@@ -1494,9 +1491,9 @@ namespace Patch
             auto [built, injected] = Patch::BuildPatchedCloneSubobjects(
                subobject_count, subobjects_copy,
                [&device_data, &clone_origin, &custom_pipeline_data](
-                   const reshade::api::shader_desc*,
-                   const reshade::api::shader_desc* orig_desc,
-                   reshade::api::pipeline_subobject_type type) -> std::optional<std::pair<const uint8_t*, uint32_t>>
+                   const Shader::ShaderDesc*,
+                   const Shader::ShaderDesc* orig_desc,
+                   D3D11_SHADER_VERSION_TYPE type) -> std::optional<std::pair<const uint8_t*, uint32_t>>
                {
                   const uint32_t shader_hash = Shader::BinToHash(static_cast<const uint8_t*>(orig_desc->code), orig_desc->code_size);
 
@@ -1533,7 +1530,7 @@ namespace Patch
          Shader::DestroyPipelineSubojects(subobjects_copy, subobject_count);
 
          if (patched_subobjects == nullptr) continue;
-         DeviceData::AsyncCloneEntry entry{pipeline_handle, nullptr, 0, {}, {}, device, shader_hash, clone_origin, std::move(custom_pipeline_data)
+         DeviceData::AsyncCloneEntry entry{pipeline_handle, nullptr, 0, {}, device, shader_hash, clone_origin, std::move(custom_pipeline_data)
 #if LUMA_HAS_RECIPE_PROVIDERS
             , generation
 #endif
@@ -1544,20 +1541,19 @@ namespace Patch
          // LUMA_ASYNC_CLONE_PRESENT_BUDGET).
          entry.subobjects = patched_subobjects;
          entry.subobject_count = subobject_count;
-         entry.layout = layout;
 #elif LUMA_ASYNC_CLONE_MODE == 2
          // Device call on the worker thread: fastest on paper,
          // but NVIDIA driver may block on Create*Shaders
-         const bool created = device->create_pipeline(layout, subobject_count, patched_subobjects, &entry.pipeline_clone);
+         const bool created = Shader::CreatePipeline(device, subobject_count, patched_subobjects, &entry.pipeline_clone);
          Shader::DestroyPipelineSubojects(patched_subobjects, subobject_count);
          if (!created || entry.pipeline_clone.handle == 0) continue;
 #endif // LUMA_ASYNC_CLONE_MODE
 #if DEVELOPMENT
 #if LUMA_ASYNC_CLONE_MODE == 1
-         reshade::log::message(reshade::log::level::debug,
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose,
             std::format("[AsyncClone] queued clone build for pipeline {:x}", pipeline_handle).c_str());
 #else
-         reshade::log::message(reshade::log::level::debug,
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose,
             std::format("[AsyncClone] compiled clone {:x} for pipeline {:x}", entry.pipeline_clone.handle, pipeline_handle).c_str());
 #endif
 #endif
@@ -1614,7 +1610,7 @@ namespace Patch
       {
          const auto pipeline_it = device_data.pipeline_cache_by_pipeline_handle.find(entry.pipeline_handle);
          if (pipeline_it == device_data.pipeline_cache_by_pipeline_handle.end() || pipeline_it->second == nullptr || pipeline_it->second->manually_unloaded || pipeline_it->second->cloned
-             || (patches_unloaded && entry.custom_pipeline_data.patch_stages != reshade::api::shader_stage(0))
+             || (patches_unloaded && entry.custom_pipeline_data.patch_stages != ShaderStages::None)
 #if LUMA_HAS_RECIPE_PROVIDERS
              || (entry.custom_pipeline_data.patch_data && entry.generation != device_data.patch_context.reload_generation)
 #endif
@@ -1630,7 +1626,7 @@ namespace Patch
       // Verify before creating/registering (unique lock), then create outside
       // the lock: device calls must not happen while holding s_mutex_generic
       // (same pattern as the destroy path).
-      std::vector<std::pair<reshade::api::device*, reshade::api::pipeline>> orphans;
+      std::vector<std::pair<ID3D11Device*, Shader::Pipeline>> orphans;
       std::vector<std::pair<DeviceData::AsyncCloneEntry, Shader::CachedPipeline*>> verified;
       {
          const std::unique_lock lock_generic(s_mutex_generic);
@@ -1651,19 +1647,19 @@ namespace Patch
 
 #if LUMA_ASYNC_CLONE_MODE == 1
       // Create pipelines from subobjects on the render thread.
-      std::vector<std::pair<reshade::api::pipeline, std::pair<DeviceData::AsyncCloneEntry, Shader::CachedPipeline*>>> created;
+      std::vector<std::pair<Shader::Pipeline, std::pair<DeviceData::AsyncCloneEntry, Shader::CachedPipeline*>>> created;
       for (const auto& v : verified)
       {
          const DeviceData::AsyncCloneEntry& entry = v.first;
-         reshade::api::pipeline pipeline_clone = {};
-         if (entry.device->create_pipeline(entry.layout, entry.subobject_count, entry.subobjects, &pipeline_clone))
+         Shader::Pipeline pipeline_clone = {};
+         if (Shader::CreatePipeline(entry.device, entry.subobject_count, entry.subobjects, &pipeline_clone))
          {
             created.emplace_back(pipeline_clone, v);
          }
       }
 #else
       // Mode 2: pipelines already compiled by worker — just collect them.
-      std::vector<std::pair<reshade::api::pipeline, std::pair<DeviceData::AsyncCloneEntry, Shader::CachedPipeline*>>> created;
+      std::vector<std::pair<Shader::Pipeline, std::pair<DeviceData::AsyncCloneEntry, Shader::CachedPipeline*>>> created;
       for (const auto& v : verified)
       {
          created.emplace_back(v.first.pipeline_clone, v);
@@ -1689,8 +1685,7 @@ namespace Patch
             cached_pipeline->clone_origin = entry.clone_origin;
             cached_pipeline->custom_pipeline_data = entry.custom_pipeline_data;
 #if LUMA_USE_DXP
-            if (cached_pipeline->custom_pipeline_data.patch_data && (clone.handle & 1) == 0
-                && cached_pipeline->device->get_api() == reshade::api::device_api::d3d11)
+            if (cached_pipeline->custom_pipeline_data.patch_data && (clone.handle & 1) == 0)
             {
                // Keep clone ownership with its reports so old command lists can switch variants after reload.
                cached_pipeline->custom_pipeline_data.patch_data->native_pipeline_clone.reset(reinterpret_cast<ID3D11DeviceChild*>(clone.handle));
@@ -1717,7 +1712,7 @@ namespace Patch
             device_data.cloned_pipeline_count++;
             device_data.cloned_pipelines_changed = true;
 #if DEVELOPMENT
-            reshade::log::message(reshade::log::level::debug,
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose,
                std::format("[AsyncClone] published clone {:x} for pipeline {:x}", clone.handle, entry.pipeline_handle).c_str());
 #endif
          }
@@ -1735,13 +1730,13 @@ namespace Patch
       // pattern as the destroy path).
       for (const auto& [device, clone] : orphans)
       {
-         device->destroy_pipeline(clone);
+         Shader::DestroyPipeline(clone);
       }
    }
 #endif
 
 #if LUMA_USE_DXP
-   bool ResolveRecipeBindings(DeviceData& device_data, const Shader::CustomPipelineData& data, reshade::api::pipeline_subobject_type type,
+   bool ResolveRecipeBindings(DeviceData& device_data, const Shader::CustomPipelineData& data, D3D11_SHADER_VERSION_TYPE type,
       std::vector<RecipeBinding>& bindings, bool& has_recipe)
    {
       if (!data.patch_data) return true;
@@ -1763,7 +1758,7 @@ namespace Patch
             static thread_local std::unordered_set<std::string> unresolved;
             if (unresolved.emplace(result->identity + ":" + handle).second)
             {
-               reshade::log::message(reshade::log::level::warning,
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
                   std::format("[Luma] Recipe {} resource '{}' is not available (in \"managed_resources\"), drawing with the original shader", result->identity, handle).c_str());
             }
          }

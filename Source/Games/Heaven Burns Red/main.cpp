@@ -3,7 +3,6 @@
 #define DISABLE_AUTO_DEBUGGER 1
 #define DISABLE_FOCUS_LOSS_SUPPRESSION 1
 #define AVOID_INPUT_LOSS 1
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 #define DISABLE_SWAPCHAIN_FLIP_MODEL 1
 #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
 #define ALLOW_SHADERS_DUMPING_WITH_NAME 1
@@ -312,22 +311,13 @@ public:
    {
 #if CUSTOM_MSAA_RESOLVE
       native_shaders_definitions.emplace(CompileTimeStringHash("MSAA Filter VS"), 
-         ShaderDefinition{"Luma_MSAAResolveFilter", reshade::api::pipeline_subobject_type::vertex_shader, nullptr, nullptr, 
+         ShaderDefinition{"Luma_MSAAResolveFilter", D3D11_SHVER_VERTEX_SHADER, nullptr, nullptr, 
             {{"VERTEXSHADER", "1"}}});
       
       native_shaders_definitions.emplace(CompileTimeStringHash("MSAA Filter PS"), 
-         ShaderDefinition{"Luma_MSAAResolveFilter", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, nullptr, 
+         ShaderDefinition{"Luma_MSAAResolveFilter", D3D11_SHVER_PIXEL_SHADER, nullptr, nullptr, 
             {{"MSAA_SAMPLE", "8"}}});
-      
-      reshade::register_event<reshade::addon_event::resolve_texture_region>(HeavenBurnsRed::OnResolveTextureRegion);
-#endif
-      reshade::register_event<reshade::addon_event::create_resource>(HeavenBurnsRed::OnCreateResource);
-      reshade::register_event<reshade::addon_event::init_resource>(HeavenBurnsRed::OnInitResource);
-      reshade::register_event<reshade::addon_event::destroy_resource>(HeavenBurnsRed::OnDestroyResource);
-      reshade::register_event<reshade::addon_event::init_resource_view>(HeavenBurnsRed::OnInitResourceView);
-      reshade::register_event<reshade::addon_event::create_pipeline>(HeavenBurnsRed::OnCreatePipeline);
-      reshade::register_event<reshade::addon_event::create_sampler>(HeavenBurnsRed::OnCreateSampler);
-      reshade::register_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(HeavenBurnsRed::OnBindRenderTargetsAndDepthStencil);
+      #endif
    }
    
    void OnLoad(std::filesystem::path& file_path, bool failed) override
@@ -343,211 +333,196 @@ public:
       device_data.game = new GameDeviceHeavenBurnsRed;
    }
    
-   static bool OnCreateResource(
-      reshade::api::device* device,
-      reshade::api::resource_desc& desc,
-      reshade::api::subresource_data* initial_data,
-      reshade::api::resource_usage initial_state)
+   // The game's 2x MSAA output-sized targets get the user's MSAA sample count
+   void PreCreateTexture2D(ID3D11Device* device, D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA*& initial_data) override
    {
-      if (desc.type != reshade::api::resource_type::texture_2d)
-         return false;
-      
-      if (desc.texture.samples != 2)
-         return false;
-      
-      if (desc.texture.width == desc.texture.height)
-         return false;
-      
-      auto& device_data = *device->get_private_data<DeviceData>();
-      
-      if (desc.texture.width != device_data.output_resolution.x || desc.texture.height != device_data.output_resolution.y)
-         return false;
-      
-      desc.texture.samples = msaa_values[msaa_index];
-      return true;
+      if (desc.SampleDesc.Count != 2)
+         return;
+
+      if (desc.Width == desc.Height)
+         return;
+
+      DeviceData* device_data = GetDeviceData(device);
+      if (!device_data)
+         return;
+
+      if (desc.Width != device_data->output_resolution.x || desc.Height != device_data->output_resolution.y)
+         return;
+
+      desc.SampleDesc.Count = msaa_values[msaa_index];
    }
 
-   static void OnInitResource(
-      reshade::api::device* device,
-      const reshade::api::resource_desc& desc,
-      const reshade::api::subresource_data* initial_data,
-      reshade::api::resource_usage initial_state,
-      reshade::api::resource resource)
+   void PostCreateTexture2D(ID3D11Device* device, const D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture2D* texture) override
    {
-      if (desc.type != reshade::api::resource_type::texture_2d)
+      if (desc.SampleDesc.Count <= 1)
          return;
-      
-      if (desc.texture.samples <= 1)
+
+      DeviceData* device_data = GetDeviceData(device);
+      if (!device_data || !device_data->game)
          return;
-      
-      auto& device_data = *device->get_private_data<DeviceData>();
-      
-      if (desc.texture.width != device_data.output_resolution.x || desc.texture.height != device_data.output_resolution.y)
+
+      if (desc.Width != device_data->output_resolution.x || desc.Height != device_data->output_resolution.y)
          return;
-      
-      auto& game_device_data = GetGameDeviceData(device_data);
-      
-      if ((desc.usage & reshade::api::resource_usage::depth_stencil) != reshade::api::resource_usage::undefined)
+
+      auto& game_device_data = GetGameDeviceData(*device_data);
+
+      if ((desc.BindFlags & D3D11_BIND_DEPTH_STENCIL) != 0)
       {
-         game_device_data.tracked_depth_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
+         game_device_data.tracked_depth_resource = texture;
          game_device_data.tracked_depth_dsv = nullptr;
       }
-      else if ((desc.usage & reshade::api::resource_usage::render_target) != reshade::api::resource_usage::undefined)
+      else if ((desc.BindFlags & D3D11_BIND_RENDER_TARGET) != 0)
       {
-         game_device_data.tracked_color_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
+         game_device_data.tracked_color_resource = texture;
          game_device_data.tracked_color_rtv = nullptr;
       }
    }
-   
-   static void OnDestroyResource(
-      reshade::api::device* device,
-      reshade::api::resource resource)
+
+   void OnResourceDestroyed(const void* resource) override
    {
-      auto& device_data = *device->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
-      
-      ID3D11Resource* native_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
-      
-      if (game_device_data.tracked_color_resource.get() == native_resource)
+      // The object can't be used anymore, it's only compared. The game has one device.
+      const std::shared_lock lock_devices(s_mutex_device);
+      for (DeviceData* device_data : global_devices_data)
       {
-         game_device_data.tracked_color_resource = nullptr;
-         game_device_data.tracked_color_rtv = nullptr;
-      }
-      else if (game_device_data.tracked_depth_resource.get() == native_resource)
-      {
-         game_device_data.tracked_depth_resource = nullptr;
-         game_device_data.tracked_depth_dsv = nullptr;
-      }
-   }
-   
-   static void OnInitResourceView(
-      reshade::api::device* device,
-      reshade::api::resource resource,
-      reshade::api::resource_usage usage_type,
-      const reshade::api::resource_view_desc& desc,
-      reshade::api::resource_view view)
-   {
-      auto& device_data = *device->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
-      
-      ID3D11Resource* native_resource = reinterpret_cast<ID3D11Resource*>(resource.handle);
-      
-      if (usage_type == reshade::api::resource_usage::render_target && game_device_data.tracked_color_resource.get() == native_resource)
-      {
-         game_device_data.tracked_color_rtv = reinterpret_cast<ID3D11RenderTargetView*>(view.handle);
-      }
-      else if (usage_type == reshade::api::resource_usage::depth_stencil && game_device_data.tracked_depth_resource.get() == native_resource)
-      {
-         game_device_data.tracked_depth_dsv = reinterpret_cast<ID3D11DepthStencilView*>(view.handle);
-      }
-   }
-   
-   static bool OnCreatePipeline(
-      reshade::api::device* device,
-      reshade::api::pipeline_layout layout,
-      uint32_t subobject_count,
-      const reshade::api::pipeline_subobject* subobjects)
-   {
-      auto& device_data = *device->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
-      for (uint32_t i = 0; i < subobject_count; ++i)
-      {
-         const auto& subobject = subobjects[i];
-         for (uint32_t j = 0; j < subobject.count; ++j)
+         if (!device_data->game)
+            continue;
+         auto& game_device_data = GetGameDeviceData(*device_data);
+
+         const ID3D11Resource* native_resource = static_cast<const ID3D11Resource*>(resource);
+
+         if (game_device_data.tracked_color_resource.get() == native_resource)
          {
-            if (subobject.type == reshade::api::pipeline_subobject_type::pixel_shader)
-            {
-               const auto* original_shader_desc = static_cast<reshade::api::shader_desc*>(subobjects[i].data);
-               std::vector<std::byte> shader_code((const std::byte*)original_shader_desc->code, ((const std::byte*)original_shader_desc->code) + original_shader_desc->code_size);
-
-               uint32_t hash = Shader::BinToHash((const uint8_t*)original_shader_desc->code, original_shader_desc->code_size);
-               
-               std::vector<std::byte> code;
-               code.resize(original_shader_desc->code_size);
-               memcpy(&code[0], original_shader_desc->code, original_shader_desc->code_size);
-               game_device_data.pixel_shader_code[hash] = std::move(code);
-               
-               // Better build the shader list here than check per draw
-               bool is_alpha_tested_shader = PatchPixelShader(shader_code);
-               
-               if (!is_alpha_tested_shader)
-                  return false;
-
-               ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-               com_ptr<ID3D11PixelShader> patched_shader;
-               native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, &patched_shader);
-
-               game_device_data.modified_atoc_pixel_shaders[hash] = patched_shader.get();
-            }
+            game_device_data.tracked_color_resource = nullptr;
+            game_device_data.tracked_color_rtv = nullptr;
+         }
+         else if (game_device_data.tracked_depth_resource.get() == native_resource)
+         {
+            game_device_data.tracked_depth_resource = nullptr;
+            game_device_data.tracked_depth_dsv = nullptr;
          }
       }
+   }
+
+   void PostCreateRenderTargetView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_RENDER_TARGET_VIEW_DESC1* desc, ID3D11RenderTargetView* view) override
+   {
+      DeviceData* device_data = GetDeviceData(device);
+      if (!device_data || !device_data->game)
+         return;
+      auto& game_device_data = GetGameDeviceData(*device_data);
+      if (game_device_data.tracked_color_resource.get() == resource)
+      {
+         game_device_data.tracked_color_rtv = view;
+      }
+   }
+
+   void PostCreateDepthStencilView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_DEPTH_STENCIL_VIEW_DESC* desc, ID3D11DepthStencilView* view) override
+   {
+      DeviceData* device_data = GetDeviceData(device);
+      if (!device_data || !device_data->game)
+         return;
+      auto& game_device_data = GetGameDeviceData(*device_data);
+      if (game_device_data.tracked_depth_resource.get() == resource)
+      {
+         game_device_data.tracked_depth_dsv = view;
+      }
+   }
+
+   void PreCreatePixelShader(ID3D11Device* native_device, const void*& bytecode, SIZE_T& length) override
+   {
+      DeviceData* device_data = GetDeviceData(native_device);
+      if (!device_data || !device_data->game || !bytecode)
+         return;
+      auto& game_device_data = GetGameDeviceData(*device_data);
+      std::vector<std::byte> shader_code((const std::byte*)bytecode, ((const std::byte*)bytecode) + length);
+
+      uint32_t hash = Shader::BinToHash((const uint8_t*)bytecode, length);
+
+      std::vector<std::byte> code;
+      code.resize(length);
+      memcpy(&code[0], bytecode, length);
+      game_device_data.pixel_shader_code[hash] = std::move(code);
+
+      // Better build the shader list here than check per draw
+      bool is_alpha_tested_shader = PatchPixelShader(shader_code);
+
+      if (!is_alpha_tested_shader)
+         return;
+
+      com_ptr<ID3D11PixelShader> patched_shader;
+      native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, &patched_shader);
+
+      game_device_data.modified_atoc_pixel_shaders[hash] = patched_shader.get();
+   }
+
+   void PreCreateSamplerState(ID3D11Device* device, D3D11_SAMPLER_DESC& desc) override
+   {
+      if (desc.MaxAnisotropy <= 1)
+         return;
+
+      // The game already uses aniso samplers for most of the texture samplings, but for lightmap it's 3x and texture 16x/10x/4x
+      desc.MaxAnisotropy = D3D11_REQ_MAXANISOTROPY;
+   }
+
+   static void OnBindRenderTargetsAndDepthStencil(
+      ID3D11DeviceContext* context,
+      uint32_t count,
+      ID3D11RenderTargetView* const* rtvs)
+   {
+      CommandListData* cmd_list_data = GetCommandListData(context);
+      if (!cmd_list_data)
+         return;
+      auto& game_device_data = GetGameDeviceData(*cmd_list_data->device_data);
+
+      game_device_data.is_current_rtv_ms =
+         count == 1 &&
+         rtvs && rtvs[0] != nullptr &&
+         game_device_data.tracked_color_rtv != nullptr &&
+         rtvs[0] == game_device_data.tracked_color_rtv.get();
+   }
+
+   bool PreOMSetRenderTargets(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views, ID3D11DepthStencilView*& depth_stencil) override
+   {
+      OnBindRenderTargetsAndDepthStencil(context, count, views);
+      return false;
+   }
+
+   bool PreOMSetRenderTargetsAndUnorderedAccessViews(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views, ID3D11DepthStencilView*& depth_stencil, UINT uav_start, UINT uav_count, ID3D11UnorderedAccessView** uavs, const UINT* initial_counts) override
+   {
+      // ReShade only reported the render targets when they changed
+      if (count != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+         OnBindRenderTargetsAndDepthStencil(context, count, views);
       return false;
    }
    
-   static bool OnCreateSampler(
-      reshade::api::device* device,
-      reshade::api::sampler_desc &desc)
-   {
-      if (desc.max_anisotropy <= 1.f)
-         return false;
-      
-      // The game already uses aniso samplers for most of the texture samplings, but for lightmap it's 3x and texture 16x/10x/4x
-      desc.max_anisotropy = D3D11_REQ_MAXANISOTROPY;
-      return true;
-   }
-   
-   static void OnBindRenderTargetsAndDepthStencil(
-      reshade::api::command_list* cmd_list,
-      uint32_t count,
-      const reshade::api::resource_view *rtvs,
-      reshade::api::resource_view dsv)
-   {
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
-      auto& game_device_data = GetGameDeviceData(device_data);
-      
-      game_device_data.is_current_rtv_ms =
-         count == 1 &&
-         rtvs[0].handle != 0 &&
-         game_device_data.tracked_color_rtv != nullptr &&
-         rtvs[0].handle == reinterpret_cast<uint64_t>(game_device_data.tracked_color_rtv.get());
-   }
-   
 #if CUSTOM_MSAA_RESOLVE
-   static bool OnResolveTextureRegion(
-      reshade::api::command_list* cmd_list,
-      reshade::api::resource source,
-      uint32_t source_subresource,
-      const reshade::api::subresource_box* source_box,
-      reshade::api::resource dest,
-      uint32_t dest_subresource,
-      uint32_t dest_x,
-      uint32_t dest_y,
-      uint32_t dest_z,
-      reshade::api::format format)
+   bool PreResolveSubresource(ID3D11DeviceContext* native_device_context, ID3D11Resource* dest, UINT dest_subresource, ID3D11Resource* source, UINT source_subresource, DXGI_FORMAT format) override
    {
-      if (source.handle == 0)
+      if (source == nullptr)
          return false;
 
-      if (dest.handle == 0)
+      if (dest == nullptr)
          return false;
 
-      auto& device_data = *cmd_list->get_device()->get_private_data<DeviceData>();
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      if (!cmd_list_data)
+         return false;
+      auto& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
 
       if (!game_device_data.has_3d_scene_drawn)
       {
 #if 0
-         reshade::log::message(reshade::log::level::debug, "Fail to detect 3d scene.");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose, "Fail to detect 3d scene.");
 #endif
          return false;
       }
       
       ComPtr<ID3D11Resource> src_tex;
-      HRESULT hr_src = reinterpret_cast<ID3D11Resource*>(source.handle)->QueryInterface(src_tex.put());
+      HRESULT hr_src = source->QueryInterface(src_tex.put());
       if (FAILED(hr_src))
       {
 #if DEVELOPMENT
-         reshade::log::message(reshade::log::level::debug, "Fail to resolve incompatible source.");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose, "Fail to resolve incompatible source.");
 #endif
          return false;
       }
@@ -556,27 +531,17 @@ public:
       {
          if (test_index == 14)
          {
-            ComPtr<ID3D11DeviceContext> native_device_context;
-            ID3D11DeviceChild* device_child = (ID3D11DeviceChild*)(cmd_list->get_native());
-            HRESULT hr = device_child->QueryInterface(native_device_context.put());
-            if (FAILED(hr))
-            {
-#if DEVELOPMENT
-               reshade::log::message(reshade::log::level::debug, "Fail to get context device.");
-#endif
-               return false;
-            }
-
-            ID3D11Device* native_device = (ID3D11Device*)(cmd_list->get_device()->get_native());
+            HRESULT hr = S_OK;
+            ID3D11Device* native_device = device_data.native_device;
 
             ComPtr<ID3D11RenderTargetView> render_target_view;
             {
                ComPtr<ID3D11Resource> dest_tex;
-               HRESULT hr_dest = reinterpret_cast<ID3D11Resource*>(dest.handle)->QueryInterface(dest_tex.put());
+               HRESULT hr_dest = dest->QueryInterface(dest_tex.put());
                if (FAILED(hr_dest))
                {
 #if DEVELOPMENT
-                  reshade::log::message(reshade::log::level::debug, "Fail to resolve incompatible dest.");
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose, "Fail to resolve incompatible dest.");
 #endif
                   return false;
                }
@@ -590,17 +555,17 @@ public:
                if (FAILED(hr))
                {
 #if DEVELOPMENT
-                  reshade::log::message(reshade::log::level::debug, "Fail to create dest render target.");
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose, "Fail to create dest render target.");
 #endif
                   return false;
                }
             }
 
             DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
-            draw_state_stack.Cache(native_device_context.get(), device_data.uav_max_count);
+            draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
 
    #if 0
-            reshade::log::message(reshade::log::level::debug, "Drawing custom resolve.");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose, "Drawing custom resolve.");
    #endif
 
             // Set the new resources/states:
@@ -630,14 +595,14 @@ public:
             // Finally draw:
             native_device_context->Draw(3, 0);
 
-            draw_state_stack.Restore(native_device_context.get());
+            draw_state_stack.Restore(native_device_context);
             return true;
          }
       }
       else
       {
 #if 0
-         reshade::log::message(reshade::log::level::debug, "Resolve source isn't cached.");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose, "Resolve source isn't cached.");
 #endif
       }
       return false;
@@ -668,7 +633,7 @@ public:
          PatchCharacterPixelShader(shader_code);
          
 #if DEVELOPMENT
-         reshade::log::message(reshade::log::level::debug, std::format("Character Pixel Shader Patched: 0x{:08X}", pixel_shader_hash).c_str());
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose, std::format("Character Pixel Shader Patched: 0x{:08X}", pixel_shader_hash).c_str());
 #endif
 
          HRESULT hr = native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, game_device_data.modified_character_pixel_shaders[pixel_shader_hash].put());
@@ -685,13 +650,13 @@ public:
       ID3D11Device* native_device,
       ID3D11DeviceContext* native_device_context,
       CommandListData& cmd_list_data, DeviceData& device_data,
-      reshade::api::shader_stage stages,
+      ShaderStages stages,
       const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes,
       bool is_custom_pass, bool& updated_cbuffers,
       std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
-      if (enable_character_supersampling && (stages & reshade::api::shader_stage::compute) != 0)
+      if (enable_character_supersampling && (stages & ShaderStages::Compute) != 0)
       {
          bool is_skinning = false;
          while (true)
@@ -720,7 +685,7 @@ public:
                   if (optional_name->contains("Skinning"))
                   {
 #if DEVELOPMENT
-                     reshade::log::message(reshade::log::level::debug, std::format("Skinning Compute Shader: 0x{:08X}", original_shader_hashes.compute_shaders[0]).c_str());
+                     Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose, std::format("Skinning Compute Shader: 0x{:08X}", original_shader_hashes.compute_shaders[0]).c_str());
 #endif
                      is_skinning = true;
                      shader_hashes_skinning.compute_shaders.emplace(original_shader_hashes.compute_shaders[0]);
@@ -759,7 +724,7 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
       
-      if ((stages & reshade::api::shader_stage::pixel) == 0)
+      if ((stages & ShaderStages::Pixel) == 0)
          return DrawOrDispatchOverrideType::None;
       
       if (original_shader_hashes.pixel_shaders.empty())
@@ -805,7 +770,7 @@ public:
                if (blend_state_replacement != game_device_data.alpha_blend_states.end())
                {
                   native_device_context->OMSetBlendState(blend_state_replacement->second.get(), blend_factor, sample_mask);
-                  //reshade::log::message(reshade::log::level::info, "Blend State: Replaced.");
+                  //Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "Blend State: Replaced.");
                }
                else
                {
@@ -869,32 +834,30 @@ public:
    
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "MSAA", msaa_index);
-      reshade::get_config_value(runtime, NAME, "AlphaToCoverage", enable_alpha_to_coverage);
-      reshade::get_config_value(runtime, NAME, "SuperSampling", enable_character_supersampling);
+      Config::Get(NAME, "MSAA", msaa_index);
+      Config::Get(NAME, "AlphaToCoverage", enable_alpha_to_coverage);
+      Config::Get(NAME, "SuperSampling", enable_character_supersampling);
    }
    
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
       const char* labels[] = { "2x", "4x", "8x" };
 
       if (ImGui::SliderInt("MSAA", &msaa_index, 0, 2, labels[msaa_index]))
       {
-         reshade::set_config_value(runtime, NAME, "MSAA", msaa_index);
+         Config::Set(NAME, "MSAA", msaa_index);
       }
       
       const char* labels_toggle[] = { "Off", "On" };
       
       if (ImGui::SliderInt("Alpha To Coverage", &enable_alpha_to_coverage, 0, 1, labels_toggle[enable_alpha_to_coverage]))
       {
-         reshade::set_config_value(runtime, NAME, "AlphaToCoverage", enable_alpha_to_coverage);
+         Config::Set(NAME, "AlphaToCoverage", enable_alpha_to_coverage);
       }
       
       if (ImGui::SliderInt("Character Supersampling", &enable_character_supersampling, 0, 1, labels_toggle[enable_character_supersampling]))
       {
-         reshade::set_config_value(runtime, NAME, "SuperSampling", enable_character_supersampling);
+         Config::Set(NAME, "SuperSampling", enable_character_supersampling);
       }
    }
    
@@ -919,20 +882,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       
       enable_samplers_upgrade = false; // Exit hang
 
-      game = new HeavenBurnsRed();
+      SetGame<HeavenBurnsRed>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
-#if CUSTOM_MSAA_RESOLVE
-      reshade::unregister_event<reshade::addon_event::resolve_texture_region>(HeavenBurnsRed::OnResolveTextureRegion);
-#endif
-      reshade::unregister_event<reshade::addon_event::create_resource>(HeavenBurnsRed::OnCreateResource);
-      reshade::unregister_event<reshade::addon_event::init_resource>(HeavenBurnsRed::OnInitResource);
-      reshade::unregister_event<reshade::addon_event::destroy_resource>(HeavenBurnsRed::OnDestroyResource);
-      reshade::unregister_event<reshade::addon_event::init_resource_view>(HeavenBurnsRed::OnInitResourceView);
-      reshade::unregister_event<reshade::addon_event::create_pipeline>(HeavenBurnsRed::OnCreatePipeline);
-      reshade::unregister_event<reshade::addon_event::create_sampler>(HeavenBurnsRed::OnCreateSampler);
-      reshade::unregister_event<reshade::addon_event::bind_render_targets_and_depth_stencil>(HeavenBurnsRed::OnBindRenderTargetsAndDepthStencil);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

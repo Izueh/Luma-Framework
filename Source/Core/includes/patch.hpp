@@ -18,10 +18,6 @@
 
 #include "hash.h"
 
-// shaders.h (and shader_define.h through it) relies on reshade.hpp having been
-// included first (core.hpp does this via the DLSS/FSR headers).
-#include <include/reshade.hpp>
-
 #include "shaders.h"
 
 // Container utilities (DXBC parsing + patched container building) and pipeline
@@ -147,7 +143,7 @@ namespace Patch
       uint32_t shader_hash = 0;
       uint32_t recipe_hash = 0;
       std::string identity;
-      reshade::api::pipeline_subobject_type stage = reshade::api::pipeline_subobject_type::unknown;
+      D3D11_SHADER_VERSION_TYPE stage = SHADER_VERSION_TYPE_UNKNOWN;
       dxp::RecipeReport report;
    };
 
@@ -234,7 +230,7 @@ namespace Patch
       {
          uint32_t hash = 0;
          std::string identity;
-         reshade::api::pipeline_subobject_type stage = reshade::api::pipeline_subobject_type::unknown;
+         D3D11_SHADER_VERSION_TYPE stage = SHADER_VERSION_TYPE_UNKNOWN;
          std::shared_ptr<const dxp::sm5::Recipe> recipe;
          // User settings, copied from the global recipe settings when the recipes are loaded.
          bool enabled = true;
@@ -257,7 +253,7 @@ namespace Patch
    // Request passed to recipe providers (full DXBC container).
    struct ShaderPatchRequest
    {
-      reshade::api::pipeline_subobject_type type = reshade::api::pipeline_subobject_type::unknown;
+      D3D11_SHADER_VERSION_TYPE type = SHADER_VERSION_TYPE_UNKNOWN;
       uint32_t shader_hash = uint32_t(-1);
       const std::byte* shader_container = nullptr;
       size_t shader_container_size = 0;
@@ -276,7 +272,7 @@ namespace Patch
    struct PatchJob
    {
       uint32_t shader_hash = uint32_t(-1);
-      reshade::api::pipeline_subobject_type type = reshade::api::pipeline_subobject_type::unknown;
+      D3D11_SHADER_VERSION_TYPE type = SHADER_VERSION_TYPE_UNKNOWN;
       std::vector<uint8_t> shader_container;
       uint32_t bytecode_offset = 0;
 #if LUMA_HAS_RECIPE_PROVIDERS
@@ -326,21 +322,20 @@ namespace Patch
    // Clones the pipeline replacing shader subobjects via "find_patch" (same
    // lookup order as LoadCustomShaders: files first, then patches). No re-entry
    // guard needed: addon-created pipelines bypass ReShade's event dispatch.
-   inline std::pair<reshade::api::pipeline, bool> ClonePipelineWithPatches(
-      reshade::api::device* device,
-      reshade::api::pipeline_layout layout,
-      const reshade::api::pipeline_subobject* subobjects,
+   inline std::pair<Shader::Pipeline, bool> ClonePipelineWithPatches(
+      ID3D11Device* device,
+      const Shader::PipelineSubobject* subobjects,
       uint32_t subobject_count,
       std::function<std::optional<std::pair<const uint8_t*, uint32_t>>(
-          const reshade::api::shader_desc* clone_desc,
-          const reshade::api::shader_desc* orig_desc,
-          reshade::api::pipeline_subobject_type type)> find_patch);
+          const Shader::ShaderDesc* clone_desc,
+          const Shader::ShaderDesc* orig_desc,
+          D3D11_SHADER_VERSION_TYPE type)> find_patch);
 
 #if LUMA_USE_DXP
    // A resource a recipe added, resolved for the current draw.
    struct RecipeBinding
    {
-      reshade::api::pipeline_subobject_type stage = reshade::api::pipeline_subobject_type::unknown;
+      D3D11_SHADER_VERSION_TYPE stage = SHADER_VERSION_TYPE_UNKNOWN;
       UINT slot = 0;
       com_ptr<ID3D11ShaderResourceView> srv;
       com_ptr<ID3D11Buffer> buffer;
@@ -349,7 +344,7 @@ namespace Patch
    };
    // Appends the resources the recipes of a clone's stage added: Luma's cbuffers or "managed_resources" entries named after
    // the recipe handles (games register theirs). Returns false if any is missing, the stage should then use its original shader.
-   bool ResolveRecipeBindings(DeviceData& device_data, const Shader::CustomPipelineData& data, reshade::api::pipeline_subobject_type type,
+   bool ResolveRecipeBindings(DeviceData& device_data, const Shader::CustomPipelineData& data, D3D11_SHADER_VERSION_TYPE type,
       std::vector<RecipeBinding>& bindings, bool& has_recipe);
    void SetRecipeBindings(ID3D11DeviceContext* context, CommandListData& cmd_list_data, const std::vector<RecipeBinding>& bindings);
 #endif

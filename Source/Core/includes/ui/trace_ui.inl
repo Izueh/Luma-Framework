@@ -3,7 +3,7 @@
 // The dev UI of the frame capture and the debug draw (see "ui.hpp"), included by "core.hpp" after the trace module
 namespace UI
 {
-   void DrawCaptureTab(reshade::api::effect_runtime* runtime, DeviceData& device_data, bool& open_settings_tab)
+   void DrawCaptureTab(DeviceData& device_data, bool& open_settings_tab)
    {
       const bool refresh_cloned_pipelines = device_data.cloned_pipelines_changed.exchange(false);
       static int32_t selected_index = -1; // TODO: rename to capture_, and "changed_selected" too
@@ -54,7 +54,7 @@ namespace UI
 
             // Only the primary command list should have any capture data, the others would have joined their with it
             {
-               CommandListData& cmd_list_data = *runtime->get_command_queue()->get_immediate_command_list()->get_private_data<CommandListData>();
+               CommandListData& cmd_list_data = *device_data.primary_command_list_data;
                const std::shared_lock lock_trace_2(cmd_list_data.mutex_trace);
                cmd_list_data.trace_draw_calls_data.clear();
             }
@@ -81,7 +81,7 @@ namespace UI
                if (!Trace::running)
                {
                   const std::shared_lock lock_generic(s_mutex_generic);
-                  CommandListData& cmd_list_data = *runtime->get_command_queue()->get_immediate_command_list()->get_private_data<CommandListData>();
+                  CommandListData& cmd_list_data = *device_data.primary_command_list_data;
                   const std::shared_lock lock_trace_2(cmd_list_data.mutex_trace);
 
 #if 1 // Much more optimized, drawing all items is extremely slow otherwise
@@ -112,7 +112,7 @@ namespace UI
                         if (Trace::ignore_bindings) continue;
                      }
                      else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom) {
-                        if (Trace::ignore_custom_draws && draw_call_data.custom_stage != reshade::api::shader_stage(0)) continue;
+                        if (Trace::ignore_custom_draws && draw_call_data.custom_stage != ShaderStages::None) continue;
                      }
                      actual_trace_count++;
                      trace_draw_calls_index_inverse_redirector.emplace_back(index);
@@ -539,9 +539,9 @@ namespace UI
                         if (!Trace::highlighted_resource.empty() && !device_data.swapchains.empty())
                         {
                            // Not fully safe, but it should do for almost all cases
-                           reshade::api::swapchain* swapchain = *device_data.swapchains.begin();
-                           IDXGISwapChain* native_swapchain = (IDXGISwapChain*)(swapchain->get_native());
-                           UINT back_buffer_index = swapchain->get_current_back_buffer_index();
+                           IDXGISwapChain* swapchain = *device_data.swapchains.begin();
+                           IDXGISwapChain* native_swapchain = swapchain;
+                           UINT back_buffer_index = 0; // Always 0 in DX11
                            com_ptr<ID3D11Texture2D> back_buffer;
                            native_swapchain->GetBuffer(back_buffer_index, IID_PPV_ARGS(&back_buffer));
 
@@ -554,7 +554,7 @@ namespace UI
                      }
                      else if (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom)
                      {
-                        if (Trace::ignore_custom_draws && draw_call_data.custom_stage != reshade::api::shader_stage(0)) continue;
+                        if (Trace::ignore_custom_draws && draw_call_data.custom_stage != ShaderStages::None) continue;
 
                         if (Trace::show_command_list_info)
                         {
@@ -594,7 +594,7 @@ namespace UI
                         changed_selected = true;
                      }
                      ImGui::PopStyleColor();
-                     if ((draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Shader && is_valid) || (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom && draw_call_data.custom_stage != reshade::api::shader_stage(0)))
+                     if ((draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Shader && is_valid) || (draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom && draw_call_data.custom_stage != ShaderStages::None))
                      {
                         ImGui::SameLine();
                         ImGui::SetNextItemAllowOverlap(); // Allow the button to be clickable if rects overlap
@@ -730,8 +730,8 @@ namespace UI
          const auto draw_state_analysis = [&](const TraceDrawCallData& draw_call_data, CachedPipeline* pipeline, bool debug_draw_shader_enabled)
          {
             const bool has_vs = pipeline && pipeline->HasVertexShader();
-            const bool has_ps = pipeline ? pipeline->HasPixelShader() : draw_call_data.custom_stage == reshade::api::shader_stage::pixel;
-            const bool has_cs = pipeline ? pipeline->HasComputeShader() : draw_call_data.custom_stage == reshade::api::shader_stage::compute;
+            const bool has_ps = pipeline ? pipeline->HasPixelShader() : draw_call_data.custom_stage == ShaderStages::Pixel;
+            const bool has_cs = pipeline ? pipeline->HasComputeShader() : draw_call_data.custom_stage == ShaderStages::Compute;
 
             static const TraceDrawCallData* last_draw_call_data = nullptr;
             static std::set<std::pair<TraceDrawCallData::SlotKind, UINT>> original_slots; // Replaced slots showing the original
@@ -1711,7 +1711,7 @@ namespace UI
                ImGui::PopID();
                if (open_settings_tab_item)
                {
-                  CommandListData& cmd_list_data = *runtime->get_command_queue()->get_immediate_command_list()->get_private_data<CommandListData>();
+                  CommandListData& cmd_list_data = *device_data.primary_command_list_data;
                   const std::shared_lock lock_trace(cmd_list_data.mutex_trace);
                   if (selected_index >= 0 && cmd_list_data.trace_draw_calls_data.size() >= selected_index + 1)
                   {
@@ -1724,7 +1724,7 @@ namespace UI
                         std::unique_lock lock(s_mutex_generic);
                         const auto pipeline_pair = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle);
                         CachedPipeline* const pipeline = pipeline_pair != device_data.pipeline_cache_by_pipeline_handle.end() ? pipeline_pair->second : nullptr;
-                        const bool is_luma_pass = draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom && draw_call_data.custom_stage != reshade::api::shader_stage(0);
+                        const bool is_luma_pass = draw_call_data.type == TraceDrawCallData::TraceDrawCallType::Custom && draw_call_data.custom_stage != ShaderStages::None;
                         if (pipeline || is_luma_pass)
                         {
                            if (ImGui::BeginChild("Settings and Info"))
@@ -2067,7 +2067,7 @@ namespace UI
                   }
 
                   static std::string disasm_string;
-                  CommandListData& cmd_list_data = *runtime->get_command_queue()->get_immediate_command_list()->get_private_data<CommandListData>();
+                  CommandListData& cmd_list_data = *device_data.primary_command_list_data;
                   const std::shared_lock lock_trace(cmd_list_data.mutex_trace);
 
                   bool refresh_disassembly = changed_selected || opened_disassembly_tab_item != open_disassembly_tab_item || pending_disassembly_refresh;
@@ -2185,7 +2185,7 @@ namespace UI
                   static std::string hlsl_string;
                   static bool hlsl_error = false;
                   static bool hlsl_warning = false;
-                  CommandListData& cmd_list_data = *runtime->get_command_queue()->get_immediate_command_list()->get_private_data<CommandListData>();
+                  CommandListData& cmd_list_data = *device_data.primary_command_list_data;
                   const std::shared_lock lock_trace(cmd_list_data.mutex_trace);
                   static bool pending_live_code_refresh = false;
                   bool refresh_live_code = changed_selected || inline_includes_toggled || opened_live_tab_item != open_live_tab_item || refresh_cloned_pipelines || pending_live_code_refresh;

@@ -120,7 +120,6 @@ public:
         // We must remove it later with `RemoveVectoredExceptionHandler`?
         AddVectoredExceptionHandler(1, ExceptionBreakpointHandler);
 
-        reshade::register_event<reshade::addon_event::update_buffer_region>(OnUpdateBufferRegion);
     }
 
     void OnInit(bool async) override
@@ -130,13 +129,13 @@ public:
         luma_settings_cbuffer_index = 13;
         luma_data_cbuffer_index = -1;
 
-        native_shaders_definitions.emplace("MHW Unpack MVs CS"_h, ShaderDefinition{ "Luma_MHW_UnpackMVs_CS", reshade::api::pipeline_subobject_type::compute_shader });
+        native_shaders_definitions.emplace("MHW Unpack MVs CS"_h, ShaderDefinition{ "Luma_MHW_UnpackMVs_CS", D3D11_SHVER_COMPUTE_SHADER });
         
         // Bloom
-        native_shaders_definitions.emplace("MHW Bloom VS"_h, ShaderDefinition{ "Luma_MHW_Bloom_impl", reshade::api::pipeline_subobject_type::vertex_shader, nullptr, "main_vs" });
-        native_shaders_definitions.emplace("MHW Bloom Prefilter PS"_h, ShaderDefinition{ "Luma_MHW_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "prefilter_ps" });
-        native_shaders_definitions.emplace("MHW Bloom Downsample PS"_h, ShaderDefinition{ "Luma_MHW_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "downsample_ps" });
-        native_shaders_definitions.emplace("MHW Bloom Upsample PS"_h, ShaderDefinition{ "Luma_MHW_Bloom_impl", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "upsample_ps" });
+        native_shaders_definitions.emplace("MHW Bloom VS"_h, ShaderDefinition{ "Luma_MHW_Bloom_impl", D3D11_SHVER_VERTEX_SHADER, nullptr, "main_vs" });
+        native_shaders_definitions.emplace("MHW Bloom Prefilter PS"_h, ShaderDefinition{ "Luma_MHW_Bloom_impl", D3D11_SHVER_PIXEL_SHADER, nullptr, "prefilter_ps" });
+        native_shaders_definitions.emplace("MHW Bloom Downsample PS"_h, ShaderDefinition{ "Luma_MHW_Bloom_impl", D3D11_SHVER_PIXEL_SHADER, nullptr, "downsample_ps" });
+        native_shaders_definitions.emplace("MHW Bloom Upsample PS"_h, ShaderDefinition{ "Luma_MHW_Bloom_impl", D3D11_SHVER_PIXEL_SHADER, nullptr, "upsample_ps" });
       
         // Bloom
         g_bloom_nmips = 6;
@@ -192,19 +191,19 @@ public:
 
         if (ImGui::Checkbox("Luma Bloom Enable", &g_enable_luma_bloom))
         {
-            reshade::set_config_value(nullptr, NAME, "LumaBloomEnable", g_enable_luma_bloom);
+            Config::Set(NAME, "LumaBloomEnable", g_enable_luma_bloom);
         }
 
         if (ImGui::SliderFloat("Bloom Intensity", &g_bloom_intensity, 0.0f, 3.0f))
         {
-            reshade::set_config_value(nullptr, NAME, "BloomIntensity", g_bloom_intensity);
+            Config::Set(NAME, "BloomIntensity", g_bloom_intensity);
         }
     }
 
     void LoadConfigs() override
     {
-        reshade::get_config_value(nullptr, NAME, "LumaBloomEnable", g_enable_luma_bloom);
-        reshade::get_config_value(nullptr, NAME, "BloomIntensity", g_bloom_intensity);
+        Config::Get(NAME, "LumaBloomEnable", g_enable_luma_bloom);
+        Config::Get(NAME, "BloomIntensity", g_bloom_intensity);
     }
 
     void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -212,9 +211,9 @@ public:
         device_data.game = new GameDeviceDataMonsterHunterWorld;
     }
 
-    void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+    void OnInitSwapchain(IDXGISwapChain* swapchain) override
     {
-        auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+        auto& device_data = *GetSwapchainData(swapchain)->device_data;
         auto& game_device_data = GetGameDeviceData(device_data);
         auto& managed_resources = game_device_data.managed_resources;
 
@@ -226,12 +225,21 @@ public:
         ResetCOMArray(g_srv_bloom_mips_x);
     }
 
-    static bool OnUpdateBufferRegion(reshade::api::device* device, const void* data, reshade::api::resource resource, uint64_t offset, uint64_t size)
+    // ReShade's "update_buffer_region": buffer updates on the immediate context
+    bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch, UINT copy_flags) override
     {
-        auto native_resource = (ID3D11Resource*)resource.handle;
-        ComPtr<ID3D11Buffer> buffer;
-        auto hr = native_resource->QueryInterface(buffer.put());
-        if (SUCCEEDED(hr))
+       ID3D11Buffer* buffer = AsBuffer(resource);
+       if (!buffer || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+          return false;
+       D3D11_BUFFER_DESC desc;
+       buffer->GetDesc(&desc);
+       const uint64_t size = box ? uint64_t(box->right - box->left) : uint64_t(desc.ByteWidth);
+       OnUpdateBufferRegion(buffer, data);
+       return false;
+    }
+
+    static bool OnUpdateBufferRegion(ID3D11Buffer* buffer, const void* data)
+    {
         {
             D3D11_BUFFER_DESC desc;
             buffer->GetDesc(&desc);
@@ -248,7 +256,7 @@ public:
         return false;
     }
 
-    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
     {
         auto& game_device_data = GetGameDeviceData(device_data);
         auto& managed_resources = game_device_data.managed_resources;
@@ -726,19 +734,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         texture_format_upgrades_type   = TextureFormatUpgradesType::AllowedEnabled;
         // ### Check which of these are needed and remove the rest ###
         texture_upgrade_formats = {
-              //reshade::api::format::r8g8b8a8_unorm,
-              //reshade::api::format::r8g8b8a8_unorm_srgb,
-              //reshade::api::format::r8g8b8a8_typeless,
-              //reshade::api::format::r8g8b8x8_unorm,
-              //reshade::api::format::r8g8b8x8_unorm_srgb,
-              //reshade::api::format::b8g8r8a8_unorm,
-              //reshade::api::format::b8g8r8a8_unorm_srgb,
-              //reshade::api::format::b8g8r8a8_typeless,
-              //reshade::api::format::b8g8r8x8_unorm,
-              //reshade::api::format::b8g8r8x8_unorm_srgb,
-              //reshade::api::format::b8g8r8x8_typeless,
+              //DXGI_FORMAT_R8G8B8A8_UNORM,
+              //DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+              //DXGI_FORMAT_R8G8B8A8_TYPELESS,
+              //DXGI_FORMAT_B8G8R8A8_UNORM,
+              //DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+              //DXGI_FORMAT_B8G8R8A8_TYPELESS,
+              //DXGI_FORMAT_B8G8R8X8_UNORM,
+              //DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+              //DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-              reshade::api::format::r11g11b10_float,
+              DXGI_FORMAT_R11G11B10_FLOAT,
         };
         // ### Check these if textures are not upgraded ###
         texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
@@ -753,7 +759,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         forced_shader_names.emplace(0xBCA17DC2, "Copy");
         #endif
 
-        game = new MonsterHunterWorld();
+        SetGame<MonsterHunterWorld>();
     }
 
     CoreMain(hModule, ul_reason_for_call, lpReserved);

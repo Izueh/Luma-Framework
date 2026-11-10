@@ -110,10 +110,10 @@ namespace CODs // partial
          // Default
          texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
          texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_typeless, // color buffers
-            reshade::api::format::r8g8b8a8_unorm,    // color buffers
-            reshade::api::format::r11g11b10_float,   // color buffers
-            reshade::api::format::r8g8_snorm,        // motion vectors
+            DXGI_FORMAT_R8G8B8A8_TYPELESS, // color buffers
+            DXGI_FORMAT_R8G8B8A8_UNORM,    // color buffers
+            DXGI_FORMAT_R11G11B10_FLOAT,   // color buffers
+            DXGI_FORMAT_R8G8_SNORM,        // motion vectors
          };
          texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio /*| (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px*/;
       }
@@ -128,7 +128,7 @@ namespace CODs // partial
       virtual void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data)
       {
       }
-      virtual DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+      virtual DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
       {
          return DrawOrDispatchOverrideType::None;
       }
@@ -157,14 +157,14 @@ namespace NativeShaders
 
    void OnInit()
    {
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_h1_BlitBlurSkip_PS), ShaderDefinition{Luma_h1_BlitBlurSkip_PS.data(), reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_h1_RenderIntermediatePass_PS), ShaderDefinition{Luma_h1_RenderIntermediatePass_PS.data(), reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_h1_SMAAT2XSkip_PS), ShaderDefinition{Luma_h1_SMAAT2XSkip_PS.data(), reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_h1_SRMotionVectorIn_PS), ShaderDefinition{Luma_h1_SRMotionVectorIn_PS.data(), reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_h1_SRColorIn_PS), ShaderDefinition{Luma_h1_SRColorIn_PS.data(), reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_h1_SRColorOut_PS), ShaderDefinition{Luma_h1_SRColorOut_PS.data(), reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_s1_SRMotionVectorIn_PS), ShaderDefinition{Luma_s1_SRMotionVectorIn_PS.data(), reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_iw7_SRMotionVectorIn_PS), ShaderDefinition{Luma_iw7_SRMotionVectorIn_PS.data(), reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_h1_BlitBlurSkip_PS), ShaderDefinition{Luma_h1_BlitBlurSkip_PS.data(), D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_h1_RenderIntermediatePass_PS), ShaderDefinition{Luma_h1_RenderIntermediatePass_PS.data(), D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_h1_SMAAT2XSkip_PS), ShaderDefinition{Luma_h1_SMAAT2XSkip_PS.data(), D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_h1_SRMotionVectorIn_PS), ShaderDefinition{Luma_h1_SRMotionVectorIn_PS.data(), D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_h1_SRColorIn_PS), ShaderDefinition{Luma_h1_SRColorIn_PS.data(), D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_h1_SRColorOut_PS), ShaderDefinition{Luma_h1_SRColorOut_PS.data(), D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_s1_SRMotionVectorIn_PS), ShaderDefinition{Luma_s1_SRMotionVectorIn_PS.data(), D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash(Luma_iw7_SRMotionVectorIn_PS), ShaderDefinition{Luma_iw7_SRMotionVectorIn_PS.data(), D3D11_SHVER_PIXEL_SHADER});
    }
 } // namespace NativeShaders
 
@@ -638,7 +638,7 @@ namespace SR
          return true;
       }
 
-      static bool SetAddressByOffsetIfVerified(uint offset, reshade::api::effect_runtime* runtime)
+      static bool SetAddressByOffsetIfVerified(uint offset)
       {
          // failed?
          if (offset == 0)
@@ -654,13 +654,13 @@ namespace SR
          VirtualProtect(addr, sizeof(float4), PAGE_EXECUTE_READWRITE, &old_protect);
 
          // save
-         message(reshade::log::level::info, std::string("Jitter offset found and set: " + std::format("{:#x}", offset)).c_str());
-         reshade::set_config_value(runtime, NAME, "JitterOffset", offset);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::string("Jitter offset found and set: " + std::format("{:#x}", offset)).c_str());
+         Config::Set(NAME, "JitterOffset", offset);
 
          return true;
       }
 
-      static bool SetAddressFromScanIfVerified(reshade::api::effect_runtime* runtime)
+      static bool SetAddressFromScanIfVerified()
       {
          const uintptr_t start = Globals::base;
          const uintptr_t end = Globals::base + 0x7FFFFFFF;
@@ -680,7 +680,7 @@ namespace SR
             if (mbi.State == MEM_COMMIT && (mbi.Protect & readable) && !(mbi.Protect & PAGE_GUARD) && !(mbi.Protect & PAGE_NOACCESS))
             {
                for (uintptr_t a = current; a + sizeof(float4) <= region_end; a += 16)
-                  if (SetAddressByOffsetIfVerified(static_cast<uint>(a - Globals::base), runtime))
+                  if (SetAddressByOffsetIfVerified(static_cast<uint>(a - Globals::base)))
                      return true;
             }
 
@@ -689,12 +689,12 @@ namespace SR
          return false;
       }
 
-      static bool TryDisarm(reshade::api::effect_runtime* runtime)
+      static bool TryDisarm()
       {
          if (!IsReady())
             return false;
          *addr = expected_jitter;
-         reshade::set_config_value(runtime, NAME, "JitterOffset", 0);
+         Config::Set(NAME, "JitterOffset", 0);
          addr = nullptr;
          return true;
       }
@@ -780,16 +780,16 @@ namespace SR
          }
       }
 
-      static void OnLoad(reshade::api::effect_runtime* runtime)
+      static void OnLoad()
       {
          uint o = 0;
-         auto s = reshade::get_config_value(runtime, NAME, "JitterOffset", o);
-         message(reshade::log::level::info, std::string("Jitter offset loaded: " + std::format("{:#x}", o)).c_str());
+         auto s = Config::Get(NAME, "JitterOffset", o);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::string("Jitter offset loaded: " + std::format("{:#x}", o)).c_str());
 
          if (s)
-            SetAddressByOffsetIfVerified(o, runtime);
+            SetAddressByOffsetIfVerified(o);
          else
-            SetAddressFromScanIfVerified(runtime);
+            SetAddressFromScanIfVerified();
       }
    } // namespace Jitter
 
@@ -923,13 +923,13 @@ namespace SR
       //  cb_luma_global_settings.GameSettings.RenderResolutionScale = SR::IsOn() ? Buffers::GetRenderRatio() : -1; //%
    }
 
-   void OnLoad(reshade::api::effect_runtime* runtime)
+   void OnLoad()
    {
       // jitter
-      Jitter::OnLoad(runtime);
+      Jitter::OnLoad();
 
       // ignore_upgraded_samplers_user
-      reshade::set_config_value(runtime, NAME, "ignore_upgraded_samplers_user", ignore_upgraded_samplers_user);
+      Config::Set(NAME, "ignore_upgraded_samplers_user", ignore_upgraded_samplers_user);
    }
 } // namespace SR
 
@@ -944,7 +944,7 @@ namespace SectionedImGui
          return (1.f - amount / 2) + amount / 2 * sinf(cb_luma_global_settings.FrameIndex * speed);
       }
 
-      static void README(DeviceData& device_data, reshade::api::effect_runtime* runtime)
+      static void README(DeviceData& device_data)
       {
          // pulsing text
          auto pulse = GetPulseMultiplier();
@@ -971,7 +971,7 @@ namespace SectionedImGui
          ImGui::TextWrapped(GameIdentity::filename_obscured.empty() ? "%s" : "%s (%s)", GameIdentity::filename.c_str(), GameIdentity::filename_obscured.c_str());
       }
 
-      static void GammaCorrection(DeviceData& device_data, reshade::api::effect_runtime* runtime)
+      static void GammaCorrection(DeviceData& device_data)
       {
          // Info
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.75f, 1.f));
@@ -1012,12 +1012,12 @@ namespace SectionedImGui
             }
             ShaderDefineInfo::Set(GAMMA_CORRECTION_TYPE_HASH, custom_sdr_gamma > 0);
             defines_need_recompilation = true;
-            reshade::set_config_value(runtime, NAME, "custom_sdr_gamma", custom_sdr_gamma);
+            Config::Set(NAME, "custom_sdr_gamma", custom_sdr_gamma);
          }
          ImGui::PopID();
       }
 
-      static void InGameSettingsWarning(DeviceData& device_data, reshade::api::effect_runtime* runtime)
+      static void InGameSettingsWarning(DeviceData& device_data)
       {
          // color red
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.75f, 0.75f, 1.f));
@@ -1054,7 +1054,7 @@ namespace SectionedImGui
          }
       }
 
-      static void InGameSettingsBrightness(DeviceData& device_data, reshade::api::effect_runtime* runtime)
+      static void InGameSettingsBrightness(DeviceData& device_data)
       {
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.75f, 1.f));
          ImGui::TextWrapped("[\"BRIGHTNESS\"]");
@@ -1076,7 +1076,7 @@ namespace SectionedImGui
          ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_IS_BLACK, "Black Test", "For verifying \"NOT VISIBLE\".\nAny pixels not 0 will be forced to a bright value.");
       }
 
-      static void HDRBrightness(DeviceData& device_data, reshade::api::effect_runtime* runtime)
+      static void HDRBrightness(DeviceData& device_data)
       {
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 1.f, 1.f));
          ImGui::TextWrapped("[HDR Luminance Tonemapping]");
@@ -1099,32 +1099,32 @@ namespace SectionedImGui
 
          ImGui::PushID("HDRBrightness: ExposurePost");
          if (ImGui::SliderFloat("Post Exposure", &cb_luma_global_settings.GameSettings.ExposurePost, 0.f, 3.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "ExposurePost", cb_luma_global_settings.GameSettings.ExposurePost);
+            Config::Set(NAME, "ExposurePost", cb_luma_global_settings.GameSettings.ExposurePost);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Exposure on color right before luminance HDR tonemap to Display Peak, which doesn't cause blowout.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.ExposurePost, default_luma_global_game_settings.ExposurePost, "ExposurePost", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.ExposurePost, default_luma_global_game_settings.ExposurePost, "ExposurePost");
 
          ImGui::PushID("HDRBrightness: ExpectedMax");
          if (ImGui::SliderFloat("Expected Max", &cb_luma_global_settings.GameSettings.ExpectedMax, 0.f, 2.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "ExpectedMax", cb_luma_global_settings.GameSettings.ExpectedMax);
+            Config::Set(NAME, "ExpectedMax", cb_luma_global_settings.GameSettings.ExpectedMax);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("The expected maximum luminance of the scene.\nDecrease means more clipping.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.ExpectedMax, default_luma_global_game_settings.ExpectedMax, "ExpectedMax", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.ExpectedMax, default_luma_global_game_settings.ExpectedMax, "ExpectedMax");
 
          if (ImGui::SliderFloat("FMV Paper White", &cb_luma_global_settings.GameSettings.FMVPaperWhite, 1.f, 500.f, "%.0f"))
-            reshade::set_config_value(runtime, NAME, "FMVPaperWhite", cb_luma_global_settings.GameSettings.FMVPaperWhite);
+            Config::Set(NAME, "FMVPaperWhite", cb_luma_global_settings.GameSettings.FMVPaperWhite);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Separate brightness for video files (e.g. loading).");
-         DrawResetButton(cb_luma_global_settings.GameSettings.FMVPaperWhite, default_luma_global_game_settings.FMVPaperWhite, "FMVPaperWhite", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.FMVPaperWhite, default_luma_global_game_settings.FMVPaperWhite, "FMVPaperWhite");
 
          ShaderDefineInfo::UIToggleCheckmark(ShaderDefineInfo::SWAPCHAIN_TEST_USER_PEAK, "Test Pattern (Read Tooltip)", "Show a simple test pattern (2 Rectangles: 10000 nits outer VS user settings inner) to check if the display peak brightness is correctly set.\n\n- If display is set to HGiG, which hard clips, the technically best value is the lowest where the inner rectangle disappears.\n- If display is set to Static Tonemap, it will try to compress the full 10000 nits down, so you have to search up your model, or eye it by finding when the roll off starts.\n\nAlso consider other factors like chrominance loss at higher nits, Automatic Brightness Limiter (ABL), and personal preference.");
       }
 
       static bool is_show_pcc_ucs = false;
-      static void PerChannelCorrection(DeviceData& device_data, reshade::api::effect_runtime* runtime)
+      static void PerChannelCorrection(DeviceData& device_data)
       {
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 0.75f, 1.f, 1.f));
          ImGui::TextWrapped("[Per-Channel Correction via SDR Tonemap Extension]");
@@ -1140,11 +1140,11 @@ namespace SectionedImGui
 
          ImGui::PushID("HDRBrightness: Exposure Pre");
          if (ImGui::SliderFloat("Pre Exposure", &cb_luma_global_settings.GameSettings.ExposurePre, 0.f, 3.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "ExposurePre", cb_luma_global_settings.GameSettings.ExposurePre);
+            Config::Set(NAME, "ExposurePre", cb_luma_global_settings.GameSettings.ExposurePre);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Exposure multiplier of raw linear color,\nright after scene rendering is done,\nand before per-channel tonemap that causes blowout.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.ExposurePre, default_luma_global_game_settings.ExposurePre, "ExposurePre", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.ExposurePre, default_luma_global_game_settings.ExposurePre, "ExposurePre");
 
          ShaderDefineInfo::UIDropDown(ShaderDefineInfo::PCC_TONEMAP, "Shoulder Replacement",
             {"Reinhard (\"Soft Knee\")", "Exponential (\"Hard Knee\")"},
@@ -1152,16 +1152,16 @@ namespace SectionedImGui
 
          ImGui::PushID("PCC: Peak");
          if (ImGui::SliderFloat("Peak", &cb_luma_global_settings.GameSettings.PCCPeak, 1.f, 10.f, "%.4f", ImGuiSliderFlags_Logarithmic))
-            reshade::set_config_value(runtime, NAME, "PCCPeak", cb_luma_global_settings.GameSettings.PCCPeak);
+            Config::Set(NAME, "PCCPeak", cb_luma_global_settings.GameSettings.PCCPeak);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("The peak for the extended per-channel tonemapper from which we obtain new extended chrominance & hue.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.PCCPeak, default_luma_global_game_settings.PCCPeak, "PCCPeak", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.PCCPeak, default_luma_global_game_settings.PCCPeak, "PCCPeak");
 
          if (ImGui::Button(std::format("Match Display Peak ÷ Paper ({:.2f})", cb_luma_global_settings.ScenePeakWhite / cb_luma_global_settings.ScenePaperWhite).c_str()))
          {
             cb_luma_global_settings.GameSettings.PCCPeak = cb_luma_global_settings.ScenePeakWhite / cb_luma_global_settings.ScenePaperWhite;
-            reshade::set_config_value(runtime, NAME, "PCCPeak", cb_luma_global_settings.GameSettings.PCCPeak);
+            Config::Set(NAME, "PCCPeak", cb_luma_global_settings.GameSettings.PCCPeak);
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Match Chrominance Extension to Luminance Extension.\nTechnically correct, but usually too high, which leads to unintended highlights like orange/red fire.");
@@ -1170,21 +1170,21 @@ namespace SectionedImGui
          // {
          //    ImGui::PushID("PCC: Hue");
          //    if (ImGui::SliderFloat("Hue Strength", &cb_luma_global_settings.GameSettings.PCCHue, 0.f, 1.f, "%.3f"))
-         //       reshade::set_config_value(runtime, NAME, "PCCHue", cb_luma_global_settings.GameSettings.PCCHue);
+         //       Config::Set(NAME, "PCCHue", cb_luma_global_settings.GameSettings.PCCHue);
          //    ImGui::PopID();
          //    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("(With Uniform/Perceptual Color Space) The amount of new straighten blowout hue to blend onto the original.");
-         //    DrawResetButton(cb_luma_global_settings.GameSettings.PCCHue, default_luma_global_game_settings.PCCHue, "PCCHue", runtime);
+         //    DrawResetButton(cb_luma_global_settings.GameSettings.PCCHue, default_luma_global_game_settings.PCCHue, "PCCHue");
          //
          //    ImGui::PushID("PCC: Chrom");
          //    if (ImGui::SliderFloat("Saturation Strength", &cb_luma_global_settings.GameSettings.PCCChrom, 0.f, 1.f, "%.3f"))
-         //       reshade::set_config_value(runtime, NAME, "PCCChrom", cb_luma_global_settings.GameSettings.PCCChrom);
+         //       Config::Set(NAME, "PCCChrom", cb_luma_global_settings.GameSettings.PCCChrom);
          //    ImGui::PopID();
          //    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("(With Uniform/Perceptual Color Space) The amount of new recovered chrominance to blend onto the original.");
-         //    DrawResetButton(cb_luma_global_settings.GameSettings.PCCChrom, default_luma_global_game_settings.PCCChrom, "PCCChrom", runtime);
+         //    DrawResetButton(cb_luma_global_settings.GameSettings.PCCChrom, default_luma_global_game_settings.PCCChrom, "PCCChrom");
          // }
       }
 
-      static void SR(DeviceData& device_data, reshade::api::effect_runtime* runtime)
+      static void SR(DeviceData& device_data)
       {
          // Enabled? and HardReset
          if (!SR::IsOn())
@@ -1262,7 +1262,7 @@ namespace SectionedImGui
          if (SR::Jitter::IsReady())
          {
             if (DEVELOPMENT && ImGui::Button("Disarm"))
-               SR::Jitter::TryDisarm(runtime);
+               SR::Jitter::TryDisarm();
             ImGui::SameLine();
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75f, 1.f, 0.75f, 1.f));
             ImGui::SameLine();
@@ -1321,7 +1321,7 @@ namespace SectionedImGui
 
             static bool failed = false;
             if (ImGui::Button("Scan for Jitter Address Offset"))
-               failed = !SR::Jitter::SetAddressFromScanIfVerified(runtime);
+               failed = !SR::Jitter::SetAddressFromScanIfVerified();
             ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.75, 0.75, 0.75, 1));
             ImGui::SameLine();
             ImGui::TextWrapped("(Else, using original T2X Jitter)");
@@ -1351,11 +1351,11 @@ namespace SectionedImGui
 
          ImGui::PushID("SR Sampler Upgrade Bypass");
          if (ImGui::Checkbox("Bypass", &SR::ignore_upgraded_samplers_user))
-            reshade::set_config_value(runtime, NAME, "ignore_upgraded_samplers_user", SR::ignore_upgraded_samplers_user);
+            Config::Set(NAME, "ignore_upgraded_samplers_user", SR::ignore_upgraded_samplers_user);
          ImGui::PopID();
       }
 
-      void PostProcessing(DeviceData& device_data, reshade::api::effect_runtime* runtime)
+      void PostProcessing(DeviceData& device_data)
       {
          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 0.75f, 1.f));
          ImGui::TextWrapped("[Miscellaneous]");
@@ -1364,11 +1364,11 @@ namespace SectionedImGui
          // Bloom cb
          ImGui::PushID("PP Bloom");
          if (ImGui::SliderFloat("Bloom", &cb_luma_global_settings.GameSettings.Bloom, 0.f, 2.f, "%.3f"))
-            reshade::set_config_value(runtime, NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
+            Config::Set(NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
          ImGui::PopID();
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("Simple bloom intensity multiplier.");
-         DrawResetButton(cb_luma_global_settings.GameSettings.Bloom, default_luma_global_game_settings.Bloom, "Bloom", runtime);
+         DrawResetButton(cb_luma_global_settings.GameSettings.Bloom, default_luma_global_game_settings.Bloom, "Bloom");
 
          // TODO more
          // TODO IW film grain
@@ -1401,7 +1401,7 @@ namespace SectionedImGui
    } // namespace Templates
 
    // section struct
-   using SectionFunc = std::function<void(DeviceData&, reshade::api::effect_runtime*)>;
+   using SectionFunc = std::function<void(DeviceData&)>;
    struct SectionEntry
    {
       const char* name;
@@ -1411,31 +1411,31 @@ namespace SectionedImGui
    // list of sections
    static inline std::vector<SectionEntry> sections =
       {
-         {"README (Scroll Me!)", [](DeviceData& d, reshade::api::effect_runtime* r)
-            { Templates::README(d, r); }},
-         {"In-Game Settings: Warning", [](DeviceData& d, reshade::api::effect_runtime* r)
-            { Templates::InGameSettingsWarning(d, r); }},
-         {"In-Game Settings: Brightness", [](DeviceData& d, reshade::api::effect_runtime* r)
-            { Templates::InGameSettingsBrightness(d, r); }},
-         {"Gamma Correction", [](DeviceData& d, reshade::api::effect_runtime* r)
-            { Templates::GammaCorrection(d, r); }},
-         {"Super Resolution", [](DeviceData& d, reshade::api::effect_runtime* r)
-            { Templates::SR(d, r); }},
-         {"Luminance Extension", [](DeviceData& d, reshade::api::effect_runtime* r)
-            { Templates::HDRBrightness(d, r); }},
-         {"Chrominance Extension", [](DeviceData& d, reshade::api::effect_runtime* r)
-            { Templates::PerChannelCorrection(d, r); }},
-         {"Miscellaneous", [](DeviceData& d, reshade::api::effect_runtime* r)
-            { Templates::PostProcessing(d, r); }},
+         {"README (Scroll Me!)", [](DeviceData& d)
+            { Templates::README(d); }},
+         {"In-Game Settings: Warning", [](DeviceData& d)
+            { Templates::InGameSettingsWarning(d); }},
+         {"In-Game Settings: Brightness", [](DeviceData& d)
+            { Templates::InGameSettingsBrightness(d); }},
+         {"Gamma Correction", [](DeviceData& d)
+            { Templates::GammaCorrection(d); }},
+         {"Super Resolution", [](DeviceData& d)
+            { Templates::SR(d); }},
+         {"Luminance Extension", [](DeviceData& d)
+            { Templates::HDRBrightness(d); }},
+         {"Chrominance Extension", [](DeviceData& d)
+            { Templates::PerChannelCorrection(d); }},
+         {"Miscellaneous", [](DeviceData& d)
+            { Templates::PostProcessing(d); }},
    };
 
    // current section index
    static int index = 0;
 
-   static void OnDrawContents(int i, DeviceData& device_data, reshade::api::effect_runtime* runtime)
+   static void OnDrawContents(int i, DeviceData& device_data)
    {
       if (i >= 0 && i < static_cast<int>(sections.size()) && sections[i].draw) // range & null check
-         sections[i].draw(device_data, runtime);
+         sections[i].draw(device_data);
    }
 
    static bool IndexGetMin()
@@ -1446,21 +1446,21 @@ namespace SectionedImGui
    {
       return index >= static_cast<int>(sections.size()) - 1;
    }
-   static void IndexSaveConfig(reshade::api::effect_runtime* runtime)
+   static void IndexSaveConfig()
    {
-      reshade::set_config_value(runtime, NAME, "SectionedImGuiIndex", index);
+      Config::Set(NAME, "SectionedImGuiIndex", index);
    }
-   static void IndexLoadConfig(reshade::api::effect_runtime* runtime)
+   static void IndexLoadConfig()
    {
-      reshade::get_config_value(runtime, NAME, "SectionedImGuiIndex", index);
-   }
-
-   static void OnLoadConfigs(reshade::api::effect_runtime* runtime)
-   {
-      IndexLoadConfig(runtime);
+      Config::Get(NAME, "SectionedImGuiIndex", index);
    }
 
-   static void OnDraw(reshade::api::effect_runtime* runtime, DeviceData& device_data)
+   static void OnLoadConfigs()
+   {
+      IndexLoadConfig();
+   }
+
+   static void OnDraw(DeviceData& device_data)
    {
       // index setup
       int index_prev = index;
@@ -1519,7 +1519,7 @@ namespace SectionedImGui
       ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8.0f, 8.0f));
       ImGui::BeginChild("##SectionContents", ImVec2(0, 0), ImGuiChildFlags_AutoResizeY | ImGuiChildFlags_Borders);
       ImGui::PushItemWidth(256);                   // Fill available width
-      OnDrawContents(index, device_data, runtime); // Draw!
+      OnDrawContents(index, device_data); // Draw!
       ImGui::PopItemWidth();
       ImGui::EndChild();
       {
@@ -1537,7 +1537,7 @@ namespace SectionedImGui
 
       // Save index
       if (index_prev != index)
-         IndexSaveConfig(runtime);
+         IndexSaveConfig();
 
       // Forced: Gamma Correction handling
       ShaderDefineInfo::Set(GAMMA_CORRECTION_TYPE_HASH, custom_sdr_gamma > 0);
@@ -1701,11 +1701,11 @@ namespace CODs // partial
 
       void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
       {
-         message(reshade::log::level::info, "(H1::OnCreateDevice()) Creating GameDeviceDataH1");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "(H1::OnCreateDevice()) Creating GameDeviceDataH1");
          device_data.game = new GameDeviceDataH1;
       }
 
-      DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+      DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
       {
          GameDeviceDataH1* game_device_data = static_cast<GameDeviceDataH1*>(device_data.game);
          DrawOrDispatchOverrideType result = DrawOrDispatchOverrideType::None;
@@ -1814,7 +1814,7 @@ namespace CODs // partial
             if (ps != hash_t2x && ps != hash_t2xf && ps != hash_blit0 && ps != hash_blit_blur)
             {
                auto s = std::format("Unexpected shader hash when handling RTVState transition: {:#x}", ps);
-               message(reshade::log::level::error, s.c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, s.c_str());
                ASSERT_ONCE_MSG(false, s + "\nPlease report bug!");
             }
 
@@ -1855,7 +1855,7 @@ namespace CODs // partial
             {
                auto sf = std::format("The depth resource could not be found this frame.\nThis should never happen, so please report!\n(motionvectors: {}, depthcopy: {})", game_device_data->drawn_motionvectors, game_device_data->drawn_depthcopy);
                ASSERT_ONCE_MSG(false, sf);
-               message(reshade::log::level::error, sf.c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, sf.c_str());
 
                // last hurrah?
                if (!SR::Buffers::depth.res)
@@ -1931,7 +1931,7 @@ namespace CODs // partial
             if (color_out_dirty)
             {
                SR::Buffers::Create(native_device, render_res, output_res);
-               message(reshade::log::level::info, std::format("(H1::OnDrawOrDispatch()) Created/Updated SR buffers {}", SR::Buffers::GetRenderRatio()).c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("(H1::OnDrawOrDispatch()) Created/Updated SR buffers {}", SR::Buffers::GetRenderRatio()).c_str());
             }
 
             // RETURN: must hold out on SR draw ///////////////////////////////////////
@@ -2186,11 +2186,11 @@ namespace CODs // partial
 
       void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
       {
-         message(reshade::log::level::info, "(H2::OnCreateDevice()) Creating GameDeviceDataH2");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "(H2::OnCreateDevice()) Creating GameDeviceDataH2");
          device_data.game = new H2::GameDeviceDataH2;
       }
 
-      DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+      DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
       {
          GameDeviceDataH2* game_device_data = static_cast<GameDeviceDataH2*>(device_data.game);
          DrawOrDispatchOverrideType result = DrawOrDispatchOverrideType::None;
@@ -2301,7 +2301,7 @@ namespace CODs // partial
                {
                   auto s = std::format("RTVState transition encountered new shader: {:#x}", ps);
                   // ASSERT_MSG(false, s + "\nPlease report this new shader hash!");
-                  message(reshade::log::level::info, s.c_str());
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.c_str());
                }
             }
 
@@ -2342,7 +2342,7 @@ namespace CODs // partial
             {
                auto sf = std::format("The depth resource could not be found this frame.\nThis should never happen, so please report!\n(motionvectors: {}, depthcopy: {})", game_device_data->drawn_motionvectors, game_device_data->drawn_depthcopy);
                ASSERT_ONCE_MSG(false, sf);
-               message(reshade::log::level::error, sf.c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, sf.c_str());
 
                // last hurrah?
                if (!SR::Buffers::depth.res)
@@ -2418,7 +2418,7 @@ namespace CODs // partial
             if (color_out_dirty)
             {
                SR::Buffers::Create(native_device, render_res, output_res);
-               message(reshade::log::level::info, std::format("(H1::OnDrawOrDispatch()) Created/Updated SR buffers {}", SR::Buffers::GetRenderRatio()).c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("(H1::OnDrawOrDispatch()) Created/Updated SR buffers {}", SR::Buffers::GetRenderRatio()).c_str());
             }
 
             // RETURN: must hold out on SR draw ///////////////////////////////////////
@@ -2670,11 +2670,11 @@ namespace CODs // partial
 
       void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
       {
-         message(reshade::log::level::info, "(S1::OnCreateDevice()) Creating GameDeviceDataS1");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "(S1::OnCreateDevice()) Creating GameDeviceDataS1");
          device_data.game = new GameDeviceDataS1;
       }
 
-      DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+      DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
       {
          GameDeviceDataS1* game_device_data = static_cast<GameDeviceDataS1*>(device_data.game);
          DrawOrDispatchOverrideType result = DrawOrDispatchOverrideType::None;
@@ -2787,7 +2787,7 @@ namespace CODs // partial
                if (!reported_unknown_transition.test_and_set(std::memory_order_relaxed))
                {
                   auto s = std::format("Unexpected shader hash when handling RTVState transition: {:#x}", ps);
-                  message(reshade::log::level::warning, s.c_str());
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, s.c_str());
                }
             }
 
@@ -2828,7 +2828,7 @@ namespace CODs // partial
             {
                auto sf = std::format("The depth resource could not be found this frame.\nThis should never happen, so please report!\n(motionvectors: {}, depthcopy: {})", game_device_data->drawn_motionvectors, game_device_data->drawn_depthcopy);
                ASSERT_ONCE_MSG(false, sf);
-               message(reshade::log::level::error, sf.c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, sf.c_str());
 
                // last hurrah?
                if (!SR::Buffers::depth.res)
@@ -2904,7 +2904,7 @@ namespace CODs // partial
             if (color_out_dirty)
             {
                SR::Buffers::Create(native_device, render_res, output_res);
-               message(reshade::log::level::info, std::format("(H1::OnDrawOrDispatch()) Created/Updated SR buffers {}", SR::Buffers::GetRenderRatio()).c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("(H1::OnDrawOrDispatch()) Created/Updated SR buffers {}", SR::Buffers::GetRenderRatio()).c_str());
             }
 
             // RETURN: must hold out on SR draw ///////////////////////////////////////
@@ -3167,10 +3167,10 @@ namespace CODs // partial
 
          texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
          texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_typeless, // color buffers
-            // reshade::api::format::r8g8b8a8_unorm, //color buffers
-            reshade::api::format::r11g11b10_float, // color buffers
-            // reshade::api::format::r8g8_snorm, //motion vectors
+            DXGI_FORMAT_R8G8B8A8_TYPELESS, // color buffers
+            // DXGI_FORMAT_R8G8B8A8_UNORM, //color buffers
+            DXGI_FORMAT_R11G11B10_FLOAT, // color buffers
+            // DXGI_FORMAT_R8G8_SNORM, //motion vectors
          };
          texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio /*| (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px*/;
 
@@ -3181,11 +3181,11 @@ namespace CODs // partial
 
       void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
       {
-         message(reshade::log::level::info, "(IW7::OnCreateDevice()) Creating GameDeviceDataIW7");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "(IW7::OnCreateDevice()) Creating GameDeviceDataIW7");
          device_data.game = new GameDeviceDataIW7;
       }
 
-      DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+      DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
       {
          GameDeviceDataIW7* game_device_data = static_cast<GameDeviceDataIW7*>(device_data.game);
          DrawOrDispatchOverrideType result = DrawOrDispatchOverrideType::None;
@@ -3350,7 +3350,7 @@ namespace CODs // partial
                if (encountered_shader_hashes.insert(ps).second) // true if new insertion
                {
                   auto s = std::format("RTVState transition encountered new shader: {:#x}", ps);
-                  message(reshade::log::level::info, s.c_str());
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, s.c_str());
                }
             }
 
@@ -3391,7 +3391,7 @@ namespace CODs // partial
          //    {
          //       auto sf = std::format("The depth resource could not be found this frame.\nThis should never happen, so please report!\n(motionvectors: {}, depthcopy: {})", game_device_data->drawn_motionvectors, game_device_data->drawn_depthcopy);
          //       ASSERT_ONCE_MSG(false, sf);
-         //       message(reshade::log::level::error, sf.c_str());
+         //       Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, sf.c_str());
          //
          //       // last hurrah?
          //       if (!SR::Buffers::depth.res) return DrawOrDispatchOverrideType::Skip;
@@ -3463,7 +3463,7 @@ namespace CODs // partial
          //    if (color_out_dirty)
          //    {
          //       SR::Buffers::Create(native_device, render_res, output_res);
-         //       message(reshade::log::level::info, std::format("(H1::OnDrawOrDispatch()) Created/Updated SR buffers {}", SR::Buffers::GetRenderRatio()).c_str());
+         //       Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("(H1::OnDrawOrDispatch()) Created/Updated SR buffers {}", SR::Buffers::GetRenderRatio()).c_str());
          //    }
          //
          //    // RETURN: must hold out on SR draw ///////////////////////////////////////
@@ -3723,19 +3723,19 @@ namespace CB
       default_luma_global_game_settings.PCCPeak = cb_luma_global_settings.GameSettings.PCCPeak = 1.f;
    }
 
-   static void OnLoadConfigs(reshade::api::effect_runtime* runtime)
+   static void OnLoadConfigs()
    {
-      reshade::get_config_value(runtime, NAME, "FMVPaperWhite", cb_luma_global_settings.GameSettings.FMVPaperWhite);
-      reshade::get_config_value(runtime, NAME, "ExposurePost", cb_luma_global_settings.GameSettings.ExposurePost);
-      reshade::get_config_value(runtime, NAME, "ExposurePre", cb_luma_global_settings.GameSettings.ExposurePre);
-      reshade::get_config_value(runtime, NAME, "ExpectedMax", cb_luma_global_settings.GameSettings.ExpectedMax);
-      reshade::get_config_value(runtime, NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
-      // reshade::get_config_value(runtime, NAME, "PCCChrom", cb_luma_global_settings.GameSettings.PCCChrom);
-      // reshade::get_config_value(runtime, NAME, "PCCHue", cb_luma_global_settings.GameSettings.PCCHue);
-      reshade::get_config_value(runtime, NAME, "PCCPeak", cb_luma_global_settings.GameSettings.PCCPeak);
+      Config::Get(NAME, "FMVPaperWhite", cb_luma_global_settings.GameSettings.FMVPaperWhite);
+      Config::Get(NAME, "ExposurePost", cb_luma_global_settings.GameSettings.ExposurePost);
+      Config::Get(NAME, "ExposurePre", cb_luma_global_settings.GameSettings.ExposurePre);
+      Config::Get(NAME, "ExpectedMax", cb_luma_global_settings.GameSettings.ExpectedMax);
+      Config::Get(NAME, "Bloom", cb_luma_global_settings.GameSettings.Bloom);
+      // Config::Get(NAME, "PCCChrom", cb_luma_global_settings.GameSettings.PCCChrom);
+      // Config::Get(NAME, "PCCHue", cb_luma_global_settings.GameSettings.PCCHue);
+      Config::Get(NAME, "PCCPeak", cb_luma_global_settings.GameSettings.PCCPeak);
 
       // custom_sdr_gamma
-      reshade::get_config_value(runtime, NAME, "custom_sdr_gamma", custom_sdr_gamma);
+      Config::Get(NAME, "custom_sdr_gamma", custom_sdr_gamma);
       ShaderDefineInfo::Set(GAMMA_CORRECTION_TYPE_HASH, custom_sdr_gamma > 0);
       defines_need_recompilation = true;
    }
@@ -3760,12 +3760,11 @@ namespace AWBorderlessWindow
    static State state;
    static std::mutex state_mutex;
 
-   void Observe(reshade::api::swapchain* swapchain)
+   void Observe(IDXGISwapChain* swapchain)
    {
       if (GameIdentity::game != GameIdentity::S1) return;
       DXGI_SWAP_CHAIN_DESC desc = {};
-      auto* native = reinterpret_cast<IDXGISwapChain*>(swapchain->get_native());
-      if (FAILED(native->GetDesc(&desc))) return;
+      if (FAILED(swapchain->GetDesc(&desc))) return;
       std::scoped_lock lock(state_mutex);
       state = { desc.Windowed ? desc.OutputWindow : nullptr,
          desc.BufferDesc.Width, desc.BufferDesc.Height, GetTickCount64() + 2000, 0 };
@@ -3822,7 +3821,7 @@ namespace AWBorderlessWindow
       // Queue on the HWND's owner thread; do not resize DXGI buffers or hold a lock.
       if (SetWindowPos(current.window, nullptr, monitor.rcMonitor.left, monitor.rcMonitor.top,
           width, height, SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS))
-         reshade::log::message(reshade::log::level::info, "[AW window] Requested native-size borderless window bounds.");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "[AW window] Requested native-size borderless window bounds.");
    }
 }
 
@@ -3831,7 +3830,7 @@ class CallOfDutyDX11 final : public Game
 public:
    void OnInit(bool async) override
    {
-      message(reshade::log::level::info, "OnInit()");
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "OnInit()");
 
       // Defines
       ShaderDefineInfo::OnInit();
@@ -3848,19 +3847,19 @@ public:
 
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
    {
-      message(reshade::log::level::info, "OnCreateDevice()");
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "OnCreateDevice()");
 
       CODs::cod->OnCreateDevice(native_device, device_data);
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      message(reshade::log::level::info, "OnInitSwapchain()");
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "OnInitSwapchain()");
       AWBorderlessWindow::Observe(swapchain);
-      auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+      auto& device_data = *GetSwapchainData(swapchain)->device_data;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       if (Globals::pipeline_is_skipondrawordispatch)
          return DrawOrDispatchOverrideType::None;
@@ -3882,23 +3881,21 @@ public:
 
    void LoadConfigs() override
    {
-      message(reshade::log::level::info, "LoadConfigs()");
-      reshade::api::effect_runtime* runtime = nullptr;
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "LoadConfigs()");
 
-      CB::OnLoadConfigs(runtime);
-      SR::OnLoad(runtime);
-      SectionedImGui::OnLoadConfigs(runtime);
+      CB::OnLoadConfigs();
+      SR::OnLoad();
+      SectionedImGui::OnLoadConfigs();
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       // Below Luma's brightness settings
       ImGui::Separator();
 
       // DRAW
-      SectionedImGui::OnDraw(runtime, device_data);
+      SectionedImGui::OnDraw(device_data);
 
       // Debug stuff
       if (DEVELOPMENT)
@@ -3956,7 +3953,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       CODs::OnDllMainAfterGameIdentity(GameIdentity::game);
       SectionedImGui::OnDllMainAfterGameIdentity(GameIdentity::game);
 
-      game = new CallOfDutyDX11();
+      SetGame<CallOfDutyDX11>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

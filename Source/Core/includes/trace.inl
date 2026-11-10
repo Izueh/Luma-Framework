@@ -10,7 +10,7 @@ namespace Trace
       thread_local std::vector<TraceDrawCallData> queued_entries;
 
       // Records the state bound for "stage", the slots "reflection" uses, or all the bound ones without it. Expects "device_data.mutex" (shared).
-      void CaptureState(TraceDrawCallData& trace_draw_call_data, const DeviceData& device_data, ID3D11DeviceContext* native_device_context, reshade::api::shader_stage stage, const CachedShader* reflection, const DrawDispatchData& draw_dispatch_data)
+      void CaptureState(TraceDrawCallData& trace_draw_call_data, const DeviceData& device_data, ID3D11DeviceContext* native_device_context, ShaderStages stage, const CachedShader* reflection, const DrawDispatchData& draw_dispatch_data)
       {
          trace_draw_call_data.command_list = native_device_context;
 
@@ -92,7 +92,7 @@ namespace Trace
          static const CachedShader no_reflection = {};
          const CachedShader* cached_shader = reflection ? reflection : &no_reflection;
          const bool show_unused_bound = show_unused_bound_resources || !reflection;
-         if (stage == reshade::api::shader_stage::pixel)
+         if (stage == ShaderStages::Pixel)
          {
             // The first call gets the number of bound rects/viewports
             native_device_context->RSGetScissorRects(&trace_draw_call_data.scissor_count, nullptr);
@@ -359,7 +359,7 @@ namespace Trace
                }
             }
          }
-         else if (stage == reshade::api::shader_stage::vertex)
+         else if (stage == ShaderStages::Vertex)
          {
             com_ptr<ID3D11ShaderResourceView> srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
             native_device_context->VSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]);
@@ -444,7 +444,7 @@ namespace Trace
                }
             }
          }
-         else if (stage == reshade::api::shader_stage::compute)
+         else if (stage == ShaderStages::Compute)
          {
             com_ptr<ID3D11ShaderResourceView> srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
             native_device_context->CSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]); // TODO: use the CSGetShaderResources1 version (all around) which also has the plane desc
@@ -531,24 +531,24 @@ namespace Trace
       }
 
       // Needs "s_mutex_generic" (shared). Returns the shader stage whose state a game draw's entry records, and its reflections.
-      reshade::api::shader_stage FindStage(const DeviceData& device_data, uint64_t pipeline_handle, const CachedShader** cached_shader)
+      ShaderStages FindStage(const DeviceData& device_data, uint64_t pipeline_handle, const CachedShader** cached_shader)
       {
          *cached_shader = nullptr;
          // Note that the pipelines can be run more than once so this will return the first one matching (there's only one actually, we don't have separate settings for their running instance, as that's runtime stuff)
          const auto pipeline_pair = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle);
          if (pipeline_pair == device_data.pipeline_cache_by_pipeline_handle.end() || pipeline_pair->second == nullptr)
-            return reshade::api::shader_stage(0);
+            return ShaderStages::None;
          const CachedPipeline* pipeline = pipeline_pair->second;
          if (const auto shader = !pipeline->shader_hashes.empty() ? shader_cache.find(pipeline->shader_hashes[0]) : shader_cache.end(); shader != shader_cache.end()) // DX10/11 exclusive behaviour
             *cached_shader = shader->second;
          assert(*cached_shader);
          if (pipeline->HasPixelShader())
-            return reshade::api::shader_stage::pixel;
+            return ShaderStages::Pixel;
          if (pipeline->HasVertexShader())
-            return reshade::api::shader_stage::vertex;
+            return ShaderStages::Vertex;
          if (pipeline->HasComputeShader())
-            return reshade::api::shader_stage::compute;
-         return reshade::api::shader_stage(0);
+            return ShaderStages::Compute;
+         return ShaderStages::None;
       }
 
       // Luma passes don't have their command list's data at hand
@@ -562,7 +562,7 @@ namespace Trace
       }
 
       // Needs "device_data.mutex" (shared). The "native_shaders_definitions" key of the bound pixel (or compute) shader, 0 if it isn't one of Luma's.
-      uint32_t FindNativeShaderHash(const DeviceData& device_data, ID3D11DeviceContext* native_device_context, reshade::api::shader_stage stage)
+      uint32_t FindNativeShaderHash(const DeviceData& device_data, ID3D11DeviceContext* native_device_context, ShaderStages stage)
       {
          const auto find = [](const auto& native_shaders, const auto* shader) -> uint32_t
          {
@@ -570,7 +570,7 @@ namespace Trace
                { return native_shader.second.get() == shader; });
             return it != native_shaders.end() ? it->first : 0;
          };
-         if (stage == reshade::api::shader_stage::compute)
+         if (stage == ShaderStages::Compute)
          {
             com_ptr<ID3D11ComputeShader> shader;
             native_device_context->CSGetShader(&shader, nullptr, nullptr);
@@ -587,7 +587,7 @@ namespace Trace
          TraceDrawCallData trace_draw_call_data;
          trace_draw_call_data.pipeline_handle = pipeline_handle;
          const CachedShader* cached_shader;
-         const reshade::api::shader_stage stage = FindStage(device_data, pipeline_handle, &cached_shader);
+         const ShaderStages stage = FindStage(device_data, pipeline_handle, &cached_shader);
          CaptureState(trace_draw_call_data, device_data, native_device_context, stage, cached_shader, draw_dispatch_data);
 
          if (trace_draw_calls_data.capacity() - trace_draw_calls_data.size() <= 1)
@@ -639,7 +639,7 @@ namespace Trace
       }
 
       // Needs the pass's state still bound: copies the constant buffer the tracking selected, of "stage", and makes a copy of it in deferred contexts
-      void TrackConstantBuffer(ID3D11DeviceContext* native_device_context, DeviceData& device_data, reshade::api::shader_stage stage)
+      void TrackConstantBuffer(ID3D11DeviceContext* native_device_context, DeviceData& device_data, ShaderStages stage)
       {
          com_ptr<ID3D11Buffer> cb;
          UINT cb_first = 0, cb_num = 0;
@@ -647,19 +647,19 @@ namespace Trace
          native_device_context->QueryInterface(&native_device_context_1);
          switch (stage)
          {
-         case reshade::api::shader_stage::vertex:
+         case ShaderStages::Vertex:
             if (native_device_context_1)
                native_device_context_1->VSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
             else
                native_device_context->VSGetConstantBuffers(track_buffer_index, 1, &cb);
             break;
-         case reshade::api::shader_stage::pixel:
+         case ShaderStages::Pixel:
             if (native_device_context_1)
                native_device_context_1->PSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
             else
                native_device_context->PSGetConstantBuffers(track_buffer_index, 1, &cb);
             break;
-         case reshade::api::shader_stage::compute:
+         case ShaderStages::Compute:
             if (native_device_context_1)
                native_device_context_1->CSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
             else
@@ -750,7 +750,7 @@ namespace Trace
          return native_reflection.found;
       }
 
-      void RecordCustomPass(ID3D11DeviceContext* native_device_context, const char* name, reshade::api::shader_stage stage, const DrawDispatchData& draw_dispatch_data)
+      void RecordCustomPass(ID3D11DeviceContext* native_device_context, const char* name, ShaderStages stage, const DrawDispatchData& draw_dispatch_data)
       {
          if (debug_draw_custom_pass == 0 && track_buffer_custom_pass == 0 && !running)
             return;
@@ -773,7 +773,7 @@ namespace Trace
          const uint32_t name_hash = Math::CompileTimeStringHash(name);
          if (debug_draw_custom_pass == name_hash && (debug_draw_pipeline_target_thread == std::thread::id() || debug_draw_pipeline_target_thread == std::this_thread::get_id())
              && IsTargetInstance(debug_draw_custom_pass_instance, debug_draw_pipeline_target_instance))
-            CopyDebugDrawTexture(debug_draw_mode, debug_draw_view_index, native_device_context, *device_data, stage == reshade::api::shader_stage::compute);
+            CopyDebugDrawTexture(debug_draw_mode, debug_draw_view_index, native_device_context, *device_data, stage == ShaderStages::Compute);
          if (track_buffer_custom_pass == name_hash && IsTargetInstance(track_buffer_custom_pass_instance, track_buffer_pipeline_target_instance))
             TrackConstantBuffer(native_device_context, *device_data, stage);
          if (!running)
@@ -855,14 +855,14 @@ namespace Trace
       DrawDispatchData draw_dispatch_data;
       draw_dispatch_data.vertex_count = vertex_count;
       draw_dispatch_data.instance_count = 1;
-      RecordCustomPass(native_device_context, name, reshade::api::shader_stage::pixel, draw_dispatch_data);
+      RecordCustomPass(native_device_context, name, ShaderStages::Pixel, draw_dispatch_data);
    }
 
    void CustomDispatch(ID3D11DeviceContext* native_device_context, const char* name, UINT thread_group_count_x, UINT thread_group_count_y, UINT thread_group_count_z)
    {
       DrawDispatchData draw_dispatch_data;
       draw_dispatch_data.dispatch_count = {thread_group_count_x, thread_group_count_y, thread_group_count_z};
-      RecordCustomPass(native_device_context, name, reshade::api::shader_stage::compute, draw_dispatch_data);
+      RecordCustomPass(native_device_context, name, ShaderStages::Compute, draw_dispatch_data);
    }
 
    void AddEvent(CommandListData& cmd_list_data, ID3D11DeviceContext* command_list, TraceDrawCallData::TraceDrawCallType type, ID3D11Resource* source, ID3D11Resource* target)
@@ -871,13 +871,13 @@ namespace Trace
          { SetEventResources(trace_draw_call_data, source, target); });
    }
 
-   void AddClear(reshade::api::command_list* cmd_list, reshade::api::resource_view view, std::initializer_list<float> values)
+   void AddClear(CommandListData& cmd_list_data, uint64_t view, std::initializer_list<float> values)
    {
-      if (view.handle == 0)
+      if (view == 0)
          return;
-      AddEventEntry(*cmd_list->get_private_data<CommandListData>(), (ID3D11DeviceContext*)(cmd_list->get_native()), TraceDrawCallData::TraceDrawCallType::ClearResource, [&](TraceDrawCallData& trace_draw_call_data)
+      AddEventEntry(cmd_list_data, cmd_list_data.native_device_context, TraceDrawCallData::TraceDrawCallType::ClearResource, [&](TraceDrawCallData& trace_draw_call_data)
          {
-            SetEventResources(trace_draw_call_data, nullptr, reinterpret_cast<ID3D11Resource*>(cmd_list->get_device()->get_resource_from_view(view).handle));
+            SetEventResources(trace_draw_call_data, nullptr, GetResourceFromView(view));
             std::copy_n(values.begin(), (std::min)(values.size(), std::size(trace_draw_call_data.blend_factor)), trace_draw_call_data.blend_factor);
          });
    }
@@ -966,7 +966,7 @@ namespace Trace
       if (running)
       {
 #if _DEBUG && LOG_VERBOSE
-         reshade::log::message(reshade::log::level::info, "--- Frame Graphics Capture Ended ---");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "--- Frame Graphics Capture Ended ---");
 #endif
          running = false;
          const std::shared_lock lock_trace_2(cmd_list_data.mutex_trace);
@@ -975,7 +975,7 @@ namespace Trace
       else if (scheduled)
       {
 #if _DEBUG && LOG_VERBOSE
-         reshade::log::message(reshade::log::level::info, "--- Frame Graphics Capture Started ---");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "--- Frame Graphics Capture Started ---");
 #endif
          // Split the trace logic over "two" frames, to make sure we capture everything in between two present calls
          scheduled = false;
@@ -1169,9 +1169,9 @@ namespace Trace
       return false;
    }
 
-   bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view_index, reshade::api::command_list* cmd_list, bool is_dispatch)
+   bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view_index, CommandListData& cmd_list_data, bool is_dispatch)
    {
-      return CopyDebugDrawTexture(debug_draw_mode, debug_draw_view_index, (ID3D11DeviceContext*)(cmd_list->get_native()), *cmd_list->get_device()->get_private_data<DeviceData>(), is_dispatch);
+      return CopyDebugDrawTexture(debug_draw_mode, debug_draw_view_index, cmd_list_data.native_device_context, *cmd_list_data.device_data, is_dispatch);
    }
 
    bool MapBufferData(com_ptr<ID3D11Buffer>& cb, ID3D11DeviceContext* native_device_context, std::vector<float>& buffer_data, UINT byte_width)
@@ -1291,9 +1291,9 @@ namespace Trace
       {
          auto& entry = entries[i];
          if (entry.type != TraceDrawCallData::TraceDrawCallType::Shader) continue;
-         if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_compute_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::compute);
-         else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_vertex_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::vertex);
-         else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_pixel_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, reshade::api::shader_stage::pixel);
+         if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_compute_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, ShaderStages::Compute);
+         else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_vertex_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, ShaderStages::Vertex);
+         else if (entry.pipeline_handle == cmd_list_data.pipeline_state_original_pixel_shader.handle) entry.drawn_origin = Shader::GetShaderOrigin(cmd_list_data, ShaderStages::Pixel);
       }
       if (draw_went_through)
          first += MoveQueued(entries, native_device_context, first);
@@ -1305,7 +1305,7 @@ namespace Trace
    {
       GameDraw game_draw;
       game_draw.is_dispatch = is_dispatch;
-      const reshade::api::shader_stage stage = is_dispatch ? reshade::api::shader_stage::compute : reshade::api::shader_stage::pixel;
+      const ShaderStages stage = is_dispatch ? ShaderStages::Compute : ShaderStages::Pixel;
       const uint64_t pipeline = is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader.handle : cmd_list_data.pipeline_state_original_pixel_shader.handle;
       const auto& shader_hashes = is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader_hashes : cmd_list_data.pipeline_state_original_graphics_shader_hashes;
       game_draw.debug_draw = (debug_draw_shader_hash != 0 || debug_draw_pipeline != 0) && (debug_draw_pipeline == 0 || debug_draw_pipeline == pipeline)
@@ -1326,10 +1326,9 @@ namespace Trace
       return game_draw;
    }
 
-   bool EndGameDraw(const GameDraw& game_draw, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::command_list* cmd_list, bool cancelled_or_replaced, const std::function<void()>& draw)
+   bool EndGameDraw(const GameDraw& game_draw, CommandListData& cmd_list_data, DeviceData& device_data, ID3D11DeviceContext* native_device_context, bool cancelled_or_replaced, const std::function<void()>& draw)
    {
       EndDraw(cmd_list_data, cancelled_or_replaced);
-      ID3D11DeviceContext* native_device_context = (ID3D11DeviceContext*)(cmd_list->get_native());
 
       // Run the draw (instead of delegating it to ReShade) and copy its output. A replaced pass is read back as the game drew it, unless asked otherwise.
       bool drawn = false;
@@ -1352,17 +1351,17 @@ namespace Trace
          drawn = true;
       }
 
-      reshade::api::shader_stage track_buffer_stage = reshade::api::shader_stage(0);
+      ShaderStages track_buffer_stage = ShaderStages::None;
       if (track_buffer_pipeline == 0)
-         track_buffer_stage = reshade::api::shader_stage(0);
+         track_buffer_stage = ShaderStages::None;
       else if (game_draw.is_dispatch)
-         track_buffer_stage = track_buffer_pipeline == cmd_list_data.pipeline_state_original_compute_shader.handle ? reshade::api::shader_stage::compute : reshade::api::shader_stage(0);
+         track_buffer_stage = track_buffer_pipeline == cmd_list_data.pipeline_state_original_compute_shader.handle ? ShaderStages::Compute : ShaderStages::None;
       else if (track_buffer_pipeline == cmd_list_data.pipeline_state_original_pixel_shader.handle)
-         track_buffer_stage = reshade::api::shader_stage::pixel;
+         track_buffer_stage = ShaderStages::Pixel;
       else if (track_buffer_pipeline == cmd_list_data.pipeline_state_original_vertex_shader.handle)
-         track_buffer_stage = reshade::api::shader_stage::vertex;
+         track_buffer_stage = ShaderStages::Vertex;
       // TODO: make "track_buffer_pipeline_target_instance" by thread (like "debug_draw_pipeline_target_instance"), though it's rarely useful
-      if (track_buffer_stage != reshade::api::shader_stage(0) && IsTargetInstance(track_buffer_pipeline_instance, track_buffer_pipeline_target_instance))
+      if (track_buffer_stage != ShaderStages::None && IsTargetInstance(track_buffer_pipeline_instance, track_buffer_pipeline_target_instance))
          TrackConstantBuffer(native_device_context, device_data, track_buffer_stage);
       return drawn;
    }
@@ -1399,7 +1398,7 @@ namespace Trace
       const TraceDrawCallData& entry = cmd_list_data.trace_draw_calls_data[index];
       PassTarget target;
       bool is_luma_pass = false;
-      if (entry.type == TraceDrawCallData::TraceDrawCallType::Custom && entry.custom_stage != reshade::api::shader_stage(0))
+      if (entry.type == TraceDrawCallData::TraceDrawCallType::Custom && entry.custom_stage != ShaderStages::None)
       {
          is_luma_pass = true;
          target.custom_pass = Math::CompileTimeStringHash(entry.custom_name);
@@ -1414,7 +1413,7 @@ namespace Trace
          const CachedPipeline* pipeline = pipeline_pair->second;
          target.pipeline = entry.pipeline_handle;
          target.shader_hash = pipeline->shader_hashes[0];
-         target.stage = pipeline->HasPixelShader() ? reshade::api::shader_stage::pixel : (pipeline->HasComputeShader() ? reshade::api::shader_stage::compute : reshade::api::shader_stage::vertex);
+         target.stage = pipeline->HasPixelShader() ? ShaderStages::Pixel : (pipeline->HasComputeShader() ? ShaderStages::Compute : ShaderStages::Vertex);
       }
       else
       {
@@ -1469,7 +1468,7 @@ namespace Trace
       }
       if (!keep_mode || prev_debug_draw_mode == DebugDrawMode::Custom)
       {
-         debug_draw_mode = target.stage == reshade::api::shader_stage::pixel ? DebugDrawMode::RenderTarget : (target.stage == reshade::api::shader_stage::compute ? DebugDrawMode::UnorderedAccessView : DebugDrawMode::ShaderResource);
+         debug_draw_mode = target.stage == ShaderStages::Pixel ? DebugDrawMode::RenderTarget : (target.stage == ShaderStages::Compute ? DebugDrawMode::UnorderedAccessView : DebugDrawMode::ShaderResource);
       }
       // Preserve the last view index between passes that have it (e.g. during gbuffers rendering)
       const auto has_view = [&](const auto& view_formats)

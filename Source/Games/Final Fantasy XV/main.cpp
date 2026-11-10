@@ -342,8 +342,8 @@ class FinalFantasyXV final : public Game
             rtvs[0] = result->rtv.get();
             native_device_context->OMSetRenderTargets(game_device_data.taa_state.state->valid_render_target_views_bound, rtvs, game_device_data.taa_state.state->depth_stencil_view.get());
             native_device_context->PSSetShaderResources(0, 1, &scene_srv);
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData);
             native_device_context->Draw(4, 0);
             result_srv = result->srv.get();
          }
@@ -382,7 +382,7 @@ class FinalFantasyXV final : public Game
          ID3D11RenderTargetView* target = device_data.has_drawn_sr && is_upscaling ? result->rtv.get() : scene_rtv;
          CompositeRain(native_device, native_device_context, device_data, target, true);
       }
-      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData);
       // Consume the replay state after TAA fallback; has_drawn_sr only marks successful SR.
       if (result_srv && !device_data.has_drawn_sr)
          game_device_data.taa_state.state.reset();
@@ -422,12 +422,12 @@ public:
       use_os_reference_white_level = false;
       force_sdr_display_capability = true; // The game has no HDR toggle, make it use its SDR path
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs CS"), ShaderDefinition{"Luma_FFXV_MotionVec_Decode", reshade::api::pipeline_subobject_type::compute_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Foliage Mask CS"), ShaderDefinition{"Luma_FFXV_FoliageMask", reshade::api::pipeline_subobject_type::compute_shader});
-      native_shaders_definitions.emplace(CompileTimeStringHash("Rain Composite PS"), ShaderDefinition{"Luma_RainComposite", reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(0x2100CE9BU, ShaderDefinition{"Luma_Directional_Light", reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(0xA315F1E7U, ShaderDefinition{"Luma_Directional_Light_CSM", reshade::api::pipeline_subobject_type::pixel_shader});
-      native_shaders_definitions.emplace(0x4B8E0FF8U, ShaderDefinition{"Luma_Directional_Light_CSM_AO", reshade::api::pipeline_subobject_type::pixel_shader});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Decode MVs CS"), ShaderDefinition{"Luma_FFXV_MotionVec_Decode", D3D11_SHVER_COMPUTE_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Foliage Mask CS"), ShaderDefinition{"Luma_FFXV_FoliageMask", D3D11_SHVER_COMPUTE_SHADER});
+      native_shaders_definitions.emplace(CompileTimeStringHash("Rain Composite PS"), ShaderDefinition{"Luma_RainComposite", D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(0x2100CE9BU, ShaderDefinition{"Luma_Directional_Light", D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(0xA315F1E7U, ShaderDefinition{"Luma_Directional_Light_CSM", D3D11_SHVER_PIXEL_SHADER});
+      native_shaders_definitions.emplace(0x4B8E0FF8U, ShaderDefinition{"Luma_Directional_Light_CSM_AO", D3D11_SHVER_PIXEL_SHADER});
 
       default_luma_global_game_settings.BloomStrength = 1.f;
       default_luma_global_game_settings.Sharpness = 0.3f;
@@ -460,56 +460,50 @@ public:
    {
       if (!failed)
       {
-         reshade::register_event<reshade::addon_event::map_buffer_region>(FinalFantasyXV::OnMapBufferRegion);
-         reshade::register_event<reshade::addon_event::unmap_buffer_region>(FinalFantasyXV::OnUnmapBufferRegion);
-         reshade::register_event<reshade::addon_event::update_buffer_region>(FinalFantasyXV::OnUpdateBufferRegion);
-         reshade::register_event<reshade::addon_event::clear_render_target_view>(FinalFantasyXV::OnClearRenderTargetView);
       }
    }
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
-      reshade::get_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
-      reshade::get_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
-      reshade::get_config_value(runtime, NAME, "VignetteStrength", cb_luma_global_settings.GameSettings.VignetteStrength);
+      Config::Get(NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
+      Config::Get(NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
+      Config::Get(NAME, "VignetteStrength", cb_luma_global_settings.GameSettings.VignetteStrength);
       cb_luma_global_settings.GameSettings.VignetteStrength = std::clamp(cb_luma_global_settings.GameSettings.VignetteStrength, 0.f, 2.f);
 
       bool enable_dof = true;
-      reshade::get_config_value(runtime, NAME, "EnableDoF", enable_dof);
+      Config::Get(NAME, "EnableDoF", enable_dof);
       cb_luma_global_settings.GameSettings.EnableDoF = enable_dof ? 1 : 0;
 
       bool enable_vbao = true;
-      reshade::get_config_value(runtime, NAME, "EnableVBAO", enable_vbao);
+      Config::Get(NAME, "EnableVBAO", enable_vbao);
       cb_luma_global_settings.GameSettings.EnableVBAO = enable_vbao ? 1 : 0;
 #if DEVELOPMENT || TEST // Only a tuning setting, fixed in the published builds
-      reshade::get_config_value(runtime, NAME, "VBAOThicknessScale", cb_luma_global_settings.GameSettings.VBAOThicknessScale);
+      Config::Get(NAME, "VBAOThicknessScale", cb_luma_global_settings.GameSettings.VBAOThicknessScale);
       cb_luma_global_settings.GameSettings.VBAOThicknessScale = std::clamp(cb_luma_global_settings.GameSettings.VBAOThicknessScale, 0.f, 1.f);
 #endif
 #if DEVELOPMENT || TEST // Only tuning settings, fixed in the published builds
-      reshade::get_config_value(runtime, NAME, "FoliageMipBiasCorrection", foliage_mip_bias_correction);
+      Config::Get(NAME, "FoliageMipBiasCorrection", foliage_mip_bias_correction);
       bool enable_vbao_foliage_mask = true;
-      reshade::get_config_value(runtime, NAME, "EnableVBAOFoliageMask", enable_vbao_foliage_mask);
+      Config::Get(NAME, "EnableVBAOFoliageMask", enable_vbao_foliage_mask);
       cb_luma_global_settings.GameSettings.EnableVBAOFoliageMask = enable_vbao_foliage_mask ? 1 : 0;
-      reshade::get_config_value(runtime, NAME, "VBAOFoliageBlend", cb_luma_global_settings.GameSettings.VBAOFoliageBlend);
+      Config::Get(NAME, "VBAOFoliageBlend", cb_luma_global_settings.GameSettings.VBAOFoliageBlend);
       cb_luma_global_settings.GameSettings.VBAOFoliageBlend = std::clamp(cb_luma_global_settings.GameSettings.VBAOFoliageBlend, 0.f, 1.f);
 #endif
 
       enable_directional_shadows = false;
-      reshade::get_config_value(runtime, NAME, "DirectionalShadows", enable_directional_shadows);
+      Config::Get(NAME, "DirectionalShadows", enable_directional_shadows);
 
 #if DEVELOPMENT || TEST // Only a tuning setting, fixed in the published builds
       bool use_vanilla_gamut_ratio = false;
-      reshade::get_config_value(runtime, NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
+      Config::Get(NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
       cb_luma_global_settings.GameSettings.UseVanillaGamutRatio = use_vanilla_gamut_ratio ? 1 : 0;
 #endif
-      reshade::get_config_value(runtime, NAME, "RainComposition", rain_composition);
+      Config::Get(NAME, "RainComposition", rain_composition);
       rain_composition = std::clamp(rain_composition, 0, 1);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       if (ImGui::TreeNodeEx("Post Process", ImGuiTreeNodeFlags_DefaultOpen))
       {
@@ -518,28 +512,28 @@ public:
          {
             cb_luma_global_settings.GameSettings.EnableDoF = enable_dof ? 1 : 0;
             device_data.force_reset_sr = true;
-            reshade::set_config_value(runtime, NAME, "EnableDoF", enable_dof);
+            Config::Set(NAME, "EnableDoF", enable_dof);
          }
-         if (DrawResetButton(enable_dof, true, "EnableDoF", runtime))
+         if (DrawResetButton(enable_dof, true, "EnableDoF"))
          {
             cb_luma_global_settings.GameSettings.EnableDoF = 1;
             device_data.force_reset_sr = true;
-            reshade::set_config_value(runtime, NAME, "EnableDoF", enable_dof);
+            Config::Set(NAME, "EnableDoF", enable_dof);
          }
          bool enable_vbao = cb_luma_global_settings.GameSettings.EnableVBAO != 0;
          if (ImGui::Checkbox("Enable VBAO", &enable_vbao))
          {
             cb_luma_global_settings.GameSettings.EnableVBAO = enable_vbao ? 1 : 0;
-            reshade::set_config_value(runtime, NAME, "EnableVBAO", enable_vbao);
+            Config::Set(NAME, "EnableVBAO", enable_vbao);
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          {
             ImGui::SetTooltip("Replaces the game's ambient occlusion (SAO) with a visibility bitmask AO (ported from the FF7 Remake mod).");
          }
-         if (DrawResetButton(enable_vbao, true, "EnableVBAO", runtime))
+         if (DrawResetButton(enable_vbao, true, "EnableVBAO"))
          {
             cb_luma_global_settings.GameSettings.EnableVBAO = 1;
-            reshade::set_config_value(runtime, NAME, "EnableVBAO", true);
+            Config::Set(NAME, "EnableVBAO", true);
          }
 #if DEVELOPMENT || TEST
          if (cb_luma_global_settings.GameSettings.EnableVBAO != 0)
@@ -548,66 +542,66 @@ public:
             if (ImGui::Checkbox("VBAO Foliage Mask", &enable_foliage_mask))
             {
                cb_luma_global_settings.GameSettings.EnableVBAOFoliageMask = enable_foliage_mask ? 1 : 0;
-               reshade::set_config_value(runtime, NAME, "EnableVBAOFoliageMask", enable_foliage_mask);
+               Config::Set(NAME, "EnableVBAOFoliageMask", enable_foliage_mask);
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
                ImGui::SetTooltip("Plants (bushes, trees, grass) don't occlude their surroundings, and darken less themselves.\nThe game marks them in the stencil buffer.");
             }
-            if (DrawResetButton(enable_foliage_mask, true, "EnableVBAOFoliageMask", runtime))
+            if (DrawResetButton(enable_foliage_mask, true, "EnableVBAOFoliageMask"))
             {
                cb_luma_global_settings.GameSettings.EnableVBAOFoliageMask = 1;
-               reshade::set_config_value(runtime, NAME, "EnableVBAOFoliageMask", true);
+               Config::Set(NAME, "EnableVBAOFoliageMask", true);
             }
             if (cb_luma_global_settings.GameSettings.EnableVBAOFoliageMask != 0)
             {
                if (ImGui::SliderFloat("VBAO Foliage Blend", &cb_luma_global_settings.GameSettings.VBAOFoliageBlend, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
                {
-                  reshade::set_config_value(runtime, NAME, "VBAOFoliageBlend", cb_luma_global_settings.GameSettings.VBAOFoliageBlend);
+                  Config::Set(NAME, "VBAOFoliageBlend", cb_luma_global_settings.GameSettings.VBAOFoliageBlend);
                }
                if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                {
                   ImGui::SetTooltip("How much the AO of the foliage pixels is blended toward unoccluded.");
                }
-               if (DrawResetButton(cb_luma_global_settings.GameSettings.VBAOFoliageBlend, 0.75f, "VBAOFoliageBlend", runtime))
+               if (DrawResetButton(cb_luma_global_settings.GameSettings.VBAOFoliageBlend, 0.75f, "VBAOFoliageBlend"))
                {
                   cb_luma_global_settings.GameSettings.VBAOFoliageBlend = 0.75f;
-                  reshade::set_config_value(runtime, NAME, "VBAOFoliageBlend", cb_luma_global_settings.GameSettings.VBAOFoliageBlend);
+                  Config::Set(NAME, "VBAOFoliageBlend", cb_luma_global_settings.GameSettings.VBAOFoliageBlend);
                }
             }
             if (ImGui::SliderFloat("VBAO Thickness Scale", &cb_luma_global_settings.GameSettings.VBAOThicknessScale, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
             {
-               reshade::set_config_value(runtime, NAME, "VBAOThicknessScale", cb_luma_global_settings.GameSettings.VBAOThicknessScale);
+               Config::Set(NAME, "VBAOThicknessScale", cb_luma_global_settings.GameSettings.VBAOThicknessScale);
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
                ImGui::SetTooltip("The thickness of the depth buffer surfaces for VBAO (min 20 cm) grows linearly with the depth, as this fraction of the ray reach (which is about 21% of the depth).\n0 keeps it constant (thin, no halos around objects but weak occlusion at a distance).");
             }
-            if (DrawResetButton(cb_luma_global_settings.GameSettings.VBAOThicknessScale, 0.15f, "VBAOThicknessScale", runtime))
+            if (DrawResetButton(cb_luma_global_settings.GameSettings.VBAOThicknessScale, 0.15f, "VBAOThicknessScale"))
             {
                cb_luma_global_settings.GameSettings.VBAOThicknessScale = 0.15f;
-               reshade::set_config_value(runtime, NAME, "VBAOThicknessScale", cb_luma_global_settings.GameSettings.VBAOThicknessScale);
+               Config::Set(NAME, "VBAOThicknessScale", cb_luma_global_settings.GameSettings.VBAOThicknessScale);
             }
          }
 #endif
 #if DEVELOPMENT || TEST
          if (ImGui::Checkbox("Foliage Mip Bias Correction", &foliage_mip_bias_correction))
          {
-            reshade::set_config_value(runtime, NAME, "FoliageMipBiasCorrection", foliage_mip_bias_correction);
+            Config::Set(NAME, "FoliageMipBiasCorrection", foliage_mip_bias_correction);
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          {
             ImGui::SetTooltip("Gives the plants (stencil class 0xB0, alpha tested, they shimmer with sharp mips) +1 of the SR texture mip bias back (never softer than the game's own).\nRequires active SR.");
          }
-         if (DrawResetButton(foliage_mip_bias_correction, true, "FoliageMipBiasCorrection", runtime))
+         if (DrawResetButton(foliage_mip_bias_correction, true, "FoliageMipBiasCorrection"))
          {
             foliage_mip_bias_correction = true;
-            reshade::set_config_value(runtime, NAME, "FoliageMipBiasCorrection", foliage_mip_bias_correction);
+            Config::Set(NAME, "FoliageMipBiasCorrection", foliage_mip_bias_correction);
          }
 #endif
          const char* rain_timings[] = {"After TAA / DLSS", "After DoF"};
          if (ImGui::Combo("Rain Composition", &rain_composition, rain_timings, IM_ARRAYSIZE(rain_timings)))
-            reshade::set_config_value(runtime, NAME, "RainComposition", rain_composition);
+            Config::Set(NAME, "RainComposition", rain_composition);
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("After TAA / DLSS: rain receives game DoF and motion blur.\nAfter DoF: rain bypasses DoF and still receives motion blur when enabled.\nRequires active SR.");
 #if DEVELOPMENT || TEST
@@ -617,52 +611,52 @@ public:
             if (ImGui::Checkbox("Use Vanilla Gamut Ratio", &use_vanilla_gamut_ratio))
             {
                cb_luma_global_settings.GameSettings.UseVanillaGamutRatio = use_vanilla_gamut_ratio ? 1 : 0;
-               reshade::set_config_value(runtime, NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
+               Config::Set(NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
             }
-            if (DrawResetButton(use_vanilla_gamut_ratio, false, "UseVanillaGamutRatio", runtime))
+            if (DrawResetButton(use_vanilla_gamut_ratio, false, "UseVanillaGamutRatio"))
             {
                cb_luma_global_settings.GameSettings.UseVanillaGamutRatio = 0;
-               reshade::set_config_value(runtime, NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
+               Config::Set(NAME, "UseVanillaGamutRatio", use_vanilla_gamut_ratio);
             }
          }
 #endif
          if (ImGui::Checkbox("Directional Shadows", &enable_directional_shadows))
          {
-            reshade::set_config_value(runtime, NAME, "DirectionalShadows", enable_directional_shadows);
+            Config::Set(NAME, "DirectionalShadows", enable_directional_shadows);
          }
-         if (DrawResetButton(enable_directional_shadows, false, "DirectionalShadows", runtime))
+         if (DrawResetButton(enable_directional_shadows, false, "DirectionalShadows"))
          {
             enable_directional_shadows = false;
-            reshade::set_config_value(runtime, NAME, "DirectionalShadows", enable_directional_shadows);
+            Config::Set(NAME, "DirectionalShadows", enable_directional_shadows);
          }
 
          if (ImGui::SliderFloat("Bloom Strength", &cb_luma_global_settings.GameSettings.BloomStrength, 0.f, 2.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
-            reshade::set_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
+            Config::Set(NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
          }
-         if (DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, 1.f, "BloomStrenght", runtime))
+         if (DrawResetButton(cb_luma_global_settings.GameSettings.BloomStrength, 1.f, "BloomStrenght"))
          {
             cb_luma_global_settings.GameSettings.BloomStrength = 1.f;
-            reshade::set_config_value(runtime, NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
+            Config::Set(NAME, "BloomStrenght", cb_luma_global_settings.GameSettings.BloomStrength);
          }
 
          if (ImGui::SliderFloat("Vignette Strength", &cb_luma_global_settings.GameSettings.VignetteStrength, 0.f, 2.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
-            reshade::set_config_value(runtime, NAME, "VignetteStrength", cb_luma_global_settings.GameSettings.VignetteStrength);
+            Config::Set(NAME, "VignetteStrength", cb_luma_global_settings.GameSettings.VignetteStrength);
          }
-         if (DrawResetButton(cb_luma_global_settings.GameSettings.VignetteStrength, 1.f, "VignetteStrength", runtime))
+         if (DrawResetButton(cb_luma_global_settings.GameSettings.VignetteStrength, 1.f, "VignetteStrength"))
          {
             cb_luma_global_settings.GameSettings.VignetteStrength = 1.f;
          }
 
          if (ImGui::SliderFloat("Sharpness", &cb_luma_global_settings.GameSettings.Sharpness, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp))
          {
-            reshade::set_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
+            Config::Set(NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
          }
-         if (DrawResetButton(cb_luma_global_settings.GameSettings.Sharpness, 0.3f, "Sharpness", runtime))
+         if (DrawResetButton(cb_luma_global_settings.GameSettings.Sharpness, 0.3f, "Sharpness"))
          {
             cb_luma_global_settings.GameSettings.Sharpness = 0.3f;
-            reshade::set_config_value(runtime, NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
+            Config::Set(NAME, "Sharpness", cb_luma_global_settings.GameSettings.Sharpness);
          }
 
          ImGui::TreePop();
@@ -695,8 +689,8 @@ public:
       const UINT group_count_x = horizontal ? ScaledGroups(groups.x, horizontal_original_outputs_per_group * scale.x / outputs_per_group) : ScaledGroups(groups.x, scale.x);
       const UINT group_count_y = horizontal ? ScaledGroups(groups.y, scale.y) : ScaledGroups(groups.y, vertical_original_outputs_per_group * scale.y / outputs_per_group);
 
-      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaSettings);
-      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::compute, LumaConstantBufferType::LumaData);
+      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaSettings);
+      SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaData);
       Trace::UpdateDraw(cmd_list_data, device_data, native_device_context);
       native_device_context->Dispatch(group_count_x, group_count_y, 1);
    }
@@ -711,7 +705,7 @@ public:
          {
             game_device_data.foliage_mask_failed_logged = true;
             const std::string message = std::string("FFXV: VBAO foliage mask disabled: ") + reason;
-            reshade::log::message(reshade::log::level::warning, message.c_str());
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, message.c_str());
          }
          return nullptr;
       };
@@ -865,12 +859,12 @@ public:
       return sampler_entry.second.get();
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
       // Only with our replacement bound, the game shader has a different thread layout
-      if (is_custom_pass && stages == reshade::api::shader_stage::compute && original_shader_hashes.Contains(shader_hashes_screen_blur))
+      if (is_custom_pass && stages == ShaderStages::Compute && original_shader_hashes.Contains(shader_hashes_screen_blur))
       {
          DispatchScreenBlur(native_device, native_device_context, cmd_list_data, device_data, game_device_data, original_shader_hashes.compute_shaders[0] == 0x4F4B7B50u);
          updated_cbuffers = true;
@@ -879,7 +873,7 @@ public:
 
 #if ENABLE_FAST_NOISE_TEXTURES
       // The replaced AO pass (Shaders/Final Fantasy XV/AO_SAO_GTVBAO_0xC86DCBDA) reads the FAST noise for its sampling pattern, t0-t5 are the game's bindings and t6 is free in the original signature
-      if ((stages & reshade::api::shader_stage::pixel) != 0 && original_shader_hashes.Contains(shader_hashes_attach_fast_noise))
+      if ((stages & ShaderStages::Pixel) != 0 && original_shader_hashes.Contains(shader_hashes_attach_fast_noise))
       {
          ID3D11ShaderResourceView* fast_noise_srv = GetFastNoiseSrv(device_data);
          if (fast_noise_srv)
@@ -893,7 +887,7 @@ public:
 #endif
 
       // The G-buffer depth stencil (its stencil marks the foliage), as read by the linear depth pass which runs before the AO
-      if ((stages & reshade::api::shader_stage::pixel) != 0 && original_shader_hashes.Contains(shader_hashes_linear_depth))
+      if ((stages & ShaderStages::Pixel) != 0 && original_shader_hashes.Contains(shader_hashes_linear_depth))
       {
          ComPtr<ID3D11ShaderResourceView> depth_srv;
          native_device_context->PSGetShaderResources(0, 1, depth_srv.put());
@@ -905,7 +899,7 @@ public:
       }
 
       // The replaced AO pass reads the foliage mask at t7 (unbound, which reads as no foliage, when the mask is off or can't be built)
-      if ((stages & reshade::api::shader_stage::pixel) != 0 && original_shader_hashes.Contains(shader_hashes_ao))
+      if ((stages & ShaderStages::Pixel) != 0 && original_shader_hashes.Contains(shader_hashes_ao))
       {
          const bool use_foliage_mask = cb_luma_global_settings.GameSettings.EnableVBAO != 0 && cb_luma_global_settings.GameSettings.EnableVBAOFoliageMask != 0;
          ID3D11ShaderResourceView* foliage_mask_srv = use_foliage_mask ? BuildFoliageMask(native_device, native_device_context, device_data, game_device_data) : nullptr;
@@ -914,7 +908,7 @@ public:
 
       // Plants draw with a softer sampler, and the game's one is put back right after (it doesn't necessarily re-bind its samplers between draws).
       // Doing the draw here means setting the Luma cbuffers ourselves, as the other draws that replace the original one do.
-      if ((stages & reshade::api::shader_stage::pixel) != 0 && original_draw_dispatch_func)
+      if ((stages & ShaderStages::Pixel) != 0 && original_draw_dispatch_func)
       {
          ComPtr<ID3D11SamplerState> original_sampler;
          if (ID3D11SamplerState* foliage_sampler = GetFoliageSampler(native_device, native_device_context, device_data, game_device_data, original_sampler))
@@ -962,7 +956,7 @@ public:
          if (shader != nullptr)
          {
             native_device_context->PSSetShader(shader, nullptr, 0);
-            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
+            SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings);
 
             ID3D11ShaderResourceView* fast_noise_srv = GetFastNoiseSrv(device_data);
             if (fast_noise_srv)
@@ -1055,7 +1049,7 @@ public:
       {
          const bool is_tonemap = original_shader_hashes.Contains(shader_hashes_tonemap);
          const bool is_upscale_pass = original_shader_hashes.Contains(shader_hashes_OutputScaled);
-         const bool is_compute = stages == reshade::api::shader_stage::compute;
+         const bool is_compute = stages == ShaderStages::Compute;
          if (is_upscale_pass && game_device_data.has_drawn_tonemap &&
              OutputScaledWritesOutputResolution(native_device_context, tracking, device_data.output_resolution))
          {
@@ -1142,9 +1136,8 @@ public:
       return DrawOrDispatchOverrideType::None;
    }
 
-   static void UpdateLODBias(reshade::api::device* device)
+   static void UpdateLODBias(DeviceData& device_data)
    {
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
       auto& game_device_data = GetGameDeviceData(device_data);
 
       if (!custom_texture_mip_lod_bias_offset)
@@ -1169,7 +1162,7 @@ public:
          // It also allows us to use the right samplers for this frame's resolution.
          if (texture_mip_lod_bias_offset_changed)
          {
-            ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
+            ID3D11Device* native_device = device_data.native_device;
             for (auto& samplers_handle : device_data.custom_sampler_by_original_sampler)
             {
                if (samplers_handle.second.contains(new_texture_mip_lod_bias_offset))
@@ -1189,31 +1182,45 @@ public:
       }
    }
 
-   static bool OnClearRenderTargetView(reshade::api::command_list* cmd_list, reshade::api::resource_view rtv,
-      const float color[4], uint32_t rect_count, const reshade::api::rect*)
+   bool PreClearRenderTargetView(ID3D11DeviceContext* native_device_context, ID3D11RenderTargetView* native_rtv, const FLOAT color[4]) override
    {
-      auto* device = cmd_list->get_device();
-      if (device->get_api() != reshade::api::device_api::d3d11 || rtv.handle == 0)
-         return false;
-      auto* device_data = device->get_private_data<DeviceData>();
+      TrackRenderTargetClear(native_device_context, native_rtv, color, 0);
+      return false;
+   }
+
+   // ReShade reported "ClearView" on render target views as render target clears, so the upscale tracking sees both
+   bool PreClearView(ID3D11DeviceContext* native_device_context, ID3D11View* view, const FLOAT color[4], const D3D11_RECT* rects, UINT rect_count) override
+   {
+      ComPtr<ID3D11RenderTargetView> rtv;
+      if (view && SUCCEEDED(view->QueryInterface(rtv.put())))
+         TrackRenderTargetClear(native_device_context, rtv.get(), color, rect_count);
+      return false;
+   }
+
+   static void TrackRenderTargetClear(ID3D11DeviceContext* native_device_context, ID3D11RenderTargetView* native_rtv, const FLOAT color[4], UINT rect_count)
+   {
+      if (!native_rtv)
+         return;
+      CommandListData* cmd_list_data = GetCommandListData(native_device_context);
+      DeviceData* device_data = cmd_list_data ? cmd_list_data->device_data : nullptr;
       if (!device_data || !device_data->game)
-         return false;
+         return;
+      const uint64_t rtv_handle = reinterpret_cast<uint64_t>(native_rtv);
 
       ComPtr<ID3D11RenderTargetView> effective_rtv;
       {
          const std::shared_lock lock(device_data->mutex);
-         auto upgraded_view = device_data->resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(rtv.handle);
+         auto upgraded_view = device_data->resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(rtv_handle);
          const auto effective_handle = !ignore_indirect_upgraded_textures &&
             upgraded_view != device_data->resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.end()
-            ? upgraded_view->second : rtv.handle;
+            ? upgraded_view->second : rtv_handle;
          effective_rtv = reinterpret_cast<ID3D11RenderTargetView*>(effective_handle);
       }
       // Resolve upgrades ourselves: the core event performs its native clear
       // separately, and its redirected clear does not emit another event.
-      TrackAndClearUpscaleTarget(reinterpret_cast<ID3D11Device*>(device->get_native()),
-         reinterpret_cast<ID3D11DeviceContext*>(cmd_list->get_native()), GetGameDeviceData(*device_data).upscale_tracking,
+      TrackAndClearUpscaleTarget(device_data->native_device,
+         native_device_context, GetGameDeviceData(*device_data).upscale_tracking,
          effective_rtv.get(), color, rect_count, device_data->render_resolution, device_data->output_resolution);
-      return false;
    }
 
    static bool ExecuteUpscaledCopy(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint64_t& src_resource)
@@ -1325,15 +1332,34 @@ public:
       return redirected;
    }
 
-   static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+   // Native hooks (buffers only)
+public:
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
    {
-      ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+   }
+
+   bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+   {
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return false;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnUnmapBufferRegion(*cmd_list_data->device_data, buffer);
+      return false;
+   }
+
+   static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
+   {
+      ID3D11Device* native_device = device_data.native_device;
       auto& game_device_data = GetGameDeviceData(device_data);
 
       // Cache every 256-byte buffer on Map (data will be available on Unmap)
-      if ((access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard || access == reshade::api::map_access::read_write))
+      if (((access == D3D11_MAP_WRITE || access == D3D11_MAP_WRITE_NO_OVERWRITE) || access == D3D11_MAP_WRITE_DISCARD || access == D3D11_MAP_READ_WRITE))
       {
          D3D11_BUFFER_DESC buffer_desc;
          buffer->GetDesc(&buffer_desc);
@@ -1345,11 +1371,9 @@ public:
       }
    }
 
-   static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+   static void OnUnmapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer)
    {
-      ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
+      ID3D11Device* native_device = device_data.native_device;
       auto& game_device_data = GetGameDeviceData(device_data);
 
       // Update cached TAA cbuffer data on Unmap (data is now available)
@@ -1368,13 +1392,18 @@ public:
       game_device_data.cb_taa_buffer = nullptr;
    }
 
-   static bool OnUpdateBufferRegion(reshade::api::device* device, const void* data, reshade::api::resource resource, uint64_t offset, uint64_t size)
+   // ReShade's "update_buffer_region": buffer updates on the immediate context
+   bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch, UINT copy_flags) override
    {
-      ID3D11Device* native_device = (ID3D11Device*)(device->get_native());
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE)
+         return false;
+      CommandListData* cmd_list_data = GetCommandListData(context);
+      if (!cmd_list_data)
+         return false;
+      DeviceData& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
-      uint64_t buffer_size = size;
+      uint64_t buffer_size = 0;
 
       if (game_device_data.has_processed_view_buffer || buffer == nullptr || !device_data.taa_detected)
       {
@@ -1398,11 +1427,11 @@ public:
 
       if (!game_device_data.found_per_view_globals)
       {
-         CheckAndExtractPerViewGlobalsBuffer(device, resource, data);
+         CheckAndExtractPerViewGlobalsBuffer(device_data, data);
          // Update LOD bias now that we know the render resolution from view cbuffer
          if (game_device_data.has_processed_view_buffer)
          {
-            UpdateLODBias(device);
+            UpdateLODBias(device_data);
          }
       }
 
@@ -1581,7 +1610,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       // In the SDR path (forced by the display capability spoofing) the game tonemaps into an R10G10B10A2 target, which would clip the HDR output.
       // That's the only texture of this format the game uses, so upgrade it directly.
       texture_upgrade_formats = {
-         reshade::api::format::r10g10b10a2_unorm
+         DXGI_FORMAT_R10G10B10A2_UNORM
       };
       enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
 
@@ -1599,14 +1628,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 
       enable_samplers_upgrade = true;
 
-      game = new FinalFantasyXV();
+      SetGame<FinalFantasyXV>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(FinalFantasyXV::OnMapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::unmap_buffer_region>(FinalFantasyXV::OnUnmapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::update_buffer_region>(FinalFantasyXV::OnUpdateBufferRegion);
-      reshade::unregister_event<reshade::addon_event::clear_render_target_view>(FinalFantasyXV::OnClearRenderTargetView);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

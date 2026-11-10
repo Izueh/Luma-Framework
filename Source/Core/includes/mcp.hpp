@@ -9,7 +9,6 @@
 #include <utility>
 
 #include <d3d11.h>
-#include <include/reshade.hpp>
 
 struct CommandListData; // instance_data.h
 struct DeviceData;      // instance_data.h
@@ -68,7 +67,7 @@ namespace Mcp
    // Called from "Init()": starts the pipe server and registers Core's knobs
    void Start();
    // Called from "OnPresent" on the render thread, before display composition
-   void OnPresent(DeviceData& device_data, CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, reshade::api::swapchain* swapchain);
+   void OnPresent(DeviceData& device_data, CommandListData& cmd_list_data, ID3D11DeviceContext* native_device_context, IDXGISwapChain* swapchain);
    // Called on DLL unload
    void Shutdown();
 } // namespace Mcp

@@ -267,7 +267,7 @@ public:
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
       GetShaderDefineData(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL_HASH).SetDefaultValue('1');
 
-      native_shaders_definitions.emplace(CompileTimeStringHash("Sanitize Lighting"), ShaderDefinition{ "Luma_SanitizeLighting", reshade::api::pipeline_subobject_type::pixel_shader });
+      native_shaders_definitions.emplace(CompileTimeStringHash("Sanitize Lighting"), ShaderDefinition{ "Luma_SanitizeLighting", D3D11_SHVER_PIXEL_SHADER });
    }
 
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -275,9 +275,9 @@ public:
       device_data.game = new GameDeviceDataINSIDE;
    }
 
-   void OnInitSwapchain(reshade::api::swapchain* swapchain) override
+   void OnInitSwapchain(IDXGISwapChain* swapchain) override
    {
-      auto& device_data = *swapchain->get_device()->get_private_data<DeviceData>();
+      auto& device_data = *GetSwapchainData(swapchain)->device_data;
       if (device_data.game)
       {
          auto& game_device_data = *static_cast<GameDeviceDataINSIDE*>(device_data.game);
@@ -291,11 +291,11 @@ public:
       }
    }
 
-   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, reshade::api::pipeline_subobject_type type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
+   std::unique_ptr<std::byte[]> PatchShaderBytecodeSync(const std::byte* code, size_t& size, D3D11_SHADER_VERSION_TYPE type, uint64_t shader_hash, const std::byte* shader_object, size_t shader_object_size) override
    {
       using namespace System;
 
-      if (type != reshade::api::pipeline_subobject_type::pixel_shader) return nullptr;
+      if (type != D3D11_SHVER_PIXEL_SHADER) return nullptr;
 
       std::unique_ptr<std::byte[]> new_code = nullptr;
 
@@ -541,7 +541,7 @@ public:
    // pretty much) -Render additive lights -Draw motion vectors for dynamic objects (rest is
    // calculated from the camera I think) -TAA -Bloom and emissive color -Tonemap -Swapchain output
    // (possibly draws black bars)
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = *static_cast<GameDeviceDataINSIDE*>(device_data.game);
 
@@ -777,13 +777,12 @@ public:
 
    void LoadConfigs() override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
-      reshade::get_config_value(runtime, NAME, "HDRIntensity", cb_luma_global_settings.GameSettings.HDRIntensity);
-      reshade::get_config_value(runtime, NAME, "HighlightsDesaturation", cb_luma_global_settings.GameSettings.HighlightsDesaturation);
+      Config::Get(NAME, "HDRIntensity", cb_luma_global_settings.GameSettings.HDRIntensity);
+      Config::Get(NAME, "HighlightsDesaturation", cb_luma_global_settings.GameSettings.HighlightsDesaturation);
       // "device_data.cb_luma_global_settings_dirty" should already be true at this point
 
-      reshade::get_config_value(runtime, NAME, "CustomAspectRatio", max_aspect_ratio);
+      Config::Get(NAME, "CustomAspectRatio", max_aspect_ratio);
       // Don't re-patch if the custom AR was disabled, we'll let the mod default to the output AR
       if (max_aspect_ratio > 0.f)
       {
@@ -791,12 +790,11 @@ public:
          //SetAspectRatioUpgrades(device_data, max_aspect_ratio); // TODO: add
       }
 
-      reshade::get_config_value(runtime, NAME, "DisableDither", disable_dither);
+      Config::Get(NAME, "DisableDither", disable_dither);
    }
 
    void DrawImGuiSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
 
       ImGui::NewLine();
 
@@ -807,19 +805,19 @@ public:
          {
             if (ImGui::SliderFloat("HDR Intensity", &cb_luma_global_settings.GameSettings.HDRIntensity, 0.f, 2.f))
             {
-               reshade::set_config_value(runtime, NAME, "HDRIntensity", cb_luma_global_settings.GameSettings.HDRIntensity);
+               Config::Set(NAME, "HDRIntensity", cb_luma_global_settings.GameSettings.HDRIntensity);
             }
-            DrawResetButton(cb_luma_global_settings.GameSettings.HDRIntensity, 1.f, "HDRIntensity", runtime);
+            DrawResetButton(cb_luma_global_settings.GameSettings.HDRIntensity, 1.f, "HDRIntensity");
 
             if (ImGui::SliderFloat("Highlights Desaturation", &cb_luma_global_settings.GameSettings.HighlightsDesaturation, 0.f, 1.f))
             {
-               reshade::set_config_value(runtime, NAME, "HighlightsDesaturation", cb_luma_global_settings.GameSettings.HighlightsDesaturation);
+               Config::Set(NAME, "HighlightsDesaturation", cb_luma_global_settings.GameSettings.HighlightsDesaturation);
             }
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             {
                ImGui::SetTooltip("The higher the value, the closer we are to the vanilla look (results might still be different due to HDR tonemapping)");
             }
-            DrawResetButton(cb_luma_global_settings.GameSettings.HighlightsDesaturation, 0.4f, "HighlightsDesaturation", runtime);
+            DrawResetButton(cb_luma_global_settings.GameSettings.HighlightsDesaturation, 0.4f, "HighlightsDesaturation");
 
             ImGui::NewLine();
          }
@@ -834,7 +832,7 @@ public:
                max_aspect_ratio = -1.f;
             PatchAspectRatio(output_aspect_ratio);
             SetAspectRatioUpgrades(device_data, output_aspect_ratio);
-            reshade::set_config_value(runtime, NAME, "CustomAspectRatio", max_aspect_ratio);
+            Config::Set(NAME, "CustomAspectRatio", max_aspect_ratio);
          }
          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          {
@@ -849,13 +847,13 @@ public:
             // nor going below 16:9 (the game never allows rendering below that).
             if (ImGui::SliderFloat("Custom Aspect Ratio", &max_aspect_ratio, default_aspect_ratio, output_aspect_ratio))
             {
-               reshade::set_config_value(runtime, NAME, "CustomAspectRatio", max_aspect_ratio);
+               Config::Set(NAME, "CustomAspectRatio", max_aspect_ratio);
                PatchAspectRatio(max_aspect_ratio);
                SetAspectRatioUpgrades(device_data, max_aspect_ratio);
             }
-            if (DrawResetButton(max_aspect_ratio, output_aspect_ratio, "CustomAspectRatio", runtime))
+            if (DrawResetButton(max_aspect_ratio, output_aspect_ratio, "CustomAspectRatio"))
             {
-               reshade::set_config_value(runtime, NAME, "CustomAspectRatio", max_aspect_ratio);
+               Config::Set(NAME, "CustomAspectRatio", max_aspect_ratio);
                PatchAspectRatio(max_aspect_ratio);
                SetAspectRatioUpgrades(device_data, max_aspect_ratio);
             }
@@ -864,7 +862,7 @@ public:
          ImGui::NewLine();
          if (ImGui::Checkbox("Disable Dithering", &disable_dither))
          {
-            reshade::set_config_value(runtime, NAME, "DisableDither", disable_dither);
+            Config::Set(NAME, "DisableDither", disable_dither);
 
             const std::shared_lock lock(s_mutex_shader_defines);
             GetShaderDefineData(char_ptr_crc32("ENABLE_DITHER")).SetDefaultValue(disable_dither ? '0' : '1');
@@ -884,7 +882,6 @@ public:
 #if DEVELOPMENT
    void DrawImGuiDevSettings(DeviceData& device_data) override
    {
-      reshade::api::effect_runtime* runtime = nullptr;
    }
 #endif
 
@@ -964,16 +961,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       texture_format_upgrades_type = TextureFormatUpgradesType::AllowedEnabled;
       texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::CustomAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::RenderAspectRatio;
       texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
             // Likely unnecessary but won't hurt
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
 
             // These are used by lighting, which wouldn't really need to be upgraded as it 10bit in log space are already plenty, and possibly even better than FP16,
             // however, they are also used by bloom so we need to upgrade them (until we find a way to selectively upgrade textures)
-            reshade::api::format::r10g10b10a2_typeless,
-            reshade::api::format::r10g10b10a2_unorm,
+            DXGI_FORMAT_R10G10B10A2_TYPELESS,
+            DXGI_FORMAT_R10G10B10A2_UNORM,
       };
 
       // There's many...
@@ -1053,7 +1050,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       cb_luma_global_settings.GameSettings.HighlightsDesaturation = 0.4f;
       // TODO: use "default_luma_global_game_settings"
 
-      game = new INSIDE();
+      SetGame<INSIDE>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

@@ -8,7 +8,6 @@
 #define DISABLE_AUTO_DEBUGGER 1
 #define DISABLE_FOCUS_LOSS_SUPPRESSION 1
 #define AVOID_INPUT_LOSS 1
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 
 // FSR 3 Native AA as a vendor-neutral alternative to DLAA (selectable in core's "Super Resolution" combo)
 #define GEOMETRY_SHADER_SUPPORT 0
@@ -69,14 +68,14 @@ static constexpr uint32_t kTAAResolveDofHashes[] = {
 static bool IsTAAResolveDof(const ShaderHashesList<OneShaderPerPipeline>& hashes)
 {
    for (uint32_t h : kTAAResolveDofHashes)
-      if (hashes.Contains(h, reshade::api::shader_stage::compute))
+      if (hashes.Contains(h, ShaderStages::Compute))
          return true;
    return false;
 }
 static bool IsTAAResolve(const ShaderHashesList<OneShaderPerPipeline>& hashes)
 {
    for (uint32_t h : kTAAResolveHashes)
-      if (hashes.Contains(h, reshade::api::shader_stage::compute))
+      if (hashes.Contains(h, ShaderStages::Compute))
          return true;
    return IsTAAResolveDof(hashes);
 }
@@ -188,7 +187,7 @@ struct MassEffectAndromedaGameDeviceData final : public GameDeviceData
 
    // --- Edge-triggered situational logging (DEV/TEST only): one summary line in OnPresent that
    // re-prints ONLY when the situation changes — a different in-game AA mode, DLAA engaging/dropping, an
-   // SMAA/sharpness change, a loading screen — so you can read each transition in ReShade.log without spam. ---
+   // SMAA/sharpness change, a loading screen — so you can read each transition in Luma.log without spam. ---
    bool dlss_ran_this_frame = false;  // set true only when DLSS Draw() actually succeeded this frame
    uint32_t fxaa_seen_this_frame = 0; // game's FXAA pass seen this frame (counted regardless of smaa_enable)
 #if DEVELOPMENT || TEST
@@ -361,7 +360,7 @@ class MassEffectAndromeda final : public Game
                   gd.logged_probe_hit = true;
                   char b[96];
                   snprintf(b, sizeof(b), "MEA: camera fallback probe hit at %s b%u", cs ? "CS" : "VS", slot);
-                  reshade::log::message(reshade::log::level::info, b);
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, b);
                }
 #endif
                return;
@@ -377,26 +376,35 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
    // hazard (the wide slot probe crashed on exactly this in menus, where UI CBs are DISCARD-cycled every frame).
    // OnDestroyResource removes the record entirely, which also un-bans a handle the runtime later recycles.
    // Fires on Frostbite worker threads → map_recs_mutex.
-   static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+   // Native hooks (buffers only)
+public:
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
    {
-      DeviceData& device_data = *device->get_private_data<DeviceData>();
+      ID3D11Buffer* buffer = AsBuffer(resource);
+      if (!buffer)
+         return;
+      if (CommandListData* cmd_list_data = GetCommandListData(context))
+         OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+   }
+
+   static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
+   {
       if (!device_data.game)
          return;
-      if (access == reshade::api::map_access::write_discard)
+      if (access == D3D11_MAP_WRITE_DISCARD)
       {
          auto& gd = GetGameDeviceData(device_data);
          std::lock_guard<std::mutex> lock(gd.map_recs_mutex);
          for (int i = 0; i < gd.map_rec_count; ++i)
-            if (gd.map_recs[i].handle == resource.handle)
+            if (gd.map_recs[i].handle == reinterpret_cast<uint64_t>(buffer))
             {
                gd.map_recs[i].data = nullptr; // ban — see header comment
                break;
             }
          return;
       }
-      if (access != reshade::api::map_access::write_only || data == nullptr || *data == nullptr)
+      if (!((access == D3D11_MAP_WRITE || access == D3D11_MAP_WRITE_NO_OVERWRITE)) || data == nullptr || *data == nullptr)
          return; // NO_OVERWRITE only
-      ID3D11Buffer* buffer = reinterpret_cast<ID3D11Buffer*>(resource.handle);
       D3D11_BUFFER_DESC bd = {};
       buffer->GetDesc(&bd);
       if ((bd.BindFlags & D3D11_BIND_CONSTANT_BUFFER) == 0 || bd.Usage != D3D11_USAGE_DYNAMIC)
@@ -406,7 +414,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
       auto& gd = GetGameDeviceData(device_data);
       std::lock_guard<std::mutex> lock(gd.map_recs_mutex); // fires on Frostbite worker threads — see map_recs_mutex note
       for (int i = 0; i < gd.map_rec_count; ++i)           // dedupe by handle — keep latest pointer
-         if (gd.map_recs[i].handle == resource.handle)
+         if (gd.map_recs[i].handle == reinterpret_cast<uint64_t>(buffer))
          {
             if (gd.map_recs[i].data != nullptr) // banned handles stay banned until destroyed
             {
@@ -416,31 +424,35 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
             return;
          }
       if (gd.map_rec_count < MassEffectAndromedaGameDeviceData::kMaxMaps)
-         gd.map_recs[gd.map_rec_count++] = {resource.handle, *data, (uint64_t)bd.ByteWidth};
+         gd.map_recs[gd.map_rec_count++] = {reinterpret_cast<uint64_t>(buffer), *data, (uint64_t)bd.ByteWidth};
 #if DEVELOPMENT || TEST
       else if (!gd.logged_maps_full) // cap hit → the camera handle may be dropped this frame (would force DLSS reset)
       {
          gd.logged_maps_full = true;
-         reshade::log::message(reshade::log::level::warning, "MEA: map_recs cap (kMaxMaps) hit — raise it if camera capture starts missing.");
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "MEA: map_recs cap (kMaxMaps) hit — raise it if camera capture starts missing.");
       }
 #endif
    }
 
    // Drop the record of a destroyed buffer: its cached map pointer is dead, and the runtime may recycle the
    // handle for a brand-new buffer (which must not inherit a stale pointer or a DISCARD ban).
-   static void OnDestroyResource(reshade::api::device* device, reshade::api::resource resource)
+public:
+   void OnResourceDestroyed(const void* resource) override
    {
-      DeviceData* device_data = device->get_private_data<DeviceData>();
-      if (device_data == nullptr || !device_data->game)
-         return;
-      auto& gd = GetGameDeviceData(*device_data);
-      std::lock_guard<std::mutex> lock(gd.map_recs_mutex);
-      for (int i = 0; i < gd.map_rec_count; ++i)
-         if (gd.map_recs[i].handle == resource.handle)
-         {
-            gd.map_recs[i] = gd.map_recs[--gd.map_rec_count];
-            break;
-         }
+      const std::shared_lock lock_devices(s_mutex_device);
+      for (DeviceData* device_data : global_devices_data)
+      {
+         if (!device_data->game)
+            continue;
+         auto& gd = GetGameDeviceData(*device_data);
+         std::lock_guard<std::mutex> lock(gd.map_recs_mutex);
+         for (int i = 0; i < gd.map_rec_count; ++i)
+            if (gd.map_recs[i].handle == reinterpret_cast<uint64_t>(resource))
+            {
+               gd.map_recs[i] = gd.map_recs[--gd.map_rec_count];
+               break;
+            }
+      }
    }
 
    void OnInit(bool async) override
@@ -454,17 +466,15 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
       // target (u2/u3) to r11g11b10_float, where CopySubresourceRegion from our rgba16f output silently
       // no-ops (black scene, live UI). This CS writes through the game's own typed UAV instead.
       native_shaders_definitions.emplace(CompileTimeStringHash("MEA SR Output Copy CS"),
-         ShaderDefinition{"Luma_MEA_CopyColor", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "copy_color_cs"});
+         ShaderDefinition{"Luma_MEA_CopyColor", D3D11_SHVER_COMPUTE_SHADER, nullptr, "copy_color_cs"});
       // History (u3) variant: encodes to the native resolve's history format (encoded-domain RGB x512) so
       // frames where the native resolve runs (SR<->native transitions, dialogue run-native) read honest
       // history instead of a de-facto reset.
       native_shaders_definitions.emplace(CompileTimeStringHash("MEA SR History Copy CS"),
-         ShaderDefinition{"Luma_MEA_CopyColor", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "copy_color_history_cs"});
+         ShaderDefinition{"Luma_MEA_CopyColor", D3D11_SHVER_COMPUTE_SHADER, nullptr, "copy_color_history_cs"});
 #endif
       // Cache the camera ring-buffer's CPU map pointer (read at the TAA dispatch by bound offset in
       // SelectCameraCPU) — replaces the per-frame GPU readback stall. Must run in all configs.
-      reshade::register_event<reshade::addon_event::map_buffer_region>(OnMapBufferRegion);
-      reshade::register_event<reshade::addon_event::destroy_resource>(OnDestroyResource);
    }
 
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
@@ -493,7 +503,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
       device_data.game = nullptr;
    }
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& gd = GetGameDeviceData(device_data);
 
@@ -505,8 +515,8 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
       // if this one's camera map hasn't landed). Immediate-only keeps cam_valid_this_frame single-threaded (no race).
       // Here, not at the COMPUTE TAA dispatch: by then VS slot 2 holds a half-res view's camera. ---
       if (is_immediate && !gd.cam_valid_this_frame &&
-          (original_shader_hashes.Contains(kGbufferVS_A, reshade::api::shader_stage::vertex) ||
-             original_shader_hashes.Contains(kGbufferVS_B, reshade::api::shader_stage::vertex)))
+          (original_shader_hashes.Contains(kGbufferVS_A, ShaderStages::Vertex) ||
+             original_shader_hashes.Contains(kGbufferVS_B, ShaderStages::Vertex)))
       {
          if (ID3D11DeviceContext1* ctx1 = GetImmediateCtx1(gd, native_device_context))
             CaptureCameraAtGbuffer(ctx1, gd);
@@ -515,7 +525,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
 #if DEVELOPMENT || TEST
       // Count the game's FXAA pass independently of smaa_enable so the OnPresent state line can report
       // the in-game AA mode (TAA vs FXAA vs Off) even when our SMAA replacement is disabled.
-      if (original_shader_hashes.Contains(kFXAAHash, reshade::api::shader_stage::pixel))
+      if (original_shader_hashes.Contains(kFXAAHash, ShaderStages::Pixel))
          gd.fxaa_seen_this_frame++;
 #endif
 
@@ -523,7 +533,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
       // --- FXAA pass (in-game FXAA AA mode): replace with SMAA. ---
       // Mutually exclusive with the TAA/DLAA path (FXAA mode has no TAA dispatch, and vice versa).
       if (g_smaa_enable &&
-          original_shader_hashes.Contains(kFXAAHash, reshade::api::shader_stage::pixel) &&
+          original_shader_hashes.Contains(kFXAAHash, ShaderStages::Pixel) &&
           is_immediate)
       {
          gd.fxaa_hits_this_frame++;
@@ -635,7 +645,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
                {
                   char b[176];
                   snprintf(b, sizeof(b), "MEA DIAG: unhooked resolve-like CS 0x%08X (u2+u3+t1 bound) — candidate TAA-resolve perm missing from the hooked set", outlier_cs);
-                  reshade::log::message(reshade::log::level::warning, b);
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, b);
                }
             }
          }
@@ -660,7 +670,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
             const uint32_t matched_cs = FirstComputeHash(original_shader_hashes);
             char hit_msg[128];
             snprintf(hit_msg, sizeof(hit_msg), "MEA: TAA resolve compute 0x%08X detected — SR injection point reached (perm-matrix hook).", matched_cs);
-            reshade::log::message(reshade::log::level::info, hit_msg);
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, hit_msg);
          }
 #endif
 
@@ -687,7 +697,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
                   char b[160];
                   snprintf(b, sizeof(b), "MEA SR capture FAIL: depth=%d mvs=%d color=%d u2=%d u3=%d",
                      (int)(bool)srv_depth, (int)(bool)srv_mvs, (int)(bool)srv_color, (int)(bool)uav_resolved, (int)(bool)uav_history);
-                  reshade::log::message(reshade::log::level::warning, b);
+                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, b);
                }
 #endif
                if (srv_depth && srv_mvs && srv_color && uav_resolved)
@@ -730,7 +740,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
                      if (!gd.logged_probe_miss)
                      {
                         gd.logged_probe_miss = true;
-                        reshade::log::message(reshade::log::level::info,
+                        Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info,
                            "MEA: no camera at hooked resolve (gbuffer capture + wide probe both missed) — native TAA for these frames.");
                      }
 #endif
@@ -770,7 +780,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
                         snprintf(b, sizeof(b), "MEA SR hand-off: u2 fmt=%d %ux%u mips=%u vs SR out rgba16f %ux%u -> mode=%s",
                            (int)ud.Format, ud.Width, ud.Height, ud.MipLevels, out_w, out_h,
                            mode == HandoffMode::DirectCopy ? "direct-copy" : (mode == HandoffMode::CsCopy ? "cs-copy" : "INCOMPATIBLE (native TAA)"));
-                        reshade::log::message(mode == HandoffMode::Incompatible ? reshade::log::level::warning : reshade::log::level::info, b);
+                        Luma::Utils::Log::Write(mode == HandoffMode::Incompatible ? Luma::Utils::Log::Level::Warning : Luma::Utils::Log::Level::Info, b);
                      }
                      gd.u2_mode = mode;
                   }
@@ -801,7 +811,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
                         const uint32_t matched_cs = FirstComputeHash(original_shader_hashes);
                         char b[160];
                         snprintf(b, sizeof(b), "MEA: DOF-variant resolve 0x%08X — run-native-then-override (u4/u5 CoC preserved).", matched_cs);
-                        reshade::log::message(reshade::log::level::info, b);
+                        Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, b);
                      }
 #endif
                   }
@@ -876,7 +886,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
                            (int)ok, (int)reset, out_w, out_h, device_data.output_resolution.x, device_data.output_resolution.y,
                            draw_data.jitter_x, draw_data.jitter_y,
                            settings_data.mvs_x_scale, settings_data.mvs_y_scale, draw_data.near_plane);
-                        reshade::log::message(reshade::log::level::info, b);
+                        Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, b);
                      }
 #endif
                      if (ok)
@@ -938,7 +948,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
                         if (!gd.logged_draw_fail)
                         {
                            gd.logged_draw_fail = true;
-                           reshade::log::message(reshade::log::level::warning,
+                           Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
                               "MEA: SR Draw FAIL — native TAA this frame, force_reset_sr re-armed; history resets on SR recovery.");
                         }
 #endif
@@ -1006,7 +1016,7 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
                "MEA[f=%llu] aa=%s dlaa_active=%d smaa_replaced=%d sharpen=%d | sr=%d supp=%d smaa_en=%d camValid=%d bias=%.2f reason=%s",
                (unsigned long long)cb_luma_global_settings.FrameIndex, aa, cur.dlaa, cur.smaa_replaced, cur.sharpen,
                cur.sr_type, cur.sr_supp, cur.smaa_en, cur.cam_valid, cur.bias, reason);
-            reshade::log::message(reshade::log::level::info, b);
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, b);
          }
       }
       // AF verification (one-shot): dump the descriptors of the custom samplers core created from
@@ -1031,12 +1041,12 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
                      char sb[176];
                      snprintf(sb, sizeof(sb), "MEA AF: custom sampler filter=%d maxAniso=%u mipBias=%.2f minLOD=%.1f (offset key=%.2f)",
                         (int)d.Filter, d.MaxAnisotropy, d.MipLODBias, d.MinLOD, by_bias.first);
-                     reshade::log::message(reshade::log::level::info, sb);
+                     Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, sb);
                   }
                }
             char hb[96];
             snprintf(hb, sizeof(hb), "MEA AF: %d custom (upgraded) sampler(s) active — filter=85=ANISOTROPIC, maxAniso=16 means AF working", total);
-            reshade::log::message(reshade::log::level::info, hb);
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, hb);
          }
       }
 #endif // DEVELOPMENT || TEST
@@ -1060,8 +1070,8 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
    // Persist the user settings across launches (ReShade config section NAME="Luma"). Called on boot.
    void LoadConfigs() override
    {
-      reshade::get_config_value(nullptr, NAME, "SMAAEnable", g_smaa_enable);
-      reshade::get_config_value(nullptr, NAME, "SMAASharpness", g_smaa_sharpness);
+      Config::Get(NAME, "SMAAEnable", g_smaa_enable);
+      Config::Get(NAME, "SMAASharpness", g_smaa_sharpness);
    }
 
    // User-facing settings (all configs). Minimal + tooltips + persistence. The DLSS quality preset is selectable
@@ -1070,13 +1080,13 @@ public: // OnMapBufferRegion is referenced from DllMain (DLL_PROCESS_DETACH unre
    {
       ImGui::SeparatorText("Anti-Aliasing");
       if (ImGui::Checkbox("SMAA Enable", &g_smaa_enable))
-         reshade::set_config_value(nullptr, NAME, "SMAAEnable", g_smaa_enable);
+         Config::Set(NAME, "SMAAEnable", g_smaa_enable);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Replaces the game's FXAA with SMAA (only active when in-game Anti-Aliasing is set to FXAA).");
       ImGui::BeginDisabled(!g_smaa_enable);
       ImGui::SliderFloat("RCAS Sharpness", &g_smaa_sharpness, 0.f, 1.f); // updates live; persist on release
       if (ImGui::IsItemDeactivatedAfterEdit())
-         reshade::set_config_value(nullptr, NAME, "SMAASharpness", g_smaa_sharpness);
+         Config::Set(NAME, "SMAASharpness", g_smaa_sharpness);
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
          ImGui::SetTooltip("Sharpening applied on top of SMAA (0 = off).");
       ImGui::EndDisabled();
@@ -1188,13 +1198,11 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       enable_samplers_upgrade = true; // boot-time only
       samplers_upgrade_mode = 4;
 
-      game = new MassEffectAndromeda();
+      SetGame<MassEffectAndromeda>();
    }
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
       // We registered these in OnInit; unregister so a reload doesn't double-register / dangle.
-      reshade::unregister_event<reshade::addon_event::map_buffer_region>(MassEffectAndromeda::OnMapBufferRegion);
-      reshade::unregister_event<reshade::addon_event::destroy_resource>(MassEffectAndromeda::OnDestroyResource);
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

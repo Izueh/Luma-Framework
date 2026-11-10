@@ -10,12 +10,12 @@ namespace QuantumBreakUpscaling
    struct ShaderPass
    {
       uint32_t hash;
-      reshade::api::shader_stage stage;
+      ShaderStages stage;
    };
 
-   inline constexpr ShaderPass depth_linearization_pass{0xA43343D6u, reshade::api::shader_stage::pixel};
-   inline constexpr ShaderPass history_reprojection_pass{0xE8337D48u, reshade::api::shader_stage::compute};
-   inline constexpr ShaderPass temporal_resolve_pass{0x99274617u, reshade::api::shader_stage::pixel};
+   inline constexpr ShaderPass depth_linearization_pass{0xA43343D6u, ShaderStages::Pixel};
+   inline constexpr ShaderPass history_reprojection_pass{0xE8337D48u, ShaderStages::Compute};
+   inline constexpr ShaderPass temporal_resolve_pass{0x99274617u, ShaderStages::Pixel};
 
 #if ENABLE_SR && (DEVELOPMENT || TEST)
    struct NativeInputUsage

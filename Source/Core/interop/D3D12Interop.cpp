@@ -1,8 +1,11 @@
 #include "D3D12Interop.h"
+#include "../utils/log.hpp"
 
 #if ENABLE_D3D12_INTEROP
 
-#include <include/reshade.hpp>
+
+#include "../includes/debug.h"
+#include "../utils/format.hpp"
 
 #include <format>
 #include <string>
@@ -16,18 +19,15 @@ namespace D3D12Interop
       // Max CPU wait on the DX12 GPU work (these waits are rare), to never hang the game if the GPU is stuck
       constexpr ULONGLONG fence_timeout_ms = 2000;
 
-      // ReShade's interface ID to query the original object from its proxies (see "com_utils.hpp")
-      constexpr GUID IID_UnwrappedObject = {0x7f2c9a11, 0x3b4e, 0x4d6a, {0x81, 0x2f, 0x5e, 0x9c, 0xd3, 0x7a, 0x1b, 0x42}};
-
-      void Log(reshade::log::level level, const std::string& message)
+      void Log(Luma::Utils::Log::Level level, const std::string& message)
       {
-         reshade::log::message(level, ("D3D12 Interop: " + message).c_str());
+         Luma::Utils::Log::Write(level, ("D3D12 Interop: " + message).c_str());
       }
 
       void LogError(Context& context, const std::string& message)
       {
          if (context.logged_errors++ < 10) // Don't spam the log
-            Log(reshade::log::level::error, message);
+            Log(Luma::Utils::Log::Level::Error, message);
       }
 
       // Returns false if the GPU didn't reach the value in time (and the device wasn't removed)
@@ -52,7 +52,7 @@ namespace D3D12Interop
       bool CreateSharedTexture(Context& context, SharedTexture& texture, UINT width, UINT height, DXGI_FORMAT format, bool unordered_access)
       {
          // Created on DX11 with a legacy (non NT) shared handle, and opened on DX12.
-         // DX12 created textures failed to open on DX11 in some setups (E_INVALIDARG), legacy handles are also the most compatible (e.g. with the ReShade proxy).
+         // DX12 created textures failed to open on DX11 in some setups (E_INVALIDARG), legacy handles are also the most compatible.
          texture = {};
          D3D11_TEXTURE2D_DESC desc = {};
          desc.Width = width;
@@ -95,7 +95,7 @@ namespace D3D12Interop
       ComPtr<ID3D11Device5> device_11_5;
       if (FAILED(device->QueryInterface(IID_PPV_ARGS(&device_11_5))))
       {
-         Log(reshade::log::level::error, "ID3D11Device5 is not supported, can't share fences between DX11 and DX12");
+         Log(Luma::Utils::Log::Level::Error, "ID3D11Device5 is not supported, can't share fences between DX11 and DX12");
          return false;
       }
 
@@ -106,26 +106,19 @@ namespace D3D12Interop
       const auto d3d12_create_device = reinterpret_cast<PFN_D3D12_CREATE_DEVICE>(GetProcAddress(LoadLibraryW(L"d3d12.dll"), "D3D12CreateDevice")); // Never freed, it's a system dll
       if (!context.adapter || FAILED(context.adapter->GetDesc(&context.adapter_desc)) || !d3d12_create_device)
       {
-         Log(reshade::log::level::error, "Couldn't retrieve the DX11 adapter or load DX12");
+         Log(Luma::Utils::Log::Level::Error, "Couldn't retrieve the DX11 adapter or load DX12");
          return false;
       }
       const HRESULT create_hr = d3d12_create_device(context.adapter.Get(), D3D_FEATURE_LEVEL_12_0, IID_PPV_ARGS(&context.device_12));
       if (FAILED(create_hr))
       {
-         Log(reshade::log::level::error, std::format("D3D12CreateDevice failed, hr = {:#010x}", unsigned(create_hr)));
+         Log(Luma::Utils::Log::Level::Error, std::format("D3D12CreateDevice failed, hr = {:#010x}", unsigned(create_hr)));
          return false;
-      }
-      // ReShade wraps any DX12 device created in the process, use the original one, so none of our DX12 work goes through ReShade (and its addons)
-      ComPtr<ID3D12Device> unwrapped_device_12;
-      if (SUCCEEDED(context.device_12->QueryInterface(IID_UnwrappedObject, reinterpret_cast<void**>(unwrapped_device_12.GetAddressOf()))))
-      {
-         context.device_12_wrapped = std::move(context.device_12);
-         context.device_12 = std::move(unwrapped_device_12);
       }
       const LUID device_12_luid = context.device_12->GetAdapterLuid();
       if (device_12_luid.LowPart != context.adapter_desc.AdapterLuid.LowPart || device_12_luid.HighPart != context.adapter_desc.AdapterLuid.HighPart)
       {
-         Log(reshade::log::level::error, "The DX12 device adapter doesn't match the DX11 one");
+         Log(Luma::Utils::Log::Level::Error, "The DX12 device adapter doesn't match the DX11 one");
          return false;
       }
 
@@ -159,7 +152,7 @@ namespace D3D12Interop
       }
       if (FAILED(hr))
       {
-         Log(reshade::log::level::error, std::format("Failed to create the DX12 queue/command list/shared fence, hr = {:#010x}", unsigned(hr)));
+         Log(Luma::Utils::Log::Level::Error, std::format("Failed to create the DX12 queue/command list/shared fence, hr = {:#010x}", unsigned(hr)));
          return false;
       }
 
@@ -168,7 +161,7 @@ namespace D3D12Interop
       if (!CreateSharedTexture(context, test_texture, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, true))
          return false;
 
-      Log(reshade::log::level::info, std::format("Initialized{}", context.device_12_wrapped ? " (unwrapped the ReShade DX12 device)" : ""));
+      Log(Luma::Utils::Log::Level::Info, "Initialized");
       return true;
    }
 
@@ -202,15 +195,15 @@ namespace D3D12Interop
       }
       D3D11_TEXTURE2D_DESC source_desc;
       source_texture->GetDesc(&source_desc);
-      const auto source_format = reshade::api::format(source_desc.Format);
-      const bool is_srgb = reshade::api::format_to_default_typed(source_format, 1) == source_format && reshade::api::format_to_default_typed(source_format, 0) != source_format;
+      const DXGI_FORMAT source_format = source_desc.Format;
+      const bool is_srgb = GetDefaultTypedFormat(source_format, 1) == source_format && GetDefaultTypedFormat(source_format, 0) != source_format;
       if (!is_depth && (source_desc.MipLevels != 1 || source_desc.ArraySize != 1 || source_desc.SampleDesc.Count != 1 || is_srgb))
       {
          LogError(context, std::format("Unsupported input/output texture (mips {}, array size {}, samples {}, format {})", source_desc.MipLevels, source_desc.ArraySize, source_desc.SampleDesc.Count, int(source_desc.Format)));
          return false;
       }
       // DX12 libraries need typed formats to create views
-      const DXGI_FORMAT format = (is_depth ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT(reshade::api::format_to_default_typed(source_format)));
+      const DXGI_FORMAT format = (is_depth ? DXGI_FORMAT_R32_FLOAT : GetDefaultTypedFormat(source_format));
       return UpdateSharedTexture(context, texture, source_desc.Width, source_desc.Height, format, unordered_access);
    }
 
@@ -232,7 +225,7 @@ namespace D3D12Interop
          static_cast<ID3D11Texture2D*>(source)->GetDesc(&desc); // Already verified to be a 2D texture by "UpdateSharedTextureFrom()"
          // The depth (not stencil) view of the typeless depth formats ("format_to_default_typed()" would pick float for 16 bit)
          D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
-         srv_desc.Format = (desc.Format == DXGI_FORMAT_R16_TYPELESS ? DXGI_FORMAT_R16_UNORM : DXGI_FORMAT(reshade::api::format_to_default_typed(reshade::api::format(desc.Format))));
+         srv_desc.Format = (desc.Format == DXGI_FORMAT_R16_TYPELESS ? DXGI_FORMAT_R16_UNORM : GetDefaultTypedFormat(desc.Format));
          srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
          srv_desc.Texture2D.MipLevels = 1;
          HRESULT hr = E_INVALIDARG; // MSAA depth isn't supported

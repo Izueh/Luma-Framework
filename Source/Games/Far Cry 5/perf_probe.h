@@ -20,7 +20,7 @@ namespace FC5
             char line[256];
             std::snprintf(line, sizeof(line), "[FC5 perf] frame=%llu CPU %s n=%llu total_ms=%.3f avg_ms=%.3f peak_ms=%.3f",
                frame, label, count, total_ms, total_ms / count, peak_ms);
-            reshade::log::message(reshade::log::level::info, line);
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
          }
          count = 0; total_ms = peak_ms = 0;
       }
@@ -73,7 +73,7 @@ namespace FC5
             std::snprintf(line, sizeof(line),
                "[FC5 thread] frame=%llu NGX %s n=%llu wall_ms=%.3f cpu_ms=%.3f cycles=%llu failed=%llu",
                frame, i ? "ge1ms" : "lt1ms", b.count, b.wall_ms, b.cpu_ms, b.cycles, failed);
-            reshade::log::message(reshade::log::level::info, line);
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
          }
          fast = {}; slow = {}; failed = 0;
       }

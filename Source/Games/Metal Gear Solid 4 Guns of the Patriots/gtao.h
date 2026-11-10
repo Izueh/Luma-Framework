@@ -132,12 +132,12 @@ namespace MGS4GTAO
    {
       shader_defines_data.push_back({ "XE_GTAO_QUALITY", '2', true, false, "0 - Low\n1 - Medium\n2 - High\n3 - Very High\n4 - Ultra", 4 });
 
-      native_shaders_definitions.emplace("MGS4 GTAO Prefilter CS"_h, ShaderDefinition{ "Luma_MGS4_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "prefilter_depths16x16_cs" });
-      native_shaders_definitions.emplace("MGS4 GTAO Depth Downsample CS"_h, ShaderDefinition{ "Luma_MGS4_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "downsample_depth_cs" });
-      native_shaders_definitions.emplace("MGS4 GTAO Main CS"_h, ShaderDefinition{ "Luma_MGS4_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "main_pass_cs" });
-      native_shaders_definitions.emplace("MGS4 GTAO Denoise CS"_h, ShaderDefinition{ "Luma_MGS4_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
-      native_shaders_definitions.emplace("MGS4 GTAO Denoise Final CS"_h, ShaderDefinition{ "Luma_MGS4_XeGTAO", reshade::api::pipeline_subobject_type::compute_shader, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
-      native_shaders_definitions.emplace("MGS4 GTAO Apply PS"_h, ShaderDefinition{ "Luma_MGS4_XeGTAO", reshade::api::pipeline_subobject_type::pixel_shader, nullptr, "apply_ps", { { "MGS4_GTAO_APPLY", "1" } } });
+      native_shaders_definitions.emplace("MGS4 GTAO Prefilter CS"_h, ShaderDefinition{ "Luma_MGS4_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "prefilter_depths16x16_cs" });
+      native_shaders_definitions.emplace("MGS4 GTAO Depth Downsample CS"_h, ShaderDefinition{ "Luma_MGS4_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "downsample_depth_cs" });
+      native_shaders_definitions.emplace("MGS4 GTAO Main CS"_h, ShaderDefinition{ "Luma_MGS4_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "main_pass_cs" });
+      native_shaders_definitions.emplace("MGS4 GTAO Denoise CS"_h, ShaderDefinition{ "Luma_MGS4_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "0" } } });
+      native_shaders_definitions.emplace("MGS4 GTAO Denoise Final CS"_h, ShaderDefinition{ "Luma_MGS4_XeGTAO", D3D11_SHVER_COMPUTE_SHADER, nullptr, "denoise_pass_cs", { { "XE_GTAO_FINAL_APPLY", "1" } } });
+      native_shaders_definitions.emplace("MGS4 GTAO Apply PS"_h, ShaderDefinition{ "Luma_MGS4_XeGTAO", D3D11_SHVER_PIXEL_SHADER, nullptr, "apply_ps", { { "MGS4_GTAO_APPLY", "1" } } });
    }
 
    inline bool CreateSurface(ID3D11Device* device, UINT width, UINT height, DXGI_FORMAT format, Surface& surface, UINT mip_count = 1)

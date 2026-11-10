@@ -1,6 +1,5 @@
 #define GAME_DEUS_EX_MANKIND_DIVIDED 1
 
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
 
 // Any message box breaks the input of the game forever
 #define DISABLE_AUTO_DEBUGGER 1
@@ -69,8 +68,6 @@ public:
     {
         if (!failed)
         {
-            reshade::register_event<reshade::addon_event::map_buffer_region>(GameDeusExMankindDivided::OnMapBufferRegion);
-            reshade::register_event<reshade::addon_event::unmap_buffer_region>(GameDeusExMankindDivided::OnUnmapBufferRegion);
         }
     }
 
@@ -82,12 +79,12 @@ public:
         luma_settings_cbuffer_index = 8;
         luma_data_cbuffer_index = -1;
 
-        native_shaders_definitions.emplace(CompileTimeStringHash("DeusExMD Post DLSS CS"), ShaderDefinition("Luma_DeusExMD_Post_DLSS_CS", reshade::api::pipeline_subobject_type::compute_shader));
+        native_shaders_definitions.emplace(CompileTimeStringHash("DeusExMD Post DLSS CS"), ShaderDefinition("Luma_DeusExMD_Post_DLSS_CS", D3D11_SHVER_COMPUTE_SHADER));
     }
 
     void LoadConfigs() override
     {
-        reshade::get_config_value(nullptr, NAME, "DisableLastKnownLocation", g_disable_last_known_location);
+        Config::Get(NAME, "DisableLastKnownLocation", g_disable_last_known_location);
     }
 
     void DrawImGuiSettings(DeviceData& device_data) override
@@ -96,7 +93,7 @@ public:
 
         if (ImGui::Checkbox("Disable last known location", &g_disable_last_known_location))
         {
-            reshade::set_config_value(nullptr, NAME, "DisableLastKnownLocation", g_disable_last_known_location);
+            Config::Set(NAME, "DisableLastKnownLocation", g_disable_last_known_location);
         }
     }
 
@@ -105,26 +102,44 @@ public:
         device_data.game = new GameDeviceDataDeusExMankindDivided;
     }
 
-    static void OnMapBufferRegion(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
+    // Native hooks (buffers only)
+public:
+    void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
     {
-        SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
+       ID3D11Buffer* buffer = AsBuffer(resource);
+       if (!buffer)
+          return;
+       if (CommandListData* cmd_list_data = GetCommandListData(context))
+          OnMapBufferRegion(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+    }
 
-        auto buffer = (ID3D11Buffer*)resource.handle;
+    bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
+    {
+       ID3D11Buffer* buffer = AsBuffer(resource);
+       if (!buffer)
+          return false;
+       if (CommandListData* cmd_list_data = GetCommandListData(context))
+          OnUnmapBufferRegion(*cmd_list_data->device_data, buffer);
+       return false;
+    }
+
+    static void OnMapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
+    {
+
         D3D11_BUFFER_DESC desc;
         buffer->GetDesc(&desc);
         if (desc.BindFlags == D3D11_BIND_CONSTANT_BUFFER && desc.ByteWidth == 544)
         {
-            g_cbSharedPerViewData_handle = resource.handle;
+            g_cbSharedPerViewData_handle = reinterpret_cast<uint64_t>(buffer);
             g_cbSharedPerViewData_mapped_data = *data;
         }
     }
 
-    static void OnUnmapBufferRegion(reshade::api::device* device, reshade::api::resource resource)
+    static void OnUnmapBufferRegion(DeviceData& device_data, ID3D11Buffer* buffer)
     {
-        SKIP_UNSUPPORTED_DEVICE_API(device->get_api());
 
         // Not thread safe, but it looks like it's fine.
-        if (g_cbSharedPerViewData_handle == resource.handle)
+        if (g_cbSharedPerViewData_handle == reinterpret_cast<uint64_t>(buffer))
         {
             auto data = (float*)g_cbSharedPerViewData_mapped_data;
 
@@ -137,7 +152,7 @@ public:
         }
     }
 
-    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
     {
         auto& game_device_data = GetGameDeviceData(device_data);
 
@@ -263,19 +278,17 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         texture_format_upgrades_type   = TextureFormatUpgradesType::AllowedEnabled;
         // ### Check which of these are needed and remove the rest ###
         texture_upgrade_formats = {
-            reshade::api::format::r8g8b8a8_unorm,
-            reshade::api::format::r8g8b8a8_unorm_srgb,
-            reshade::api::format::r8g8b8a8_typeless,
-            reshade::api::format::r8g8b8x8_unorm,
-            reshade::api::format::r8g8b8x8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_unorm,
-            reshade::api::format::b8g8r8a8_unorm_srgb,
-            reshade::api::format::b8g8r8a8_typeless,
-            reshade::api::format::b8g8r8x8_unorm,
-            reshade::api::format::b8g8r8x8_unorm_srgb,
-            reshade::api::format::b8g8r8x8_typeless,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+            DXGI_FORMAT_R8G8B8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            DXGI_FORMAT_B8G8R8A8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8A8_TYPELESS,
+            DXGI_FORMAT_B8G8R8X8_UNORM,
+            DXGI_FORMAT_B8G8R8X8_UNORM_SRGB,
+            DXGI_FORMAT_B8G8R8X8_TYPELESS,
 
-            reshade::api::format::r11g11b10_float,
+            DXGI_FORMAT_R11G11B10_FLOAT,
         };
         // ### Check these if textures are not upgraded ###
         texture_format_upgrades_2d_size_filters = 0 | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio;
@@ -290,7 +303,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         forced_shader_names.emplace(0xE30A40E6, "LastKnownLocation");
         #endif
 
-        game = new GameDeusExMankindDivided();
+        SetGame<GameDeusExMankindDivided>();
     }
 
     CoreMain(hModule, ul_reason_for_call, lpReserved);

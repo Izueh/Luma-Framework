@@ -1,4 +1,5 @@
 #include "FSR4.h"
+#include "../utils/log.hpp"
 
 #if ENABLE_FSR4
 
@@ -11,7 +12,6 @@
 #include "../interop/D3D12Interop.h"
 #include "../hooks/FidelityFXHooks.h"
 
-#include <include/reshade.hpp>
 
 #include <format>
 #include <string>
@@ -30,9 +30,9 @@ namespace FidelityFX
       constexpr const wchar_t* ffx_loader_dll_name = L"amd_fidelityfx_loader_dx12.dll";
       constexpr const wchar_t* ffx_upscaler_dll_name = L"amd_fidelityfx_upscaler_dx12.dll";
 
-      void Log(reshade::log::level level, const std::string& message)
+      void Log(Luma::Utils::Log::Level level, const std::string& message)
       {
-         reshade::log::message(level, ("FSR4: " + message).c_str());
+         Luma::Utils::Log::Write(level, ("FSR4: " + message).c_str());
       }
 
       void FFXMessageCallback(uint32_t type, const wchar_t* message)
@@ -44,7 +44,7 @@ namespace FidelityFX
          char buffer[512] = {};
          size_t converted = 0;
          wcstombs_s(&converted, buffer, message ? message : L"", sizeof(buffer) - 1);
-         Log(type == FFX_API_MESSAGE_TYPE_ERROR ? reshade::log::level::error : reshade::log::level::warning, std::string("FidelityFX: ") + buffer);
+         Log(type == FFX_API_MESSAGE_TYPE_ERROR ? Luma::Utils::Log::Level::Error : Luma::Utils::Log::Level::Warning, std::string("FidelityFX: ") + buffer);
       }
 
       struct FSR4InstanceData : public SR::InstanceData
@@ -81,7 +81,7 @@ namespace FidelityFX
       void LogError(FSR4InstanceData& data, const std::string& message)
       {
          if (data.logged_errors++ < 10) // Don't spam the log
-            Log(reshade::log::level::error, message);
+            Log(Luma::Utils::Log::Level::Error, message);
       }
 
       // The FFX dlls only check the GPU when queried for the upscaler versions and on context creation.
@@ -92,7 +92,7 @@ namespace FidelityFX
             return false;
          const bool spoofing = FidelityFXHooks::BeginAMDSpoofing(data.ffx_upscaler_module);
          if (!spoofing)
-            Log(reshade::log::level::error, "Failed to spoof an AMD GPU");
+            Log(Luma::Utils::Log::Level::Error, "Failed to spoof an AMD GPU");
          return spoofing;
       }
 
@@ -105,7 +105,7 @@ namespace FidelityFX
       void DestroyContext(FSR4InstanceData& data)
       {
          if (data.context && data.ffx_destroy_context(&data.context, nullptr) != FFX_API_RETURN_OK)
-            Log(reshade::log::level::warning, "ffxDestroyContext failed");
+            Log(Luma::Utils::Log::Level::Warning, "ffxDestroyContext failed");
          data.context = nullptr;
       }
 
@@ -140,7 +140,7 @@ namespace FidelityFX
                return name;
             available_versions += std::format("{}{}", available_versions.empty() ? "" : ", ", name ? name : "(null)");
          }
-         Log(reshade::log::level::info, std::format("No FSR 4 upscaler available on this GPU (available versions: [{}])", available_versions));
+         Log(Luma::Utils::Log::Level::Info, std::format("No FSR 4 upscaler available on this GPU (available versions: [{}])", available_versions));
          return {};
       }
 
@@ -152,7 +152,7 @@ namespace FidelityFX
          data.ffx_dispatch = reinterpret_cast<PfnFfxDispatch>(GetProcAddress(data.ffx_loader_module, "ffxDispatch"));
          if (!data.ffx_create_context || !data.ffx_destroy_context || !data.ffx_query || !data.ffx_dispatch)
          {
-            Log(reshade::log::level::error, "The FidelityFX loader dll is missing exports");
+            Log(Luma::Utils::Log::Level::Error, "The FidelityFX loader dll is missing exports");
             return false;
          }
 
@@ -165,13 +165,13 @@ namespace FidelityFX
          {
             data.spoof_amd = FidelityFXHooks::Init(data.interop.adapter.Get());
             if (!data.spoof_amd)
-               Log(reshade::log::level::error, "Failed to create the hooks to spoof an AMD GPU");
+               Log(Luma::Utils::Log::Level::Error, "Failed to create the hooks to spoof an AMD GPU");
          }
 
          const std::string fsr4_version = QueryFSR4Version(data);
          if (fsr4_version.empty())
             return false;
-         Log(reshade::log::level::info, std::format("Initialized FSR {}{}", fsr4_version, data.spoof_amd ? std::format(" (spoofing an AMD GPU, the real vendor id is {:#06x})", data.interop.adapter_desc.VendorId) : ""));
+         Log(Luma::Utils::Log::Level::Info, std::format("Initialized FSR {}{}", fsr4_version, data.spoof_amd ? std::format(" (spoofing an AMD GPU, the real vendor id is {:#06x})", data.interop.adapter_desc.VendorId) : ""));
          return true;
       }
    }
@@ -199,7 +199,7 @@ namespace FidelityFX
       {
          if (ffx_upscaler_module)
             FreeLibrary(ffx_upscaler_module);
-         Log(reshade::log::level::info, "The FidelityFX DX12 dlls weren't found next to Luma, FSR 4 won't be available");
+         Log(Luma::Utils::Log::Level::Info, "The FidelityFX DX12 dlls weren't found next to Luma, FSR 4 won't be available");
          return false;
       }
 
@@ -222,7 +222,7 @@ namespace FidelityFX
       // If the GPU is stuck (but the device wasn't removed), leak everything instead of hanging or risking a crash
       if (!D3D12Interop::WaitForIdle(custom_data->interop))
       {
-         Log(reshade::log::level::warning, "Leaking the DX12 interop resources, as the GPU might still be using them");
+         Log(Luma::Utils::Log::Level::Warning, "Leaking the DX12 interop resources, as the GPU might still be using them");
          custom_data = nullptr;
          return;
       }
@@ -317,7 +317,7 @@ namespace FidelityFX
       phase_count_desc.pOutPhaseCount = &custom_data->phase_count;
       custom_data->ffx_query(&custom_data->context, &phase_count_desc.header);
 
-      Log(reshade::log::level::info, std::format("Created context (render {}x{}, output {}x{}), provider \"{}\"", settings_data.render_width, settings_data.render_height, settings_data.output_width, settings_data.output_height,
+      Log(Luma::Utils::Log::Level::Info, std::format("Created context (render {}x{}, output {}x{}), provider \"{}\"", settings_data.render_width, settings_data.render_height, settings_data.output_width, settings_data.output_height,
          provider_version_desc.versionName ? provider_version_desc.versionName : "unknown"));
 
       custom_data->settings_data = settings_data;

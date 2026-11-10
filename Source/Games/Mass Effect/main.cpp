@@ -189,7 +189,7 @@ class MassEffect final : public Game
    // Pass identity by hash, folding both dgVoodoo builds (MoHA ContainsPixelShader, TW2 IsTonemap, BL2 IsBL2Tonemap).
    static bool ContainsPixelShader(const ShaderHashesList<OneShaderPerPipeline>& hashes, uint32_t hash, uint32_t hash_v281)
    {
-      return hashes.Contains(hash, reshade::api::shader_stage::pixel) || hashes.Contains(hash_v281, reshade::api::shader_stage::pixel);
+      return hashes.Contains(hash, ShaderStages::Pixel) || hashes.Contains(hash_v281, ShaderStages::Pixel);
    }
 
    static bool IsDofBloomGather(const ShaderHashesList<OneShaderPerPipeline>& hashes)
@@ -354,10 +354,10 @@ class MassEffect final : public Game
    }
 
    // dgVoodoo leaves blending ON for a secondary RT with RT0 off; D3D9 has one global state (TW2 water 0xDA16C815).
-   static bool FixImpossiblePerRTBlend(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, MassEffectGameDeviceData& gd, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, std::function<void()>* original_draw_dispatch_func)
+   static bool FixImpossiblePerRTBlend(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, MassEffectGameDeviceData& gd, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, std::function<void()>* original_draw_dispatch_func)
    {
       // Injected passes set their blend deliberately; without the dispatch func the draw cannot be re-issued.
-      if (is_custom_pass || (stages & reshade::api::shader_stage::pixel) == 0 || original_draw_dispatch_func == nullptr)
+      if (is_custom_pass || (stages & ShaderStages::Pixel) == 0 || original_draw_dispatch_func == nullptr)
          return false;
 
       ComPtr<ID3D11BlendState> blend_state;
@@ -410,7 +410,7 @@ class MassEffect final : public Game
          const std::scoped_lock logged_shaders_lock(logged_shaders_mutex);
          if (logged_shaders.emplace(pixel_shader_hash).second)
          {
-            reshade::log::message(reshade::log::level::warning,
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
                std::format("[ME1-BlendFix] impossible per-RT blend state (dgVoodoo artefact) on pixel shader 0x{:X} - {}", pixel_shader_hash, needs_fix ? "repaired" : "inverse shape, left alone").c_str());
          }
       }
@@ -467,7 +467,7 @@ class MassEffect final : public Game
       if (!rtv)
       {
          std::snprintf(msg, sizeof(msg), "[Luma] ME1 DIAG: %s RTV0 NOT BOUND", label);
-         reshade::log::message(reshade::log::level::info, msg);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, msg);
          return;
       }
       uint4 size;
@@ -476,7 +476,7 @@ class MassEffect final : public Game
       std::snprintf(msg, sizeof(msg), "[Luma] ME1 DIAG: %s RTV0 %ux%u res_fmt %s -> upgrade %s",
          label, size.x, size.y, GetFormatNameSafe(format),
          format == DXGI_FORMAT_R16G16B16A16_FLOAT ? "OK (fp16)" : "MISSING (not fp16)");
-      reshade::log::message(reshade::log::level::info, msg);
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, msg);
    }
 
    // One-shot synchronous readback of b4: the devkit shows the buffers but not their contents. Stalls once per pass.
@@ -509,7 +509,7 @@ class MassEffect final : public Game
       {
          char msg[256];
          std::snprintf(msg, sizeof(msg), "[Luma] ME1 DIAG: %s cb4[%u] = %.6f %.6f %.6f %.6f", label, r, rows[r * 4 + 0], rows[r * 4 + 1], rows[r * 4 + 2], rows[r * 4 + 3]);
-         reshade::log::message(reshade::log::level::info, msg);
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, msg);
       }
       native_device_context->Unmap(staging.get(), 0);
    }
@@ -574,7 +574,7 @@ class MassEffect final : public Game
       char msg[512];
       std::snprintf(msg, sizeof(msg), "[Luma] ME1 DIAG: SMAA predication mask %ux%u tolerance %.4f -> above 0.5 = %.2f%% | mean %.4f | p50 %.4f p90 %.4f p99 %.4f | NaN %llu",
          td.Width, td.Height, g_smaa_pred_tolerance, 100.0 * (double)above_half / (double)total, sum / (double)total, percentile(0.50), percentile(0.90), percentile(0.99), (unsigned long long)nans);
-      reshade::log::message(reshade::log::level::info, msg);
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, msg);
    }
 #endif // ENABLE_SMAA
 #endif // DEVELOPMENT
@@ -593,9 +593,9 @@ public:
       // Core auto-registers the 6 SMAA passes. Added here: the linear decode the neighborhood blend reads, and the
       // predication CS turning scene alpha into R16F edge-ness in [0,1].
       native_shaders_definitions.emplace(CompileTimeStringHash("ME1 SMAA Linearize CS"),
-         ShaderDefinition("Luma_ME1_SMAALinearize", reshade::api::pipeline_subobject_type::compute_shader));
+         ShaderDefinition("Luma_ME1_SMAALinearize", D3D11_SHVER_COMPUTE_SHADER));
       native_shaders_definitions.emplace(CompileTimeStringHash("ME1 Depth Extract CS"),
-         ShaderDefinition("Luma_ME1_DepthExtract", reshade::api::pipeline_subobject_type::compute_shader));
+         ShaderDefinition("Luma_ME1_DepthExtract", D3D11_SHVER_COMPUTE_SHADER));
 #endif
 
       // Address-space ceiling, PROBED: no LARGE_ADDRESS_AWARE (0x0102 measured) = 2 GB, Luma's 4K scratch ~365 MB.
@@ -606,7 +606,7 @@ public:
          SYSTEM_INFO sys_info = {};
          GetSystemInfo(&sys_info);
          if (reinterpret_cast<uintptr_t>(sys_info.lpMaximumApplicationAddress) < 0x80000000u)
-            reshade::log::message(reshade::log::level::warning,
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
                "[Luma] ME1: this executable is NOT large-address-aware, so the process is capped at 2 GB of address "
                "space. Luma's own scratch is ~365 MB at 4K, on top of dgVoodoo's copies: expect std::bad_alloc (UE3 "
                "reports it as a rendering GPF) with 4K texture packs, with the devkit, or both. Patch the "
@@ -814,7 +814,7 @@ public:
          if (pred_ok)
             MeasurePredicationMask(native_device, native_device_context, gd.tex_pred.get());
          else
-            reshade::log::message(reshade::log::level::warning, "[Luma] ME1 DIAG: SMAA predication mask not measured: predication inactive this frame (no scene capture, size mismatch or CS missing)");
+            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "[Luma] ME1 DIAG: SMAA predication mask not measured: predication inactive this frame (no scene capture, size mismatch or CS missing)");
       }
       if (pred_ok && g_smaa_pred_debug)
       {
@@ -843,7 +843,7 @@ public:
    }
 #endif // ENABLE_SMAA
 
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& gd = GetGameDeviceData(device_data);
 
@@ -922,7 +922,7 @@ public:
          gd.uber_ran_this_frame = true;
 
          // Push LumaSettings at the seam, not in a feature block (MoHA): bloom off left the grade on a stale upload.
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings);
 
          // Scene at t0 here (fp16, alpha = linear depth): the bloom and SMAA predication source, no extra pass.
          gd.srv_scene.reset();
@@ -945,7 +945,7 @@ public:
       // Uber-less chains composite DoF and bloom here instead: the replacement adds the Luma glow the uber would have.
       if (is_immediate && ContainsPixelShader(original_shader_hashes, kDofBloomBlendHash, kDofBloomBlendHash_v281))
       {
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings);
          ComPtr<ID3D11ShaderResourceView> srv_blend_scene;
          native_device_context->PSGetShaderResources(0, 1, srv_blend_scene.put());
          BindLumaBloom(native_device, native_device_context, device_data, srv_blend_scene.get());
@@ -957,8 +957,8 @@ public:
          device_data.has_drawn_main_post_processing = true;
 
          // Same seam rule: this pass reads LumaSettings and LumaData, and the SMAA path skips core's upload.
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaSettings);
-         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, reshade::api::shader_stage::pixel, LumaConstantBufferType::LumaData);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaSettings);
+         SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, ShaderStages::Pixel, LumaConstantBufferType::LumaData);
 
          // Gamma-only frames: nothing captured the scene for predication, and this pass reads the RAW fp16 scene at t0.
          if (!gd.uber_ran_this_frame)
@@ -1016,7 +1016,7 @@ public:
       // One-shot telemetry (BL GOTY). Warmup budget only: the menu runs the same pass, so a few frames are enough.
       constexpr uint32_t kBuildCheckFrame = 120;
       if (gd.frames_presented < kBuildCheckFrame && ++gd.frames_presented == kBuildCheckFrame && !gd.ever_matched_final_pass)
-         reshade::log::message(reshade::log::level::warning,
+         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning,
             "[Luma] ME1: no keyed final color pass seen after warmup -- the dgVoodoo build is probably neither 2.87.3 nor 2.81.3, so every shader replacement is inactive (re-dump the shaders for it).");
 
       gd.uber_ran_this_frame = false;
@@ -1075,25 +1075,25 @@ public:
    void LoadConfigs() override
    {
       // Grade sliders (cb_luma_global_settings_dirty is already true at init -> uploaded on first frame).
-      reshade::get_config_value(nullptr, NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
-      reshade::get_config_value(nullptr, NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
-      reshade::get_config_value(nullptr, NAME, "HighlightsDesaturation", cb_luma_global_settings.GameSettings.HighlightDechroma);
+      Config::Get(NAME, "Exposure", cb_luma_global_settings.GameSettings.Exposure);
+      Config::Get(NAME, "Saturation", cb_luma_global_settings.GameSettings.Saturation);
+      Config::Get(NAME, "HighlightsDesaturation", cb_luma_global_settings.GameSettings.HighlightDechroma);
 #if ENABLE_BLOOM
       // Inside the guard because it drives the Luma pyramid alone: with no pyramid there is nothing for it to scale.
-      reshade::get_config_value(nullptr, NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
-      reshade::get_config_value(nullptr, NAME, "LumaBloomEnable", g_luma_bloom_enable);
+      Config::Get(NAME, "BloomIntensity", cb_luma_global_settings.GameSettings.BloomIntensity);
+      Config::Get(NAME, "LumaBloomEnable", g_luma_bloom_enable);
       cb_luma_global_settings.GameSettings.LumaBloomEnable = g_luma_bloom_enable ? 1.f : 0.f; // mirror to the shaders
-      reshade::get_config_value(nullptr, NAME, "BloomThreshold", cb_luma_global_settings.GameSettings.BloomThreshold);
+      Config::Get(NAME, "BloomThreshold", cb_luma_global_settings.GameSettings.BloomThreshold);
 #endif
-      reshade::get_config_value(nullptr, NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
-      reshade::get_config_value(nullptr, NAME, "Dithering", cb_luma_global_settings.GameSettings.Dithering);
-      reshade::get_config_value(nullptr, NAME, "VideoAutoHDREnable", cb_luma_global_settings.GameSettings.VideoAutoHDREnable);
-      reshade::get_config_value(nullptr, NAME, "VideoAutoHDRBoost", cb_luma_global_settings.GameSettings.VideoAutoHDRBoost);
+      Config::Get(NAME, "Contrast", cb_luma_global_settings.GameSettings.Contrast);
+      Config::Get(NAME, "Dithering", cb_luma_global_settings.GameSettings.Dithering);
+      Config::Get(NAME, "VideoAutoHDREnable", cb_luma_global_settings.GameSettings.VideoAutoHDREnable);
+      Config::Get(NAME, "VideoAutoHDRBoost", cb_luma_global_settings.GameSettings.VideoAutoHDRBoost);
 #if ENABLE_SMAA
-      reshade::get_config_value(nullptr, NAME, "SMAAEnable", g_smaa_enable);
-      reshade::get_config_value(nullptr, NAME, "SMAAPredication", g_smaa_predication);
-      reshade::get_config_value(nullptr, NAME, "SMAAPredicationTolerance", g_smaa_pred_tolerance);
-      reshade::get_config_value(nullptr, NAME, "RCASSharpness", g_rcas_sharpness);
+      Config::Get(NAME, "SMAAEnable", g_smaa_enable);
+      Config::Get(NAME, "SMAAPredication", g_smaa_predication);
+      Config::Get(NAME, "SMAAPredicationTolerance", g_smaa_pred_tolerance);
+      Config::Get(NAME, "RCASSharpness", g_rcas_sharpness);
 #endif
    }
 
@@ -1102,7 +1102,7 @@ public:
 #if ENABLE_SMAA
       ImGui::SeparatorText("Anti-Aliasing");
       if (ImGui::Checkbox("SMAA Enable", &g_smaa_enable))
-         reshade::set_config_value(nullptr, NAME, "SMAAEnable", g_smaa_enable);
+         Config::Set(NAME, "SMAAEnable", g_smaa_enable);
       if (ImGui::IsItemHovered())
          ImGui::SetTooltip("Adds SMAA anti-aliasing (the game has none of its own).");
       if (g_smaa_enable)
@@ -1110,11 +1110,11 @@ public:
 #if DEVELOPMENT
          // Not a preference: on geometry it relaxes the threshold back to base ULTRA, never below. A bisect switch.
          if (ImGui::Checkbox("SMAA Predication", &g_smaa_predication))
-            reshade::set_config_value(nullptr, NAME, "SMAAPredication", g_smaa_predication);
+            Config::Set(NAME, "SMAAPredication", g_smaa_predication);
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Finds edges by geometry (scene depth) instead of by brightness alone.\nKeeps textures sharp while still antialiasing real silhouettes.");
          if (ImGui::SliderFloat("SMAA Predication Tolerance", &g_smaa_pred_tolerance, 0.002f, 0.2f, "%.3f", ImGuiSliderFlags_Logarithmic))
-            reshade::set_config_value(nullptr, NAME, "SMAAPredicationTolerance", g_smaa_pred_tolerance);
+            Config::Set(NAME, "SMAAPredicationTolerance", g_smaa_pred_tolerance);
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("How far a surface may deviate from its local plane before it counts as an edge,\nas a fraction of view depth. Lower = more edges. This is the calibration lever,\nnot the SMAA threshold. Logarithmic: the parameter is relative.");
          ImGui::Checkbox("SMAA Predication Debug View", &g_smaa_pred_debug);
@@ -1123,11 +1123,11 @@ public:
          if (ImGui::Button("Measure Predication Mask"))
             g_smaa_pred_measure = true;
          if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Log the mask's coverage above 0.5 plus percentiles to ReShade.log.\nReal silhouettes are ~1% of a typical frame; a working mask barely moves across a 20x tolerance sweep.\nStalls the GPU for one frame.");
+            ImGui::SetTooltip("Log the mask's coverage above 0.5 plus percentiles to Luma.log.\nReal silhouettes are ~1% of a typical frame; a working mask barely moves across a 20x tolerance sweep.\nStalls the GPU for one frame.");
 #endif
 
          if (ImGui::SliderFloat("RCAS Sharpness", &g_rcas_sharpness, 0.f, 1.f))
-            reshade::set_config_value(nullptr, NAME, "RCASSharpness", g_rcas_sharpness);
+            Config::Set(NAME, "RCASSharpness", g_rcas_sharpness);
          if (ImGui::IsItemHovered())
             ImGui::SetTooltip("Sharpening applied on top of SMAA (0 = off).");
          DrawResetButton(g_rcas_sharpness, 0.f, "RCASSharpness"); // writes the config itself (Serialize defaults true)
@@ -1141,7 +1141,7 @@ public:
 
       if (ImGui::SliderFloat("Exposure", &gs.Exposure, 0.f, 2.f))
       {
-         reshade::set_config_value(nullptr, NAME, "Exposure", gs.Exposure);
+         Config::Set(NAME, "Exposure", gs.Exposure);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1151,7 +1151,7 @@ public:
 
       if (ImGui::SliderFloat("Contrast", &gs.Contrast, 0.f, 2.f))
       {
-         reshade::set_config_value(nullptr, NAME, "Contrast", gs.Contrast);
+         Config::Set(NAME, "Contrast", gs.Contrast);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1161,7 +1161,7 @@ public:
 
       if (ImGui::SliderFloat("Saturation", &gs.Saturation, 0.f, 2.f))
       {
-         reshade::set_config_value(nullptr, NAME, "Saturation", gs.Saturation);
+         Config::Set(NAME, "Saturation", gs.Saturation);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1171,7 +1171,7 @@ public:
 
       if (ImGui::SliderFloat("Highlights Desaturation", &gs.HighlightDechroma, 0.f, 1.f))
       {
-         reshade::set_config_value(nullptr, NAME, "HighlightsDesaturation", gs.HighlightDechroma);
+         Config::Set(NAME, "HighlightsDesaturation", gs.HighlightDechroma);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1184,14 +1184,14 @@ public:
       if (ImGui::Button("Dump Pass Constants"))
          g_dump_pass_cb = true;
       if (ImGui::IsItemHovered())
-         ImGui::SetTooltip("Log the copy/uber/gamma passes' cb4 grade rows for the next frame to ReShade.log.\nMeasured 1.0 / 1.0 / 0.625 - press it on a gameplay frame, not on a loading fade.\nEach dump blocks on a GPU read.");
+         ImGui::SetTooltip("Log the copy/uber/gamma passes' cb4 grade rows for the next frame to Luma.log.\nMeasured 1.0 / 1.0 / 0.625 - press it on a gameplay frame, not on a loading fade.\nEach dump blocks on a GPU read.");
 #endif
 
 #if ENABLE_BLOOM
       ImGui::SeparatorText("Bloom");
       if (ImGui::Checkbox("Luma Bloom Enable", &g_luma_bloom_enable))
       {
-         reshade::set_config_value(nullptr, NAME, "LumaBloomEnable", g_luma_bloom_enable);
+         Config::Set(NAME, "LumaBloomEnable", g_luma_bloom_enable);
          gs.LumaBloomEnable = g_luma_bloom_enable ? 1.f : 0.f;
          device_data.cb_luma_global_settings_dirty = true;
       }
@@ -1203,7 +1203,7 @@ public:
 
       if (ImGui::SliderFloat("Bloom Intensity", &gs.BloomIntensity, 0.f, 2.f))
       {
-         reshade::set_config_value(nullptr, NAME, "BloomIntensity", gs.BloomIntensity);
+         Config::Set(NAME, "BloomIntensity", gs.BloomIntensity);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -1214,7 +1214,7 @@ public:
 #if DEVELOPMENT
       if (ImGui::SliderFloat("Bloom Threshold", &gs.BloomThreshold, 0.f, 4.f, "%.2f"))
       {
-         reshade::set_config_value(nullptr, NAME, "BloomThreshold", gs.BloomThreshold);
+         Config::Set(NAME, "BloomThreshold", gs.BloomThreshold);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1232,7 +1232,7 @@ public:
       if (ImGui::Checkbox("Video AutoHDR", &video_auto_hdr))
       {
          gs.VideoAutoHDREnable = video_auto_hdr ? 1.f : 0.f;
-         reshade::set_config_value(nullptr, NAME, "VideoAutoHDREnable", gs.VideoAutoHDREnable);
+         Config::Set(NAME, "VideoAutoHDREnable", gs.VideoAutoHDREnable);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1241,7 +1241,7 @@ public:
       ImGui::BeginDisabled(!video_auto_hdr);
       if (ImGui::SliderFloat("Video HDR Boost", &gs.VideoAutoHDRBoost, 0.f, 1.f))
       {
-         reshade::set_config_value(nullptr, NAME, "VideoAutoHDRBoost", gs.VideoAutoHDRBoost);
+         Config::Set(NAME, "VideoAutoHDRBoost", gs.VideoAutoHDRBoost);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -1254,7 +1254,7 @@ public:
       if (ImGui::Checkbox("Dithering", &dithering))
       {
          gs.Dithering = dithering ? 1.f : 0.f;
-         reshade::set_config_value(nullptr, NAME, "Dithering", gs.Dithering);
+         Config::Set(NAME, "Dithering", gs.Dithering);
          device_data.cb_luma_global_settings_dirty = true;
       }
       if (ImGui::IsItemHovered())
@@ -1345,8 +1345,8 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       enable_indirect_texture_format_upgrades = true; // creation-time mirrors, substituted at bind (BL2/TW2 scheme)
       enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectDependencies;
       texture_upgrade_formats = {
-         reshade::api::format::r8g8b8a8_typeless,     // dgVoodoo's D3D9 backbuffer surface (the LDR canvas)
-         reshade::api::format::r16g16b16a16_typeless, // DoF/bloom gather, blur and blit targets, viewed as unorm
+         DXGI_FORMAT_R8G8B8A8_TYPELESS,     // dgVoodoo's D3D9 backbuffer surface (the LDR canvas)
+         DXGI_FORMAT_R16G16B16A16_TYPELESS, // DoF/bloom gather, blur and blit targets, viewed as unorm
       };
       // "No1Px" is mandatory under dgVoodoo (BL2): 1x1 placeholders fill unused slots and pass the aspect filter.
       texture_format_upgrades_2d_size_filters = (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainResolution | (uint32_t)TextureFormatUpgrades2DSizeFilters::SwapchainAspectRatio | (uint32_t)TextureFormatUpgrades2DSizeFilters::No1Px;
@@ -1356,7 +1356,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
       samplers_upgrade_mode = 4;
       force_upgrade_linear_samplers = true;
 
-      game = new MassEffect();
+      SetGame<MassEffect>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);
