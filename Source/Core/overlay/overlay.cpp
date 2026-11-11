@@ -123,7 +123,7 @@ void OnPresent(IDXGISwapChain* swapchain)
    D3D11::Render(attached->device, swapchain, ImGui::GetDrawData());
 }
 
-void OnSwapchainDestroyed(const void* swapchain)
+void OnSwapchainDestroyed(const IDXGISwapChain* swapchain)
 {
    std::scoped_lock lock(mutex);
    if (attached && swapchain == attached->swapchain)

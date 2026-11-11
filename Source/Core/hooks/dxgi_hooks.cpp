@@ -111,10 +111,10 @@ HRESULT WINAPI CreateFactory2(UINT flags, REFIID riid, void** factory)
    return result;
 }
 
-void OnSwapchainReleased(const void* swapchain)
+void OnSwapchainReleased(ID3D11Device* device, const IUnknown* swapchain)
 {
    Scope::Guard scope;
-   Callbacks::OnSwapChainDestroyed(swapchain);
+   Callbacks::OnSwapChainDestroyed(device, static_cast<const IDXGISwapChain*>(swapchain));
 }
 
 void ReportSwapchain(HRESULT result, IDXGISwapChain* swapchain, IUnknown* creator)
@@ -135,7 +135,7 @@ void ReportSwapchain(HRESULT result, IDXGISwapChain* swapchain, IUnknown* creato
    if (FAILED(creator->QueryInterface(IID_PPV_ARGS(&device))))
       return;
    Scope::Guard scope;
-   Lifetime::Track(base.Get(), &OnSwapchainReleased);
+   Lifetime::Track(base.Get(), device.Get(), &OnSwapchainReleased);
    Callbacks::PostCreateSwapChain(base.Get(), device.Get());
 }
 

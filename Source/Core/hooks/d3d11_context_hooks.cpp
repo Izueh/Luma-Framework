@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <d3d11_4.h>
+#include <wrl/client.h>
 
 #include "hooks/callbacks.hpp"
 #include "hooks/detours.hpp"
@@ -375,7 +376,9 @@ HRESULT STDMETHODCALLTYPE FinishCommandList(ID3D11DeviceContext* context, BOOL r
    if (Detours::IsGameCall(guard) && SUCCEEDED(result) && list && *list)
    {
       Scope::Guard scope;
-      Lifetime::Track(*list, &Detours::OnDestroyed<Callbacks::OnCommandListDestroyed>);
+      Microsoft::WRL::ComPtr<ID3D11Device> device;
+      context->GetDevice(&device);
+      Lifetime::Track(*list, device.Get(), &Detours::OnDestroyed<Callbacks::OnCommandListDestroyed>);
       Callbacks::PostFinishCommandList(context, restore, *list);
    }
    return result;

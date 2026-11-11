@@ -1794,14 +1794,11 @@ public:
    {
       BLMovieLeakFix::OnInitBuffer(desc, reinterpret_cast<uintptr_t>(buffer));
    }
-   void OnResourceDestroyed(const void* resource) override
+   void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource) override
    {
       BLMovieLeakFix::OnDestroyResource(reinterpret_cast<uintptr_t>(resource));
-      const std::shared_lock lock_devices(s_mutex_device);
-      for (DeviceData* const device_data : global_devices_data)
-      {
+      if (DeviceData* const device_data = GetDeviceData(device))
          OnDestroyBuffer(device_data, reinterpret_cast<uintptr_t>(resource));
-      }
    }
    void PostCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_SHADER_RESOURCE_VIEW_DESC1* desc, ID3D11ShaderResourceView* view) override
    {
@@ -1815,7 +1812,7 @@ public:
    {
       BLMovieLeakFix::OnInitResourceView(reinterpret_cast<uintptr_t>(resource), reinterpret_cast<uintptr_t>(view));
    }
-   void OnViewDestroyed(const void* view) override
+   void OnViewDestroyed(ID3D11Device* device, const ID3D11View* view) override
    {
       BLMovieLeakFix::OnDestroyResourceView(reinterpret_cast<uintptr_t>(view));
    }

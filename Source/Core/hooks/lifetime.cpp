@@ -19,10 +19,11 @@ constexpr GUID TRACKER_GUID = {0x19be01c2, 0xfb6f, 0x421a, {0xbf, 0x5b, 0x38, 0x
 struct Tracker final : IUnknown
 {
    std::atomic<ULONG> references = 1;
-   const void* object;
+   const IUnknown* object;
+   ID3D11Device* device;
    DestroyCallback on_destroy;
 
-   Tracker(const void* object_, DestroyCallback on_destroy_) : object(object_), on_destroy(on_destroy_) {}
+   Tracker(const IUnknown* object_, ID3D11Device* device_, DestroyCallback on_destroy_) : object(object_), device(device_), on_destroy(on_destroy_) {}
 
    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** result) override
    {
@@ -48,7 +49,7 @@ struct Tracker final : IUnknown
       const ULONG remaining = --references;
       if (remaining == 0)
       {
-         on_destroy(object);
+         on_destroy(device, object);
          delete this;
       }
       return remaining;
@@ -56,28 +57,28 @@ struct Tracker final : IUnknown
 };
 
 template <typename T>
-bool Attach(T* object, const void* key, DestroyCallback on_destroy)
+bool Attach(T* object, const IUnknown* key, ID3D11Device* device, DestroyCallback on_destroy)
 {
    UINT size = 0;
    if (SUCCEEDED(object->GetPrivateData(TRACKER_GUID, &size, nullptr)))
       return false;
-   Tracker* tracker = new Tracker(key, on_destroy);
+   Tracker* tracker = new Tracker(key, device, on_destroy);
    const bool attached = SUCCEEDED(object->SetPrivateDataInterface(TRACKER_GUID, tracker));
    tracker->Release();
    return attached;
 }
 } // namespace
 
-bool Track(IUnknown* object, DestroyCallback on_destroy)
+bool Track(IUnknown* object, ID3D11Device* device, DestroyCallback on_destroy)
 {
    if (ComPtr<ID3D12Object> d3d12_object; SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&d3d12_object))))
-      return Attach(d3d12_object.Get(), object, on_destroy);
+      return Attach(d3d12_object.Get(), object, device, on_destroy);
    if (ComPtr<ID3D11Device> d3d11_device; SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&d3d11_device))))
-      return Attach(d3d11_device.Get(), object, on_destroy);
+      return Attach(d3d11_device.Get(), object, device, on_destroy);
    if (ComPtr<ID3D11DeviceChild> d3d11_child; SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&d3d11_child))))
-      return Attach(d3d11_child.Get(), object, on_destroy);
+      return Attach(d3d11_child.Get(), object, device, on_destroy);
    if (ComPtr<IDXGIObject> dxgi_object; SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&dxgi_object))))
-      return Attach(dxgi_object.Get(), object, on_destroy);
+      return Attach(dxgi_object.Get(), object, device, on_destroy);
    return false;
 }
 } // namespace Lifetime

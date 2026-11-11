@@ -186,7 +186,7 @@ namespace FC5::UploadProbe
       std::snprintf(line, sizeof(line), "[FC5 upload context] native=%p immediate=%d", ctx, immediate);
       Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
    }
-   inline void OnDestroyContext(const void* ctx)
+   inline void OnDestroyContext(const ID3D11DeviceContext* ctx)
    {
       std::lock_guard lock(mutex);
       contexts.erase(Key(ctx));
@@ -221,10 +221,10 @@ namespace FC5::UploadProbe
       if (auto d = devices.find(reinterpret_cast<uintptr_t>(device)); d != devices.end()) ++d->second.epoch;
    }
    // The device isn't known on destruction, the resource can only be on one
-   inline void OnDestroyResource(const void* resource)
+   inline void OnDestroyResource(ID3D11Device* device, const ID3D11Resource* resource)
    {
       std::lock_guard lock(mutex);
-      for (auto& [key, d] : devices) d.buffers.erase(Key(resource));
+      if (auto d = devices.find(Key(device)); d != devices.end()) d->second.buffers.erase(Key(resource));
    }
    inline void OnDestroyDevice(ID3D11Device* device)
    {

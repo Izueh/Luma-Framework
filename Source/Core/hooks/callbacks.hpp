@@ -18,7 +18,7 @@ void OnDeviceDestroyed(ID3D11Device* device);
 void PreCreateSwapChain(DXGI_SWAP_CHAIN_DESC& desc);
 void PreCreateSwapChainForHwnd(DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND hwnd);
 void PostCreateSwapChain(IDXGISwapChain* swapchain, ID3D11Device* device);
-void OnSwapChainDestroyed(const void* swapchain);
+void OnSwapChainDestroyed(ID3D11Device* device, const IDXGISwapChain* swapchain);
 
 void PreResizeBuffers(IDXGISwapChain* swapchain, UINT& count, UINT width, UINT height, DXGI_FORMAT& format, UINT& flags,
    const UINT* node_masks = nullptr, IUnknown* const* present_queues = nullptr);
@@ -39,7 +39,7 @@ void PostCreateTexture2D(ID3D11Device* device, const D3D11_TEXTURE2D_DESC1& desc
 void PreCreateTexture3D(ID3D11Device* device, D3D11_TEXTURE3D_DESC1& desc, const D3D11_SUBRESOURCE_DATA*& initial_data);
 void PostCreateTexture3D(ID3D11Device* device, const D3D11_TEXTURE3D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture3D* texture);
 void PostOpenSharedResource(ID3D11Device* device, ID3D11Resource* resource);
-void OnResourceDestroyed(const void* resource);
+void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource);
 
 // Views: an empty desc is the game's null one
 void PreCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource, std::optional<D3D11_SHADER_RESOURCE_VIEW_DESC1>& desc);
@@ -50,14 +50,14 @@ void PreCreateUnorderedAccessView(ID3D11Device* device, ID3D11Resource* resource
 void PostCreateUnorderedAccessView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_UNORDERED_ACCESS_VIEW_DESC1* desc, ID3D11UnorderedAccessView* view);
 void PreCreateDepthStencilView(ID3D11Device* device, ID3D11Resource* resource, std::optional<D3D11_DEPTH_STENCIL_VIEW_DESC>& desc);
 void PostCreateDepthStencilView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_DEPTH_STENCIL_VIEW_DESC* desc, ID3D11DepthStencilView* view);
-void OnViewDestroyed(const void* view);
+void OnViewDestroyed(ID3D11Device* device, const ID3D11View* view);
 
 void PreCreateSamplerState(ID3D11Device* device, D3D11_SAMPLER_DESC& desc);
 void PostCreateSamplerState(ID3D11Device* device, const D3D11_SAMPLER_DESC& desc, ID3D11SamplerState* sampler);
 // "CreateBlendState" reports the DESC1 with logic ops disabled
 void PreCreateBlendState(ID3D11Device* device, D3D11_BLEND_DESC1& desc);
 void PostCreateBlendState(ID3D11Device* device, const D3D11_BLEND_DESC1& desc, ID3D11BlendState* blend_state);
-void OnSamplerDestroyed(const void* sampler);
+void OnSamplerDestroyed(ID3D11Device* device, const ID3D11SamplerState* sampler);
 
 // Shaders
 void PreCreateVertexShader(ID3D11Device* device, const void*& bytecode, SIZE_T& length);
@@ -74,10 +74,10 @@ void PreCreatePixelShader(ID3D11Device* device, const void*& bytecode, SIZE_T& l
 void PostCreatePixelShader(ID3D11Device* device, const void* bytecode, SIZE_T length, ID3D11PixelShader* shader);
 void PreCreateComputeShader(ID3D11Device* device, const void*& bytecode, SIZE_T& length);
 void PostCreateComputeShader(ID3D11Device* device, const void* bytecode, SIZE_T length, ID3D11ComputeShader* shader);
-void OnShaderDestroyed(const void* shader);
+void OnShaderDestroyed(ID3D11Device* device, const ID3D11DeviceChild* shader);
 void PostCreateInputLayout(ID3D11Device* device, const D3D11_INPUT_ELEMENT_DESC* elements, UINT count, const void* bytecode, SIZE_T length,
    ID3D11InputLayout* layout);
-void OnInputLayoutDestroyed(const void* layout);
+void OnInputLayoutDestroyed(ID3D11Device* device, const ID3D11InputLayout* layout);
 
 // Binds: the arrays are the detour's copies, which can be edited
 bool PreVSSetShader(ID3D11DeviceContext* context, ID3D11VertexShader*& shader);
@@ -159,9 +159,9 @@ bool PreDispatchIndirect(ID3D11DeviceContext* context, ID3D11Buffer* arguments, 
 
 // Deferred contexts
 void PostCreateDeferredContext(ID3D11Device* device, ID3D11DeviceContext* context);
-void OnDeferredContextDestroyed(const void* context);
+void OnDeferredContextDestroyed(ID3D11Device* device, const ID3D11DeviceContext* context);
 void PostFinishCommandList(ID3D11DeviceContext* context, BOOL restore, ID3D11CommandList* list);
-void OnCommandListDestroyed(const void* list);
+void OnCommandListDestroyed(ID3D11Device* device, const ID3D11CommandList* list);
 bool PreExecuteCommandList(ID3D11DeviceContext* context, ID3D11CommandList* list, BOOL restore);
 bool PreFlush(ID3D11DeviceContext* context);
 } // namespace Callbacks

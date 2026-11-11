@@ -693,11 +693,11 @@ namespace
 
    // Deferred contexts and their finished command lists (the immediate contexts' data is their device's)
    std::shared_mutex s_mutex_command_lists;
-   std::unordered_map<const void*, std::unique_ptr<CommandListData>> global_command_lists_data;
+   std::unordered_map<const ID3D11DeviceChild*, std::unique_ptr<CommandListData>> global_command_lists_data;
    // Bumped when one is destroyed, so threads drop their cached lookup (an address can be reused)
    std::atomic<uint64_t> command_lists_generation = 0;
 
-   DeviceData* GetDeviceData(const void* native_device)
+   DeviceData* GetDeviceData(const ID3D11Device* native_device)
    {
       const std::shared_lock lock(s_mutex_device);
       for (DeviceData* device_data : global_devices_data)
@@ -709,9 +709,9 @@ namespace
    }
 
    // A device context (immediate or deferred) or a finished command list
-   CommandListData* GetCommandListData(const void* object)
+   CommandListData* GetCommandListData(const ID3D11DeviceChild* object)
    {
-      thread_local const void* cached_object = nullptr;
+      thread_local const ID3D11DeviceChild* cached_object = nullptr;
       thread_local CommandListData* cached_data = nullptr;
       thread_local uint64_t cached_generation = 0;
       const uint64_t generation = command_lists_generation;
@@ -3224,7 +3224,7 @@ namespace
    }
 
    // The swapchain may already be gone when not resizing
-   void OnDestroySwapchain(const void* native_swapchain, bool resize)
+   void OnDestroySwapchain(const IDXGISwapChain* native_swapchain, bool resize)
    {
       SwapchainData* swapchain_data_ptr = GetSwapchainData(native_swapchain);
       if (!swapchain_data_ptr) return;
@@ -3235,7 +3235,7 @@ namespace
 
          {
             const std::unique_lock lock_device(device_data.mutex);
-            device_data.swapchains.erase(static_cast<IDXGISwapChain*>(const_cast<void*>(native_swapchain)));
+            device_data.swapchains.erase(const_cast<IDXGISwapChain*>(native_swapchain));
             for (const uint64_t handle : swapchain_data.back_buffers)
             {
                device_data.back_buffers.erase(handle);
@@ -4954,7 +4954,7 @@ namespace
    }
 
    // Deferred contexts and finished command lists
-   void OnDestroyCommandList(const void* object)
+   void OnDestroyCommandList(const ID3D11DeviceChild* object)
    {
       std::unique_ptr<CommandListData> cmd_list_data;
       {
@@ -7194,20 +7194,19 @@ namespace
    }
 
    // The sampler can't be used anymore
-   void OnDestroySampler(const void* sampler)
+   void OnDestroySampler(ID3D11Device* device, const ID3D11SamplerState* sampler)
    {
       // This only seems to happen when the game shuts down in Prey (as any destroy callback, it can be called from an arbitrary thread, but that's fine).
       // We don't need to check the custom samplers within the map even if they might be the same object, because they are strong pointers and thus wouldn't get destroyed if they were non null.
+      DeviceData* device_data = GetDeviceData(device);
+      if (!device_data)
+         return;
       const uint64_t sampler_handle = reinterpret_cast<uintptr_t>(sampler);
-      const std::shared_lock lock_device(s_mutex_device);
-      for (DeviceData* device_data : global_devices_data)
-      {
-         s_mutex_samplers.lock();
-         // Release custom samplers outside lock as OnDestroySampler can be called recursively
-         auto samplers = std::move(device_data->custom_sampler_by_original_sampler[sampler_handle]);
-         device_data->custom_sampler_by_original_sampler.erase(sampler_handle);
-         s_mutex_samplers.unlock();
-      }
+      s_mutex_samplers.lock();
+      // Release custom samplers outside lock as OnDestroySampler can be called recursively
+      auto samplers = std::move(device_data->custom_sampler_by_original_sampler[sampler_handle]);
+      device_data->custom_sampler_by_original_sampler.erase(sampler_handle);
+      s_mutex_samplers.unlock();
    }
 
    // Takes a view desc the game would have tried to use with a resource we upgraded (directly or indirectly),
@@ -7493,19 +7492,18 @@ namespace
    }
 
    // The resource can't be used anymore
-   void OnDestroyResource(const void* resource)
+   void OnDestroyResource(ID3D11Device* device, const ID3D11Resource* resource)
    {
+      DeviceData* device_data = GetDeviceData(device);
+      if (!device_data)
+         return;
       const uint64_t resource_handle = reinterpret_cast<uintptr_t>(resource);
-      const std::shared_lock lock_device(s_mutex_device);
-      for (DeviceData* device_data : global_devices_data)
-      {
-         std::unique_lock lock(device_data->mutex);
-         // Unlinks its mirror (and the mirror views) and defers their destruction to the next present, as they may still be in flight in hooks or bound on recorded lists
-         device_data->resource_upgrades.OnResourceDestroyed(resource_handle);
+      std::unique_lock lock(device_data->mutex);
+      // Unlinks its mirror (and the mirror views) and defers their destruction to the next present, as they may still be in flight in hooks or bound on recorded lists
+      device_data->resource_upgrades.OnResourceDestroyed(resource_handle);
 #if DEVELOPMENT
-         device_data->cb_per_view_global_buffers.erase(reinterpret_cast<ID3D11Buffer*>(resource_handle));
+      device_data->cb_per_view_global_buffers.erase(reinterpret_cast<ID3D11Buffer*>(resource_handle));
 #endif
-      }
    }
 
    // Before a view is created: can replace its desc (empty is the game's null one, the whole resource). Returns true if it did.
@@ -7751,16 +7749,14 @@ namespace
 
    // TODO: put a test for resources that failed to be upgraded after changing resolution because they were created before the the swapchain changed res
    // The view can't be used anymore
-   void OnDestroyResourceView(const void* view)
+   void OnDestroyResourceView(ID3D11Device* device, const ID3D11View* view)
    {
-      const uint64_t view_handle = reinterpret_cast<uintptr_t>(view);
-      const std::shared_lock lock_device(s_mutex_device);
-      for (DeviceData* device_data : global_devices_data)
-      {
-         std::unique_lock lock(device_data->mutex);
-         // Unlinks its mirror view (if any) and defers its destruction to the next present, as it may still be in flight
-         device_data->resource_upgrades.OnResourceViewDestroyed(view_handle);
-      }
+      DeviceData* device_data = GetDeviceData(device);
+      if (!device_data)
+         return;
+      std::unique_lock lock(device_data->mutex);
+      // Unlinks its mirror view (if any) and defers its destruction to the next present, as it may still be in flight
+      device_data->resource_upgrades.OnResourceViewDestroyed(reinterpret_cast<uintptr_t>(view));
    }
 
    // Before the game binds shader resource or unordered access views: replaces them in place (the array is a copy of the game's)
@@ -12112,12 +12108,6 @@ void OnPostCreateShader(ID3D11Device* device, D3D11_SHADER_VERSION_TYPE type, co
    OnInitPipeline(device, 1, &subobject, Shader::Pipeline{reinterpret_cast<uintptr_t>(shader)});
 }
 
-std::vector<DeviceData*> GetDevicesData()
-{
-   const std::shared_lock lock(s_mutex_device);
-   return global_devices_data;
-}
-
 bool OnSetShader(ID3D11DeviceContext* context, ShaderStages stage, void** shader)
 {
    CommandListData* data = GetData(context);
@@ -12199,9 +12189,9 @@ void PostCreateSwapChain(IDXGISwapChain* swapchain, ID3D11Device* device)
    game->PostCreateSwapChain(swapchain, device);
 }
 
-void OnSwapChainDestroyed(const void* swapchain)
+void OnSwapChainDestroyed(ID3D11Device* device, const IDXGISwapChain* swapchain)
 {
-   game->OnSwapChainDestroyed(swapchain);
+   game->OnSwapChainDestroyed(device, swapchain);
    Overlay::OnSwapchainDestroyed(swapchain);
    OnDestroySwapchain(swapchain, false);
 }
@@ -12331,12 +12321,12 @@ void PostOpenSharedResource(ID3D11Device* device, ID3D11Resource* resource)
 
 // Destruction is reported for the objects created while any of their creation hooks was installed.
 // The game asks for all of them when it overrides one of these (see "LUMA_GAME_HOOKS").
-void OnResourceDestroyed(const void* resource)
+void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource)
 {
    if (LUMA_GAME_WANTS(CreateBuffer))
-      game->OnResourceDestroyed(resource);
+      game->OnResourceDestroyed(device, resource);
    if (LUMA_CORE_WANTS(CreateBuffer) || LUMA_CORE_WANTS(CreateTexture1D) || LUMA_CORE_WANTS(CreateTexture2D) || LUMA_CORE_WANTS(CreateTexture3D))
-      OnDestroyResource(resource);
+      OnDestroyResource(device, resource);
 }
 
 void PreCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource, std::optional<D3D11_SHADER_RESOURCE_VIEW_DESC1>& desc)
@@ -12403,12 +12393,12 @@ void PostCreateDepthStencilView(ID3D11Device* device, ID3D11Resource* resource, 
       game->PostCreateDepthStencilView(device, resource, desc, view);
 }
 
-void OnViewDestroyed(const void* view)
+void OnViewDestroyed(ID3D11Device* device, const ID3D11View* view)
 {
    if (LUMA_GAME_WANTS(CreateShaderResourceView))
-      game->OnViewDestroyed(view);
+      game->OnViewDestroyed(device, view);
    if (LUMA_CORE_WANTS(CreateShaderResourceView) || LUMA_CORE_WANTS(CreateRenderTargetView) || LUMA_CORE_WANTS(CreateUnorderedAccessView) || LUMA_CORE_WANTS(CreateDepthStencilView))
-      OnDestroyResourceView(view);
+      OnDestroyResourceView(device, view);
 }
 
 void PreCreateSamplerState(ID3D11Device* device, D3D11_SAMPLER_DESC& desc)
@@ -12425,12 +12415,12 @@ void PostCreateSamplerState(ID3D11Device* device, const D3D11_SAMPLER_DESC& desc
       game->PostCreateSamplerState(device, desc, sampler);
 }
 
-void OnSamplerDestroyed(const void* sampler)
+void OnSamplerDestroyed(ID3D11Device* device, const ID3D11SamplerState* sampler)
 {
    if (LUMA_GAME_WANTS(CreateSamplerState))
-      game->OnSamplerDestroyed(sampler);
+      game->OnSamplerDestroyed(device, sampler);
    if (LUMA_CORE_WANTS(CreateSamplerState))
-      OnDestroySampler(sampler);
+      OnDestroySampler(device, sampler);
 }
 
 // Blend states are only the game's
@@ -12469,11 +12459,11 @@ LUMA_SHADER_CALLBACKS(PixelShader, D3D11_SHVER_PIXEL_SHADER, ID3D11PixelShader)
 LUMA_SHADER_CALLBACKS(ComputeShader, D3D11_SHVER_COMPUTE_SHADER, ID3D11ComputeShader)
 #undef LUMA_SHADER_CALLBACKS
 
-void OnShaderDestroyed(const void* shader)
+void OnShaderDestroyed(ID3D11Device* device, const ID3D11DeviceChild* shader)
 {
    if (LUMA_GAME_WANTS(CreateVertexShader))
-      game->OnShaderDestroyed(shader);
-   for (DeviceData* device_data : GetDevicesData())
+      game->OnShaderDestroyed(device, shader);
+   if (DeviceData* device_data = GetDeviceData(device))
       OnDestroyPipeline(*device_data, reinterpret_cast<uintptr_t>(shader));
 }
 
@@ -12487,17 +12477,17 @@ void PostCreateInputLayout(ID3D11Device* device, const D3D11_INPUT_ELEMENT_DESC*
       game->PostCreateInputLayout(device, elements, count, bytecode, length, layout);
 }
 
-void OnInputLayoutDestroyed(const void* layout)
+void OnInputLayoutDestroyed(ID3D11Device* device, const ID3D11InputLayout* layout)
 {
    if (LUMA_GAME_WANTS(CreateInputLayout))
-      game->OnInputLayoutDestroyed(layout);
+      game->OnInputLayoutDestroyed(device, layout);
 #if DEVELOPMENT
    if (LUMA_CORE_WANTS(CreateInputLayout))
    {
-      for (DeviceData* device_data : GetDevicesData())
+      if (DeviceData* device_data = GetDeviceData(device))
       {
          const std::unique_lock lock_device(device_data->mutex);
-         device_data->input_layouts_descs.erase(static_cast<const ID3D11InputLayout*>(layout));
+         device_data->input_layouts_descs.erase(layout);
       }
    }
 #endif
@@ -12878,10 +12868,10 @@ void PostCreateDeferredContext(ID3D11Device* device, ID3D11DeviceContext* contex
       game->PostCreateDeferredContext(device, context);
 }
 
-void OnDeferredContextDestroyed(const void* context)
+void OnDeferredContextDestroyed(ID3D11Device* device, const ID3D11DeviceContext* context)
 {
    if (LUMA_GAME_WANTS(CreateDeferredContext))
-      game->OnDeferredContextDestroyed(context);
+      game->OnDeferredContextDestroyed(device, context);
    OnDestroyCommandList(context);
 }
 
@@ -12893,10 +12883,10 @@ void PostFinishCommandList(ID3D11DeviceContext* context, BOOL restore, ID3D11Com
       game->PostFinishCommandList(context, restore, list);
 }
 
-void OnCommandListDestroyed(const void* list)
+void OnCommandListDestroyed(ID3D11Device* device, const ID3D11CommandList* list)
 {
    if (LUMA_GAME_WANTS(FinishCommandList))
-      game->OnCommandListDestroyed(list);
+      game->OnCommandListDestroyed(device, list);
    OnDestroyCommandList(list);
 }
 

@@ -991,7 +991,7 @@ namespace NvapiHdr
       Luma::Utils::Log::Write(SUCCEEDED(hr) ? Luma::Utils::Log::Level::Info : Luma::Utils::Log::Level::Warning, std::format("[MEA HDR] swapchain init: SetColorSpace1({}) hr 0x{:08X}", static_cast<int>(color_space), static_cast<uint32_t>(hr)).c_str());
    }
 
-   static void OnDestroySwapchain(const void* swapchain)
+   static void OnDestroySwapchain(const IDXGISwapChain* swapchain)
    {
       const std::unique_lock lock(native_swapchain_mutex);
       if (native_swapchain == swapchain)
@@ -1225,23 +1225,20 @@ public:
 
    // Drop the record of a destroyed buffer: its cached map pointer is dead, and the runtime may recycle the
    // handle for a brand-new buffer (which must not inherit a stale pointer or a DISCARD ban).
-   void OnResourceDestroyed(const void* resource) override
+   void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource) override
    {
-      const std::shared_lock lock_devices(s_mutex_device);
-      for (DeviceData* const device_data : global_devices_data)
+      DeviceData* const device_data = GetDeviceData(device);
+      if (!device_data || !device_data->game)
+         return;
+      auto& gd = GetGameDeviceData(*device_data);
+      const std::unique_lock lock(gd.map_cache.mutex);
+      if (const int i = gd.map_cache.Find(reinterpret_cast<uintptr_t>(resource)); i >= 0)
       {
-         if (!device_data->game)
-            continue;
-         auto& gd = GetGameDeviceData(*device_data);
-         const std::unique_lock lock(gd.map_cache.mutex);
-         if (const int i = gd.map_cache.Find(reinterpret_cast<uintptr_t>(resource)); i >= 0)
-         {
-            gd.map_cache.recs[i] = gd.map_cache.recs[--gd.map_cache.count];
-         }
+         gd.map_cache.recs[i] = gd.map_cache.recs[--gd.map_cache.count];
       }
    }
 
-   void OnSwapChainDestroyed(const void* swapchain) override
+   void OnSwapChainDestroyed(ID3D11Device* device, const IDXGISwapChain* swapchain) override
    {
       NvapiHdr::OnDestroySwapchain(swapchain);
    }

@@ -21,10 +21,10 @@ using Detours::original;
 
 thread_local uint32_t device_depth = 0;
 
-template <void (*Callback)(const void*)>
-void Track(IUnknown* object)
+template <auto Callback>
+void Track(ID3D11Device* device, IUnknown* object)
 {
-   Lifetime::Track(object, &Detours::OnDestroyed<Callback>);
+   Lifetime::Track(object, device, &Detours::OnDestroyed<Callback>);
 }
 
 // Buffers and textures, reported with their versioned desc
@@ -41,7 +41,7 @@ HRESULT CreateResource(Device* device, const Desc* desc, const D3D11_SUBRESOURCE
    if (SUCCEEDED(result) && resource && *resource)
    {
       Scope::Guard scope;
-      Track<Callbacks::OnResourceDestroyed>(*resource);
+      Track<Callbacks::OnResourceDestroyed>(device, *resource);
       Post(device, game_desc, initial_data, *resource);
    }
    return result;
@@ -95,7 +95,7 @@ HRESULT CreateView(Device* device, ID3D11Resource* resource, const Desc* desc, V
    if (SUCCEEDED(result) && view && *view)
    {
       Scope::Guard scope;
-      Track<Callbacks::OnViewDestroyed>(*view);
+      Track<Callbacks::OnViewDestroyed>(device, *view);
       Post(device, resource, game_desc ? &*game_desc : nullptr, *view);
    }
    return result;
@@ -161,7 +161,7 @@ HRESULT STDMETHODCALLTYPE CreateSamplerState(ID3D11Device* device, const D3D11_S
    if (SUCCEEDED(result) && sampler && *sampler)
    {
       Scope::Guard scope;
-      Track<Callbacks::OnSamplerDestroyed>(*sampler);
+      Track<Callbacks::OnSamplerDestroyed>(device, *sampler);
       Callbacks::PostCreateSamplerState(device, game_desc, *sampler);
    }
    return result;
@@ -234,7 +234,7 @@ HRESULT CreateShader(ID3D11Device* device, const void* bytecode, SIZE_T length, 
    if (SUCCEEDED(result) && shader && *shader)
    {
       Scope::Guard scope;
-      Track<Callbacks::OnShaderDestroyed>(*shader);
+      Track<Callbacks::OnShaderDestroyed>(device, *shader);
       Post(device, bytecode, length, *shader);
    }
    return result;
@@ -283,7 +283,7 @@ HRESULT STDMETHODCALLTYPE CreateGeometryShaderWithStreamOutput(ID3D11Device* dev
    if (is_game && SUCCEEDED(result) && shader && *shader)
    {
       Scope::Guard scope;
-      Track<Callbacks::OnShaderDestroyed>(*shader);
+      Track<Callbacks::OnShaderDestroyed>(device, *shader);
       Callbacks::PostCreateGeometryShaderWithStreamOutput(device, bytecode, length, *shader);
    }
    return result;
@@ -297,7 +297,7 @@ HRESULT STDMETHODCALLTYPE CreateInputLayout(ID3D11Device* device, const D3D11_IN
    if (Detours::IsGameCall(guard) && SUCCEEDED(result) && layout && *layout)
    {
       Scope::Guard scope;
-      Track<Callbacks::OnInputLayoutDestroyed>(*layout);
+      Track<Callbacks::OnInputLayoutDestroyed>(device, *layout);
       Callbacks::PostCreateInputLayout(device, elements, count, bytecode, length, *layout);
    }
    return result;
@@ -311,7 +311,7 @@ void ReportSharedResource(ID3D11Device* device, HRESULT result, void** object)
    ComPtr<ID3D11Resource> resource;
    if (FAILED(static_cast<IUnknown*>(*object)->QueryInterface(IID_PPV_ARGS(&resource))))
       return;
-   Track<Callbacks::OnResourceDestroyed>(resource.Get());
+   Track<Callbacks::OnResourceDestroyed>(device, resource.Get());
    Callbacks::PostOpenSharedResource(device, resource.Get());
 }
 
@@ -350,7 +350,7 @@ HRESULT CreateDeferredContextDetour(Device* device, UINT flags, Context** contex
    if (Detours::IsGameCall(guard) && SUCCEEDED(result) && context && *context)
    {
       Scope::Guard scope;
-      Track<Callbacks::OnDeferredContextDestroyed>(*context);
+      Track<Callbacks::OnDeferredContextDestroyed>(device, *context);
       Callbacks::PostCreateDeferredContext(device, *context);
    }
    return result;

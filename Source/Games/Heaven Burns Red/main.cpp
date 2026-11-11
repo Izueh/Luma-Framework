@@ -378,28 +378,22 @@ public:
       }
    }
 
-   void OnResourceDestroyed(const void* resource) override
+   void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource) override
    {
-      // The object can't be used anymore, it's only compared. The game has one device.
-      const std::shared_lock lock_devices(s_mutex_device);
-      for (DeviceData* device_data : global_devices_data)
+      DeviceData* device_data = GetDeviceData(device);
+      if (!device_data || !device_data->game)
+         return;
+      auto& game_device_data = GetGameDeviceData(*device_data);
+
+      if (game_device_data.tracked_color_resource.get() == resource)
       {
-         if (!device_data->game)
-            continue;
-         auto& game_device_data = GetGameDeviceData(*device_data);
-
-         const ID3D11Resource* native_resource = static_cast<const ID3D11Resource*>(resource);
-
-         if (game_device_data.tracked_color_resource.get() == native_resource)
-         {
-            game_device_data.tracked_color_resource = nullptr;
-            game_device_data.tracked_color_rtv = nullptr;
-         }
-         else if (game_device_data.tracked_depth_resource.get() == native_resource)
-         {
-            game_device_data.tracked_depth_resource = nullptr;
-            game_device_data.tracked_depth_dsv = nullptr;
-         }
+         game_device_data.tracked_color_resource = nullptr;
+         game_device_data.tracked_color_rtv = nullptr;
+      }
+      else if (game_device_data.tracked_depth_resource.get() == resource)
+      {
+         game_device_data.tracked_depth_resource = nullptr;
+         game_device_data.tracked_depth_dsv = nullptr;
       }
    }
 

@@ -29,11 +29,20 @@ auto Report(Callback callback, Args&&... args)
    return callback(std::forward<Args>(args)...);
 }
 
-template <void (*Callback)(const void*)>
-void OnDestroyed(const void* object)
+template <typename Callback>
+struct DestroyedObject;
+template <typename T>
+struct DestroyedObject<void (*)(ID3D11Device*, const T*)>
+{
+   using Type = T;
+};
+
+// The tracker holds the object as the IUnknown it was tracked with: COM interfaces are single inheritance, so it's the same address
+template <auto Callback>
+void OnDestroyed(ID3D11Device* device, const IUnknown* object)
 {
    Scope::Guard scope;
-   Callback(object);
+   Callback(device, static_cast<const typename DestroyedObject<decltype(Callback)>::Type*>(object));
 }
 
 // Each base desc is a prefix of its versioned one: a texture's adds TextureLayout, a view's union members add PlaneSlice

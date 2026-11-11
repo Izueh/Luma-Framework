@@ -136,7 +136,7 @@ public:
    virtual void PreCreateSwapChain(DXGI_SWAP_CHAIN_DESC& desc) {}
    virtual void PreCreateSwapChainForHwnd(DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND hwnd) {}
    virtual void PostCreateSwapChain(IDXGISwapChain* swapchain, ID3D11Device* device) {}
-   virtual void OnSwapChainDestroyed(const void* swapchain) {}
+   virtual void OnSwapChainDestroyed(ID3D11Device* device, const IDXGISwapChain* swapchain) {}
    virtual void PreResizeBuffers(IDXGISwapChain* swapchain, UINT& count, UINT width, UINT height, DXGI_FORMAT& format, UINT& flags, const UINT* node_masks = nullptr, IUnknown* const* present_queues = nullptr) {}
    virtual void PostResizeBuffers(IDXGISwapChain* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) {}
    virtual bool PreSetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutput* output) { return false; }
@@ -151,7 +151,7 @@ public:
    virtual void PreCreateTexture3D(ID3D11Device* device, D3D11_TEXTURE3D_DESC1& desc, const D3D11_SUBRESOURCE_DATA*& initial_data) {}
    virtual void PostCreateTexture3D(ID3D11Device* device, const D3D11_TEXTURE3D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture3D* texture) {}
    virtual void PostOpenSharedResource(ID3D11Device* device, ID3D11Resource* resource) {}
-   virtual void OnResourceDestroyed(const void* resource) {}
+   virtual void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource) {}
    virtual void PreCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource, std::optional<D3D11_SHADER_RESOURCE_VIEW_DESC1>& desc) {}
    virtual void PostCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_SHADER_RESOURCE_VIEW_DESC1* desc, ID3D11ShaderResourceView* view) {}
    virtual void PreCreateRenderTargetView(ID3D11Device* device, ID3D11Resource* resource, std::optional<D3D11_RENDER_TARGET_VIEW_DESC1>& desc) {}
@@ -160,10 +160,10 @@ public:
    virtual void PostCreateUnorderedAccessView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_UNORDERED_ACCESS_VIEW_DESC1* desc, ID3D11UnorderedAccessView* view) {}
    virtual void PreCreateDepthStencilView(ID3D11Device* device, ID3D11Resource* resource, std::optional<D3D11_DEPTH_STENCIL_VIEW_DESC>& desc) {}
    virtual void PostCreateDepthStencilView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_DEPTH_STENCIL_VIEW_DESC* desc, ID3D11DepthStencilView* view) {}
-   virtual void OnViewDestroyed(const void* view) {}
+   virtual void OnViewDestroyed(ID3D11Device* device, const ID3D11View* view) {}
    virtual void PreCreateSamplerState(ID3D11Device* device, D3D11_SAMPLER_DESC& desc) {}
    virtual void PostCreateSamplerState(ID3D11Device* device, const D3D11_SAMPLER_DESC& desc, ID3D11SamplerState* sampler) {}
-   virtual void OnSamplerDestroyed(const void* sampler) {}
+   virtual void OnSamplerDestroyed(ID3D11Device* device, const ID3D11SamplerState* sampler) {}
    // "CreateBlendState" reports the DESC1 with logic ops disabled
    virtual void PreCreateBlendState(ID3D11Device* device, D3D11_BLEND_DESC1& desc) {}
    virtual void PostCreateBlendState(ID3D11Device* device, const D3D11_BLEND_DESC1& desc, ID3D11BlendState* blend_state) {}
@@ -181,9 +181,9 @@ public:
    virtual void PostCreatePixelShader(ID3D11Device* device, const void* bytecode, SIZE_T length, ID3D11PixelShader* shader) {}
    virtual void PreCreateComputeShader(ID3D11Device* device, const void*& bytecode, SIZE_T& length) {}
    virtual void PostCreateComputeShader(ID3D11Device* device, const void* bytecode, SIZE_T length, ID3D11ComputeShader* shader) {}
-   virtual void OnShaderDestroyed(const void* shader) {}
+   virtual void OnShaderDestroyed(ID3D11Device* device, const ID3D11DeviceChild* shader) {}
    virtual void PostCreateInputLayout(ID3D11Device* device, const D3D11_INPUT_ELEMENT_DESC* elements, UINT count, const void* bytecode, SIZE_T length, ID3D11InputLayout* layout) {}
-   virtual void OnInputLayoutDestroyed(const void* layout) {}
+   virtual void OnInputLayoutDestroyed(ID3D11Device* device, const ID3D11InputLayout* layout) {}
    virtual bool PreVSSetShader(ID3D11DeviceContext* context, ID3D11VertexShader*& shader) { return false; }
    virtual bool PreHSSetShader(ID3D11DeviceContext* context, ID3D11HullShader*& shader) { return false; }
    virtual bool PreDSSetShader(ID3D11DeviceContext* context, ID3D11DomainShader*& shader) { return false; }
@@ -241,9 +241,9 @@ public:
    virtual bool PreDispatch(ID3D11DeviceContext* context, UINT x, UINT y, UINT z) { return false; }
    virtual bool PreDispatchIndirect(ID3D11DeviceContext* context, ID3D11Buffer* arguments, UINT offset) { return false; }
    virtual void PostCreateDeferredContext(ID3D11Device* device, ID3D11DeviceContext* context) {}
-   virtual void OnDeferredContextDestroyed(const void* context) {}
+   virtual void OnDeferredContextDestroyed(ID3D11Device* device, const ID3D11DeviceContext* context) {}
    virtual void PostFinishCommandList(ID3D11DeviceContext* context, BOOL restore, ID3D11CommandList* list) {}
-   virtual void OnCommandListDestroyed(const void* list) {}
+   virtual void OnCommandListDestroyed(ID3D11Device* device, const ID3D11CommandList* list) {}
    virtual bool PreExecuteCommandList(ID3D11DeviceContext* context, ID3D11CommandList* list, BOOL restore) { return false; }
    virtual bool PreFlush(ID3D11DeviceContext* context) { return false; }
 };

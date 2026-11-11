@@ -15,7 +15,7 @@ void SetDrawFunctions(DrawFunction main, DrawFunction always);
 void OnSwapchainCreated(IDXGISwapChain* swapchain, ID3D11Device* device);
 // Before the game's present
 void OnPresent(IDXGISwapChain* swapchain);
-void OnSwapchainDestroyed(const void* swapchain);
+void OnSwapchainDestroyed(const IDXGISwapChain* swapchain);
 void OnDeviceDestroyed(const void* device);
 // From the window's thread
 void OnWindowMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);

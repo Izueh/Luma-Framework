@@ -460,7 +460,7 @@ struct GameDeviceDataMetaphorReFantazio final : public GameDeviceData
    // resources related to frustum culling
    ID3D11Buffer* cb_shadow_transform = nullptr;
    std::shared_mutex bounding_box_mutex;
-   std::unordered_map<ID3D11Buffer*, BoundingBoxCollection> bounding_boxes;
+   std::unordered_map<const ID3D11Buffer*, BoundingBoxCollection> bounding_boxes;
 
    std::unordered_map<uint32_t, std::array<uint32_t, 2>> vertex_shader_ndc_coord_indices;
    std::unordered_map<uint32_t, ComPtr<ID3D11VertexShader>> original_vertex_shaders;
@@ -2982,18 +2982,14 @@ public:
       game_device_data.bounding_boxes[buffer] = {box28, box40};
    }
 
-   void OnResourceDestroyed(const void* resource) override
+   void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource) override
    {
-      // The game has one device
-      const std::shared_lock lock_devices(s_mutex_device);
-      for (DeviceData* device_data : global_devices_data)
-      {
-         if (!device_data->game)
-            continue;
-         auto& game_device_data = GetGameDeviceData(*device_data);
-         const std::unique_lock lock_bounding_boxes(game_device_data.bounding_box_mutex);
-         game_device_data.bounding_boxes.erase((ID3D11Buffer*)resource);
-      }
+      DeviceData* device_data = GetDeviceData(device);
+      if (!device_data || !device_data->game)
+         return;
+      auto& game_device_data = GetGameDeviceData(*device_data);
+      const std::unique_lock lock_bounding_boxes(game_device_data.bounding_box_mutex);
+      game_device_data.bounding_boxes.erase(static_cast<const ID3D11Buffer*>(resource));
    }
 
    // ReShade reported the immediate context first ("init_command_list"), then the deferred ones: the context tags count it

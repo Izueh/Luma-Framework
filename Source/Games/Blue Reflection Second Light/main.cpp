@@ -912,7 +912,7 @@ struct GameDeviceDataBlueReflectionSecondLight final : public GameDeviceData
    // spatial index: for each draw_call_hash, map quantized world-position key -> index into prev_global_cbuffer_lookup vector
    std::unordered_map<uint64_t, std::unordered_map<uint64_t, uint32_t>> prev_global_cbuffer_spatial_index;
    std::unordered_map<ID3D11DeviceContext*, ComPtr<ID3D11DeviceContext1>> ctx1_cache;
-   std::unordered_map<ID3D11Buffer*, PendingCBufferData> g_pending_cb_data;
+   std::unordered_map<const ID3D11Buffer*, PendingCBufferData> g_pending_cb_data;
    StretchyGpuBuffer g_cbuffer;
    
    ComPtr<ID3D11Buffer> modifiable_vertex_buffer;
@@ -2524,17 +2524,13 @@ public:
       desc.RenderTarget[5].RenderTargetWriteMask = 15;
    }
    
-   void OnResourceDestroyed(const void* resource) override
+   void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource) override
    {
-      // The object can't be used anymore (not even QueryInterface): it's only looked up by address. The game has one device.
-      const std::shared_lock lock_devices(s_mutex_device);
-      for (DeviceData* device_data : global_devices_data)
-      {
-         if (!device_data->game || device_data->sr_type == SR::Type::None)
-            continue;
-         auto& game_device_data = GetGameDeviceData(*device_data);
-         game_device_data.g_pending_cb_data.erase(reinterpret_cast<ID3D11Buffer*>(const_cast<void*>(resource)));
-      }
+      DeviceData* device_data = GetDeviceData(device);
+      if (!device_data || !device_data->game || device_data->sr_type == SR::Type::None)
+         return;
+      auto& game_device_data = GetGameDeviceData(*device_data);
+      game_device_data.g_pending_cb_data.erase(static_cast<const ID3D11Buffer*>(resource));
    }
    
    void OnPresent(ID3D11Device* native_device, DeviceData& device_data) override

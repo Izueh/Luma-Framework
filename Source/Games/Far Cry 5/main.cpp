@@ -352,7 +352,7 @@ public:
    {
       FC5::UploadProbe::OnInitContext(device, context);
    }
-   void OnDeferredContextDestroyed(const void* context) override
+   void OnDeferredContextDestroyed(ID3D11Device* device, const ID3D11DeviceContext* context) override
    {
       FC5::UploadProbe::OnDestroyContext(context);
    }
@@ -405,9 +405,9 @@ public:
             FC5::UploadProbe::Invalidate(device, resource);
       return false;
    }
-   void OnResourceDestroyed(const void* resource) override
+   void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource) override
    {
-      FC5::UploadProbe::OnDestroyResource(resource);
+      FC5::UploadProbe::OnDestroyResource(device, resource);
    }
 
    void OnInitSwapchain(IDXGISwapChain* native) override
