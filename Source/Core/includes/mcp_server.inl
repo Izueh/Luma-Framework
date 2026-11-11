@@ -2687,8 +2687,8 @@ namespace Mcp
 #if LUMA_PATCH_PROVIDERS != 0 // Read at bind time, like the dev UI's "Allow Patches"
       RegisterToggles({{"core.allow_patches", &allow_patches}});
 #endif
-#if ENABLE_FIDELITY_SK && DEVELOPMENT && !defined(NDEBUG) // As "FidelityFX::draw_debug_view"
-      RegisterToggles({{"core.fsr_debug_view", &FidelityFX::draw_debug_view}});
+#if ENABLE_FIDELITY_SK && DEVELOPMENT && !defined(NDEBUG) // As "SR::debug_view"
+      RegisterToggles({{"core.fsr_debug_view", &SR::debug_view}});
 #endif
       // "DrawSMAA" and "DrawBloom"'s intermediates, the bloom's mips through "mip"
       RegisterTextures({{"core.smaa_edges", [](DeviceData& device_data) -> ID3D11DeviceChild*
