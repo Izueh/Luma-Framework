@@ -106,9 +106,11 @@
    SLOT(IDXGIFactory, CreateSwapChain)                                    \
    SLOT(IDXGIFactory2, CreateSwapChainForHwnd)                            \
    SLOT(IDXGISwapChain, GetDevice)                                        \
+   SLOT(IDXGISwapChain, GetDesc)                                          \
    SLOT(IDXGISwapChain, Present)                                          \
    SLOT(IDXGISwapChain, SetFullscreenState)                               \
    SLOT(IDXGISwapChain, ResizeBuffers)                                    \
+   SLOT(IDXGISwapChain1, GetDesc1)                                        \
    SLOT(IDXGISwapChain1, Present1)                                        \
    SLOT(IDXGISwapChain3, ResizeBuffers1)
 

@@ -52,8 +52,9 @@ void InstallD3D11(const D3D11::Functions& functions);
 void InstallD3D11Device(const D3D11::Functions& functions);
 void InstallD3D11Context(const D3D11::Functions& functions);
 
-// A swapchain the factory hooks can't report: D3D11CreateDeviceAndSwapChain creates it before its device is known
-void OnSwapchainCreated(IDXGISwapChain* swapchain, IUnknown* creator);
+// A swapchain the factory hooks can't report: D3D11CreateDeviceAndSwapChain creates it before its device is known.
+// `requested` is the desc the game asked for, before Luma's changes (null if it didn't pass one).
+void OnSwapchainCreated(IDXGISwapChain* swapchain, IUnknown* creator, const DXGI_SWAP_CHAIN_DESC* requested);
 
 // Copies the hooks, and attempts their install right away
 void Declare(std::span<const Hook> hooks);

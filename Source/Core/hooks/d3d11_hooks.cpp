@@ -203,6 +203,9 @@ HRESULT WINAPI CreateDeviceAndSwapChain(IDXGIAdapter* adapter, D3D_DRIVER_TYPE d
    ID3D11Device** device, D3D_FEATURE_LEVEL* feature_level, ID3D11DeviceContext** immediate_context)
 {
    DXGI_SWAP_CHAIN_DESC game_swapchain_desc;
+   // What the game asked for, before Luma's changes
+   DXGI_SWAP_CHAIN_DESC requested_swapchain_desc = {};
+   bool has_requested_swapchain_desc = false;
    const bool game_call = !Scope::IsActive();
    const D3D_FEATURE_LEVEL game_feature_level = GetGameFeatureLevel(feature_levels, feature_level_count);
    if (game_call)
@@ -211,6 +214,8 @@ HRESULT WINAPI CreateDeviceAndSwapChain(IDXGIAdapter* adapter, D3D_DRIVER_TYPE d
       Callbacks::PreCreateDevice(flags, feature_levels, feature_level_count);
       if (swapchain_desc)
       {
+         requested_swapchain_desc = *swapchain_desc;
+         has_requested_swapchain_desc = true;
          game_swapchain_desc = *swapchain_desc;
          Callbacks::PreCreateSwapChain(game_swapchain_desc);
          swapchain_desc = &game_swapchain_desc;
@@ -227,7 +232,7 @@ HRESULT WINAPI CreateDeviceAndSwapChain(IDXGIAdapter* adapter, D3D_DRIVER_TYPE d
       HideRaisedFeatureLevel(result, game_feature_level, device, feature_level);
    ID3D11Device* real_device = OnDeviceCreated(result, device, immediate_context);
    if (real_device && swapchain && *swapchain)
-      Hooks::OnSwapchainCreated(*swapchain, real_device);
+      Hooks::OnSwapchainCreated(*swapchain, real_device, has_requested_swapchain_desc ? &requested_swapchain_desc : nullptr);
    return result;
 }
 

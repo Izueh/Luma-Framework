@@ -12202,7 +12202,8 @@ void PreResizeBuffers(IDXGISwapChain* swapchain, UINT& count, UINT width, UINT h
    DXGI_SWAP_CHAIN_DESC current_desc = {};
    swapchain->GetDesc(&current_desc);
    OnDestroySwapchain(swapchain, true);
-   // Zero or unknown keep the current values
+   // Zero or unknown keep the values the game asked for: the hooks already resolved them against its original desc, so the swapchain's own
+   // (upgraded) format never gets read back as the vanilla one. Only a swapchain the hooks don't know falls back on its current desc.
    SwapchainSettings settings{format == DXGI_FORMAT_UNKNOWN ? current_desc.BufferDesc.Format : format, current_desc.SampleDesc.Count, count == 0 ? current_desc.BufferCount : count, current_desc.SwapEffect, flags, !current_desc.Windowed};
    if (OnCreateSwapchain(settings))
    {
