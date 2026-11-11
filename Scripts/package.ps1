@@ -1,15 +1,15 @@
 <#
 .SYNOPSIS
-    Package a Luma game addon locally, replicating the CI packaging
-    (.github/workflows/build_and_release.yml "Create ZIP per addon").
+    Package a Luma game mod locally, replicating the CI packaging
+    (.github/workflows/build_and_release.yml "Create ZIP per mod").
 
 .DESCRIPTION
-    Produces the same layout the CI ships: a zip containing the addon at the
-    root plus a "Luma/" folder (the shaders mount, filtered to this project),
+    Produces the same layout the CI ships: a zip containing the mod's dxgi.dll
+    at the root plus a "Luma/" folder (the shaders mount, filtered to this project),
     with the project-level (Core/Textures) folders only included when the
     project opts in via UseLumaFastNoise, plus the runtime DLLs the project
-    needs (dxcompiler.dll for DXP, d3dcompiler_47.dll, ReShade as dxgi.dll,
-    NGX DLSS and the FidelityFX DX12 dlls for FSR 4 when opted in).
+    needs (d3dcompiler_47.dll, NGX DLSS and the FidelityFX DX12 dlls for FSR 4
+    when opted in).
 
 .EXAMPLE
     .\scripts\package.ps1 -Project "Final Fantasy XV" -Config "Development-Release" -Platform "x64"
@@ -92,28 +92,24 @@ $useLumaXeSS = Test-PropEnabled $vcxproj "UseLumaXeSS"
 $useLumaSRBridge = ($Platform -eq "Win32") -and (Test-PropEnabled $vcxproj "UseLumaSRBridge")
 Write-Host "Opt-ins: UseLumaFastNoise=$useLumaFastNoise UseLumaDXP=$useLumaDXP UseLumaNGX=$useLumaNGX UseLumaFSR4=$useLumaFSR4 UseLumaXeSS=$useLumaXeSS UseLumaSRBridge=$useLumaSRBridge"
 
-# Locate the addon. When packaging runs from the LumaPackage build target the
+# Locate the mod's dxgi.dll. When packaging runs from the LumaPackage build target the
 # exact build output is passed in (-AddonPath = $(TargetPath)); standalone runs
-# scan this project's build output and the repo-root solution output instead.
+# look in the solution output, "Binaries\<platform>-<config>\<ProjectName>\".
 $addonFile = $null
-if (-not [string]::IsNullOrEmpty($AddonPath) -and (Test-Path $AddonPath)) {
-    $addonFile = Get-Item $AddonPath
+if (-not [string]::IsNullOrEmpty($AddonPath) -and (Test-Path -LiteralPath $AddonPath)) {
+    $addonFile = Get-Item -LiteralPath $AddonPath
 } else {
-    $addonCandidates = @()
-    $projectAddonDir = Join-Path $projectDir "Binaries\$Platform-$Config"
-    foreach ($dir in @($projectAddonDir, (Join-Path $repoRoot "Binaries\$Platform-$Config"))) {
-        if (Test-Path $dir) {
-            $addonCandidates += Get-ChildItem -Path $dir -Filter "*.addon" -ErrorAction SilentlyContinue |
-                Where-Object { $_.Name -match [regex]::Escape($Project) }
-        }
+    $projectOutputName = Split-Path $projectDir -Leaf
+    foreach ($name in @($projectOutputName, $Project, "_$Project") | Select-Object -Unique) {
+        $candidate = Join-Path $repoRoot "Binaries\$Platform-$Config\$name\dxgi.dll"
+        if (Test-Path -LiteralPath $candidate) { $addonFile = Get-Item -LiteralPath $candidate; break }
     }
-    $addonFile = $addonCandidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
 }
 if (-not $addonFile) {
-    Write-Error "Addon not found for '$Project' (build the project first)"
+    Write-Error "dxgi.dll not found for '$Project' (build the project first)"
     exit 1
 }
-Write-Host "Using addon: $($addonFile.FullName) ($($addonFile.LastWriteTime))"
+Write-Host "Using mod: $($addonFile.FullName) ($($addonFile.LastWriteTime))"
 
 # Zip name, mirroring the CI
 $zipName = "Luma-$Project"
@@ -145,9 +141,6 @@ try {
     $d3dCompilerSrc = if ($Platform -eq "Win32") { Join-Path $repoRoot "Shaders\Decompiler\d3dcompiler_47_x32.dll" }
                       else { Join-Path $repoRoot "Shaders\Decompiler\d3dcompiler_47.dll" }
     if (Test-Path $d3dCompilerSrc) { Copy-Item $d3dCompilerSrc -Destination "$tempDir\Luma" -Force }
-    $reshadeSrc = if ($Platform -eq "Win32") { Join-Path $repoRoot "Source\External\reshade\bin\Win32\Release\ReShade32.dll" }
-                  else { Join-Path $repoRoot "Source\External\reshade\bin\x64\Release\ReShade64.dll" }
-    if (Test-Path $reshadeSrc) { Copy-Item $reshadeSrc -Destination (Join-Path $tempDir "dxgi.dll") -Force }
     # The SR bridge's x64 helper (a Luma.sln project, built next to the Win32 addons), which loads the dlls below
     if ($useLumaSRBridge) {
         $helperSrc = Join-Path $repoRoot "Binaries\Win32-$Config\Luma-Upscaler.exe"
@@ -178,10 +171,10 @@ try {
         Copy-Item (Join-Path $xessDir "third-party-programs.txt") -Destination "$tempDir\Licenses\XeSS_third-party-programs.txt" -Force
     }
 
-    # Addon at the zip root, under the canonical Luma-<Project>.addon name
-    Copy-Item $addonFile.FullName -Destination (Join-Path $tempDir "Luma-$Project.addon") -Force
+    # The mod at the zip root, as the game loads it
+    Copy-Item -LiteralPath $addonFile.FullName -Destination (Join-Path $tempDir "dxgi.dll") -Force
 
-    # Zip — next to the addon by default
+    # Zip — next to the mod by default
     if ([string]::IsNullOrEmpty($OutDir)) { $OutDir = $addonFile.DirectoryName }
     $OutDir = $OutDir.TrimEnd('\')
     New-Item -ItemType Directory -Path $OutDir -Force | Out-Null

@@ -51,30 +51,6 @@ jobs:
       shell: pwsh
       run: '& "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" integrate install'
 
-    # Only packaging needs ReShade, and only for this cell's platform
-    - name: ReShade submodule SHA
-      id: reshade_sha
-      if: matrix.config != 'Development-Debug'
-      shell: pwsh
-      run: '"sha=$(git rev-parse HEAD:Source/External/reshade)" >> $env:GITHUB_OUTPUT'
-
-    - name: Cache ReShade
-      id: reshade_cache
-      if: matrix.config != 'Development-Debug'
-      uses: actions/cache@v6
-      with:
-        path: Source/External/reshade/bin/${{ matrix.platform }}/Release/ReShade*.dll
-        key: reshade-v145-${{ matrix.platform }}-${{ steps.reshade_sha.outputs.sha }}
-
-    # This requires the git directory to be added to the PATH Windows environment variables, to properly set up versioning information
-    # ReShade takes its version from "git describe --tags", so its shallow submodule needs the full history and tags first
-    - name: Build ReShade.sln Release
-      if: matrix.config != 'Development-Debug' && steps.reshade_cache.outputs.cache-hit != 'true'
-      run: |
-        git -C Source/External/reshade fetch --unshallow --tags --no-recurse-submodules
-        msbuild "Source\External\reshade\ReShade.sln" /m /p:Configuration="Release" /p:Platform="${{ matrix.platform == 'x64' && '64-bit' || '32-bit' }}" /p:PlatformToolset=v145
-      continue-on-error: true
-
     - name: Build Luma.sln ${{ matrix.config }}-${{ matrix.platform }} (${{ matrix.shard }})
       shell: pwsh
       env:
@@ -88,7 +64,7 @@ jobs:
         }
       continue-on-error: true # if only one or a few games failed to build, we should still build and package+release the other # TODO: add code to avoid doing an empty release if they all failed to build
 
-    - name: Create ZIP per addon with matching shaders
+    - name: Create ZIP per mod with matching shaders
       id: create_zip
       shell: pwsh
       # We only build publishing and test for now, development builds can be built locally by devs (with the exclusion of the Generic and Graphics Analyzer mod, which can also be used to quickly download a dev/debug environment)
@@ -122,55 +98,47 @@ jobs:
         Write-Host "Core FAST texture projects: $($coreFastNoiseProjects -join ', ')"
         Write-Host "DXP projects: $($dxpProjects -join ', ')"
 
-        # Expected addons for this cell (the projects it built, listed by the plan job) - missing ones failed to build
+        # The mods this cell built (the projects listed by the plan job): each game builds "dxgi.dll" into
+        # "Binaries\<platform>-<config>\<ProjectName>\". A missing one failed to build.
         $cellProjects = $env:PROJECTS -split ';'
         $cellPaths = $env:PATHS -split ';'
-        $expectedAddons = @()
+        $builtMods = @()
+        $missingProjects = @()
         for ($i = 0; $i -lt $cellPaths.Count; $i++) {
           $vcxPath = Join-Path (Get-Location) $cellPaths[$i]
           if (-not (Test-Path $vcxPath)) { continue }
           $vcxContent = Get-Content $vcxPath -Raw
-          # Core and the tools (SR Bridge Helper) build too, but aren't addons
-          if ($vcxContent -notmatch '<TargetExt[^>]*>\.addon<') { continue }
+          # Core and the tools (SR Bridge Helper) build too, but aren't mods
+          if ($vcxContent -notmatch '<TargetName[^>]*>dxgi<') { continue }
           $projName = $cellProjects[$i]
           if ($vcxContent -match '<ProjectName>([^<]+)</ProjectName>') { $projName = $Matches[1] }
           $projName = $projName -replace '&amp;', '&' -replace '&lt;', '<' -replace '&gt;', '>' -replace '&quot;', '"'
-          $expectedAddons += "Luma-$projName.addon"
+          $dllPath = Join-Path (Get-Location) "Binaries\${{ matrix.platform }}-${{ matrix.config }}\$projName\dxgi.dll"
+          if (Test-Path -LiteralPath $dllPath) {
+            $builtMods += [pscustomobject]@{ Name = $projName; Dll = $dllPath }
+          } else {
+            $missingProjects += $projName
+          }
         }
-        Write-Host "Projects expected for this configuration: $($expectedAddons.Count)"
-        
-        # Find the addon file in the build folder (adjust path accordingly)
-        $addonDir = "Binaries\${{ matrix.platform }}-${{ matrix.config }}"
-        $addonFiles = Get-ChildItem -Path $addonDir -Filter "Luma-*.addon"
+        Write-Host "Mods built for this configuration: $($builtMods.Count), failed: $($missingProjects.Count)"
 
-        if ($addonFiles.Count -eq 0) {
-          Write-Host "No addon files found."
+        if ($builtMods.Count -eq 0) {
+          Write-Host "No mods found."
           "skip_upload=true" >> $env:GITHUB_OUTPUT
           exit 0
         }
 
         "skip_upload=false" >> $env:GITHUB_OUTPUT
 
-        $builtAddons = @($addonFiles | ForEach-Object { $_.Name })
-        $missingAddons = @($expectedAddons | Where-Object { $builtAddons -notcontains $_ })
-        if ($missingAddons.Count -gt 0) {
-          $missingProjects = $missingAddons | ForEach-Object { $_ -replace '^Luma-', '' -replace '\.addon$', '' }
+        if ($missingProjects.Count -gt 0) {
           $warningMessage = "Projects that failed to build (excluded from this release): $($missingProjects -join ', ')"
           Write-Host ("::warning::" + ($warningMessage -replace '%', '%25' -replace ',', '%2C' -replace ':', '%3A'))
         }
 
         $packagedCount = 0
-        foreach ($addonFile in $addonFiles) {
-          if (-not $addonFile) {
-            Write-Host "Addon file not found, it's likely this configuration isn't present for this project. Skipping."
-            continue
-          }
-
-          # Extract project name by removing prefix 'Luma-' and suffix '.addon'
-          $fileName = $addonFile.Name
-          # Replace "Luma-_" with "Luma-" in the filename, given that some projects (e.g. template, generic mod etc) might have an underscore in front of them to appear on top in alphabetical order
-          $cleanFileName = $fileName -replace '^Luma-_', 'Luma-'
-          $projectName = $cleanFileName -replace '^Luma-', '' -replace '\.addon$', ''
+        foreach ($mod in $builtMods) {
+          # Some projects (e.g. template, generic mod etc) have an underscore in front of them to appear on top in alphabetical order
+          $projectName = $mod.Name -replace '^_', ''
           $zipName = "Luma-$projectName"
           # Add "Test" tag for test builds
           if ("${{ matrix.config }}" -eq "Test-Release") {
@@ -216,10 +184,10 @@ jobs:
 
           # Package with the shared script (single source of truth with local packaging):
           # it copies only this game's shaders, Global and Includes, skipping game
-          # Dump directories before traversal and excluding all .cso files. It bundles the runtime
-          # DLLs (d3dcompiler_47, ReShade as dxgi.dll, NGX DLSS) and zips next to the
-          # addon or into -OutDir. dxcompiler.dll is intentionally not shipped (SM5-only).
-          pwsh -ExecutionPolicy Bypass -File "Scripts/package.ps1" -Project $projectName -Config "${{ matrix.config }}" -Platform "${{ matrix.platform }}" -AddonPath $addonFile.FullName -OutDir "."
+          # Dump directories before traversal and excluding all .cso files. It bundles the mod's
+          # dxgi.dll and the runtime DLLs (d3dcompiler_47, NGX DLSS...) and zips into -OutDir.
+          # dxcompiler.dll is intentionally not shipped (SM5-only).
+          pwsh -ExecutionPolicy Bypass -File "Scripts/package.ps1" -Project $projectName -Config "${{ matrix.config }}" -Platform "${{ matrix.platform }}" -AddonPath $mod.Dll -OutDir "."
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::warning::Packaging failed for '$projectName' - it will be excluded from this release."
             continue
@@ -271,9 +239,9 @@ jobs:
             
             Installation instructions:
             - Extract all the files directly in the game main executable folder (replace the previous ones if you are updating)
-            - If you already had a ReShade installation (dxgi.dll) overwrite it unless it's the same version. If you have other mods that used the dxgi.dll file, find a way to proxy them
+            - Luma is the "dxgi.dll" file: if you already had another dxgi.dll (e.g. ReShade or other mods), it will be replaced, back it up first
             - Boot the game
-            - Press home to bring out the ReShade and Luma menus (if they don't appear, ReShade or Luma failed to install or run)
+            - Press Insert to bring out the Luma menu (if it doesn't appear, Luma failed to install or run)
             - Customize the settings if you'd like, the defaults are already good and pick up on your display calibration
             - **(Linux only)** install msvcrt40 and vcrun2022 using protontricks
 
