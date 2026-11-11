@@ -2,7 +2,7 @@
 
 // Implementation of ResourceUpgradeManager (see resource_upgrades.hpp).
 
-std::optional<ResourceDesc> ResourceUpgradeManager::GetOptionalResourceUpgradeDesc(const ResourceDesc& desc, const ResourceUpgradeFrameState& state, bool has_initial_data) const
+std::optional<ResourceDesc> ResourceUpgradeManager::GetOptionalResourceUpgradeDesc(const ResourceDesc& desc, const ResourceUpgradeFrameState& state, bool has_initial_data, bool force_format_upgrade) const
 {
    if (texture_format_upgrades_type < TextureFormatUpgradesType::AllowedEnabled)
    {
@@ -119,7 +119,7 @@ std::optional<ResourceDesc> ResourceUpgradeManager::GetOptionalResourceUpgradeDe
    }
 
    // The format needs to be in the upgrades list (color and depth textures have separate ones)
-   const bool format_filter = (is_upgradable_color && texture_upgrade_formats.contains(desc.format)) || (is_depth && texture_depth_upgrade_formats.contains(desc.format));
+   const bool format_filter = force_format_upgrade || (is_upgradable_color && texture_upgrade_formats.contains(desc.format)) || (is_depth && texture_depth_upgrade_formats.contains(desc.format));
 
    if (!format_filter && !resize_filter)
    {
@@ -303,10 +303,15 @@ std::optional<ResourceDesc> ResourceUpgradeManager::GetOptionalResourceUpgradeDe
       }
       default:
       case LUTDimensions::_2D:
+      case LUTDimensions::_2DAnd3D:
       {
          // For 2D, "texture_format_upgrades_lut_size" is the height, usually they extend in width and that's squared
          type_and_size_format_filter |= format_filter && desc.dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D && desc.width == (texture_format_upgrades_lut_size * texture_format_upgrades_lut_size) && desc.height == texture_format_upgrades_lut_size && desc.depth_or_layers == 1 && desc.levels == 1 && desc.samples == 1;
-         break;
+         if (texture_format_upgrades_lut_dimensions != LUTDimensions::_2DAnd3D)
+         {
+            break;
+         }
+         [[fallthrough]];
       }
       case LUTDimensions::_3D:
       {
@@ -340,7 +345,8 @@ bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResource(
    bool should_scale,
    bool leave_locked,
    UINT additional_bind_flags,
-   bool* scaled)
+   bool* scaled,
+   bool force_format_upgrade)
 {
    bool replaced = false;
 
@@ -397,16 +403,15 @@ bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResource(
       }
       else // Upgrade texture desc
       {
-#if 1
-         if (std::optional<ResourceDesc> upgraded_desc = GetOptionalResourceUpgradeDesc(source_desc, state, false))
+         if (std::optional<ResourceDesc> upgraded_desc = GetOptionalResourceUpgradeDesc(source_desc, state, false, force_format_upgrade))
          {
             target_desc = upgraded_desc.value();
             needs_upgraded_resource = true;
          }
-#else // TODO: delete older simpler branch
-         target_desc.format = GetBestResourceUpgradeFormat(source_desc);
-         needs_upgraded_resource = source_desc.format != target_desc.format;
-#endif
+         else
+         {
+            ASSERT_ONCE_MSG(!force_format_upgrade, "Forced texture upgrade failed, this might be unwanted");
+         }
       }
 
       // Resolution scaling (upscale only): scale the mirror from render_resolution to output_resolution
@@ -451,8 +456,8 @@ bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResource(
          std::unique_lock lock_device_write(*lock_device_read.mutex());
          if (!original_resources_to_mirrored_upgraded_resources.contains(in_resource))
          {
-            original_resources_to_mirrored_upgraded_resources[in_resource] = IndirectUpgradedResource{ reinterpret_cast<uint64_t>(mirrored_upgraded_resource), needs_scale, original_width, original_height, target_desc.width, target_desc.height };
-            out_resource = reinterpret_cast<uint64_t>(mirrored_upgraded_resource);
+            original_resources_to_mirrored_upgraded_resources[in_resource] = IndirectUpgradedResource{ reinterpret_cast<uintptr_t>(mirrored_upgraded_resource), needs_scale, original_width, original_height, target_desc.width, target_desc.height };
+            out_resource = reinterpret_cast<uintptr_t>(mirrored_upgraded_resource);
 
             // TODO: optionally copy the content of "in_resource"?
          }
@@ -546,10 +551,10 @@ bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResourceView(
             std::unique_lock lock_device_write(*lock_device_read.mutex());
             if (!original_resource_views_to_mirrored_upgraded_resource_views.contains(in_rv))
             {
-               original_resource_views_to_mirrored_upgraded_resource_views[in_rv] = reinterpret_cast<uint64_t>(mirrored_upgraded_resource_view);
-               mirror_views_by_mirror_resource[original_resource_to_mirrored_upgraded_resource_ptr].emplace(reinterpret_cast<uint64_t>(mirrored_upgraded_resource_view));
-               mirror_views_to_mirror_resources[reinterpret_cast<uint64_t>(mirrored_upgraded_resource_view)] = original_resource_to_mirrored_upgraded_resource_ptr;
-               out_rv = reinterpret_cast<uint64_t>(mirrored_upgraded_resource_view);
+               original_resource_views_to_mirrored_upgraded_resource_views[in_rv] = reinterpret_cast<uintptr_t>(mirrored_upgraded_resource_view);
+               mirror_views_by_mirror_resource[original_resource_to_mirrored_upgraded_resource_ptr].emplace(reinterpret_cast<uintptr_t>(mirrored_upgraded_resource_view));
+               mirror_views_to_mirror_resources[reinterpret_cast<uintptr_t>(mirrored_upgraded_resource_view)] = original_resource_to_mirrored_upgraded_resource_ptr;
+               out_rv = reinterpret_cast<uintptr_t>(mirrored_upgraded_resource_view);
             }
             else // Destroy it if it was accidentally created at the same time by another thread
             {

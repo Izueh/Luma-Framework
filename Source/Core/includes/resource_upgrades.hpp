@@ -130,7 +130,8 @@ public:
    {
       _1D,
       _2D,
-      _3D
+      _3D,
+      _2DAnd3D
    };
 
    struct AutoTextureFormatUpgradeShaderHash
@@ -261,7 +262,7 @@ public:
          // Unknown view, for some reason
          lock_device_read->unlock(); // Avoids deadlocks with the device
          ASSERT_ONCE_MSG(false, "Why do we have untracked resources? This should not ever happen"); // TODO: delete this whole path once we verified this cannot happen
-         uint64_t resource = reinterpret_cast<uint64_t>(GetResourceFromView(view_handle));
+         uint64_t resource = reinterpret_cast<uintptr_t>(GetResourceFromView(view_handle));
          lock_device_read->lock();
          return resource;
       }
@@ -389,9 +390,8 @@ public:
       return original_view_desc.Format(); // Unchanged
    }
 
-   // Decides whether a resource should be upgraded at creation time. Uses the frame state for
-   // resolution/aspect-ratio filters.
-   std::optional<ResourceDesc> GetOptionalResourceUpgradeDesc(const ResourceDesc& desc, const ResourceUpgradeFrameState& state, bool has_initial_data = false) const;
+   // Decides whether a resource should be upgraded at creation time or later. Uses the frame state for resolution/aspect-ratio filters.
+   std::optional<ResourceDesc> GetOptionalResourceUpgradeDesc(const ResourceDesc& desc, const ResourceUpgradeFrameState& state, bool has_initial_data = false, bool force_format_upgrade = false) const;
 
    // ------------------------------------------------------------------
    // Mirror creation / lookup (migrated from core.hpp)
@@ -414,7 +414,8 @@ public:
       bool should_scale = false,
       bool leave_locked = true,
       UINT additional_bind_flags = 0,
-      bool* scaled = nullptr);
+      bool* scaled = nullptr,
+      bool force_format_upgrade = false);
 
    bool FindOrCreateIndirectUpgradedResourceView(
       ID3D11Device* device,

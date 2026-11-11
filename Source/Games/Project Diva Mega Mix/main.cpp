@@ -291,7 +291,7 @@ namespace OutputHandling
          native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
          ComPtr<ID3D11Resource> res;
          rtv->GetResource(res.put());
-         uint64_t handle = reinterpret_cast<uint64_t>(res.get());
+         uint64_t handle = reinterpret_cast<uintptr_t>(res.get());
 
          // set contains
          if (!device_data.back_buffers.contains(handle)) return DrawOrDispatchOverrideType::None;
@@ -1726,7 +1726,7 @@ namespace XeGTAO
          rtv->GetResource(color_res.put());
 
          // failed: color_res != FoundResource::correct_main_color_res_handle (i.e. X Song Pack HQ Mirrored World Reflections)
-         if (reinterpret_cast<uint64_t>(color_res.get()) != RenderTracker::res_main_color_handle) return false;
+         if (reinterpret_cast<uintptr_t>(color_res.get()) != RenderTracker::res_main_color_handle) return false;
 
          // Depth
          ASSERT_MSG(depth_res.get() == RenderTracker::res_main_depth.get(), "XeGTAO::TrySetFromViews() depth_res != ResourceTracker::res_main_depth"); // validate with RenderTracker
@@ -1764,9 +1764,9 @@ namespace XeGTAO
          }
 
          // Scene CB1
-         auto previous_cb_handle = FoundResource::SceneCB::cb.get() ? reinterpret_cast<uint64_t>(FoundResource::SceneCB::cb.get()) : 0;
+         auto previous_cb_handle = FoundResource::SceneCB::cb.get() ? reinterpret_cast<uintptr_t>(FoundResource::SceneCB::cb.get()) : 0;
          native_device_context->PSGetConstantBuffers(1, 1, FoundResource::SceneCB::cb.put());
-         if (DEVELOPMENT && previous_cb_handle != 0 && previous_cb_handle != reinterpret_cast<uint64_t>(FoundResource::SceneCB::cb.get()))
+         if (DEVELOPMENT && previous_cb_handle != 0 && previous_cb_handle != reinterpret_cast<uintptr_t>(FoundResource::SceneCB::cb.get()))
             ASSERT_MSG(FoundResource::SceneCB::cb.get() != nullptr, "FoundResource SceneCB changed to nullptr");
 
          // log
@@ -1793,7 +1793,7 @@ namespace XeGTAO
          native_device_context->PSGetShaderResources(main_color_index, 1, main_color_srv.put());
          ASSERT_MSG(main_color_srv != nullptr, "XeGTAO::TryDraw() main_color_srv is nullptr");
          main_color_srv->GetResource(main_color_res.put());
-         main_color_res_handle = reinterpret_cast<uint64_t>(main_color_res.get());
+         main_color_res_handle = reinterpret_cast<uintptr_t>(main_color_res.get());
       }
       else
       {
@@ -1802,11 +1802,11 @@ namespace XeGTAO
          native_device_context->OMGetRenderTargets(1, main_color_rtv.put(), nullptr);
          ASSERT_MSG(main_color_rtv != nullptr, "XeGTAO::TryDraw() main_color_rtv is nullptr");
          main_color_rtv->GetResource(main_color_res.put());
-         main_color_res_handle = reinterpret_cast<uint64_t>(main_color_res.get());
+         main_color_res_handle = reinterpret_cast<uintptr_t>(main_color_res.get());
       }
 
       // failed: bound main color RES != FoundResource::Color::res (i.e. X Song Pack HQ Mirrored World Reflections)
-      if (main_color_res_handle != reinterpret_cast<uint64_t>(FoundResource::Color::res.get())) return false;
+      if (main_color_res_handle != reinterpret_cast<uintptr_t>(FoundResource::Color::res.get())) return false;
       
       // Thread counts setup
       int checkerboard_mode = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_CHECKBOARD);
@@ -2241,7 +2241,7 @@ namespace SSS
                rtv0->GetResource(res0.put());
          
                // RES handle
-               auto res_handle = reinterpret_cast<uint64_t>(res0.get());
+               auto res_handle = reinterpret_cast<uintptr_t>(res0.get());
          
                // get item
                current_item = Resources::TryGetItemForOriginal(res_handle);
@@ -2331,11 +2331,11 @@ namespace SSS
                ASSERT_MSG(rtv0 != nullptr, "SSS::OnDrawOrDispatchOverride() Wait rtv0 is nullptr");
                ComPtr<ID3D11Resource> res0;
                rtv0->GetResource(res0.put());
-               auto res_handle = reinterpret_cast<uint64_t>(res0.get());
+               auto res_handle = reinterpret_cast<uintptr_t>(res0.get());
 
                ComPtr<ID3D11Resource> res_new;
                current_item->new_draw_rtv->GetResource(res_new.put());
-               auto res_new_handle = reinterpret_cast<uint64_t>(res_new.get());
+               auto res_new_handle = reinterpret_cast<uintptr_t>(res_new.get());
                
                ASSERT_MSG(res_handle == res_new_handle, "SSS::OnDrawOrDispatchOverride() Wait rtv0 res_handle != new_draw_rtv res_handle");
             }
@@ -2435,7 +2435,7 @@ namespace SSS
             
             ComPtr<ID3D11Resource> replacement_res = nullptr;
             rtv0->GetResource(replacement_res.put());
-            current_item->replacement_res_handle = reinterpret_cast<uint64_t>(replacement_res.get()); 
+            current_item->replacement_res_handle = reinterpret_cast<uintptr_t>(replacement_res.get()); 
 
             // set SRV0 & RTV0 as full res
             native_device_context->PSSetShaderResources(0, 1, is_pbr ? &current_item->new_draw_srv : &current_item->new_aux_srv); // NPR uses aux from pre-sss pass, PBR uses original
@@ -2475,7 +2475,7 @@ namespace SSS
             srv16->GetResource(res16.put());
 
             // replace?
-            Resources::Item* item = Resources::TryGetItemForReplace(reinterpret_cast<uint64_t>(res16.get()));
+            Resources::Item* item = Resources::TryGetItemForReplace(reinterpret_cast<uintptr_t>(res16.get()));
             if (item)
             {
                // set SRV16 as our new
@@ -3348,7 +3348,7 @@ namespace SpotLightShadows
                ComPtr<ID3D11Resource> rtv0_resource;
                rtv0->GetResource(rtv0_resource.put());
                
-               Resources::depth_res_handle = reinterpret_cast<uint64_t>(rtv0_resource.get());
+               Resources::depth_res_handle = reinterpret_cast<uintptr_t>(rtv0_resource.get());
             }
 
             // next state
@@ -3367,7 +3367,7 @@ namespace SpotLightShadows
                {
                   ComPtr<ID3D11ShaderResourceView> srv10;
                   native_device_context->PSGetShaderResources(18, 1, srv10.put());
-                  srv10_handle = !srv10 ? 0 : reinterpret_cast<uint64_t>(srv10.get());
+                  srv10_handle = !srv10 ? 0 : reinterpret_cast<uintptr_t>(srv10.get());
                }
                
                if (srv10_handle != Resources::depth_res_handle)
@@ -4694,8 +4694,8 @@ namespace ShadowMap
                rtv0->GetResource(rtv0_res.put());
                dsv->GetResource(dsv_res.put());
                
-               uint64_t rtv0_handle = reinterpret_cast<uint64_t>(rtv0_res.get());
-               uint64_t dsv_handle = reinterpret_cast<uint64_t>(dsv_res.get());
+               uint64_t rtv0_handle = reinterpret_cast<uintptr_t>(rtv0_res.get());
+               uint64_t dsv_handle = reinterpret_cast<uintptr_t>(dsv_res.get());
                if (rtv0_handle != Resources::orig_tex_handle || dsv_handle != Resources::orig_depthdraw_handle)
                {
                   Resources::Reset_Handles();
@@ -4753,7 +4753,7 @@ namespace ShadowMap
             //    ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null WorldBDownsample0 FindTexBHandle");
             //    ComPtr<ID3D11Resource> rtv0_resource;
             //    rtv0->GetResource(rtv0_resource.put());
-            //    Resources::orig_texdownb_handle = reinterpret_cast<uint64_t>(rtv0_resource.get()); // save
+            //    Resources::orig_texdownb_handle = reinterpret_cast<uintptr_t>(rtv0_resource.get()); // save
             // }
             
             // ready
@@ -4840,7 +4840,7 @@ namespace ShadowMap
                ASSERT_MSG(srv0 != nullptr, "ShadowMap: SRV0 null DepthExpand0 FindDepthHandle");
                ComPtr<ID3D11Resource> res;
                srv0->GetResource(res.put());
-               Resources::orig_depthdraw_handle = reinterpret_cast<uint64_t>(res.get()); // save
+               Resources::orig_depthdraw_handle = reinterpret_cast<uintptr_t>(res.get()); // save
 
                // query SRV0 tex desc
                ComPtr<ID3D11Texture2D> tex;
@@ -4903,7 +4903,7 @@ namespace ShadowMap
                ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null DepthExpand1 FindDepthUseHandle");
                ComPtr<ID3D11Resource> rtv0_res;
                rtv0->GetResource(rtv0_res.put());
-               Resources::orig_depthuse_handle = reinterpret_cast<uint64_t>(rtv0_res.get());
+               Resources::orig_depthuse_handle = reinterpret_cast<uintptr_t>(rtv0_res.get());
             }
 
             // ready
@@ -4919,7 +4919,7 @@ namespace ShadowMap
                   ComPtr<ID3D11Resource> rtv0_res;
                   rtv0->GetResource(rtv0_res.put());
                   
-                  uint64_t rtv0_handle = reinterpret_cast<uint64_t>(rtv0_res.get());
+                  uint64_t rtv0_handle = reinterpret_cast<uintptr_t>(rtv0_res.get());
                   ASSERT_MSG(rtv0_handle == Resources::orig_depthuse_handle, "ShadowMap: DepthExpand1 RTV0 handle does not match expected orig_depthuse_handle");
                }
                
@@ -4972,7 +4972,7 @@ namespace ShadowMap
                ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null DepthExpand2 FindDepthDownHandle");
                ComPtr<ID3D11Resource> rtv0_res;
                rtv0->GetResource(rtv0_res.put());
-               Resources::orig_depthusedown_handle = reinterpret_cast<uint64_t>(rtv0_res.get());
+               Resources::orig_depthusedown_handle = reinterpret_cast<uintptr_t>(rtv0_res.get());
             }
 
             // next
@@ -4999,7 +4999,7 @@ namespace ShadowMap
                ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null WorldADownsample0 FindTexAHandle");
                ComPtr<ID3D11Resource> rtv0_resource;
                rtv0->GetResource(rtv0_resource.put());
-               // Resources::orig_texdowna_handle = reinterpret_cast<uint64_t>(rtv0_resource.get()); // save
+               // Resources::orig_texdowna_handle = reinterpret_cast<uintptr_t>(rtv0_resource.get()); // save
 
                // query RTV0 tex desc
                ComPtr<ID3D11Texture2D> tex;
@@ -5024,7 +5024,7 @@ namespace ShadowMap
                ASSERT_MSG(srv0 != nullptr, "ShadowMap: SRV0 null WorldADownsample0 FindTexAHandle");
                ComPtr<ID3D11Resource> srv0_resource;
                srv0->GetResource(srv0_resource.put());
-               Resources::orig_tex_handle = reinterpret_cast<uint64_t>(srv0_resource.get());
+               Resources::orig_tex_handle = reinterpret_cast<uintptr_t>(srv0_resource.get());
             }
 
             // ready
@@ -5048,7 +5048,7 @@ namespace ShadowMap
                      ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null WorldADownsample0 IsReady");
                      ComPtr<ID3D11Resource> rtv0_res;
                      rtv0->GetResource(rtv0_res.put());
-                     uint64_t rtv0_handle = reinterpret_cast<uint64_t>(rtv0_res.get());
+                     uint64_t rtv0_handle = reinterpret_cast<uintptr_t>(rtv0_res.get());
 
                      state_texdowna_rtv_handle = rtv0_handle;
                   }
@@ -5141,7 +5141,7 @@ namespace ShadowMap
                   native_device_context->PSGetShaderResources(19, 1, srv19.put());
                   ComPtr<ID3D11Resource> srv19_res;
                   srv19->GetResource(srv19_res.put());
-                  uint64_t srv19_handle = reinterpret_cast<uint64_t>(srv19_res.get());
+                  uint64_t srv19_handle = reinterpret_cast<uintptr_t>(srv19_res.get());
                   if (srv19_handle != Resources::orig_depthuse_handle)
                   {
                      ASSERT_ONCE_MSG(srv19_handle == Resources::orig_depthuse_handle, "ShadowMap: SSSSetup SRV19 handle does not match expected orig_depthuse_handle");
@@ -5168,7 +5168,7 @@ namespace ShadowMap
                
                ComPtr<ID3D11Resource> srv19_res;
                srv19->GetResource(srv19_res.put());
-               uint64_t srv19_handle = reinterpret_cast<uint64_t>(srv19_res.get());
+               uint64_t srv19_handle = reinterpret_cast<uintptr_t>(srv19_res.get());
                if (srv19_handle != Resources::orig_depthuse_handle) break; // failed: not expected handle
                
                if (Resources::IsColorNewReady())
@@ -5184,7 +5184,7 @@ namespace ShadowMap
                      native_device_context->PSGetShaderResources(6, 1, srv6.put());
                      ComPtr<ID3D11Resource> srv6_res;
                      srv6->GetResource(srv6_res.put());
-                     uint64_t srv6_handle = reinterpret_cast<uint64_t>(srv6_res.get());
+                     uint64_t srv6_handle = reinterpret_cast<uintptr_t>(srv6_res.get());
                      
                      bool is_flipped = srv6_handle != state_texdowna_rtv_handle;
                      const std::array<ID3D11ShaderResourceView*, 2> srvs = {
@@ -5779,7 +5779,7 @@ namespace DuplicateWorldReflections
 
                ComPtr<ID3D11Resource> res;
                rtv->GetResource(res.put());
-               uint64_t handle = reinterpret_cast<uint64_t>(res.get());
+               uint64_t handle = reinterpret_cast<uintptr_t>(res.get());
                
                is_replace_token = Resources::handles_current->handle == handle; // grant?
             }
@@ -5842,7 +5842,7 @@ namespace DuplicateWorldReflections
 
             ComPtr<ID3D11Resource> res;
             srv0->GetResource(res.put());
-            uint64_t handle = reinterpret_cast<uint64_t>(res.get());
+            uint64_t handle = reinterpret_cast<uintptr_t>(res.get());
 
             // dirty handle?
             [[unlikely]] if (Resources::handles_current && Resources::handles_current->handle != handle)
@@ -5922,7 +5922,7 @@ namespace DuplicateWorldReflections
             ComPtr<ID3D11Resource> srv15_res;
             srv15->GetResource(srv15_res.put());
             
-            uint64_t srv15_handle = reinterpret_cast<uint64_t>(srv15_res.get());
+            uint64_t srv15_handle = reinterpret_cast<uintptr_t>(srv15_res.get());
 
             // verify if not yet
             [[unlikely]] if (!Resources::handles_current->is_verified)
@@ -6006,14 +6006,14 @@ namespace LUTBuilderScan
       // RES
       ComPtr<ID3D11Resource> res;
       srv->GetResource(res.put());
-      prev_used_res = reinterpret_cast<uint64_t>(res.get());
+      prev_used_res = reinterpret_cast<uintptr_t>(res.get());
 
       // skip if old
-      if (scanned_lut_res.contains(reinterpret_cast<uint64_t>(res.get()))) return;
+      if (scanned_lut_res.contains(reinterpret_cast<uintptr_t>(res.get()))) return;
 
       // insert
-      scanned_lut_res.insert(reinterpret_cast<uint64_t>(res.get()));
-      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("LUTBuilderScan: Found LUTBuilder LUT at SRV2, res={}.", reinterpret_cast<uint64_t>(res.get())).c_str());
+      scanned_lut_res.insert(reinterpret_cast<uintptr_t>(res.get()));
+      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("LUTBuilderScan: Found LUTBuilder LUT at SRV2, res={}.", reinterpret_cast<uintptr_t>(res.get())).c_str());
       ASSERT_ONCE_MSG(scanned_lut_res.size() <= 2, "LUTBuilderScan: Found 3 LUTBuilder LUTs, check log!"); // only expect 2
    }
 
@@ -6035,7 +6035,7 @@ namespace RenderTracker // partial
       {
          com_ptr<ID3D11Resource> rtv_resource;
          rtv->GetResource(&rtv_resource);
-         last_cleared_rtv_handle = reinterpret_cast<uint64_t>(rtv_resource.get()); // The view keeps it alive
+         last_cleared_rtv_handle = reinterpret_cast<uintptr_t>(rtv_resource.get()); // The view keeps it alive
       }
       ID3D11Resource* res = reinterpret_cast<ID3D11Resource*>(last_cleared_rtv_handle);
 
@@ -6101,7 +6101,7 @@ namespace RenderTracker // partial
             native_device_context->PSGetShaderResources(10, 1, srv10.put());
             ASSERT_MSG(srv10 != nullptr, "RenderTracker: SRV10 null Contour");
             srv10->GetResource(res_main_depth.put());
-            res_main_depth_handle = reinterpret_cast<uint64_t>(res_main_depth.get());
+            res_main_depth_handle = reinterpret_cast<uintptr_t>(res_main_depth.get());
          }
          // PBR route via SSS Setup
          else if (sss_state == SSSState_Setup && (ps == ShaderHashesLists::SSSSetup0 || ps == ShaderHashesLists::SSSSetup1))
@@ -6111,7 +6111,7 @@ namespace RenderTracker // partial
             native_device_context->OMGetRenderTargets(0, nullptr, dsv.put());
             ASSERT_MSG(dsv != nullptr, "RenderTracker: DSV null SSS");
             dsv->GetResource(res_main_depth.put());
-            res_main_depth_handle = reinterpret_cast<uint64_t>(res_main_depth.get());
+            res_main_depth_handle = reinterpret_cast<uintptr_t>(res_main_depth.get());
          }
 
          // size
@@ -6157,7 +6157,7 @@ namespace RenderTracker // partial
          native_device_context->PSGetShaderResources(0, 1, srv.put());
          ASSERT_MSG(srv != nullptr, "DuplicateWorldReflections: SRV0 null TonemapDraw");
          srv->GetResource(res_main_color.put());
-         res_main_color_handle = reinterpret_cast<uint64_t>(res_main_color.get());
+         res_main_color_handle = reinterpret_cast<uintptr_t>(res_main_color.get());
 
          // TEX for size
          auto hr = res_main_color->QueryInterface(res_main_color_tex.put());

@@ -559,7 +559,7 @@ public:
                && srv_texture_2d_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT
                && srv_texture_2d_desc.SampleDesc.Count == 1) // MSAA textures can't have UAVs
             {
-               const uint64_t srv_resource_handle = (uint64_t)srv_resource.get();
+               const uint64_t srv_resource_handle = (uintptr_t)srv_resource.get();
                uint64_t original_srv_resource_handle = srv_resource_handle;
 
                std::unique_lock lock_device_write(device_data.mutex);

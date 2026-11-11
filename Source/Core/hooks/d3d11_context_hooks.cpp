@@ -175,6 +175,30 @@ void STDMETHODCALLTYPE RSSetScissorRects(ID3D11DeviceContext* context, UINT coun
 }
 
 template <size_t V>
+void STDMETHODCALLTYPE OMSetBlendState(ID3D11DeviceContext* context, ID3D11BlendState* state, const FLOAT blend_factor[4], UINT sample_mask)
+{
+   ReportAfter<&OMSetBlendState<V>, &Callbacks::PostOMSetBlendState>(context, state, blend_factor, sample_mask);
+}
+
+template <size_t V>
+void STDMETHODCALLTYPE OMSetDepthStencilState(ID3D11DeviceContext* context, ID3D11DepthStencilState* state, UINT stencil_ref)
+{
+   ReportAfter<&OMSetDepthStencilState<V>, &Callbacks::PostOMSetDepthStencilState>(context, state, stencil_ref);
+}
+
+template <size_t V>
+void STDMETHODCALLTYPE IASetVertexBuffers(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11Buffer* const* buffers, const UINT* strides, const UINT* offsets)
+{
+   ReportAfter<&IASetVertexBuffers<V>, &Callbacks::PostIASetVertexBuffers>(context, start, count, buffers, strides, offsets);
+}
+
+template <size_t V>
+void STDMETHODCALLTYPE IASetIndexBuffer(ID3D11DeviceContext* context, ID3D11Buffer* buffer, DXGI_FORMAT format, UINT offset)
+{
+   ReportAfter<&IASetIndexBuffer<V>, &Callbacks::PostIASetIndexBuffer>(context, buffer, format, offset);
+}
+
+template <size_t V>
 void STDMETHODCALLTYPE ClearState(ID3D11DeviceContext* context)
 {
    ReportAfter<&ClearState<V>, &Callbacks::PostClearState>(context);
@@ -256,6 +280,12 @@ template <size_t V>
 void STDMETHODCALLTYPE ClearRenderTargetView(ID3D11DeviceContext* context, ID3D11RenderTargetView* view, const FLOAT color[4])
 {
    ReportBefore<&ClearRenderTargetView<V>, &Callbacks::PreClearRenderTargetView>(context, view, color);
+}
+
+template <size_t V>
+void STDMETHODCALLTYPE CopyStructureCount(ID3D11DeviceContext* context, ID3D11Buffer* dest, UINT dest_offset, ID3D11UnorderedAccessView* source)
+{
+   ReportBefore<&CopyStructureCount<V>, &Callbacks::PreCopyStructureCount>(context, dest, dest_offset, source);
 }
 
 template <size_t V>
@@ -412,6 +442,10 @@ void InstallD3D11Context(const D3D11::Functions& functions)
    add(Function::OMSetRenderTargetsAndUnorderedAccessViews, {LUMA_BASE_HOOKS(OMSetRenderTargetsAndUnorderedAccessViews)});
    add(Function::RSSetViewports, {LUMA_BASE_HOOKS(RSSetViewports)});
    add(Function::RSSetScissorRects, {LUMA_BASE_HOOKS(RSSetScissorRects)});
+   add(Function::OMSetBlendState, {LUMA_BASE_HOOKS(OMSetBlendState)});
+   add(Function::OMSetDepthStencilState, {LUMA_BASE_HOOKS(OMSetDepthStencilState)});
+   add(Function::IASetVertexBuffers, {LUMA_BASE_HOOKS(IASetVertexBuffers)});
+   add(Function::IASetIndexBuffer, {LUMA_BASE_HOOKS(IASetIndexBuffer)});
    add(Function::ClearState, {LUMA_BASE_HOOKS(ClearState)});
    add(Function::Map, {LUMA_BASE_HOOKS(Map)});
    add(Function::Unmap, {LUMA_BASE_HOOKS(Unmap)});
@@ -420,6 +454,7 @@ void InstallD3D11Context(const D3D11::Functions& functions)
    add(Function::CopySubresourceRegion, {LUMA_BASE_HOOKS(CopySubresourceRegion), LUMA_CONTEXT1_HOOKS(CopySubresourceRegion1)});
    add(Function::ResolveSubresource, {LUMA_BASE_HOOKS(ResolveSubresource)});
    add(Function::ClearRenderTargetView, {LUMA_BASE_HOOKS(ClearRenderTargetView)});
+   add(Function::CopyStructureCount, {LUMA_BASE_HOOKS(CopyStructureCount)});
    add(Function::ClearDepthStencilView, {LUMA_BASE_HOOKS(ClearDepthStencilView)});
    add(Function::ClearUnorderedAccessViewUint, {LUMA_BASE_HOOKS(ClearUnorderedAccessViewUint)});
    add(Function::ClearUnorderedAccessViewFloat, {LUMA_BASE_HOOKS(ClearUnorderedAccessViewFloat)});

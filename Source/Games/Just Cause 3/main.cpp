@@ -470,7 +470,7 @@ public:
             rtv->GetResource(&rt_resource);
 
             const std::shared_lock lock(device_data.mutex);
-            is_rt_swapchain = device_data.back_buffers.contains((uint64_t)rt_resource.get());
+            is_rt_swapchain = device_data.back_buffers.contains((uintptr_t)rt_resource.get());
          }
 
          // Needed to branch on gamma conversions in the shaders

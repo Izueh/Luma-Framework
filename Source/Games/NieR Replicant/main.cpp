@@ -905,7 +905,7 @@ public:
       {
          return;
       }
-      ID3D11Resource* native_resource = reinterpret_cast<ID3D11Resource*>(reinterpret_cast<uint64_t>(buffer));
+      ID3D11Resource* native_resource = reinterpret_cast<ID3D11Resource*>(reinterpret_cast<uintptr_t>(buffer));
 
       ComPtr<ID3D11Buffer> native_buffer;
       native_resource->QueryInterface(native_buffer.put());

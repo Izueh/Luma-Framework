@@ -1187,7 +1187,7 @@ public:
             if (!sampler)
                continue;
             // The game's sampler: the bound one, or the one whose variant is bound
-            auto original = custom_samplers.find(reinterpret_cast<uint64_t>(sampler));
+            auto original = custom_samplers.find(reinterpret_cast<uintptr_t>(sampler));
             if (original == custom_samplers.end())
             {
                original = std::find_if(custom_samplers.begin(), custom_samplers.end(), [sampler](const auto& entry)

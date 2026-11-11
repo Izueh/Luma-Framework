@@ -164,7 +164,7 @@ namespace UI
                      if (Trace::show_command_list_info)
                      {
                         if (draw_call_data.command_list && draw_call_data.command_list->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) // Deferred
-                           command_list_info = " - ~> " + std::to_string(reinterpret_cast<uint64_t>(draw_call_data.command_list.get())) + " - " + std::to_string(thread_id);
+                           command_list_info = " - ~> " + std::to_string(reinterpret_cast<uintptr_t>(draw_call_data.command_list.get())) + " - " + std::to_string(thread_id);
                         else // Immediate
                            command_list_info = " - " + std::to_string(thread_id); // No need to fill up the immediate command list ptr every time
                      }
@@ -913,7 +913,7 @@ namespace UI
 
                            ImGui::Text("R Original Format: %s", GetFormatName(DXGI_FORMAT(upgraded_resource_pair.second)));
 
-                           if (const auto it = device_data.resource_upgrades.original_upgraded_resource_views_formats.find(reinterpret_cast<uint64_t>(slot_data.srvs[i])); it != device_data.resource_upgrades.original_upgraded_resource_views_formats.end())
+                           if (const auto it = device_data.resource_upgrades.original_upgraded_resource_views_formats.find(reinterpret_cast<uintptr_t>(slot_data.srvs[i])); it != device_data.resource_upgrades.original_upgraded_resource_views_formats.end())
                            {
                               const auto& [native_resource, original_view_format] = it->second;
                               ASSERT_ONCE(native_resource == upgraded_resource_pair.first); // Uh!?
@@ -1051,7 +1051,7 @@ namespace UI
 
                            ImGui::Text("R Original Format: %s", GetFormatName(DXGI_FORMAT(upgraded_resource_pair.second)));
 
-                           if (const auto it = device_data.resource_upgrades.original_upgraded_resource_views_formats.find(reinterpret_cast<uint64_t>(slot_data.uavs[i])); it != device_data.resource_upgrades.original_upgraded_resource_views_formats.end())
+                           if (const auto it = device_data.resource_upgrades.original_upgraded_resource_views_formats.find(reinterpret_cast<uintptr_t>(slot_data.uavs[i])); it != device_data.resource_upgrades.original_upgraded_resource_views_formats.end())
                            {
                               const auto& [native_resource, original_view_format] = it->second;
                               ASSERT_ONCE(native_resource == upgraded_resource_pair.first); // Uh!?
@@ -1223,7 +1223,7 @@ namespace UI
                            ImGui::Text("R Original Format: %s", GetFormatName(DXGI_FORMAT(upgraded_resource_pair.second)));
 
                            // TODO: why does this flicker on and off in Deux Ex HR when it writes on the swapchain for material draws?
-                           if (const auto it = device_data.resource_upgrades.original_upgraded_resource_views_formats.find(reinterpret_cast<uint64_t>(slot_data.rtvs[i])); it != device_data.resource_upgrades.original_upgraded_resource_views_formats.end())
+                           if (const auto it = device_data.resource_upgrades.original_upgraded_resource_views_formats.find(reinterpret_cast<uintptr_t>(slot_data.rtvs[i])); it != device_data.resource_upgrades.original_upgraded_resource_views_formats.end())
                            {
                               const auto& [native_resource, original_view_format] = it->second;
                               ASSERT_ONCE(native_resource == upgraded_resource_pair.first); // Uh!?

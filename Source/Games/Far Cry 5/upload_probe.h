@@ -42,14 +42,14 @@ namespace FC5::UploadProbe
    inline Sample BeforeRead(ID3D11Device* device, ID3D11Buffer* buffer, const D3D11_BUFFER_DESC& desc, uint64_t offset)
    {
       std::lock_guard lock(mutex);
-      const auto key = reinterpret_cast<uint64_t>(device);
+      const auto key = reinterpret_cast<uintptr_t>(device);
       if (!devices.contains(key) && devices.size() >= 8) return {};
       auto& d = devices[key];
       ++d.stats.comparisons;
       if (desc.BindFlags != D3D11_BIND_CONSTANT_BUFFER || desc.Usage != D3D11_USAGE_DYNAMIC ||
          !(desc.CPUAccessFlags & D3D11_CPU_ACCESS_WRITE) || desc.ByteWidth > 65536 || desc.MiscFlags != 0)
       { ++d.stats.missing; return {}; }
-      const auto resource = reinterpret_cast<uint64_t>(buffer);
+      const auto resource = reinterpret_cast<uintptr_t>(buffer);
       if (!d.buffers.contains(resource) && d.buffers.size() >= 64)
       { ++d.stats.capped; ++d.stats.missing; return {}; }
       auto& e = d.buffers[resource];
@@ -69,7 +69,7 @@ namespace FC5::UploadProbe
       if (!cpu.valid || !cpu.fresh || ctx->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE ||
          !ValidateCameraJitter(cpu.rows.data(), jitter)) return false;
       std::lock_guard lock(mutex);
-      const auto d = devices.find(reinterpret_cast<uint64_t>(device));
+      const auto d = devices.find(reinterpret_cast<uintptr_t>(device));
       if (d == devices.end() || !d->second.gate.Safe() || d->second.epoch != cpu.epoch) return false;
       const auto e = d->second.buffers.find(cpu.resource);
       if (e == d->second.buffers.end() || e->second.snapshot.generation != cpu.generation ||
@@ -84,7 +84,7 @@ namespace FC5::UploadProbe
       const bool jitter_equal = cpu.valid && ValidateCameraJitter(cpu.rows.data(), a) && ValidateCameraJitter(gpu, b) &&
          a.width == b.width && a.height == b.height && a.x == b.x && a.y == b.y;
       std::lock_guard lock(mutex);
-      const auto it = devices.find(reinterpret_cast<uint64_t>(device));
+      const auto it = devices.find(reinterpret_cast<uintptr_t>(device));
       if (it == devices.end()) return;
       auto& d = it->second;
       auto& s = d.stats;
@@ -109,15 +109,15 @@ namespace FC5::UploadProbe
    {
       if (subresource != 0) return;
       std::lock_guard lock(mutex);
-      const auto c = contexts.find(reinterpret_cast<uint64_t>(ctx));
+      const auto c = contexts.find(reinterpret_cast<uintptr_t>(ctx));
       if (c == contexts.end() || !c->second.ready) return;
       const auto d = devices.find(c->second.device);
       if (d == devices.end()) return;
-      const auto e = d->second.buffers.find(reinterpret_cast<uint64_t>(resource));
+      const auto e = d->second.buffers.find(reinterpret_cast<uintptr_t>(resource));
       if (e == d->second.buffers.end()) return;
       auto& entry = e->second;
       entry.publish_pending = false;
-      entry.map_context = reinterpret_cast<uint64_t>(ctx);
+      entry.map_context = reinterpret_cast<uintptr_t>(ctx);
       if (!c->second.immediate)
       {
          entry.snapshot.Invalidate(); entry.trust.Invalidate();
@@ -131,15 +131,15 @@ namespace FC5::UploadProbe
    {
       if (subresource != 0) return;
       std::lock_guard lock(mutex);
-      const auto c = contexts.find(reinterpret_cast<uint64_t>(ctx));
+      const auto c = contexts.find(reinterpret_cast<uintptr_t>(ctx));
       if (c == contexts.end() || !c->second.ready || !c->second.immediate) return;
       const auto d = devices.find(c->second.device);
       if (d == devices.end()) return;
-      const auto e = d->second.buffers.find(reinterpret_cast<uint64_t>(resource));
+      const auto e = d->second.buffers.find(reinterpret_cast<uintptr_t>(resource));
       if (e == d->second.buffers.end()) return;
       const auto start = PerfCounter::Clock::now();
       auto& entry = e->second;
-      entry.publish_pending = entry.map_context == reinterpret_cast<uint64_t>(ctx) &&
+      entry.publish_pending = entry.map_context == reinterpret_cast<uintptr_t>(ctx) &&
          entry.snapshot.End(GetCurrentThreadId(), d->second.epoch);
       entry.snapshot.valid = false; // Not visible until the original Unmap returns.
       if (!entry.publish_pending) ++d->second.stats.rejected;
@@ -149,19 +149,19 @@ namespace FC5::UploadProbe
    {
       if (subresource != 0) return;
       std::lock_guard lock(mutex);
-      const auto c = contexts.find(reinterpret_cast<uint64_t>(ctx));
+      const auto c = contexts.find(reinterpret_cast<uintptr_t>(ctx));
       if (c == contexts.end() || !c->second.ready || !c->second.immediate) return;
       const auto d = devices.find(c->second.device);
       if (d == devices.end()) return;
-      const auto e = d->second.buffers.find(reinterpret_cast<uint64_t>(resource));
+      const auto e = d->second.buffers.find(reinterpret_cast<uintptr_t>(resource));
       if (e == d->second.buffers.end()) return;
       auto& entry = e->second;
-      if (entry.publish_pending && entry.map_context == reinterpret_cast<uint64_t>(ctx) &&
+      if (entry.publish_pending && entry.map_context == reinterpret_cast<uintptr_t>(ctx) &&
          entry.snapshot.epoch == d->second.epoch && entry.snapshot.thread == GetCurrentThreadId())
       { entry.snapshot.valid = true; ++d->second.stats.uploads; }
       entry.publish_pending = false;
    }
-   inline uint64_t Key(const void* object) { return reinterpret_cast<uint64_t>(object); }
+   inline uint64_t Key(const void* object) { return reinterpret_cast<uintptr_t>(object); }
    inline void OnInitDevice(ID3D11Device* device)
    {
       std::lock_guard lock(mutex);
@@ -218,7 +218,7 @@ namespace FC5::UploadProbe
    inline void AdvanceFrame(ID3D11Device* device)
    {
       std::lock_guard lock(mutex);
-      if (auto d = devices.find(reinterpret_cast<uint64_t>(device)); d != devices.end()) ++d->second.epoch;
+      if (auto d = devices.find(reinterpret_cast<uintptr_t>(device)); d != devices.end()) ++d->second.epoch;
    }
    // The device isn't known on destruction, the resource can only be on one
    inline void OnDestroyResource(const void* resource)
@@ -237,7 +237,7 @@ namespace FC5::UploadProbe
       Stats s{}; PerfCounter timing; size_t buffers = 0; UploadDeviceGate gate;
       {
          std::lock_guard lock(mutex);
-         const auto it = devices.find(reinterpret_cast<uint64_t>(device));
+         const auto it = devices.find(reinterpret_cast<uintptr_t>(device));
          if (it == devices.end()) return;
          auto& d = it->second; s = d.stats; d.stats = {};
          timing = d.copy_cpu; d.copy_cpu = {}; buffers = d.buffers.size();

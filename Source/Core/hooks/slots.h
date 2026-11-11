@@ -64,10 +64,15 @@
    SLOT(ID3D11DeviceContext, DispatchIndirect)                            \
    SLOT(ID3D11DeviceContext, RSSetViewports)                              \
    SLOT(ID3D11DeviceContext, RSSetScissorRects)                           \
+   SLOT(ID3D11DeviceContext, OMSetBlendState)                             \
+   SLOT(ID3D11DeviceContext, OMSetDepthStencilState)                      \
+   SLOT(ID3D11DeviceContext, IASetVertexBuffers)                          \
+   SLOT(ID3D11DeviceContext, IASetIndexBuffer)                            \
    SLOT(ID3D11DeviceContext, CopySubresourceRegion)                       \
    SLOT(ID3D11DeviceContext, CopyResource)                                \
    SLOT(ID3D11DeviceContext, UpdateSubresource)                           \
    SLOT(ID3D11DeviceContext, ClearRenderTargetView)                       \
+   SLOT(ID3D11DeviceContext, CopyStructureCount)                          \
    SLOT(ID3D11DeviceContext, ClearUnorderedAccessViewUint)                \
    SLOT(ID3D11DeviceContext, ClearUnorderedAccessViewFloat)               \
    SLOT(ID3D11DeviceContext, ClearDepthStencilView)                       \

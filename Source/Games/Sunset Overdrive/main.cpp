@@ -897,7 +897,7 @@ public:
       {
          const com_ptr<ID3D11Resource> resource = render_target_resource();
          const std::shared_lock lock(device_data.mutex);
-         return resource && device_data.back_buffers.contains(reinterpret_cast<uint64_t>(resource.get()));
+         return resource && device_data.back_buffers.contains(reinterpret_cast<uintptr_t>(resource.get()));
       };
 
       if (is_pixel_shader(shader_hash_CameraVelocity))
@@ -1055,7 +1055,7 @@ public:
             if (!sampler)
                continue;
             // The game's sampler: the bound one, or the one whose variant is bound
-            auto original = custom_samplers.find(reinterpret_cast<uint64_t>(sampler));
+            auto original = custom_samplers.find(reinterpret_cast<uintptr_t>(sampler));
             if (original == custom_samplers.end())
             {
                original = std::find_if(custom_samplers.begin(), custom_samplers.end(), [sampler](const auto& entry)

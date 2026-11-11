@@ -1205,7 +1205,7 @@ public:
       DeviceData* device_data = cmd_list_data ? cmd_list_data->device_data : nullptr;
       if (!device_data || !device_data->game)
          return;
-      const uint64_t rtv_handle = reinterpret_cast<uint64_t>(native_rtv);
+      const uint64_t rtv_handle = reinterpret_cast<uintptr_t>(native_rtv);
 
       ComPtr<ID3D11RenderTargetView> effective_rtv;
       {

@@ -130,7 +130,7 @@ public:
         buffer->GetDesc(&desc);
         if (desc.BindFlags == D3D11_BIND_CONSTANT_BUFFER && desc.ByteWidth == 544)
         {
-            g_cbSharedPerViewData_handle = reinterpret_cast<uint64_t>(buffer);
+            g_cbSharedPerViewData_handle = reinterpret_cast<uintptr_t>(buffer);
             g_cbSharedPerViewData_mapped_data = *data;
         }
     }
@@ -139,7 +139,7 @@ public:
     {
 
         // Not thread safe, but it looks like it's fine.
-        if (g_cbSharedPerViewData_handle == reinterpret_cast<uint64_t>(buffer))
+        if (g_cbSharedPerViewData_handle == reinterpret_cast<uintptr_t>(buffer))
         {
             auto data = (float*)g_cbSharedPerViewData_mapped_data;
 

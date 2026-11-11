@@ -1593,7 +1593,7 @@ namespace CODs // partial
          // O(n) check if one of back_buffers
          bool success = false;
          {
-            const auto rtv0_resource_handle = reinterpret_cast<uint64_t>(rtvstate_buffers.res.get());
+            const auto rtv0_resource_handle = reinterpret_cast<uintptr_t>(rtvstate_buffers.res.get());
             for (const uint64_t bb_handle : device_data.back_buffers)
             {
                if (bb_handle == rtv0_resource_handle)
@@ -1632,7 +1632,7 @@ namespace CODs // partial
                rtvs[i]->GetResource(&res); // get (AddRef'd)
 
                // O(n) check if one of back_buffers
-               const auto rtv_resource_handle = reinterpret_cast<uint64_t>(res);
+               const auto rtv_resource_handle = reinterpret_cast<uintptr_t>(res);
                for (const uint64_t bb_handle : device_data.back_buffers)
                {
                   if (bb_handle == rtv_resource_handle)

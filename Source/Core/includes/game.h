@@ -213,6 +213,10 @@ public:
    virtual bool PreOMSetRenderTargetsAndUnorderedAccessViews(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views, ID3D11DepthStencilView*& depth_stencil, UINT uav_start, UINT uav_count, ID3D11UnorderedAccessView** uavs, const UINT* initial_counts) { return false; }
    virtual void PostRSSetViewports(ID3D11DeviceContext* context, UINT count, const D3D11_VIEWPORT* viewports) {}
    virtual void PostRSSetScissorRects(ID3D11DeviceContext* context, UINT count, const D3D11_RECT* rects) {}
+   virtual void PostOMSetBlendState(ID3D11DeviceContext* context, ID3D11BlendState* state, const FLOAT blend_factor[4], UINT sample_mask) {}
+   virtual void PostOMSetDepthStencilState(ID3D11DeviceContext* context, ID3D11DepthStencilState* state, UINT stencil_ref) {}
+   virtual void PostIASetVertexBuffers(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11Buffer* const* buffers, const UINT* strides, const UINT* offsets) {}
+   virtual void PostIASetIndexBuffer(ID3D11DeviceContext* context, ID3D11Buffer* buffer, DXGI_FORMAT format, UINT offset) {}
    virtual void PostClearState(ID3D11DeviceContext* context) {}
    virtual void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) {}
    virtual bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) { return false; }
@@ -222,6 +226,7 @@ public:
    virtual bool PreCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, UINT x, UINT y, UINT z, ID3D11Resource* source, UINT source_subresource, const D3D11_BOX* box, UINT copy_flags = 0) { return false; }
    virtual bool PreResolveSubresource(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, ID3D11Resource* source, UINT source_subresource, DXGI_FORMAT format) { return false; }
    virtual bool PreClearRenderTargetView(ID3D11DeviceContext* context, ID3D11RenderTargetView* view, const FLOAT color[4]) { return false; }
+   virtual bool PreCopyStructureCount(ID3D11DeviceContext* context, ID3D11Buffer* dest, UINT dest_offset, ID3D11UnorderedAccessView* source) { return false; }
    virtual bool PreClearDepthStencilView(ID3D11DeviceContext* context, ID3D11DepthStencilView* view, UINT flags, FLOAT depth, UINT8 stencil) { return false; }
    virtual bool PreClearUnorderedAccessViewUint(ID3D11DeviceContext* context, ID3D11UnorderedAccessView* view, const UINT values[4]) { return false; }
    virtual bool PreClearUnorderedAccessViewFloat(ID3D11DeviceContext* context, ID3D11UnorderedAccessView* view, const FLOAT values[4]) { return false; }
@@ -322,6 +327,10 @@ public:
    X(PreOMSetRenderTargetsAndUnorderedAccessViews, OMSetRenderTargetsAndUnorderedAccessViews)                              \
    X(PostRSSetViewports, RSSetViewports)                                                                                   \
    X(PostRSSetScissorRects, RSSetScissorRects)                                                                             \
+   X(PostOMSetBlendState, OMSetBlendState)                                                                                 \
+   X(PostOMSetDepthStencilState, OMSetDepthStencilState)                                                                   \
+   X(PostIASetVertexBuffers, IASetVertexBuffers)                                                                           \
+   X(PostIASetIndexBuffer, IASetIndexBuffer)                                                                               \
    X(PostClearState, ClearState)                                                                                           \
    X(PostMap, Map)                                                                                                         \
    X(PreUnmap, Unmap)                                                                                                      \
@@ -331,6 +340,7 @@ public:
    X(PreCopySubresourceRegion, CopySubresourceRegion)                                                                      \
    X(PreResolveSubresource, ResolveSubresource)                                                                            \
    X(PreClearRenderTargetView, ClearRenderTargetView)                                                                      \
+   X(PreCopyStructureCount, CopyStructureCount)                                                                            \
    X(PreClearDepthStencilView, ClearDepthStencilView)                                                                      \
    X(PreClearUnorderedAccessViewUint, ClearUnorderedAccessViewUint)                                                        \
    X(PreClearUnorderedAccessViewFloat, ClearUnorderedAccessViewFloat)                                                      \

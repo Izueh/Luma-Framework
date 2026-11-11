@@ -92,11 +92,15 @@
 #ifndef ENABLE_FIDELITY_SK
 #define ENABLE_FIDELITY_SK 0
 #endif // ENABLE_FIDELITY_SK
+// 32-bit only: DLSS, FSR and XeSS through an x64 helper process (see "SRBridge.h")
+#ifndef ENABLE_SR_BRIDGE
+#define ENABLE_SR_BRIDGE 0
+#endif // ENABLE_SR_BRIDGE
 // Automatically define "ENABLE_SR" if any SR tech is enabled
 #ifdef ENABLE_SR
 #undef ENABLE_SR
 #endif // ENABLE_SR
-#if (defined(ENABLE_NGX) && ENABLE_NGX) || (defined(ENABLE_FIDELITY_SK) && ENABLE_FIDELITY_SK) || (defined(_WIN64) && defined(ENABLE_XESS) && ENABLE_XESS && defined(ENABLE_D3D12_INTEROP) && ENABLE_D3D12_INTEROP && __has_include("xess/xess_d3d12.h")) // Same as "XeSS.h"
+#if (defined(ENABLE_NGX) && ENABLE_NGX) || (defined(ENABLE_FIDELITY_SK) && ENABLE_FIDELITY_SK) || (defined(_WIN64) && defined(ENABLE_XESS) && ENABLE_XESS && defined(ENABLE_D3D12_INTEROP) && ENABLE_D3D12_INTEROP && __has_include("xess/xess_d3d12.h")) /*Same as "XeSS.h"*/ || (ENABLE_SR_BRIDGE && !defined(_WIN64))
 #define ENABLE_SR 1
 #else
 #define ENABLE_SR 0
@@ -161,6 +165,7 @@
 #include "fsr/FSR.h" // see "ENABLE_FIDELITY_SK"
 #include "fsr/FSR4.h" // see "ENABLE_FSR4"
 #include "xess/XeSS.h" // see "ENABLE_XESS"
+#include "sr_bridge/SRBridge.h" // see "ENABLE_SR_BRIDGE"
 
 #include "utils/config.hpp"
 #include "utils/log.hpp"
@@ -2938,7 +2943,7 @@ namespace
    {
       com_ptr<ID3D11Texture2D> back_buffer;
       native_swapchain->GetBuffer(0, IID_PPV_ARGS(&back_buffer));
-      return reinterpret_cast<uint64_t>(back_buffer.get());
+      return reinterpret_cast<uintptr_t>(back_buffer.get());
    }
 
    // The real swapchain and device
@@ -4557,13 +4562,13 @@ namespace
             {
                static_assert(CompileTimeStringHash("Draw Purple CS") != CompileTimeStringHash("Draw NaN CS"));
                auto shader_hash = cached_pipeline->replace_draw_type == ShaderReplaceDrawType::Purple ? CompileTimeStringHash("Draw Purple CS") : CompileTimeStringHash("Draw NaN CS");
-               *bound_shader = reinterpret_cast<uint64_t>(device_data.native_compute_shaders[shader_hash].get());
+               *bound_shader = reinterpret_cast<uintptr_t>(device_data.native_compute_shaders[shader_hash].get());
             }
             if ((stages & ShaderStages::Pixel) != 0 && bound_shader)
             {
                static_assert(CompileTimeStringHash("Draw Purple PS") != CompileTimeStringHash("Draw NaN PS")); // TODO: delete both
                auto shader_hash = cached_pipeline->replace_draw_type == ShaderReplaceDrawType::Purple ? CompileTimeStringHash("Draw Purple PS") : CompileTimeStringHash("Draw NaN PS");
-               *bound_shader = reinterpret_cast<uint64_t>(device_data.native_pixel_shaders[shader_hash].get());
+               *bound_shader = reinterpret_cast<uintptr_t>(device_data.native_pixel_shaders[shader_hash].get());
             }
          }
          else if (cached_pipeline->replace_draw_type == ShaderReplaceDrawType::Skip)
@@ -4638,7 +4643,7 @@ namespace
    }
 
    // "in_source_resource" is optional and allows overriding the desc to base the new resource on.
-   bool FindOrCreateIndirectUpgradedResource(ID3D11Device* device, const uint64_t in_source_resource, const uint64_t in_resource, uint64_t& out_resource, DeviceData& device_data, bool allow_create, std::shared_lock<std::shared_mutex>& lock_device_read, bool allow_scale = false, bool force_scale = false, bool leave_locked = true, UINT additional_bind_flags = 0, bool* scaled = nullptr)
+   bool FindOrCreateIndirectUpgradedResource(ID3D11Device* device, const uint64_t in_source_resource, const uint64_t in_resource, uint64_t& out_resource, DeviceData& device_data, bool allow_create, std::shared_lock<std::shared_mutex>& lock_device_read, bool allow_scale = false, bool force_scale = false, bool leave_locked = true, UINT additional_bind_flags = 0, bool* scaled = nullptr, bool force_format_upgrade = false)
    {
       // Swapchain backbuffers are excluded by the caller (checked here before invoking the manager, since
       // the manager is decoupled from DeviceData's backbuffer bookkeeping).
@@ -4674,7 +4679,7 @@ namespace
       return device_data.resource_upgrades.FindOrCreateIndirectUpgradedResource(
          device, in_source_resource, in_resource, out_resource,
          allow_create && !is_back_buffer, lock_device_read, state,
-         should_scale, leave_locked, additional_bind_flags, scaled);
+         should_scale, leave_locked, additional_bind_flags, scaled, force_format_upgrade);
    }
 
    bool FindOrCreateIndirectUpgradedResourceView(ID3D11Device* device, const uint64_t in_rv, uint64_t& out_rv, DeviceData& device_data, bool allow_create, ViewKind view_kind, std::shared_lock<std::shared_mutex>& lock_device_read)
@@ -4697,7 +4702,7 @@ namespace
       cmd_list_data.any_upgraded_ps_rtvs = false;
       for (uint32_t i = 0; i < count && rtvs; i++)
       {
-         const uint64_t original_rtv = reinterpret_cast<uint64_t>(rtvs[i]);
+         const uint64_t original_rtv = reinterpret_cast<uintptr_t>(rtvs[i]);
          uint64_t replaced_rtv = original_rtv;
          // TODO: here we don't check for direct upgrades as we do for the other states... Is it right?
          if (FindOrCreateIndirectUpgradedResourceView(device_data.native_device, original_rtv, replaced_rtv, device_data, enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectDependencies, ViewKind::RenderTarget, lock_device_read))
@@ -4718,7 +4723,7 @@ namespace
       }
 
       // Usually not needed (yet?) but won't hurt
-      const uint64_t original_dsv = reinterpret_cast<uint64_t>(dsv);
+      const uint64_t original_dsv = reinterpret_cast<uintptr_t>(dsv);
       uint64_t replaced_dsv = original_dsv;
       if (FindOrCreateIndirectUpgradedResourceView(device_data.native_device, original_dsv, replaced_dsv, device_data, enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectDependencies, ViewKind::DepthStencil, lock_device_read))
       {
@@ -5859,7 +5864,7 @@ namespace
                if (!device_data.ui_initial_original_rtv)
                {
                   const std::shared_lock lock(device_data.mutex);
-                  targeting_swapchain = device_data.back_buffers.contains((uint64_t)rtv.get());
+                  targeting_swapchain = device_data.back_buffers.contains((uintptr_t)rtv.get());
                }
                if ((ui_separation_use_ui_hashes_only && cmd_list_data.is_known_ui_shader_bound) || targeting_swapchain || (AreViewsOfSameResource(rtv.get(), device_data.ui_initial_original_rtv.get()) && rtv_desc.Texture2D.MipSlice == 0)) // Make sure it was writing to the base mip (just in case the game did weird stuff)
                {
@@ -5949,9 +5954,13 @@ namespace
          {
             // Do textures indirect upgrade "inline".
             // If this was previously upgraded, they'd already have the target format and hence wouldn't get upgraded.
-            // "force_indirect_texture_format_upgrades" takes priority over "auto_texture_format_upgrade_shader_hashes".
             const AutoTextureFormatUpgradeShaderHash* auto_texture_format_upgrades = is_dispatch ? cmd_list_data.auto_compute_texture_format_upgrades : cmd_list_data.auto_graphics_texture_format_upgrades;
             const bool hash_based_indirect_texture_format_upgrades = auto_texture_format_upgrades != nullptr;
+            // "auto_texture_format_upgrade_shader_hashes" takes priority over "force_indirect_texture_format_upgrades",
+            // because "auto_texture_format_upgrade_shader_hashes" is more specific, and forces a specific set of outputs to be upgraded,
+            // if we needed more, we could always add them to that list.
+            // While "force_indirect_texture_format_upgrades" is more of a generic/bruteforce method that might have mismatches.
+            force_indirect_texture_format_upgrades = force_indirect_texture_format_upgrades && !hash_based_indirect_texture_format_upgrades;
 
             bool inline_texture_upgrades = force_indirect_texture_format_upgrades || hash_based_indirect_texture_format_upgrades;
 
@@ -5978,7 +5987,7 @@ namespace
                const AutoTextureFormatUpgradeShaderHash dummy_empty_texture_format_upgrade_shader_hashes_data = { {}, {}, false };
 
                uint64_t source_resource = 0;
-               if (force_indirect_texture_format_upgrades && !hash_based_indirect_texture_format_upgrades && (is_dispatch ? cmd_list_data.any_upgraded_cs_srvs : cmd_list_data.any_upgraded_ps_srvs))
+               if (force_indirect_texture_format_upgrades && (is_dispatch ? cmd_list_data.any_upgraded_cs_srvs : cmd_list_data.any_upgraded_ps_srvs))
                {
                   const auto& upgraded_srvs = is_dispatch ? cmd_list_data.cs_srvs_state : cmd_list_data.ps_srvs_state;
                   // Use the first upgraded SRV, whether it's valid or not (it should be!).
@@ -5993,7 +6002,7 @@ namespace
                            native_device_context->CSGetShaderResources(i, 1, &srv);
                         else
                            native_device_context->PSGetShaderResources(i, 1, &srv);
-                        source_resource = srv.get() ? reinterpret_cast<uint64_t>(GetResourceFromView((uint64_t)srv.get())) : 0;
+                        source_resource = srv.get() ? reinterpret_cast<uintptr_t>(GetResourceFromView((uintptr_t)srv.get())) : 0;
                         break;
                      }
                   }
@@ -6006,13 +6015,13 @@ namespace
                {
                   native_device_context->OMGetRenderTargetsAndUnorderedAccessViews(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv, 0, device_data.uav_max_count, &uavs[0]);
                   
-                  if (force_indirect_texture_format_upgrades && !hash_based_indirect_texture_format_upgrades && source_resource == 0 && cmd_list_data.any_upgraded_ps_uavs)
+                  if (force_indirect_texture_format_upgrades && source_resource == 0 && cmd_list_data.any_upgraded_ps_uavs)
                   {
                      for (size_t i = 0; i < cmd_list_data.ps_uavs_state.size(); ++i)
                      {
                         if (cmd_list_data.ps_uavs_state[i] == CommandListData::ViewState::SetAndUpgraded)
                         {
-                           source_resource = uavs[i].get() ? reinterpret_cast<uint64_t>(GetResourceFromView((uint64_t)uavs[i].get())) : 0;
+                           source_resource = uavs[i].get() ? reinterpret_cast<uintptr_t>(GetResourceFromView((uintptr_t)uavs[i].get())) : 0;
                            break;
                         }
                      }
@@ -6022,13 +6031,13 @@ namespace
                {
                   native_device_context->CSGetUnorderedAccessViews(0, device_data.uav_max_count, &uavs[0]);
                   
-                  if (force_indirect_texture_format_upgrades && !hash_based_indirect_texture_format_upgrades && source_resource == 0 && cmd_list_data.any_upgraded_cs_uavs)
+                  if (force_indirect_texture_format_upgrades && source_resource == 0 && cmd_list_data.any_upgraded_cs_uavs)
                   {
                      for (size_t i = 0; i < cmd_list_data.cs_uavs_state.size(); ++i)
                      {
                         if (cmd_list_data.cs_uavs_state[i] == CommandListData::ViewState::SetAndUpgraded)
                         {
-                           source_resource = uavs[i].get() ? reinterpret_cast<uint64_t>(GetResourceFromView((uint64_t)uavs[i].get())) : 0;
+                           source_resource = uavs[i].get() ? reinterpret_cast<uintptr_t>(GetResourceFromView((uintptr_t)uavs[i].get())) : 0;
                            break;
                         }
                      }
@@ -6051,6 +6060,8 @@ namespace
                // TODO: why not do it with "force_indirect_texture_format_upgrades" too? Is it too generic?
                const bool allow_scale = hash_based_indirect_texture_format_upgrades && auto_texture_format_upgrades->scale; // "auto_texture_format_upgrades" is null on the forced (chain) path
                const bool force_scale = cmd_list_data.force_scale;
+               // The forced upgrades are generic, as such we wouldn't want to skip the format check!
+               const bool force_format_upgrade = !force_indirect_texture_format_upgrades && hash_based_indirect_texture_format_upgrades;
 
                bool any_changed = false;
                bool any_changed_inline = false;
@@ -6062,7 +6073,7 @@ namespace
                      const uint8_t slot = auto_texture_format_upgrade_shader_hashes_data.rtv_slots[i];
                      if (rtvs[slot] != nullptr)
                      {
-                        const uint64_t prev_resource_view = reinterpret_cast<uint64_t>(rtvs[slot].get());
+                        const uint64_t prev_resource_view = reinterpret_cast<uintptr_t>(rtvs[slot].get());
                         // Already redirected to a mirror? Nothing to upgrade, keep the bound mirror.
 #if 1 // Faster // TODO: delete the branch here and in the UAV code below once verified
                         if (cmd_list_data.ps_rtvs_state[slot] >= CommandListData::ViewState::SetAndUpgraded)
@@ -6085,7 +6096,7 @@ namespace
                         const uint64_t seed_res_before = prev_resource;
 #endif
                         // TODO: what's the "resource != prev_resource" check for? It seems useless?
-                        if (FindOrCreateIndirectUpgradedResource(device, source_resource, prev_resource, resource, device_data, true, lock_device_read, allow_scale, force_scale) && resource != prev_resource)
+                        if (FindOrCreateIndirectUpgradedResource(device, source_resource, prev_resource, resource, device_data, true, lock_device_read, allow_scale, force_scale, true, 0, nullptr, force_format_upgrade) && resource != prev_resource)
                         {
                            uint64_t resource_view = prev_resource_view;
                            if (FindOrCreateIndirectUpgradedResourceView(device, prev_resource_view, resource_view, device_data, true, ViewKind::RenderTarget, lock_device_read))
@@ -6142,7 +6153,7 @@ namespace
                   const uint8_t slot = auto_texture_format_upgrade_shader_hashes_data.uav_slots[i];
                   if (uavs[slot] != nullptr)
                   {
-                     const uint64_t prev_resource_view = reinterpret_cast<uint64_t>(uavs[slot].get());
+                     const uint64_t prev_resource_view = reinterpret_cast<uintptr_t>(uavs[slot].get());
                      // Already redirected to a mirror? Nothing to upgrade, keep the bound mirror.
 #if 1 // Faster
                      if ((is_dispatch ? cmd_list_data.cs_uavs_state[slot] : cmd_list_data.ps_uavs_state[slot]) >= CommandListData::ViewState::SetAndUpgraded)
@@ -6159,7 +6170,7 @@ namespace
 #endif
                      uint64_t prev_resource = GetCachedResourceFromView(device_data, prev_resource_view, true, false, true, &lock_device_read);
                      uint64_t resource = prev_resource;
-                     if (FindOrCreateIndirectUpgradedResource(device, source_resource, prev_resource, resource, device_data, true, lock_device_read, allow_scale, force_scale) && resource != prev_resource)
+                     if (FindOrCreateIndirectUpgradedResource(device, source_resource, prev_resource, resource, device_data, true, lock_device_read, allow_scale, force_scale, true, 0, nullptr, force_format_upgrade) && resource != prev_resource)
                      {
                         uint64_t resource_view = prev_resource_view;
                         if (FindOrCreateIndirectUpgradedResourceView(device, prev_resource_view, resource_view, device_data, true, ViewKind::UnorderedAccess, lock_device_read))
@@ -6252,7 +6263,7 @@ namespace
                         {
                            if (rtvs[i] != nullptr)
                            {
-                              const uint64_t rtv_resource = GetCachedResourceFromView(device_data, reinterpret_cast<uint64_t>(rtvs[i].get()), false, true);
+                              const uint64_t rtv_resource = GetCachedResourceFromView(device_data, reinterpret_cast<uintptr_t>(rtvs[i].get()), false, true);
                               // TODO: make a "upgraded view to IndirectUpgradedResource*" map to speed this up
                               // We need to do two lookups to pass from an upgraded view to the original resource (back to the upgraded resource struct)
                               if (auto mirror_it = std::ranges::find_if(device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources, [rtv_resource](const auto& pair) { return pair.second.mirror_handle == rtv_resource; }); mirror_it != device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.end())
@@ -6273,7 +6284,7 @@ namespace
                         }
                         if (dsv.get())
                         {
-                           const uint64_t dsv_resource = GetCachedResourceFromView(device_data, reinterpret_cast<uint64_t>(dsv.get()), false, true);
+                           const uint64_t dsv_resource = GetCachedResourceFromView(device_data, reinterpret_cast<uintptr_t>(dsv.get()), false, true);
                            if (auto mirror_it = std::ranges::find_if(device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources, [dsv_resource](const auto& pair) { return pair.second.mirror_handle == dsv_resource; }); mirror_it != device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.end())
                            {
                               any_scaled |= mirror_it->second.is_scaled;
@@ -6487,7 +6498,7 @@ namespace
             bool targeting_swapchain;
             {
                const std::shared_lock lock(device_data.mutex);
-               targeting_swapchain = device_data.back_buffers.contains((uint64_t)render_target_resource.get());
+               targeting_swapchain = device_data.back_buffers.contains((uintptr_t)render_target_resource.get());
             }
             // We check across all the swap chain back buffers, not just the one that will be presented this frame (we have no 100% of what swapchain will draw this frame).
             // Note that some games (e.g. Prey) compose the UI in separate render targets to then be drawn into the world (e.g. in game interactive computer screens), but these usually don't draw on any of the swapchain buffers.
@@ -7179,7 +7190,7 @@ namespace
       native_sampler->GetDesc(&native_desc);
       com_ptr<ID3D11SamplerState> custom_sampler = CreateCustomSampler(device_data, native_device, native_desc);
       std::unique_lock unique_lock_samplers(s_mutex_samplers);
-      device_data.custom_sampler_by_original_sampler[reinterpret_cast<uint64_t>(native_sampler)][device_data.texture_mip_lod_bias_offset] = custom_sampler;
+      device_data.custom_sampler_by_original_sampler[reinterpret_cast<uintptr_t>(native_sampler)][device_data.texture_mip_lod_bias_offset] = custom_sampler;
    }
 
    // The sampler can't be used anymore
@@ -7187,7 +7198,7 @@ namespace
    {
       // This only seems to happen when the game shuts down in Prey (as any destroy callback, it can be called from an arbitrary thread, but that's fine).
       // We don't need to check the custom samplers within the map even if they might be the same object, because they are strong pointers and thus wouldn't get destroyed if they were non null.
-      const uint64_t sampler_handle = reinterpret_cast<uint64_t>(sampler);
+      const uint64_t sampler_handle = reinterpret_cast<uintptr_t>(sampler);
       const std::shared_lock lock_device(s_mutex_device);
       for (DeviceData* device_data : global_devices_data)
       {
@@ -7408,7 +7419,7 @@ namespace
 
                lock.lock();
                ASSERT(!device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.contains(resource)); // The game re-used the ptr (can rarely happen), and we haven't cleared our mirrored verson yet
-               device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.emplace(resource, ResourceUpgradeManager::IndirectUpgradedResource{ reinterpret_cast<uint64_t>(mirrored_upgraded_resource), texture_scaled, desc.width, desc.height, upgraded_desc.width, upgraded_desc.height });
+               device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.emplace(resource, ResourceUpgradeManager::IndirectUpgradedResource{ reinterpret_cast<uintptr_t>(mirrored_upgraded_resource), texture_scaled, desc.width, desc.height, upgraded_desc.width, upgraded_desc.height });
             }
             if (new_initial_data_ptr)
                delete[] static_cast<const uint8_t*>(new_initial_data_ptr->pSysMem);
@@ -7484,7 +7495,7 @@ namespace
    // The resource can't be used anymore
    void OnDestroyResource(const void* resource)
    {
-      const uint64_t resource_handle = reinterpret_cast<uint64_t>(resource);
+      const uint64_t resource_handle = reinterpret_cast<uintptr_t>(resource);
       const std::shared_lock lock_device(s_mutex_device);
       for (DeviceData* device_data : global_devices_data)
       {
@@ -7514,6 +7525,7 @@ namespace
       }
       default:
       case LUTDimensions::_2D:
+      case LUTDimensions::_2DAnd3D:
       {
          lut_dimensions = ViewType::Texture2D;
          break;
@@ -7524,6 +7536,11 @@ namespace
          break;
       }
       }
+      ViewType lut_dimensions_alternative = lut_dimensions;
+      if (texture_format_upgrades_lut_dimensions == LUTDimensions::_2DAnd3D)
+      {
+         lut_dimensions_alternative = ViewType::Texture3D;
+      }
 
       DeviceData* device_data_ptr = GetDeviceData(device);
       if (!device_data_ptr)
@@ -7531,7 +7548,7 @@ namespace
       DeviceData& device_data = *device_data_ptr;
 
       const ViewType view_type = desc ? GetViewType(*desc) : ViewType::Unknown;
-      if (resource != 0 && (view_type == ViewType::Unknown || view_type == lut_dimensions || view_type == ViewType::Texture2D || view_type == ViewType::Texture2DArray || view_type == ViewType::Texture2DMS || view_type == ViewType::Texture2DMSArray || view_type == ViewType::TextureCube || view_type == ViewType::TextureCubeArray))
+      if (resource != 0 && (view_type == ViewType::Unknown || view_type == lut_dimensions || view_type == lut_dimensions_alternative || view_type == ViewType::Texture2D || view_type == ViewType::Texture2DArray || view_type == ViewType::Texture2DMS || view_type == ViewType::Texture2DMSArray || view_type == ViewType::TextureCube || view_type == ViewType::TextureCubeArray))
       {
          const ResourceDesc resource_desc = GetResourceDesc(resource);
 
@@ -7723,7 +7740,7 @@ namespace
          ID3D11View* mirrored_upgraded_resource_view = nullptr;
          if (SUCCEEDED(CreateResourceView(device, reinterpret_cast<ID3D11Resource*>(original_resource_to_mirrored_upgraded_resource_ptr), upgraded_desc, &mirrored_upgraded_resource_view)))
          {
-            const uint64_t mirrored_upgraded_resource_view_handle = reinterpret_cast<uint64_t>(mirrored_upgraded_resource_view);
+            const uint64_t mirrored_upgraded_resource_view_handle = reinterpret_cast<uintptr_t>(mirrored_upgraded_resource_view);
             lock.lock();
             device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views[view] = mirrored_upgraded_resource_view_handle;
             device_data.resource_upgrades.mirror_views_by_mirror_resource[original_resource_to_mirrored_upgraded_resource_ptr].emplace(mirrored_upgraded_resource_view_handle);
@@ -7736,7 +7753,7 @@ namespace
    // The view can't be used anymore
    void OnDestroyResourceView(const void* view)
    {
-      const uint64_t view_handle = reinterpret_cast<uint64_t>(view);
+      const uint64_t view_handle = reinterpret_cast<uintptr_t>(view);
       const std::shared_lock lock_device(s_mutex_device);
       for (DeviceData* device_data : global_devices_data)
       {
@@ -7792,7 +7809,7 @@ namespace
                }
             };
 
-            const uint64_t original_rv = reinterpret_cast<uint64_t>(views[i]);
+            const uint64_t original_rv = reinterpret_cast<uintptr_t>(views[i]);
             if (original_rv == 0)
             {
                if (enable_chain_indirect_texture_format_upgrades >= ChainTextureFormatUpgradesType::DirectAndIndirectDependencies)
@@ -7911,7 +7928,7 @@ namespace
       std::shared_lock shared_lock_samplers(s_mutex_samplers);
       for (uint32_t i = 0; i < count; i++)
       {
-         const uint64_t sampler = reinterpret_cast<uint64_t>(samplers[i]);
+         const uint64_t sampler = reinterpret_cast<uintptr_t>(samplers[i]);
 
          const auto custom_sampler_by_original_sampler_it = device_data.custom_sampler_by_original_sampler.find(sampler);
          if (custom_sampler_by_original_sampler_it != device_data.custom_sampler_by_original_sampler.end())
@@ -7971,7 +7988,7 @@ namespace
    void OnMapTextureRegion(CommandListData& cmd_list_data, ID3D11Resource* native_resource, UINT subresource, D3D11_MAP map_type, D3D11_MAPPED_SUBRESOURCE* data)
    {
       DeviceData& device_data = *cmd_list_data.device_data;
-      const uint64_t resource = reinterpret_cast<uint64_t>(native_resource);
+      const uint64_t resource = reinterpret_cast<uintptr_t>(native_resource);
 
 #if DEVELOPMENT
       {
@@ -8029,7 +8046,7 @@ namespace
    void OnUnmapTextureRegion(CommandListData& cmd_list_data, ID3D11Resource* native_resource, UINT subresource)
    {
       DeviceData& device_data = *cmd_list_data.device_data;
-      const uint64_t resource = reinterpret_cast<uint64_t>(native_resource);
+      const uint64_t resource = reinterpret_cast<uintptr_t>(native_resource);
 
       if (auto it = upgraded_mapped_resources.find(resource); it != upgraded_mapped_resources.end())
       {
@@ -8096,7 +8113,7 @@ namespace
    bool OnUpdateTextureRegion(CommandListData& cmd_list_data, const D3D11_SUBRESOURCE_DATA& data, ID3D11Resource* native_resource, UINT subresource, const D3D11_BOX* box)
    {
       DeviceData& device_data = *cmd_list_data.device_data;
-      uint64_t resource = reinterpret_cast<uint64_t>(native_resource);
+      uint64_t resource = reinterpret_cast<uintptr_t>(native_resource);
 
 #if DEVELOPMENT
       Trace::AddEvent(cmd_list_data, cmd_list_data.native_device_context, TraceDrawCallData::TraceDrawCallType::CPUWrite, nullptr, native_resource);
@@ -8169,12 +8186,12 @@ namespace
    {
 
 #if DEVELOPMENT
-      Trace::AddClear(cmd_list_data, reinterpret_cast<uint64_t>(dsv), {(flags & D3D11_CLEAR_DEPTH) ? depth : 0.f, (flags & D3D11_CLEAR_STENCIL) ? float(stencil) : 0.f});
+      Trace::AddClear(cmd_list_data, reinterpret_cast<uintptr_t>(dsv), {(flags & D3D11_CLEAR_DEPTH) ? depth : 0.f, (flags & D3D11_CLEAR_STENCIL) ? float(stencil) : 0.f});
 #endif
       
       DeviceData& device_data = *cmd_list_data.device_data;
       std::shared_lock lock(device_data.mutex);
-      auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(reinterpret_cast<uint64_t>(dsv));
+      auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(reinterpret_cast<uintptr_t>(dsv));
       if (!ignore_indirect_upgraded_textures && original_resource_view_to_mirrored_upgraded_resource_view != device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
          const auto original_resource_view_to_mirrored_upgraded_resource_view_ptr = original_resource_view_to_mirrored_upgraded_resource_view->second;
@@ -8190,12 +8207,12 @@ namespace
    {
 
 #if DEVELOPMENT
-      Trace::AddClear(cmd_list_data, reinterpret_cast<uint64_t>(rtv), {color[0], color[1], color[2], color[3]});
+      Trace::AddClear(cmd_list_data, reinterpret_cast<uintptr_t>(rtv), {color[0], color[1], color[2], color[3]});
 #endif
 
       DeviceData& device_data = *cmd_list_data.device_data;
       std::shared_lock lock(device_data.mutex);
-      auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(reinterpret_cast<uint64_t>(rtv));
+      auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(reinterpret_cast<uintptr_t>(rtv));
       if (!ignore_indirect_upgraded_textures && original_resource_view_to_mirrored_upgraded_resource_view != device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
          const auto original_resource_view_to_mirrored_upgraded_resource_view_ptr = original_resource_view_to_mirrored_upgraded_resource_view->second;
@@ -8211,12 +8228,12 @@ namespace
    {
 
 #if DEVELOPMENT
-      Trace::AddClear(cmd_list_data, reinterpret_cast<uint64_t>(uav), {float(values[0]), float(values[1]), float(values[2]), float(values[3])});
+      Trace::AddClear(cmd_list_data, reinterpret_cast<uintptr_t>(uav), {float(values[0]), float(values[1]), float(values[2]), float(values[3])});
 #endif
 
       DeviceData& device_data = *cmd_list_data.device_data;
       std::shared_lock lock(device_data.mutex);
-      auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(reinterpret_cast<uint64_t>(uav));
+      auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(reinterpret_cast<uintptr_t>(uav));
       if (!ignore_indirect_upgraded_textures && original_resource_view_to_mirrored_upgraded_resource_view != device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
          const auto original_resource_view_to_mirrored_upgraded_resource_view_ptr = original_resource_view_to_mirrored_upgraded_resource_view->second;
@@ -8244,12 +8261,12 @@ namespace
    {
 
 #if DEVELOPMENT
-      Trace::AddClear(cmd_list_data, reinterpret_cast<uint64_t>(uav), {values[0], values[1], values[2], values[3]});
+      Trace::AddClear(cmd_list_data, reinterpret_cast<uintptr_t>(uav), {values[0], values[1], values[2], values[3]});
 #endif
 
       DeviceData& device_data = *cmd_list_data.device_data;
       std::shared_lock lock(device_data.mutex);
-      auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(reinterpret_cast<uint64_t>(uav));
+      auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(reinterpret_cast<uintptr_t>(uav));
       if (!ignore_indirect_upgraded_textures && original_resource_view_to_mirrored_upgraded_resource_view != device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
          const auto original_resource_view_to_mirrored_upgraded_resource_view_ptr = original_resource_view_to_mirrored_upgraded_resource_view->second;
@@ -9670,13 +9687,13 @@ namespace
                               if (ImGui::Button("Unload"))
                               {
                                  s_mutex_generic.unlock(); // Hack to avoid deadlocks with the device destroying pipelines
-                                 UnloadCustomShaders(device_data, { reinterpret_cast<uint64_t>(pipeline) }, false);
+                                 UnloadCustomShaders(device_data, { reinterpret_cast<uintptr_t>(pipeline) }, false);
                                  s_mutex_generic.lock();
                               }
 #if 0 // TODO: this still deadlocks!
                               if (ImGui::Button(pipeline->cloned ? "Recompile" : "Load"))
                               {
-                                 pipeline_to_recompile = reinterpret_cast<uint64_t>(pipeline);
+                                 pipeline_to_recompile = reinterpret_cast<uintptr_t>(pipeline);
                               }
 #endif
                               ImGui::PopID();
@@ -9794,7 +9811,7 @@ namespace
                      // Redirect the hash
                      for (const auto& original_resource_to_mirrored_upgraded_resource : device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources)
                      {
-                        if (original_resource_to_mirrored_upgraded_resource.second.mirror_handle == uint64_t(selected_resource.get()))
+                        if (original_resource_to_mirrored_upgraded_resource.second.mirror_handle == uintptr_t(selected_resource.get()))
                         {
                            hash = std::to_string(std::hash<void*>{}((void*)original_resource_to_mirrored_upgraded_resource.first));
                            break;
@@ -9871,12 +9888,12 @@ namespace
                   {
                      std::shared_lock lock(device_data.mutex); // Note: this is probably not 100% safe, as we don't keep the resources as a com ptr, DX might destroy them as we iterate the array, but this is debug code so, whatever!
                   
-                     swapchain = device_data.back_buffers.contains(uint64_t(selected_resource.get()));
+                     swapchain = device_data.back_buffers.contains(uintptr_t(selected_resource.get()));
 
                      // Redirect the hash to the indirect texture
                      for (const auto& original_resource_to_mirrored_upgraded_resource : device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources)
                      {
-                        if (original_resource_to_mirrored_upgraded_resource.second.mirror_handle == uint64_t(selected_resource.get()))
+                        if (original_resource_to_mirrored_upgraded_resource.second.mirror_handle == uintptr_t(selected_resource.get()))
                         {
                            lock.unlock();
 
@@ -10034,6 +10051,12 @@ namespace
             {
                xess_name = (Intel::XeSS::IsNativeDX11(xess_instance->second) ? "XeSS (Native DX11)" : "XeSS (DX12 Interop)");
             }
+#elif ENABLE_SR_BRIDGE
+            // The helper only tries the native DX11 XeSS on Intel GPUs (and doesn't report whether that worked), the ones it's auto selectable on
+            if (const auto xess_instance = device_data.sr_implementations_instances.find(SR::Type::XeSS); xess_instance != device_data.sr_implementations_instances.end() && xess_instance->second && !xess_instance->second->auto_selectable)
+            {
+               xess_name = "XeSS (DX12 Interop)";
+            }
 #endif
             const SR::Type sr_auto_type = SR::GetAutoType(device_data.sr_implementations_instances);
             const std::string auto_name = (sr_auto_type != SR::Type::None ? std::format("Auto ({})", SR::GetTypeName(sr_auto_type)) : "Auto");
@@ -10091,10 +10114,10 @@ namespace
                   AddComboItem(auto_name.c_str(), SR::UserType::Auto, sr_auto_type, sr_auto_type != SR::Type::None);
                AddComboItem("DLSS", SR::UserType::DLSS, SR::Type::DLSS, device_data.sr_implementations_instances.contains(SR::Type::DLSS));
                AddComboItem("FSR 3", SR::UserType::FSR_3, SR::Type::FSR, device_data.sr_implementations_instances.contains(SR::Type::FSR));
-#if ENABLE_FSR4
+#if ENABLE_FSR4 || ENABLE_SR_BRIDGE
                AddComboItem("FSR 4 (DX12 Interop)", SR::UserType::FSR_4, SR::Type::FSR_4, device_data.sr_implementations_instances.contains(SR::Type::FSR_4));
 #endif
-#if ENABLE_XESS
+#if ENABLE_XESS || ENABLE_SR_BRIDGE
                AddComboItem(xess_name, SR::UserType::XeSS, SR::Type::XeSS, device_data.sr_implementations_instances.contains(SR::Type::XeSS));
 #endif
                ImGui::EndCombo();
@@ -10209,6 +10232,7 @@ namespace
                auto* sr_instance_data = device_data.GetSRInstanceData();
                if (sr_instance_data)
                {
+                  sr_implementations[device_data.sr_type]->ReleaseResources(sr_instance_data);
 #if 0 // This would actually unload the previously selected SR DLL and all, making the game hitch, so it's better to just keep it in memory, especially because otherwise we need to check for compatibily again and load them again etc
                   sr_implementations[device_data.sr_type]->Deinit(sr_instance_data);
                   sr_instance_data = nullptr;
@@ -11672,6 +11696,12 @@ void Init(bool async)
 #if ENABLE_XESS
    sr_implementations[SR::Type::XeSS] = std::make_unique<Intel::XeSS>();
 #endif
+#if ENABLE_SR_BRIDGE
+   for (const SR::Type type : {SR::Type::DLSS, SR::Type::FSR, SR::Type::FSR_4, SR::Type::XeSS})
+   {
+      sr_implementations[type] = std::make_unique<SRBridge::Bridge>(type);
+   }
+#endif
 #if DEVELOPMENT
    Mcp::Start();
 #if ENABLE_SR
@@ -12058,7 +12088,7 @@ void OnPreCreateView(ID3D11Device* device, ID3D11Resource* resource, std::option
       view_desc->kind = view_kind;
       view_desc.value().*member = *desc;
    }
-   if (OnCreateResourceView(device, reinterpret_cast<uint64_t>(resource), view_kind, view_desc) && view_desc)
+   if (OnCreateResourceView(device, reinterpret_cast<uintptr_t>(resource), view_kind, view_desc) && view_desc)
       desc = view_desc.value().*member;
 }
 
@@ -12079,7 +12109,7 @@ void OnPostCreateShader(ID3D11Device* device, D3D11_SHADER_VERSION_TYPE type, co
 {
    Shader::ShaderDesc shader_desc{bytecode, length};
    const Shader::PipelineSubobject subobject{type, 1, &shader_desc};
-   OnInitPipeline(device, 1, &subobject, Shader::Pipeline{reinterpret_cast<uint64_t>(shader)});
+   OnInitPipeline(device, 1, &subobject, Shader::Pipeline{reinterpret_cast<uintptr_t>(shader)});
 }
 
 std::vector<DeviceData*> GetDevicesData()
@@ -12093,7 +12123,7 @@ bool OnSetShader(ID3D11DeviceContext* context, ShaderStages stage, void** shader
    CommandListData* data = GetData(context);
    if (!data)
       return false;
-   uint64_t bound_shader = reinterpret_cast<uint64_t>(*shader);
+   uint64_t bound_shader = reinterpret_cast<uintptr_t>(*shader);
    OnBindPipeline(*data, stage, Shader::Pipeline{bound_shader}, &bound_shader);
    *shader = reinterpret_cast<void*>(bound_shader);
    return false;
@@ -12240,7 +12270,7 @@ void PreCreateBuffer(ID3D11Device* device, D3D11_BUFFER_DESC& desc, const D3D11_
 void PostCreateBuffer(ID3D11Device* device, const D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Buffer* buffer)
 {
    if (LUMA_CORE_WANTS(CreateBuffer))
-      OnInitResource(device, ResourceDesc::From(desc), initial_data, reinterpret_cast<uint64_t>(buffer));
+      OnInitResource(device, ResourceDesc::From(desc), initial_data, reinterpret_cast<uintptr_t>(buffer));
    if (LUMA_GAME_WANTS(CreateBuffer))
       game->PostCreateBuffer(device, desc, initial_data, buffer);
 }
@@ -12256,7 +12286,7 @@ void PreCreateTexture1D(ID3D11Device* device, D3D11_TEXTURE1D_DESC& desc, const 
 void PostCreateTexture1D(ID3D11Device* device, const D3D11_TEXTURE1D_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture1D* texture)
 {
    if (LUMA_CORE_WANTS(CreateTexture1D))
-      OnInitResource(device, ResourceDesc::From(desc), initial_data, reinterpret_cast<uint64_t>(texture));
+      OnInitResource(device, ResourceDesc::From(desc), initial_data, reinterpret_cast<uintptr_t>(texture));
    if (LUMA_GAME_WANTS(CreateTexture1D))
       game->PostCreateTexture1D(device, desc, initial_data, texture);
 }
@@ -12272,7 +12302,7 @@ void PreCreateTexture2D(ID3D11Device* device, D3D11_TEXTURE2D_DESC1& desc, const
 void PostCreateTexture2D(ID3D11Device* device, const D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture2D* texture)
 {
    if (LUMA_CORE_WANTS(CreateTexture2D))
-      OnInitResource(device, ResourceDesc::From(desc), initial_data, reinterpret_cast<uint64_t>(texture));
+      OnInitResource(device, ResourceDesc::From(desc), initial_data, reinterpret_cast<uintptr_t>(texture));
    if (LUMA_GAME_WANTS(CreateTexture2D))
       game->PostCreateTexture2D(device, desc, initial_data, texture);
 }
@@ -12288,7 +12318,7 @@ void PreCreateTexture3D(ID3D11Device* device, D3D11_TEXTURE3D_DESC1& desc, const
 void PostCreateTexture3D(ID3D11Device* device, const D3D11_TEXTURE3D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture3D* texture)
 {
    if (LUMA_CORE_WANTS(CreateTexture3D))
-      OnInitResource(device, ResourceDesc::From(desc), initial_data, reinterpret_cast<uint64_t>(texture));
+      OnInitResource(device, ResourceDesc::From(desc), initial_data, reinterpret_cast<uintptr_t>(texture));
    if (LUMA_GAME_WANTS(CreateTexture3D))
       game->PostCreateTexture3D(device, desc, initial_data, texture);
 }
@@ -12320,7 +12350,7 @@ void PreCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource,
 void PostCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_SHADER_RESOURCE_VIEW_DESC1* desc, ID3D11ShaderResourceView* view)
 {
    if (LUMA_CORE_WANTS(CreateShaderResourceView))
-      OnInitResourceView(device, reinterpret_cast<uint64_t>(resource), ViewKind::ShaderResource, reinterpret_cast<uint64_t>(view));
+      OnInitResourceView(device, reinterpret_cast<uintptr_t>(resource), ViewKind::ShaderResource, reinterpret_cast<uintptr_t>(view));
    if (LUMA_GAME_WANTS(CreateShaderResourceView))
       game->PostCreateShaderResourceView(device, resource, desc, view);
 }
@@ -12336,7 +12366,7 @@ void PreCreateRenderTargetView(ID3D11Device* device, ID3D11Resource* resource, s
 void PostCreateRenderTargetView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_RENDER_TARGET_VIEW_DESC1* desc, ID3D11RenderTargetView* view)
 {
    if (LUMA_CORE_WANTS(CreateRenderTargetView))
-      OnInitResourceView(device, reinterpret_cast<uint64_t>(resource), ViewKind::RenderTarget, reinterpret_cast<uint64_t>(view));
+      OnInitResourceView(device, reinterpret_cast<uintptr_t>(resource), ViewKind::RenderTarget, reinterpret_cast<uintptr_t>(view));
    if (LUMA_GAME_WANTS(CreateRenderTargetView))
       game->PostCreateRenderTargetView(device, resource, desc, view);
 }
@@ -12352,7 +12382,7 @@ void PreCreateUnorderedAccessView(ID3D11Device* device, ID3D11Resource* resource
 void PostCreateUnorderedAccessView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_UNORDERED_ACCESS_VIEW_DESC1* desc, ID3D11UnorderedAccessView* view)
 {
    if (LUMA_CORE_WANTS(CreateUnorderedAccessView))
-      OnInitResourceView(device, reinterpret_cast<uint64_t>(resource), ViewKind::UnorderedAccess, reinterpret_cast<uint64_t>(view));
+      OnInitResourceView(device, reinterpret_cast<uintptr_t>(resource), ViewKind::UnorderedAccess, reinterpret_cast<uintptr_t>(view));
    if (LUMA_GAME_WANTS(CreateUnorderedAccessView))
       game->PostCreateUnorderedAccessView(device, resource, desc, view);
 }
@@ -12368,7 +12398,7 @@ void PreCreateDepthStencilView(ID3D11Device* device, ID3D11Resource* resource, s
 void PostCreateDepthStencilView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_DEPTH_STENCIL_VIEW_DESC* desc, ID3D11DepthStencilView* view)
 {
    if (LUMA_CORE_WANTS(CreateDepthStencilView))
-      OnInitResourceView(device, reinterpret_cast<uint64_t>(resource), ViewKind::DepthStencil, reinterpret_cast<uint64_t>(view));
+      OnInitResourceView(device, reinterpret_cast<uintptr_t>(resource), ViewKind::DepthStencil, reinterpret_cast<uintptr_t>(view));
    if (LUMA_GAME_WANTS(CreateDepthStencilView))
       game->PostCreateDepthStencilView(device, resource, desc, view);
 }
@@ -12444,7 +12474,7 @@ void OnShaderDestroyed(const void* shader)
    if (LUMA_GAME_WANTS(CreateVertexShader))
       game->OnShaderDestroyed(shader);
    for (DeviceData* device_data : GetDevicesData())
-      OnDestroyPipeline(*device_data, reinterpret_cast<uint64_t>(shader));
+      OnDestroyPipeline(*device_data, reinterpret_cast<uintptr_t>(shader));
 }
 
 void PostCreateInputLayout(ID3D11Device* device, const D3D11_INPUT_ELEMENT_DESC* elements, UINT count, const void* bytecode, SIZE_T length, ID3D11InputLayout* layout)
@@ -12561,6 +12591,31 @@ void PostRSSetScissorRects(ID3D11DeviceContext* context, UINT count, const D3D11
       game->PostRSSetScissorRects(context, count, rects);
 }
 
+// These state binds are only the game's
+void PostOMSetBlendState(ID3D11DeviceContext* context, ID3D11BlendState* state, const FLOAT blend_factor[4], UINT sample_mask)
+{
+   if (LUMA_GAME_WANTS(OMSetBlendState))
+      game->PostOMSetBlendState(context, state, blend_factor, sample_mask);
+}
+
+void PostOMSetDepthStencilState(ID3D11DeviceContext* context, ID3D11DepthStencilState* state, UINT stencil_ref)
+{
+   if (LUMA_GAME_WANTS(OMSetDepthStencilState))
+      game->PostOMSetDepthStencilState(context, state, stencil_ref);
+}
+
+void PostIASetVertexBuffers(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11Buffer* const* buffers, const UINT* strides, const UINT* offsets)
+{
+   if (LUMA_GAME_WANTS(IASetVertexBuffers))
+      game->PostIASetVertexBuffers(context, start, count, buffers, strides, offsets);
+}
+
+void PostIASetIndexBuffer(ID3D11DeviceContext* context, ID3D11Buffer* buffer, DXGI_FORMAT format, UINT offset)
+{
+   if (LUMA_GAME_WANTS(IASetIndexBuffer))
+      game->PostIASetIndexBuffer(context, buffer, format, offset);
+}
+
 void PostClearState(ID3D11DeviceContext* context)
 {
    if (LUMA_CORE_WANTS(ClearState))
@@ -12641,7 +12696,7 @@ bool PreCopyResource(ID3D11DeviceContext* context, ID3D11Resource* destination, 
    if (!LUMA_CORE_WANTS(CopyResource))
       return false;
    CommandListData* data = GetData(context);
-   return data && OnCopyResource(*data, reinterpret_cast<uint64_t>(source), reinterpret_cast<uint64_t>(destination));
+   return data && OnCopyResource(*data, reinterpret_cast<uintptr_t>(source), reinterpret_cast<uintptr_t>(destination));
 }
 
 bool PreCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, UINT x, UINT y, UINT z, ID3D11Resource* source, UINT source_subresource, const D3D11_BOX* box, UINT copy_flags)
@@ -12657,7 +12712,7 @@ bool PreCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* dest
       if (CommandListData* data = GetData(context))
       {
          const uint64_t size = box ? uint64_t(box->right - box->left) : uint64_t(GetResourceDesc(source).width);
-         OnCopyBufferRegion(*data, reinterpret_cast<uint64_t>(source), box ? box->left : 0, reinterpret_cast<uint64_t>(destination), x, size);
+         OnCopyBufferRegion(*data, reinterpret_cast<uintptr_t>(source), box ? box->left : 0, reinterpret_cast<uintptr_t>(destination), x, size);
       }
 #endif
       return false;
@@ -12667,7 +12722,7 @@ bool PreCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* dest
       return false;
    // A whole subresource copy to the origin has no destination box, like ReShade reported it (games rely on that to tell full copies apart)
    if (!box && x == 0 && y == 0 && z == 0)
-      return OnCopyTextureRegion(*data, reinterpret_cast<uint64_t>(source), source_subresource, nullptr, reinterpret_cast<uint64_t>(destination), destination_subresource, nullptr);
+      return OnCopyTextureRegion(*data, reinterpret_cast<uintptr_t>(source), source_subresource, nullptr, reinterpret_cast<uintptr_t>(destination), destination_subresource, nullptr);
    // The destination area, from the source one (or the whole source subresource)
    D3D11_BOX destination_box;
    if (box)
@@ -12681,7 +12736,7 @@ bool PreCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* dest
       const UINT depth = source_desc.dimension == D3D11_RESOURCE_DIMENSION_TEXTURE3D ? max(source_desc.depth_or_layers >> mip, 1u) : 1u;
       destination_box = {x, y, z, x + max(source_desc.width >> mip, 1u), y + max(source_desc.height >> mip, 1u), z + depth};
    }
-   return OnCopyTextureRegion(*data, reinterpret_cast<uint64_t>(source), source_subresource, box, reinterpret_cast<uint64_t>(destination), destination_subresource, &destination_box);
+   return OnCopyTextureRegion(*data, reinterpret_cast<uintptr_t>(source), source_subresource, box, reinterpret_cast<uintptr_t>(destination), destination_subresource, &destination_box);
 }
 
 bool PreResolveSubresource(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, ID3D11Resource* source, UINT source_subresource, DXGI_FORMAT format)
@@ -12691,7 +12746,7 @@ bool PreResolveSubresource(ID3D11DeviceContext* context, ID3D11Resource* destina
    if (!LUMA_CORE_WANTS(ResolveSubresource))
       return false;
    CommandListData* data = GetData(context);
-   return data && OnResolveTextureRegion(*data, reinterpret_cast<uint64_t>(source), source_subresource, nullptr, reinterpret_cast<uint64_t>(destination), destination_subresource, 0, 0, 0, format);
+   return data && OnResolveTextureRegion(*data, reinterpret_cast<uintptr_t>(source), source_subresource, nullptr, reinterpret_cast<uintptr_t>(destination), destination_subresource, 0, 0, 0, format);
 }
 
 bool PreClearRenderTargetView(ID3D11DeviceContext* context, ID3D11RenderTargetView* view, const FLOAT color[4])
@@ -12702,6 +12757,12 @@ bool PreClearRenderTargetView(ID3D11DeviceContext* context, ID3D11RenderTargetVi
       return false;
    CommandListData* data = GetData(context);
    return data && OnClearRenderTargetView(*data, view, color);
+}
+
+// Only the game's
+bool PreCopyStructureCount(ID3D11DeviceContext* context, ID3D11Buffer* dest, UINT dest_offset, ID3D11UnorderedAccessView* source)
+{
+   return LUMA_GAME_WANTS(CopyStructureCount) && game->PreCopyStructureCount(context, dest, dest_offset, source);
 }
 
 bool PreClearDepthStencilView(ID3D11DeviceContext* context, ID3D11DepthStencilView* view, UINT flags, FLOAT depth, UINT8 stencil)

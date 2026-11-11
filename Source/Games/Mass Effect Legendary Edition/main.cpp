@@ -505,7 +505,7 @@ public:
             rtv->GetResource(rt_res.put());
          if (rt_res)
          {
-            const uint64_t rt_handle = reinterpret_cast<uint64_t>(rt_res.get());
+            const uint64_t rt_handle = reinterpret_cast<uintptr_t>(rt_res.get());
             bool on_swapchain;
             {
                // Swapchain recreation mutates back_buffers under unique_lock; draw hooks must take a shared lock.
@@ -798,7 +798,7 @@ public:
          uav_color->GetResource(color_res.put());
          if (!color_res)
             return DrawOrDispatchOverrideType::None;
-         const uint64_t color_handle = reinterpret_cast<uint64_t>(color_res.get());
+         const uint64_t color_handle = reinterpret_cast<uintptr_t>(color_res.get());
 
          // Skip later resolves for an already processed resource; rerunning in-place FXAA would corrupt SMAA.
          if (gd.smaa_applied_handles.count(color_handle) != 0)

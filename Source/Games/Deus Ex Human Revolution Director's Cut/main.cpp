@@ -600,7 +600,7 @@ public:
                {
                   game_device_data.swapchain_rtv->GetResource(&rt_resource);
                }
-               ASSERT_ONCE(device_data.back_buffers.contains((uint64_t)rt_resource.get())); // Note: this might trigger for one frame after loading
+               ASSERT_ONCE(device_data.back_buffers.contains((uintptr_t)rt_resource.get())); // Note: this might trigger for one frame after loading
             }
 #endif
                if (g_smaa_enable)

@@ -14,7 +14,11 @@
     <UseLumaD3D12Interop Condition="'$(UseLumaD3D12Interop)'==''">false</UseLumaD3D12Interop>
     <!-- Shared hooking library (SafetyHook and Zydis submodules), enabled automatically by the features that need it -->
     <UseLumaSafetyHook>true</UseLumaSafetyHook>
+    <!-- Luma's native D3D11/DXGI hooks, loader and overlay (off for tools that only use the upscalers, e.g. the "SR Bridge Helper") -->
+    <UseLumaNativeHooks Condition="'$(UseLumaNativeHooks)'==''">true</UseLumaNativeHooks>
     <UseLumaFastNoise Condition="'$(UseLumaFastNoise)'==''">false</UseLumaFastNoise>
+    <!-- 32-bit games: DLSS, FSR and XeSS through the x64 "SR Bridge Helper" (Source/Core/sr_bridge). package.ps1 ships it and the upscalers' dlls next to the addon. -->
+    <UseLumaSRBridge Condition="'$(UseLumaSRBridge)'==''">false</UseLumaSRBridge>
     <!-- On by default: NVAPI is a static lib that loads the driver's DLL at runtime, so it's harmless on non NVIDIA GPUs (init just fails). -->
     <UseLumaNVAPI Condition="'$(UseLumaNVAPI)'==''">true</UseLumaNVAPI>
   </PropertyGroup>
@@ -64,7 +68,7 @@
     <LumaImGuiRoot>$(MSBuildThisFileDirectory)..\..\Luma2\External\imgui</LumaImGuiRoot>
   </PropertyGroup>
 
-  <ItemGroup Condition="'$(UseLumaSafetyHook)'=='true'">
+  <ItemGroup Condition="'$(UseLumaSafetyHook)'=='true' and '$(UseLumaNativeHooks)'=='true'">
     <ClCompile Include="$(LumaCoreRoot)\hooks\hooks.cpp;$(LumaCoreRoot)\hooks\vtables.cpp;$(LumaCoreRoot)\hooks\scope.cpp;$(LumaCoreRoot)\hooks\lifetime.cpp;$(LumaCoreRoot)\hooks\device_proxy.cpp;$(LumaCoreRoot)\hooks\d3d11_hooks.cpp;$(LumaCoreRoot)\hooks\d3d11_device_hooks.cpp;$(LumaCoreRoot)\hooks\d3d11_context_hooks.cpp;$(LumaCoreRoot)\hooks\dxgi_hooks.cpp;$(LumaCoreRoot)\hooks\slots.c;$(LumaCoreRoot)\system\dxgi_exports.cpp;$(LumaCoreRoot)\system\loader.cpp;$(LumaCoreRoot)\overlay\overlay.cpp;$(LumaCoreRoot)\overlay\input.cpp;$(LumaCoreRoot)\overlay\input_hooks.cpp;$(LumaCoreRoot)\overlay\d3d11_renderer.cpp">
       <ObjectFileName>$(IntDir)luma_hooks\</ObjectFileName>
       <AdditionalIncludeDirectories>$(LumaCoreRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -77,6 +81,8 @@
       <ForcedIncludeFiles></ForcedIncludeFiles>
       <TreatWarningAsError>false</TreatWarningAsError>
     </ClCompile>
+  </ItemGroup>
+  <ItemGroup Condition="'$(UseLumaSafetyHook)'=='true'">
     <ClCompile Include="$(LumaCoreRoot)\utils\log.cpp;$(LumaCoreRoot)\utils\modules.cpp;$(LumaCoreRoot)\utils\strings.cpp">
       <ObjectFileName>$(IntDir)luma_utils\</ObjectFileName>
       <AdditionalIncludeDirectories>$(LumaCoreRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -148,6 +154,9 @@
       <AdditionalIncludeDirectories>$(LumaImGuiRoot);$(LumaSafetyHookRoot)\include;$(LumaZydisRoot)\include;$(LumaZydisRoot)\dependencies\zycore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;ENABLE_SAFETYHOOK=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <ClCompile Condition="'$(UseLumaSRBridge)'=='true'">
+      <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_SR_BRIDGE=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <ClCompile Condition="'$(UseLumaFastNoise)'=='true'">
       <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_FAST_NOISE_TEXTURES=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
@@ -155,10 +164,10 @@
       <AdditionalIncludeDirectories>$(LumaNVAPIRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_NVAPI=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
-    <Link Condition="'$(Platform)'=='x64'">
+    <Link Condition="'$(Platform)'=='x64' and '$(UseLumaNativeHooks)'=='true'">
       <ForceSymbolReferences>LumaDllExports_dxgi;%(ForceSymbolReferences)</ForceSymbolReferences>
     </Link>
-    <Link Condition="'$(Platform)'=='Win32'">
+    <Link Condition="'$(Platform)'=='Win32' and '$(UseLumaNativeHooks)'=='true'">
       <ForceSymbolReferences>_LumaDllExports_dxgi;%(ForceSymbolReferences)</ForceSymbolReferences>
     </Link>
     <Link Condition="'$(UseLumaDXP)'=='true'">

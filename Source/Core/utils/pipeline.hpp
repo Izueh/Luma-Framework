@@ -117,7 +117,7 @@ namespace Shader
          }
          if (FAILED(result) || !shader)
             return false;
-         pipeline->handle = reinterpret_cast<uint64_t>(shader);
+         pipeline->handle = reinterpret_cast<uintptr_t>(shader);
          return true;
       }
       return false;

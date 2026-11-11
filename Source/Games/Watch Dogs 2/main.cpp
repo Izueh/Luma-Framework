@@ -888,7 +888,7 @@ public:
 
       for (uint32_t i = 0; i < count; ++i)
       {
-         const uint64_t buffer_handle = reinterpret_cast<uint64_t>(buffers[i]);
+         const uint64_t buffer_handle = reinterpret_cast<uintptr_t>(buffers[i]);
          if (buffer_handle == 0)
             continue;
 
