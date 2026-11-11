@@ -184,7 +184,7 @@ struct RGBA16FTarget
 struct MassEffectGameDeviceData final : public GameDeviceData
 {
    // Handles already processed by SMAA this frame; later in-place FXAA resolves must be skipped.
-   std::unordered_set<uint64_t> smaa_applied_handles;
+   std::unordered_set<const ID3D11Resource*> smaa_applied_handles;
 
    // R24 scene depth captured from motion-blur tonemap permutations for SMAA predication.
    ComPtr<ID3D11ShaderResourceView> srv_depth;
@@ -505,12 +505,11 @@ public:
             rtv->GetResource(rt_res.put());
          if (rt_res)
          {
-            const uint64_t rt_handle = reinterpret_cast<uintptr_t>(rt_res.get());
             bool on_swapchain;
             {
                // Swapchain recreation mutates back_buffers under unique_lock; draw hooks must take a shared lock.
                std::shared_lock lock(device_data.mutex);
-               on_swapchain = device_data.back_buffers.contains(rt_handle);
+               on_swapchain = device_data.back_buffers.contains(rt_res.get());
             }
             auto& gs = cb_luma_global_settings.GameSettings;
             const float flag = on_swapchain ? 1.f : 0.f;
@@ -798,7 +797,7 @@ public:
          uav_color->GetResource(color_res.put());
          if (!color_res)
             return DrawOrDispatchOverrideType::None;
-         const uint64_t color_handle = reinterpret_cast<uintptr_t>(color_res.get());
+         const ID3D11Resource* const color_handle = color_res.get();
 
          // Skip later resolves for an already processed resource; rerunning in-place FXAA would corrupt SMAA.
          if (gd.smaa_applied_handles.count(color_handle) != 0)

@@ -242,7 +242,7 @@ struct Borderlands2GameDeviceData final : public GameDeviceData
    uint32_t smaa_out_w = 0, smaa_out_h = 0;
 
    // Resource the tonemap renders to; on BL2 the HUD draws onto it afterwards. Used by Hide UI and the FXAA override.
-   uint64_t ldr_buffer_handle = 0;
+   const ID3D11Resource* ldr_buffer = nullptr; // Not owned, only compared
    // Set when the tonemap runs, cleared every Present: scopes Hide UI's alpha-blend skip to the post-tonemap
    // span of THIS frame (so next frame's pre-tonemap transparents aren't dropped). See the Hide UI block in OnDrawOrDispatch.
    bool tonemap_fired_this_frame = false;
@@ -781,7 +781,7 @@ class Borderlands2 final : public Game
 
    // Motion vectors: a registered vc4 buffer mapped for a whole rewrite, remembered until its Unmap. The hooks can run on several
    // threads, hence the lock (see "mv_constants_mutex").
-   static void OnMapBufferRegion(DeviceData* device_data, uint64_t handle, D3D11_MAP type, void** data)
+   static void OnMapBufferRegion(DeviceData* device_data, ID3D11Buffer* handle, D3D11_MAP type, void** data)
    {
       if (!device_data || !device_data->game || !GetGameDeviceData(*device_data).sr_active || !data || !*data)
          return;
@@ -795,7 +795,7 @@ class Borderlands2 final : public Game
 
    // Motion vectors: a redirected Map of a vc4 buffer writes its data to the buffer, before its Unmap. Not gated on "sr_active": the
    // present that turns it off can fall between the two.
-   static void OnUnmapBufferRegion(DeviceData* device_data, uint64_t handle)
+   static void OnUnmapBufferRegion(DeviceData* device_data, ID3D11Buffer* handle)
    {
       if (!device_data || !device_data->game)
          return;
@@ -810,7 +810,7 @@ class Borderlands2 final : public Game
    }
 
    // Motion vectors: the CPU copy of a vc4 buffer from an immediate context UpdateSubresource (before it runs)
-   static void OnUpdateBufferRegion(DeviceData* device_data, const void* data, uint64_t handle, uint64_t offset, uint64_t size)
+   static void OnUpdateBufferRegion(DeviceData* device_data, const void* data, ID3D11Buffer* handle, uint64_t offset, uint64_t size)
    {
       if (!device_data || !device_data->game || !data || !GetGameDeviceData(*device_data).sr_active)
          return;
@@ -1576,7 +1576,7 @@ public:
       if (!buffer)
          return;
       if (const CommandListData* const cmd_list_data = GetCommandListData(context))
-         OnMapBufferRegion(cmd_list_data->device_data, reinterpret_cast<uintptr_t>(buffer), type, &mapped.pData);
+         OnMapBufferRegion(cmd_list_data->device_data, buffer, type, &mapped.pData);
    }
 
    bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
@@ -1585,7 +1585,7 @@ public:
       if (!buffer)
          return false;
       if (const CommandListData* const cmd_list_data = GetCommandListData(context))
-         OnUnmapBufferRegion(cmd_list_data->device_data, reinterpret_cast<uintptr_t>(buffer));
+         OnUnmapBufferRegion(cmd_list_data->device_data, buffer);
       return false;
    }
 
@@ -1599,7 +1599,7 @@ public:
          return false;
       const uint64_t offset = box ? box->left : 0;
       const uint64_t size = box ? uint64_t(box->right - box->left) : UINT64_MAX;
-      OnUpdateBufferRegion(cmd_list_data->device_data, data, reinterpret_cast<uintptr_t>(buffer), offset, size);
+      OnUpdateBufferRegion(cmd_list_data->device_data, data, buffer, offset, size);
       return false;
    }
 
@@ -2409,7 +2409,7 @@ public:
             ComPtr<ID3D11Resource> res;
             rtv->GetResource(res.put());
             if (res)
-               gd.ldr_buffer_handle = (uintptr_t)res.get();
+               gd.ldr_buffer = res.get();
          }
          // Capture the scene-color SRV (PS t0) for SMAA predication (its .a holds linear view-space depth) and for the
          // FXAA override, which recognizes BL2's resolve by it. The tonemap reads (doesn't overwrite) this buffer, so .a
@@ -2521,7 +2521,7 @@ public:
             if (src_res.get() == scene_res.get())
                return DrawOrDispatchOverrideType::Replaced; // BL2: upstream of the tonemap, its output feeds nothing
 
-            if ((uintptr_t)src_res.get() == gd.ldr_buffer_handle)
+            if (src_res.get() == gd.ldr_buffer)
             {
                ComPtr<ID3D11RenderTargetView> fxaa_rtv;
                native_device_context->OMGetRenderTargets(1, fxaa_rtv.put(), nullptr);
@@ -2556,7 +2556,7 @@ public:
          }
 
          bool on_ldr_buffer = false;
-         if (gd.ldr_buffer_handle)
+         if (gd.ldr_buffer)
          {
             ComPtr<ID3D11RenderTargetView> rtv;
             native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
@@ -2564,7 +2564,7 @@ public:
             {
                ComPtr<ID3D11Resource> res;
                rtv->GetResource(res.put());
-               on_ldr_buffer = (res && (uintptr_t)res.get() == gd.ldr_buffer_handle);
+               on_ldr_buffer = (res && res.get() == gd.ldr_buffer);
             }
          }
 

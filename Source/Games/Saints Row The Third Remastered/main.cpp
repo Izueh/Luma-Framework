@@ -1187,7 +1187,7 @@ public:
             if (!sampler)
                continue;
             // The game's sampler: the bound one, or the one whose variant is bound
-            auto original = custom_samplers.find(reinterpret_cast<uintptr_t>(sampler));
+            auto original = custom_samplers.find(sampler);
             if (original == custom_samplers.end())
             {
                original = std::find_if(custom_samplers.begin(), custom_samplers.end(), [sampler](const auto& entry)
@@ -1196,16 +1196,16 @@ public:
                if (original == custom_samplers.end())
                   continue;
             }
-            auto& [original_handle, variants] = *original;
+            auto& [original_sampler, variants] = *original;
             auto variant = variants.find(bias);
             if (variant == variants.end())
             {
                D3D11_SAMPLER_DESC desc;
-               reinterpret_cast<ID3D11SamplerState*>(original_handle)->GetDesc(&desc);
+               original_sampler->GetDesc(&desc);
                variant = variants.emplace(bias, CreateCustomSampler(*device_data, device_data->native_device, desc)).first;
             }
             // No variant: a sampler Core doesn't upgrade, the game's own
-            ID3D11SamplerState* const replacement = (variant->second ? variant->second.get() : reinterpret_cast<ID3D11SamplerState*>(original_handle));
+            ID3D11SamplerState* const replacement = (variant->second ? variant->second.get() : original_sampler);
             if (replacement != sampler)
             {
                sampler->Release();

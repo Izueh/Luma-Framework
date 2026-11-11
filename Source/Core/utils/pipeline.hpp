@@ -11,10 +11,10 @@
 
 namespace Shader
 {
-   // A game shader object by its pointer (on D3D11 a pipeline is a single shader)
+   // A game shader object (on D3D11 a pipeline is a single shader, of any stage)
    struct Pipeline
    {
-      uint64_t handle = 0;
+      ID3D11DeviceChild* handle = nullptr;
 
       bool operator==(const Pipeline&) const = default;
    };
@@ -30,7 +30,7 @@ namespace Shader
    {
       D3D11_SHADER_VERSION_TYPE type = SHADER_VERSION_TYPE_UNKNOWN;
       uint32_t count = 0;
-      void* data = nullptr; // A ShaderDesc
+      ShaderDesc* data = nullptr;
    };
 
    inline bool IsShaderType(D3D11_SHADER_VERSION_TYPE type)
@@ -117,7 +117,7 @@ namespace Shader
          }
          if (FAILED(result) || !shader)
             return false;
-         pipeline->handle = reinterpret_cast<uintptr_t>(shader);
+         pipeline->handle = shader;
          return true;
       }
       return false;
@@ -128,6 +128,6 @@ namespace Shader
       if (!pipeline.handle)
          return;
       Luma::Hooks::Scope::Guard scope;
-      reinterpret_cast<IUnknown*>(pipeline.handle)->Release();
+      pipeline.handle->Release();
    }
 }

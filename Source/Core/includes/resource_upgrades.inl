@@ -336,9 +336,9 @@ std::optional<ResourceDesc> ResourceUpgradeManager::GetOptionalResourceUpgradeDe
 
 bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResource(
    ID3D11Device* device,
-   const uint64_t in_source_resource,
-   const uint64_t in_resource,
-   uint64_t& out_resource,
+   const ID3D11Resource* in_source_resource,
+   ID3D11Resource* in_resource,
+   ID3D11Resource*& out_resource,
    bool allow_create,
    std::shared_lock<std::shared_mutex>& lock_device_read,
    const ResourceUpgradeFrameState& state,
@@ -353,13 +353,13 @@ bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResource(
    auto original_resource_to_mirrored_upgraded_resource = original_resources_to_mirrored_upgraded_resources.find(in_resource); // Note: no null check here, given the case should be rare
    if (original_resource_to_mirrored_upgraded_resource != original_resources_to_mirrored_upgraded_resources.end())
    {
-      out_resource = original_resource_to_mirrored_upgraded_resource->second.mirror_handle;
+      out_resource = original_resource_to_mirrored_upgraded_resource->second.mirror_resource;
       replaced = true;
       if (scaled)
          *scaled = original_resource_to_mirrored_upgraded_resource->second.is_scaled;
    }
    // Ignore all swapchain textures, we can't directly upgrade these (even in case they weren't directly upgraded), given that it's the ultimate target and somehow we'll need to write the values in it // TODO: not true, we could still swap its texture and then copy it back on the og swapchain on presentation
-   else if (allow_create && in_resource != 0 && !upgraded_resources.contains(in_resource))
+   else if (allow_create && in_resource != nullptr && !upgraded_resources.contains(in_resource))
    {
       lock_device_read.unlock(); // Avoids deadlocks with the device
 
@@ -434,7 +434,7 @@ bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResource(
          const bool matches_render = !is_1x1 && render_aspect >= (min_aspect - FLT_EPSILON) && render_aspect <= (max_aspect + FLT_EPSILON);
          if (matches_render)
          {
-            if (in_source_resource == 0) // TODO: why this check here? Also, we should always check "allow_scale" to avoid random scaling positives??? It's a fallback value in case we have no source desc specified?
+            if (in_source_resource == nullptr) // TODO: why this check here? Also, we should always check "allow_scale" to avoid random scaling positives??? It's a fallback value in case we have no source desc specified?
                needs_scale = true; // seed: per-shader toggle only
             else
                needs_scale = source_desc.width == (uint32_t)state.output_resolution.x && source_desc.height == (uint32_t)state.output_resolution.y; // chain: source already at output res
@@ -456,14 +456,14 @@ bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResource(
          std::unique_lock lock_device_write(*lock_device_read.mutex());
          if (!original_resources_to_mirrored_upgraded_resources.contains(in_resource))
          {
-            original_resources_to_mirrored_upgraded_resources[in_resource] = IndirectUpgradedResource{ reinterpret_cast<uintptr_t>(mirrored_upgraded_resource), needs_scale, original_width, original_height, target_desc.width, target_desc.height };
-            out_resource = reinterpret_cast<uintptr_t>(mirrored_upgraded_resource);
+            original_resources_to_mirrored_upgraded_resources[in_resource] = IndirectUpgradedResource{ mirrored_upgraded_resource, needs_scale, original_width, original_height, target_desc.width, target_desc.height };
+            out_resource = mirrored_upgraded_resource;
 
             // TODO: optionally copy the content of "in_resource"?
          }
          else // Destroy it if it was accidentally created at the same time by another thread
          {
-            out_resource = original_resources_to_mirrored_upgraded_resources[in_resource].mirror_handle;
+            out_resource = original_resources_to_mirrored_upgraded_resources[in_resource].mirror_resource;
             lock_device_write.unlock();
             mirrored_upgraded_resource->Release();
          }
@@ -492,8 +492,8 @@ bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResource(
 
 bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResourceView(
    ID3D11Device* device,
-   const uint64_t in_rv,
-   uint64_t& out_rv,
+   ID3D11View* in_rv,
+   ID3D11View*& out_rv,
    bool allow_create,
    ViewKind view_kind,
    std::shared_lock<std::shared_mutex>& lock_device_read)
@@ -511,13 +511,13 @@ bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResourceView(
    // For example, sometimes we upgrade resources after creation and we can't know all the views that were previously created for the original resource (well, we could cache them on creation based on the list of formats we ever upgrade, if ever...),
    // so we need to create a mirrored upgraded view for every view it had.
    // TODO: just cache all the views for any resource we might ever upgrade later (e.g. through "auto_texture_format_upgrade_shader_hashes"), as mentioned above, so we could skip many of these checks.
-   else if (allow_create && in_rv != 0 && !original_resources_to_mirrored_upgraded_resources.empty())
+   else if (allow_create && in_rv != nullptr && !original_resources_to_mirrored_upgraded_resources.empty())
    {
-      const uint64_t resource = GetCachedResourceFromView(in_rv, true, false, true, &lock_device_read);
+      ID3D11Resource* const resource = GetCachedResourceFromView(in_rv, true, false, true, &lock_device_read);
       auto original_resource_to_mirrored_upgraded_resource = original_resources_to_mirrored_upgraded_resources.find(resource);
       if (original_resource_to_mirrored_upgraded_resource != original_resources_to_mirrored_upgraded_resources.end())
       {
-         const auto original_resource_to_mirrored_upgraded_resource_ptr = original_resource_to_mirrored_upgraded_resource->second.mirror_handle;
+         const auto original_resource_to_mirrored_upgraded_resource_ptr = original_resource_to_mirrored_upgraded_resource->second.mirror_resource;
 
          lock_device_read.unlock(); // Avoids deadlocks with the device
 
@@ -546,15 +546,15 @@ bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResourceView(
          }
 
          ID3D11View* mirrored_upgraded_resource_view = nullptr;
-         if (SUCCEEDED(CreateResourceView(device, reinterpret_cast<ID3D11Resource*>(original_resource_to_mirrored_upgraded_resource_ptr), resource_view_desc, &mirrored_upgraded_resource_view)))
+         if (SUCCEEDED(CreateResourceView(device, original_resource_to_mirrored_upgraded_resource_ptr, resource_view_desc, &mirrored_upgraded_resource_view)))
          {
             std::unique_lock lock_device_write(*lock_device_read.mutex());
             if (!original_resource_views_to_mirrored_upgraded_resource_views.contains(in_rv))
             {
-               original_resource_views_to_mirrored_upgraded_resource_views[in_rv] = reinterpret_cast<uintptr_t>(mirrored_upgraded_resource_view);
-               mirror_views_by_mirror_resource[original_resource_to_mirrored_upgraded_resource_ptr].emplace(reinterpret_cast<uintptr_t>(mirrored_upgraded_resource_view));
-               mirror_views_to_mirror_resources[reinterpret_cast<uintptr_t>(mirrored_upgraded_resource_view)] = original_resource_to_mirrored_upgraded_resource_ptr;
-               out_rv = reinterpret_cast<uintptr_t>(mirrored_upgraded_resource_view);
+               original_resource_views_to_mirrored_upgraded_resource_views[in_rv] = mirrored_upgraded_resource_view;
+               mirror_views_by_mirror_resource[original_resource_to_mirrored_upgraded_resource_ptr].emplace(mirrored_upgraded_resource_view);
+               mirror_views_to_mirror_resources[mirrored_upgraded_resource_view] = original_resource_to_mirrored_upgraded_resource_ptr;
+               out_rv = mirrored_upgraded_resource_view;
             }
             else // Destroy it if it was accidentally created at the same time by another thread
             {
@@ -584,17 +584,17 @@ bool ResourceUpgradeManager::FindOrCreateIndirectUpgradedResourceView(
    return replaced;
 }
 
-void ResourceUpgradeManager::UnlinkMirror(uint64_t mirror_handle)
+void ResourceUpgradeManager::UnlinkMirror(ID3D11Resource* mirror_resource)
 {
    // Find and erase the original->mirror entry for this mirror.
    for (auto it = original_resources_to_mirrored_upgraded_resources.begin(); it != original_resources_to_mirrored_upgraded_resources.end(); ++it)
    {
-      if (it->second.mirror_handle != mirror_handle)
+      if (it->second.mirror_resource != mirror_resource)
          continue;
 
       // Invalidate stale view mappings for this mirror while the lock is held.
-      std::vector<uint64_t> unlinked_mirror_views;
-      if (auto mirror_views_it = mirror_views_by_mirror_resource.find(mirror_handle); mirror_views_it != mirror_views_by_mirror_resource.end())
+      std::vector<ID3D11View*> unlinked_mirror_views;
+      if (auto mirror_views_it = mirror_views_by_mirror_resource.find(mirror_resource); mirror_views_it != mirror_views_by_mirror_resource.end())
       {
          const auto& mirror_views = mirror_views_it->second;
          for (auto view_map_it = original_resource_views_to_mirrored_upgraded_resource_views.begin(); view_map_it != original_resource_views_to_mirrored_upgraded_resource_views.end();)
@@ -616,11 +616,11 @@ void ResourceUpgradeManager::UnlinkMirror(uint64_t mirror_handle)
       original_resources_to_mirrored_upgraded_resources.erase(it);
 
       // Defer freeing to present: the mirror may still be in flight in hooks or bound on recorded lists.
-      for (const uint64_t unlinked_mirror_view : unlinked_mirror_views)
+      for (ID3D11View* const unlinked_mirror_view : unlinked_mirror_views)
       {
-         pending_mirror_view_destructions.push_back({ unlinked_mirror_view });
+         pending_mirror_view_destructions.push_back(unlinked_mirror_view);
       }
-      pending_mirror_resource_destructions.push_back({ mirror_handle });
+      pending_mirror_resource_destructions.push_back(mirror_resource);
       break;
    }
 }
@@ -628,15 +628,15 @@ void ResourceUpgradeManager::UnlinkMirror(uint64_t mirror_handle)
 // Lock-free: caller/core.hpp holds the single device mutex.
 void ResourceUpgradeManager::InvalidateAllIndirectUpgradedResources()
 {
-   std::vector<uint64_t> invalidated_mirrors;
+   std::vector<ID3D11Resource*> invalidated_mirrors;
    invalidated_mirrors.reserve(original_resources_to_mirrored_upgraded_resources.size());
    for (const auto& [orig, mirror] : original_resources_to_mirrored_upgraded_resources)
    {
-      invalidated_mirrors.push_back(mirror.mirror_handle);
+      invalidated_mirrors.push_back(mirror.mirror_resource);
    }
-   for (const uint64_t mirror_handle : invalidated_mirrors)
+   for (ID3D11Resource* const mirror_resource : invalidated_mirrors)
    {
-      UnlinkMirror(mirror_handle);
+      UnlinkMirror(mirror_resource);
    }
 }
 
@@ -644,35 +644,35 @@ void ResourceUpgradeManager::FlushPendingDestructions(std::shared_mutex& device_
 {
    // The caller must NOT hold "device_mutex": the pending lists are taken under it, but the destructions happen outside of it,
    // as destroying resources can call back into our destruction callbacks (which lock it).
-   std::vector<uint64_t> pending_views;
-   std::vector<uint64_t> pending_resources;
+   std::vector<ID3D11View*> pending_views;
+   std::vector<ID3D11Resource*> pending_resources;
    {
       std::unique_lock lock(device_mutex);
       pending_views = std::move(pending_mirror_view_destructions);
       pending_resources = std::move(pending_mirror_resource_destructions);
    }
    Luma::Hooks::Scope::Guard scope;
-   for (const uint64_t view : pending_views)
+   for (ID3D11View* const view : pending_views)
    {
-      reinterpret_cast<ID3D11View*>(view)->Release();
+      view->Release();
    }
-   for (const uint64_t resource : pending_resources)
+   for (ID3D11Resource* const resource : pending_resources)
    {
-      reinterpret_cast<ID3D11Resource*>(resource)->Release();
+      resource->Release();
    }
 }
 
 // Lock-free: caller/core.hpp holds the single device mutex.
-void ResourceUpgradeManager::OnResourceDestroyed(uint64_t resource_handle)
+void ResourceUpgradeManager::OnResourceDestroyed(const ID3D11Resource* resource)
 {
-   auto original_resource_to_mirrored_upgraded_resource = original_resources_to_mirrored_upgraded_resources.find(resource_handle);
+   auto original_resource_to_mirrored_upgraded_resource = original_resources_to_mirrored_upgraded_resources.find(resource);
    if (original_resource_to_mirrored_upgraded_resource != original_resources_to_mirrored_upgraded_resources.end())
    {
-      const auto mirrored_upgraded_resource = original_resource_to_mirrored_upgraded_resource->second.mirror_handle;
+      ID3D11Resource* const mirrored_upgraded_resource = original_resource_to_mirrored_upgraded_resource->second.mirror_resource;
       original_resources_to_mirrored_upgraded_resources.erase(original_resource_to_mirrored_upgraded_resource);
 
       // Invalidate stale view mappings for this mirror while the lock is held.
-      std::vector<uint64_t> unlinked_mirror_views;
+      std::vector<ID3D11View*> unlinked_mirror_views;
       if (auto mirror_views_it = mirror_views_by_mirror_resource.find(mirrored_upgraded_resource); mirror_views_it != mirror_views_by_mirror_resource.end())
       {
          const auto& mirror_views = mirror_views_it->second;
@@ -696,49 +696,49 @@ void ResourceUpgradeManager::OnResourceDestroyed(uint64_t resource_handle)
       // Defer freeing to present: the mirror may still be in flight in hooks or bound on recorded lists.
       if (delayed_destruction)
       {
-         for (const uint64_t unlinked_mirror_view : unlinked_mirror_views)
+         for (ID3D11View* const unlinked_mirror_view : unlinked_mirror_views)
          {
-            pending_mirror_view_destructions.push_back({unlinked_mirror_view});
+            pending_mirror_view_destructions.push_back(unlinked_mirror_view);
          }
-         pending_mirror_resource_destructions.push_back({mirrored_upgraded_resource});
+         pending_mirror_resource_destructions.push_back(mirrored_upgraded_resource);
       }
 #if 0 // TODO: add back and try or delete branches
       else
       {
          lock.unlock();
    
-         for (const uint64_t unlinked_mirror_view : unlinked_mirror_views)
+         for (ID3D11View* const unlinked_mirror_view : unlinked_mirror_views)
          {
-            device->destroy_resource_view({ unlinked_mirror_view });
+            unlinked_mirror_view->Release();
          }
-         device->destroy_resource({ mirrored_upgraded_resource });
+         mirrored_upgraded_resource->Release();
       }
 #endif
    }
-   upgraded_resources.erase(resource_handle);
+   upgraded_resources.erase(resource);
 #if DEVELOPMENT
-   original_upgraded_resources_formats.erase(resource_handle);
+   original_upgraded_resources_formats.erase(resource);
 #endif
 }
 
 // Lock-free: caller/core.hpp holds the single device mutex.
-void ResourceUpgradeManager::OnResourceViewDestroyed(uint64_t view_handle)
+void ResourceUpgradeManager::OnResourceViewDestroyed(const ID3D11View* view)
 {
 #if DEVELOPMENT
-   original_upgraded_resource_views_formats.erase(view_handle);
+   original_upgraded_resource_views_formats.erase(view);
 #endif
-   original_views_to_original_resources.erase(view_handle);
+   original_views_to_original_resources.erase(view);
 
-   auto original_resource_view_to_mirrored_upgraded_resource_view = original_resource_views_to_mirrored_upgraded_resource_views.find(view_handle);
+   auto original_resource_view_to_mirrored_upgraded_resource_view = original_resource_views_to_mirrored_upgraded_resource_views.find(view);
    if (original_resource_view_to_mirrored_upgraded_resource_view != original_resource_views_to_mirrored_upgraded_resource_views.end())
    {
-      const auto mirrored_upgraded_resource_view = original_resource_view_to_mirrored_upgraded_resource_view->second;
+      ID3D11View* const mirrored_upgraded_resource_view = original_resource_view_to_mirrored_upgraded_resource_view->second;
       original_resource_views_to_mirrored_upgraded_resource_views.erase(original_resource_view_to_mirrored_upgraded_resource_view);
       // No device call (get_resource_from_view) under the luma lock: this callback runs inside the D3D11
       // runtime's final Release (destruction notifier) on an arbitrary thread, so taking the luma lock here and
       // then calling back into the runtime inverts the lock order vs the draw path (which holds the shared luma
-      // lock while making device calls) and can deadlock. The mirror resource handle is cached at insert time.
-      uint64_t mirror_resource = 0;
+      // lock while making device calls) and can deadlock. The mirror resource is cached at insert time.
+      const ID3D11Resource* mirror_resource = nullptr;
       if (auto mirror_res_it = mirror_views_to_mirror_resources.find(mirrored_upgraded_resource_view); mirror_res_it != mirror_views_to_mirror_resources.end())
       {
          mirror_resource = mirror_res_it->second;
@@ -751,15 +751,15 @@ void ResourceUpgradeManager::OnResourceViewDestroyed(uint64_t view_handle)
             mirror_views_by_mirror_resource.erase(mirror_views_it);
       }
       // Defer freeing to present: the mirror view may still be in flight.
-      pending_mirror_view_destructions.push_back({ mirrored_upgraded_resource_view });
+      pending_mirror_view_destructions.push_back(mirrored_upgraded_resource_view);
    }
 }
 
-void ResourceUpgradeManager::ReUpgradeResource(uint64_t original_or_upgraded_resource_handle, UINT additional_bind_flags)
+void ResourceUpgradeManager::ReUpgradeResource(ID3D11Resource* original_or_upgraded_resource, UINT additional_bind_flags)
 {
 #if 0 // TODO: finish up! Split into a destroy and re-create func etc.
-   const uint64_t old_upgraded_resource_handle = original_or_upgraded_resource_handle;
-   uint64_t original_resource_handle = original_or_upgraded_resource_handle;
+   ID3D11Resource* const old_upgraded_resource = original_or_upgraded_resource;
+   ID3D11Resource* original_resource = original_or_upgraded_resource;
 
    ID3D11Device* native_device = device_data.native_device;
 
@@ -768,18 +768,18 @@ void ResourceUpgradeManager::ReUpgradeResource(uint64_t original_or_upgraded_res
    // Inverted map search to find the original resource from the upgraded one (if there was one)
    for (const auto& original_resource_to_mirrored_upgraded_resource : original_resources_to_mirrored_upgraded_resources)
    {
-      if (original_resource_to_mirrored_upgraded_resource.second.mirror_handle == old_upgraded_resource_handle)
+      if (original_resource_to_mirrored_upgraded_resource.second.mirror_resource == old_upgraded_resource)
       {
-         original_resource_handle = original_resource_to_mirrored_upgraded_resource.first;
+         original_resource = const_cast<ID3D11Resource*>(original_resource_to_mirrored_upgraded_resource.first);
 
-         auto original_resource_to_mirrored_upgraded_resource = original_resources_to_mirrored_upgraded_resources.find(original_resource_handle);
+         auto original_resource_to_mirrored_upgraded_resource = original_resources_to_mirrored_upgraded_resources.find(original_resource);
          if (original_resource_to_mirrored_upgraded_resource != original_resources_to_mirrored_upgraded_resources.end())
          {
-            const auto mirrored_upgraded_resource = original_resource_to_mirrored_upgraded_resource->second.mirror_handle;
+            ID3D11Resource* const mirrored_upgraded_resource = original_resource_to_mirrored_upgraded_resource->second.mirror_resource;
             original_resources_to_mirrored_upgraded_resources.erase(original_resource_to_mirrored_upgraded_resource);
 
             // Invalidate stale view mappings for this mirror while the lock is held.
-            std::vector<uint64_t> unlinked_mirror_views;
+            std::vector<ID3D11View*> unlinked_mirror_views;
             if (auto mirror_views_it = mirror_views_by_mirror_resource.find(mirrored_upgraded_resource); mirror_views_it != mirror_views_by_mirror_resource.end())
             {
                const auto& mirror_views = mirror_views_it->second;
@@ -803,20 +803,20 @@ void ResourceUpgradeManager::ReUpgradeResource(uint64_t original_or_upgraded_res
             // Defer freeing to present: the mirror may still be in flight in hooks or bound on recorded lists.
             if (delayed_destruction)
             {
-               for (const uint64_t unlinked_mirror_view : unlinked_mirror_views)
+               for (ID3D11View* const unlinked_mirror_view : unlinked_mirror_views)
                {
-                  pending_mirror_view_destructions.push_back({ unlinked_mirror_view });
+                  pending_mirror_view_destructions.push_back(unlinked_mirror_view);
                }
-               pending_mirror_resource_destructions.push_back({ mirrored_upgraded_resource });
+               pending_mirror_resource_destructions.push_back(mirrored_upgraded_resource);
             }
             else
             {
                lock_device_write.unlock();
-               for (const uint64_t unlinked_mirror_view : unlinked_mirror_views)
+               for (ID3D11View* const unlinked_mirror_view : unlinked_mirror_views)
                {
-                  reinterpret_cast<ID3D11View*>(unlinked_mirror_view)->Release();
+                  unlinked_mirror_view->Release();
                }
-               reinterpret_cast<ID3D11Resource*>(mirrored_upgraded_resource)->Release();
+               mirrored_upgraded_resource->Release();
                lock_device_write.lock();
             }
          }
@@ -828,11 +828,11 @@ void ResourceUpgradeManager::ReUpgradeResource(uint64_t original_or_upgraded_res
    lock_device_write.unlock();
    std::shared_lock lock_device_read(device_data.mutex);
 
-   uint64_t new_upgraded_resource;
-   if (::FindOrCreateIndirectUpgradedResource(native_device, 0, original_resource_handle, new_upgraded_resource, device_data, true, lock_device_read, false, false, false, D3D11_BIND_UNORDERED_ACCESS))
+   ID3D11Resource* new_upgraded_resource = nullptr;
+   if (::FindOrCreateIndirectUpgradedResource(native_device, nullptr, original_resource, new_upgraded_resource, device_data, true, lock_device_read, false, false, false, D3D11_BIND_UNORDERED_ACCESS))
    {
       // Carry the current content over, just in case it was used for multi frame motion blur or something (very unlikely)
-      native_device_context->CopyResource((ID3D11Resource*)new_upgraded_resource, (ID3D11Resource*)old_upgraded_resource_handle);
+      native_device_context->CopyResource(new_upgraded_resource, old_upgraded_resource);
    }
 #endif
 }

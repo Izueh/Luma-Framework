@@ -274,8 +274,8 @@ namespace BLMovieLeakFix
    };
 
    static std::mutex g_mtx;
-   static std::unordered_map<uint64_t, MovieTex> g_movie;    // resource handle -> info
-   static std::unordered_map<uint64_t, uint64_t> g_view2res; // view handle -> resource handle (tagged buffers only)
+   static std::unordered_map<const ID3D11Resource*, MovieTex> g_movie;               // resource -> info
+   static std::unordered_map<const ID3D11View*, const ID3D11Resource*> g_view2res; // view -> resource (tagged buffers only)
    static uintptr_t g_exe_base = 0;
    static int g_cur_gen = 0;
    static uint32_t g_last_movie_frame = 0;
@@ -308,7 +308,7 @@ namespace BLMovieLeakFix
    // Tags the movies' Y'CbCr decode buffers at creation (the stack is walked only from "STACKWALK_MIN_BYTES")
    // Decode targets are BUFFERS (measured): only buffer creation calls this, which excludes the textures that share the
    // streaming-fn span -> no mistag/UAF, and skips the stack walk for every texture.
-   void OnInitBuffer(const D3D11_BUFFER_DESC& desc, uint64_t handle)
+   void OnInitBuffer(const D3D11_BUFFER_DESC& desc, const ID3D11Buffer* buffer)
    {
       const uint64_t bytes = desc.ByteWidth;
       if (bytes < STACKWALK_MIN_BYTES)
@@ -322,19 +322,19 @@ namespace BLMovieLeakFix
       if (g_cur_gen == 0 || (f - g_last_movie_frame) > NEW_GEN_GAP_FRAMES)
          g_cur_gen += 1;
       g_last_movie_frame = f;
-      g_movie[handle] = MovieTex{bytes, g_cur_gen, f};
+      g_movie[buffer] = MovieTex{bytes, g_cur_gen, f};
       g_have_movie = true;
    }
 
-   void OnDestroyResource(uint64_t handle)
+   void OnDestroyResource(const ID3D11Resource* resource)
    {
       if (!g_have_movie)
          return;
       const std::lock_guard<std::mutex> lk(g_mtx);
-      g_movie.erase(handle);
+      g_movie.erase(resource);
    }
 
-   void OnInitResourceView(uint64_t res, uint64_t view)
+   void OnInitResourceView(const ID3D11Resource* res, const ID3D11View* view)
    {
       if (!g_have_movie || !view)
          return;
@@ -343,7 +343,7 @@ namespace BLMovieLeakFix
          g_view2res[view] = res;
    }
 
-   void OnDestroyResourceView(uint64_t view)
+   void OnDestroyResourceView(const ID3D11View* view)
    {
       if (!g_have_movie)
          return;
@@ -355,8 +355,8 @@ namespace BLMovieLeakFix
    // re-enters OnDestroyResource[View] on this thread -> COLLECT+UNLINK under lock, then RELEASE unlocked.
    void Flush()
    {
-      std::unordered_map<uintptr_t, uint64_t> victims; // Resource -> its bytes
-      std::vector<uintptr_t> views;
+      std::unordered_map<const ID3D11Resource*, uint64_t> victims; // Resource -> its bytes
+      std::vector<const ID3D11View*> views;
       {
          const std::lock_guard<std::mutex> lk(g_mtx);
          // Phase A: pick victims (keep current + previous gen, must be idle) and UNLINK them before any Release (re-entrant callbacks
@@ -378,9 +378,9 @@ namespace BLMovieLeakFix
                views.push_back(view);
                return true; });
       }
-      // Phase B: RELEASE with the lock released, the views before their resources
-      for (const uintptr_t view : views)
-         reinterpret_cast<IUnknown*>(view)->Release();
+      // Phase B: RELEASE with the lock released, the views before their resources (the keys are const for the destroy callbacks' lookups)
+      for (const ID3D11View* const view : views)
+         const_cast<ID3D11View*>(view)->Release();
       uint32_t ft = 0;
       uint64_t fb = 0;
       bool partial = false;
@@ -388,7 +388,7 @@ namespace BLMovieLeakFix
       {
          // rc==0 => actually freed (count it); rc>0 => game holds extra refs, not reclaimed. (rc is a
          // by-value ULONG, never a deref of a freed object.)
-         const ULONG rc = reinterpret_cast<IUnknown*>(resource)->Release();
+         const ULONG rc = const_cast<ID3D11Resource*>(resource)->Release();
          if (rc == 0)
          {
             ft++;
@@ -563,14 +563,14 @@ struct BorderlandsGotyGameDeviceData final : public GameDeviceData
    // The frame's scene depth (the depth view's resource), its last copy (the post passes and the outlines read that copy), and a
    // view of the one the camera fill and the upscaler read (the depth itself if it can be read, else the copy)
    com_ptr<ID3D11Resource> mv_depth;
-   uint64_t mv_depth_copy = 0;
+   ID3D11Resource* mv_depth_copy = nullptr; // Not owned
    com_ptr<ID3D11ShaderResourceView> mv_depth_srv;
    bool mv_fill_pending = false;
    bool mv_filled = false; // This frame's fill ran: SMAA T2x's motion vectors are whole
    com_ptr<ID3D11Buffer> mv_fill_buffer;
    // The fp16 scene the motion vector draws write, and its last copy (the DOF/Bloom gather and the uber post read the copy)
    com_ptr<ID3D11Resource> mv_scene_color;
-   uint64_t mv_scene_color_copy = 0;
+   ID3D11Resource* mv_scene_color_copy = nullptr; // Not owned
    // The projection jitter (pixels, +y down), chosen when the scene opens; its NDC offset is at VS "MotionVectorPatches::jitter_slot"
    // of every mesh draw depth tested against the scene
    std::array<float, 2> mv_jitter = {};
@@ -869,7 +869,7 @@ class BorderlandsGoty final : public Game
 
    // Motion vectors: the CPU copy of a registered b0 / b1 / b3 buffer, from the game's UpdateSubresource (before it runs). The engine
    // uploads whole buffers (no box: "size" is UINT64_MAX).
-   static void OnUpdateBufferRegion(DeviceData* device_data, const void* data, uint64_t handle, uint64_t offset, uint64_t size)
+   static void OnUpdateBufferRegion(DeviceData* device_data, const void* data, const ID3D11Resource* handle, uint64_t offset, uint64_t size)
    {
       if (!device_data || !device_data->game || !data)
          return;
@@ -890,7 +890,7 @@ class BorderlandsGoty final : public Game
 
    // Motion vectors: a destroyed b0 / b1 / b3 buffer leaves the registry and the filter (its address can come back as another buffer,
    // of another size)
-   static void OnDestroyBuffer(DeviceData* device_data, uint64_t handle)
+   static void OnDestroyBuffer(DeviceData* device_data, const ID3D11Resource* handle)
    {
       if (!device_data || !device_data->game)
          return;
@@ -906,34 +906,34 @@ class BorderlandsGoty final : public Game
    }
 
    // Motion vectors: the copies of the scene and of its depth (the last ones before the first post pass are what post reads)
-   bool OverrideCopyResource(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint64_t& src_resource) override
+   bool OverrideCopyResource(ID3D11Device* native_device, DeviceData& device_data, ID3D11Resource*& dst_resource, ID3D11Resource*& src_resource) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
       if (game_device_data.mv_scene_open)
       {
-         if (src_resource == uint64_t(game_device_data.mv_scene_color.get()))
+         if (src_resource == game_device_data.mv_scene_color.get())
          {
             game_device_data.mv_scene_color_copy = dst_resource;
          }
-         else if (src_resource == uint64_t(game_device_data.mv_depth.get()))
+         else if (src_resource == game_device_data.mv_depth.get())
          {
             game_device_data.mv_depth_copy = dst_resource;
          }
       }
       return false;
    }
-   bool OverrideCopyTextureRegion(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint32_t dst_subresource, const D3D11_BOX* dst_box, uint64_t& src_resource, uint32_t src_subresource, const D3D11_BOX* src_box) override
+   bool OverrideCopyTextureRegion(ID3D11Device* native_device, DeviceData& device_data, ID3D11Resource*& dst_resource, uint32_t dst_subresource, const D3D11_BOX* dst_box, ID3D11Resource*& src_resource, uint32_t src_subresource, const D3D11_BOX* src_box) override
    {
       // UE3 copies the scene and its depth with CopySubresourceRegion too (10 a gameplay frame, see "refused_region_copies"). Only a
       // whole texture copy is one of them (the upscaler reads it, and the post passes read it in full).
       auto& game_device_data = GetGameDeviceData(device_data);
-      const bool scene_or_depth = src_resource == uint64_t(game_device_data.mv_scene_color.get()) || src_resource == uint64_t(game_device_data.mv_depth.get());
+      const bool scene_or_depth = src_resource == game_device_data.mv_scene_color.get() || src_resource == game_device_data.mv_depth.get();
       bool whole = dst_subresource == 0 && src_subresource == 0 && (!dst_box || (dst_box->left == 0 && dst_box->top == 0 && dst_box->front == 0));
       if (whole && src_box && scene_or_depth)
       {
          uint4 size;
          DXGI_FORMAT unused_format;
-         GetResourceInfo(reinterpret_cast<ID3D11Resource*>(src_resource), size, unused_format);
+         GetResourceInfo(src_resource, size, unused_format);
          whole = src_box->left == 0 && src_box->top == 0 && src_box->right >= size.x && src_box->bottom >= size.y;
       }
       if (!whole)
@@ -1057,9 +1057,9 @@ class BorderlandsGoty final : public Game
       game_device_data.mv_scene_open = true;
       game_device_data.mv_depth.reset();
       dsv->GetResource(&game_device_data.mv_depth);
-      game_device_data.mv_depth_copy = 0;
+      game_device_data.mv_depth_copy = nullptr;
       game_device_data.mv_scene_color.reset();
-      game_device_data.mv_scene_color_copy = 0;
+      game_device_data.mv_scene_color_copy = nullptr;
       game_device_data.jitter_dsv = nullptr;
       game_device_data.bound_states.ResetDepthTest();
       game_device_data.mv_accepted_rtv = nullptr;
@@ -1287,7 +1287,7 @@ class BorderlandsGoty final : public Game
          {
             depth_texture.reset();
             depth_desc = {};
-            if (SUCCEEDED(reinterpret_cast<ID3D11Resource*>(game_device_data.mv_depth_copy)->QueryInterface(&depth_texture)))
+            if (SUCCEEDED(game_device_data.mv_depth_copy->QueryInterface(&depth_texture)))
             {
                depth_texture->GetDesc(&depth_desc);
             }
@@ -1540,7 +1540,7 @@ class BorderlandsGoty final : public Game
       auto& game_device_data = GetGameDeviceData(device_data);
       if (!game_device_data.mv_texture || !game_device_data.mv_camera || game_device_data.mv_camera->size() < 16 * sizeof(float) || !game_device_data.mv_depth_srv || !game_device_data.mv_scene_color)
          return false;
-      ID3D11Resource* const scene_resource = (game_device_data.mv_scene_color_copy ? reinterpret_cast<ID3D11Resource*>(game_device_data.mv_scene_color_copy) : game_device_data.mv_scene_color.get());
+      ID3D11Resource* const scene_resource = (game_device_data.mv_scene_color_copy ? game_device_data.mv_scene_color_copy : game_device_data.mv_scene_color.get());
       com_ptr<ID3D11Texture2D> scene;
       if (FAILED(scene_resource->QueryInterface(&scene)))
          return false;
@@ -1746,7 +1746,7 @@ class BorderlandsGoty final : public Game
             if (!sampler)
                continue;
             // The game's sampler: the bound one, or the one whose variant is bound
-            auto original = custom_samplers.find(reinterpret_cast<uintptr_t>(sampler));
+            auto original = custom_samplers.find(sampler);
             if (original == custom_samplers.end())
             {
                original = std::find_if(custom_samplers.begin(), custom_samplers.end(), [sampler](const auto& entry)
@@ -1755,16 +1755,16 @@ class BorderlandsGoty final : public Game
                if (original == custom_samplers.end())
                   continue;
             }
-            auto& [original_handle, variants] = *original;
+            auto& [original_sampler, variants] = *original;
             auto variant = variants.find(bias);
             if (variant == variants.end())
             {
                D3D11_SAMPLER_DESC desc;
-               reinterpret_cast<ID3D11SamplerState*>(original_handle)->GetDesc(&desc);
+               original_sampler->GetDesc(&desc);
                variant = variants.emplace(bias, CreateCustomSampler(*device_data, device_data->native_device, desc)).first;
             }
             // No variant: a sampler Core doesn't upgrade, the game's own
-            ID3D11SamplerState* const replacement = (variant->second ? variant->second.get() : reinterpret_cast<ID3D11SamplerState*>(original_handle));
+            ID3D11SamplerState* const replacement = (variant->second ? variant->second.get() : original_sampler);
             if (replacement != sampler)
             {
                sampler->Release();
@@ -1792,29 +1792,29 @@ public:
    // "PatchedDraws::BoundStates", "OnCreateBlendState")
    void PostCreateBuffer(ID3D11Device* device, const D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Buffer* buffer) override
    {
-      BLMovieLeakFix::OnInitBuffer(desc, reinterpret_cast<uintptr_t>(buffer));
+      BLMovieLeakFix::OnInitBuffer(desc, buffer);
    }
    void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource) override
    {
-      BLMovieLeakFix::OnDestroyResource(reinterpret_cast<uintptr_t>(resource));
+      BLMovieLeakFix::OnDestroyResource(resource);
       if (DeviceData* const device_data = GetDeviceData(device))
-         OnDestroyBuffer(device_data, reinterpret_cast<uintptr_t>(resource));
+         OnDestroyBuffer(device_data, resource);
    }
    void PostCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_SHADER_RESOURCE_VIEW_DESC1* desc, ID3D11ShaderResourceView* view) override
    {
-      BLMovieLeakFix::OnInitResourceView(reinterpret_cast<uintptr_t>(resource), reinterpret_cast<uintptr_t>(view));
+      BLMovieLeakFix::OnInitResourceView(resource, view);
    }
    void PostCreateRenderTargetView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_RENDER_TARGET_VIEW_DESC1* desc, ID3D11RenderTargetView* view) override
    {
-      BLMovieLeakFix::OnInitResourceView(reinterpret_cast<uintptr_t>(resource), reinterpret_cast<uintptr_t>(view));
+      BLMovieLeakFix::OnInitResourceView(resource, view);
    }
    void PostCreateUnorderedAccessView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_UNORDERED_ACCESS_VIEW_DESC1* desc, ID3D11UnorderedAccessView* view) override
    {
-      BLMovieLeakFix::OnInitResourceView(reinterpret_cast<uintptr_t>(resource), reinterpret_cast<uintptr_t>(view));
+      BLMovieLeakFix::OnInitResourceView(resource, view);
    }
    void OnViewDestroyed(ID3D11Device* device, const ID3D11View* view) override
    {
-      BLMovieLeakFix::OnDestroyResourceView(reinterpret_cast<uintptr_t>(view));
+      BLMovieLeakFix::OnDestroyResourceView(view);
    }
 
    bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch, UINT copy_flags) override
@@ -1827,7 +1827,7 @@ public:
          return false;
       const uint64_t offset = box ? box->left : 0;
       const uint64_t size = box ? uint64_t(box->right - box->left) : UINT64_MAX;
-      OnUpdateBufferRegion(cmd_list_data->device_data, data, reinterpret_cast<uintptr_t>(buffer), offset, size);
+      OnUpdateBufferRegion(cmd_list_data->device_data, data, buffer, offset, size);
       return false;
    }
 
@@ -2150,7 +2150,7 @@ public:
          if (rtv)
             rtv->GetResource(rtv_res.put());
          const std::shared_lock lock(device_data.mutex);
-         if (rtv_res && device_data.back_buffers.contains(reinterpret_cast<uintptr_t>(rtv_res.get())))
+         if (rtv_res && device_data.back_buffers.contains(rtv_res.get()))
             return DrawOrDispatchOverrideType::Replaced; // drop the UI draw
       }
 

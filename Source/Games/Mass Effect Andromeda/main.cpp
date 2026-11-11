@@ -650,7 +650,7 @@ struct MassEffectAndromedaGameDeviceData final : public GameDeviceData
    // readback. Mapped on both the immediate and Frostbite worker threads, hence the mutex. Reset each present.
    struct MapRec
    {
-      uint64_t handle = 0;
+      const ID3D11Resource* handle = nullptr; // Not owned, only compared
       const void* data = nullptr; // nullptr = banned (seen DISCARD-mapped)
       uint64_t size = 0;
    };
@@ -665,7 +665,7 @@ struct MassEffectAndromedaGameDeviceData final : public GameDeviceData
 #endif
 
       // Caller holds "mutex"
-      int Find(uint64_t handle) const
+      int Find(const ID3D11Resource* handle) const
       {
          for (int i = 0; i < count; ++i)
          {
@@ -1083,9 +1083,9 @@ class MassEffectAndromeda final : public Game
       }
       if (!cb)
          return false;
-      const uint64_t h = reinterpret_cast<uintptr_t>(cb);
+      const ID3D11Resource* const h = cb;
       const uint32_t off = fc * 16u;
-      cb->Release(); // only the handle is needed, as the map cache key
+      cb->Release(); // only the pointer is needed, as the map cache key
       for (int i = 0; i < gd->map_cache.count; ++i)
       {
          const auto& rec = gd->map_cache.recs[i];
@@ -1122,7 +1122,7 @@ class MassEffectAndromeda final : public Game
       const bool discard = access == D3D11_MAP_WRITE_DISCARD;
       if (!discard && ((access != D3D11_MAP_WRITE && access != D3D11_MAP_WRITE_NO_OVERWRITE) || data == nullptr || *data == nullptr))
          return; // NO_OVERWRITE (cached) or DISCARD (bans) only
-      const uint64_t handle = reinterpret_cast<uintptr_t>(buffer);
+      const ID3D11Resource* const handle = buffer;
       D3D11_BUFFER_DESC bd = {};
       buffer->GetDesc(&bd);
       if ((bd.BindFlags & D3D11_BIND_CONSTANT_BUFFER) == 0 || bd.Usage != D3D11_USAGE_DYNAMIC)
@@ -1232,7 +1232,7 @@ public:
          return;
       auto& gd = GetGameDeviceData(*device_data);
       const std::unique_lock lock(gd.map_cache.mutex);
-      if (const int i = gd.map_cache.Find(reinterpret_cast<uintptr_t>(resource)); i >= 0)
+      if (const int i = gd.map_cache.Find(resource); i >= 0)
       {
          gd.map_cache.recs[i] = gd.map_cache.recs[--gd.map_cache.count];
       }
@@ -1812,7 +1812,7 @@ private:
       }
       if (!engine_cb)
          return false;
-      const uint64_t engine_cb_handle = reinterpret_cast<uintptr_t>(engine_cb.get()); // The map cache key
+      const ID3D11Resource* const engine_cb_handle = engine_cb.get(); // The map cache key
       const std::shared_lock lock(gd->map_cache.mutex);
       const int i = gd->map_cache.Find(engine_cb_handle);
       if (i < 0 || gd->map_cache.recs[i].data == nullptr || uint64_t(first_constant + row_count) * 16 > gd->map_cache.recs[i].size)

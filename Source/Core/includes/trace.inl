@@ -22,11 +22,10 @@ namespace Trace
          // the upgraded one will be visible in the lists anyway
          auto RedirectMirroredRVS = [&]<typename T>(T* ptr) -> T*
          {
-            uint64_t handle = reinterpret_cast<uintptr_t>(ptr);
             for (const auto& [key, value] : device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views)
             {
-               if (value == handle)
-                  return reinterpret_cast<T*>(key);
+               if (value == ptr)
+                  return static_cast<T*>(const_cast<ID3D11View*>(key)); // The original view has the same type as its mirror
             }
             return ptr;
          };
@@ -37,9 +36,9 @@ namespace Trace
             {
                rv->GetResource(&resource);
 
-               const bool upgraded = device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.contains((uintptr_t)resource.get()) || device_data.resource_upgrades.upgraded_resources.contains((uintptr_t)resource.get()) || (/*swapchain_upgrade_type > SwapchainUpgradeType::None &&*/ device_data.back_buffers.contains((uintptr_t)resource.get())); // TODO: expose "swapchain_upgrade_type" here or something like that
+               const bool upgraded = device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.contains(resource.get()) || device_data.resource_upgrades.upgraded_resources.contains(resource.get()) || (/*swapchain_upgrade_type > SwapchainUpgradeType::None &&*/ device_data.back_buffers.contains(resource.get())); // TODO: expose "swapchain_upgrade_type" here or something like that
                const bool scaled = [&]() {
-                  auto it = device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.find((uintptr_t)resource.get());
+                  auto it = device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.find(resource.get());
                   return it != device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.end() && it->second.is_scaled;
                }();
 
@@ -265,7 +264,7 @@ namespace Trace
                   if (rt_resource)
                   {
                      // If any of the set RTs are the swapchain, set it to true
-                     trace_draw_call_data.rt_is_swapchain[i] |= device_data.back_buffers.contains((uintptr_t)rt_resource.get());
+                     trace_draw_call_data.rt_is_swapchain[i] |= device_data.back_buffers.contains(rt_resource.get());
                      GetResourceInfo(rt_resource.get(), trace_draw_call_data.rt_size[i], trace_draw_call_data.rt_format[i], &trace_draw_call_data.rt_type_name[i], &trace_draw_call_data.rt_hash[i], &trace_draw_call_data.rt_debug_name[i]);
                
                      trace_draw_call_data.rtv_mip[i] = GetRTVMipLevel(rtv_desc);
@@ -531,7 +530,7 @@ namespace Trace
       }
 
       // Needs "s_mutex_generic" (shared). Returns the shader stage whose state a game draw's entry records, and its reflections.
-      ShaderStages FindStage(const DeviceData& device_data, uint64_t pipeline_handle, const CachedShader** cached_shader)
+      ShaderStages FindStage(const DeviceData& device_data, const ID3D11DeviceChild* pipeline_handle, const CachedShader** cached_shader)
       {
          *cached_shader = nullptr;
          // Note that the pipelines can be run more than once so this will return the first one matching (there's only one actually, we don't have separate settings for their running instance, as that's runtime stuff)
@@ -582,7 +581,7 @@ namespace Trace
       }
 
       // A game draw's entry for one of its shaders. Expects "s_mutex_generic", "s_mutex_dumping" and "device_data.mutex" (shared) locked.
-      void AddDrawCall(std::vector<TraceDrawCallData>& trace_draw_calls_data, const DeviceData& device_data, ID3D11DeviceContext* native_device_context, uint64_t pipeline_handle, const DrawDispatchData& draw_dispatch_data)
+      void AddDrawCall(std::vector<TraceDrawCallData>& trace_draw_calls_data, const DeviceData& device_data, ID3D11DeviceContext* native_device_context, const ID3D11DeviceChild* pipeline_handle, const DrawDispatchData& draw_dispatch_data)
       {
          TraceDrawCallData trace_draw_call_data;
          trace_draw_call_data.pipeline_handle = pipeline_handle;
@@ -871,9 +870,9 @@ namespace Trace
          { SetEventResources(trace_draw_call_data, source, target); });
    }
 
-   void AddClear(CommandListData& cmd_list_data, uint64_t view, std::initializer_list<float> values)
+   void AddClear(CommandListData& cmd_list_data, const ID3D11View* view, std::initializer_list<float> values)
    {
-      if (view == 0)
+      if (view == nullptr)
          return;
       AddEventEntry(cmd_list_data, cmd_list_data.native_device_context, TraceDrawCallData::TraceDrawCallType::ClearResource, [&](TraceDrawCallData& trace_draw_call_data)
          {
@@ -1306,7 +1305,7 @@ namespace Trace
       GameDraw game_draw;
       game_draw.is_dispatch = is_dispatch;
       const ShaderStages stage = is_dispatch ? ShaderStages::Compute : ShaderStages::Pixel;
-      const uint64_t pipeline = is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader.handle : cmd_list_data.pipeline_state_original_pixel_shader.handle;
+      const ID3D11DeviceChild* const pipeline = is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader.handle : cmd_list_data.pipeline_state_original_pixel_shader.handle;
       const auto& shader_hashes = is_dispatch ? cmd_list_data.pipeline_state_original_compute_shader_hashes : cmd_list_data.pipeline_state_original_graphics_shader_hashes;
       game_draw.debug_draw = (debug_draw_shader_hash != 0 || debug_draw_pipeline != 0) && (debug_draw_pipeline == 0 || debug_draw_pipeline == pipeline)
          && (debug_draw_shader_hash == 0 || shader_hashes.Contains(debug_draw_shader_hash, stage))

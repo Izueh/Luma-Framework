@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <d3d11.h>
+
 namespace QuantumBreakUpscaling
 {
    struct NativeJitterSample
@@ -296,10 +298,10 @@ namespace QuantumBreakUpscaling
       return TemporalInputAction::NativeSR;
    }
 
-   inline bool CanUseTemporalSRShader(bool enabled, uintptr_t original, uintptr_t replacement, uintptr_t bound) noexcept
+   inline bool CanUseTemporalSRShader(bool enabled, const ID3D11DeviceChild* original, const ID3D11DeviceChild* replacement, const ID3D11DeviceChild* bound) noexcept
    {
       // A cached replacement handle or a custom vertex shader does not prove the PS is active.
-      return enabled && original != 0u && replacement != 0u && replacement != original && bound == replacement;
+      return enabled && original != nullptr && replacement != nullptr && replacement != original && bound == replacement;
    }
 
    struct SRRenderSize

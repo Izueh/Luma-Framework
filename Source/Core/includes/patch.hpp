@@ -316,7 +316,7 @@ namespace Patch
    // (needs the full Game/DeviceData types).
    std::shared_ptr<PatchedShaderData> PatchShaderSync(Game& game, DeviceData& device_data, const ShaderPatchRequest& request, const ByteCodeView& view, uint32_t providers);
 
-   void TryPatchPipeline(DeviceData& device_data, uint64_t pipeline_handle);
+   void TryPatchPipeline(DeviceData& device_data, const ID3D11DeviceChild* pipeline_handle);
 #endif // LUMA_PATCH_PROVIDERS != 0
 
    // Clones the pipeline replacing shader subobjects via "find_patch" (same
@@ -357,9 +357,9 @@ namespace Patch
    // TODO(Patch module): job collection depends on core.hpp's globals
    // (s_mutex_generic, pipeline_cache_destruction_mutex). Keep its
    // implementation in patch.inl until those are extracted.
-   void GeneratePatchedShadersAsync(DeviceData& device_data, const std::unordered_set<uint64_t>& pipelines_filter);
+   void GeneratePatchedShadersAsync(DeviceData& device_data, const std::unordered_set<const ID3D11DeviceChild*>& pipelines_filter);
    void NotifyAsyncCloneQueue(DeviceData& device_data);
-   void ProcessAsyncCloneBatch(DeviceData& device_data, const std::unordered_set<uint64_t>& pipelines);
+   void ProcessAsyncCloneBatch(DeviceData& device_data, const std::unordered_set<const ID3D11DeviceChild*>& pipelines);
    void PublishReadyAsyncClones(DeviceData& device_data);
 #endif
 } // namespace Patch

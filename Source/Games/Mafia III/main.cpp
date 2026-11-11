@@ -239,7 +239,7 @@ namespace
       {
          com_ptr<ID3D11Resource> rt_resource;
          render_target_view->GetResource(&rt_resource);
-         is_rt_swapchain = device_data.back_buffers.contains((uintptr_t)rt_resource.get()); // At least one of the two won't be nullptr
+         is_rt_swapchain = device_data.back_buffers.contains(rt_resource.get()); // At least one of the two won't be nullptr
       }
       return is_rt_swapchain;
    }
@@ -734,7 +734,7 @@ public:
             render_target_view->GetResource(&rt_resource);
             if (rt_resource.get())
             {
-               is_rt_swapchain = device_data.back_buffers.contains((uintptr_t)rt_resource.get());
+               is_rt_swapchain = device_data.back_buffers.contains(rt_resource.get());
 
                com_ptr<ID3D11Texture2D> rt;
                HRESULT hr = rt_resource->QueryInterface(&rt);
@@ -754,7 +754,7 @@ public:
                         ASSERT_ONCE(pipelines_pair->second.size() == 1);
                         for (const CachedPipeline* cached_pipeline : pipelines_pair->second)
                         {
-                           ID3D11PixelShader* native_ps = reinterpret_cast<ID3D11PixelShader*>(cached_pipeline->pipeline.handle);
+                           ID3D11PixelShader* native_ps = static_cast<ID3D11PixelShader*>(cached_pipeline->pipeline.handle);
                            native_device_context->PSSetShader(native_ps, nullptr, 0);
                            break;
                         }
@@ -885,7 +885,7 @@ public:
          {
             com_ptr<ID3D11Resource> rt_resource;
             rtv->GetResource(&rt_resource);
-            is_rt_swapchain = device_data.back_buffers.contains((uintptr_t)rt_resource.get());
+            is_rt_swapchain = device_data.back_buffers.contains(rt_resource.get());
             is_rt_swapchain_or_back_buffer = is_rt_swapchain;
             // Make sure it's linear otherwise, otherwise we might still need to correct the missing sRGB view mismatch
             if (!is_rt_swapchain)
@@ -1028,7 +1028,7 @@ public:
 
             com_ptr<ID3D11Resource> rt_resource;
             rtv->GetResource(&rt_resource);
-            is_rt_swapchain = device_data.back_buffers.contains((uintptr_t)rt_resource.get());
+            is_rt_swapchain = device_data.back_buffers.contains(rt_resource.get());
             // Make sure it's linear otherwise, otherwise we might still need to correct the missing sRGB view mismatch
             bool is_rt_swapchain_or_back_buffer = is_rt_swapchain;
             if (!is_rt_swapchain)

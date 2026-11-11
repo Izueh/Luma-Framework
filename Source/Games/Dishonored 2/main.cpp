@@ -366,7 +366,7 @@ public:
                for (auto& samplers_handle : device_data.custom_sampler_by_original_sampler)
                {
                   if (samplers_handle.second.contains(new_texture_mip_lod_bias_offset)) continue; // Skip "resolutions" that already got their custom samplers created
-                  ID3D11SamplerState* native_sampler = reinterpret_cast<ID3D11SamplerState*>(samplers_handle.first);
+                  ID3D11SamplerState* native_sampler = samplers_handle.first;
                   shared_lock_samplers.unlock(); // This is fine!
                   {
                      D3D11_SAMPLER_DESC native_desc;

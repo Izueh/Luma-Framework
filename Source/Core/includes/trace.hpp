@@ -75,9 +75,9 @@ struct TraceDrawCallData
    TraceDrawCallType type = TraceDrawCallType::Shader;
 
 #if 1 // For now add a new "TraceDrawCallData" per shader (e.g. one for vertex and one for pixel, instead of doing it per draw call), this is due to legacy code that would require too much refactor
-   uint64_t pipeline_handle = 0;
+   const ID3D11DeviceChild* pipeline_handle = nullptr;
 #else
-   uint64_t pipeline_handles = 0; // The actual list of pipelines that run within the traced frame (within this deferred command list, and then merged into the immediate one later)
+   const ID3D11DeviceChild* pipeline_handles = nullptr; // The actual list of pipelines that run within the traced frame (within this deferred command list, and then merged into the immediate one later)
    ShaderHashesList shader_hashes;
 #endif
 
@@ -333,7 +333,7 @@ namespace Trace
    // Textures debug drawing
    inline uint32_t debug_draw_shader_hash = 0;
    inline char debug_draw_shader_hash_string[8 + 1] = {}; // A shader hash and its terminator
-   inline uint64_t debug_draw_pipeline = 0; // In DX11 shaders and pipelines are the same thing so this is kinda useless (excluding the rare case where multiple pipelines (compiled shader objects) were based on the same shader, and hence had the same hash)
+   inline const ID3D11DeviceChild* debug_draw_pipeline = nullptr; // In DX11 shaders and pipelines are the same thing so this is kinda useless (excluding the rare case where multiple pipelines (compiled shader objects) were based on the same shader, and hence had the same hash)
    inline int32_t debug_draw_pipeline_target_instance = -1;
    inline std::thread::id debug_draw_pipeline_target_thread = std::thread::id(); // Filter target instances by thread, which would hopefully reliably match the command lists, over multiple frames
    inline uint32_t debug_draw_custom_pass = 0; // A Luma pass instead of a game pipeline, by the hash of its "Trace::CustomDraw()" name
@@ -353,7 +353,7 @@ namespace Trace
    inline bool debug_draw_auto_gamma = true;
 
    // Constant Buffers tracking
-   inline uint64_t track_buffer_pipeline = 0; // Can be any type of shader
+   inline const ID3D11DeviceChild* track_buffer_pipeline = nullptr; // Can be any type of shader
    inline uint32_t track_buffer_custom_pass = 0; // A Luma pass instead of a game pipeline, like "debug_draw_custom_pass"
    inline int32_t track_buffer_pipeline_target_instance = -1;
    inline int32_t track_buffer_index = 0;
@@ -394,7 +394,7 @@ namespace Trace
    // Core: the entries of events that aren't draws, with the resource they read ("source", in "sr_*[0]") and the one they write ("target", in "rt_*[0]")
    void AddEvent(CommandListData& cmd_list_data, ID3D11DeviceContext* command_list, TraceDrawCallData::TraceDrawCallType type, ID3D11Resource* source = nullptr, ID3D11Resource* target = nullptr);
    // "values" are stored in "blend_factor" (depth and stencil in the first two for depth clears)
-   void AddClear(CommandListData& cmd_list_data, uint64_t view, std::initializer_list<float> values);
+   void AddClear(CommandListData& cmd_list_data, const ID3D11View* view, std::initializer_list<float> values);
    void AddCopy(CommandListData& cmd_list_data, ID3D11DeviceContext* command_list, ID3D11Resource* source, ID3D11Resource* target, const TraceDrawCallData::CopyInfo& copy_info);
    // Core: a deferred command list created or appended into "cmd_list_data", with the entries it recorded
    void JoinCommandList(CommandListData& cmd_list_data, CommandListData& secondary_cmd_list_data, ID3D11DeviceContext* command_list, bool is_finish_command_list);
@@ -422,7 +422,7 @@ namespace Trace
    // A pass the debug draw and the constant buffer tracking can target: a game pipeline, or a Luma pass by name ("CustomDraw()")
    struct PassTarget
    {
-      uint64_t pipeline = 0;
+      const ID3D11DeviceChild* pipeline = nullptr;
       uint32_t shader_hash = 0; // The pipeline's (first) shader, or the Luma pass's native shader
       uint32_t custom_pass = 0;
       ShaderStages stage = ShaderStages::None;

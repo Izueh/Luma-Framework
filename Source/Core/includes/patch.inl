@@ -890,7 +890,7 @@ namespace Patch
       return nullptr;
    }
 
-   void TryPatchPipeline(DeviceData& device_data, uint64_t pipeline_handle)
+   void TryPatchPipeline(DeviceData& device_data, const ID3D11DeviceChild* pipeline_handle)
    {
       Shader::CachedPipeline* cached_pipeline = nullptr;
       {
@@ -959,7 +959,7 @@ namespace Patch
             {
                cached_pipeline->patch_application_mode = Shader::PatchApplicationMode::Sync;
 #if DEVELOPMENT
-               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose, std::format("[Patch] Sync-patched pipeline {:x} -> clone {:x}", cached_pipeline->pipeline.handle, pipeline_clone.handle).c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose, std::format("[Patch] Sync-patched pipeline {:x} -> clone {:x}", reinterpret_cast<uintptr_t>(cached_pipeline->pipeline.handle), reinterpret_cast<uintptr_t>(pipeline_clone.handle)).c_str());
 #endif
 
 #if DEVELOPMENT && LUMA_PATCH_PROVIDERS != 0
@@ -1014,7 +1014,7 @@ namespace Patch
    void UnloadPatches(DeviceData& device_data)
    {
       patches_unloaded = true; // Also prevents new pipelines from being queued for patch cloning
-      std::unordered_set<uint64_t> mixed;
+      std::unordered_set<const ID3D11DeviceChild*> mixed;
       {
          const std::unique_lock lock(s_mutex_generic);
          for (auto& pair : device_data.pipeline_cache_by_pipeline_handle)
@@ -1048,8 +1048,8 @@ namespace Patch
       auto& context = device_data.patch_context;
       uint64_t settings_version = 0;
       std::vector<PatchContext::RecipeEntry> recipes = ParseRecipes(device_data, settings_version); // Disk reads stay outside the core locks
-      std::unordered_set<uint64_t> affected;
-      std::unordered_map<uint64_t, ID3D11Device*> to_destroy;
+      std::unordered_set<const ID3D11DeviceChild*> affected;
+      std::unordered_map<ID3D11DeviceChild*, ID3D11Device*> to_destroy;
       {
          const std::shared_lock lock_destroy(device_data.pipeline_cache_destruction_mutex);
          const std::unique_lock lock_generic(s_mutex_generic);
@@ -1069,7 +1069,7 @@ namespace Patch
          // Also clears their clone description (files included). They are re-patched (and get their
          // files back) on their next bind, like every pipeline whose recipe outcome was cleared above.
          if (!affected.empty()) UnloadCustomShaders(device_data, affected, false, &to_destroy);
-         for (uint64_t handle : affected) device_data.pipelines_to_reload.erase(handle);
+         for (const ID3D11DeviceChild* handle : affected) device_data.pipelines_to_reload.erase(handle);
       }
       for (const auto& [handle, device] : to_destroy) Shader::DestroyPipeline({handle});
    }
@@ -1278,7 +1278,7 @@ namespace Patch
       // Stored-but-uncloned pipelines go through the async worker (providers may
       // not have run while unloaded, hence the same predicate as the queue gate).
       {
-         std::unordered_set<uint64_t> to_reload;
+         std::unordered_set<const ID3D11DeviceChild*> to_reload;
          {
             const std::shared_lock lock(s_mutex_generic);
             for (auto& pair : device_data.pipeline_cache_by_pipeline_handle)
@@ -1295,7 +1295,7 @@ namespace Patch
          if (!to_reload.empty())
          {
             const std::unique_lock lock_loading(s_mutex_loading);
-            for (uint64_t handle : to_reload)
+            for (const ID3D11DeviceChild* handle : to_reload)
             {
                device_data.pipelines_to_reload.emplace(handle);
             }
@@ -1322,7 +1322,7 @@ namespace Patch
    }
 
 #if LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC)
-   void GeneratePatchedShadersAsync(DeviceData& device_data, const std::unordered_set<uint64_t>& pipelines_filter)
+   void GeneratePatchedShadersAsync(DeviceData& device_data, const std::unordered_set<const ID3D11DeviceChild*>& pipelines_filter)
    {
       std::vector<Patch::PatchJob> patch_jobs;
       // One job per shader per cycle: many pipelines share a shader hash, and
@@ -1335,7 +1335,7 @@ namespace Patch
          std::shared_lock lock_pipeline_destroy(device_data.pipeline_cache_destruction_mutex);
          const std::shared_lock lock_generic(s_mutex_generic);
 
-         for (uint64_t pipeline_handle : pipelines_filter)
+         for (const ID3D11DeviceChild* pipeline_handle : pipelines_filter)
          {
             auto cached_pipeline_it = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle);
             if (cached_pipeline_it == device_data.pipeline_cache_by_pipeline_handle.end() || cached_pipeline_it->second == nullptr || cached_pipeline_it->second->manually_unloaded)
@@ -1443,9 +1443,9 @@ namespace Patch
    // game's pipeline destruction can never free memory we are still reading.
    // Finished builds are handed to the ready queue; the present boundary
    // publishes them (see PublishReadyAsyncClones).
-   void ProcessAsyncCloneBatch(DeviceData& device_data, const std::unordered_set<uint64_t>& pipelines)
+   void ProcessAsyncCloneBatch(DeviceData& device_data, const std::unordered_set<const ID3D11DeviceChild*>& pipelines)
    {
-      for (const uint64_t pipeline_handle : pipelines)
+      for (const ID3D11DeviceChild* const pipeline_handle : pipelines)
       {
          Shader::PipelineSubobject* subobjects_copy = nullptr;
          uint32_t subobject_count = 0;
@@ -1551,10 +1551,10 @@ namespace Patch
 #if DEVELOPMENT
 #if LUMA_ASYNC_CLONE_MODE == 1
          Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose,
-            std::format("[AsyncClone] queued clone build for pipeline {:x}", pipeline_handle).c_str());
+            std::format("[AsyncClone] queued clone build for pipeline {:x}", reinterpret_cast<uintptr_t>(pipeline_handle)).c_str());
 #else
          Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose,
-            std::format("[AsyncClone] compiled clone {:x} for pipeline {:x}", entry.pipeline_clone.handle, pipeline_handle).c_str());
+            std::format("[AsyncClone] compiled clone {:x} for pipeline {:x}", reinterpret_cast<uintptr_t>(entry.pipeline_clone.handle), reinterpret_cast<uintptr_t>(pipeline_handle)).c_str());
 #endif
 #endif
          const std::lock_guard lock_jobs(device_data.async_jobs_mutex);
@@ -1685,10 +1685,10 @@ namespace Patch
             cached_pipeline->clone_origin = entry.clone_origin;
             cached_pipeline->custom_pipeline_data = entry.custom_pipeline_data;
 #if LUMA_USE_DXP
-            if (cached_pipeline->custom_pipeline_data.patch_data && (clone.handle & 1) == 0)
+            if (cached_pipeline->custom_pipeline_data.patch_data) // (There used to be a check for ReShade's tagged handles here, shader pointers never have the low bit set)
             {
                // Keep clone ownership with its reports so old command lists can switch variants after reload.
-               cached_pipeline->custom_pipeline_data.patch_data->native_pipeline_clone.reset(reinterpret_cast<ID3D11DeviceChild*>(clone.handle));
+               cached_pipeline->custom_pipeline_data.patch_data->native_pipeline_clone.reset(clone.handle);
             }
 #endif
             device_data.pipeline_cache_by_pipeline_clone_handle[clone.handle] = cached_pipeline;
@@ -1713,7 +1713,7 @@ namespace Patch
             device_data.cloned_pipelines_changed = true;
 #if DEVELOPMENT
             Luma::Utils::Log::Write(Luma::Utils::Log::Level::Verbose,
-               std::format("[AsyncClone] published clone {:x} for pipeline {:x}", clone.handle, entry.pipeline_handle).c_str());
+               std::format("[AsyncClone] published clone {:x} for pipeline {:x}", reinterpret_cast<uintptr_t>(clone.handle), reinterpret_cast<uintptr_t>(entry.pipeline_handle)).c_str());
 #endif
          }
       }

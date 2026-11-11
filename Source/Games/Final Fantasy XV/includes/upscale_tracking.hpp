@@ -39,8 +39,8 @@ struct UpscaledStencil
 struct UpscaleTrackingState
 {
    std::deque<UpscaledResource> pool;
-   std::unordered_map<uintptr_t, uint32_t> frame_links; // source resource ptr -> pool index (frame-local)
-   std::unordered_map<uintptr_t, UpscaledStencil> stencil_pool; // source DSV resource ptr -> output-resolution stencil
+   std::unordered_map<const ID3D11Resource*, uint32_t> frame_links; // source resource -> pool index (frame-local)
+   std::unordered_map<const ID3D11Resource*, UpscaledStencil> stencil_pool; // source DSV resource -> output-resolution stencil
    bool post_taa_upscale_active = false;                // gate: true until the scene reaches an output-sized target
    UINT pool_output_width = 0;
    UINT pool_output_height = 0;
@@ -233,7 +233,7 @@ static UpscaledResource* AcquireUpscaledFromPool(
 
 static UpscaledResource* GetLinkedUpscaled(
    UpscaleTrackingState& tracking,
-   uintptr_t source_key)
+   const ID3D11Resource* source_key)
 {
    std::lock_guard<std::recursive_mutex> lock(tracking.mutex);
    auto link_it = tracking.frame_links.find(source_key);
@@ -253,7 +253,7 @@ static UpscaledResource* GetLinkedUpscaled(
 static UpscaledResource* LinkUpscaledResource(
    ID3D11Device* device, ID3D11DeviceContext* device_context, ID3D11Resource* original_resource,
    UpscaleTrackingState& tracking, const float2& output_resolution, bool require_uav, DXGI_FORMAT view_format);
-static void UnlinkUpscaledResource(UpscaleTrackingState& tracking, uintptr_t source_key);
+static void UnlinkUpscaledResource(UpscaleTrackingState& tracking, const ID3D11Resource* source_key);
 
 // Full clears of render-shaped RTVs during the active chain establish their
 // scaled target immediately. This initializes pooled/discarded MRT regions
@@ -276,7 +276,7 @@ static void TrackAndClearUpscaleTarget(
    D3D11_TEXTURE2D_DESC desc{};
    if (!resource || FAILED(resource->QueryInterface(texture.put())))
       return;
-   const uintptr_t key = reinterpret_cast<uintptr_t>(resource.get());
+   const ID3D11Resource* const key = resource.get();
    if (rect_count != 0)
    {
       // Rect coordinates belong to the native grid. Drop any previous link so
@@ -320,13 +320,13 @@ static void ForgetNativeUpscaleOutputs(ID3D11DeviceContext* context, UpscaleTrac
       ComPtr<ID3D11Resource> resource;
       target->GetResource(resource.put());
       target->Release();
-      tracking.frame_links.erase(reinterpret_cast<uintptr_t>(resource.get()));
+      tracking.frame_links.erase(resource.get());
    }
 }
 
 static void UnlinkUpscaledResource(
    UpscaleTrackingState& tracking,
-   uintptr_t source_key)
+   const ID3D11Resource* source_key)
 {
    std::lock_guard<std::recursive_mutex> lock(tracking.mutex);
    auto link_it = tracking.frame_links.find(source_key);
@@ -355,7 +355,7 @@ static UpscaledResource* LinkUpscaledResource(
    if (!original_resource)
       return nullptr;
 
-   const uintptr_t source_key = reinterpret_cast<uintptr_t>(original_resource);
+   const ID3D11Resource* const source_key = original_resource;
 
    if (UpscaledResource* linked = GetLinkedUpscaled(tracking, source_key))
    {
@@ -425,7 +425,7 @@ static uint32_t ReplaceUpscaledInputs(
       srvs[i]->Release(); // balance the Get
       if (!resource)
          continue;
-      UpscaledResource* linked = GetLinkedUpscaled(tracking, reinterpret_cast<uintptr_t>(resource.get()));
+      UpscaledResource* linked = GetLinkedUpscaled(tracking, resource.get());
       if (!linked || !linked->srv)
          continue;
       ++chain_hits;
@@ -500,7 +500,7 @@ static ID3D11DepthStencilView* AcquireUpscaledStencil(
       return nullptr;
    view_desc.Flags = 0; // Never read only, the stencil is written by the passes using it
 
-   UpscaledStencil& entry = tracking.stencil_pool[reinterpret_cast<uintptr_t>(resource.get())];
+   UpscaledStencil& entry = tracking.stencil_pool[resource.get()];
    if (entry.texture)
    {
       D3D11_TEXTURE2D_DESC existing{};
@@ -561,7 +561,7 @@ static uint32_t ReplaceUpscaledOutputs(
       D3D11_TEXTURE2D_DESC desc{};
       DXGI_FORMAT view_format = DXGI_FORMAT_UNKNOWN;
       DXGI_FORMAT typed_format = DXGI_FORMAT_UNKNOWN;
-      uintptr_t source_key = 0;
+      const ID3D11Resource* source_key = nullptr;
       uint32_t pool_index = kInvalidPoolIndex;
       bool already_pooled = false;
       bool acquired = false;
@@ -607,7 +607,7 @@ static uint32_t ReplaceUpscaledOutputs(
       output.original_view->GetResource(output.resource.put());
       if (!output.resource || FAILED(output.resource->QueryInterface(output.texture.put())))
          return reject();
-      output.source_key = reinterpret_cast<uintptr_t>(output.resource.get());
+      output.source_key = output.resource.get();
       output.texture->GetDesc(&output.desc);
       D3D11_RENDER_TARGET_VIEW_DESC view_desc{};
       output.original_view->GetDesc(&view_desc);
@@ -760,7 +760,7 @@ static void ReplaceUpscaledUAVOutput(
       return;
 
    std::lock_guard<std::recursive_mutex> lock(tracking.mutex);
-   const uintptr_t source_key = reinterpret_cast<uintptr_t>(resource.get());
+   const ID3D11Resource* const source_key = resource.get();
    const DXGI_FORMAT view_format = view_desc.Format != DXGI_FORMAT_UNKNOWN && view_desc.Format != desc.Format ? view_desc.Format : DXGI_FORMAT_UNKNOWN;
    UpscaledResource* entry = GetLinkedUpscaled(tracking, source_key);
    if (!entry)

@@ -114,25 +114,25 @@ namespace RenderTracker // partial
    // Handles //
    ComPtr<ID3D11Resource> res_main_color; // rgba16f that forward lighting draws to
    ComPtr<ID3D11Texture2D> res_main_color_tex;
-   uint64_t res_main_color_handle = 0;
+   const ID3D11Resource* res_main_color_handle = nullptr; // Only compared ("res_main_color" keeps it alive)
    uint2 res_main_color_size = {};
 
    ComPtr<ID3D11Resource> res_main_depth; // depth buffer that forward lighting draws to
    ComPtr<ID3D11Texture2D> res_main_depth_tex;
-   uint64_t res_main_depth_handle = 0;
+   const ID3D11Resource* res_main_depth_handle = nullptr; // Only compared ("res_main_depth" keeps it alive)
    uint2 res_main_depth_size = {}; // should be same as color
 
    void Reset_Handles()
    {
-      res_main_color.reset(); res_main_color_tex.reset(); res_main_color_handle = 0;
-      res_main_depth.reset(); res_main_depth_tex.reset(); res_main_depth_handle = 0;
+      res_main_color.reset(); res_main_color_tex.reset(); res_main_color_handle = nullptr;
+      res_main_depth.reset(); res_main_depth_tex.reset(); res_main_depth_handle = nullptr;
       res_main_color_size = {0,0}; res_main_depth_size = {0,0};
    }
       
    // State (cleared on present) //
    uint32_t ps_prev;
 
-   uint64_t last_cleared_rtv_handle = 0;
+   const ID3D11Resource* last_cleared_rtv_handle = nullptr; // The resource of the last cleared RTV, only compared
 
    uint8_t count_main_color_clears = 0; // count of ClearRenderTargetView on main color
    uint8_t count_main_color_clears_draws_after = 0; // (exec first-most) count of OnDrawOrDispatch after last ClearRenderTargetView on main color
@@ -291,10 +291,8 @@ namespace OutputHandling
          native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
          ComPtr<ID3D11Resource> res;
          rtv->GetResource(res.put());
-         uint64_t handle = reinterpret_cast<uintptr_t>(res.get());
-
          // set contains
-         if (!device_data.back_buffers.contains(handle)) return DrawOrDispatchOverrideType::None;
+         if (!device_data.back_buffers.contains(res.get())) return DrawOrDispatchOverrideType::None;
       }
       // (otherwise, it's guaranteed after final)
 
@@ -1706,7 +1704,7 @@ namespace XeGTAO
          // Stage 1: Tonemap //
          //////////////////////
          // failed: still not found
-         if (RenderTracker::res_main_color_handle == 0) return false;
+         if (RenderTracker::res_main_color_handle == nullptr) return false;
          
          ///////////////////////////////////////
          // Stage 2: SSS for color, depth, cb //
@@ -1726,7 +1724,7 @@ namespace XeGTAO
          rtv->GetResource(color_res.put());
 
          // failed: color_res != FoundResource::correct_main_color_res_handle (i.e. X Song Pack HQ Mirrored World Reflections)
-         if (reinterpret_cast<uintptr_t>(color_res.get()) != RenderTracker::res_main_color_handle) return false;
+         if (color_res.get() != RenderTracker::res_main_color_handle) return false;
 
          // Depth
          ASSERT_MSG(depth_res.get() == RenderTracker::res_main_depth.get(), "XeGTAO::TrySetFromViews() depth_res != ResourceTracker::res_main_depth"); // validate with RenderTracker
@@ -1764,9 +1762,9 @@ namespace XeGTAO
          }
 
          // Scene CB1
-         auto previous_cb_handle = FoundResource::SceneCB::cb.get() ? reinterpret_cast<uintptr_t>(FoundResource::SceneCB::cb.get()) : 0;
+         const ID3D11Buffer* const previous_cb_handle = FoundResource::SceneCB::cb.get();
          native_device_context->PSGetConstantBuffers(1, 1, FoundResource::SceneCB::cb.put());
-         if (DEVELOPMENT && previous_cb_handle != 0 && previous_cb_handle != reinterpret_cast<uintptr_t>(FoundResource::SceneCB::cb.get()))
+         if (DEVELOPMENT && previous_cb_handle != nullptr && previous_cb_handle != FoundResource::SceneCB::cb.get())
             ASSERT_MSG(FoundResource::SceneCB::cb.get() != nullptr, "FoundResource SceneCB changed to nullptr");
 
          // log
@@ -1785,7 +1783,7 @@ namespace XeGTAO
    {
       // get bound main color RES from original draw
       ComPtr<ID3D11Resource> main_color_res = nullptr;
-      uint64_t main_color_res_handle = 0;
+      const ID3D11Resource* main_color_res_handle = nullptr;
       if (main_color_index >= 0)
       {
          // SRV
@@ -1793,7 +1791,7 @@ namespace XeGTAO
          native_device_context->PSGetShaderResources(main_color_index, 1, main_color_srv.put());
          ASSERT_MSG(main_color_srv != nullptr, "XeGTAO::TryDraw() main_color_srv is nullptr");
          main_color_srv->GetResource(main_color_res.put());
-         main_color_res_handle = reinterpret_cast<uintptr_t>(main_color_res.get());
+         main_color_res_handle = main_color_res.get();
       }
       else
       {
@@ -1802,11 +1800,11 @@ namespace XeGTAO
          native_device_context->OMGetRenderTargets(1, main_color_rtv.put(), nullptr);
          ASSERT_MSG(main_color_rtv != nullptr, "XeGTAO::TryDraw() main_color_rtv is nullptr");
          main_color_rtv->GetResource(main_color_res.put());
-         main_color_res_handle = reinterpret_cast<uintptr_t>(main_color_res.get());
+         main_color_res_handle = main_color_res.get();
       }
 
       // failed: bound main color RES != FoundResource::Color::res (i.e. X Song Pack HQ Mirrored World Reflections)
-      if (main_color_res_handle != reinterpret_cast<uintptr_t>(FoundResource::Color::res.get())) return false;
+      if (main_color_res_handle != FoundResource::Color::res.get()) return false;
       
       // Thread counts setup
       int checkerboard_mode = ShaderDefineInfo::GetB(ShaderDefineInfo::XEGTAO_CHECKBOARD);
@@ -2123,8 +2121,8 @@ namespace SSS
    {
       struct Item
       {
-         uint64_t original_res_handle; // original full res setup RES
-         uint64_t replacement_res_handle = 0; // SRV16 to replace
+         const ID3D11Resource* original_res_handle = nullptr; // original full res setup RES (only compared)
+         const ID3D11Resource* replacement_res_handle = nullptr; // SRV16 to replace (only compared)
          uint2 size = { 0, 0 };
          bool IsOriginalMainColor() const { return original_res_handle == RenderTracker::res_main_color_handle; }
 
@@ -2142,11 +2140,11 @@ namespace SSS
          ComPtr<ID3D11ShaderResourceView> new_use_srv;
          ComPtr<ID3D11RenderTargetView> new_use_rtv;
          
-         bool IsValid() const { return original_res_handle > 0; }
+         bool IsValid() const { return original_res_handle != nullptr; }
          void Reset()
          {
             size = { 0, 0 };
-            original_res_handle = 0; replacement_res_handle = 0;
+            original_res_handle = nullptr; replacement_res_handle = nullptr;
             original_srv.reset(); original_rtv.reset();
             new_draw_srv.reset(); new_draw_rtv.reset();
             new_aux_srv.reset(); new_aux_rtv.reset();
@@ -2157,7 +2155,7 @@ namespace SSS
       std::array<Item, 2> items = { };
       int GetItemCount() { return std::count_if(items.begin(), items.end(), [](const Item& item) { return item.IsValid(); }); }
 
-      Item* TryGetItemForOriginal(uint64_t original_res_handle)
+      Item* TryGetItemForOriginal(const ID3D11Resource* original_res_handle)
       {
          for (Item& item : items)
          {
@@ -2166,11 +2164,11 @@ namespace SSS
          return nullptr;
       }
 
-      Item* TryGetItemForReplace(uint64_t replacement_res_handle)
+      Item* TryGetItemForReplace(const ID3D11Resource* replacement_res_handle)
       {
          for (Item& item : items)
          {
-            ASSERT_MSG(!item.IsValid() || item.replacement_res_handle > 0, "SSS::Resources::TryGetItemForReplace() IsValid() but replacement_res_handle == 0");
+            ASSERT_MSG(!item.IsValid() || item.replacement_res_handle != nullptr, "SSS::Resources::TryGetItemForReplace() IsValid() but replacement_res_handle == 0");
             if (item.IsValid() && item.replacement_res_handle == replacement_res_handle) return &item;
          }
          return nullptr;
@@ -2241,7 +2239,7 @@ namespace SSS
                rtv0->GetResource(res0.put());
          
                // RES handle
-               auto res_handle = reinterpret_cast<uintptr_t>(res0.get());
+               const ID3D11Resource* res_handle = res0.get();
          
                // get item
                current_item = Resources::TryGetItemForOriginal(res_handle);
@@ -2331,11 +2329,11 @@ namespace SSS
                ASSERT_MSG(rtv0 != nullptr, "SSS::OnDrawOrDispatchOverride() Wait rtv0 is nullptr");
                ComPtr<ID3D11Resource> res0;
                rtv0->GetResource(res0.put());
-               auto res_handle = reinterpret_cast<uintptr_t>(res0.get());
+               const ID3D11Resource* res_handle = res0.get();
 
                ComPtr<ID3D11Resource> res_new;
                current_item->new_draw_rtv->GetResource(res_new.put());
-               auto res_new_handle = reinterpret_cast<uintptr_t>(res_new.get());
+               const ID3D11Resource* res_new_handle = res_new.get();
                
                ASSERT_MSG(res_handle == res_new_handle, "SSS::OnDrawOrDispatchOverride() Wait rtv0 res_handle != new_draw_rtv res_handle");
             }
@@ -2435,7 +2433,7 @@ namespace SSS
             
             ComPtr<ID3D11Resource> replacement_res = nullptr;
             rtv0->GetResource(replacement_res.put());
-            current_item->replacement_res_handle = reinterpret_cast<uintptr_t>(replacement_res.get()); 
+            current_item->replacement_res_handle = replacement_res.get(); 
 
             // set SRV0 & RTV0 as full res
             native_device_context->PSSetShaderResources(0, 1, is_pbr ? &current_item->new_draw_srv : &current_item->new_aux_srv); // NPR uses aux from pre-sss pass, PBR uses original
@@ -2475,7 +2473,7 @@ namespace SSS
             srv16->GetResource(res16.put());
 
             // replace?
-            Resources::Item* item = Resources::TryGetItemForReplace(reinterpret_cast<uintptr_t>(res16.get()));
+            Resources::Item* item = Resources::TryGetItemForReplace(res16.get());
             if (item)
             {
                // set SRV16 as our new
@@ -3260,7 +3258,7 @@ namespace SpotLightShadows
 
    namespace Resources
    {
-      uint64_t depth_res_handle = 0;
+      const ID3D11Resource* depth_res_handle = nullptr; // Only compared
 
       ComPtr<ID3D11ShaderResourceView> newcolor_srv = nullptr;
       ComPtr<ID3D11RenderTargetView> newcolor_rtv = nullptr;
@@ -3269,7 +3267,7 @@ namespace SpotLightShadows
 
       void Reset()
       {
-         depth_res_handle = 0;
+         depth_res_handle = nullptr;
          newcolor_srv.reset();
          newcolor_rtv.reset();
       }
@@ -3339,7 +3337,7 @@ namespace SpotLightShadows
             ASSERT_MSG(ps == 0xC1A00F28, "SpotLightShadows: DepthFinalize1 shader not detected next!");
 
             // RTV0 is precompute depth (will be bound SRV18 for Resolve)
-            if (Resources::depth_res_handle == 0)
+            if (Resources::depth_res_handle == nullptr)
             {
                ComPtr<ID3D11RenderTargetView> rtv0;
                native_device_context->OMGetRenderTargets(1, rtv0.put(), nullptr);
@@ -3348,7 +3346,7 @@ namespace SpotLightShadows
                ComPtr<ID3D11Resource> rtv0_resource;
                rtv0->GetResource(rtv0_resource.put());
                
-               Resources::depth_res_handle = reinterpret_cast<uintptr_t>(rtv0_resource.get());
+               Resources::depth_res_handle = rtv0_resource.get();
             }
 
             // next state
@@ -3363,14 +3361,18 @@ namespace SpotLightShadows
             if (!resolving_shaders.contains(ps))
             {
                // last hurrah SVR10 == depth_res_handle
-               uint64_t srv10_handle;
+               // TODO: this compared the SRV's address (a view) with "depth_res_handle" (a resource), so they never matched.
+               // Kept that way to not change behaviour, the fix is probably to compare the SRV's resource.
+               const bool srv10_is_depth = false;
+#if DEVELOPMENT
                {
-                  ComPtr<ID3D11ShaderResourceView> srv10;
-                  native_device_context->PSGetShaderResources(18, 1, srv10.put());
-                  srv10_handle = !srv10 ? 0 : reinterpret_cast<uintptr_t>(srv10.get());
+                  ComPtr<ID3D11ShaderResourceView> srv18;
+                  native_device_context->PSGetShaderResources(18, 1, srv18.put());
+                  ASSERT_ONCE_MSG(!srv18 || GetResourceFromView(srv18.get()) != Resources::depth_res_handle, "SpotLightShadows: SRV18 is the depth, but the check compared the view, not its resource, so it's never seen as such. Fix \"srv10_is_depth\".");
                }
-               
-               if (srv10_handle != Resources::depth_res_handle)
+#endif
+
+               if (!srv10_is_depth)
                {
                   if (state == ResolvingAtLeastOnce) state = TonemapUse; // resolved at least once, so we can move on
                   break; // early "return"
@@ -4057,7 +4059,7 @@ namespace ShadowMap
    bool state_silhouette_clear_token_color = true; // token to clear if needed (OnClearRenderTargetViewMegaMix will also grant)
    bool state_silhouette_clear_token_depth = true; // token to clear if needed
    bool state_silhouette_clear_token_color_granted_this_frame = false; // granted by OnClearRenderTargetViewMegaMix
-   uint64_t state_texdowna_rtv_handle = 0; // handle of TexA downsample that was used this frame. if !state_texa_used_this_frame, this is 0.
+   const ID3D11Resource* state_texdowna_rtv_handle = nullptr; // resource of TexA downsample that was used this frame (only compared). if !state_texa_used_this_frame, this is null.
 
 
    void ResetState()
@@ -4120,28 +4122,29 @@ namespace ShadowMap
       State state = FindDepthDrawHandle;
       bool IsOriginalSearchReady() { return state >= Done; }
       
-      uint64_t orig_depthdraw_handle = 0; // 2048x2048 R32F
-      uint64_t orig_depthuse_handle = 0; // 2048x2048 R32F, bound SRV19
-      uint64_t orig_depthusedown_handle = 0; // 512x512 R32F, bound SRV20
+      // The game's resources, only compared
+      const ID3D11Resource* orig_depthdraw_handle = nullptr; // 2048x2048 R32F
+      const ID3D11Resource* orig_depthuse_handle = nullptr; // 2048x2048 R32F, bound SRV19
+      const ID3D11Resource* orig_depthusedown_handle = nullptr; // 512x512 R32F, bound SRV20
       uint depth_size_orig = 0; // should not be 0 when State IsReady()
 
-      uint64_t orig_tex_handle = 0; // 2048x2048 RGBA8
-      // uint64_t orig_texdowna_handle = 0; // 512x512 RGBA8
-      // uint64_t orig_texdownb_handle = 0; // 512x512 RGBA8
+      const ID3D11Resource* orig_tex_handle = nullptr; // 2048x2048 RGBA8
+      // const ID3D11Resource* orig_texdowna_handle = nullptr; // 512x512 RGBA8
+      // const ID3D11Resource* orig_texdownb_handle = nullptr; // 512x512 RGBA8
       uint tex_size_orig = 0; // should not be 0 when State IsReady()
 
       void Reset_Handles()
       {
          state = FindDepthDrawHandle;
          
-         orig_depthdraw_handle = 0;
-         orig_depthuse_handle = 0;
-         orig_depthusedown_handle = 0;
+         orig_depthdraw_handle = nullptr;
+         orig_depthuse_handle = nullptr;
+         orig_depthusedown_handle = nullptr;
          depth_size_orig = 0;
-         
-         orig_tex_handle = 0;
-         // orig_texdowna_handle = 0;
-         // orig_texdownb_handle = 0;
+
+         orig_tex_handle = nullptr;
+         // orig_texdowna_handle = nullptr;
+         // orig_texdownb_handle = nullptr;
          tex_size_orig = 0;
       }
 
@@ -4694,8 +4697,8 @@ namespace ShadowMap
                rtv0->GetResource(rtv0_res.put());
                dsv->GetResource(dsv_res.put());
                
-               uint64_t rtv0_handle = reinterpret_cast<uintptr_t>(rtv0_res.get());
-               uint64_t dsv_handle = reinterpret_cast<uintptr_t>(dsv_res.get());
+               const ID3D11Resource* rtv0_handle = rtv0_res.get();
+               const ID3D11Resource* dsv_handle = dsv_res.get();
                if (rtv0_handle != Resources::orig_tex_handle || dsv_handle != Resources::orig_depthdraw_handle)
                {
                   Resources::Reset_Handles();
@@ -4753,7 +4756,7 @@ namespace ShadowMap
             //    ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null WorldBDownsample0 FindTexBHandle");
             //    ComPtr<ID3D11Resource> rtv0_resource;
             //    rtv0->GetResource(rtv0_resource.put());
-            //    Resources::orig_texdownb_handle = reinterpret_cast<uintptr_t>(rtv0_resource.get()); // save
+            //    Resources::orig_texdownb_handle = rtv0_resource.get(); // save
             // }
             
             // ready
@@ -4840,7 +4843,7 @@ namespace ShadowMap
                ASSERT_MSG(srv0 != nullptr, "ShadowMap: SRV0 null DepthExpand0 FindDepthHandle");
                ComPtr<ID3D11Resource> res;
                srv0->GetResource(res.put());
-               Resources::orig_depthdraw_handle = reinterpret_cast<uintptr_t>(res.get()); // save
+               Resources::orig_depthdraw_handle = res.get(); // save
 
                // query SRV0 tex desc
                ComPtr<ID3D11Texture2D> tex;
@@ -4903,7 +4906,7 @@ namespace ShadowMap
                ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null DepthExpand1 FindDepthUseHandle");
                ComPtr<ID3D11Resource> rtv0_res;
                rtv0->GetResource(rtv0_res.put());
-               Resources::orig_depthuse_handle = reinterpret_cast<uintptr_t>(rtv0_res.get());
+               Resources::orig_depthuse_handle = rtv0_res.get();
             }
 
             // ready
@@ -4919,7 +4922,7 @@ namespace ShadowMap
                   ComPtr<ID3D11Resource> rtv0_res;
                   rtv0->GetResource(rtv0_res.put());
                   
-                  uint64_t rtv0_handle = reinterpret_cast<uintptr_t>(rtv0_res.get());
+                  const ID3D11Resource* rtv0_handle = rtv0_res.get();
                   ASSERT_MSG(rtv0_handle == Resources::orig_depthuse_handle, "ShadowMap: DepthExpand1 RTV0 handle does not match expected orig_depthuse_handle");
                }
                
@@ -4972,7 +4975,7 @@ namespace ShadowMap
                ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null DepthExpand2 FindDepthDownHandle");
                ComPtr<ID3D11Resource> rtv0_res;
                rtv0->GetResource(rtv0_res.put());
-               Resources::orig_depthusedown_handle = reinterpret_cast<uintptr_t>(rtv0_res.get());
+               Resources::orig_depthusedown_handle = rtv0_res.get();
             }
 
             // next
@@ -4999,7 +5002,7 @@ namespace ShadowMap
                ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null WorldADownsample0 FindTexAHandle");
                ComPtr<ID3D11Resource> rtv0_resource;
                rtv0->GetResource(rtv0_resource.put());
-               // Resources::orig_texdowna_handle = reinterpret_cast<uintptr_t>(rtv0_resource.get()); // save
+               // Resources::orig_texdowna_handle = rtv0_resource.get(); // save
 
                // query RTV0 tex desc
                ComPtr<ID3D11Texture2D> tex;
@@ -5024,7 +5027,7 @@ namespace ShadowMap
                ASSERT_MSG(srv0 != nullptr, "ShadowMap: SRV0 null WorldADownsample0 FindTexAHandle");
                ComPtr<ID3D11Resource> srv0_resource;
                srv0->GetResource(srv0_resource.put());
-               Resources::orig_tex_handle = reinterpret_cast<uintptr_t>(srv0_resource.get());
+               Resources::orig_tex_handle = srv0_resource.get();
             }
 
             // ready
@@ -5048,7 +5051,7 @@ namespace ShadowMap
                      ASSERT_MSG(rtv0 != nullptr, "ShadowMap: RTV0 null WorldADownsample0 IsReady");
                      ComPtr<ID3D11Resource> rtv0_res;
                      rtv0->GetResource(rtv0_res.put());
-                     uint64_t rtv0_handle = reinterpret_cast<uintptr_t>(rtv0_res.get());
+                     const ID3D11Resource* rtv0_handle = rtv0_res.get();
 
                      state_texdowna_rtv_handle = rtv0_handle;
                   }
@@ -5141,7 +5144,7 @@ namespace ShadowMap
                   native_device_context->PSGetShaderResources(19, 1, srv19.put());
                   ComPtr<ID3D11Resource> srv19_res;
                   srv19->GetResource(srv19_res.put());
-                  uint64_t srv19_handle = reinterpret_cast<uintptr_t>(srv19_res.get());
+                  const ID3D11Resource* srv19_handle = srv19_res.get();
                   if (srv19_handle != Resources::orig_depthuse_handle)
                   {
                      ASSERT_ONCE_MSG(srv19_handle == Resources::orig_depthuse_handle, "ShadowMap: SSSSetup SRV19 handle does not match expected orig_depthuse_handle");
@@ -5168,7 +5171,7 @@ namespace ShadowMap
                
                ComPtr<ID3D11Resource> srv19_res;
                srv19->GetResource(srv19_res.put());
-               uint64_t srv19_handle = reinterpret_cast<uintptr_t>(srv19_res.get());
+               const ID3D11Resource* srv19_handle = srv19_res.get();
                if (srv19_handle != Resources::orig_depthuse_handle) break; // failed: not expected handle
                
                if (Resources::IsColorNewReady())
@@ -5184,7 +5187,7 @@ namespace ShadowMap
                      native_device_context->PSGetShaderResources(6, 1, srv6.put());
                      ComPtr<ID3D11Resource> srv6_res;
                      srv6->GetResource(srv6_res.put());
-                     uint64_t srv6_handle = reinterpret_cast<uintptr_t>(srv6_res.get());
+                     const ID3D11Resource* srv6_handle = srv6_res.get();
                      
                      bool is_flipped = srv6_handle != state_texdowna_rtv_handle;
                      const std::array<ID3D11ShaderResourceView*, 2> srvs = {
@@ -5218,7 +5221,7 @@ namespace ShadowMap
       return result;
    }
 
-   bool OnClearRenderTargetViewMegaMix(uint32_t rtv_handle)
+   bool OnClearRenderTargetViewMegaMix(const ID3D11Resource* rtv_handle)
    {
       bool is_prevent = false; // result
 
@@ -5227,7 +5230,10 @@ namespace ShadowMap
       if (DEVELOPMENT && !IsModEnabled()) return is_prevent;
 
       // relevant?
-      bool is_cleared_original_color = rtv_handle == Resources::orig_tex_handle;
+      // TODO: this took the address as "uint32_t", truncating it before comparing it with the full 64 bit "orig_tex_handle", so it only
+      // matched resources below 4GB (rarely the case on x64). Kept that way to not change behaviour, the fix is "rtv_handle == Resources::orig_tex_handle".
+      bool is_cleared_original_color = uint64_t(uint32_t(std::bit_cast<uintptr_t>(rtv_handle))) == std::bit_cast<uintptr_t>(Resources::orig_tex_handle);
+      ASSERT_ONCE_MSG(is_cleared_original_color || rtv_handle != Resources::orig_tex_handle, "ShadowMap: the original color was cleared, but the 32 bit truncated check missed it. Fix it to \"rtv_handle == Resources::orig_tex_handle\".");
       
       // grant color clear token (depth is not cleared)
       if (is_cleared_original_color && state_silhouette_draw_count > 0)
@@ -5345,15 +5351,15 @@ namespace DuplicateWorldReflections
       struct HandleItem
       {
          bool is_verified = false;
-         uint64_t handle = 0;
+         const ID3D11Resource* handle = nullptr; // Only compared
          bool is_full_resolution = false;
-         
-         bool IsValid() { return handle != 0; }
-         
+
+         bool IsValid() { return handle != nullptr; }
+
          void Reset()
          {
             is_verified = false;
-            handle = 0;
+            handle = nullptr;
             is_full_resolution = false;
          }
       };
@@ -5363,13 +5369,13 @@ namespace DuplicateWorldReflections
 
       HandleItem Handles_Get(bool i) {return handles[i];}
 
-      HandleItem* Handles_Find(uint64_t handle)
+      HandleItem* Handles_Find(const ID3D11Resource* handle)
       {
          for (auto& item : handles) if (item.handle == handle) return &item;
          return nullptr;
       }
 
-      HandleItem* Handles_CreateCandidate(uint64_t handle, uint2 size, ID3D11Texture2D* color_tex, ID3D11Device* native_device)
+      HandleItem* Handles_CreateCandidate(const ID3D11Resource* handle, uint2 size, ID3D11Texture2D* color_tex, ID3D11Device* native_device)
       {
          HandleItem* result = nullptr;
          for (auto& item : handles)
@@ -5779,7 +5785,7 @@ namespace DuplicateWorldReflections
 
                ComPtr<ID3D11Resource> res;
                rtv->GetResource(res.put());
-               uint64_t handle = reinterpret_cast<uintptr_t>(res.get());
+               const ID3D11Resource* handle = res.get();
                
                is_replace_token = Resources::handles_current->handle == handle; // grant?
             }
@@ -5842,7 +5848,7 @@ namespace DuplicateWorldReflections
 
             ComPtr<ID3D11Resource> res;
             srv0->GetResource(res.put());
-            uint64_t handle = reinterpret_cast<uintptr_t>(res.get());
+            const ID3D11Resource* handle = res.get();
 
             // dirty handle?
             [[unlikely]] if (Resources::handles_current && Resources::handles_current->handle != handle)
@@ -5868,7 +5874,7 @@ namespace DuplicateWorldReflections
 
                // create
                Resources::handles_current = Resources::Handles_CreateCandidate(handle, {tex_desc.Width, tex_desc.Height}, tex.get(), native_device);
-               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("DuplicateWorldReflections: Creating new candidate! 0x{:016X} {}x{}", handle, tex_desc.Width, tex_desc.Height).c_str());
+               Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("DuplicateWorldReflections: Creating new candidate! 0x{:016X} {}x{}", reinterpret_cast<uintptr_t>(handle), tex_desc.Width, tex_desc.Height).c_str());
             }
             ASSERT_MSG(Resources::handles_current, "DuplicateWorldReflections: Blur, current_item null");
             ASSERT_MSG(Resources::handles_current->IsValid(), "DuplicateWorldReflections: Blur, current_item not valid");
@@ -5922,7 +5928,7 @@ namespace DuplicateWorldReflections
             ComPtr<ID3D11Resource> srv15_res;
             srv15->GetResource(srv15_res.put());
             
-            uint64_t srv15_handle = reinterpret_cast<uintptr_t>(srv15_res.get());
+            const ID3D11Resource* srv15_handle = srv15_res.get();
 
             // verify if not yet
             [[unlikely]] if (!Resources::handles_current->is_verified)
@@ -5986,8 +5992,8 @@ namespace DuplicateWorldReflections
 #if DEVELOPMENT
 namespace LUTBuilderScan
 {
-   std::unordered_set<uint64_t> scanned_lut_res;
-   uint64_t prev_used_res = 0;
+   std::unordered_set<const ID3D11Resource*> scanned_lut_res; // Only compared
+   const ID3D11Resource* prev_used_res = nullptr;
 
    void OnDrawOrDispatchOverride(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData&device_data, uint32_t ps)
    {
@@ -6006,13 +6012,13 @@ namespace LUTBuilderScan
       // RES
       ComPtr<ID3D11Resource> res;
       srv->GetResource(res.put());
-      prev_used_res = reinterpret_cast<uintptr_t>(res.get());
+      prev_used_res = res.get();
 
       // skip if old
-      if (scanned_lut_res.contains(reinterpret_cast<uintptr_t>(res.get()))) return;
+      if (scanned_lut_res.contains(res.get())) return;
 
       // insert
-      scanned_lut_res.insert(reinterpret_cast<uintptr_t>(res.get()));
+      scanned_lut_res.insert(res.get());
       Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("LUTBuilderScan: Found LUTBuilder LUT at SRV2, res={}.", reinterpret_cast<uintptr_t>(res.get())).c_str());
       ASSERT_ONCE_MSG(scanned_lut_res.size() <= 2, "LUTBuilderScan: Found 3 LUTBuilder LUTs, check log!"); // only expect 2
    }
@@ -6035,9 +6041,9 @@ namespace RenderTracker // partial
       {
          com_ptr<ID3D11Resource> rtv_resource;
          rtv->GetResource(&rtv_resource);
-         last_cleared_rtv_handle = reinterpret_cast<uintptr_t>(rtv_resource.get()); // The view keeps it alive
+         last_cleared_rtv_handle = rtv_resource.get(); // The view keeps it alive
       }
-      ID3D11Resource* res = reinterpret_cast<ID3D11Resource*>(last_cleared_rtv_handle);
+      const ID3D11Resource* res = last_cleared_rtv_handle;
 
       bool is_prevent = false;
       // (Note: SSS setup RTV0 == main forward lit RTV0 == tonemap SRV0, cleared at SSS start)
@@ -6101,7 +6107,7 @@ namespace RenderTracker // partial
             native_device_context->PSGetShaderResources(10, 1, srv10.put());
             ASSERT_MSG(srv10 != nullptr, "RenderTracker: SRV10 null Contour");
             srv10->GetResource(res_main_depth.put());
-            res_main_depth_handle = reinterpret_cast<uintptr_t>(res_main_depth.get());
+            res_main_depth_handle = res_main_depth.get();
          }
          // PBR route via SSS Setup
          else if (sss_state == SSSState_Setup && (ps == ShaderHashesLists::SSSSetup0 || ps == ShaderHashesLists::SSSSetup1))
@@ -6111,7 +6117,7 @@ namespace RenderTracker // partial
             native_device_context->OMGetRenderTargets(0, nullptr, dsv.put());
             ASSERT_MSG(dsv != nullptr, "RenderTracker: DSV null SSS");
             dsv->GetResource(res_main_depth.put());
-            res_main_depth_handle = reinterpret_cast<uintptr_t>(res_main_depth.get());
+            res_main_depth_handle = res_main_depth.get();
          }
 
          // size
@@ -6157,7 +6163,7 @@ namespace RenderTracker // partial
          native_device_context->PSGetShaderResources(0, 1, srv.put());
          ASSERT_MSG(srv != nullptr, "DuplicateWorldReflections: SRV0 null TonemapDraw");
          srv->GetResource(res_main_color.put());
-         res_main_color_handle = reinterpret_cast<uintptr_t>(res_main_color.get());
+         res_main_color_handle = res_main_color.get();
 
          // TEX for size
          auto hr = res_main_color->QueryInterface(res_main_color_tex.put());
@@ -7113,7 +7119,7 @@ public:
             ImGui::PushStyleColor(ImGuiCol_Text, XeGTAO::FoundResource::IsSizeValid() ? ImVec4(0.4f, 0.8f, 0.4f, 1.f) : ImVec4(0.8f, 0.4f, 0.4f, 1.f));
             std::string status;
             if (XeGTAO::FoundResource::IsSizeValid()) status = std::format("Yes ({}x{})", XeGTAO::FoundResource::size.x, XeGTAO::FoundResource::size.y);
-            else if (RenderTracker::res_main_color_handle > 0)  status = "No (Color found, pending Depth)";
+            else if (RenderTracker::res_main_color_handle != nullptr)  status = "No (Color found, pending Depth)";
             else status = "No";
             ImGui::TextWrapped("Ready: %s",  status.c_str());
             ImGui::PopStyleColor();
@@ -7272,23 +7278,23 @@ public:
             ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Depth Draw: %s", ShadowMap::Resources::orig_depthdraw_handle ? "Found" : "Not Found");
             ImGui::PopStyleColor();
 
-            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_depthuse_handle > 0 ? c_green : c_red);
+            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_depthuse_handle != nullptr ? c_green : c_red);
             ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Depth Use: %s", ShadowMap::Resources::orig_depthuse_handle ? "Found" : "Not Found");
             ImGui::PopStyleColor();
 
-            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_depthusedown_handle > 0 ? c_green : c_red);
+            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_depthusedown_handle != nullptr ? c_green : c_red);
             ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Depth Downsample: %s", ShadowMap::Resources::orig_depthusedown_handle ? "Found" : "Not Found");
             ImGui::PopStyleColor();
 
-            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_tex_handle > 0 ? c_green : c_red);
+            ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_tex_handle != nullptr ? c_green : c_red);
             ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Color: %s", ShadowMap::Resources::orig_tex_handle ? "Found" : "Not Found");
             ImGui::PopStyleColor();
 
-            // ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_texdowna_handle > 0 ? c_green : c_red);
+            // ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_texdowna_handle != nullptr ? c_green : c_red);
             // ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Shadow Map Downsample A: %s", ShadowMap::Resources::orig_texdowna_handle ? "Found" : "Not Found");
             // ImGui::PopStyleColor();
             //
-            // ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_texdownb_handle > 0 ? c_green : c_yellow);
+            // ImGui::PushStyleColor(ImGuiCol_Text, ShadowMap::Resources::orig_texdownb_handle != nullptr ? c_green : c_yellow);
             // ImGui::Bullet(); ImGui::SameLine(); ImGui::TextWrapped("Shadow Map Downsample B (Multiple Characters/Objects): %s", ShadowMap::Resources::orig_texdownb_handle ? "Found" : "Not Found");
             // ImGui::PopStyleColor();
 
@@ -8074,10 +8080,10 @@ public:
       {
          // for each list scanned_lut_res
          ImGui::Text("LUT Resource Handles:");
-         for (const uint64_t lut_res : LUTBuilderScan::scanned_lut_res)
+         for (const ID3D11Resource* const lut_res : LUTBuilderScan::scanned_lut_res)
          {
             if (LUTBuilderScan::prev_used_res == lut_res) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 1.0f, 0.0f, 1.0f));
-            ImGui::BulletText(std::to_string(lut_res).c_str());
+            ImGui::BulletText(std::to_string(reinterpret_cast<uintptr_t>(lut_res)).c_str()); // The address, as before
             if (LUTBuilderScan::prev_used_res == lut_res) ImGui::PopStyleColor();
          }
       }

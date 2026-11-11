@@ -312,7 +312,7 @@ namespace
    // The scene cbuffer this thread mapped (each deferred context is recorded by one thread at a time)
    struct PendingSceneCBMap
    {
-      uint64_t buffer = 0;
+      const ID3D11Buffer* buffer = nullptr; // Not owned, only compared
       void* data = nullptr;
    };
    thread_local PendingSceneCBMap t_pending_scene_cb_map;
@@ -398,14 +398,14 @@ namespace
       buffer->GetDesc(&desc);
       if (desc.ByteWidth == kSceneCBSize && (desc.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0)
       {
-         t_pending_scene_cb_map = {reinterpret_cast<uintptr_t>(buffer), *data};
+         t_pending_scene_cb_map = {buffer, *data};
       }
    }
 
    // Called before the real unmap, so the mapped memory still takes our changes
    void OnUnmapSceneCB(const DeviceData& device_data, ID3D11Buffer* buffer)
    {
-      if (t_pending_scene_cb_map.buffer != reinterpret_cast<uintptr_t>(buffer) || t_pending_scene_cb_map.data == nullptr)
+      if (t_pending_scene_cb_map.buffer != buffer ||t_pending_scene_cb_map.data == nullptr)
          return;
       void* const data = t_pending_scene_cb_map.data;
       t_pending_scene_cb_map = {};

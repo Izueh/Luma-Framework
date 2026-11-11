@@ -370,7 +370,7 @@ class FinalFantasyXV final : public Game
          if (device_data.has_drawn_sr && is_upscaling)
          {
             // Publish the resolved AA scene for downstream post-processing.
-            tracking.frame_links[reinterpret_cast<uintptr_t>(output_resource.get())] = FindPoolIndexByPtr(tracking, result);
+            tracking.frame_links[output_resource.get()] = FindPoolIndexByPtr(tracking, result);
             tracking.post_taa_upscale_active = true;
          }
       }
@@ -1167,7 +1167,7 @@ public:
             {
                if (samplers_handle.second.contains(new_texture_mip_lod_bias_offset))
                   continue; // Skip "resolutions" that already got their custom samplers created
-               ID3D11SamplerState* native_sampler = reinterpret_cast<ID3D11SamplerState*>(samplers_handle.first);
+               ID3D11SamplerState* native_sampler = samplers_handle.first;
                shared_lock_samplers.unlock(); // This is fine!
                {
                   D3D11_SAMPLER_DESC native_desc;
@@ -1205,16 +1205,13 @@ public:
       DeviceData* device_data = cmd_list_data ? cmd_list_data->device_data : nullptr;
       if (!device_data || !device_data->game)
          return;
-      const uint64_t rtv_handle = reinterpret_cast<uintptr_t>(native_rtv);
-
       ComPtr<ID3D11RenderTargetView> effective_rtv;
       {
          const std::shared_lock lock(device_data->mutex);
-         auto upgraded_view = device_data->resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(rtv_handle);
-         const auto effective_handle = !ignore_indirect_upgraded_textures &&
+         auto upgraded_view = device_data->resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(native_rtv);
+         effective_rtv = !ignore_indirect_upgraded_textures &&
             upgraded_view != device_data->resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.end()
-            ? upgraded_view->second : rtv_handle;
-         effective_rtv = reinterpret_cast<ID3D11RenderTargetView*>(effective_handle);
+            ? static_cast<ID3D11RenderTargetView*>(upgraded_view->second) : native_rtv; // Mirror views have the original's type
       }
       // Resolve upgrades ourselves: the core event performs its native clear
       // separately, and its redirected clear does not emit another event.
@@ -1223,7 +1220,7 @@ public:
          effective_rtv.get(), color, rect_count, device_data->render_resolution, device_data->output_resolution);
    }
 
-   static bool ExecuteUpscaledCopy(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint64_t& src_resource)
+   static bool ExecuteUpscaledCopy(ID3D11Device* native_device, DeviceData& device_data, ID3D11Resource*& dst_resource, ID3D11Resource*& src_resource)
    {
       if (!native_device || !device_data.game)
          return false;
@@ -1234,8 +1231,8 @@ public:
       if (!tracking.post_taa_upscale_active)
          return false;
 
-      ID3D11Resource* source_resource = reinterpret_cast<ID3D11Resource*>(src_resource);
-      ID3D11Resource* dest_resource = reinterpret_cast<ID3D11Resource*>(dst_resource);
+      ID3D11Resource* source_resource = src_resource;
+      ID3D11Resource* dest_resource = dst_resource;
 
       if (!source_resource || !dest_resource)
          return false;
@@ -1248,7 +1245,7 @@ public:
             return false;
       }
 
-      const uintptr_t source_key = reinterpret_cast<uintptr_t>(source_resource);
+      const ID3D11Resource* const source_key = source_resource;
       UpscaledResource* upscaled_source = GetLinkedUpscaled(tracking, source_key);
       if (!upscaled_source || !upscaled_source->texture)
          return false;
@@ -1274,13 +1271,13 @@ public:
       return true;
    }
 
-   static void ForgetNativeCopyDestination(DeviceData& device_data, uint64_t dst_resource)
+   static void ForgetNativeCopyDestination(DeviceData& device_data, ID3D11Resource* dst_resource)
    {
       auto& game_device_data = GetGameDeviceData(device_data);
       auto& tracking = game_device_data.upscale_tracking;
-      if (!tracking.post_taa_upscale_active || dst_resource == 0)
+      if (!tracking.post_taa_upscale_active || dst_resource == nullptr)
          return;
-      auto* destination = reinterpret_cast<ID3D11Resource*>(dst_resource);
+      ID3D11Resource* destination = dst_resource;
       if (game_device_data.taa_state.IsValid())
       {
          ComPtr<ID3D11Resource> taa_output;
@@ -1288,10 +1285,10 @@ public:
          if (destination == taa_output.get())
             return; // Preserve the DLSS/TAA history target's established link semantics.
       }
-      UnlinkUpscaledResource(tracking, reinterpret_cast<uintptr_t>(destination));
+      UnlinkUpscaledResource(tracking, destination);
    }
 
-   bool OverrideCopyResource(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint64_t& src_resource) override
+   bool OverrideCopyResource(ID3D11Device* native_device, DeviceData& device_data, ID3D11Resource*& dst_resource, ID3D11Resource*& src_resource) override
    {
       if (!native_device)
          return false;
@@ -1305,7 +1302,7 @@ public:
       return redirected;
    }
 
-   bool OverrideCopyTextureRegion(ID3D11Device* native_device, DeviceData& device_data, uint64_t& dst_resource, uint32_t dst_subresource, const D3D11_BOX* dst_box, uint64_t& src_resource, uint32_t src_subresource, const D3D11_BOX* src_box) override
+   bool OverrideCopyTextureRegion(ID3D11Device* native_device, DeviceData& device_data, ID3D11Resource*& dst_resource, uint32_t dst_subresource, const D3D11_BOX* dst_box, ID3D11Resource*& src_resource, uint32_t src_subresource, const D3D11_BOX* src_box) override
    {
       if (!native_device)
          return false;

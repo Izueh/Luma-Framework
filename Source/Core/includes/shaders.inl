@@ -78,11 +78,11 @@ namespace Shader
          bound = custom;
       };
       Use(ShaderStages::Vertex, cmd_list_data.pipeline_state_original_vertex_shader, cmd_list_data.pipeline_state_custom_vertex_shader, cmd_list_data.pipeline_state_has_custom_vertex_shader,
-         [&](uint64_t handle) { native_device_context->VSSetShader(reinterpret_cast<ID3D11VertexShader*>(handle), nullptr, 0); });
+         [&](ID3D11DeviceChild* shader) { native_device_context->VSSetShader(static_cast<ID3D11VertexShader*>(shader), nullptr, 0); });
       Use(ShaderStages::Pixel, cmd_list_data.pipeline_state_original_pixel_shader, cmd_list_data.pipeline_state_custom_pixel_shader, cmd_list_data.pipeline_state_has_custom_pixel_shader,
-         [&](uint64_t handle) { native_device_context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(handle), nullptr, 0); });
+         [&](ID3D11DeviceChild* shader) { native_device_context->PSSetShader(static_cast<ID3D11PixelShader*>(shader), nullptr, 0); });
       Use(ShaderStages::Compute, cmd_list_data.pipeline_state_original_compute_shader, cmd_list_data.pipeline_state_custom_compute_shader, cmd_list_data.pipeline_state_has_custom_compute_shader,
-         [&](uint64_t handle) { native_device_context->CSSetShader(reinterpret_cast<ID3D11ComputeShader*>(handle), nullptr, 0); });
+         [&](ID3D11DeviceChild* shader) { native_device_context->CSSetShader(static_cast<ID3D11ComputeShader*>(shader), nullptr, 0); });
       cmd_list_data.pipeline_state_has_custom_graphics_shader = cmd_list_data.pipeline_state_has_custom_vertex_shader || cmd_list_data.pipeline_state_has_custom_pixel_shader;
    }
 } // namespace Shader

@@ -559,27 +559,27 @@ public:
                && srv_texture_2d_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT
                && srv_texture_2d_desc.SampleDesc.Count == 1) // MSAA textures can't have UAVs
             {
-               const uint64_t srv_resource_handle = (uintptr_t)srv_resource.get();
-               uint64_t original_srv_resource_handle = srv_resource_handle;
+               ID3D11Resource* const srv_resource_ptr = srv_resource.get();
+               ID3D11Resource* original_srv_resource = srv_resource_ptr;
 
                std::unique_lock lock_device_write(device_data.mutex);
 
                // Inverted map search to find the original resource from the upgraded one (assuming there was one)
                for (const auto& original_resource_to_mirrored_upgraded_resource : device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources)
                {
-                  if (original_resource_to_mirrored_upgraded_resource.second.mirror_handle == srv_resource_handle)
+                  if (original_resource_to_mirrored_upgraded_resource.second.mirror_resource == srv_resource_ptr)
                   {
-                     original_srv_resource_handle = original_resource_to_mirrored_upgraded_resource.first;
+                     original_srv_resource = const_cast<ID3D11Resource*>(original_resource_to_mirrored_upgraded_resource.first); // The game's resource, keys are only const for lookups
 
                      // TODO1: do a "remove indirect upgraded resource" func instead! This is already copied from it. Below too. see "device_data.resource_upgrades.ReUpgradeResource()";"
-                     auto original_resource_to_mirrored_upgraded_resource = device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.find(original_srv_resource_handle);
+                     auto original_resource_to_mirrored_upgraded_resource = device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.find(original_srv_resource);
                      if (original_resource_to_mirrored_upgraded_resource != device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.end())
                      {
-                        const auto mirrored_upgraded_resource = original_resource_to_mirrored_upgraded_resource->second.mirror_handle;
+                        ID3D11Resource* const mirrored_upgraded_resource = original_resource_to_mirrored_upgraded_resource->second.mirror_resource;
                         device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.erase(original_resource_to_mirrored_upgraded_resource);
 
                         // Invalidate stale view mappings for this mirror while the lock is held.
-                        std::vector<uint64_t> unlinked_mirror_views;
+                        std::vector<ID3D11View*> unlinked_mirror_views;
                         if (auto mirror_views_it = device_data.resource_upgrades.mirror_views_by_mirror_resource.find(mirrored_upgraded_resource); mirror_views_it != device_data.resource_upgrades.mirror_views_by_mirror_resource.end())
                         {
                            const auto& mirror_views = mirror_views_it->second;
@@ -603,20 +603,20 @@ public:
                         // Defer freeing to present: the mirror may still be in flight in hooks or bound on recorded lists.
                         if (delayed_destruction)
                         {
-                           for (const uint64_t unlinked_mirror_view : unlinked_mirror_views)
+                           for (ID3D11View* const unlinked_mirror_view : unlinked_mirror_views)
                            {
-                              device_data.resource_upgrades.pending_mirror_view_destructions.push_back({ unlinked_mirror_view });
+                              device_data.resource_upgrades.pending_mirror_view_destructions.push_back(unlinked_mirror_view);
                            }
-                           device_data.resource_upgrades.pending_mirror_resource_destructions.push_back({ mirrored_upgraded_resource });
+                           device_data.resource_upgrades.pending_mirror_resource_destructions.push_back(mirrored_upgraded_resource);
                         }
                         else
                         {
                            lock_device_write.unlock();
-                           for (const uint64_t unlinked_mirror_view : unlinked_mirror_views)
+                           for (ID3D11View* const unlinked_mirror_view : unlinked_mirror_views)
                            {
-                              reinterpret_cast<ID3D11View*>(unlinked_mirror_view)->Release();
+                              unlinked_mirror_view->Release();
                            }
-                           reinterpret_cast<ID3D11Resource*>(mirrored_upgraded_resource)->Release();
+                           mirrored_upgraded_resource->Release();
                            lock_device_write.lock();
                         }
                      }
@@ -628,11 +628,11 @@ public:
                lock_device_write.unlock();
                std::shared_lock lock_device_read(device_data.mutex);
 
-               uint64_t new_resource;
-               if (FindOrCreateIndirectUpgradedResource(native_device, 0, original_srv_resource_handle, new_resource, device_data, true, lock_device_read, false, false, false, D3D11_BIND_UNORDERED_ACCESS))
+               ID3D11Resource* new_resource = nullptr;
+               if (FindOrCreateIndirectUpgradedResource(native_device, nullptr, original_srv_resource, new_resource, device_data, true, lock_device_read, false, false, false, D3D11_BIND_UNORDERED_ACCESS))
                {
                   // Carry the current content over, just in case it was used for multi frame motion blur or something (very unlikely)
-                  native_device_context->CopyResource((ID3D11Resource*)new_resource, srv_resource.get());
+                  native_device_context->CopyResource(new_resource, srv_resource.get());
                }
             }
          }
@@ -701,7 +701,7 @@ public:
             ComPtr<ID3D11PixelShader> previous_shader;
             native_device_context->PSGetShader(previous_shader.put(), nullptr, nullptr);
 
-            native_device_context->PSSetShader(reinterpret_cast<ID3D11PixelShader*>(cmd_list_data.pipeline_state_original_pixel_shader.handle), nullptr, 0);
+            native_device_context->PSSetShader(static_cast<ID3D11PixelShader*>(cmd_list_data.pipeline_state_original_pixel_shader.handle), nullptr, 0);
 
             if (original_draw_dispatch_func && *original_draw_dispatch_func)
             {

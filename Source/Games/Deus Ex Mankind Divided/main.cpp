@@ -45,7 +45,7 @@ namespace
     const ShaderHashesList shader_hashes_LastKnownLocation { .pixel_shaders = { 0xA6A0E453, 0xE30A40E6 } };
 
     void* g_cbSharedPerViewData_mapped_data;
-    uintptr_t g_cbSharedPerViewData_handle;
+    const ID3D11Buffer* g_cbSharedPerViewData_buffer; // Not owned, only compared
     cbSharedPerViewData g_cbSharedPerViewData_data;
 
     bool g_disable_last_known_location;
@@ -130,7 +130,7 @@ public:
         buffer->GetDesc(&desc);
         if (desc.BindFlags == D3D11_BIND_CONSTANT_BUFFER && desc.ByteWidth == 544)
         {
-            g_cbSharedPerViewData_handle = reinterpret_cast<uintptr_t>(buffer);
+            g_cbSharedPerViewData_buffer = buffer;
             g_cbSharedPerViewData_mapped_data = *data;
         }
     }
@@ -139,7 +139,7 @@ public:
     {
 
         // Not thread safe, but it looks like it's fine.
-        if (g_cbSharedPerViewData_handle == reinterpret_cast<uintptr_t>(buffer))
+        if (g_cbSharedPerViewData_buffer == buffer)
         {
             auto data = (float*)g_cbSharedPerViewData_mapped_data;
 
@@ -147,7 +147,7 @@ public:
             if (data[8] && data[9] && data[8] == data[129])
             {
                 std::memcpy(&g_cbSharedPerViewData_data, data, sizeof(g_cbSharedPerViewData_data));
-                g_cbSharedPerViewData_handle = 0;
+                g_cbSharedPerViewData_buffer = nullptr;
             }
         }
     }

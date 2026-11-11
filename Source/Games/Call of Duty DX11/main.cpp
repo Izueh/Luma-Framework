@@ -1593,10 +1593,10 @@ namespace CODs // partial
          // O(n) check if one of back_buffers
          bool success = false;
          {
-            const auto rtv0_resource_handle = reinterpret_cast<uintptr_t>(rtvstate_buffers.res.get());
-            for (const uint64_t bb_handle : device_data.back_buffers)
+            const ID3D11Resource* const rtv0_resource = rtvstate_buffers.res.get();
+            for (const ID3D11Resource* const back_buffer : device_data.back_buffers)
             {
-               if (bb_handle == rtv0_resource_handle)
+               if (back_buffer == rtv0_resource)
                {
                   success = true;
                   break;
@@ -1632,10 +1632,9 @@ namespace CODs // partial
                rtvs[i]->GetResource(&res); // get (AddRef'd)
 
                // O(n) check if one of back_buffers
-               const auto rtv_resource_handle = reinterpret_cast<uintptr_t>(res);
-               for (const uint64_t bb_handle : device_data.back_buffers)
+               for (const ID3D11Resource* const back_buffer : device_data.back_buffers)
                {
-                  if (bb_handle == rtv_resource_handle)
+                  if (back_buffer == res)
                   {
                      found = i;
                      break;

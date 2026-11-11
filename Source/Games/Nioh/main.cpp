@@ -124,7 +124,7 @@ public:
                const auto it = custom_samplers.second.find(device_data.texture_mip_lod_bias_offset);
                if (it != custom_samplers.second.end())
                {
-                  ID3D11SamplerState* native_sampler = reinterpret_cast<ID3D11SamplerState*>(custom_samplers.first);
+                  ID3D11SamplerState* native_sampler = custom_samplers.first;
                   if (it->second != nullptr && it->second == samplers[i]) // Null means the sampler didn't need an upgrade
                   {
                      samplers[i] = native_sampler;

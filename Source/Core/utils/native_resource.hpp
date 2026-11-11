@@ -120,10 +120,12 @@ struct ResourceDesc
    }
 };
 
-inline ResourceDesc GetResourceDesc(ID3D11Resource* resource)
+// D3D11 getters aren't const qualified, but they don't modify the object.
+inline ResourceDesc GetResourceDesc(const ID3D11Resource* const_resource)
 {
-   if (!resource)
+   if (!const_resource)
       return {};
+   ID3D11Resource* resource = const_cast<ID3D11Resource*>(const_resource);
    D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
    resource->GetType(&dimension);
    switch (dimension)
@@ -154,11 +156,6 @@ inline ResourceDesc GetResourceDesc(ID3D11Resource* resource)
    }
    default: return {};
    }
-}
-
-inline ResourceDesc GetResourceDesc(uint64_t resource)
-{
-   return GetResourceDesc(reinterpret_cast<ID3D11Resource*>(resource));
 }
 
 // Never seen by Luma's own hooks. The layout isn't kept, it needs ID3D11Device3.
@@ -232,11 +229,12 @@ inline Desc1 WidenViewDesc(const Desc& desc)
    return desc1;
 }
 
-inline ResourceViewDesc GetResourceViewDesc(ID3D11View* view)
+inline ResourceViewDesc GetResourceViewDesc(const ID3D11View* const_view)
 {
    ResourceViewDesc result;
-   if (!view)
+   if (!const_view)
       return result;
+   ID3D11View* view = const_cast<ID3D11View*>(const_view);
    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> srv;
    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv;
    Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> uav;
@@ -270,17 +268,12 @@ inline ResourceViewDesc GetResourceViewDesc(ID3D11View* view)
    return result;
 }
 
-inline ResourceViewDesc GetResourceViewDesc(uint64_t view)
-{
-   return GetResourceViewDesc(reinterpret_cast<ID3D11View*>(view));
-}
-
-inline ID3D11Resource* GetResourceFromView(uint64_t view) // Not AddRef'd
+inline ID3D11Resource* GetResourceFromView(const ID3D11View* view) // Not AddRef'd
 {
    if (!view)
       return nullptr;
    ID3D11Resource* resource = nullptr;
-   reinterpret_cast<ID3D11View*>(view)->GetResource(&resource);
+   const_cast<ID3D11View*>(view)->GetResource(&resource);
    if (resource)
       resource->Release();
    return resource;

@@ -906,14 +906,14 @@ namespace UI
                      // TODO: store this information in the trace list, it might expire otherwise, or even be incorrect if ptrs were re-used. Also this info isn't shown if we use indirect texture upgrades.
                      for (auto upgraded_resource_pair : device_data.resource_upgrades.original_upgraded_resources_formats)
                      {
-                        void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource_pair.first);
+                        void* upgraded_resource_ptr = const_cast<ID3D11Resource*>(upgraded_resource_pair.first);
                         if (sr_hash == std::to_string(std::hash<void*>{}(upgraded_resource_ptr)))
                         {
                            ImGui::Text("R: Direct Upgraded");
 
                            ImGui::Text("R Original Format: %s", GetFormatName(DXGI_FORMAT(upgraded_resource_pair.second)));
 
-                           if (const auto it = device_data.resource_upgrades.original_upgraded_resource_views_formats.find(reinterpret_cast<uintptr_t>(slot_data.srvs[i])); it != device_data.resource_upgrades.original_upgraded_resource_views_formats.end())
+                           if (const auto it = device_data.resource_upgrades.original_upgraded_resource_views_formats.find(slot_data.srvs[i]); it != device_data.resource_upgrades.original_upgraded_resource_views_formats.end())
                            {
                               const auto& [native_resource, original_view_format] = it->second;
                               ASSERT_ONCE(native_resource == upgraded_resource_pair.first); // Uh!?
@@ -942,7 +942,7 @@ namespace UI
                      }
                      for (auto upgraded_resource_pair : device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources)
                      {
-                        void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource_pair.first);
+                        void* upgraded_resource_ptr = const_cast<ID3D11Resource*>(upgraded_resource_pair.first);
                         if (sr_hash == std::to_string(std::hash<void*>{}(upgraded_resource_ptr)))
                         {
                            if (upgraded_resource_pair.second.is_scaled)
@@ -1044,14 +1044,14 @@ namespace UI
                      const std::shared_lock lock(device_data.mutex);
                      for (auto upgraded_resource_pair : device_data.resource_upgrades.original_upgraded_resources_formats)
                      {
-                        void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource_pair.first);
+                        void* upgraded_resource_ptr = const_cast<ID3D11Resource*>(upgraded_resource_pair.first);
                         if (ua_hash == std::to_string(std::hash<void*>{}(upgraded_resource_ptr)))
                         {
                            ImGui::Text("R: Direct Upgraded");
 
                            ImGui::Text("R Original Format: %s", GetFormatName(DXGI_FORMAT(upgraded_resource_pair.second)));
 
-                           if (const auto it = device_data.resource_upgrades.original_upgraded_resource_views_formats.find(reinterpret_cast<uintptr_t>(slot_data.uavs[i])); it != device_data.resource_upgrades.original_upgraded_resource_views_formats.end())
+                           if (const auto it = device_data.resource_upgrades.original_upgraded_resource_views_formats.find(slot_data.uavs[i]); it != device_data.resource_upgrades.original_upgraded_resource_views_formats.end())
                            {
                               const auto& [native_resource, original_view_format] = it->second;
                               ASSERT_ONCE(native_resource == upgraded_resource_pair.first); // Uh!?
@@ -1073,7 +1073,7 @@ namespace UI
                      }
                      for (auto upgraded_resource_pair : device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources)
                      {
-                        void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource_pair.first);
+                        void* upgraded_resource_ptr = const_cast<ID3D11Resource*>(upgraded_resource_pair.first);
                         if (ua_hash == std::to_string(std::hash<void*>{}(upgraded_resource_ptr)))
                         {
                            if (upgraded_resource_pair.second.is_scaled)
@@ -1215,7 +1215,7 @@ namespace UI
                      // TODO: this is missing the "R is UAV" print
                      for (auto upgraded_resource_pair : device_data.resource_upgrades.original_upgraded_resources_formats)
                      {
-                        void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource_pair.first);
+                        void* upgraded_resource_ptr = const_cast<ID3D11Resource*>(upgraded_resource_pair.first);
                         if (rt_hash == std::to_string(std::hash<void*>{}(upgraded_resource_ptr)))
                         {
                            ImGui::Text("R: Direct Upgraded");
@@ -1223,7 +1223,7 @@ namespace UI
                            ImGui::Text("R Original Format: %s", GetFormatName(DXGI_FORMAT(upgraded_resource_pair.second)));
 
                            // TODO: why does this flicker on and off in Deux Ex HR when it writes on the swapchain for material draws?
-                           if (const auto it = device_data.resource_upgrades.original_upgraded_resource_views_formats.find(reinterpret_cast<uintptr_t>(slot_data.rtvs[i])); it != device_data.resource_upgrades.original_upgraded_resource_views_formats.end())
+                           if (const auto it = device_data.resource_upgrades.original_upgraded_resource_views_formats.find(slot_data.rtvs[i]); it != device_data.resource_upgrades.original_upgraded_resource_views_formats.end())
                            {
                               const auto& [native_resource, original_view_format] = it->second;
                               ASSERT_ONCE(native_resource == upgraded_resource_pair.first); // Uh!?
@@ -1245,7 +1245,7 @@ namespace UI
                      }
                      for (auto upgraded_resource_pair : device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources)
                      {
-                        void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource_pair.first);
+                        void* upgraded_resource_ptr = const_cast<ID3D11Resource*>(upgraded_resource_pair.first);
                         if (rt_hash == std::to_string(std::hash<void*>{}(upgraded_resource_ptr)))
                         {
                            if (upgraded_resource_pair.second.is_scaled)
@@ -1593,9 +1593,9 @@ namespace UI
                   ImGui::Text("R Size: %ux%u", dsv_data.ds_size.x, dsv_data.ds_size.y); // Should match all the Render Targets size
                   {
                      const std::shared_lock lock(device_data.mutex);
-                     for (uint64_t upgraded_resource : device_data.resource_upgrades.upgraded_resources)
+                     for (const ID3D11Resource* upgraded_resource : device_data.resource_upgrades.upgraded_resources)
                      {
-                        void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource);
+                        void* upgraded_resource_ptr = const_cast<ID3D11Resource*>(upgraded_resource);
                         if (dsv_data.ds_hash == std::to_string(std::hash<void*>{}(upgraded_resource_ptr)))
                         {
                            ImGui::Text("R: Direct Upgraded");
@@ -1604,7 +1604,7 @@ namespace UI
                      }
                      for (auto upgraded_resource_pair : device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources)
                      {
-                        void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource_pair.first);
+                        void* upgraded_resource_ptr = const_cast<ID3D11Resource*>(upgraded_resource_pair.first);
                         if (dsv_data.ds_hash == std::to_string(std::hash<void*>{}(upgraded_resource_ptr)))
                         {
                            if (upgraded_resource_pair.second.is_scaled)
@@ -1949,9 +1949,9 @@ namespace UI
                                     ImGui::Text("Source R Format: %s", GetFormatName(sr_format));
                                  }
                                  ImGui::Text("Source R Size: %ux%ux%ux%u", sr_size.x, sr_size.y, sr_size.z, sr_size.w);
-                                 for (uint64_t upgraded_resource : device_data.resource_upgrades.upgraded_resources)
+                                 for (const ID3D11Resource* upgraded_resource : device_data.resource_upgrades.upgraded_resources)
                                  {
-                                    void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource);
+                                    void* upgraded_resource_ptr = const_cast<ID3D11Resource*>(upgraded_resource);
                                     if (sr_hash == std::to_string(std::hash<void*>{}(upgraded_resource_ptr)))
                                     {
                                        ImGui::Text("Source R: Direct Upgraded");
@@ -1961,7 +1961,7 @@ namespace UI
                                  }
                                  for (auto upgraded_resource_pair : device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources)
                                  {
-                                    void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource_pair.first);
+                                    void* upgraded_resource_ptr = const_cast<ID3D11Resource*>(upgraded_resource_pair.first);
                                     if (sr_hash == std::to_string(std::hash<void*>{}(upgraded_resource_ptr)))
                                     {
                                        ImGui::Text("Source R: Indirect Upgraded");
@@ -1999,9 +1999,9 @@ namespace UI
                                     ImGui::Text("Target R Format: %u", rt_format);
                                  }
                                  ImGui::Text("Target R Size: %ux%ux%ux%u", rt_size.x, rt_size.y, rt_size.z, rt_size.w);
-                                 for (uint64_t upgraded_resource : device_data.resource_upgrades.upgraded_resources)
+                                 for (const ID3D11Resource* upgraded_resource : device_data.resource_upgrades.upgraded_resources)
                                  {
-                                    void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource);
+                                    void* upgraded_resource_ptr = const_cast<ID3D11Resource*>(upgraded_resource);
                                     if (rt_hash == std::to_string(std::hash<void*>{}(upgraded_resource_ptr)))
                                     {
                                        ImGui::Text("Target R: Direct Upgraded");
@@ -2010,7 +2010,7 @@ namespace UI
                                  }
                                  for (auto upgraded_resource_pair : device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources)
                                  {
-                                    void* upgraded_resource_ptr = reinterpret_cast<void*>(upgraded_resource_pair.first);
+                                    void* upgraded_resource_ptr = const_cast<ID3D11Resource*>(upgraded_resource_pair.first);
                                     if (rt_hash == std::to_string(std::hash<void*>{}(upgraded_resource_ptr)))
                                     {
                                        ImGui::Text("Target R: Indirect Upgraded");

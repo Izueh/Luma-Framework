@@ -155,7 +155,7 @@ namespace Mcp
       // The dev UI's debug draw pass selection, overwritten by a readback and restored once the job finishes
       struct DebugDrawSelection
       {
-         uint64_t pipeline;
+         const ID3D11DeviceChild* pipeline;
          uint32_t shader_hash;
          int32_t target_instance;
          std::thread::id target_thread;
@@ -188,7 +188,7 @@ namespace Mcp
       // The dev UI's constant buffer tracking selection, same as above
       struct TrackBufferSelection
       {
-         uint64_t pipeline;
+         const ID3D11DeviceChild* pipeline;
          int32_t target_instance;
          int32_t index;
          uint32_t custom_pass;
@@ -222,7 +222,7 @@ namespace Mcp
          uint32_t phase = 0;
          uint32_t frames = 0; // Captures done, or frames waited for a pass
          // The pass a readback targets (see "ResolveTarget")
-         uint64_t pipeline_handle = 0;
+         const ID3D11DeviceChild* pipeline_handle = nullptr;
          uint32_t shader_hash = 0;
          uint32_t custom_pass = 0; // A Luma pass instead of a game pipeline, see "Trace::debug_draw_custom_pass"
          const char* stage = "";
@@ -355,7 +355,7 @@ namespace Mcp
       constexpr const char* trace_type_names[] = {"shader", "copy", "clear", "bind_pipeline", "bind_resource", "cpu_read", "cpu_write", "present", "create_command_list", "append_command_list", "reset_command_list", "flush_command_list", "custom"};
       constexpr const char* copy_kind_names[] = {"resource", "region", "resolve", "buffer_region"};
 
-      const Shader::CachedPipeline* FindPipeline(const DeviceData& device_data, uint64_t pipeline_handle)
+      const Shader::CachedPipeline* FindPipeline(const DeviceData& device_data, const ID3D11DeviceChild* pipeline_handle)
       {
          const auto it = device_data.pipeline_cache_by_pipeline_handle.find(pipeline_handle);
          return it != device_data.pipeline_cache_by_pipeline_handle.end() ? it->second : nullptr;
@@ -1429,7 +1429,7 @@ namespace Mcp
             if (view && (*view == "swapchain" || *view == "ui"))
             {
                const bool back_buffer = *view == "swapchain";
-               ID3D11Resource* resource = back_buffer ? reinterpret_cast<ID3D11Resource*>(GetSwapchainBackBuffer(swapchain)) : device_data.ui_texture.get();
+               ID3D11Resource* resource = back_buffer ? static_cast<ID3D11Resource*>(GetSwapchainBackBuffer(swapchain)) : device_data.ui_texture.get();
                if (!resource)
                {
                   job->error = back_buffer ? "The swapchain has no current back buffer" : "There's no separate UI texture (UI separation is off, or the UI hasn't drawn yet)";

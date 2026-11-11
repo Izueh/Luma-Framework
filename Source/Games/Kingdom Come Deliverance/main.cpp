@@ -25,7 +25,7 @@ struct GameDeviceDataKingdomComeDeliverance final : GameDeviceData
     ComPtr<ID3D11Texture2D> tex_dlss_output;
     ComPtr<ID3D11Texture2D> tex_mvs;
     ComPtr<ID3D11RenderTargetView> rtv_mvs;
-    std::unordered_map<uintptr_t, void*> mapped_cbs;
+    std::unordered_map<const ID3D11Buffer*, void*> mapped_cbs; // Buffer -> its mapped data
 };
 
 class KingdomComeDeliverance final : public Game
@@ -89,7 +89,7 @@ public:
 
             if (desc.BindFlags == D3D11_BIND_CONSTANT_BUFFER && desc.ByteWidth == 256)
             {
-                game_device_data.mapped_cbs[reinterpret_cast<uintptr_t>(buffer)] = *data;
+                game_device_data.mapped_cbs[buffer] = *data;
             }
         }
     }
@@ -117,9 +117,9 @@ public:
         //   float4 ScreenSize : packoffset(c12); // w, h, 1/w, 1/h
         //   float4 g_vVisAreasParams[64] : packoffset(c13);
         // }
-        if (!g_has_drawn_lightning && game_device_data.mapped_cbs.contains(reinterpret_cast<uintptr_t>(buffer)))
+        if (!g_has_drawn_lightning && game_device_data.mapped_cbs.contains(buffer))
         {
-           auto data = (float4*)game_device_data.mapped_cbs[reinterpret_cast<uintptr_t>(buffer)];
+           auto data = (float4*)game_device_data.mapped_cbs[buffer];
 
            // Base jitters (x, y) in range [-0.5, 0.5], for "r_AntialiasingTAAPattern 4" (the game setting).
            // ( 0.0625, -0.1875), (-0.0625,  0.1875),

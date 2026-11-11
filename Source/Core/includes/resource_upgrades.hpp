@@ -144,7 +144,7 @@ public:
    // Per-resource mirror bookkeeping.
    struct IndirectUpgradedResource
    {
-      uint64_t mirror_handle = 0;
+      ID3D11Resource* mirror_resource = nullptr; // Owned (released when unlinked, see the pending destructions)
       bool is_scaled = false;
       uint32_t original_width = 0;
       uint32_t original_height = 0;
@@ -218,43 +218,44 @@ public:
    // ------------------------------------------------------------------
    // Runtime mirror state
    // ------------------------------------------------------------------
-   std::unordered_set<uint64_t> upgraded_resources; // All the directly upgraded resources, excluding the swapchains backbuffers, as they are created internally by DX
+   // Keys are const because they are only looked up (the destroy callbacks receive const pointers); values we call into, or release, are not.
+   std::unordered_set<const ID3D11Resource*> upgraded_resources; // All the directly upgraded resources, excluding the swapchains backbuffers, as they are created internally by DX
 #if DEVELOPMENT
-   std::unordered_map<uint64_t, DXGI_FORMAT> original_upgraded_resources_formats; // Maps the original resource to its direct upgraded format. These include the swapchain buffers too!
-   std::unordered_map<uint64_t, std::pair<uint64_t, DXGI_FORMAT>> original_upgraded_resource_views_formats; // All the views for direct upgraded resources, with the resource and the original resource view format
+   std::unordered_map<const ID3D11Resource*, DXGI_FORMAT> original_upgraded_resources_formats; // Maps the original resource to its direct upgraded format. These include the swapchain buffers too!
+   std::unordered_map<const ID3D11View*, std::pair<ID3D11Resource*, DXGI_FORMAT>> original_upgraded_resource_views_formats; // All the views for direct upgraded resources, with the resource and the original resource view format
 #endif
-   std::unordered_map<uint64_t, IndirectUpgradedResource> original_resources_to_mirrored_upgraded_resources; // TODO: convert/copy the initial/current data from the source texture when created. Also rename to "indirect_upgraded"
-   std::unordered_map<uint64_t, uint64_t> original_resource_views_to_mirrored_upgraded_resource_views;
+   std::unordered_map<const ID3D11Resource*, IndirectUpgradedResource> original_resources_to_mirrored_upgraded_resources; // TODO: convert/copy the initial/current data from the source texture when created. Also rename to "indirect_upgraded"
+   std::unordered_map<const ID3D11View*, ID3D11View*> original_resource_views_to_mirrored_upgraded_resource_views;
    // Mirror views grouped by their mirror resource. Lets OnDestroyResource unlink a destroyed mirror's views by
    // iterating only that mirror's (small) set with plain hash lookups, instead of scanning the whole view map with
    // a device call (get_resource_from_view) per entry while holding the lock.
-   std::unordered_map<uint64_t, std::unordered_set<uint64_t>> mirror_views_by_mirror_resource;
-   // View handle -> resource handle caches, so the draw/descriptor/destroy paths never need a device call
+   std::unordered_map<const ID3D11Resource*, std::unordered_set<ID3D11View*>> mirror_views_by_mirror_resource;
+   // View -> resource caches, so the draw/descriptor/destroy paths never need a device call
    // (get_resource_from_view) while holding the luma mutex (lock-order inversion vs D3D11 runtime locks taken in
    // destruction-notifier callbacks). Populated in OnInitResourceView / at mirror-view insert sites.
-   std::unordered_map<uint64_t, uint64_t> original_views_to_original_resources;      // game view -> its resource
-   std::unordered_map<uint64_t, uint64_t> mirror_views_to_mirror_resources; // mirror view -> mirror resource
+   std::unordered_map<const ID3D11View*, ID3D11Resource*> original_views_to_original_resources; // game view -> its resource
+   std::unordered_map<const ID3D11View*, ID3D11Resource*> mirror_views_to_mirror_resources; // mirror view -> mirror resource
    // Mirrors freed at present (frame boundary) instead of on original destruction, so in-flight
    // hooks/game state can never dereference a freed mirror. Guarded by `mutex`.
-   std::vector<uint64_t> pending_mirror_resource_destructions;
-   std::vector<uint64_t> pending_mirror_view_destructions;
+   std::vector<ID3D11Resource*> pending_mirror_resource_destructions;
+   std::vector<ID3D11View*> pending_mirror_view_destructions;
 
    // ------------------------------------------------------------------
    // Queries (all lock-free: the caller/core.hpp holds the single device mutex)
    // ------------------------------------------------------------------
 
-   // View handle -> resource handle from our caches (no device call under the lock).
-   uint64_t GetCachedResourceFromView(uint64_t view_handle, bool original = true, bool mirrored = false, bool live_fallback = false, std::shared_lock<std::shared_mutex>* lock_device_read = nullptr) const
+   // View -> resource from our caches (no device call under the lock).
+   ID3D11Resource* GetCachedResourceFromView(const ID3D11View* view, bool original = true, bool mirrored = false, bool live_fallback = false, std::shared_lock<std::shared_mutex>* lock_device_read = nullptr) const
    {
       // Put the original first as it's more likely to be found
       if (original)
       {
-         if (auto it = original_views_to_original_resources.find(view_handle); it != original_views_to_original_resources.end())
+         if (auto it = original_views_to_original_resources.find(view); it != original_views_to_original_resources.end())
             return it->second;
       }
       if (mirrored)
       {
-         if (auto it = mirror_views_to_mirror_resources.find(view_handle); it != mirror_views_to_mirror_resources.end())
+         if (auto it = mirror_views_to_mirror_resources.find(view); it != mirror_views_to_mirror_resources.end())
             return it->second;
       }
       if (live_fallback)
@@ -262,43 +263,43 @@ public:
          // Unknown view, for some reason
          lock_device_read->unlock(); // Avoids deadlocks with the device
          ASSERT_ONCE_MSG(false, "Why do we have untracked resources? This should not ever happen"); // TODO: delete this whole path once we verified this cannot happen
-         uint64_t resource = reinterpret_cast<uintptr_t>(GetResourceFromView(view_handle));
+         ID3D11Resource* resource = GetResourceFromView(view);
          lock_device_read->lock();
          return resource;
       }
-      return 0;
+      return nullptr;
    }
 
-   bool IsUpgraded(uint64_t resource_handle) const
+   bool IsUpgraded(const ID3D11Resource* resource) const
    {
-      return upgraded_resources.contains(resource_handle);
+      return upgraded_resources.contains(resource);
    }
 
-   bool HasMirror(uint64_t resource_handle) const
+   bool HasMirror(const ID3D11Resource* resource) const
    {
-      return original_resources_to_mirrored_upgraded_resources.contains(resource_handle);
+      return original_resources_to_mirrored_upgraded_resources.contains(resource);
    }
 
    // True when either resource is a scaled (output-resolution) indirect mirror.
-   bool IsScaledMirrorResource(uint64_t resource_handle) const
+   bool IsScaledMirrorResource(const ID3D11Resource* resource) const
    {
-      if (resource_handle == 0)
+      if (resource == nullptr)
          return false;
-      if (auto it = original_resources_to_mirrored_upgraded_resources.find(resource_handle); it != original_resources_to_mirrored_upgraded_resources.end())
+      if (auto it = original_resources_to_mirrored_upgraded_resources.find(resource); it != original_resources_to_mirrored_upgraded_resources.end())
          return it->second.is_scaled;
       for (const auto& [orig, mirror] : original_resources_to_mirrored_upgraded_resources)
       {
-         if (mirror.mirror_handle == resource_handle)
+         if (mirror.mirror_resource == resource)
             return mirror.is_scaled;
       }
       return false;
    }
 
-   uint64_t GetMirrorHandle(uint64_t resource_handle) const
+   ID3D11Resource* GetMirrorResource(const ID3D11Resource* resource) const
    {
-      if (auto it = original_resources_to_mirrored_upgraded_resources.find(resource_handle); it != original_resources_to_mirrored_upgraded_resources.end())
-         return it->second.mirror_handle;
-      return 0;
+      if (auto it = original_resources_to_mirrored_upgraded_resources.find(resource); it != original_resources_to_mirrored_upgraded_resources.end())
+         return it->second.mirror_resource;
+      return nullptr;
    }
 
    // True when the hash-upgrade scale chain is active this frame: a scale-enabled seed exists and SR
@@ -398,16 +399,16 @@ public:
    // ------------------------------------------------------------------
 
    // Creates (or reuses) an indirectly-upgraded mirror for "in_resource". "in_source_resource" is the
-   // resource the upgrade is being propagated from (0 for a seed). Returns true if a mirror was found or
+   // resource the upgrade is being propagated from (null for a seed). Returns true if a mirror was found or
    // created and "out_resource" was redirected. Lock-free: the caller (core.hpp) must hold the single
    // device mutex (passed as "lock_device_read") before calling.
    // "should_scale" is computed by core.hpp (seed vs chain policy) and passed in; the manager only
    // applies it with the render<output + aspect checks.
    bool FindOrCreateIndirectUpgradedResource(
       ID3D11Device* device,
-      const uint64_t in_source_resource,
-      const uint64_t in_resource,
-      uint64_t& out_resource,
+      const ID3D11Resource* in_source_resource,
+      ID3D11Resource* in_resource,
+      ID3D11Resource*& out_resource,
       bool allow_create,
       std::shared_lock<std::shared_mutex>& lock_device_read,
       const ResourceUpgradeFrameState& state,
@@ -419,8 +420,8 @@ public:
 
    bool FindOrCreateIndirectUpgradedResourceView(
       ID3D11Device* device,
-      const uint64_t in_rv,
-      uint64_t& out_rv,
+      ID3D11View* in_rv,
+      ID3D11View*& out_rv,
       bool allow_create,
       ViewKind view_kind,
       std::shared_lock<std::shared_mutex>& lock_device_read);
@@ -446,15 +447,15 @@ public:
    void FlushPendingDestructions(std::shared_mutex& device_mutex);
 
    // Handles a resource being destroyed: unlink its mirror + mirror views, defer free to present.
-   void OnResourceDestroyed(uint64_t resource_handle);
+   void OnResourceDestroyed(const ID3D11Resource* resource);
 
    // Handles a resource view being destroyed: unlink the mirror view.
-   void OnResourceViewDestroyed(uint64_t view_handle);
+   void OnResourceViewDestroyed(const ID3D11View* view);
 
-   void ReUpgradeResource(uint64_t original_resource_handle, UINT additional_bind_flags = 0);
+   void ReUpgradeResource(ID3D11Resource* original_resource, UINT additional_bind_flags = 0);
 
 private:
-   void UnlinkMirror(uint64_t mirror_handle);
+   void UnlinkMirror(ID3D11Resource* mirror_resource);
 };
 
 #include "resource_upgrades.inl"

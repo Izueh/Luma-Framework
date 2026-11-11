@@ -290,7 +290,7 @@ struct DeviceData
    // Only one of the two paths is active per build configuration.
    struct AsyncCloneEntry
    {
-      uint64_t pipeline_handle = 0;
+      const ID3D11DeviceChild* pipeline_handle = nullptr;
       // Mode 1: subobjects built by worker, pipeline created at present boundary
       Shader::PipelineSubobject* subobjects = nullptr;
       uint32_t subobject_count = 0;
@@ -327,7 +327,7 @@ struct DeviceData
 #endif
 
    std::unordered_set<IDXGISwapChain*> swapchains;
-   std::unordered_set<uint64_t> back_buffers; // From all the swapchains (whether they are upgraded or not)
+   std::unordered_set<const ID3D11Resource*> back_buffers; // From all the swapchains (whether they are upgraded or not). Owned by the swapchains.
    ID3D11Device* native_device = nullptr; // Doesn't need mutex, always valid given it's a ptr to "itself"
    com_ptr<ID3D11DeviceContext> primary_command_list; // The immediate/primary command list is always valid
    CommandListData* primary_command_list_data = nullptr; // The immediate/primary command list is always valid
@@ -354,16 +354,17 @@ struct DeviceData
    // This contains all pipelines (from the game) that we can replace shaders of (e.g. pixel shaders, vertex shaders, ...).
    // It's basically data we append (link) to pipelines, done manually because we have no other way.
    // The data here is allocated by itself. // TODO: make this a unique pointer for easier handling.
-   std::unordered_map<uint64_t, Shader::CachedPipeline*> pipeline_cache_by_pipeline_handle;
+   std::unordered_map<const ID3D11DeviceChild*, Shader::CachedPipeline*> pipeline_cache_by_pipeline_handle;
    // Same as "pipeline_cache_by_pipeline_handle" but mapped to cloned (custom) pipeline handles.
-   std::unordered_map<uint64_t, Shader::CachedPipeline*> pipeline_cache_by_pipeline_clone_handle;
+   std::unordered_map<const ID3D11DeviceChild*, Shader::CachedPipeline*> pipeline_cache_by_pipeline_clone_handle;
    // All the pipelines linked to a shader. By original shader hash.
    std::unordered_map<uint32_t, std::unordered_set<Shader::CachedPipeline*>> pipeline_caches_by_shader_hash;
 
-   std::unordered_set<uint64_t> pipelines_to_reload;
+   std::unordered_set<const ID3D11DeviceChild*> pipelines_to_reload;
 
    // Custom samplers mapped to original ones by texture LOD bias
-   std::unordered_map<uint64_t, std::unordered_map<float, com_ptr<ID3D11SamplerState>>> custom_sampler_by_original_sampler;
+   // Not const: the game's sampler desc is read back to create the variants. Not owned (the destroy callback removes it).
+   std::unordered_map<ID3D11SamplerState*, std::unordered_map<float, com_ptr<ID3D11SamplerState>>> custom_sampler_by_original_sampler;
 
 #if ENABLE_SR
    SR::Type sr_type = SR::Type::None; // If active, the SR tech enabled by the user and supported+initialized correctly on this device
@@ -531,7 +532,7 @@ struct SwapchainData
    // Probably not particularly useful as the swapchain would be single threaded, if not for its destruction callback
    std::shared_mutex mutex;
 
-   std::unordered_set<uint64_t> back_buffers;
+   std::unordered_set<const ID3D11Resource*> back_buffers; // Owned by the swapchain
 
    std::vector<com_ptr<ID3D11RenderTargetView>> display_composition_rtvs;
 

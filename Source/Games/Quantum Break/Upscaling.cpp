@@ -173,7 +173,7 @@ namespace QuantumBreakUpscaling
       const auto& cached = *pipeline->second;
       if (!cached.cloned || cached.clone_origin != Shader::CloneOrigin::File || cached.shader_hashes[0] != temporal_resolve_pass.hash) return false;
       return CanUseTemporalSRShader(custom_shaders_enabled,
-         cached.pipeline.handle, cached.pipeline_clone.handle, reinterpret_cast<uintptr_t>(bound.get()));
+         cached.pipeline.handle, cached.pipeline_clone.handle, bound.get());
 #else
       (void)context;
       (void)cmd_list_data;

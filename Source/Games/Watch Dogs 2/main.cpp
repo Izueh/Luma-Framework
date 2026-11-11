@@ -40,8 +40,8 @@ struct CachedRenderTargetResource
 // Which constant buffers are the viewport one, per thread (each context records on its own thread), so no lock is needed
 struct WD2CmdListCache
 {
-   std::unordered_set<uint64_t> known_viewport_cbuffers;
-   std::unordered_set<uint64_t> known_non_viewport_cbuffers;
+   std::unordered_set<const ID3D11Buffer*> known_viewport_cbuffers;
+   std::unordered_set<const ID3D11Buffer*> known_non_viewport_cbuffers;
 };
 thread_local WD2CmdListCache wd2_cbuffers_cache;
 
@@ -888,8 +888,8 @@ public:
 
       for (uint32_t i = 0; i < count; ++i)
       {
-         const uint64_t buffer_handle = reinterpret_cast<uintptr_t>(buffers[i]);
-         if (buffer_handle == 0)
+         const ID3D11Buffer* const buffer_handle = buffers[i];
+         if (buffer_handle == nullptr)
             continue;
 
          bool is_viewport = luma_cache->known_viewport_cbuffers.contains(buffer_handle);

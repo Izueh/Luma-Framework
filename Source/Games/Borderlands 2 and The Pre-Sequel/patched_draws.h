@@ -217,6 +217,10 @@ namespace PatchedDraws
       {
          return size_t((key * 0x9E3779B97F4A7C15ull) >> 32);
       }
+      size_t operator()(const ID3D11Buffer* key) const noexcept
+      {
+         return (*this)(uint64_t(std::bit_cast<uintptr_t>(key)));
+      }
    };
 
    // CPU copies of the constant buffers the patched draws read their object and camera from (dgVoodoo's vc4), by buffer. A draw
@@ -237,15 +241,15 @@ namespace PatchedDraws
          UINT size = 0;           // The buffer's
          uint32_t generation = 0; // "generation" at the upload: an older one predates a pause of the hooks
       };
-      std::unordered_map<uint64_t, Entry, KeyHash> entries;
+      std::unordered_map<ID3D11Buffer*, Entry, KeyHash> entries; // Not owned. Not const: its desc is read back at a Map
       // Raised when the hooks restart ("Restart"): the uploads they missed make every older "latest" stale. A counter rather than
       // emptying the entries, which the frame's thread owns (dgVoodoo may present from another thread).
       std::atomic<uint32_t> generation = 1;
       uint32_t open_maps = 0; // Maps redirected to "latest" and not unmapped yet: most Unmaps skip the lookup
       // The first registered buffers and their entries (a node's address stays while the map grows), so a buffer hook finds them
-      // without a lookup. With more registered, every buffer takes the map lookup. The handles are read lock free ("MayBeRegistered").
+      // without a lookup. With more registered, every buffer takes the map lookup. The buffers are read lock free ("MayBeRegistered").
       static constexpr uint32_t MAX_FILTERED = 32;
-      std::array<std::atomic<uint64_t>, MAX_FILTERED> filtered_handles = {};
+      std::array<std::atomic<ID3D11Buffer*>, MAX_FILTERED> filtered_buffers = {};
       std::array<Entry*, MAX_FILTERED> filtered_entries = {};
       std::atomic<uint32_t> filtered_count = 0;
       std::atomic<bool> filter_overflow = false;
@@ -256,28 +260,28 @@ namespace PatchedDraws
 
       // False if the buffer surely isn't registered. Lock free, from any thread: a game's buffer hooks skip the game's other buffers
       // before taking its lock.
-      bool MayBeRegistered(uint64_t handle) const
+      bool MayBeRegistered(const ID3D11Buffer* handle) const
       {
          if (filter_overflow.load(std::memory_order_acquire))
             return true;
          const uint32_t count = filtered_count.load(std::memory_order_acquire);
          for (uint32_t i = 0; i < count; i++)
          {
-            if (filtered_handles[i].load(std::memory_order_acquire) == handle)
+            if (filtered_buffers[i].load(std::memory_order_acquire) == handle)
                return true;
          }
          return false;
       }
 
       // The registered buffer's entry, null if the buffer isn't one
-      Entry* Find(uint64_t handle)
+      Entry* Find(ID3D11Buffer* handle)
       {
          if (!filter_overflow.load(std::memory_order_relaxed))
          {
             const uint32_t count = filtered_count.load(std::memory_order_relaxed);
             for (uint32_t i = 0; i < count; i++)
             {
-               if (filtered_handles[i].load(std::memory_order_relaxed) == handle)
+               if (filtered_buffers[i].load(std::memory_order_relaxed) == handle)
                   return filtered_entries[i];
             }
             return nullptr;
@@ -289,7 +293,7 @@ namespace PatchedDraws
       // The buffer's entry, registered (and filtered while there is room) on its first draw
       Entry& Register(ID3D11Buffer* buffer)
       {
-         const uint64_t handle = uint64_t(reinterpret_cast<uintptr_t>(buffer));
+         ID3D11Buffer* const handle = buffer;
          D3D11_BUFFER_DESC desc;
          buffer->GetDesc(&desc);
          if (Entry* const found = Find(handle))
@@ -312,7 +316,7 @@ namespace PatchedDraws
          if (count < MAX_FILTERED)
          {
             filtered_entries[count] = entry;
-            filtered_handles[count].store(handle, std::memory_order_release);
+            filtered_buffers[count].store(handle, std::memory_order_release);
             filtered_count.store(count + 1, std::memory_order_release);
          }
          else
@@ -360,7 +364,7 @@ namespace PatchedDraws
       // The "PostMap" callback: a registered buffer mapped for a whole rewrite is written to its "latest" instead of "*data"
       // until its Unmap. A mapped pointer must not be read back: AMD's is write-combined, a 4 KB copy took 28 us per draw there. A
       // partial or appending write (the copies would miss it) leaves the entry's "mapped" null. Does nothing if the buffer isn't registered.
-      void OnMap(uint64_t handle, D3D11_MAP type, void** data)
+      void OnMap(ID3D11Buffer* handle, D3D11_MAP type, void** data)
       {
          Entry* const entry = Find(handle);
          if (!entry)
@@ -370,7 +374,7 @@ namespace PatchedDraws
          {
             // A destroyed buffer's address can come back for a smaller one before the next draw's "Register": the Unmap's copy would overrun it
             D3D11_BUFFER_DESC desc;
-            reinterpret_cast<ID3D11Buffer*>(uintptr_t(handle))->GetDesc(&desc);
+            handle->GetDesc(&desc);
             if (entry->size != desc.ByteWidth)
             {
                *entry = {.size = desc.ByteWidth};
@@ -384,7 +388,7 @@ namespace PatchedDraws
 
       // The "PreUnmap" callback: a redirected Map's write reaches the buffer. Must run
       // even with motion vectors just turned off (the game wrote only to "latest"), so hooks don't gate it on that.
-      void OnUnmap(uint64_t handle)
+      void OnUnmap(ID3D11Buffer* handle)
       {
          if (open_maps == 0)
             return;
@@ -399,7 +403,7 @@ namespace PatchedDraws
 
       // The "PreUpdateSubresource" callback (before the UpdateSubresource runs): a partial update is
       // merged into the last upload, else into zeros.
-      void OnUpdate(uint64_t handle, const void* data, uint64_t offset, uint64_t size)
+      void OnUpdate(ID3D11Buffer* handle, const void* data, uint64_t offset, uint64_t size)
       {
          Entry* const entry = Find(handle);
          if (!entry || offset >= entry->size)
