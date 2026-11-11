@@ -61,8 +61,8 @@ jobs:
         msbuild Luma.slnf /m /p:Configuration=${{ matrix.config }} /p:Platform=${{ matrix.platform }} /p:DefineConstants="REMOTE_BUILD=1"
         if ($LASTEXITCODE -ne 0) {
           Write-Host "::warning::MSBuild reported errors for ${{ matrix.config }}-${{ matrix.platform }} - the projects that failed to compile will be excluded from packaging/release (see the 'Create ZIP' step for the exact list)."
+          exit 0 # if only one or a few games failed to build, we should still build and package+release the other # TODO: add code to avoid doing an empty release if they all failed to build
         }
-      continue-on-error: true # if only one or a few games failed to build, we should still build and package+release the other # TODO: add code to avoid doing an empty release if they all failed to build
 
     - name: Create ZIP per mod with matching shaders
       id: create_zip
@@ -122,8 +122,19 @@ jobs:
         }
         Write-Host "Mods built for this configuration: $($builtMods.Count), failed: $($missingProjects.Count)"
 
+        $results = [ordered]@{}
+        foreach ($mod in $builtMods) { $results[$mod.Name] = "✅ Built" }
+        foreach ($projName in $missingProjects) { $results[$projName] = "❌ Failed to build" }
+        function Write-Summary {
+          $summary = @("### ${{ matrix.config }}-${{ matrix.platform }} (${{ matrix.shard }})", "", "| Game | Result |", "| --- | --- |")
+          foreach ($name in ($results.Keys | Sort-Object)) { $summary += "| $name | $($results[$name]) |" }
+          $summary += ""
+          $summary -join "`n" >> $env:GITHUB_STEP_SUMMARY
+        }
+
         if ($builtMods.Count -eq 0) {
           Write-Host "No mods found."
+          Write-Summary
           "skip_upload=true" >> $env:GITHUB_OUTPUT
           exit 0
         }
@@ -190,13 +201,17 @@ jobs:
           pwsh -ExecutionPolicy Bypass -File "Scripts/package.ps1" -Project $projectName -Config "${{ matrix.config }}" -Platform "${{ matrix.platform }}" -AddonPath $mod.Dll -OutDir "."
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::warning::Packaging failed for '$projectName' - it will be excluded from this release."
+            $results[$mod.Name] = "⚠️ Built, packaging failed"
             continue
           }
+          $results[$mod.Name] = "✅ Packaged"
           $packagedCount++
 
           #"zipfile=$zipName" >> $env:GITHUB_OUTPUT
           #"skip_upload=false" >> $env:GITHUB_OUTPUT
         }
+
+        Write-Summary
 
         # Skip the upload if nothing was packaged (last write wins on GITHUB_OUTPUT)
         if ($packagedCount -eq 0) {
