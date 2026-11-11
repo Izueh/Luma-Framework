@@ -1,16 +1,20 @@
 #include "overlay/overlay.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include <optional>
+#include <string>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <backends/imgui_impl_win32.h>
 
 #include "hooks/scope.hpp"
 #include "overlay/d3d11_renderer.hpp"
 #include "overlay/input.hpp"
 #include "overlay/input_hooks.hpp"
+#include "utils/config.hpp"
 #include "utils/log.hpp"
 
 // Declared by ImGui's Win32 backend only in a comment, to keep <Windows.h> out of its header
@@ -37,6 +41,12 @@ std::atomic<bool> open = false;
 DrawFunction draw_main = nullptr;
 DrawFunction draw_always = nullptr;
 
+constexpr const char* CONFIG_SECTION = "Luma";
+constexpr const char* FONT_SIZE_CONFIG = "FontSize";
+constexpr float MIN_FONT_SIZE = 8.f;
+constexpr float MAX_FONT_SIZE = 48.f;
+float font_size = 0.f;
+
 // With the lock held
 bool Attach(IDXGISwapChain* swapchain, ID3D11Device* device)
 {
@@ -46,11 +56,14 @@ bool Attach(IDXGISwapChain* swapchain, ID3D11Device* device)
    ImGui::CreateContext();
    ImGuiIO& io = ImGui::GetIO();
    io.IniFilename = nullptr; // Nothing written next to the game
-   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
    ImGui::StyleColorsDark();
    const float scale = ImGui_ImplWin32_GetDpiScaleForHwnd(desc.OutputWindow);
    ImGui::GetStyle().ScaleAllSizes(scale);
    ImGui::GetStyle().FontScaleDpi = scale;
+   float saved_font_size = 0.f;
+   if (Config::Get(CONFIG_SECTION, FONT_SIZE_CONFIG, saved_font_size))
+      font_size = std::clamp(saved_font_size, MIN_FONT_SIZE, MAX_FONT_SIZE);
    ImGui_ImplWin32_Init(desc.OutputWindow);
 
    attached = Attachment{desc.OutputWindow, swapchain, device};
@@ -72,6 +85,50 @@ void Detach()
    attached.reset();
 }
 
+void DrawDockSpace()
+{
+   const ImGuiViewport* viewport = ImGui::GetMainViewport();
+   const ImGuiID root_space_id = ImGui::GetID("ViewportDockspace");
+   if (!ImGui::DockBuilderGetNode(root_space_id))
+   {
+      ImGui::DockBuilderAddNode(root_space_id, ImGuiDockNodeFlags_DockSpace);
+      ImGui::DockBuilderSetNodeSize(root_space_id, viewport->Size);
+      ImGuiID main_space_id = 0;
+      ImGuiID right_space_id = 0;
+      ImGui::DockBuilderSplitNode(root_space_id, ImGuiDir_Left, 1.f / 3.f, &main_space_id, &right_space_id);
+      ImGui::DockBuilderDockWindow("Luma", main_space_id);
+      ImGui::DockBuilderDockWindow("Overlay Settings", main_space_id);
+      ImGui::DockBuilderFinish(root_space_id);
+   }
+
+   ImGui::SetNextWindowPos(viewport->Pos);
+   ImGui::SetNextWindowSize(viewport->Size);
+   ImGui::SetNextWindowViewport(viewport->ID);
+   ImGui::Begin("Viewport", nullptr,
+      ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking |
+         ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoBackground);
+   ImGui::DockSpace(root_space_id, ImVec2(0, 0), ImGuiDockNodeFlags_PassthruCentralNode);
+   ImGui::End();
+}
+
+void DrawOverlaySettings()
+{
+   const std::string key_label = Input::IsCapturingToggleKey() ? "Press a key (Escape cancels)" : Input::GetKeyName(Input::GetToggleKey());
+   if (ImGui::Button((key_label + "###OverlayKey").c_str()))
+      Input::CaptureToggleKey();
+   ImGui::SameLine();
+   ImGui::TextUnformatted("Overlay key");
+   if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Opens and closes this overlay");
+
+   ImGui::SliderFloat("Font size", &font_size, MIN_FONT_SIZE, MAX_FONT_SIZE, "%.0f px", ImGuiSliderFlags_AlwaysClamp);
+   if (ImGui::IsItemDeactivatedAfterEdit())
+   {
+      Config::SetValue(CONFIG_SECTION, FONT_SIZE_CONFIG, double(font_size));
+      Config::Save();
+   }
+}
+
 void BuildFrame(const DXGI_SWAP_CHAIN_DESC& desc, ID3D11Device* device)
 {
    ImGui_ImplWin32_NewFrame();
@@ -81,14 +138,21 @@ void BuildFrame(const DXGI_SWAP_CHAIN_DESC& desc, ID3D11Device* device)
       io.DisplayFramebufferScale = ImVec2(float(desc.BufferDesc.Width) / io.DisplaySize.x, float(desc.BufferDesc.Height) / io.DisplaySize.y);
    // Games often hide the cursor
    io.MouseDrawCursor = open;
+   if (font_size > 0.f)
+      ImGui::GetStyle().FontSizeBase = font_size;
    ImGui::NewFrame();
+   if (font_size <= 0.f)
+      font_size = std::clamp(ImGui::GetStyle().FontSizeBase, MIN_FONT_SIZE, MAX_FONT_SIZE);
    if (draw_always)
       draw_always(device);
    if (open && draw_main)
    {
-      ImGui::SetNextWindowSize(ImVec2(700.f, 600.f), ImGuiCond_FirstUseEver);
-      if (ImGui::Begin("Luma"))
+      DrawDockSpace();
+      if (ImGui::Begin("Luma", nullptr, ImGuiWindowFlags_NoFocusOnAppearing))
          draw_main(device);
+      ImGui::End();
+      if (ImGui::Begin("Overlay Settings", nullptr, ImGuiWindowFlags_NoFocusOnAppearing))
+         DrawOverlaySettings();
       ImGui::End();
    }
    ImGui::Render();
