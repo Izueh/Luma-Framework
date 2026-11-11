@@ -646,6 +646,16 @@ public:
    {
       auto& device_data = *GetSwapchainData(swapchain)->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
+      // Core just set "output_resolution" to the swapchain's size, but this game's targets are sized from its own output size, which differs from it
+      // when the window has borders (e.g. 3840x2160 vs 3840x2124). The game resizes the swapchain and recreates its targets on the same thread,
+      // before the frame hook runs again, so re-apply its size right away or they'd fail the upgrade size filters and stay at their vanilla format.
+      // Before the hook first ran, the swapchain's size is the best guess.
+      const uint32_t game_width = g_game_output_width.load(std::memory_order_acquire);
+      const uint32_t game_height = g_game_output_height.load(std::memory_order_acquire);
+      if (game_width > 0 && game_height > 0)
+         ApplyGameOutputResolution(device_data, game_width, game_height);
+      else
+         ApplyGameOutputResolution(device_data, static_cast<uint32_t>(device_data.output_resolution.x), static_cast<uint32_t>(device_data.output_resolution.y));
       EnsureScaledTexture(device_data, game_device_data);
    }
 

@@ -17,7 +17,7 @@ void main(
    out float4 o0 : SV_Target0)
 {
    float4 r0, r1, r2, r3;
-   float2 uv = v0.xy / LumaSettings.SwapchainSize;
+   float2 uv = v0.xy / LumaSettings.GameSettings.OutputSize;
    float4 texSample = g_Texture0.Sample(g_Texture0Sampler_s, uv);
 
    float3 color = texSample.rgb;

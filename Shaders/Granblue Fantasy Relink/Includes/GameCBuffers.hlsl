@@ -9,6 +9,12 @@ namespace CB
 {
 struct LumaGameSettings
 {
+   // The game's output resolution (what its post process targets are sized from), which isn't necessarily the swapchain's
+   // (e.g. a window with borders makes the swapchain shorter, the game then fits its output to it in its last pass)
+   float2 OutputSize;
+   float2 OutputInvSize;
+   // Keep the vectors above first: HLSL doesn't let a vector straddle a 16 byte register (c++ does), so they'd stop matching after an odd number of scalars
+
    float GammaCorrection;
    float Exposure;
    float Highlights;
@@ -26,7 +32,6 @@ struct LumaGameSettings
    int BloomType;
    float BloomStrength;
    int IsTAARunning; // 1 when the engine's TAA frame-graph pass is active this frame
-   float RenderScale;
 };
 
 struct LumaGameData

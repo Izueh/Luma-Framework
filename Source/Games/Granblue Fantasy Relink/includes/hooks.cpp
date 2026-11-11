@@ -581,6 +581,23 @@ bool TryReadTAAResetFlag()
 // into the trampoline call and write them to g_renderWidth/g_renderHeight — the globals
 // the frame graph reads to decide whether the temporal upscale path runs.
 // g_outputWidth/g_outputHeight are never modified.
+// Sets "output_resolution" (which the texture upgrade size filters compare against) to the game's own output size,
+// and mirrors it in "LumaSettings.GameSettings.OutputSize", which the Luma passes and replaced shaders on the output size their UVs from.
+// It isn't necessarily the swapchain's: a window with borders makes the swapchain shorter (e.g. 3840x2124 for a 3840x2160 output),
+// and the game fits its output to it in its last pass.
+static void ApplyGameOutputResolution(DeviceData& device_data, uint32_t width, uint32_t height)
+{
+   device_data.output_resolution.x = static_cast<float>(width);
+   device_data.output_resolution.y = static_cast<float>(height);
+   auto& game_settings = cb_luma_global_settings.GameSettings;
+   if (game_settings.OutputSize.x != static_cast<float>(width) || game_settings.OutputSize.y != static_cast<float>(height))
+   {
+      game_settings.OutputSize = float2{static_cast<float>(width), static_cast<float>(height)};
+      game_settings.OutputInvSize = float2{1.f / static_cast<float>(width), 1.f / static_cast<float>(height)};
+      device_data.cb_luma_global_settings_dirty = true;
+   }
+}
+
 static char __fastcall Hooked_InitializeDX11RenderingPipeline(int screen_width, int screen_height)
 {
    int render_w = screen_width;
@@ -589,9 +606,10 @@ static char __fastcall Hooked_InitializeDX11RenderingPipeline(int screen_width, 
    DeviceData* device_data = g_device_data_ptr.load(std::memory_order_acquire);
    if (device_data && screen_width > 0 && screen_height > 0)
    {
-      // screen_width/height ARE the output dims — keep output_resolution current every frame.
-      device_data->output_resolution.x = static_cast<float>(screen_width);
-      device_data->output_resolution.y = static_cast<float>(screen_height);
+      // screen_width/height ARE the output dims (not necessarily the swapchain's, e.g. with window borders): keep the output resolution current every frame.
+      g_game_output_width.store(static_cast<uint32_t>(screen_width), std::memory_order_release);
+      g_game_output_height.store(static_cast<uint32_t>(screen_height), std::memory_order_release);
+      ApplyGameOutputResolution(*device_data, static_cast<uint32_t>(screen_width), static_cast<uint32_t>(screen_height));
 
       const float scale = render_scale;
       const double aspect_ratio = static_cast<double>(screen_width) / screen_height;

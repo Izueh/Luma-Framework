@@ -32,7 +32,7 @@ void main(
   uint4 bitmask, uiDest;
   float4 fDest;
 #if TONEMAP_AFTER_TAA
-  float4 targetUvParam = float4(LumaSettings.SwapchainInvSize, LumaSettings.SwapchainInvSize);
+  float4 targetUvParam = float4(LumaSettings.GameSettings.OutputInvSize, LumaSettings.GameSettings.OutputInvSize);
 #else
   float4 targetUvParam = g_TargetUvParam;
 #endif

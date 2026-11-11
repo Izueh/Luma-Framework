@@ -46,7 +46,7 @@ void main(float4 v0: SV_Position0, out float4 o0: SV_Target0)
    float4 fDest;
 
    // Derive UV from SV_Position (Copy VS does not output TEXCOORD0)
-   float2 v1 = v0.xy / LumaSettings.SwapchainSize;
+   float2 v1 = v0.xy / LumaSettings.GameSettings.OutputSize;
 
    r0.xyzw = g_TextureSceneColorHDR.Sample(g_TextureSceneColorHDRSampler_s, v1).xyzw;
    float alpha = r0.w;

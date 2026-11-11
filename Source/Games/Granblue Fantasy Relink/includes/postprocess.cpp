@@ -100,7 +100,8 @@ static bool CanDrawNativeOutlinePass(ID3D11ShaderResourceView* input_color_srv, 
 
 static bool DrawNativeOutlinePass(
    ID3D11DeviceContext* context,
-   const DeviceData& device_data,
+   CommandListData& cmd_list_data,
+   DeviceData& device_data,
    GameDeviceDataGBFR& game_device_data,
    ID3D11ShaderResourceView* input_color_srv)
 {
@@ -167,6 +168,16 @@ static bool DrawNativeOutlinePass(
       cs_samplers[i] = replay_state.cs_samplers[i].get();
    }
    context->CSSetSamplers(0, GameDeviceDataGBFR::OutlineReplayState::kCapturedSamplerCount, &cs_samplers[0]);
+
+   // The captured slots may not hold Luma's cbuffers (the game's dispatch was cancelled before Core set them), and they could be from another frame
+   {
+      constexpr bool do_safety_checks = false;
+      SetLumaConstantBuffers(context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaSettings, 0, 0, 0.f, 0.f, do_safety_checks);
+      SetLumaConstantBuffers(context, cmd_list_data, device_data, ShaderStages::Compute, LumaConstantBufferType::LumaData, 0, 0, 0.f, 0.f, do_safety_checks);
+   }
+
+   // The previous pass in the chain leaves its output (our input) bound as render target, and D3D would then null our SRV of it
+   context->OMSetRenderTargets(0, nullptr, nullptr);
 
    ID3D11ShaderResourceView* cs_srvs[26] = {};
    cs_srvs[0] = input_color_srv;
@@ -1493,7 +1504,7 @@ static void RunLatePostProcessPasses(
       {
          const bool outline_ok = run_chained_color_pass("OutlineCS", [&](ID3D11ShaderResourceView* input_srv, ID3D11ShaderResourceView*& out_srv) -> bool
             {
-            if (!DrawNativeOutlinePass(native_device_context, device_data, game_device_data, input_srv))
+            if (!DrawNativeOutlinePass(native_device_context, cmd_list_data, device_data, game_device_data, input_srv))
             {
                return false;
             }

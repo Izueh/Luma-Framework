@@ -10,7 +10,7 @@ SamplerState g_Texture1Sampler_s : register(s1);
 void main(float4 v0: SV_Position0, out float4 o0: SV_Target0)
 {
    const int3 uv = int3(v0.xy, 0);
-   float2 uv_norm = v0.xy / LumaSettings.SwapchainSize;
+   float2 uv_norm = v0.xy / LumaSettings.GameSettings.OutputSize;
    float4 color = g_Texture0.Load(uv);
    float alpha = g_Texture1.SampleLevel(g_Texture1Sampler_s, uv_norm, 0).a;
 

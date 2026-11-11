@@ -44,6 +44,10 @@ struct GBFRHookGlobals
 
    std::atomic<DeviceData*> device_data_ptr = nullptr;
    std::atomic<ID3D11Device*> native_device_ptr = nullptr;
+   // The game's own output size (g_outputWidth/Height, last seen by the frame hook), which can differ from the swapchain's (e.g. window borders).
+   // Core overwrites "output_resolution" with the swapchain's whenever it (re)initializes it, so this is applied back right after.
+   std::atomic<uint32_t> game_output_width{0};
+   std::atomic<uint32_t> game_output_height{0};
    std::atomic<uint32_t> table_jitter_x_bits{0};
    std::atomic<uint32_t> table_jitter_y_bits{0};
    std::atomic<bool> table_jitter_valid{false};
@@ -61,6 +65,8 @@ inline auto& g_taa_init_hook = g_hook_globals.taa_init_hook;
 #endif
 inline auto& g_device_data_ptr = g_hook_globals.device_data_ptr;
 inline auto& g_native_device_ptr = g_hook_globals.native_device_ptr;
+inline auto& g_game_output_width = g_hook_globals.game_output_width;
+inline auto& g_game_output_height = g_hook_globals.game_output_height;
 inline GBFRResolvedAddresses g_resolved_addresses;
 
 // Per-constant status from ResolveGBFRAddresses() — for logging and the UI debug table.

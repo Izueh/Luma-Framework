@@ -91,7 +91,7 @@ void main(uint2 vThreadID: SV_DispatchThreadID)
 //     return;
 //   }
 #if TONEMAP_AFTER_TAA
-   if (any(vThreadID.xy >= (uint2)LumaSettings.SwapchainSize.xy))
+   if (any(vThreadID.xy >= (uint2)LumaSettings.GameSettings.OutputSize.xy))
    {
       return;
    }
@@ -109,9 +109,9 @@ void main(uint2 vThreadID: SV_DispatchThreadID)
    OutputTexture[vThreadID.xy] = float4(r2.xyz, 1);
    return;
 #if TONEMAP_AFTER_TAA
-   if (LumaSettings.GameSettings.RenderScale != 1.0f)
+   if (any(LumaData.RenderResolutionScale != 1.0f))
    {
-      uint2 depthCoord = min((uint2)floor((vThreadID.xy + 0.5f) * LumaSettings.GameSettings.RenderScale),
+      uint2 depthCoord = min((uint2)floor((vThreadID.xy + 0.5f) * LumaData.RenderResolutionScale),
                              (uint2)(screenSize_.xy - 1.0f));
       r3.x = DepthTexture.Load(int3(depthCoord, 0)).x;
    }
@@ -138,9 +138,9 @@ void main(uint2 vThreadID: SV_DispatchThreadID)
    if (r3.y != 0)
    {
 #if TONEMAP_AFTER_TAA
-      const float2 _outputSize = LumaSettings.SwapchainSize.xy;
-      const float2 _invOutputSize = LumaSettings.SwapchainInvSize.xy;
-      const uint2 _stencilCoord = min((uint2)floor((vThreadID.xy + 0.5f) * LumaSettings.GameSettings.RenderScale),
+      const float2 _outputSize = LumaSettings.GameSettings.OutputSize.xy;
+      const float2 _invOutputSize = LumaSettings.GameSettings.OutputInvSize.xy;
+      const uint2 _stencilCoord = min((uint2)floor((vThreadID.xy + 0.5f) * LumaData.RenderResolutionScale),
                                       (uint2)(screenSize_.xy - 1.0f));
 #else
       const float2 _outputSize = screenSize_.xy;
