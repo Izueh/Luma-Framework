@@ -36,7 +36,7 @@
   <PropertyGroup>
     <OutDir>$(Luma2Root)Binaries\$(Configuration)\</OutDir>
     <IntDir>$(Luma2Root)Binaries\Intermediate\$(ProjectName)\$(Configuration)\</IntDir>
-    <ExternalIncludePath>$(LumaExternalDir)safetyhook\include;$(LumaExternalDir)zydis\include;$(LumaExternalDir)zydis\dependencies\zycore\include;$(Luma2ExternalDir)glaze\include;$(Luma2ExternalDir)imgui;$(Luma2ExternalDir)doctest;$(ExternalIncludePath)</ExternalIncludePath>
+    <ExternalIncludePath>$(LumaExternalDir)safetyhook\include;$(LumaExternalDir)zydis\include;$(LumaExternalDir)zydis\dependencies\zycore\include;$(Luma2ExternalDir)glaze\include;$(Luma2ExternalDir)imgui;$(Luma2ExternalDir)doctest;$(Luma2ExternalDir)Fonts\FontAwesome;$(ExternalIncludePath)</ExternalIncludePath>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
@@ -55,6 +55,8 @@
       <AdditionalIncludeDirectories>$(Luma2SourceDir)Core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'=='Development-Debug' or '$(Configuration)'=='Development-Release'">DEVELOPMENT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- Development builds read shaders and textures from the repository in place, when it's there (System/Paths.cpp) -->
+      <PreprocessorDefinitions Condition="'$(Configuration)'=='Development-Debug' or '$(Configuration)'=='Development-Release'">LUMA_RESOURCES_DIR=LR"($(Luma2Root)Resources\)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'=='Test-Release'">TEST=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'!='Publishing-Release' and ('$(LumaDebugLayer)'=='true' or '$(LumaGpuValidation)'=='true')">LUMA_DEBUG_LAYER=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'!='Publishing-Release' and '$(LumaGpuValidation)'=='true'">LUMA_GPU_VALIDATION=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -75,6 +77,9 @@
       <OptimizeReferences Condition="'$(LumaDebugConfiguration)'=='false'">true</OptimizeReferences>
       <LinkTimeCodeGeneration Condition="'$(LumaDebugConfiguration)'=='false'">UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
     </Link>
+    <ResourceCompile>
+      <AdditionalIncludeDirectories>$(Luma2ExternalDir)Fonts\FontAwesome;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
     <Lib>
       <LinkTimeCodeGeneration Condition="'$(LumaDebugConfiguration)'=='false'">true</LinkTimeCodeGeneration>
     </Lib>

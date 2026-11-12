@@ -25,7 +25,21 @@ jobs:
           tidy-checks: '-*' # clang-tidy has no compile database here, so it only reports noise
           files-changed-only: true # should be set to true initially, but false for testing
           thread-comments: false
-          ignore: 'Source/External/** | **/safetyhook* | **/Zydis*'
+          ignore: 'Source/External/** | **/safetyhook* | **/Zydis* | Luma2/**' # Luma2 has its own job below
       - name: Fail fast?!
         if: steps.linter.outputs.checks-failed > 0
         run: exit 1
+
+  # Luma 2.0 started clean: every file is checked, and a difference fails the build
+  luma2-format:
+    name: Luma2 format
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install clang-format 21
+        run: pip install "clang-format==21.1.*"
+      - name: Check Luma2/Source
+        run: |
+          clang-format --version
+          find Luma2/Source \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print0 | xargs -0 clang-format --style=file --dry-run --Werror

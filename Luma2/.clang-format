@@ -1,4 +1,4 @@
-# Luma 2.0's style. Style decisions go here, each with a line saying what it's for.
+# clang-format 21 (the version CI runs). Luma 2.0's style. Style decisions go here, each with a line saying what it's for.
 BasedOnStyle: Microsoft
 
 # Indentation: 3 spaces
@@ -37,8 +37,8 @@ BraceWrapping:
 NamespaceIndentation: None
 FixNamespaceComments: true
 
-# Guard clauses and loops take two lines. Short functions may stay on one line, and case labels with a short body too.
-AllowShortIfStatementsOnASingleLine: Never
+# Loops take two lines. A guard clause may stay on one line, as in 1.0, and short functions and case labels too.
+AllowShortIfStatementsOnASingleLine: WithoutElse
 AllowShortLoopsOnASingleLine: false
 AllowShortBlocksOnASingleLine: Never
 AllowShortFunctionsOnASingleLine: All
@@ -56,3 +56,13 @@ AlwaysBreakTemplateDeclarations: Yes
 SpacesBeforeTrailingComments: 1
 AlignTrailingComments: false
 InsertNewlineAtEOF: true
+
+# One blank line between definitions, no blank line opening a block, never two in a row
+SeparateDefinitionBlocks: Always
+KeepEmptyLines:
+  AtStartOfBlock: false
+MaxEmptyLinesToKeep: 1
+
+# const before the type, braces only where written
+QualifierAlignment: Left
+InsertBraces: false

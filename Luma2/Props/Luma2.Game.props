@@ -9,14 +9,27 @@
 
   <ItemDefinitionGroup>
     <Link>
-      <!-- Links "system/<dll>_exports.cpp" from Core, which nothing else references -->
+      <!-- Links "System/<Dll>Exports.cpp" from Core, which nothing else references -->
       <ForceSymbolReferences>LumaDllExports_$(LumaDllName);%(ForceSymbolReferences)</ForceSymbolReferences>
     </Link>
   </ItemDefinitionGroup>
 
-  <!-- Copies the dll and its pdb into the game when "LumaGameDir" is set (e.g. in the project's .vcxproj.user file) -->
+  <!-- The overlay's fonts (UI/Fonts.rc): a resource only reaches the dll from its own project -->
+  <ItemGroup>
+    <ResourceCompile Include="$(Luma2SourceDir)Core\UI\Fonts.rc" />
+  </ItemGroup>
+
+  <!-- Copies the dll and its pdb into the game when "LumaGameDir" is set (e.g. in the project's .vcxproj.user file), next to the "Luma" folder the mod reads and writes -->
   <Target Name="LumaDeploy" AfterTargets="Build" Condition="'$(LumaGameDir)'!=''">
     <Copy SourceFiles="$(TargetPath);$(OutDir)$(TargetName).pdb" DestinationFolder="$(LumaGameDir)" SkipUnchangedFiles="true" />
+    <MakeDir Directories="$(LumaGameDir)Luma" />
+    <!-- The Luma folder is Global's files with the game's on top (a game's file wins a name clash) -->
+    <ItemGroup>
+      <LumaGlobalResource Include="$(Luma2Root)Resources\Global\**\*" Exclude="$(Luma2Root)Resources\Global\**\.gitkeep" />
+      <LumaGameResource Include="$(Luma2Root)Resources\$(ProjectName)\**\*" Exclude="$(Luma2Root)Resources\$(ProjectName)\**\.gitkeep" />
+    </ItemGroup>
+    <Copy SourceFiles="@(LumaGlobalResource)" DestinationFiles="@(LumaGlobalResource->'$(LumaGameDir)Luma\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(LumaGameResource)" DestinationFiles="@(LumaGameResource->'$(LumaGameDir)Luma\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     <Message Importance="high" Text="Deployed $(TargetFileName) to $(LumaGameDir)" />
   </Target>
 </Project>

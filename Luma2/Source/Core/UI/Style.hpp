@@ -1,0 +1,101 @@
+#pragma once
+
+#include <string_view>
+
+#include <imgui.h>
+
+// Every color, size and spacing of the overlay. Panels use these, never literal colors or pixel sizes.
+namespace Luma {
+namespace UI {
+namespace Style {
+namespace Colors {
+// Surfaces, darkest to lightest
+inline constexpr ImVec4 WINDOW = {0.067f, 0.071f, 0.082f, 0.97f};
+inline constexpr ImVec4 PANEL = {0.098f, 0.106f, 0.122f, 1.f};
+inline constexpr ImVec4 CONTROL = {0.153f, 0.165f, 0.188f, 1.f};
+inline constexpr ImVec4 CONTROL_HOVERED = {0.204f, 0.220f, 0.251f, 1.f};
+inline constexpr ImVec4 CONTROL_ACTIVE = {0.243f, 0.263f, 0.302f, 1.f};
+inline constexpr ImVec4 BORDER = {0.224f, 0.239f, 0.271f, 1.f};
+inline constexpr ImVec4 SHADOW = {0.f, 0.f, 0.f, 0.45f};
+
+inline constexpr ImVec4 TEXT = {0.902f, 0.914f, 0.933f, 1.f};
+inline constexpr ImVec4 TEXT_DIM = {0.557f, 0.580f, 0.624f, 1.f};
+// Setting labels, and a step brighter for a changed setting
+inline constexpr ImVec4 TEXT_LABEL = {0.776f, 0.792f, 0.827f, 1.f};
+inline constexpr ImVec4 TEXT_BRIGHT = {1.f, 1.f, 1.f, 1.f};
+inline constexpr ImVec4 ICON_DISABLED = {0.420f, 0.439f, 0.478f, 1.f};
+
+// Raised surfaces (section headers, the title bar): a vertical gradient and a highlight on the top edge
+inline constexpr ImVec4 RAISED_TOP = {0.149f, 0.161f, 0.192f, 1.f};
+inline constexpr ImVec4 RAISED_BOTTOM = {0.110f, 0.118f, 0.141f, 1.f};
+inline constexpr ImVec4 HIGHLIGHT = {1.f, 1.f, 1.f, 0.10f};
+inline constexpr ImVec4 HOVER_OVERLAY = {1.f, 1.f, 1.f, 0.05f};
+
+// Luma blue: selection, focus and primary actions
+inline constexpr ImVec4 ACCENT = {0.247f, 0.557f, 0.988f, 1.f};
+inline constexpr ImVec4 ACCENT_HOVERED = {0.384f, 0.647f, 1.f, 1.f};
+inline constexpr ImVec4 ACCENT_ACTIVE = {0.180f, 0.447f, 0.835f, 1.f};
+
+inline constexpr ImVec4 SUCCESS = {0.298f, 0.733f, 0.427f, 1.f};
+inline constexpr ImVec4 WARNING = {0.961f, 0.678f, 0.212f, 1.f};
+inline constexpr ImVec4 DANGER = {0.898f, 0.282f, 0.302f, 1.f};
+inline constexpr ImVec4 DANGER_HOVERED = {0.957f, 0.392f, 0.408f, 1.f};
+// What Luma injected, in trace
+inline constexpr ImVec4 INJECTED = {0.631f, 0.475f, 0.961f, 1.f};
+
+// Icon tints of the category headers: a small fixed palette, one color per kind of category
+namespace Tints {
+inline constexpr ImVec4 LUMA = ACCENT;
+inline constexpr ImVec4 OVERLAY = {0.353f, 0.784f, 0.980f, 1.f};
+inline constexpr ImVec4 DISPLAY = {0.984f, 0.663f, 0.243f, 1.f};
+inline constexpr ImVec4 UPSCALING = {0.243f, 0.835f, 0.710f, 1.f};
+inline constexpr ImVec4 POST_PROCESSING = {0.957f, 0.451f, 0.710f, 1.f};
+inline constexpr ImVec4 ADVANCED = {0.678f, 0.588f, 0.988f, 1.f};
+inline constexpr ImVec4 CONSOLE = {0.620f, 0.875f, 0.322f, 1.f};
+inline constexpr ImVec4 CREDITS = {0.980f, 0.459f, 0.459f, 1.f};
+inline constexpr ImVec4 OTHER = {0.580f, 0.678f, 0.851f, 1.f};
+} // namespace Tints
+
+// The services' own colors, for their marks on link buttons (GitHub's is its dark-theme white)
+namespace Brands {
+inline constexpr ImVec4 KOFI = {1.f, 0.369f, 0.357f, 1.f};
+inline constexpr ImVec4 BUY_ME_A_COFFEE = {1.f, 0.867f, 0.f, 1.f};
+inline constexpr ImVec4 DISCORD = {0.345f, 0.396f, 0.949f, 1.f};
+inline constexpr ImVec4 GITHUB = {0.941f, 0.965f, 0.988f, 1.f};
+} // namespace Brands
+} // namespace Colors
+
+// In pixels at the default font size. Scale() adapts them to the font size setting.
+namespace Sizes {
+inline constexpr float UNIT = 4.f;
+inline constexpr float CONTROL_ROUNDING = 4.f;
+inline constexpr float PANEL_ROUNDING = 6.f;
+inline constexpr float LABEL_WIDTH = 200.f;
+inline constexpr float DEFAULT_FONT = 16.f;
+inline constexpr float ACCENT_BAR = 3.f;
+inline constexpr float SHADOW = 10.f;
+} // namespace Sizes
+
+// A category header's icon and tint, chosen by its name ("Display", "Overlay", "Credits"...)
+struct Category
+{
+   const char* icon;
+   ImVec4 tint;
+};
+
+Category GetCategory(std::string_view name);
+
+// The gradient and top highlight of raised surfaces
+void DrawRaised(ImDrawList* draw_list, ImVec2 min, ImVec2 max, float rounding);
+// A soft shadow around (outside) a popup, tooltip or toast. From inside its window.
+void DrawShadow(ImDrawList* draw_list, ImVec2 min, ImVec2 max, float rounding);
+
+// `pixels` at the current font size (and DPI)
+float Scale(float pixels);
+// Every frame before NewFrame: the tokens at `font_size` (unscaled) and the window's DPI scale
+void Apply(float font_size, float dpi_scale);
+
+ImVec4 WithAlpha(ImVec4 color, float alpha);
+} // namespace Style
+} // namespace UI
+} // namespace Luma

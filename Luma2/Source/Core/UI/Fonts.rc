@@ -1,0 +1,4 @@
+// Font Awesome Free (fonts SIL OFL 1.1, icons CC BY 4.0), loaded by UI/Icons.cpp. Compiled into each game dll and Tests.exe
+// (Luma2.Game.props): a resource in the static Core library would never be linked in. Found on the resource include path.
+FontAwesomeSolid RCDATA "fa-solid-900.ttf"
+FontAwesomeBrands RCDATA "fa-brands-400.ttf"

@@ -1,0 +1,19 @@
+# Agrees with .clang-format before it runs
+root = true
+
+[*]
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{c,cpp,h,hpp,hlsl,hlsli}]
+indent_style = space
+indent_size = 3
+
+[*.{vcxproj,props,slnx,xml}]
+indent_style = space
+indent_size = 2
+
+[*.{toml,yml,yaml,json}]
+indent_style = space
+indent_size = 2

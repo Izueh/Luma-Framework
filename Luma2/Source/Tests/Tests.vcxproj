@@ -25,13 +25,15 @@
   </ItemDefinitionGroup>
 
   <ItemGroup>
-    <ClCompile Include="main.cpp" />
-    <ClCompile Include="utils_tests.cpp" />
-    <ClCompile Include="settings_tests.cpp" />
-    <ClCompile Include="hooks_tests.cpp" />
-    <ClCompile Include="devices_tests.cpp" />
-    <ClCompile Include="game_tests.cpp" />
-    <ClCompile Include="mcp_tests.cpp" />
+    <ClCompile Include="Main.cpp" />
+    <!-- The overlay's fonts, as in a game dll -->
+    <ResourceCompile Include="..\Core\UI\Fonts.rc" />
+    <ClCompile Include="UtilsTests.cpp" />
+    <ClCompile Include="SettingsTests.cpp" />
+    <ClCompile Include="HooksTests.cpp" />
+    <ClCompile Include="DevicesTests.cpp" />
+    <ClCompile Include="GameTests.cpp" />
+    <ClCompile Include="McpTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Core\Core.vcxproj">
