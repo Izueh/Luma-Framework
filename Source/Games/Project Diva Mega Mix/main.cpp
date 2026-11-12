@@ -3360,19 +3360,17 @@ namespace SpotLightShadows
             static std::unordered_set<uint32_t> resolving_shaders = { 0x1CE07171, 0x03C8D536 }; // TODO: use static array (0x1CE07171 writes DVS / is opaque & 0x03C8D536 reads DSV / is transparent)
             if (!resolving_shaders.contains(ps))
             {
-               // last hurrah SVR10 == depth_res_handle
-               // TODO: this compared the SRV's address (a view) with "depth_res_handle" (a resource), so they never matched.
-               // Kept that way to not change behaviour, the fix is probably to compare the SRV's resource.
-               const bool srv10_is_depth = false;
+               // last hurrah: SRV18's resource == depth_res_handle
+               bool srv18_is_depth = false;
 #if DEVELOPMENT
                {
                   ComPtr<ID3D11ShaderResourceView> srv18;
                   native_device_context->PSGetShaderResources(18, 1, srv18.put());
-                  ASSERT_ONCE_MSG(!srv18 || GetResourceFromView(srv18.get()) != Resources::depth_res_handle, "SpotLightShadows: SRV18 is the depth, but the check compared the view, not its resource, so it's never seen as such. Fix \"srv10_is_depth\".");
+                  srv18_is_depth = srv18 && GetResourceFromView(srv18.get()) == Resources::depth_res_handle;
                }
 #endif
 
-               if (!srv10_is_depth)
+               if (!srv18_is_depth)
                {
                   if (state == ResolvingAtLeastOnce) state = TonemapUse; // resolved at least once, so we can move on
                   break; // early "return"
@@ -5230,11 +5228,8 @@ namespace ShadowMap
       if (DEVELOPMENT && !IsModEnabled()) return is_prevent;
 
       // relevant?
-      // TODO: this took the address as "uint32_t", truncating it before comparing it with the full 64 bit "orig_tex_handle", so it only
-      // matched resources below 4GB (rarely the case on x64). Kept that way to not change behaviour, the fix is "rtv_handle == Resources::orig_tex_handle".
-      bool is_cleared_original_color = uint64_t(uint32_t(std::bit_cast<uintptr_t>(rtv_handle))) == std::bit_cast<uintptr_t>(Resources::orig_tex_handle);
-      ASSERT_ONCE_MSG(is_cleared_original_color || rtv_handle != Resources::orig_tex_handle, "ShadowMap: the original color was cleared, but the 32 bit truncated check missed it. Fix it to \"rtv_handle == Resources::orig_tex_handle\".");
-      
+      const bool is_cleared_original_color = rtv_handle != nullptr && rtv_handle == Resources::orig_tex_handle;
+
       // grant color clear token (depth is not cleared)
       if (is_cleared_original_color && state_silhouette_draw_count > 0)
       {

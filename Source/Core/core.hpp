@@ -9677,11 +9677,9 @@ namespace
                               }
                               if (ImGui::Button("Unload"))
                               {
+                                 const ID3D11DeviceChild* pipeline_to_unload = pipeline->pipeline.handle; // Read before unlocking, "pipeline" might be destroyed after
                                  s_mutex_generic.unlock(); // Hack to avoid deadlocks with the device destroying pipelines
-                                 // TODO: this passed the "CachedPipeline" address as the shader, so it never matched any pipeline and unloaded nothing.
-                                 // Kept that way to not change behaviour, the fix is probably to pass "pipeline->pipeline.handle".
-                                 ASSERT_ONCE_MSG(false, "The \"Unload\" button never unloaded anything (it passed the CachedPipeline instead of its shader). Fix it to pass \"pipeline->pipeline.handle\".");
-                                 UnloadCustomShaders(device_data, { nullptr }, false);
+                                 UnloadCustomShaders(device_data, { pipeline_to_unload }, false);
                                  s_mutex_generic.lock();
                               }
 #if 0 // TODO: this still deadlocks!
