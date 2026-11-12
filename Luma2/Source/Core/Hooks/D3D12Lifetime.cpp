@@ -1,6 +1,8 @@
 #include "Hooks/D3D12Lifetime.hpp"
 
+#include <array>
 #include <deque>
+#include <iterator>
 #include <mutex>
 #include <utility>
 #include <vector>
@@ -20,15 +22,18 @@ namespace D3D12 {
 namespace {
 using References = std::vector<ComPtr<IUnknown>>;
 
-// Unique per recording of any list: a new one starts when the list is executed
-std::atomic<uint64_t> next_token = 1;
-
 // In the command list's private data. A list is recorded by one thread at a time, and executed after it's closed.
 struct ListReferences
 {
-   uint64_t token = next_token++;
    References objects;
+   // Objects already in `objects`, by address: a bind of one of them costs no lock. A collision only adds a second reference.
+   std::array<IUnknown*, 64> held = {};
 };
+
+size_t GetSlot(const IUnknown* object)
+{
+   return (reinterpret_cast<uintptr_t>(object) >> 4) % 64;
+}
 
 struct Submission
 {
@@ -56,16 +61,39 @@ void Collect(QueueReferences& references)
 }
 } // namespace
 
-void Reference(ID3D12GraphicsCommandList* list, Object& object)
+void Replace(Object& object, ComPtr<IUnknown> replacement)
 {
-   if (!object.object)
-      return;
+   std::scoped_lock lock(object.mutex);
+   object.object.Swap(replacement);
+   object.current.store(object.object.Get(), std::memory_order_release);
+   // The previous object is released when `replacement` goes, after the lock
+}
+
+IUnknown* Reference(ID3D12GraphicsCommandList* list, Object& object)
+{
+   IUnknown* current = object.current.load(std::memory_order_acquire);
+   if (!current)
+      return nullptr;
    ListReferences* references = GetState<ListReferences>(list);
    if (!references)
       references = SetState<ListReferences>(list);
-   if (!references || object.stamp.exchange(references->token) == references->token)
-      return;
-   references->objects.push_back(object.object);
+   if (!references)
+      return nullptr;
+   // The list holds a reference to it, so it's alive and it's this object, even if it was replaced since
+   if (references->held[GetSlot(current)] == current)
+      return current;
+
+   ComPtr<IUnknown> referenced;
+   {
+      std::scoped_lock lock(object.mutex);
+      referenced = object.object;
+   }
+   if (!referenced)
+      return nullptr;
+   current = referenced.Get();
+   references->held[GetSlot(current)] = current;
+   references->objects.push_back(std::move(referenced));
+   return current;
 }
 
 void OnExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists)
@@ -78,7 +106,7 @@ void OnExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* 
          continue;
       std::move(references->objects.begin(), references->objects.end(), std::back_inserter(executed));
       references->objects.clear();
-      references->token = next_token++;
+      references->held.fill(nullptr);
    }
 
    QueueReferences* queue_references = GetState<QueueReferences>(queue);
