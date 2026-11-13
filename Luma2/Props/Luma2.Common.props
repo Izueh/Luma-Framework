@@ -52,7 +52,6 @@
       <ObjectFileName>$(IntDir)%(RelativeDir)</ObjectFileName>
       <!-- /Zc:preprocessor is required by glaze -->
       <AdditionalOptions>/utf-8 /Zc:preprocessor %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalIncludeDirectories>$(Luma2SourceDir)Core;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'=='Development-Debug' or '$(Configuration)'=='Development-Release'">DEVELOPMENT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <!-- Development builds read shaders and textures from the repository in place, when it's there (System/Paths.cpp) -->
@@ -80,8 +79,5 @@
     <ResourceCompile>
       <AdditionalIncludeDirectories>$(Luma2ExternalDir)Fonts\FontAwesome;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ResourceCompile>
-    <Lib>
-      <LinkTimeCodeGeneration Condition="'$(LumaDebugConfiguration)'=='false'">true</LinkTimeCodeGeneration>
-    </Lib>
   </ItemDefinitionGroup>
 </Project>

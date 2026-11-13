@@ -8,16 +8,12 @@
   </PropertyGroup>
 
   <ItemDefinitionGroup>
-    <Link>
-      <!-- Links "System/<Dll>Exports.cpp" from Core, which nothing else references -->
-      <ForceSymbolReferences>LumaDllExports_$(LumaDllName);%(ForceSymbolReferences)</ForceSymbolReferences>
-    </Link>
+    <ClCompile>
+      <!-- The game's shaders, for the cbuffer structs Core and the game share with them ("Game/GameCBuffers.hlsl"): before Global's,
+           as the game's files win a name clash at runtime -->
+      <AdditionalIncludeDirectories>$(Luma2Root)Resources\$(ProjectName)\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
   </ItemDefinitionGroup>
-
-  <!-- The overlay's fonts (UI/Fonts.rc): a resource only reaches the dll from its own project -->
-  <ItemGroup>
-    <ResourceCompile Include="$(Luma2SourceDir)Core\UI\Fonts.rc" />
-  </ItemGroup>
 
   <!-- Copies the dll and its pdb into the game when "LumaGameDir" is set (e.g. in the project's .vcxproj.user file), next to the "Luma" folder the mod reads and writes -->
   <Target Name="LumaDeploy" AfterTargets="Build" Condition="'$(LumaGameDir)'!=''">

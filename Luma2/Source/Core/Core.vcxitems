@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Core, compiled into each project that imports it (every game, Tests) with that project's include paths and defines, as 1.0's
+     core.hpp was. A game includes "Luma.hpp" only. Sources are found by folder: a file added under Core needs no project edit. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <MSBuildAllProjects Condition="'$(MSBuildVersion)' == '' Or '$(MSBuildVersion)' &lt; '16.0'">$(MSBuildAllProjects);$(MSBuildThisFileFullPath)</MSBuildAllProjects>
+    <HasSharedItems>true</HasSharedItems>
+    <ItemsProjectGuid>{90863F95-7FB1-4575-86F4-005003B20D8A}</ItemsProjectGuid>
+  </PropertyGroup>
+
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <!-- Core's folders, then Global's shaders after the project's own (a game's "Resources\<Game>\Shaders", Tests' stand-in): Core
+           includes "Game/GameCBuffers.hlsl" and "Includes/Core/CBuffers.hlsl", the cbuffer structs shared with the shaders -->
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory);%(AdditionalIncludeDirectories);$(Luma2Root)Resources\Global\Shaders</AdditionalIncludeDirectories>
+    </ClCompile>
+  </ItemDefinitionGroup>
+
+  <ItemGroup>
+    <ProjectCapability Include="SourceItemsFromImports" />
+  </ItemGroup>
+
+  <!-- Object files mirror Core's folders under "Core\" (two files can share a name in different folders) -->
+  <ItemGroup>
+    <ClInclude Include="$(MSBuildThisFileDirectory)**\*.hpp;$(MSBuildThisFileDirectory)**\*.h" />
+    <!-- The exports of the system dll the project is built as ("LumaDllName"), the others left out -->
+    <ClCompile Include="$(MSBuildThisFileDirectory)**\*.cpp;$(MSBuildThisFileDirectory)**\*.c" Exclude="$(MSBuildThisFileDirectory)System\*\*Exports.cpp">
+      <ObjectFileName>$(IntDir)Core\%(RecursiveDir)</ObjectFileName>
+    </ClCompile>
+    <ClCompile Include="$(MSBuildThisFileDirectory)System\$(LumaDllName)\$(LumaDllName)Exports.cpp">
+      <ObjectFileName>$(IntDir)Core\System\</ObjectFileName>
+    </ClCompile>
+    <!-- The overlay's fonts -->
+    <ResourceCompile Include="$(MSBuildThisFileDirectory)UI\Fonts.rc" />
+  </ItemGroup>
+
+  <!-- Third party code compiled into Core (shared with Luma 1.0 through ..\Source\External) -->
+  <ItemGroup>
+    <ClCompile Include="$(LumaExternalDir)safetyhook\src\allocator.cpp;$(LumaExternalDir)safetyhook\src\easy.cpp;$(LumaExternalDir)safetyhook\src\inline_hook.cpp;$(LumaExternalDir)safetyhook\src\mid_hook.cpp;$(LumaExternalDir)safetyhook\src\os.windows.cpp;$(LumaExternalDir)safetyhook\src\utility.cpp;$(LumaExternalDir)safetyhook\src\vmt_hook.cpp">
+      <ObjectFileName>$(IntDir)safetyhook\</ObjectFileName>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <!-- Zydis and Zycore have files with the same name (e.g. "String.c"), so they need separate object folders -->
+    <ClCompile Include="$(LumaExternalDir)zydis\src\*.c">
+      <ObjectFileName>$(IntDir)zydis\</ObjectFileName>
+      <AdditionalIncludeDirectories>$(LumaExternalDir)zydis\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="$(LumaExternalDir)zydis\dependencies\zycore\src\*.c;$(LumaExternalDir)zydis\dependencies\zycore\src\API\*.c">
+      <ObjectFileName>$(IntDir)zycore\</ObjectFileName>
+      <CompileAs>CompileAsC</CompileAs>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <!-- The overlay: ImGui with the Win32, DX11 and DX12 backends -->
+    <ClCompile Include="$(Luma2ExternalDir)imgui\imgui.cpp;$(Luma2ExternalDir)imgui\imgui_draw.cpp;$(Luma2ExternalDir)imgui\imgui_tables.cpp;$(Luma2ExternalDir)imgui\imgui_widgets.cpp;$(Luma2ExternalDir)imgui\backends\imgui_impl_win32.cpp;$(Luma2ExternalDir)imgui\backends\imgui_impl_dx11.cpp;$(Luma2ExternalDir)imgui\backends\imgui_impl_dx12.cpp;$(Luma2ExternalDir)imgui\misc\cpp\imgui_stdlib.cpp">
+      <ObjectFileName>$(IntDir)imgui\</ObjectFileName>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+  </ItemGroup>
+</Project>

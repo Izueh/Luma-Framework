@@ -35,9 +35,9 @@ TEST_CASE("Mcp: status reports the process, and unknown tools and arguments are 
    CHECK(status["ignored_args"].get_array().size() == 1);
 
    Utils::Json::Value error;
-   REQUIRE(Utils::Json::Read(Trace::Mcp::Answer(Trace::Mcp::ParseRequest("trace_capture")), error));
+   REQUIRE(Utils::Json::Read(Trace::Mcp::Answer(Trace::Mcp::ParseRequest("read_resource")), error));
    CHECK_FALSE(error["ok"].get<bool>());
-   CHECK(error["error"].get<std::string>().find("trace_capture") != std::string::npos);
+   CHECK(error["error"].get<std::string>().find("read_resource") != std::string::npos);
 }
 
 TEST_CASE("Mcp: the pipe answers framed requests like Scripts/luma_mcp.py sends them, from several clients")

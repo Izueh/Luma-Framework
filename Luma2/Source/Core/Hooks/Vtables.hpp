@@ -35,8 +35,12 @@ struct InterfaceVersion
    uint32_t method_count;
 };
 
-// Needs the interface in "LUMA_VTABLE_INTERFACES" (slots.h)
-#define LUMA_INTERFACE_VERSION(Interface) ::Luma::Hooks::Vtables::InterfaceVersion(__uuidof(Interface), #Interface, LumaMethodCount_##Interface)
+// `method_count` is the interface's LumaMethodCount_ (it needs to be in LUMA_VTABLE_INTERFACES, slots.h)
+template <typename T>
+InterfaceVersion GetVersion(std::string_view name, uint32_t method_count)
+{
+   return {__uuidof(T), name, method_count};
+}
 
 // Records the object's methods the first time, with the `versions` (oldest first, the first one names it in the log) the object supports.
 // The methods are copied: a vtable can be heap memory owned by its object (D3D11 contexts), freed with it.

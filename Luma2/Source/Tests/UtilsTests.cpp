@@ -5,6 +5,9 @@
 #include <string>
 #include <string_view>
 
+#include <dxgiformat.h>
+
+#include "Utils/Format.hpp"
 #include "Utils/Hash.hpp"
 #include "Utils/Json.hpp"
 #include "Utils/Strings.hpp"
@@ -31,6 +34,21 @@ struct Reply
 } // namespace UtilsTests
 
 using UtilsTests::Reply;
+
+TEST_CASE("Format: DXGI format names follow dxgiformat.h")
+{
+   CHECK(Utils::Format::GetName(DXGI_FORMAT_UNKNOWN) == "UNKNOWN");
+   CHECK(Utils::Format::GetName(DXGI_FORMAT_R16G16B16A16_FLOAT) == "R16G16B16A16_FLOAT");
+   CHECK(Utils::Format::GetName(DXGI_FORMAT_R10G10B10A2_UNORM) == "R10G10B10A2_UNORM");
+   CHECK(Utils::Format::GetName(DXGI_FORMAT_R11G11B10_FLOAT) == "R11G11B10_FLOAT");
+   CHECK(Utils::Format::GetName(DXGI_FORMAT_D24_UNORM_S8_UINT) == "D24_UNORM_S8_UINT");
+   CHECK(Utils::Format::GetName(DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) == "B8G8R8A8_UNORM_SRGB");
+   CHECK(Utils::Format::GetName(DXGI_FORMAT_BC7_UNORM_SRGB) == "BC7_UNORM_SRGB");
+   CHECK(Utils::Format::GetName(DXGI_FORMAT_B4G4R4A4_UNORM) == "B4G4R4A4_UNORM");
+   CHECK(Utils::Format::GetName(DXGI_FORMAT_P208) == "P208");
+   CHECK(Utils::Format::GetName(DXGI_FORMAT_V408) == "V408");
+   CHECK(Utils::Format::GetName(120) == "UNKNOWN");
+}
 
 TEST_CASE("Hash: CRC32 matches the standard check values")
 {
@@ -135,23 +153,23 @@ TEST_CASE("Toml: malformed documents fail and keys are quoted when needed")
 #include <Windows.h>
 #include <Psapi.h>
 
-#include "Utils/Modules.hpp"
+#include "System/Modules.hpp"
 
 TEST_CASE("Dll exports: every dxgi export forwards to the System32 dxgi.dll")
 {
    // Tests.exe links the same forwarders as a game dll
    HMODULE self = GetModuleHandleW(nullptr);
-   HMODULE dxgi = Luma::Utils::Modules::FindSystemModule(L"dxgi.dll");
+   HMODULE dxgi = Luma::System::Modules::FindSystemModule(L"dxgi.dll");
    REQUIRE(dxgi);
    for (const char* name : {"CreateDXGIFactory", "CreateDXGIFactory1", "CreateDXGIFactory2", "DXGIGetDebugInterface1", "DXGIDeclareAdapterRemovalSupport", "CompatValue", "CompatString", "SetAppCompatStringPointer"})
    {
       CAPTURE(name);
       void* forwarded = reinterpret_cast<void*>(GetProcAddress(self, name));
       CHECK(forwarded);
-      CHECK(forwarded == Luma::Utils::Modules::FindExport(dxgi, name));
+      CHECK(forwarded == Luma::System::Modules::FindExport(dxgi, name));
    }
    // Same ordinals as the system dll
-   CHECK(reinterpret_cast<void*>(GetProcAddress(self, MAKEINTRESOURCEA(11))) == Luma::Utils::Modules::FindExport(dxgi, "CreateDXGIFactory1"));
+   CHECK(reinterpret_cast<void*>(GetProcAddress(self, MAKEINTRESOURCEA(11))) == Luma::System::Modules::FindExport(dxgi, "CreateDXGIFactory1"));
 
    // The full path forwarders reuse the loaded dxgi instead of loading a second copy
    HMODULE modules[1024];
@@ -159,7 +177,7 @@ TEST_CASE("Dll exports: every dxgi export forwards to the System32 dxgi.dll")
    REQUIRE(K32EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &size));
    int dxgi_count = 0;
    for (DWORD i = 0; i < size / sizeof(HMODULE); i++)
-      dxgi_count += Luma::Utils::Modules::GetPath(modules[i]).filename() == L"dxgi.dll" ? 1 : 0;
+      dxgi_count += Luma::System::Modules::GetPath(modules[i]).filename() == L"dxgi.dll" ? 1 : 0;
    CHECK(dxgi_count == 1);
 }
 
@@ -169,16 +187,16 @@ TEST_CASE("Modules: exports are read from the export table like the loader resol
    for (const char* name : {"GetCurrentProcessId", "CreateFileW", "LoadLibraryW"})
    {
       CAPTURE(name);
-      CHECK(Luma::Utils::Modules::FindExport(kernel32, name) == reinterpret_cast<void*>(GetProcAddress(kernel32, name)));
+      CHECK(Luma::System::Modules::FindExport(kernel32, name) == reinterpret_cast<void*>(GetProcAddress(kernel32, name)));
    }
    // Forwarded to ntdll's RtlAllocateHeap
-   CHECK(Luma::Utils::Modules::FindExport(kernel32, "HeapAlloc") == reinterpret_cast<void*>(GetProcAddress(kernel32, "HeapAlloc")));
-   CHECK(Luma::Utils::Modules::FindExport(kernel32, "HeapAlloc") == reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlAllocateHeap")));
-   CHECK_FALSE(Luma::Utils::Modules::FindExport(kernel32, "LumaNoSuchExport"));
+   CHECK(Luma::System::Modules::FindExport(kernel32, "HeapAlloc") == reinterpret_cast<void*>(GetProcAddress(kernel32, "HeapAlloc")));
+   CHECK(Luma::System::Modules::FindExport(kernel32, "HeapAlloc") == reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlAllocateHeap")));
+   CHECK_FALSE(Luma::System::Modules::FindExport(kernel32, "LumaNoSuchExport"));
 
    // By ordinal
    HMODULE dxgi = GetModuleHandleW(L"dxgi.dll");
    REQUIRE(dxgi);
-   CHECK(Luma::Utils::Modules::FindExport(dxgi, MAKEINTRESOURCEA(11)) == reinterpret_cast<void*>(GetProcAddress(dxgi, MAKEINTRESOURCEA(11))));
-   CHECK_FALSE(Luma::Utils::Modules::FindExport(dxgi, MAKEINTRESOURCEA(60000)));
+   CHECK(Luma::System::Modules::FindExport(dxgi, MAKEINTRESOURCEA(11)) == reinterpret_cast<void*>(GetProcAddress(dxgi, MAKEINTRESOURCEA(11))));
+   CHECK_FALSE(Luma::System::Modules::FindExport(dxgi, MAKEINTRESOURCEA(60000)));
 }

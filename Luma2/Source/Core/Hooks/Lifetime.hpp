@@ -60,6 +60,50 @@ T* SetState(Object* object, Arguments&&... arguments)
    holder->Release();
    return attached ? value : nullptr;
 }
+
+// The same for an object known only as IUnknown (a device of either API): found through the interface that has private data
+void* GetStateOf(IUnknown* object, const GUID& guid);
+bool AttachStateOf(IUnknown* object, const GUID& guid, IUnknown* holder);
+
+template <typename T>
+T* GetStateOf(IUnknown* object)
+{
+   return static_cast<T*>(GetStateOf(object, GetStateGuid<T>()));
+}
+
+template <typename T, typename... Arguments>
+T* SetStateOf(IUnknown* object, Arguments&&... arguments)
+{
+   T* value = new T(std::forward<Arguments>(arguments)...);
+   IUnknown* holder = CreateStateHolder(value, [](void* destroyed) { delete static_cast<T*>(destroyed); });
+   const bool attached = AttachStateOf(object, GetStateGuid<T>(), holder);
+   holder->Release();
+   return attached ? value : nullptr;
+}
+
+// How many states have been destroyed so far: a state pointer remembered with this count is valid while it hasn't changed
+uint64_t GetDestroyedCount();
+
+// GetState for the same few objects asked about over and over on a hot path (a context at every bind or draw, ~20 ns through
+// private data): the last object of the calling thread is remembered. The state is default constructed on first use. Null if
+// the object has no private data.
+template <typename T, typename Object>
+T* GetOrCreateStateCached(Object* object)
+{
+   thread_local const Object* last_object = nullptr;
+   thread_local T* last_state = nullptr;
+   thread_local uint64_t last_destroyed_count = 0;
+   const uint64_t destroyed_count = GetDestroyedCount();
+   if (object == last_object && destroyed_count == last_destroyed_count)
+      return last_state;
+   T* state = GetState<T>(object);
+   if (!state)
+      state = SetState<T>(object);
+   last_object = object;
+   last_state = state;
+   last_destroyed_count = destroyed_count;
+   return state;
+}
 } // namespace Lifetime
 } // namespace Hooks
 } // namespace Luma

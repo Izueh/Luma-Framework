@@ -32,6 +32,14 @@ struct CountsInfo
    uint32_t hooks_failed = 0;
 };
 
+struct ShadersInfo
+{
+   bool loaded = true; // False after "Unload Shaders"
+   uint32_t replaced = 0; // Game shaders with live objects and a replacement
+   bool has_compilation_errors = false;
+   std::string job; // Running on the worker, empty when idle
+};
+
 struct ValidationInfo
 {
    bool debug_layer = false; // Whether this build turns it on
@@ -51,6 +59,7 @@ struct Status
    uint32_t bits = 0;
    std::string exe_path;
    std::string luma_path;
+   std::string log_path; // Read by the MCP bridge for luma_log
    std::string api; // Of the first swapchain
    bool presenting = false;
    int64_t ms_since_present = -1; // -1 before the first present
@@ -58,6 +67,7 @@ struct Status
    std::vector<SwapchainInfo> swapchains;
    bool overlay_open = false;
    CountsInfo counts;
+   ShadersInfo shaders;
    ValidationInfo validation;
    uint64_t virtual_used_mb = 0;
    uint64_t virtual_total_mb = 0;
@@ -68,7 +78,7 @@ struct Status
 // A swapchain was created or resized
 void SetSwapchain(SwapchainInfo info);
 void RemoveSwapchain(const void* swapchain);
-void OnPresent();
+void RecordPresent();
 
 // Gathered on the asking thread
 Status GetStatus();

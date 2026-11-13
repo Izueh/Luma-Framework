@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "Utils/Log.hpp"
-#include "Utils/Modules.hpp"
+#include "System/Modules.hpp"
 
 namespace Luma {
 namespace Hooks {
@@ -51,7 +51,7 @@ bool Set(Interface interface_type, IUnknown* object, std::span<const InterfaceVe
          if (SameMethods(entry.methods, vtable))
             return true;
          Utils::Log::Warning("Vtables: {} at {} in {} has different methods from the first one, its functions may not be hooked",
-            name, static_cast<const void*>(vtable), Utils::Modules::GetName(vtable));
+            name, static_cast<const void*>(vtable), System::Modules::GetName(vtable));
          return false;
       }
    }
@@ -81,7 +81,7 @@ bool Set(Interface interface_type, IUnknown* object, std::span<const InterfaceVe
    }
    // The vtable may be in heap memory (D3D11 contexts), its methods never are
    Utils::Log::Info("Vtables: {} ({}) at {} in {}, methods in {}", name, highest_version, static_cast<const void*>(vtable),
-      Utils::Modules::GetName(vtable), Utils::Modules::GetName(vtable[3]));
+      System::Modules::GetName(vtable), System::Modules::GetName(vtable[3]));
    return true;
 }
 

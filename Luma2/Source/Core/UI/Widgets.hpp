@@ -1,10 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 
+#include "Common/Api.hpp"
 #include "Settings/Registry.hpp"
 
 // The only place that calls raw ImGui controls for settings, so every panel looks and behaves the same. Games use these in
@@ -25,6 +28,7 @@ enum class Tone : uint8_t
    Success,
    Warning,
    Error,
+   Injected, // What Luma added, in trace
 };
 
 // A collapsible category header, raised, with an accent bar and an icon tinted by category (chosen from the label, or
@@ -46,11 +50,26 @@ void RowLabel(std::string_view label, std::string_view tooltip = {}, bool emphas
 bool Toggle(std::string_view id, bool& value);
 bool Slider(std::string_view id, float& value, float min, float max, std::string_view format = "%.3f");
 bool Slider(std::string_view id, int32_t& value, int32_t min, int32_t max);
+// A dropdown: for many options (more than about five), a Segmented control for fewer
 bool Combo(std::string_view id, int32_t& index, std::span<const std::string_view> labels);
+// A row of mutually exclusive options side by side, the selected one filled in the accent color: for a few options (about five or
+// fewer), a Combo for more. `width` 0 sizes it to its labels, otherwise the segments share it. True when the selection changed.
+bool Segmented(std::string_view id, int32_t& index, std::span<const std::string_view> labels, float width = 0.f);
+// The control SettingRow uses for `count` options: Segmented up to this many, Combo above
+inline constexpr size_t MAX_SEGMENTS = 5;
+// A compact on/off button for list filters, filled in the accent color while on. True when toggled.
+bool FilterChip(std::string_view label, bool& value, std::string_view tooltip = {});
+// A small rounded label inline, tinted by `tone` (a state: "Variant", "pending")
+void Tag(std::string_view text, Tone tone, std::string_view tooltip = {});
+// A message across the available width, tinted by `tone`, with an optional primary action at its end. True when the action is
+// clicked.
+bool Banner(Tone tone, std::string_view text, std::string_view action = {}, std::string_view action_tooltip = {});
 // A row with a name in the label column and a value
 void Property(std::string_view name, std::string_view value);
 // A dim line heading the rows or items after it
 void Caption(std::string_view text);
+// Text wrapped at the available width
+void Paragraph(std::string_view text);
 // One item of a bulleted list
 void ListItem(std::string_view text);
 // A button opening `url` in the browser, with the service's mark in its color (Ko-fi, Buy Me a Coffee, Discord, GitHub) or a
@@ -72,6 +91,53 @@ bool IconButton(const char* icon, std::string_view tooltip);
 
 // `fraction` in [0, 1], negative for work of unknown length
 void ProgressBar(float fraction, std::string_view label = {});
+
+struct ListEntry
+{
+   std::string label;
+   Tone tone = Tone::Info; // Info is plain text
+};
+
+// A list on the left (its width can be dragged), the selected entry's detail on the right, drawn by `detail` with the entry's index.
+// `selected` indexes `entries`, kept by the caller (out of range: none). `height` is the panes', 0 for the room left. The list
+// has a text filter on the labels, unless `visible` filters it (the caller draws its own filters then).
+void ListDetail(std::string_view id, std::span<const ListEntry> entries, size_t& selected, const std::function<void(size_t index)>& detail,
+   float height = 0.f, const std::function<bool(size_t index)>& visible = {});
+
+struct PropertyRow
+{
+   std::string name;
+   std::string value;
+   Tone tone = Tone::Info;
+};
+
+// A key and value table for state dumps, values in monospace: a click on a row copies its value
+void PropertyGrid(std::string_view id, std::span<const PropertyRow> rows);
+
+struct TableColumn
+{
+   std::string_view name;
+   float width = 0.f; // In pixels at the default font size, 0 to share the room left
+   bool monospace = true;
+};
+
+struct TableCell
+{
+   std::string text;
+   Tone tone = Tone::Info; // Info is plain text
+   std::string tooltip;
+};
+
+using TableRow = std::vector<TableCell>;
+
+// A table with a header row for state dumps of several columns (views, cbuffer contents): aligned columns, a click on a cell copies
+// it. Above `max_height` (0: none) it scrolls on its own, only the visible rows drawn.
+void DataTable(std::string_view id, std::span<const TableColumn> columns, std::span<const TableRow> rows, float max_height = 0.f);
+
+// A shader hash: monospace "0x12345678" tinted by stage, a click copies it, hovering shows `name` and the stage
+void HashChip(uint32_t hash, ShaderStage stage, std::string_view name = {});
+// Monospace text, wrapped (compiler messages)
+void Code(std::string_view text);
 void Text(std::string_view text, Tone tone = Tone::Info);
 void TextDim(std::string_view text);
 
@@ -87,6 +153,8 @@ struct StatusItem
    std::string text;
    Tone tone = Tone::Info;
    std::string tooltip;
+   // A small bar after the text, for work in progress: [0, 1], negative for unknown length
+   std::optional<float> progress;
 };
 
 // The bottom strip of the window

@@ -9,11 +9,7 @@
 namespace Luma {
 namespace UI {
 namespace Input {
-inline constexpr std::string_view TOGGLE_KEY_SETTING = "Luma.Overlay.Key";
-// Switches Luma.Enabled
-inline constexpr std::string_view ENABLED_KEY_SETTING = "Luma.EnabledKey";
-
-// Registers the toggle key setting. Once at startup, before the settings are loaded.
+// Registers the overlay key and the on/off key (Settings::Core::OVERLAY_KEY, ENABLED_KEY). Once at startup, before the settings are loaded.
 void Initialize();
 
 void Attach(HWND window);

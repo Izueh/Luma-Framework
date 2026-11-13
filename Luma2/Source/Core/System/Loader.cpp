@@ -5,10 +5,10 @@
 
 #include <winternl.h>
 
-#include "Core.hpp"
+#include "Startup.hpp"
 #include "Hooks/Hooks.hpp"
 #include "Utils/Log.hpp"
-#include "Utils/Modules.hpp"
+#include "System/Modules.hpp"
 #include "Utils/Strings.hpp"
 
 namespace Luma {
@@ -46,7 +46,7 @@ bool IsGraphicsModule(std::wstring_view name)
 
 void OnGraphicsModule(std::wstring_view name, void* base, bool was_already_loaded)
 {
-   Core::Initialize();
+   Startup::Initialize();
    Utils::Log::Info("Core: {} {} at {}", Utils::Strings::ToUtf8(name), was_already_loaded ? "was already loaded" : "loaded", base);
 }
 
@@ -58,16 +58,16 @@ VOID CALLBACK OnDllNotification(ULONG reason, const LdrDllNotificationData* data
    const std::wstring_view name(data->base_dll_name->Buffer, data->base_dll_name->Length / sizeof(wchar_t));
    if (IsGraphicsModule(name))
       OnGraphicsModule(name, data->dll_base, false);
-   if (Core::IsInitialized())
+   if (Startup::IsInitialized())
       Hooks::OnModuleLoaded(name);
 }
 } // namespace
 
 void Attach(HMODULE module)
 {
-   Utils::Modules::SetSelf(module);
+   System::Modules::SetSelf(module);
    DisableThreadLibraryCalls(module);
-   Utils::Log::Info("Luma2 loaded from {}", Utils::Strings::ToUtf8(Utils::Modules::GetPath(module)));
+   Utils::Log::Info("Luma2 loaded from {}", Utils::Strings::ToUtf8(System::Modules::GetPath(module)));
 
    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
    const auto register_notification = reinterpret_cast<LdrRegisterDllNotificationFunction>(GetProcAddress(ntdll, "LdrRegisterDllNotification"));
@@ -96,7 +96,7 @@ void Detach(bool is_process_terminating)
          unregister_notification(notification_cookie);
       notification_cookie = nullptr;
    }
-   Core::Shutdown();
+   Startup::Shutdown();
 }
 } // namespace Loader
 } // namespace System

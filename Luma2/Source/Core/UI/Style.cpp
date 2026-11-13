@@ -40,6 +40,8 @@ Category GetCategory(std::string_view name)
       Entry{"develop", {Icons::CONSOLE, Colors::Tints::CONSOLE}},
       Entry{"debug", {Icons::BUG, Colors::Tints::CONSOLE}},
       Entry{"credit", {Icons::CREDITS, Colors::Tints::CREDITS}},
+      Entry{"about", {Icons::CREDITS, Colors::Tints::CREDITS}},
+      Entry{"define", {Icons::CODE, Colors::Tints::ADVANCED}},
       Entry{"status", {Icons::INFO, Colors::Tints::OTHER}},
       Entry{"info", {Icons::INFO, Colors::Tints::OTHER}},
    };
@@ -93,7 +95,7 @@ ImVec4 WithAlpha(ImVec4 color, float alpha)
    return color;
 }
 
-void Apply(float font_size, float dpi_scale)
+void Apply(float font_size, float dpi_scale, float opacity)
 {
    current_scale = font_size / Sizes::DEFAULT_FONT * dpi_scale;
    ImGuiStyle& style = ImGui::GetStyle();
@@ -127,7 +129,7 @@ void Apply(float font_size, float dpi_scale)
    ImVec4* colors = style.Colors;
    colors[ImGuiCol_Text] = Colors::TEXT;
    colors[ImGuiCol_TextDisabled] = Colors::TEXT_DIM;
-   colors[ImGuiCol_WindowBg] = Colors::WINDOW;
+   colors[ImGuiCol_WindowBg] = WithAlpha(Colors::WINDOW, Colors::WINDOW.w * opacity);
    colors[ImGuiCol_ChildBg] = WithAlpha(Colors::PANEL, 0.f);
    colors[ImGuiCol_PopupBg] = Colors::PANEL;
    colors[ImGuiCol_Border] = Colors::BORDER;

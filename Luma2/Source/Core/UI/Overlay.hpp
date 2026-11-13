@@ -15,11 +15,11 @@ void Initialize();
 void SaveSettingsTo(const std::filesystem::path& path);
 
 // Attaches, if the overlay isn't attached to another swapchain. `device` is the real device.
-void OnSwapchainCreated(IDXGISwapChain* swapchain, const Presenter& presenter, const void* device);
+void AttachOverlay(IDXGISwapChain* swapchain, const Presenter& presenter, const void* device);
 // Before the game's present
-void OnPresent(IDXGISwapChain* swapchain);
-void OnSwapchainDestroyed(const void* swapchain);
-void OnDeviceReleased(const void* device);
+void DrawOverlay(IDXGISwapChain* swapchain);
+void DetachFromSwapchain(const void* swapchain);
+void DetachFromDevice(const void* device);
 // From the window's thread
 void OnWindowMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
 

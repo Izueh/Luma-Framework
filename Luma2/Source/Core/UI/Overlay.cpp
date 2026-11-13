@@ -9,12 +9,16 @@
 #include <imgui.h>
 #include <backends/imgui_impl_win32.h>
 
+#include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/InputHooks.hpp"
 #include "Hooks/Scope.hpp"
+#include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
 #include "Settings/Storage.hpp"
-#include "UI/D3D11Renderer.hpp"
-#include "UI/D3D12Renderer.hpp"
+#include "Shaders/Jobs.hpp"
+#include "UI/D3D11/D3D11Renderer.hpp"
+#include "UI/D3D12/D3D12Renderer.hpp"
+#include "UI/Encoding.hpp"
 #include "UI/Input.hpp"
 #include "UI/Icons.hpp"
 #include "UI/Shell.hpp"
@@ -39,17 +43,35 @@ struct Attachment
    float dpi_scale = 1.f;
 };
 
-constexpr std::string_view FONT_SIZE_SETTING = "Luma.Overlay.FontSize";
-
 constexpr std::array SETTINGS = {
    Settings::Setting{
-      .key = FONT_SIZE_SETTING,
+      .key = Settings::Core::OVERLAY_FONT_SIZE.key,
       .label = "Font size",
       .tooltip = "Of this overlay, before the display's scaling",
       .category = "Overlay",
       .default_value = Style::Sizes::DEFAULT_FONT,
       .range = Settings::Range{8.f, 48.f},
       .format = "%.0f px",
+   },
+   Settings::Setting{
+      .key = Settings::Core::OVERLAY_OPACITY.key,
+      .label = "Background opacity",
+      .tooltip = "Of this overlay's window: lower lets the game show through",
+      .category = "Overlay",
+      .default_value = 100.f,
+      .range = Settings::Range{20.f, 100.f},
+      .format = "%.0f%%",
+      .live = true,
+   },
+   Settings::Setting{
+      .key = Settings::Core::OVERLAY_HDR_PAPER_WHITE.key,
+      .label = "HDR brightness",
+      .tooltip = "This overlay's white on an HDR swapchain, in nits. 203 is the reference white of BT.2408 (as 1.0's overlay under ReShade).",
+      .category = "Overlay",
+      .default_value = 203.f,
+      .range = Settings::Range{80.f, 500.f},
+      .format = "%.0f nits",
+      .live = true,
    },
 };
 
@@ -64,6 +86,17 @@ std::atomic<bool> open = false;
 // Render thread only, like the settings
 std::filesystem::path settings_path;
 bool settings_changed = false;
+uint64_t toasted_job_report = 0;
+
+// What a finished job reported (a shader build), also while the overlay is closed
+void ToastJobReport()
+{
+   Shaders::Jobs::Report report = Shaders::Jobs::GetLastReport();
+   if (report.id == toasted_job_report)
+      return;
+   toasted_job_report = report.id;
+   Widgets::Toast(report.outcome.failed ? Widgets::Tone::Error : Widgets::Tone::Success, std::move(report.outcome.message));
+}
 
 // With the lock held
 bool Attach(IDXGISwapChain* swapchain, Presenter presenter, const void* device)
@@ -109,7 +142,7 @@ void BuildFrame(const DXGI_SWAP_CHAIN_DESC& desc)
       io.DisplayFramebufferScale = ImVec2(float(desc.BufferDesc.Width) / io.DisplaySize.x, float(desc.BufferDesc.Height) / io.DisplaySize.y);
    // Games often hide the cursor
    io.MouseDrawCursor = open;
-   Style::Apply(Settings::Get<float>(FONT_SIZE_SETTING), attached->dpi_scale);
+   Style::Apply(Settings::Get(Settings::Core::OVERLAY_FONT_SIZE), attached->dpi_scale, Settings::Get(Settings::Core::OVERLAY_OPACITY) / 100.f);
    ImGui::NewFrame();
    if (open)
       DrawShell();
@@ -117,30 +150,49 @@ void BuildFrame(const DXGI_SWAP_CHAIN_DESC& desc)
    ImGui::Render();
 }
 
-// Whether a frame was drawn
-bool Draw(IDXGISwapChain* swapchain, ID3D11Device* device, const DXGI_SWAP_CHAIN_DESC& desc)
+// Each API's renderer, by what presents (Presenter's types)
+template <typename T>
+struct Renderer;
+
+template <>
+struct Renderer<ID3D11Device>
 {
-   if (!D3D11::NewFrame(device))
-      return false;
-   BuildFrame(desc);
-   D3D11::Render(device, swapchain, ImGui::GetDrawData());
-   return true;
+   static constexpr auto NeedsRecreation = &D3D11::NeedsRecreation;
+   static constexpr auto NewFrame = &D3D11::NewFrame;
+   static constexpr auto Render = &D3D11::Render;
+};
+
+template <>
+struct Renderer<ID3D12CommandQueue>
+{
+   static constexpr auto NeedsRecreation = &D3D12::NeedsRecreation;
+   static constexpr auto NewFrame = &D3D12::NewFrame;
+   static constexpr auto Render = &D3D12::Render;
+};
+
+// How the overlay is written to the swapchain's buffer
+Encoding::Output GetOutput(IDXGISwapChain* swapchain, const DXGI_SWAP_CHAIN_DESC& desc)
+{
+   return {Encoding::GetKind(desc.BufferDesc.Format, Handlers::GetColorSpace(swapchain)), Settings::Get(Settings::Core::OVERLAY_HDR_PAPER_WHITE)};
 }
 
-bool Draw(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue, const DXGI_SWAP_CHAIN_DESC& desc)
+// Whether a frame was drawn
+template <typename T>
+bool Draw(IDXGISwapChain* swapchain, T* presenter, const DXGI_SWAP_CHAIN_DESC& desc)
 {
+   using Traits = Renderer<T>;
    // A new format or buffer count needs new renderer objects, and with them a new context (see Detach)
-   if (D3D12::NeedsRecreation(desc.BufferDesc.Format, desc.BufferCount))
+   if (Traits::NeedsRecreation(desc))
    {
       const void* device = attached->device;
       Detach();
-      if (!Attach(swapchain, queue, device))
+      if (!Attach(swapchain, presenter, device))
          return false;
    }
-   if (!D3D12::NewFrame(queue, desc.BufferDesc.Format, desc.BufferCount))
+   if (!Traits::NewFrame(presenter, desc))
       return false;
    BuildFrame(desc);
-   D3D12::Render(queue, swapchain, ImGui::GetDrawData());
+   Traits::Render(presenter, swapchain, ImGui::GetDrawData(), GetOutput(swapchain, desc));
    return true;
 }
 
@@ -154,7 +206,7 @@ void SaveSettings()
 
 void Initialize()
 {
-   Settings::Register(SETTINGS);
+   Settings::Register(SETTINGS, Settings::Kind::Luma);
 }
 
 void SaveSettingsTo(const std::filesystem::path& path)
@@ -163,15 +215,16 @@ void SaveSettingsTo(const std::filesystem::path& path)
    Settings::AddChangeListener([](const Settings::Setting&, const Settings::Value&) { settings_changed = true; });
 }
 
-void OnSwapchainCreated(IDXGISwapChain* swapchain, const Presenter& presenter, const void* device)
+void AttachOverlay(IDXGISwapChain* swapchain, const Presenter& presenter, const void* device)
 {
    std::scoped_lock lock(mutex);
    if (!attached)
       Attach(swapchain, presenter, device);
 }
 
-void OnPresent(IDXGISwapChain* swapchain)
+void DrawOverlay(IDXGISwapChain* swapchain)
 {
+   ToastJobReport();
    // Toasts are drawn while the overlay is closed too
    if (!open && !Widgets::HasToasts())
    {
@@ -196,14 +249,14 @@ void OnPresent(IDXGISwapChain* swapchain)
       SaveSettings();
 }
 
-void OnSwapchainDestroyed(const void* swapchain)
+void DetachFromSwapchain(const void* swapchain)
 {
    std::scoped_lock lock(mutex);
    if (attached && swapchain == attached->swapchain)
       Detach();
 }
 
-void OnDeviceReleased(const void* device)
+void DetachFromDevice(const void* device)
 {
    Hooks::Scope::Guard scope;
    std::scoped_lock lock(mutex);

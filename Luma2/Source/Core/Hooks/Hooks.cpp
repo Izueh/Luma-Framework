@@ -7,7 +7,7 @@
 #include <safetyhook.hpp>
 
 #include "Utils/Log.hpp"
-#include "Utils/Modules.hpp"
+#include "System/Modules.hpp"
 #include "Utils/Strings.hpp"
 
 namespace Luma {
@@ -50,7 +50,7 @@ std::string GetTargetName(const Hook& hook)
 bool IsTargetAvailable(const Hook& hook)
 {
    if (const auto* target = std::get_if<ExportTarget>(&hook.target))
-      return Utils::Modules::FindSystemModule(target->module) != nullptr;
+      return System::Modules::FindSystemModule(target->module) != nullptr;
    return Vtables::Get(std::get<VtableTarget>(hook.target).vtable) != nullptr;
 }
 
@@ -64,7 +64,7 @@ bool IsVersionSupported(const Hook& hook)
 void* FindTarget(const Hook& hook)
 {
    if (const auto* target = std::get_if<ExportTarget>(&hook.target))
-      return Utils::Modules::FindExport(Utils::Modules::FindSystemModule(target->module), target->name);
+      return System::Modules::FindExport(System::Modules::FindSystemModule(target->module), target->name);
    const auto& target = std::get<VtableTarget>(hook.target);
    return Vtables::GetMethod(target.vtable, target.slot);
 }
@@ -194,7 +194,7 @@ void InstallPending()
       else if (!candidate->target)
          Utils::Log::Info("Hooks: {} {}", name, result.message);
       else
-         Utils::Log::Info("Hooks: {} at {} in {}{}{}", name, candidate->target, Utils::Modules::GetName(candidate->target),
+         Utils::Log::Info("Hooks: {} at {} in {}{}{}", name, candidate->target, System::Modules::GetName(candidate->target),
             result.message.empty() ? "" : ", ", result.message);
    }
 }

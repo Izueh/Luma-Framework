@@ -10,7 +10,7 @@ namespace UI {
 namespace Style {
 namespace Colors {
 // Surfaces, darkest to lightest
-inline constexpr ImVec4 WINDOW = {0.067f, 0.071f, 0.082f, 0.97f};
+inline constexpr ImVec4 WINDOW = {0.067f, 0.071f, 0.082f, 1.f};
 inline constexpr ImVec4 PANEL = {0.098f, 0.106f, 0.122f, 1.f};
 inline constexpr ImVec4 CONTROL = {0.153f, 0.165f, 0.188f, 1.f};
 inline constexpr ImVec4 CONTROL_HOVERED = {0.204f, 0.220f, 0.251f, 1.f};
@@ -56,6 +56,15 @@ inline constexpr ImVec4 CREDITS = {0.980f, 0.459f, 0.459f, 1.f};
 inline constexpr ImVec4 OTHER = {0.580f, 0.678f, 0.851f, 1.f};
 } // namespace Tints
 
+// Hash chips by shader stage
+namespace Stages {
+inline constexpr ImVec4 VERTEX = {0.353f, 0.784f, 0.980f, 1.f};
+inline constexpr ImVec4 PIXEL = {0.957f, 0.451f, 0.710f, 1.f};
+inline constexpr ImVec4 COMPUTE = {0.243f, 0.835f, 0.710f, 1.f};
+// Hull, domain and geometry
+inline constexpr ImVec4 OTHER = {0.984f, 0.663f, 0.243f, 1.f};
+} // namespace Stages
+
 // The services' own colors, for their marks on link buttons (GitHub's is its dark-theme white)
 namespace Brands {
 inline constexpr ImVec4 KOFI = {1.f, 0.369f, 0.357f, 1.f};
@@ -71,6 +80,7 @@ inline constexpr float UNIT = 4.f;
 inline constexpr float CONTROL_ROUNDING = 4.f;
 inline constexpr float PANEL_ROUNDING = 6.f;
 inline constexpr float LABEL_WIDTH = 200.f;
+inline constexpr float LIST_WIDTH = 240.f;
 inline constexpr float DEFAULT_FONT = 16.f;
 inline constexpr float ACCENT_BAR = 3.f;
 inline constexpr float SHADOW = 10.f;
@@ -92,8 +102,8 @@ void DrawShadow(ImDrawList* draw_list, ImVec2 min, ImVec2 max, float rounding);
 
 // `pixels` at the current font size (and DPI)
 float Scale(float pixels);
-// Every frame before NewFrame: the tokens at `font_size` (unscaled) and the window's DPI scale
-void Apply(float font_size, float dpi_scale);
+// Every frame before NewFrame: the tokens at `font_size` (unscaled) and the window's DPI scale, the window background at `opacity` (0 to 1)
+void Apply(float font_size, float dpi_scale, float opacity = 1.f);
 
 ImVec4 WithAlpha(ImVec4 color, float alpha);
 } // namespace Style

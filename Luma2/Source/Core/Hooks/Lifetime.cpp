@@ -16,6 +16,8 @@ namespace {
 // {19BE01C2-FB6F-421A-BF5B-3815AFB2465D}
 constexpr GUID TRACKER_GUID = {0x19be01c2, 0xfb6f, 0x421a, {0xbf, 0x5b, 0x38, 0x15, 0xaf, 0xb2, 0x46, 0x5d}};
 
+std::atomic<uint64_t> destroyed_count = 0;
+
 // Released by the object when it's destroyed, or when its private data is replaced
 struct Holder final : IUnknown
 {
@@ -51,6 +53,7 @@ struct Holder final : IUnknown
       {
          destroy(state);
          delete this;
+         destroyed_count.fetch_add(1, std::memory_order_release);
       }
       return remaining;
    }
@@ -76,6 +79,21 @@ bool Attach(T* object, const IUnknown* key, IUnknown* device, DestroyCallback on
    holder->Release();
    return attached;
 }
+
+// Calls `function` with the object as the first of its interfaces that has private data
+template <typename Function>
+auto WithPrivateData(IUnknown* object, Function function) -> decltype(function(static_cast<ID3D12Object*>(nullptr)))
+{
+   if (ComPtr<ID3D12Object> d3d12_object; SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&d3d12_object))))
+      return function(d3d12_object.Get());
+   if (ComPtr<ID3D11Device> d3d11_device; SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&d3d11_device))))
+      return function(d3d11_device.Get());
+   if (ComPtr<ID3D11DeviceChild> d3d11_child; SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&d3d11_child))))
+      return function(d3d11_child.Get());
+   if (ComPtr<IDXGIObject> dxgi_object; SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&dxgi_object))))
+      return function(dxgi_object.Get());
+   return {};
+}
 } // namespace
 
 IUnknown* CreateStateHolder(void* state, StateDestroy destroy)
@@ -88,17 +106,32 @@ void* GetStateFromHolder(IUnknown* holder)
    return static_cast<Holder*>(holder)->state;
 }
 
+uint64_t GetDestroyedCount()
+{
+   return destroyed_count.load(std::memory_order_acquire);
+}
+
 bool Track(IUnknown* object, IUnknown* device, DestroyCallback on_destroy)
 {
-   if (ComPtr<ID3D12Object> d3d12_object; SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&d3d12_object))))
-      return Attach(d3d12_object.Get(), object, device, on_destroy);
-   if (ComPtr<ID3D11Device> d3d11_device; SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&d3d11_device))))
-      return Attach(d3d11_device.Get(), object, device, on_destroy);
-   if (ComPtr<ID3D11DeviceChild> d3d11_child; SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&d3d11_child))))
-      return Attach(d3d11_child.Get(), object, device, on_destroy);
-   if (ComPtr<IDXGIObject> dxgi_object; SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&dxgi_object))))
-      return Attach(dxgi_object.Get(), object, device, on_destroy);
-   return false;
+   return WithPrivateData(object, [&](auto* typed) { return Attach(typed, object, device, on_destroy); });
+}
+
+void* GetStateOf(IUnknown* object, const GUID& guid)
+{
+   return WithPrivateData(object, [&](auto* typed) -> void* {
+      IUnknown* holder = nullptr;
+      UINT size = sizeof(holder);
+      if (FAILED(typed->GetPrivateData(guid, &size, &holder)) || !holder || size != sizeof(holder))
+         return nullptr;
+      void* state = GetStateFromHolder(holder);
+      holder->Release(); // GetPrivateData added a reference, the object keeps its own
+      return state;
+   });
+}
+
+bool AttachStateOf(IUnknown* object, const GUID& guid, IUnknown* holder)
+{
+   return WithPrivateData(object, [&](auto* typed) { return SUCCEEDED(typed->SetPrivateDataInterface(guid, holder)); });
 }
 } // namespace Lifetime
 } // namespace Hooks

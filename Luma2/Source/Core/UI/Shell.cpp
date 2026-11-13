@@ -1,5 +1,7 @@
 #include "UI/Shell.hpp"
 
+#include <algorithm>
+#include <array>
 #include <format>
 #include <string>
 #include <string_view>
@@ -8,11 +10,17 @@
 
 #include <imgui.h>
 
-#include "Game/Game.hpp"
+#include "Game/Registry.hpp"
+#include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
+#include "Shaders/Defines.hpp"
+#include "Shaders/Jobs.hpp"
+#include "Shaders/Shaders.hpp"
 #include "Trace/Info.hpp"
 #include "UI/Icons.hpp"
 #include "UI/Input.hpp"
+#include "UI/Panels/Shaders.hpp"
+#include "UI/Panels/Trace.hpp"
 #include "UI/Style.hpp"
 #include "UI/Widgets.hpp"
 
@@ -20,6 +28,21 @@ namespace Luma {
 namespace UI {
 namespace {
 using Widgets::Tone;
+
+#if DEVELOPMENT
+enum class Tab : uint8_t
+{
+   Settings,
+   Shaders,
+   Trace,
+   Info,
+};
+
+Tab current_tab = Tab::Settings;
+#endif
+
+// Luma's categories at the top of the settings view, in this order
+constexpr std::array<std::string_view, 2> TOP_CATEGORIES = {"Luma", "Overlay"};
 
 // ImGui wants null terminated strings
 std::string Terminated(std::string_view text)
@@ -40,7 +63,7 @@ void CallPanel(void (*panel)())
 
 void DrawHeader(const Trace::Status& status)
 {
-   const Game::Info& info = Game::GetInfo();
+   const Game::Info& info = Game::Registry::GetInfo();
    ImGui::AlignTextToFramePadding();
    ImGui::TextUnformatted(info.name.empty() ? "Luma" : Terminated(info.name).c_str());
    ImGui::SameLine();
@@ -63,46 +86,72 @@ void DrawHeader(const Trace::Status& status)
    ImGui::PopStyleColor();
    ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
    if (Widgets::Toggle("Enabled", enabled))
-      Settings::Set(ENABLED_SETTING, enabled);
-   const std::string key = Input::GetKeyName(Settings::Get<Settings::Key>(Input::ENABLED_KEY_SETTING).code);
+      Settings::Set(Settings::Core::ENABLED, enabled);
+   const std::string key = Input::GetKeyName(Settings::Get(Settings::Core::ENABLED_KEY).code);
    ImGui::SetItemTooltip("%s", std::format("Luma {} ({} switches it)", enabled ? "on" : "off, the game's own image", key).c_str());
    ImGui::Separator();
 }
 
-void DrawSettings()
+// Defines changed while Auto Compile is off apply once compiled: one banner says so, the rows are tagged "pending"
+void DrawPendingCompile(const SettingsSection& section)
 {
-   // Categories in the order their first setting was registered
-   std::vector<std::pair<std::string_view, std::vector<const Settings::Setting*>>> categories;
-   Settings::ForEach([&](const Settings::Setting& setting, const Settings::Value&) {
-      if (!IsShown(setting))
-         return;
-      const std::string_view category = Settings::GetCategory(setting);
-      auto it = categories.begin();
-      while (it != categories.end() && it->first != category)
-         ++it;
-      if (it == categories.end())
-         it = categories.insert(it, {category, {}});
-      it->second.push_back(&setting);
-   });
-   // Rows may change the registry: draw from the collected pointers, which stay valid (settings are never removed while drawing)
-   for (const auto& [category, settings] : categories)
-   {
-      if (!Widgets::Section(category))
-         continue;
-      for (const Settings::Setting* setting : settings)
-         Widgets::SettingRow(*setting);
-      Widgets::EndSection();
-   }
-   CallPanel(Game::GetPanels().settings);
+   const size_t pending = std::ranges::count_if(section.settings, [](const Settings::Setting* setting) { return Shaders::Defines::IsPending(*setting); });
+   if (pending == 0)
+      return;
+   const std::string text = std::format("{} define{} changed since the shaders were built, applied once they compile", pending, pending == 1 ? "" : "s");
+   if (Widgets::Banner(Tone::Warning, text, "Compile Shaders", "Compiles the shaders with the defines as they are now"))
+      Shaders::Reload();
 }
 
-void DrawFooter()
+void DrawSection(const SettingsSection& section)
 {
-   const Game::Info& info = Game::GetInfo();
-   ImGui::Spacing();
-   ImGui::Separator();
-   CallPanel(Game::GetPanels().about);
-   if (!info.credits.empty() && Widgets::Section("Credits", false))
+   void (*const development_panel)() = section.role == SettingsSection::Role::Development ? Game::Registry::GetPanels().development : nullptr;
+   if (section.settings.empty() && !development_panel)
+      return;
+   if (!Widgets::Section(section.title))
+      return;
+   if (section.role == SettingsSection::Role::Defines)
+      DrawPendingCompile(section);
+   // Rows may change the registry: drawn from the collected pointers, which stay valid (settings are never removed while drawing)
+   for (const Settings::Setting* setting : section.settings)
+      Widgets::SettingRow(*setting);
+   CallPanel(development_panel);
+   Widgets::EndSection();
+}
+
+// The sections, with the game's own settings panel after its categories
+void DrawSettings()
+{
+   const std::vector<SettingsSection> sections = CollectSettingsSections();
+   const auto is_top = [](const SettingsSection& section) { return std::ranges::contains(TOP_CATEGORIES, section.title) && section.role == SettingsSection::Role::Settings; };
+   size_t game_end = 0;
+   for (size_t i = 0; i < sections.size(); i++)
+   {
+      if (is_top(sections[i]) || sections[i].role == SettingsSection::Role::Game)
+         game_end = i + 1;
+      else
+         break;
+   }
+   for (size_t i = 0; i < sections.size(); i++)
+   {
+      if (i == game_end)
+         CallPanel(Game::Registry::GetPanels().settings);
+      DrawSection(sections[i]);
+   }
+   if (game_end == sections.size())
+      CallPanel(Game::Registry::GetPanels().settings);
+}
+
+// 1.0's About tab: what the mod is, the game's own about panel, the credits, the version and build
+void DrawAbout()
+{
+   const Game::Info& info = Game::Registry::GetInfo();
+   if (!Widgets::Section("About", false))
+      return;
+   if (!info.description.empty())
+      Widgets::Paragraph(info.description);
+   CallPanel(Game::Registry::GetPanels().about);
+   if (!info.credits.empty())
    {
       for (const std::string_view credit : info.credits)
       {
@@ -112,12 +161,64 @@ void DrawFooter()
          else
             Widgets::ListItem(credit);
       }
-      // Luma's own, Font Awesome's license asks for the attribution
-      Widgets::Caption("Luma uses:");
-      Widgets::ListItem("Dear ImGui");
-      Widgets::ListItem("Font Awesome Free (icons CC BY 4.0, fonts SIL OFL 1.1)");
-      Widgets::EndSection();
    }
+   // Luma's own, Font Awesome's license asks for the attribution
+   Widgets::Caption("Luma uses:");
+   Widgets::ListItem("Dear ImGui");
+   Widgets::ListItem("Font Awesome Free (icons CC BY 4.0, fonts SIL OFL 1.1)");
+   ImGui::Spacing();
+   if (!info.version.empty())
+      Widgets::Property("Version", info.version);
+#if DEVELOPMENT
+   Widgets::Property("Build", "Development");
+#elif TEST
+   Widgets::Property("Build", "Test");
+#else
+   Widgets::Property("Build", "Publishing");
+#endif
+   Widgets::EndSection();
+}
+
+// The rows the game's links wrap to at `width`, as Widgets::WrapSameLine lays them out
+int CountLinkRows(const Game::Info& info, float width)
+{
+   int rows = 0;
+   float used = 0.f;
+   const float spacing = ImGui::GetStyle().ItemSpacing.x;
+   for (const Game::Link& link : info.links)
+   {
+      const float link_width = Widgets::GetLinkWidth(link.label, link.url);
+      if (used > 0.f && used + spacing + link_width <= width)
+      {
+         used += spacing + link_width;
+         continue;
+      }
+      rows++;
+      used = link_width;
+   }
+   return rows;
+}
+
+float GetStatusBarHeight()
+{
+   return ImGui::GetFrameHeight() + Style::Scale(Style::Sizes::UNIT);
+}
+
+// The links and the status bar, under the scrolling content
+float GetFooterHeight(const Game::Info& info)
+{
+   const float spacing = ImGui::GetStyle().ItemSpacing.y;
+   float height = GetStatusBarHeight() + spacing;
+   if (const int rows = CountLinkRows(info, ImGui::GetContentRegionAvail().x); rows > 0)
+      height += float(rows) * (ImGui::GetFrameHeight() + spacing) + spacing;
+   return height;
+}
+
+void DrawLinks(const Game::Info& info)
+{
+   if (info.links.empty())
+      return;
+   ImGui::Separator();
    float line_used = 0.f;
    for (const Game::Link& link : info.links)
    {
@@ -128,7 +229,7 @@ void DrawFooter()
 
 void DrawInfo(const Trace::Status& status)
 {
-   CallPanel(Game::GetPanels().info);
+   CallPanel(Game::Registry::GetPanels().info);
    if (Widgets::Section("Status"))
    {
       const auto row = [](std::string_view name, const std::string& value) { Widgets::Property(name, value); };
@@ -169,60 +270,144 @@ std::vector<Widgets::StatusItem> GetStatusItems(const Trace::Status& status)
    }
    items.push_back({Icons::TOOLS, std::format("{} hooks", status.counts.hooks_installed), status.counts.hooks_failed ? Tone::Warning : Tone::Info,
       std::format("{} failed", status.counts.hooks_failed)});
+   if (const Shaders::Jobs::Status job = Shaders::Jobs::GetStatus(); !job.name.empty())
+   {
+      const std::string queued = job.queued ? std::format(", {} more queued", job.queued) : std::string();
+      items.push_back({Icons::RELOAD, std::format("{} {}/{}", job.name, job.done, job.total), Tone::Info, std::format("On Luma's worker thread{}", queued),
+         job.total ? float(job.done) / float(job.total) : -1.f});
+   }
+   if (const Shaders::BuildInfo& build = Shaders::GetLastBuild(); build.failed)
+      items.push_back({Icons::ERROR_, std::format("{} shader{} failed", build.failed, build.failed == 1 ? "" : "s"), Tone::Error, build.errors});
    if (status.validation.errors || status.validation.corruptions)
       items.push_back({Icons::WARNING, std::format("{} validation errors", status.validation.errors + status.validation.corruptions), Tone::Error, "See Luma.log"});
    return items;
 }
+
+#if DEVELOPMENT
+void DrawTabBar()
+{
+   if (!ImGui::BeginTabBar("Tabs"))
+      return;
+   const auto tab = [](Tab id, std::string_view label, const char* icon) {
+      if (Widgets::Tab(label, icon))
+      {
+         current_tab = id;
+         Widgets::EndTab();
+      }
+   };
+   tab(Tab::Settings, "Settings", Icons::SLIDERS);
+   tab(Tab::Shaders, "Shaders", Icons::CODE);
+   tab(Tab::Trace, "Trace", Icons::LIST);
+   tab(Tab::Info, "Info", nullptr);
+   ImGui::EndTabBar();
+}
+#endif
+
+void DrawContent(const Trace::Status& status)
+{
+#if DEVELOPMENT
+   switch (current_tab)
+   {
+   case Tab::Settings:
+      DrawSettings();
+      DrawAbout();
+      break;
+   case Tab::Shaders: Panels::DrawShaders(); break;
+   case Tab::Trace: Panels::DrawTrace(); break;
+   case Tab::Info: DrawInfo(status); break;
+   }
+#else
+   (void)status;
+   DrawSettings();
+   if (Game::Registry::GetPanels().info && Widgets::Section("Info", false))
+   {
+      Game::Registry::GetPanels().info();
+      Widgets::EndSection();
+   }
+   DrawAbout();
+#endif
+}
 } // namespace
+
+std::vector<SettingsSection> CollectSettingsSections()
+{
+   using Role = SettingsSection::Role;
+   std::vector<SettingsSection> top(TOP_CATEGORIES.size());
+   for (size_t i = 0; i < TOP_CATEGORIES.size(); i++)
+      top[i].title = TOP_CATEGORIES[i];
+   std::vector<SettingsSection> game;
+   SettingsSection defines = {"Shader Defines", {}, Role::Defines};
+   SettingsSection recipes = {"Recipes", {}, Role::Settings};
+   std::vector<SettingsSection> rest;
+   SettingsSection development = {"Development Settings", {}, Role::Development};
+   const auto add = [](std::vector<SettingsSection>& sections, std::string_view title, Role role, const Settings::Setting* setting) {
+      auto it = std::ranges::find(sections, title, &SettingsSection::title);
+      if (it == sections.end())
+         it = sections.insert(it, {title, {}, role});
+      it->settings.push_back(setting);
+   };
+   Settings::ForEach([&](const Settings::Setting& setting, const Settings::Value&) {
+      if (!IsShown(setting))
+         return;
+      const std::string_view category = Settings::GetCategory(setting);
+      switch (setting.kind)
+      {
+      case Settings::Kind::Game: add(game, category, Role::Game, &setting); break;
+      case Settings::Kind::Define: defines.settings.push_back(&setting); break;
+      case Settings::Kind::Recipe: recipes.settings.push_back(&setting); break;
+      case Settings::Kind::Development: development.settings.push_back(&setting); break;
+      case Settings::Kind::Luma:
+         // Auto Compile is drawn with the defines it compiles (its key and file place stay Luma's "Shaders" category)
+         if (setting.key == Settings::Core::AUTO_COMPILE.key)
+            defines.settings.insert(defines.settings.begin(), &setting);
+         else if (const auto it = std::ranges::find(top, category, &SettingsSection::title); it != top.end())
+            it->settings.push_back(&setting);
+         else
+            add(rest, category, Role::Settings, &setting);
+         break;
+      }
+   });
+   // Auto Compile alone has nothing to compile
+   if (std::ranges::none_of(defines.settings, [](const Settings::Setting* setting) { return setting->kind == Settings::Kind::Define; }))
+      defines.settings.clear();
+   std::vector<SettingsSection> sections;
+   const auto append = [&](SettingsSection& section) {
+      if (!section.settings.empty())
+         sections.push_back(std::move(section));
+   };
+   std::ranges::for_each(top, append);
+   std::ranges::for_each(game, append);
+   append(defines);
+   append(recipes);
+   std::ranges::for_each(rest, append);
+#if DEVELOPMENT
+   // Shown for the game's development panel even without settings
+   sections.push_back(std::move(development));
+#endif
+   return sections;
+}
 
 void DrawShell()
 {
-   const Game::Info& info = Game::GetInfo();
+   const Game::Info& info = Game::Registry::GetInfo();
    const Trace::Status status = Trace::GetStatus();
    const ImGuiViewport* viewport = ImGui::GetMainViewport();
    const float margin = Style::Scale(Style::Sizes::UNIT * 10.f);
    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + margin, viewport->WorkPos.y + margin), ImGuiCond_FirstUseEver);
    ImGui::SetNextWindowSize(ImVec2(Style::Scale(620.f), Style::Scale(720.f)), ImGuiCond_FirstUseEver);
    const std::string title = std::format("{} Luma{}###Luma", Icons::SETTINGS, info.name.empty() ? "" : std::format(": {}", info.name));
-   if (ImGui::Begin(title.c_str(), nullptr, ImGuiWindowFlags_NoCollapse))
+   // Only the content between the header and the footer scrolls
+   if (ImGui::Begin(title.c_str(), nullptr, ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse))
    {
       DrawTitleBarDepth();
       DrawHeader(status);
-      const float bottom = ImGui::GetFrameHeight() + Style::Scale(Style::Sizes::UNIT) + ImGui::GetStyle().ItemSpacing.y;
-      if (ImGui::BeginChild("Body", ImVec2(0.f, -bottom)))
-      {
 #if DEVELOPMENT
-         if (ImGui::BeginTabBar("Tabs"))
-         {
-            if (Widgets::Tab("Settings", Icons::SLIDERS))
-            {
-               DrawSettings();
-               DrawFooter();
-               Widgets::EndTab();
-            }
-            if (Game::GetPanels().development && Widgets::Tab("Development"))
-            {
-               Game::GetPanels().development();
-               Widgets::EndTab();
-            }
-            if (Widgets::Tab("Info"))
-            {
-               DrawInfo(status);
-               Widgets::EndTab();
-            }
-            ImGui::EndTabBar();
-         }
-#else
-         DrawSettings();
-         if (Game::GetPanels().info && Widgets::Section("Info", false))
-         {
-            Game::GetPanels().info();
-            Widgets::EndSection();
-         }
-         DrawFooter();
+      DrawTabBar();
 #endif
-      }
+      if (ImGui::BeginChild("Content", ImVec2(0.f, -GetFooterHeight(info))))
+         DrawContent(status);
       ImGui::EndChild();
+      DrawLinks(info);
       const std::vector<Widgets::StatusItem> items = GetStatusItems(status);
       Widgets::StatusBar(items);
    }

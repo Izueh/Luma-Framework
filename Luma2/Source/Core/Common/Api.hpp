@@ -32,4 +32,15 @@ enum class ShaderStage : uint8_t
    Pixel,
    Compute,
 };
+
+// LumaData's per pass values (1.0's CustomData1 to 4)
+struct LumaCustomData
+{
+   uint32_t custom_data_1 = 0;
+   uint32_t custom_data_2 = 0;
+   float custom_data_3 = 0.f;
+   float custom_data_4 = 0.f;
+
+   friend bool operator==(const LumaCustomData&, const LumaCustomData&) = default;
+};
 } // namespace Luma

@@ -1,17 +1,21 @@
 #include "UI/Widgets.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <chrono>
 #include <deque>
 #include <format>
 #include <mutex>
 #include <optional>
+#include <unordered_map>
 #include <variant>
+#include <vector>
 
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 
+#include "Shaders/Defines.hpp"
 #include "UI/Icons.hpp"
 #include "UI/Input.hpp"
 #include "UI/Style.hpp"
@@ -39,6 +43,30 @@ ImGuiID capturing_key_id = 0;
 // The row being dragged or typed in, and its value meanwhile
 ImGuiID editing_id = 0;
 Settings::Value editing_value;
+// ListDetail's filters, by list
+std::unordered_map<ImGuiID, std::string> list_filters;
+
+bool ContainsIgnoreCase(std::string_view text, std::string_view part)
+{
+   return !std::ranges::search(text, part, [](char a, char b) { return std::tolower(uint8_t(a)) == std::tolower(uint8_t(b)); }).empty();
+}
+
+ImVec4 GetStageTint(ShaderStage stage)
+{
+   switch (stage)
+   {
+   case ShaderStage::Vertex: return Style::Colors::Stages::VERTEX;
+   case ShaderStage::Pixel: return Style::Colors::Stages::PIXEL;
+   case ShaderStage::Compute: return Style::Colors::Stages::COMPUTE;
+   default: return Style::Colors::Stages::OTHER;
+   }
+}
+
+std::string_view GetStageName(ShaderStage stage)
+{
+   constexpr std::string_view NAMES[] = {"vertex", "hull", "domain", "geometry", "pixel", "compute"};
+   return NAMES[size_t(stage)];
+}
 
 // Sliders, drags and text apply when the edit ends; toggles, combos and keys at once
 bool IsAppliedOnRelease(const Settings::Setting& setting)
@@ -66,6 +94,7 @@ ImVec4 GetColor(Tone tone)
    case Tone::Success: return Style::Colors::SUCCESS;
    case Tone::Warning: return Style::Colors::WARNING;
    case Tone::Error: return Style::Colors::DANGER;
+   case Tone::Injected: return Style::Colors::INJECTED;
    default: return Style::Colors::ACCENT;
    }
 }
@@ -142,10 +171,8 @@ Mark GetMark(std::string_view url)
    return {Icons::LINK, Style::Colors::ACCENT};
 }
 
-// A small rounded label after a row's control
-void Badge(std::string_view text, ImVec4 color)
+void DrawTag(std::string_view text, ImVec4 color)
 {
-   ImGui::SameLine();
    const ImVec2 size = ImGui::CalcTextSize(text.data(), text.data() + text.size());
    const ImVec2 padding(Style::Scale(Style::Sizes::UNIT * 1.5f), Style::Scale(1.f));
    const ImVec2 position = ImGui::GetCursorScreenPos();
@@ -184,7 +211,11 @@ bool DrawControl(const Settings::Setting& setting, Settings::Value& value)
          return ImGui::DragFloat(HiddenLabel(id).c_str(), &typed, 0.01f, 0.f, 0.f, Terminated(setting.format).c_str());
       }
       else if constexpr (std::is_same_v<T, Settings::EnumIndex>)
+      {
+         if (setting.enum_labels.size() <= MAX_SEGMENTS)
+            return Segmented(id, typed.value, setting.enum_labels, GetControlWidth());
          return Combo(id, typed.value, setting.enum_labels);
+      }
       else if constexpr (std::is_same_v<T, std::string>)
          return TextInput(id, typed);
       else
@@ -279,6 +310,13 @@ void Caption(std::string_view text)
    TextDim(text);
 }
 
+void Paragraph(std::string_view text)
+{
+   ImGui::PushTextWrapPos(0.f);
+   ImGui::TextUnformatted(text.data(), text.data() + text.size());
+   ImGui::PopTextWrapPos();
+}
+
 void ListItem(std::string_view text)
 {
    ImGui::Bullet();
@@ -367,10 +405,14 @@ bool SettingRow(const Settings::Setting& setting)
       ImGui::PopStyleColor();
    }
    ImGui::EndDisabled();
-   if (std::holds_alternative<Settings::Sources::Define>(setting.source))
-      Badge("recompile", Style::Colors::WARNING);
-   else if (std::holds_alternative<Settings::Sources::Recipe>(setting.source))
-      Badge("re-patch", Style::Colors::WARNING);
+   // A define the shaders weren't built with yet
+   if (Shaders::Defines::IsPending(setting))
+   {
+      ImGui::SameLine();
+      const std::optional<std::string> compiled = Shaders::Defines::GetCompiledText(std::get<Settings::Sources::Define>(setting.source).name);
+      Tag("pending", Tone::Warning,
+         std::format("The shaders were built with {}: Compile Shaders (or Auto Compile) applies this value", compiled ? *compiled : std::string("no value")));
+   }
    ImGui::PopID();
    return changed;
 }
@@ -422,6 +464,139 @@ bool Combo(std::string_view id, int32_t& index, std::span<const std::string_view
       ImGui::EndCombo();
    }
    return changed;
+}
+
+bool Segmented(std::string_view id, int32_t& index, std::span<const std::string_view> labels, float width)
+{
+   if (labels.empty())
+      return false;
+   const ImGuiStyle& style = ImGui::GetStyle();
+   const float height = ImGui::GetFrameHeight();
+   std::vector<float> widths;
+   float natural = 0.f;
+   for (const std::string_view label : labels)
+      natural += widths.emplace_back(ImGui::CalcTextSize(label.data(), label.data() + label.size()).x + style.FramePadding.x * 2.f);
+   // A given width is shared equally, so segments line up between rows
+   if (width > 0.f)
+      std::ranges::fill(widths, width / float(labels.size()));
+   ImGui::PushID(id.data(), id.data() + id.size());
+   const ImVec2 start = ImGui::GetCursorScreenPos();
+   const float total = width > 0.f ? width : natural;
+   const float rounding = Style::Scale(Style::Sizes::CONTROL_ROUNDING);
+   const bool disabled = style.Alpha < 1.f;
+   ImDrawList* draw_list = ImGui::GetWindowDrawList();
+   draw_list->AddRectFilled(start, ImVec2(start.x + total, start.y + height), ImGui::GetColorU32(Style::Colors::CONTROL), rounding);
+   bool changed = false;
+   float x = start.x;
+   for (int32_t i = 0; i < int32_t(labels.size()); i++)
+   {
+      const float segment = widths[size_t(i)];
+      ImGui::SetCursorScreenPos(ImVec2(x, start.y));
+      ImGui::PushID(i);
+      if (ImGui::InvisibleButton("##Segment", ImVec2(segment, height)) && i != index)
+      {
+         index = i;
+         changed = true;
+      }
+      const bool hovered = ImGui::IsItemHovered();
+      ImGui::PopID();
+      const ImVec2 min(x, start.y);
+      const ImVec2 max(x + segment, start.y + height);
+      const bool selected = i == index;
+      // Inset, so neighbouring fills never touch
+      const float inset = Style::Scale(2.f);
+      if (selected || hovered)
+      {
+         const ImVec4 fill = selected ? (hovered ? Style::Colors::ACCENT_HOVERED : Style::Colors::ACCENT) : Style::Colors::CONTROL_HOVERED;
+         draw_list->AddRectFilled(ImVec2(min.x + inset, min.y + inset), ImVec2(max.x - inset, max.y - inset), ImGui::GetColorU32(fill), rounding);
+      }
+      else if (i > 0 && i - 1 != index)
+      {
+         draw_list->AddLine(ImVec2(min.x, min.y + height * 0.25f), ImVec2(min.x, max.y - height * 0.25f), ImGui::GetColorU32(Style::Colors::BORDER));
+      }
+      const std::string_view label = labels[size_t(i)];
+      const ImVec2 text_size = ImGui::CalcTextSize(label.data(), label.data() + label.size());
+      const ImVec4 text_color = disabled ? Style::Colors::ICON_DISABLED : (selected ? Style::Colors::TEXT_BRIGHT : Style::Colors::TEXT_LABEL);
+      draw_list->AddText(ImVec2(min.x + (segment - text_size.x) * 0.5f, min.y + (height - text_size.y) * 0.5f), ImGui::GetColorU32(text_color), label.data(),
+         label.data() + label.size());
+      x += segment;
+   }
+   // One item for the layout and for the caller's tooltip
+   ImGui::SetCursorScreenPos(start);
+   ImGui::Dummy(ImVec2(total, height));
+   ImGui::PopID();
+   return changed;
+}
+
+bool FilterChip(std::string_view label, bool& value, std::string_view tooltip)
+{
+   int colors = 1;
+   if (value)
+   {
+      ImGui::PushStyleColor(ImGuiCol_Button, Style::WithAlpha(Style::Colors::ACCENT, 0.35f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Style::WithAlpha(Style::Colors::ACCENT, 0.5f));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive, Style::WithAlpha(Style::Colors::ACCENT, 0.65f));
+      colors = 4;
+   }
+   ImGui::PushStyleColor(ImGuiCol_Text, value ? Style::Colors::TEXT_BRIGHT : Style::Colors::TEXT_DIM);
+   ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, ImGui::GetFrameHeight() * 0.5f);
+   const bool clicked = ImGui::Button(Terminated(label).c_str());
+   ImGui::PopStyleVar();
+   ImGui::PopStyleColor(colors);
+   Tooltip(tooltip);
+   if (clicked)
+      value = !value;
+   return clicked;
+}
+
+void Tag(std::string_view text, Tone tone, std::string_view tooltip)
+{
+   DrawTag(text, GetColor(tone));
+   Tooltip(tooltip);
+}
+
+bool Banner(Tone tone, std::string_view text, std::string_view action, std::string_view action_tooltip)
+{
+   const ImVec4 color = GetColor(tone);
+   const float unit = Style::Scale(Style::Sizes::UNIT);
+   ImDrawList* draw_list = ImGui::GetWindowDrawList();
+   // The tinted background goes under the contents once their height is known
+   draw_list->ChannelsSplit(2);
+   draw_list->ChannelsSetCurrent(1);
+   const ImVec2 start = ImGui::GetCursorScreenPos();
+   const float width = ImGui::GetContentRegionAvail().x;
+   const float action_width = action.empty() ? 0.f : ImGui::CalcTextSize(action.data(), action.data() + action.size()).x + ImGui::GetStyle().FramePadding.x * 2.f;
+   // Window coordinates, as SameLine and the wrap position take them
+   const float window_x = ImGui::GetWindowPos().x - ImGui::GetScrollX();
+   const float action_x = start.x + width - action_width - unit * 2.f;
+   ImGui::SetCursorScreenPos(ImVec2(start.x + unit * 3.f, start.y + unit * 1.5f));
+   ImGui::BeginGroup();
+   ImGui::AlignTextToFramePadding();
+   ImGui::PushStyleColor(ImGuiCol_Text, color);
+   ImGui::TextUnformatted(GetIcon(tone));
+   ImGui::PopStyleColor();
+   ImGui::SameLine();
+   ImGui::PushTextWrapPos(action_x - unit * 2.f - window_x);
+   ImGui::TextUnformatted(text.data(), text.data() + text.size());
+   ImGui::PopTextWrapPos();
+   bool clicked = false;
+   if (!action.empty())
+   {
+      ImGui::SameLine();
+      ImGui::SetCursorScreenPos(ImVec2(action_x, ImGui::GetCursorScreenPos().y));
+      clicked = Button(action, ButtonKind::Primary, action_tooltip);
+   }
+   ImGui::EndGroup();
+   const float bottom = ImGui::GetItemRectMax().y + unit * 1.5f;
+   draw_list->ChannelsSetCurrent(0);
+   const float rounding = Style::Scale(Style::Sizes::CONTROL_ROUNDING);
+   draw_list->AddRectFilled(start, ImVec2(start.x + width, bottom), ImGui::GetColorU32(Style::WithAlpha(color, 0.12f)), rounding);
+   draw_list->AddRectFilled(start, ImVec2(start.x + Style::Scale(Style::Sizes::ACCENT_BAR), bottom), ImGui::GetColorU32(color), rounding,
+      ImDrawFlags_RoundCornersLeft);
+   draw_list->ChannelsMerge();
+   ImGui::SetCursorScreenPos(start);
+   ImGui::Dummy(ImVec2(width, bottom - start.y + unit));
+   return clicked;
 }
 
 bool KeyBind(std::string_view id, uint32_t& key)
@@ -524,6 +699,168 @@ void ProgressBar(float fraction, std::string_view label)
       ImGui::ProgressBar(-float(ImGui::GetTime()), ImVec2(-1.f, 0.f), text.empty() ? nullptr : text.c_str());
    else
       ImGui::ProgressBar(std::clamp(fraction, 0.f, 1.f), ImVec2(-1.f, 0.f), text.empty() ? nullptr : text.c_str());
+}
+
+void ListDetail(std::string_view id, std::span<const ListEntry> entries, size_t& selected, const std::function<void(size_t index)>& detail, float height,
+   const std::function<bool(size_t index)>& visible)
+{
+   ImGui::PushID(id.data(), id.data() + id.size());
+   std::string& filter = list_filters[ImGui::GetID("Filter")];
+   if (ImGui::BeginChild("List", ImVec2(Style::Scale(Style::Sizes::LIST_WIDTH), height), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeX))
+   {
+      if (!visible)
+      {
+         ImGui::SetNextItemWidth(-1.f);
+         ImGui::InputTextWithHint("##Filter", std::format("{} Filter", Icons::SEARCH).c_str(), &filter);
+      }
+      std::vector<size_t> shown;
+      shown.reserve(entries.size());
+      for (size_t i = 0; i < entries.size(); i++)
+      {
+         if (visible ? visible(i) : filter.empty() || ContainsIgnoreCase(entries[i].label, filter))
+            shown.push_back(i);
+      }
+      // Only the visible rows are drawn: a trace has thousands
+      ImGuiListClipper clipper;
+      clipper.Begin(int(shown.size()));
+      while (clipper.Step())
+      {
+         for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
+         {
+            const size_t i = shown[size_t(row)];
+            const ListEntry& entry = entries[i];
+            if (entry.tone != Tone::Info)
+               ImGui::PushStyleColor(ImGuiCol_Text, GetColor(entry.tone));
+            if (ImGui::Selectable(std::format("{}##{}", entry.label, i).c_str(), i == selected))
+               selected = i;
+            if (entry.tone != Tone::Info)
+               ImGui::PopStyleColor();
+         }
+      }
+   }
+   ImGui::EndChild();
+   ImGui::SameLine();
+   if (ImGui::BeginChild("Detail", ImVec2(0.f, height), ImGuiChildFlags_Borders))
+   {
+      if (selected < entries.size())
+         detail(selected);
+      else
+         TextDim("Select an entry");
+   }
+   ImGui::EndChild();
+   ImGui::PopID();
+}
+
+void PropertyGrid(std::string_view id, std::span<const PropertyRow> rows)
+{
+   const std::string table = Terminated(id);
+   if (!ImGui::BeginTable(table.c_str(), 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+      return;
+   ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, Style::Scale(Style::Sizes::LABEL_WIDTH));
+   ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+   for (size_t i = 0; i < rows.size(); i++)
+   {
+      const PropertyRow& row = rows[i];
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::PushStyleColor(ImGuiCol_Text, Style::Colors::TEXT_LABEL);
+      ImGui::TextUnformatted(row.name.data(), row.name.data() + row.name.size());
+      ImGui::PopStyleColor();
+      ImGui::TableNextColumn();
+      ImGui::PushID(int(i));
+      ImGui::PushFont(Fonts::GetMonospace(), 0.f);
+      if (row.tone != Tone::Info)
+         ImGui::PushStyleColor(ImGuiCol_Text, GetColor(row.tone));
+      if (ImGui::Selectable(row.value.empty() ? "-" : row.value.c_str()))
+         ImGui::SetClipboardText(row.value.c_str());
+      if (row.tone != Tone::Info)
+         ImGui::PopStyleColor();
+      ImGui::PopFont();
+      ImGui::PopID();
+      Tooltip("Click to copy");
+   }
+   ImGui::EndTable();
+}
+
+void DataTable(std::string_view id, std::span<const TableColumn> columns, std::span<const TableRow> rows, float max_height)
+{
+   if (columns.empty())
+      return;
+   ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersOuterH | ImGuiTableFlags_SizingStretchProp;
+   ImVec2 size(0.f, 0.f);
+   const float row_height = ImGui::GetTextLineHeight() + ImGui::GetStyle().CellPadding.y * 2.f;
+   if (max_height > 0.f && row_height * float(rows.size() + 1) > max_height)
+   {
+      flags |= ImGuiTableFlags_ScrollY;
+      size.y = max_height;
+   }
+   if (!ImGui::BeginTable(Terminated(id).c_str(), int(columns.size()), flags, size))
+      return;
+   for (const TableColumn& column : columns)
+      ImGui::TableSetupColumn(Terminated(column.name).c_str(), column.width > 0.f ? ImGuiTableColumnFlags_WidthFixed : ImGuiTableColumnFlags_WidthStretch,
+         column.width > 0.f ? Style::Scale(column.width) : 0.f);
+   ImGui::TableSetupScrollFreeze(0, 1);
+   ImGui::PushStyleColor(ImGuiCol_Text, Style::Colors::TEXT_DIM);
+   ImGui::TableHeadersRow();
+   ImGui::PopStyleColor();
+   // Only the visible rows are drawn: a cbuffer can have thousands
+   ImGuiListClipper clipper;
+   clipper.Begin(int(rows.size()));
+   while (clipper.Step())
+   {
+      for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
+      {
+         ImGui::TableNextRow();
+         ImGui::PushID(row);
+         const TableRow& cells = rows[size_t(row)];
+         for (size_t column = 0; column < columns.size(); column++)
+         {
+            ImGui::TableNextColumn();
+            if (column >= cells.size())
+               continue;
+            const TableCell& cell = cells[column];
+            ImGui::PushID(int(column));
+            if (columns[column].monospace)
+               ImGui::PushFont(Fonts::GetMonospace(), 0.f);
+            ImGui::PushStyleColor(ImGuiCol_Text, cell.tone != Tone::Info ? GetColor(cell.tone) : (column == 0 ? Style::Colors::TEXT_LABEL : Style::Colors::TEXT));
+            if (ImGui::Selectable(cell.text.empty() ? "-" : cell.text.c_str()))
+               ImGui::SetClipboardText(cell.text.c_str());
+            ImGui::PopStyleColor();
+            if (columns[column].monospace)
+               ImGui::PopFont();
+            Tooltip(cell.tooltip.empty() ? std::string_view("Click to copy") : std::string_view(cell.tooltip));
+            ImGui::PopID();
+         }
+         ImGui::PopID();
+      }
+   }
+   ImGui::EndTable();
+}
+
+void HashChip(uint32_t hash, ShaderStage stage, std::string_view name)
+{
+   const std::string text = std::format("0x{:08X}", hash);
+   ImGui::PushFont(Fonts::GetMonospace(), 0.f);
+   ImGui::PushStyleColor(ImGuiCol_Text, GetStageTint(stage));
+   ImGui::PushStyleColor(ImGuiCol_Button, Style::WithAlpha(GetStageTint(stage), 0.12f));
+   ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(Style::Scale(Style::Sizes::UNIT * 1.5f), 0.f));
+   // The same hash twice in a window shares an id: harmless, both copy the same text
+   const bool clicked = ImGui::Button(text.c_str());
+   ImGui::PopStyleVar();
+   ImGui::PopStyleColor(2);
+   ImGui::PopFont();
+   if (clicked)
+      ImGui::SetClipboardText(text.c_str());
+   Tooltip(name.empty() ? std::format("{} shader, click to copy", GetStageName(stage)) : std::format("{} ({} shader), click to copy", name, GetStageName(stage)));
+}
+
+void Code(std::string_view text)
+{
+   ImGui::PushFont(Fonts::GetMonospace(), 0.f);
+   ImGui::PushTextWrapPos(0.f);
+   ImGui::TextUnformatted(text.data(), text.data() + text.size());
+   ImGui::PopTextWrapPos();
+   ImGui::PopFont();
 }
 
 void Text(std::string_view text, Tone tone)
@@ -631,6 +968,13 @@ void StatusBar(std::span<const StatusItem> items)
          else
             Text(item.text, item.tone);
          Tooltip(item.tooltip);
+         if (item.progress)
+         {
+            ImGui::SameLine();
+            const ImVec2 size(Style::Scale(Style::Sizes::UNIT * 25.f), ImGui::GetTextLineHeight());
+            const float fraction = *item.progress < 0.f ? -float(ImGui::GetTime()) : std::clamp(*item.progress, 0.f, 1.f);
+            ImGui::ProgressBar(fraction, size, "");
+         }
       }
    }
    ImGui::EndChild();

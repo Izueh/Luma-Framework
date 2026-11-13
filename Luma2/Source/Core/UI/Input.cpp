@@ -8,6 +8,7 @@
 #include <variant>
 
 #include "Luma.hpp"
+#include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
 #include "UI/Overlay.hpp"
 #include "Utils/Log.hpp"
@@ -20,14 +21,14 @@ namespace Input {
 namespace {
 constexpr std::array SETTINGS = {
    Settings::Setting{
-      .key = TOGGLE_KEY_SETTING,
+      .key = Settings::Core::OVERLAY_KEY.key,
       .label = "Overlay key",
       .tooltip = "Opens and closes this overlay",
       .category = "Overlay",
       .default_value = Settings::Key{VK_INSERT},
    },
    Settings::Setting{
-      .key = ENABLED_KEY_SETTING,
+      .key = Settings::Core::ENABLED_KEY.key,
       .label = "On/off key",
       .tooltip = "Switches Luma on and off, to compare with the game's own image",
       .category = "Luma",
@@ -67,7 +68,7 @@ LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wparam, LPARAM 
 
 void OnSettingChanged(const Settings::Setting& setting, const Settings::Value& value)
 {
-   if (setting.key != TOGGLE_KEY_SETTING)
+   if (setting.key != Settings::Core::OVERLAY_KEY.key)
       return;
    if (const Settings::Key* key = std::get_if<Settings::Key>(&value); key && key->code > 0 && key->code < 255)
       toggle_key = key->code;
@@ -98,9 +99,9 @@ bool HandleMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
       return true;
    }
    // The window's thread may not be the presenting one: applied at the next present
-   if (key_pressed && wparam == Settings::Get<Settings::Key>(ENABLED_KEY_SETTING).code)
+   if (key_pressed && wparam == Settings::Get(Settings::Core::ENABLED_KEY).code)
    {
-      Settings::Queue(ENABLED_SETTING, !IsEnabled());
+      Settings::Queue(Settings::Core::ENABLED, !IsEnabled());
       return true;
    }
    if (!IsOpen())
@@ -111,9 +112,9 @@ bool HandleMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
 
 void Initialize()
 {
-   Settings::Register(SETTINGS);
+   Settings::Register(SETTINGS, Settings::Kind::Luma);
    Settings::AddChangeListener(&OnSettingChanged);
-   toggle_key = Settings::Get<Settings::Key>(TOGGLE_KEY_SETTING).code;
+   toggle_key = Settings::Get(Settings::Core::OVERLAY_KEY).code;
 }
 
 void Attach(HWND window)
@@ -166,7 +167,7 @@ void ApplyCapturedKey()
       return;
    capturing_toggle_key = false;
    if (const uint32_t key = captured_key.exchange(0))
-      Settings::Set(TOGGLE_KEY_SETTING, Settings::Key{key});
+      Settings::Set(Settings::Core::OVERLAY_KEY, Settings::Key{key});
 }
 
 std::string GetKeyName(uint32_t virtual_key)

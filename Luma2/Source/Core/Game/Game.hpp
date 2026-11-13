@@ -1,33 +1,121 @@
 #pragma once
 
-#include "Hooks/Functions.hpp"
-#include "Luma.hpp"
+#include <concepts>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <utility>
+
+#include <Windows.h>
+
+#include "Common/Api.hpp"
+#include "Common/Math.hpp"
+#include "Draw/Draw.hpp"
+#include "Frame/Frame.hpp"
+#include "Resources/LumaCBuffers.hpp"
+#include "Settings/Keys.hpp"
+#include "Settings/Registry.hpp"
+#include "Shaders/Defines.hpp"
 
 namespace Luma {
 namespace Game {
-// Written only while Init runs, so read without a lock
-const Info& GetInfo();
-const D3D11::Callbacks& GetD3D11();
-const D3D12::Callbacks& GetD3D12();
-const Panels& GetPanels();
-
-// The native functions the game's callbacks need hooked
-Hooks::D3D11::Functions GetRequestedFunctions();
-void LogDeclarations();
-// Forgets the info, callbacks and panels (tests)
-void Reset();
-
-// With each device the game creates, before its callbacks
-void CreateDeviceData(IUnknown* device);
-
-// Runs `callback` if the game set it. Handlers are already inside a Luma scope.
-template <typename Callback, typename... Arguments>
-auto Call(Callback callback, Arguments&&... arguments)
+struct Link
 {
-   using Result = decltype(callback(std::forward<Arguments>(arguments)...));
-   if (!callback)
-      return Result();
-   return callback(std::forward<Arguments>(arguments)...);
+   std::string_view label;
+   std::string_view url;
+};
+
+struct Info
+{
+   // Shown in the overlay's footer. Must outlive Luma (string literals, static arrays).
+   std::string_view name;
+   std::string_view version;
+   // What the mod does and who made it, at the top of the About section
+   std::string_view description;
+   std::span<const std::string_view> credits;
+   std::span<const Link> links;
+   // The only API the game uses: the other one's hooks are never installed. Unset, Luma handles both.
+   std::optional<Api> api;
+};
+
+// Implemented by the game. Under the loader lock: declarations only (no dll loads, threads or API objects).
+void Init();
+
+void SetInfo(const Info& info);
+
+// Shaders. The spans and strings must outlive Luma (static arrays, literals), but AddDefine's.
+namespace Shaders {
+// In the dev tools, and for a draw callback's hash list
+void SetDebugName(std::string_view name, std::span<const uint32_t> hashes);
+// The hashes a "<file_name>_0x########.ps_5_0.hlsl" replacement file stands for
+void RedirectHashes(std::string_view file_name, std::span<const uint32_t> hashes);
+
+// As the define's default, which users can still change. False, logged once, for a define this build doesn't have.
+template <typename T, typename U>
+   requires std::same_as<T, U>
+bool SetDefine(const Luma::Shaders::Defines::Id<T>& define, U value)
+{
+   return Luma::Shaders::Defines::SetDefault(define.key, define.name, Settings::Value(std::move(value)));
 }
+
+// A name already registered is refused. The strings are copied.
+void AddDefine(const Luma::Shaders::Defines::Definition& definition);
+} // namespace Shaders
+
+// For a game that defines `struct Luma::Game::GameDeviceData`. Created with each device before Core's objects, destroyed after
+// on_destroy_device.
+struct GameDeviceDataType
+{
+   GameDeviceData* (*create)() = nullptr;
+   void (*destroy)(GameDeviceData* data) = nullptr;
+
+   // A template, so it's compiled where the game's definition is visible
+   template <typename T>
+      requires std::same_as<T, GameDeviceData>
+   static GameDeviceDataType Of()
+   {
+      return {[]() -> GameDeviceData* { return new T(); }, [](GameDeviceData* data) { delete static_cast<T*>(data); }};
+   }
+};
+
+// Fixed for the process: anything changed at runtime is a setting instead
+struct Options
+{
+   // The LumaData writer runs at every draw with a Luma shader; LumaData uploads only when its bytes changed (1.0)
+   Resources::LumaCBuffers::Options cbuffers;
+   // The bound-state cache's groups
+   Draw::Options draw;
+   GameDeviceDataType device_data;
+};
+
+// Once, in Init. A second call is ignored.
+void SetOptions(const Options& options);
+
+// Drawn with UI::Widgets. Plain settings go through the registry instead.
+struct Panels
+{
+   void (*settings)() = nullptr; // Below the registry's settings
+   void (*info)() = nullptr; // In the Info tab (Development) or the settings view
+   void (*about)() = nullptr; // Above the credits
+   void (*development)() = nullptr; // Development builds only
+};
+
+void SetPanels(const Panels& panels);
+
+// The game's part is its GameSettings member. Written on the presenting thread only; contexts upload what was last published.
+using Resources::LumaCBuffers::cb_luma_global_settings;
+
+// Core publishes at every present: this shows a change made elsewhere (on_init_swapchain) sooner. Presenting thread only.
+void MarkLumaSettingsDirty();
+
+// Null for a device Luma doesn't know. Any thread, the device or the game's proxy of it.
+GameDeviceData* GetGameDeviceData(IUnknown* device);
+
+// The device's resolutions (Luma::Frame). Any thread, the device or the game's proxy of it.
+namespace Frame {
+Luma::Frame::Resolutions Get(IUnknown* device);
+// What the game renders the scene at, from its SR or TAA path: the output's until set, and again after a resize
+void SetRenderResolution(IUnknown* device, Math::uint2 size);
+} // namespace Frame
 } // namespace Game
 } // namespace Luma

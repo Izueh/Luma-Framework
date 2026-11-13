@@ -21,6 +21,16 @@ struct uint2
    friend constexpr bool operator==(const uint2&, const uint2&) = default;
 };
 
+struct uint4
+{
+   uint32_t x = 0;
+   uint32_t y = 0;
+   uint32_t z = 0;
+   uint32_t w = 0;
+
+   friend constexpr bool operator==(const uint4&, const uint4&) = default;
+};
+
 struct float2
 {
    float x = 0.f;

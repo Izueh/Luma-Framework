@@ -3,6 +3,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "Settings/Registry.hpp"
 #include "Utils/Log.hpp"
@@ -105,26 +106,72 @@ TomlValue WriteValue(const Setting& setting, const Value& value)
       value);
 }
 
-// The key within its category's table, without a "<category>." prefix: "Luma.OverlayKey" is OverlayKey in [Luma]
-std::string_view GetTableKey(const Setting& setting)
+std::string_view WithoutPrefix(std::string_view key, std::string_view prefix)
+{
+   if (key.size() > prefix.size() + 1 && key.starts_with(prefix) && key[prefix.size()] == '.')
+      key.remove_prefix(prefix.size() + 1);
+   return key;
+}
+
+// Where a setting is in the file, by its kind: a game's in [<Category>], Luma's in [Luma.<Category>] ([Luma] for its "Luma"
+// category), defines in [Defines] by their name, recipes in [Recipes], development ones in [Development]. The key leaves out
+// what the table already says: "Luma.Overlay.Key" is Key in [Luma.Overlay].
+struct Place
+{
+   std::vector<std::string_view> tables;
+   std::string_view key;
+};
+
+Place GetPlace(const Setting& setting)
 {
    const std::string_view category = GetCategory(setting);
-   std::string_view key = setting.key;
-   if (key.starts_with("Luma.") && !category.starts_with("Luma"))
-      key.remove_prefix(5);
-   if (key.size() > category.size() + 1 && key.starts_with(category) && key[category.size()] == '.')
-      key.remove_prefix(category.size() + 1);
-   return key;
+   switch (setting.kind)
+   {
+   case Kind::Luma:
+   {
+      const std::string_view key = WithoutPrefix(setting.key, "Luma");
+      if (category == "Luma")
+         return {{"Luma"}, key};
+      return {{"Luma", category}, WithoutPrefix(key, category)};
+   }
+   case Kind::Define:
+   {
+      const Sources::Define* define = std::get_if<Sources::Define>(&setting.source);
+      return {{"Defines"}, define ? define->name : WithoutPrefix(setting.key, "Defines")};
+   }
+   case Kind::Recipe: return {{"Recipes"}, WithoutPrefix(setting.key, "Recipes")};
+   case Kind::Development: return {{"Development"}, WithoutPrefix(WithoutPrefix(setting.key, "Luma"), "Development")};
+   default: return {{category}, WithoutPrefix(setting.key, category)};
+   }
 }
 
 const TomlValue* FindNode(const Setting& setting)
 {
-   const auto category = document.find(GetCategory(setting));
-   if (category == document.end() || !category->second.is_object())
-      return nullptr;
-   const Table& table = category->second.get_object();
-   const auto node = table.find(GetTableKey(setting));
-   return node != table.end() ? &node->second : nullptr;
+   const Place place = GetPlace(setting);
+   const Table* table = &document;
+   for (const std::string_view name : place.tables)
+   {
+      const auto it = table->find(name);
+      if (it == table->end() || !it->second.is_object())
+         return nullptr;
+      table = &it->second.get_object();
+   }
+   const auto node = table->find(place.key);
+   return node != table->end() ? &node->second : nullptr;
+}
+
+TomlValue& GetNode(const Setting& setting)
+{
+   const Place place = GetPlace(setting);
+   Table* table = &document;
+   for (const std::string_view name : place.tables)
+   {
+      TomlValue& child = (*table)[std::string(name)];
+      if (!child.is_object())
+         child.data = Table{};
+      table = &child.get_object();
+   }
+   return (*table)[std::string(place.key)];
 }
 } // namespace
 
@@ -142,19 +189,14 @@ bool Load(const std::filesystem::path& path)
       if (const std::optional<Value> value = ReadValue(setting, *node))
          Set(setting.key, *value);
       else
-         Utils::Log::Warning("Settings: ignoring \"{}.{}\", it has the wrong type", GetCategory(setting), GetTableKey(setting));
+         Utils::Log::Warning("Settings: ignoring \"{}\", it has the wrong type", setting.key);
    });
    return true;
 }
 
 bool Save(const std::filesystem::path& path)
 {
-   ForEach([](const Setting& setting, const Value& value) {
-      TomlValue& category = document[std::string(GetCategory(setting))];
-      if (!category.is_object())
-         category.data = Table{};
-      category.get_object()[std::string(GetTableKey(setting))] = WriteValue(setting, value);
-   });
+   ForEach([](const Setting& setting, const Value& value) { GetNode(setting) = WriteValue(setting, value); });
    return Utils::Toml::Save(path, document);
 }
 

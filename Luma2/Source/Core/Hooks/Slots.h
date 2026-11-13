@@ -114,6 +114,7 @@
    SLOT(IDXGISwapChain, ResizeBuffers)                                  \
    SLOT(IDXGISwapChain1, GetDesc1)                                      \
    SLOT(IDXGISwapChain1, Present1)                                      \
+   SLOT(IDXGISwapChain3, SetColorSpace1)                                \
    SLOT(IDXGISwapChain3, ResizeBuffers1)
 
 // The interface versions whose vtables Luma records (see "LUMA_INTERFACE_VERSION")

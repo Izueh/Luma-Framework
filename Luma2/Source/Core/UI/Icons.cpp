@@ -11,7 +11,7 @@
 
 #include "UI/Style.hpp"
 #include "Utils/Log.hpp"
-#include "Utils/Modules.hpp"
+#include "System/Modules.hpp"
 #include "Utils/Strings.hpp"
 
 namespace Luma {
@@ -20,7 +20,7 @@ namespace Fonts {
 namespace {
 std::span<const std::byte> GetResource(const wchar_t* name)
 {
-   const HMODULE module = Utils::Modules::GetSelf();
+   const HMODULE module = System::Modules::GetSelf();
    HRSRC resource = FindResourceW(module, name, MAKEINTRESOURCEW(10)); // RT_RCDATA
    HGLOBAL loaded = resource ? LoadResource(module, resource) : nullptr;
    const void* data = loaded ? LockResource(loaded) : nullptr;
@@ -36,6 +36,9 @@ std::filesystem::path GetWindowsFont(const wchar_t* name)
       return {};
    return std::filesystem::path(windows) / L"Fonts" / name;
 }
+
+// Of the current context's atlas
+ImFont* monospace = nullptr;
 } // namespace
 
 void Load()
@@ -70,6 +73,16 @@ void Load()
       // ImGui only reads it, but wants a non-const pointer
       io.Fonts->AddFontFromMemoryTTF(const_cast<std::byte*>(data.data()), int(data.size()), Style::Sizes::DEFAULT_FONT, &icon_config);
    }
+
+   // Hashes and compiler messages
+   const std::filesystem::path monospace_font = GetWindowsFont(L"consola.ttf");
+   monospace = std::filesystem::exists(monospace_font, error) ? io.Fonts->AddFontFromFileTTF(Utils::Strings::ToUtf8(monospace_font).c_str(), Style::Sizes::DEFAULT_FONT)
+                                                              : nullptr;
+}
+
+ImFont* GetMonospace()
+{
+   return monospace;
 }
 } // namespace Fonts
 } // namespace UI

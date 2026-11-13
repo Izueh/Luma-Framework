@@ -7,7 +7,7 @@
 #include <d3d11_4.h>
 
 #include "Hooks/Scope.hpp"
-#include "Utils/DepthGuard.hpp"
+#include "Hooks/DepthGuard.hpp"
 
 namespace Luma {
 namespace Hooks {
@@ -17,7 +17,7 @@ template <auto Detour>
 inline decltype(Detour) original = nullptr;
 
 // The outermost of nested hooked calls, not made by Luma
-inline bool IsGameCall(const Utils::DepthGuard& guard)
+inline bool IsGameCall(const DepthGuard& guard)
 {
    return guard.IsOutermost() && !Scope::IsActive();
 }

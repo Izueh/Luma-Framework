@@ -3,6 +3,8 @@
 #include <IconsFontAwesome6.h>
 #include <IconsFontAwesome6Brands.h>
 
+struct ImFont;
+
 // Font Awesome Free glyphs (UTF-8, merged into the overlay's font from the dll's resources, UI/Fonts.rc). Any codepoint of the
 // Solid and Brands fonts works: name it here from IconFontCppHeaders' headers. An icon-only button always has a tooltip.
 namespace Luma {
@@ -26,6 +28,7 @@ inline constexpr const char* FOLDER = ICON_FA_FOLDER;
 inline constexpr const char* CODE = ICON_FA_CODE;
 inline constexpr const char* BUG = ICON_FA_BUG;
 inline constexpr const char* LIST = ICON_FA_LIST;
+inline constexpr const char* CAPTURE = ICON_FA_CAMERA;
 inline constexpr const char* DISPLAY = ICON_FA_DISPLAY;
 inline constexpr const char* SLIDERS = ICON_FA_SLIDERS;
 inline constexpr const char* TOOLS = ICON_FA_WRENCH;
@@ -34,6 +37,10 @@ inline constexpr const char* LINK = ICON_FA_ARROW_UP_RIGHT_FROM_SQUARE;
 inline constexpr const char* HEART = ICON_FA_HEART;
 inline constexpr const char* EXPANDED = ICON_FA_CHEVRON_DOWN;
 inline constexpr const char* COLLAPSED = ICON_FA_CHEVRON_RIGHT;
+inline constexpr const char* FILTER = ICON_FA_FILTER;
+inline constexpr const char* TRACK = ICON_FA_CROSSHAIRS;
+inline constexpr const char* STOP = ICON_FA_STOP;
+inline constexpr const char* VARIANT = ICON_FA_CODE_BRANCH;
 
 // Category headers
 inline constexpr const char* OVERLAY = ICON_FA_WINDOW_MAXIMIZE;
@@ -56,8 +63,10 @@ inline constexpr const char* GITHUB = ICON_FA_GITHUB;
 } // namespace Icons
 
 namespace Fonts {
-// The text font (Segoe UI, or ImGui's own without it) with Font Awesome's Solid and Brands merged in. After the context is created.
+// The text font (Segoe UI, or ImGui's own without it) with Font Awesome's Solid and Brands merged in, and the monospace font
+// (Consolas, else the text font). After the context is created.
 void Load();
+ImFont* GetMonospace();
 } // namespace Fonts
 } // namespace UI
 } // namespace Luma

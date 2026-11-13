@@ -123,10 +123,7 @@ void ApplySource(const Setting& setting, const Value& value)
       if (binding->target)
          *binding->target = binding->parse ? binding->parse(ToFloat(value)) : ToFloat(value);
    }
-   else if (std::holds_alternative<Sources::Define>(setting.source))
-   {
-      LUMA_UNIMPLEMENTED("Settings::Sources::Define (Step 1)");
-   }
+   // A define's change is Shaders' (a change listener): nothing to write
    else if (std::holds_alternative<Sources::Recipe>(setting.source))
    {
       LUMA_UNIMPLEMENTED("Settings::Sources::Recipe (Step 3)");
@@ -143,6 +140,14 @@ std::optional<T> ParseNumber(std::string_view text)
    return number;
 }
 
+bool IsDefineRegistered(std::string_view name)
+{
+   return std::ranges::any_of(entries, [name](const Entry& entry) {
+      const Sources::Define* define = std::get_if<Sources::Define>(&entry.setting.source);
+      return define && define->name == name;
+   });
+}
+
 bool IsRangeValid(const Setting& setting)
 {
    if (!setting.range)
@@ -152,7 +157,7 @@ bool IsRangeValid(const Setting& setting)
 }
 } // namespace
 
-bool Register(std::span<const Setting> settings)
+bool Register(std::span<const Setting> settings, Kind kind)
 {
    bool all_registered = true;
    for (const Setting& setting : settings)
@@ -163,6 +168,13 @@ bool Register(std::span<const Setting> settings)
          all_registered = false;
          continue;
       }
+      // Define names are global to the compiler
+      if (const Sources::Define* define = std::get_if<Sources::Define>(&setting.source); define && IsDefineRegistered(define->name))
+      {
+         Utils::Log::Error("Settings: skipping \"{}\", define {} is already registered", setting.key, define->name);
+         all_registered = false;
+         continue;
+      }
       if (!IsRangeValid(setting))
       {
          Utils::Log::Error("Settings: skipping setting \"{}\", its range doesn't suit its type", setting.key);
@@ -170,12 +182,29 @@ bool Register(std::span<const Setting> settings)
          continue;
       }
       Entry& entry = entries.emplace_back(setting);
+      entry.setting.kind = kind;
       Store(entry, Clamp(setting, setting.default_value));
       entry_indices_by_key.emplace(std::string(setting.key), entries.size() - 1);
       if (std::holds_alternative<Sources::Binding>(setting.source))
          ApplySource(setting, Load(entry));
    }
    return all_registered;
+}
+
+bool SetDefault(std::string_view key, const Value& value)
+{
+   Entry* entry = FindEntry(key);
+   if (!entry || entry->setting.default_value.index() != value.index())
+      return false;
+   const Value clamped_value = Clamp(entry->setting, value);
+   const bool at_default = Load(*entry) == Clamp(entry->setting, entry->setting.default_value);
+   entry->setting.default_value = clamped_value;
+   if (at_default)
+   {
+      Store(*entry, clamped_value);
+      ApplySource(entry->setting, clamped_value);
+   }
+   return true;
 }
 
 void AddChangeListener(ChangeListener listener)
@@ -251,6 +280,12 @@ void ForEach(const std::function<void(const Setting& setting, const Value& value
 std::string_view GetCategory(const Setting& setting)
 {
    return setting.category.empty() ? DEFAULT_CATEGORY : setting.category;
+}
+
+std::string_view GetKindName(Kind kind)
+{
+   constexpr std::string_view NAMES[] = {"Game", "Luma", "Define", "Recipe", "Development"};
+   return NAMES[size_t(kind)];
 }
 
 Value Clamp(const Setting& setting, const Value& value)

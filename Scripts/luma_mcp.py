@@ -120,16 +120,19 @@ TOOLS = [
     tool(
         "luma_trace_list",
         "List entries of the last capture (compact). Hides VS entries, bindings and buffer writes by default (like the dev UI). "
+        "Luma 2 lists each draw or dispatch once, by its primary shader (PS, else VS, else CS), with all its stages in 'stages'. "
         "Fields: index, type, stage, hash, replaced (none/file/patch_*), variant (what ran for a cloned shader: original/file/patch, original when a "
         "recipe resource was missing or the game picked it), cancelled_or_replaced (the draw callbacks didn't let the draw through), updated (they changed its bindings, see luma_trace_get), upgrade_flags (^ input upgraded, v output upgraded, \\ / scaled), rt0, depth, "
         "copy_kind, note (the game's own per draw decision, e.g. mv / jitter / unpatched / mv_reject=N).",
         {"type": {"type": "string", "description": "shader, custom, copy, clear, present, cpu_read, cpu_write, ..."},
          "variant": {"type": "string", "description": "Only shader entries that ran this variant: original, file, patch"},
          "cancelled_only": {"type": "boolean", "description": "Only shader entries the draw callbacks cancelled or replaced"},
-         "hash": {"type": "string", "description": "Only entries of this shader (0x12345678)"}, "stage": {"type": "string", "description": "PS, VS, CS, GS"},
+         "hash": {"type": "string", "description": "Only entries of this shader (0x12345678); Luma 2: a call with it at any stage"},
+         "stage": {"type": "string", "description": "PS, VS, CS, GS (any case); Luma 2: a call with a shader of that stage (a draw is one entry with all its stages)"},
+         "filter": {"type": "string", "description": "Luma 2: part of a shader hash or debug name at any stage of the call, or of a Luma pass name, any case"},
          "resource": {"type": "string", "description": "Resource id (the 'resource' field of luma_trace_get) read or written by the entry"},
          "replaced_only": {"type": "boolean", "description": "Only entries whose shader Luma replaced or patched"},
-         "include_vs": {"type": "boolean", "description": "Also list vertex shader entries"},
+         "include_vs": {"type": "boolean", "description": "Also list vertex shader entries (Luma 2: the draws without a pixel shader, e.g. depth only passes)"},
          "include_bindings": {"type": "boolean", "description": "Also list resource binding entries"},
          "include_buffer_writes": {"type": "boolean", "description": "Also list buffer map/update entries"},
          "offset": {"type": "integer", "description": "First filtered entry returned, for paging"}, "limit": {"type": "integer", "description": "Default 300"}},
@@ -232,7 +235,8 @@ TOOLS = [
     tool(
         "luma_shader_state",
         "Without hash: every replaced pipeline (file or patch) and the compilation error log. With hash: its pipelines, replacement kind, custom shader file and errors.",
-        {"hash": {"type": "string", "description": "Shader hash (0x12345678)"}, "disasm": {"type": "boolean", "description": "Include the replacement's disassembly"}},
+        {"hash": {"type": "string", "description": "Shader hash (0x12345678)"}, "disasm": {"type": "boolean", "description": "Include the replacement's disassembly"},
+         "variant": {"type": "string", "description": "Luma 2, with hash: force what its binds take from now on (original, file, patch), auto to clear"}},
     ),
     tool("luma_reload_shaders", "Recompile and reload Luma's custom shaders (like the dev UI button) and return the compilation error log.",
          {"unload": {"type": "boolean", "description": "Unload them instead. Shader objects a game mod keeps itself (e.g. XeGTAO's compute shaders) keep running: "

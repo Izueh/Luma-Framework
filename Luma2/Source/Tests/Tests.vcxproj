@@ -13,32 +13,36 @@
   </PropertyGroup>
   <Import Project="..\..\Props\Luma2.Common.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="Shared">
+    <Import Project="..\Core\Core.vcxitems" Label="Shared" />
+  </ImportGroup>
   <ImportGroup Label="PropertySheets">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <ItemDefinitionGroup>
+    <ClCompile>
+      <!-- Core is compiled here like in a game: "Game/GameCBuffers.hlsl" is a stand-in game's -->
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <!-- Exports dxgi's functions from Tests.exe like a game dll, for the forwarding test -->
-      <ForceSymbolReferences>LumaDllExports_dxgi;%(ForceSymbolReferences)</ForceSymbolReferences>
     </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
     <ClCompile Include="Main.cpp" />
-    <!-- The overlay's fonts, as in a game dll -->
-    <ResourceCompile Include="..\Core\UI\Fonts.rc" />
     <ClCompile Include="UtilsTests.cpp" />
     <ClCompile Include="SettingsTests.cpp" />
+    <ClCompile Include="ShadersTests.cpp" />
     <ClCompile Include="HooksTests.cpp" />
     <ClCompile Include="DevicesTests.cpp" />
     <ClCompile Include="GameTests.cpp" />
     <ClCompile Include="McpTests.cpp" />
+    <ClCompile Include="TraceTests.cpp" />
+    <ClCompile Include="UITests.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Core\Core.vcxproj">
-      <Project>{90863F95-7FB1-4575-86F4-005003B20D8A}</Project>
-    </ProjectReference>
+    <None Include="Game\GameCBuffers.hlsl" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

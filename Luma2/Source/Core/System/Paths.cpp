@@ -4,9 +4,9 @@
 #include <system_error>
 #include <vector>
 
-#include "Game/Game.hpp"
+#include "Game/Registry.hpp"
 #include "Utils/Log.hpp"
-#include "Utils/Modules.hpp"
+#include "System/Modules.hpp"
 #include "Utils/Strings.hpp"
 
 namespace Luma {
@@ -27,7 +27,7 @@ bool IsDirectory(const std::filesystem::path& path)
 
 void Initialize()
 {
-   root = Utils::Modules::GetPath(nullptr).parent_path() / L"Luma";
+   root = System::Modules::GetPath(nullptr).parent_path() / L"Luma";
    std::error_code error;
    std::filesystem::create_directories(root, error);
 }
@@ -40,7 +40,7 @@ void ResolveRoots()
 #if DEVELOPMENT && defined(LUMA_RESOURCES_DIR)
    // The repository this build was made from, as 1.0's SOLUTION_DIR: sources are edited in place
    const std::filesystem::path resources = LUMA_RESOURCES_DIR;
-   const std::string_view name = Game::GetInfo().name;
+   const std::string_view name = Game::Registry::GetInfo().name;
    const std::filesystem::path game = resources / std::u8string(name.begin(), name.end());
    if (!name.empty() && IsDirectory(game) && IsDirectory(resources / L"Global"))
    {

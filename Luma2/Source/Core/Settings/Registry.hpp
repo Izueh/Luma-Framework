@@ -1,5 +1,6 @@
 #pragma once
 
+#include <concepts>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -58,7 +59,7 @@ struct Binding
    float (*parse)(float value) = nullptr;
 };
 
-// A shader define. Step 1: a change marks the shaders using it for recompilation.
+// A shader define: Shaders listens to the changes and recompiles
 struct Define
 {
    std::string_view name;
@@ -74,11 +75,21 @@ struct Recipe
 
 using Source = std::variant<Sources::Value, Sources::Binding, Sources::Define, Sources::Recipe>;
 
+// Who registered a setting, by the call it used. The settings view and the TOML file group by it.
+enum class Kind : uint8_t
+{
+   Game, // Settings::Register: [<Category>] in the file
+   Luma, // Core's own: [Luma.<Category>]
+   Define, // A shader define, Luma's or the game's (Game::Shaders::AddDefine): [Defines], by the define's name
+   Recipe, // A shader patch's switch or value (Step 3): [Recipes]
+   Development, // The dev sliders and Development tools: [Development], in the settings view's Development Settings section
+};
+
 // Declare as static arrays: the registry doesn't copy the strings. The value lives in the registry.
 struct Setting
 {
-   // Unique across categories. Luma's own start with "Luma.", which games don't use. In the file, a "<category>." prefix
-   // (after "Luma.") isn't repeated: "Luma.Overlay.Key" is Key in [Overlay].
+   // Unique across categories. Luma's own start with "Luma.", defines' with "Defines.", which games don't use. In the file, the
+   // table's prefix isn't repeated: "Luma.Overlay.Key" is Key in [Luma.Overlay], "Defines.UI_DRAW_TYPE" UI_DRAW_TYPE in [Defines].
    std::string_view key;
    std::string_view label;
    std::string_view tooltip;
@@ -93,6 +104,15 @@ struct Setting
    bool live = false;
    bool (*is_enabled)() = nullptr;
    bool (*is_visible)() = nullptr;
+   // Set by the call that registered it
+   Kind kind = Kind::Game;
+};
+
+// A setting's key with its value type: typed reads and writes, a wrong type is a compile error. Core's are in Settings/Keys.hpp.
+template <typename T>
+struct Id
+{
+   std::string_view key;
 };
 
 using ChangeListener = void (*)(const Setting& setting, const Value& value);
@@ -103,8 +123,20 @@ inline constexpr std::string_view DEFAULT_CATEGORY = "General";
 // there, MCP jobs run there). Other threads Queue their changes. Reads are lock-free from any thread for every type but
 // strings, which take a lock: never read a string setting per draw.
 
-// Skips, and returns false for, settings with a duplicate or empty key, or a range that doesn't suit their type
-bool Register(std::span<const Setting> settings);
+// Plain settings (`Value` and `Binding` sources), the game's by default. Skips, and returns false for, settings with a duplicate
+// or empty key, a define name already registered, or a range that doesn't suit their type.
+bool Register(std::span<const Setting> settings, Kind kind = Kind::Game);
+// A later registration step's default for a registered setting (a game's Init over Core's): its value follows while it's still the old default.
+// No listener runs. False if the key doesn't exist or the type differs.
+bool SetDefault(std::string_view key, const Value& value);
+
+template <typename T, typename U>
+   requires std::same_as<T, U>
+bool SetDefault(Id<T> id, U value)
+{
+   return SetDefault(id.key, Value(std::move(value)));
+}
+
 void AddChangeListener(ChangeListener listener);
 // Removes all settings and listeners
 void Clear();
@@ -112,7 +144,7 @@ void Clear();
 const Setting* Find(std::string_view key);
 std::optional<Value> GetValue(std::string_view key);
 
-// The default constructed "T" if the key doesn't exist or has a different type
+// The default constructed "T" if the key doesn't exist or has a different type. By key: for TOML, MCP and the UI.
 template <typename T>
 T Get(std::string_view key)
 {
@@ -124,16 +156,40 @@ T Get(std::string_view key)
    return T{};
 }
 
+template <typename T>
+T Get(Id<T> id)
+{
+   return Get<T>(id.key);
+}
+
 // Clamps the value. False if the key doesn't exist or the value has a different type.
 bool Set(std::string_view key, const Value& value);
+
+template <typename T, typename U>
+   requires std::same_as<T, U>
+bool Set(Id<T> id, U value)
+{
+   return Set(id.key, Value(std::move(value)));
+}
+
 bool Reset(std::string_view key);
 // From any thread: applied by ApplyQueued, at the next present
 void Queue(std::string_view key, Value value);
+
+template <typename T, typename U>
+   requires std::same_as<T, U>
+void Queue(Id<T> id, U value)
+{
+   Queue(id.key, Value(std::move(value)));
+}
+
 void ApplyQueued();
 // In registration order
 void ForEach(const std::function<void(const Setting& setting, const Value& value)>& function);
 
 std::string_view GetCategory(const Setting& setting);
+// "Game", "Luma", "Define", "Recipe", "Development"
+std::string_view GetKindName(Kind kind);
 // Clamped to the setting's range and enum labels
 Value Clamp(const Setting& setting, const Value& value);
 bool IsVisibleInBuild(Visibility visibility);

@@ -6,11 +6,16 @@
 
 #include <Windows.h>
 
-#include "Game/Game.hpp"
+#include "Game/Registry.hpp"
 #include "Hooks/Hooks.hpp"
 #include "Hooks/DeviceProxy.hpp"
+#include "Shaders/Database.hpp"
+#include "Shaders/Jobs.hpp"
+#include "Shaders/Shaders.hpp"
+#include "Shaders/Variants.hpp"
+#include "System/Paths.hpp"
 #include "UI/Overlay.hpp"
-#include "Utils/Modules.hpp"
+#include "System/Modules.hpp"
 #include "Utils/Strings.hpp"
 #include "Validation/Validation.hpp"
 
@@ -48,7 +53,7 @@ void RemoveSwapchain(const void* swapchain)
    std::erase_if(swapchains, [swapchain](const SwapchainInfo& info) { return info.id == reinterpret_cast<uint64_t>(swapchain); });
 }
 
-void OnPresent()
+void RecordPresent()
 {
    if constexpr (!ENABLED)
       return;
@@ -59,13 +64,14 @@ void OnPresent()
 Status GetStatus()
 {
    Status status;
-   const Game::Info& info = Game::GetInfo();
+   const Game::Info& info = Game::Registry::GetInfo();
    status.game = std::string(info.name);
    status.version = std::string(info.version);
    status.pid = GetCurrentProcessId();
    status.bits = uint32_t(sizeof(void*) * 8);
-   status.exe_path = Utils::Strings::ToUtf8(Utils::Modules::GetPath(nullptr));
-   status.luma_path = Utils::Strings::ToUtf8(Utils::Modules::SelfDirectory());
+   status.exe_path = Utils::Strings::ToUtf8(System::Modules::GetPath(nullptr));
+   status.luma_path = Utils::Strings::ToUtf8(System::Modules::SelfDirectory());
+   status.log_path = Utils::Strings::ToUtf8(System::Paths::GetLog());
    if (const uint64_t last_present = last_present_ms.load(std::memory_order_relaxed))
    {
       status.ms_since_present = int64_t(GetTickCount64() - last_present);
@@ -82,6 +88,12 @@ Status GetStatus()
    status.overlay_open = UI::IsOpen();
    const Hooks::Counts hooks = Hooks::GetCounts();
    status.counts = {Hooks::DeviceProxy::GetCount(), uint32_t(status.swapchains.size()), hooks.declared, hooks.installed, hooks.failed};
+
+   status.shaders.loaded = Shaders::Variants::IsLoaded();
+   for (const Shaders::Database::Shader* shader : Shaders::Database::GetShaders())
+      status.shaders.replaced += shader->objects && Shaders::Variants::HasVariant(shader->hash);
+   status.shaders.has_compilation_errors = Shaders::GetLastBuild().failed != 0;
+   status.shaders.job = Shaders::Jobs::GetStatus().name;
 
    const Validation::Counts validation = Validation::GetCounts();
    status.validation = {Validation::DEBUG_LAYER, Validation::GPU_VALIDATION, validation.corruptions, validation.errors, validation.warnings};

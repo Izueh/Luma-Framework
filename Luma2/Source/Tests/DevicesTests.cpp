@@ -12,11 +12,13 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
-#include "Game/Game.hpp"
+#include "Frame/Frame.hpp"
+#include "Game/Registry.hpp"
 #include "Hooks/Hooks.hpp"
 #include "Hooks/Lifetime.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/Scope.hpp"
+#include "Resources/LumaCBuffers.hpp"
 #include "Settings/Registry.hpp"
 #include "Trace/Info.hpp"
 #include "UI/Input.hpp"
@@ -225,16 +227,16 @@ void OnDeviceDestroyed(ID3D11Device* device)
 }
 
 template <typename Presenter>
-void OnSwapchainCreated(IDXGISwapChain*, Presenter* presenter)
+void OnInitSwapchain(IDXGISwapChain*, Presenter* presenter, bool resize)
 {
+   if (resize)
+   {
+      swapchain_resized_calls++;
+      return;
+   }
    swapchain_created_calls++;
    devices_known_at_swapchain = created_calls;
    callback_presenter = presenter;
-}
-
-void OnSwapchainResized(IDXGISwapChain*, UINT, UINT, UINT, DXGI_FORMAT, UINT)
-{
-   swapchain_resized_calls++;
 }
 
 template <typename Presenter>
@@ -248,20 +250,18 @@ struct GameCallbacks
 {
    GameCallbacks()
    {
-      Game::Reset();
-      Game::SetCallbacks(Game::D3D11::Callbacks{
-         .post_create_device = static_cast<void (*)(ID3D11Device*)>(&OnDeviceCreated),
-         .on_device_destroyed = static_cast<void (*)(ID3D11Device*)>(&OnDeviceDestroyed),
-         .post_create_swapchain = &OnSwapchainCreated<ID3D11Device>,
-         .post_resize_buffers = &OnSwapchainResized,
-         .pre_present = &OnPresent<ID3D11Device>,
+      Game::Registry::Reset();
+      Game::SetEvents(Game::D3D11::Events{
+         .on_init_device = static_cast<void (*)(ID3D11Device*)>(&OnDeviceCreated),
+         .on_destroy_device = static_cast<void (*)(ID3D11Device*)>(&OnDeviceDestroyed),
+         .on_init_swapchain = &OnInitSwapchain<ID3D11Device>,
+         .on_present = &OnPresent<ID3D11Device>,
       });
-      Game::SetCallbacks(Game::D3D12::Callbacks{
-         .post_create_device = static_cast<void (*)(ID3D12Device*)>(&OnDeviceCreated),
-         .on_device_destroyed = static_cast<void (*)(ID3D12Device*)>(&OnDeviceDestroyed),
-         .post_create_swapchain = &OnSwapchainCreated<ID3D12CommandQueue>,
-         .post_resize_buffers = &OnSwapchainResized,
-         .pre_present = &OnPresent<ID3D12CommandQueue>,
+      Game::SetEvents(Game::D3D12::Events{
+         .on_init_device = static_cast<void (*)(ID3D12Device*)>(&OnDeviceCreated),
+         .on_destroy_device = static_cast<void (*)(ID3D12Device*)>(&OnDeviceDestroyed),
+         .on_init_swapchain = &OnInitSwapchain<ID3D12CommandQueue>,
+         .on_present = &OnPresent<ID3D12CommandQueue>,
       });
       created_calls = 0;
       destroyed_calls = 0;
@@ -277,7 +277,7 @@ struct GameCallbacks
    ~GameCallbacks()
    {
       game_object.Reset();
-      Game::Reset();
+      Game::Registry::Reset();
    }
 };
 } // namespace
@@ -435,6 +435,36 @@ TEST_CASE("Device proxy D3D11: contexts, children and IDXGIDevice hand out the p
    CHECK(destroyed_calls == 1);
    CHECK(device_usable_when_destroyed);
    CHECK(Hooks::DeviceProxy::GetCount() == 0);
+}
+
+TEST_CASE("Frame D3D11: a device's resolutions change together, and move LumaSettings' stamp")
+{
+   InstallHooks();
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> immediate_context;
+   CreateD3D11Device(device, immediate_context);
+   if (!Frame::Find(device.Get()))
+      Frame::CreateDeviceState(device.Get());
+   const Frame::DeviceState* state = Frame::Find(device.Get());
+   REQUIRE(state);
+
+   uint64_t stamp = Resources::LumaCBuffers::GetSettingsStamp();
+   Frame::SetOutputResolution(device.Get(), {320, 180});
+   CHECK(Resources::LumaCBuffers::GetSettingsStamp() != stamp);
+   Frame::Resolutions resolutions = Frame::Read(state);
+   CHECK(resolutions.output.x == 320);
+   CHECK(resolutions.render.y == 180);
+   CHECK(resolutions.previous_render.x == 320);
+
+   stamp = Resources::LumaCBuffers::GetSettingsStamp();
+   Frame::SetRenderResolution(device.Get(), {160, 90});
+   CHECK(Resources::LumaCBuffers::GetSettingsStamp() != stamp);
+   resolutions = Frame::Read(state);
+   CHECK(resolutions.render.x == 160);
+   CHECK(resolutions.previous_render.x == 320);
+   CHECK(resolutions.output.x == 320);
+   // The cached state reads as the device does
+   CHECK(Frame::Get(device.Get()).render.y == 90);
 }
 
 TEST_CASE("D3D11: work still reads objects released right after it was recorded (so D3D11 never needs deferred release)")
@@ -744,9 +774,9 @@ struct GameWindow
 // Other tests clear the settings registry
 void InitializeOverlay()
 {
-   if (!Settings::Find(UI::Input::TOGGLE_KEY_SETTING))
+   if (!Settings::Find(Settings::Core::OVERLAY_KEY.key))
       UI::Input::Initialize();
-   Settings::Reset(UI::Input::TOGGLE_KEY_SETTING);
+   Settings::Reset(Settings::Core::OVERLAY_KEY.key);
    UI::SetOpen(false);
 }
 } // namespace
@@ -812,7 +842,7 @@ TEST_CASE("Overlay D3D11: attaches to the game's swapchain, toggles, blocks inpu
    UI::Input::CaptureToggleKey();
    window.Key(VK_F2);
    swapchain->Present(0, 0);
-   CHECK(Settings::Get<Settings::Key>(UI::Input::TOGGLE_KEY_SETTING).code == VK_F2);
+   CHECK(Settings::Get(Settings::Core::OVERLAY_KEY).code == VK_F2);
    window.Key(VK_F2);
    CHECK_FALSE(UI::IsOpen());
    window.Key(VK_INSERT);
@@ -834,7 +864,7 @@ TEST_CASE("Overlay D3D11: attaches to the game's swapchain, toggles, blocks inpu
    swapchain->Present(0, 0);
    CHECK_FALSE(UI::GetSwapchain());
    swapchain.Reset();
-   Settings::Reset(UI::Input::TOGGLE_KEY_SETTING);
+   Settings::Reset(Settings::Core::OVERLAY_KEY.key);
 }
 
 TEST_CASE("Overlay D3D12: draws on the swapchain's queue, survives resizes, and goes with the swapchain")
@@ -896,8 +926,8 @@ TEST_CASE("Overlay D3D12: draws on the swapchain's queue, survives resizes, and 
    CHECK(Hooks::DeviceProxy::GetCount() == 0);
 }
 
-#include "Validation/D3D11Validation.hpp"
-#include "Validation/D3D12Validation.hpp"
+#include "Validation/D3D11/D3D11Validation.hpp"
+#include "Validation/D3D12/D3D12Validation.hpp"
 #include "Validation/Validation.hpp"
 
 TEST_CASE("Validation: the debug layers' messages of the game's devices are read and counted")
