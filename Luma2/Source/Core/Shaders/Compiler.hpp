@@ -13,11 +13,23 @@
 #include "Shaders/Shaders.hpp"
 
 // FXC (D3DCompiler_47.dll, loaded on first use) for DXBC targets ("ps_5_0"). Files and their #include lines are named from
-// the Shaders root ("Includes/Color/Color.hlsl") and found through `roots`, the first holding them winning. One thread at a
-// time (Shaders::Jobs), except Reflect and Disassemble.
+// the Shaders root ("Includes/Color/Color.hlsl") and found through `roots`, the first holding them winning. One thread uses it
+// at a time, whatever the call (1.0: FXC isn't thread safe): each call below takes the Lock for its duration, so shader
+// creation waits for the compile in flight, not for a whole build.
 namespace Luma {
 namespace Shaders {
 namespace Compiler {
+// Held while FXC, or an interface it returned (a reflector), is in use. Recursive: a caller that uses the reflector `Reflect`
+// gave it holds one across that use, and releases the reflector before it ends. Nothing else is locked while it's held.
+class Lock
+{
+public:
+   Lock();
+   ~Lock();
+   Lock(const Lock&) = delete;
+   Lock& operator=(const Lock&) = delete;
+};
+
 struct Define
 {
    std::string name;

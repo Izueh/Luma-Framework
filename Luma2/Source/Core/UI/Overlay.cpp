@@ -15,7 +15,7 @@
 #include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
 #include "Settings/Storage.hpp"
-#include "Shaders/Jobs.hpp"
+#include "System/Jobs.hpp"
 #include "UI/D3D11/D3D11Renderer.hpp"
 #include "UI/D3D12/D3D12Renderer.hpp"
 #include "UI/Encoding.hpp"
@@ -91,7 +91,7 @@ uint64_t toasted_job_report = 0;
 // What a finished job reported (a shader build), also while the overlay is closed
 void ToastJobReport()
 {
-   Shaders::Jobs::Report report = Shaders::Jobs::GetLastReport();
+   System::Jobs::Report report = System::Jobs::GetLastReport();
    if (report.id == toasted_job_report)
       return;
    toasted_job_report = report.id;

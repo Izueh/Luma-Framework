@@ -1,8 +1,10 @@
 #include "Startup.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <optional>
+#include <thread>
 
 #include "Draw/Draw.hpp"
 #include "Game/Registry.hpp"
@@ -14,6 +16,7 @@
 #include "Settings/Storage.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Shaders/Shaders.hpp"
+#include "System/Jobs.hpp"
 #include "System/Loader.hpp"
 #include "System/Paths.hpp"
 #if DEVELOPMENT
@@ -51,7 +54,22 @@ constexpr std::array SETTINGS = {
       .category = "Luma",
       .default_value = true,
    },
+   Settings::Setting{
+      .key = Settings::Core::WORKER_THREADS.key,
+      .label = "Worker Threads",
+      .tooltip = "How many background jobs run at once: compiling shaders, dumping, loading files. Fewer leaves more of the CPU to the game.",
+      .category = "Advanced",
+      // Replaced by GetDefaultWorkerThreads
+      .default_value = int32_t(1),
+      .range = Settings::Range{1, 16},
+   },
 };
+
+// A quarter of the CPU's threads, 1 to 4: the game comes first
+int32_t GetDefaultWorkerThreads()
+{
+   return std::clamp(int32_t(std::thread::hardware_concurrency() / 4), 1, 4);
+}
 
 // What Core's own features need hooked this run, each feature asked once
 Hooks::D3D11::Functions GetCoreFunctions()
@@ -100,6 +118,7 @@ void Initialize()
 
    // Core's settings first: the game's Init changes their defaults (Settings::SetDefault) and adds its own
    Settings::Register(SETTINGS, Settings::Kind::Luma);
+   Settings::SetDefault(Settings::Core::WORKER_THREADS, GetDefaultWorkerThreads());
    Shaders::Register();
    Game::Init();
    Game::Registry::LogDeclarations();
@@ -118,9 +137,12 @@ void Initialize()
    // LumaSettings with what the settings bound to it loaded, for the draws before the first present
    Resources::LumaCBuffers::MarkSettingsDirty();
    enabled = Settings::Get(Settings::Core::ENABLED);
+   System::Jobs::SetThreadCount(uint32_t(Settings::Get(Settings::Core::WORKER_THREADS)));
    Settings::AddChangeListener([](const Settings::Setting& setting, const Settings::Value& value) {
       if (setting.key == Settings::Core::ENABLED.key)
          enabled = std::get<bool>(value);
+      else if (setting.key == Settings::Core::WORKER_THREADS.key)
+         System::Jobs::SetThreadCount(uint32_t(std::get<int32_t>(value)));
    });
 
    Shaders::Start();

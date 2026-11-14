@@ -300,6 +300,26 @@ Decided with the owner after reviewing Step 1, applied as one unit before Step 2
 * Track (`Trace/Track`, D3D11 in `D3D11Capture`): the target is a hash, stage, slot and the call's instance: the n-th call of the shader to reach the draw or dispatch hook in the frame, across contexts in hook order, which is the captured list's order (Luma's passes not counted; recording order on deferred contexts). The draw handler copies the slot into a staging buffer at that call (before the draw callbacks, as the capture), on any context. A deferred copy is tied to the command list `FinishCommandList` ends it in and becomes readable when `ExecuteCommandList` runs that list on the immediate context (a list executed into another deferred context moves to that one); up to 8 copies wait. The present maps the newest readable one and `Track::SetReading` keeps per 4 bytes the frame it last changed; a frame without one marks the last reading stale, shown as such. Shown in place of the captured contents with the changes of the last 60 frames highlighted, and as a banner with Stop at the top of the Trace tab. Not verified in the game.
 * Tests: settings sections order, Auto Compile alone, pending defines, the overlay's encoding by format and color space (and both shaders compile), variant choices, the primary shader, the filters, Track's change marks.
 
+### Jobs: one worker pool
+
+Before Step 2, which queues pipeline creation on it. `Guidelines.md` section 9 ("Background work is one pool") has the rules.
+
+* `Shaders::Jobs` (one detached thread, one job at a time) becomes `System::Jobs` on a private Win32 thread pool (`CreateThreadpool`, `SetThreadpoolThreadMaximum` from the new `Luma.Advanced.WorkerThreads` setting, default `clamp(cores / 4, 1, 4)`). `Queue(name, work, done, priority)` with `Priority::{Normal, Low}` (dumps are Low), `SetProgress` from inside `work` for that job, `RunFinished()` at present, `GetStatus()` (the oldest running job's name and progress, how many run and wait, the thread count) and `GetLastReport()`.
+* Workers run at below-normal priority, set at the start of each callback. If the pool can't be created the job runs on a plain `std::thread`, and the first use logs which of the two it got (a Wine/Proton check).
+* FXC is used by one thread at a time, as 1.0 says it should ("only ever access it from one thread at any given time"): every `Shaders::Compiler` call (`Preprocess`, `Compile`, `Reflect`, `Disassemble`) takes the recursive `Compiler::Lock` for its duration, and the code that uses a reflector holds a `Lock` across that use (`ReflectSlots`, `ReflectConstantBufferBindings`, `ReflectConstantBuffers`). The shader build is still one job; nothing compiles in parallel. The game's shader creation (`D3D11Database`) reflects, so it waits for the compile in flight (one file), not for the build: 1.0 held its creation lock for the whole boot build, which the "Boot compilation" row of section 17 still doesn't.
+* Tests: the pool's logic only (priority order, the thread cap, `done` only inside `RunFinished`, per-job progress).
+
+**Verify (once):** a cold-cache boot and a reload on FF7R with 1 and with 4 workers (overlay status bar, `luma_status`), a dump running during a reload, the same on Proton.
+
+**Notes (done, not verified in the game):**
+* `System/Jobs.{hpp,cpp}` over `TrySubmitThreadpoolCallback` and a private pool with one callback environment per priority; a job's `Run` is the callback. `Shaders/Jobs.*` and `Shaders::PublishFinishedBuilds` are gone: `Handlers::PrePresent` calls `System::Jobs::RunFinished()`.
+* `Luma.Advanced.WorkerThreads` (`Settings::Core::WORKER_THREADS`, 1 to 16) is registered in `Startup.cpp`, its default set at startup from the CPU's thread count, applied at load and by a change listener.
+* `luma_status` gains `jobs: {threads, running, queued}`; `shaders.job` is the oldest running job's name. The status bar shows that job's progress, `luma_reload_shaders` waits for no job running or queued.
+* Dumps are `Priority::Low`. Not done, as decided: cancelling a stale build, parallel compile.
+* 5 doctest cases (`JobsTests.cpp`), 76 pass. Development-Release and Publishing-Release of FF7R build. Not checked: the pool on Wine/Proton (the first job logs "Jobs: Win32 thread pool, up to N threads", or the fallback warning), FF7R in the game.
+* Decided: the build stays serial. A standalone stress test (not committed) found FXC safe in practice (no failure or difference over concurrent compiles, preprocesses, and compiles beside reflect and disassemble, at /O0 and /O3), but FXC is widely documented as not thread safe, so nothing compiles in parallel.
+* Tests: `Compiler::Lock` keeps another thread's FXC call waiting, and the thread holding it can still call in (77 doctest cases pass).
+
 ---
 
 ## Step 2: D3D12 foundation and shaders on D3D12

@@ -35,7 +35,7 @@
 #include "Common/ShaderStage.hpp"
 #include "Shaders/Compiler.hpp"
 #include "Shaders/Database.hpp"
-#include "Shaders/Jobs.hpp"
+#include "System/Jobs.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Shaders/Variants.hpp"
 #include "System/Paths.hpp"
@@ -830,7 +830,11 @@ std::string ReloadShaders(const Request& request)
    if (!requested.empty())
       return requested;
    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout);
-   while (!unload && (Shaders::GetLastBuild().id == previous_build || !Shaders::Jobs::GetStatus().name.empty()))
+   const auto is_busy = [] {
+      const System::Jobs::Status status = System::Jobs::GetStatus();
+      return status.running != 0 || status.queued != 0;
+   };
+   while (!unload && (Shaders::GetLastBuild().id == previous_build || is_busy()))
    {
       if (std::chrono::steady_clock::now() > deadline)
          return Error(std::format("the shaders didn't finish compiling in {} ms (see luma_status)", timeout));

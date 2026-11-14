@@ -17,7 +17,7 @@
 #include "Shaders/Database.hpp"
 #include "Shaders/Defines.hpp"
 #include "Shaders/Files.hpp"
-#include "Shaders/Jobs.hpp"
+#include "System/Jobs.hpp"
 #include "Shaders/Variants.hpp"
 #include "System/Paths.hpp"
 #include "Utils/Hash.hpp"
@@ -148,7 +148,7 @@ Build Run(std::vector<Compiler::Define> defines)
    for (const Files::File& file : files)
       total += uint32_t(file.hashes.size() + file.declarations.size());
    uint32_t done = 0;
-   Jobs::SetProgress(done, total);
+   System::Jobs::SetProgress(done, total);
 
    for (const Files::File& file : files)
    {
@@ -168,7 +168,7 @@ Build Run(std::vector<Compiler::Define> defines)
             .compiled = std::move(result.compiled),
             .messages = std::move(result.messages),
             .failed = result.failed});
-         Jobs::SetProgress(++done, total);
+         System::Jobs::SetProgress(++done, total);
       }
    }
 
@@ -188,14 +188,14 @@ Build Run(std::vector<Compiler::Define> defines)
          Result result = Compile(roots, file.path, shader_defines, declared.target, declared.entry, build.info);
          AddMessages(build.info, file.name, result);
          build.luma_shaders.push_back({*entry, {std::move(result.compiled), std::move(result.messages), result.failed}});
-         Jobs::SetProgress(++done, total);
+         System::Jobs::SetProgress(++done, total);
       }
    }
    return build;
 }
 
 // Presenting thread
-Jobs::Outcome Publish(Build build)
+System::Jobs::Outcome Publish(Build build)
 {
    Variants::Publish(Variants::Source::File, std::move(build.replacements));
    Resources::Database::PublishShaders(std::move(build.luma_shaders));
@@ -203,7 +203,7 @@ Jobs::Outcome Publish(Build build)
    Utils::Log::Info("Shaders: {} compiled, {} from the cache, {} failed", info.compiled, info.cached, info.failed);
    if (!info.errors.empty())
       Utils::Log::Warning("Shaders: {}", info.errors);
-   Jobs::Outcome outcome = {info.failed != 0, info.failed ? std::format("{} shader{} failed to compile", info.failed, info.failed == 1 ? "" : "s") : std::format("Shaders ready: {} compiled, {} from the cache", info.compiled, info.cached)};
+   System::Jobs::Outcome outcome = {info.failed != 0, info.failed ? std::format("{} shader{} failed to compile", info.failed, info.failed == 1 ? "" : "s") : std::format("Shaders ready: {} compiled, {} from the cache", info.compiled, info.cached)};
    {
       std::scoped_lock lock(last_build_mutex);
       build.info.id = last_build.id + 1;
@@ -303,7 +303,7 @@ void Reload()
    std::vector<Compiler::Define> defines = Defines::Collect();
    Defines::SetCompiled(defines);
    auto build = std::make_shared<Build>();
-   Jobs::Queue(
+   System::Jobs::Queue(
       "Compiling shaders", [build, defines = std::move(defines)] { *build = Run(defines); }, [build] { return Publish(std::move(*build)); });
 }
 
@@ -318,11 +318,6 @@ void Load()
    Variants::SetLoaded(true);
    Utils::Log::Info("Shaders: loaded");
    Reload();
-}
-
-void PublishFinishedBuilds()
-{
-   Jobs::RunFinished();
 }
 
 void CountFrame()

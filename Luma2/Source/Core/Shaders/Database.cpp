@@ -12,7 +12,7 @@
 
 #include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
-#include "Shaders/Jobs.hpp"
+#include "System/Jobs.hpp"
 #include "System/Paths.hpp"
 #include "Utils/Log.hpp"
 #include "Utils/Strings.hpp"
@@ -176,7 +176,7 @@ void QueueDumps()
    if (to_dump.empty())
       return;
    dumping = true;
-   Jobs::Queue(
+   System::Jobs::Queue(
       "Dumping shaders",
       [to_dump] {
          for (const Shader* shader : to_dump)
@@ -184,8 +184,9 @@ void QueueDumps()
       },
       [] {
          dumping = false;
-         return Jobs::Outcome{};
-      });
+         return System::Jobs::Outcome{};
+      },
+      System::Jobs::Priority::Low);
 }
 
 std::filesystem::path Dump(const Shader& shader)

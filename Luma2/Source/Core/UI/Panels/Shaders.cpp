@@ -11,7 +11,7 @@
 
 #include "Resources/ResourceDatabase.hpp"
 #include "Shaders/Database.hpp"
-#include "Shaders/Jobs.hpp"
+#include "System/Jobs.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Shaders/Variants.hpp"
 #include "UI/Widgets.hpp"
@@ -100,7 +100,7 @@ void DrawToolbar()
    const Shaders::BuildInfo& build = Shaders::GetLastBuild();
    if (build.id)
       Widgets::Text(std::format("{} compiled, {} from the cache, {} failed", build.compiled, build.cached, build.failed), build.failed ? Tone::Error : Tone::Info);
-   const Shaders::Jobs::Status status = Shaders::Jobs::GetStatus();
+   const System::Jobs::Status status = System::Jobs::GetStatus();
    if (!status.name.empty())
       Widgets::ProgressBar(status.total ? float(status.done) / float(status.total) : -1.f, std::format("{} {}/{}", status.name, status.done, status.total));
 }

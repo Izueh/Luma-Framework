@@ -21,6 +21,8 @@ inline constexpr Id<float> OVERLAY_FONT_SIZE = {"Luma.Overlay.FontSize"};
 inline constexpr Id<float> OVERLAY_OPACITY = {"Luma.Overlay.Opacity"};
 // The overlay's white on an HDR swapchain, in nits
 inline constexpr Id<float> OVERLAY_HDR_PAPER_WHITE = {"Luma.Overlay.HdrPaperWhite"};
+// The most background jobs (System::Jobs) that run at once
+inline constexpr Id<int32_t> WORKER_THREADS = {"Luma.Advanced.WorkerThreads"};
 // Compiles the shaders as soon as a define changes
 inline constexpr Id<bool> AUTO_COMPILE = {"Luma.Shaders.AutoCompile"};
 // Development and Test builds: writes the game's shaders to Luma/Dump

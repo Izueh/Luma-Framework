@@ -77,6 +77,8 @@ std::bitset<N> FromList(const std::vector<uint32_t>& list)
 // still pass, with no bindings left
 bool ReflectSlots(std::span<const uint8_t> bytecode, ShaderStage stage, Reflection& reflection)
 {
+   // FXC's reflector is used under its lock (1.0: one thread at a time), released before it ends
+   const Compiler::Lock lock;
    Microsoft::WRL::ComPtr<ID3D11ShaderReflection> reflector;
    D3D11_SHADER_DESC desc = {};
    if (!Compiler::Reflect(bytecode, __uuidof(ID3D11ShaderReflection), &reflector) || FAILED(reflector->GetDesc(&desc)))

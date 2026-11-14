@@ -14,7 +14,7 @@
 #include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
 #include "Shaders/Defines.hpp"
-#include "Shaders/Jobs.hpp"
+#include "System/Jobs.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Trace/Info.hpp"
 #include "UI/Icons.hpp"
@@ -270,10 +270,10 @@ std::vector<Widgets::StatusItem> GetStatusItems(const Trace::Status& status)
    }
    items.push_back({Icons::TOOLS, std::format("{} hooks", status.counts.hooks_installed), status.counts.hooks_failed ? Tone::Warning : Tone::Info,
       std::format("{} failed", status.counts.hooks_failed)});
-   if (const Shaders::Jobs::Status job = Shaders::Jobs::GetStatus(); !job.name.empty())
+   if (const System::Jobs::Status job = System::Jobs::GetStatus(); !job.name.empty())
    {
-      const std::string queued = job.queued ? std::format(", {} more queued", job.queued) : std::string();
-      items.push_back({Icons::RELOAD, std::format("{} {}/{}", job.name, job.done, job.total), Tone::Info, std::format("On Luma's worker thread{}", queued),
+      const std::string others = job.running > 1 || job.queued ? std::format(", {} more running, {} queued", job.running - 1, job.queued) : std::string();
+      items.push_back({Icons::RELOAD, std::format("{} {}/{}", job.name, job.done, job.total), Tone::Info, std::format("On Luma's worker threads (up to {}){}", job.threads, others),
          job.total ? float(job.done) / float(job.total) : -1.f});
    }
    if (const Shaders::BuildInfo& build = Shaders::GetLastBuild(); build.failed)

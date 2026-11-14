@@ -24,6 +24,7 @@
 #include "Shaders/D3D11/D3D11Variants.hpp"
 #include "Shaders/Database.hpp"
 #include "Shaders/Shaders.hpp"
+#include "System/Jobs.hpp"
 #if DEVELOPMENT
 #include "Trace/Capture.hpp"
 #include "Trace/D3D11/D3D11Capture.hpp"
@@ -325,8 +326,8 @@ void PrePresent(IDXGISwapChain* swapchain)
 #if DEVELOPMENT
    Trace::Mcp::RunPendingJobs();
 #endif
-   // Finished builds are published before the device's objects follow them, then the frame counts (retirement is by frame)
-   Shaders::PublishFinishedBuilds();
+   // Finished jobs (a shader build) are published before the device's objects follow them, then the frame counts (retirement is by frame)
+   System::Jobs::RunFinished();
 #if DEVELOPMENT || TEST
    if (Shaders::IsNeeded())
       Shaders::Database::QueueDumps();

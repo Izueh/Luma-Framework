@@ -37,7 +37,14 @@ struct ShadersInfo
    bool loaded = true; // False after "Unload Shaders"
    uint32_t replaced = 0; // Game shaders with live objects and a replacement
    bool has_compilation_errors = false;
-   std::string job; // Running on the worker, empty when idle
+   std::string job; // The oldest running job, empty when idle
+};
+
+struct JobsInfo
+{
+   uint32_t threads = 0; // The most that run at once (Luma.Advanced.WorkerThreads)
+   uint32_t running = 0;
+   uint32_t queued = 0;
 };
 
 struct ValidationInfo
@@ -68,6 +75,7 @@ struct Status
    bool overlay_open = false;
    CountsInfo counts;
    ShadersInfo shaders;
+   JobsInfo jobs;
    ValidationInfo validation;
    uint64_t virtual_used_mb = 0;
    uint64_t virtual_total_mb = 0;

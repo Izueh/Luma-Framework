@@ -10,7 +10,7 @@
 #include "Hooks/Hooks.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Shaders/Database.hpp"
-#include "Shaders/Jobs.hpp"
+#include "System/Jobs.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Shaders/Variants.hpp"
 #include "System/Paths.hpp"
@@ -93,7 +93,9 @@ Status GetStatus()
    for (const Shaders::Database::Shader* shader : Shaders::Database::GetShaders())
       status.shaders.replaced += shader->objects && Shaders::Variants::HasVariant(shader->hash);
    status.shaders.has_compilation_errors = Shaders::GetLastBuild().failed != 0;
-   status.shaders.job = Shaders::Jobs::GetStatus().name;
+   const System::Jobs::Status jobs = System::Jobs::GetStatus();
+   status.shaders.job = jobs.name;
+   status.jobs = {jobs.threads, jobs.running, jobs.queued};
 
    const Validation::Counts validation = Validation::GetCounts();
    status.validation = {Validation::DEBUG_LAYER, Validation::GPU_VALIDATION, validation.corruptions, validation.errors, validation.warnings};

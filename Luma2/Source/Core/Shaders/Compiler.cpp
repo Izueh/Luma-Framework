@@ -35,6 +35,9 @@ struct Library
 
 Library library;
 std::once_flag load_once;
+// FXC is used by one thread at a time (1.0: "apparently FXC isn't thread safe"). Recursive, so a caller holds a Lock across the use of
+// the reflector it got. Innermost: nothing else is locked while it's held, and each call holds it only for its own duration.
+std::recursive_mutex fxc_mutex;
 
 uint64_t GetProductVersion(const std::filesystem::path& path)
 {
@@ -142,6 +145,16 @@ std::string GetText(ID3DBlob* blob)
 }
 } // namespace
 
+Lock::Lock()
+{
+   fxc_mutex.lock();
+}
+
+Lock::~Lock()
+{
+   fxc_mutex.unlock();
+}
+
 Preprocessed Preprocess(std::span<const std::filesystem::path> roots, std::string_view file, std::span<const Define> defines)
 {
    const Library& fxc = GetLibrary();
@@ -151,6 +164,8 @@ Preprocessed Preprocess(std::span<const std::filesystem::path> roots, std::strin
    const std::string name(file);
    const std::vector<D3D_SHADER_MACRO> macros = GetMacros(defines);
    Include include(roots);
+   // Before the blobs, which are released inside it
+   const Lock lock;
    ComPtr<ID3DBlob> text;
    ComPtr<ID3DBlob> messages;
    const HRESULT result = fxc.preprocess(source.data(), source.size(), name.c_str(), macros.data(), &include, &text, &messages);
@@ -173,6 +188,7 @@ Compiled Compile(std::span<const std::filesystem::path> roots, std::string_view 
    const std::string target_name(target);
    const std::vector<D3D_SHADER_MACRO> macros = GetMacros(defines);
    Include include(roots);
+   const Lock lock;
    ComPtr<ID3DBlob> code;
    ComPtr<ID3DBlob> messages;
    const HRESULT result =
@@ -193,12 +209,14 @@ Compiled Compile(std::span<const std::filesystem::path> roots, std::string_view 
 bool Reflect(std::span<const uint8_t> bytecode, REFIID iid, void** reflector)
 {
    const Library& fxc = GetLibrary();
+   const Lock lock;
    return fxc.reflect && SUCCEEDED(fxc.reflect(bytecode.data(), bytecode.size(), iid, reflector));
 }
 
 std::optional<std::string> Disassemble(std::span<const uint8_t> bytecode)
 {
    const Library& fxc = GetLibrary();
+   const Lock lock;
    ComPtr<ID3DBlob> text;
    // 1.0's flags
    if (!fxc.disassemble ||
@@ -211,6 +229,7 @@ std::optional<std::string> Disassemble(std::span<const uint8_t> bytecode)
 std::vector<Binding> ReflectConstantBufferBindings(std::span<const uint8_t> bytecode)
 {
    std::vector<Binding> bindings;
+   const Lock lock;
    ComPtr<ID3D11ShaderReflection> reflector;
    D3D11_SHADER_DESC desc = {};
    if (!Reflect(bytecode, __uuidof(ID3D11ShaderReflection), &reflector) || FAILED(reflector->GetDesc(&desc)))
@@ -282,6 +301,7 @@ void AddVariables(ID3D11ShaderReflectionType* type, const std::string& name, uin
 std::vector<ConstantBuffer> ReflectConstantBuffers(std::span<const uint8_t> bytecode)
 {
    std::vector<ConstantBuffer> buffers;
+   const Lock lock;
    ComPtr<ID3D11ShaderReflection> reflector;
    D3D11_SHADER_DESC desc = {};
    if (!Reflect(bytecode, __uuidof(ID3D11ShaderReflection), &reflector) || FAILED(reflector->GetDesc(&desc)))

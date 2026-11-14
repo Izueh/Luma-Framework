@@ -48,8 +48,6 @@ void Unload();
 // Presenting thread: replaced shaders on again, and a reload
 void Load();
 
-// Presenting thread, at the present boundary: publishes the builds that finished
-void PublishFinishedBuilds();
 // Presenting thread, at the present boundary
 void CountFrame();
 // Presents so far

@@ -1,6 +1,8 @@
 #include <doctest/doctest.h>
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstddef>
 #include <cstring>
@@ -12,6 +14,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <d3d11shader.h>
@@ -419,4 +422,31 @@ TEST_CASE("Shaders: a hash's variants, by source and priority")
    Publish(Source::Patch, {});
    CHECK_FALSE(HasVariant(HASH));
    CHECK(GetVariants(HASH).empty());
+}
+
+TEST_CASE("Compiler: FXC is used by one thread at a time")
+{
+   constexpr std::string_view source = "float4 main() : SV_Target { return 1; }";
+   Microsoft::WRL::ComPtr<ID3DBlob> blob;
+   REQUIRE(SUCCEEDED(D3DCompile(source.data(), source.size(), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, &blob, nullptr)));
+   const std::span<const uint8_t> bytecode(static_cast<const uint8_t*>(blob->GetBufferPointer()), blob->GetBufferSize());
+
+   std::atomic<bool> finished = false;
+   std::atomic<bool> disassembled = false;
+   std::thread other;
+   {
+      const Shaders::Compiler::Lock lock;
+      // The thread holding the lock can still call FXC: a caller holds it across its use of a reflector
+      Microsoft::WRL::ComPtr<ID3D11ShaderReflection> reflector;
+      CHECK(Shaders::Compiler::Reflect(bytecode, IID_PPV_ARGS(&reflector)));
+      other = std::thread([&] {
+         disassembled = Shaders::Compiler::Disassemble(bytecode).has_value();
+         finished = true;
+      });
+      std::this_thread::sleep_for(std::chrono::milliseconds(150));
+      CHECK_FALSE(finished);
+   }
+   other.join();
+   CHECK(finished);
+   CHECK(disassembled);
 }

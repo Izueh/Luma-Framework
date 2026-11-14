@@ -32,6 +32,7 @@
   <ItemGroup>
     <ClCompile Include="Main.cpp" />
     <ClCompile Include="UtilsTests.cpp" />
+    <ClCompile Include="JobsTests.cpp" />
     <ClCompile Include="SettingsTests.cpp" />
     <ClCompile Include="ShadersTests.cpp" />
     <ClCompile Include="HooksTests.cpp" />
