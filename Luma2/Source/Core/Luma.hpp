@@ -7,7 +7,6 @@
 #include "Draw/D3D11/D3D11Draw.hpp"
 #include "Draw/Draw.hpp"
 #include "Game/Callbacks.hpp"
-#include "Game/Draw.hpp"
 #include "Game/Events.hpp"
 #include "Game/Game.hpp"
 #include "Settings/Keys.hpp"

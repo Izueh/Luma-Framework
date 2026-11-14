@@ -3,10 +3,6 @@
 
 // A stand-in game's parts of the Luma cbuffers: Tests compiles Core like a game, with these (its folder on the include path)
 
-#ifdef __cplusplus
-#include "Common/CBufferTypes.hpp"
-#endif
-
 namespace CB
 {
 	struct LumaGameSettings

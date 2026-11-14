@@ -1,10 +1,6 @@
 #ifndef LUMA_GAME_CB_STRUCTS
 #define LUMA_GAME_CB_STRUCTS
 
-#ifdef __cplusplus
-#include "Common/CBufferTypes.hpp"
-#endif
-
 namespace CB
 {
 	struct LumaGameSettings

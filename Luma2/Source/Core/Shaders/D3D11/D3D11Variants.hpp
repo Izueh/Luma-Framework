@@ -7,9 +7,10 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
-#include "Common/Api.hpp"
+#include "Common/ShaderStage.hpp"
 #include "Shaders/Database.hpp"
 #include "Shaders/Shaders.hpp"
+#include "Shaders/Stages.hpp"
 #include "Shaders/Variants.hpp"
 
 // The variant objects of each replaced game shader hash and device, one per source, swapped in at bind on every stage. Owned by
@@ -28,9 +29,8 @@ struct BoundShaders
    std::array<Microsoft::WRL::ComPtr<ID3D11DeviceChild>, 6> originals;
    std::array<const CompiledShader*, 6> compiled = {};
    std::array<Source, 6> sources = {};
-   // Draw::GetStageBit bits
-   uint8_t variant_stages = 0;
-   uint8_t callback_stages = 0; // The shader has a draw callback
+   StageSet variant_stages;
+   StageSet callback_stages; // The shader has a draw callback
 };
 
 // The device's variants, empty until its shaders are created
@@ -48,8 +48,8 @@ void ForgetBoundShaders(ID3D11DeviceContext* context);
 // The context's record, null for a context without private data
 const BoundShaders* GetBoundShaders(ID3D11DeviceContext* context);
 // Before a draw or dispatch: the resources the variants running on `stages` request, bound where they declared them. The stages
-// where something was bound (Draw::GetStageBit bits).
-uint8_t BindRequestedResources(ID3D11DeviceContext* context, uint8_t stages);
+// where something was bound.
+StageSet BindRequestedResources(ID3D11DeviceContext* context, StageSet stages);
 
 // Presenting thread, at the device's present: objects for what was published, replaced ones released when unused
 void PublishVariants(ID3D11Device* device);

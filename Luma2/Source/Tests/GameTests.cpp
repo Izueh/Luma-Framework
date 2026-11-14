@@ -147,13 +147,29 @@ TEST_CASE("Game: draw callbacks are found by any of their hashes, the last set w
    CHECK_FALSE(Game::Registry::HasDrawCallbacks());
    constexpr std::array<uint32_t, 2> HASHES = {0x11111111, 0x22222222};
    constexpr std::array<uint32_t, 1> OTHER = {0x22222222};
-   Game::D3D11::OnDraw(HASHES, &OnDraw);
-   Game::D3D11::OnDraw(OTHER, &OnOtherDraw);
+   Game::D3D11::OnShaderDraw(HASHES, &OnDraw);
+   Game::D3D11::OnShaderDraw(OTHER, &OnOtherDraw);
    CHECK(Game::Registry::HasDrawCallbacks());
    CHECK(Game::Registry::FindDrawCallback(0x11111111) == &OnDraw);
    CHECK(Game::Registry::FindDrawCallback(0x22222222) == &OnOtherDraw);
    CHECK(Game::Registry::FindDrawCallback(0x33333333) == nullptr);
-   CHECK(Game::Registry::GetDrawOrDispatchCallback() == nullptr);
+   CHECK(Game::Registry::GetD3D11Events().on_draw_or_dispatch == nullptr);
+}
+
+TEST_CASE("Game: any draw event requests the draw and dispatch hooks")
+{
+   Fixture fixture;
+   CHECK_FALSE(Game::Registry::GetRequestedFunctions().test(size_t(Hooks::D3D11::Function::Draw)));
+   Game::SetEvents(Game::D3D11::Events{.on_draw_or_dispatch = &OnDraw});
+   CHECK(Game::Registry::HasDrawCallbacks());
+   const Hooks::D3D11::Functions functions = Game::Registry::GetRequestedFunctions();
+   CHECK(functions.count() == 9);
+   CHECK(functions.test(size_t(Hooks::D3D11::Function::Draw)));
+   CHECK(functions.test(size_t(Hooks::D3D11::Function::DispatchIndirect)));
+
+   Game::Registry::Reset();
+   Game::SetEvents(Game::D3D11::Events{.on_variant_draw = &OnDraw});
+   CHECK(Game::Registry::GetRequestedFunctions().count() == 9);
 }
 
 TEST_CASE("Game: a second SetOptions is ignored, and Reset forgets the options")

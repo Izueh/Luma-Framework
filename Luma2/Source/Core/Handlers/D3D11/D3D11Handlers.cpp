@@ -2,10 +2,10 @@
 
 #include <optional>
 
-#include "Draw/D3D11/D3D11Callbacks.hpp"
 #include "Draw/D3D11/D3D11Draw.hpp"
 #include "Draw/Draw.hpp"
 #include "Frame/Frame.hpp"
+#include "Game/D3D11/D3D11DrawEvents.hpp"
 #include "Game/Registry.hpp"
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/DeviceProxy.hpp"
@@ -38,10 +38,6 @@ const Game::D3D11::Callbacks& GameCallbacks()
    return Game::Registry::GetD3D11Callbacks();
 }
 
-bool IsRecorded(Draw::Recorded group)
-{
-   return Draw::Has(Draw::GetRecorded(), group);
-}
 
 bool IsRestoringGameBuffers()
 {
@@ -67,7 +63,7 @@ void ForgetContextState(ID3D11DeviceContext* context)
 {
    if (Shaders::IsNeeded())
       Shaders::Variants::D3D11::ForgetBoundShaders(context);
-   if (Draw::GetRecorded() != Draw::Recorded::None)
+   if (Draw::GetRecorded().Any())
       Draw::D3D11::ForgetBoundState(context);
    if (IsRestoringGameBuffers())
       Resources::LumaCBuffers::D3D11::ForgetGameBuffers(context);
@@ -76,9 +72,9 @@ void ForgetContextState(ID3D11DeviceContext* context)
 // With the game's buffers restored after draws, after Luma's cbuffers were bound on `stages`
 // (by the fulfil step for a call the API is about to run, or by a callback's BindLumaShader): Luma issues the call itself unless a
 // callback ran or skipped it, and binds the game's buffers back at its slots. Whether the call was handled.
-bool RestoreGameBuffers(const Game::D3D11::Call& call, uint8_t stages, bool handled)
+bool RestoreGameBuffers(const Game::D3D11::Call& call, Shaders::StageSet stages, bool handled)
 {
-   if (!stages || !IsRestoringGameBuffers())
+   if (!stages.Any() || !IsRestoringGameBuffers())
       return handled;
    if (!handled)
       Game::D3D11::RunOriginal(call);
@@ -88,12 +84,12 @@ bool RestoreGameBuffers(const Game::D3D11::Call& call, uint8_t stages, bool hand
 
 // After the callbacks, which may have bound other shaders: the variants' requests are bound only for a call that runs as the game
 // made it, and not when a callback bound Luma's cbuffers itself. The stages where Luma's cbuffers are bound.
-uint8_t FulfilAfterCallbacks(ID3D11DeviceContext* context, uint8_t stages, const Draw::D3D11::CallbackResult& callbacks, bool skipped)
+Shaders::StageSet FulfilAfterEvents(ID3D11DeviceContext* context, Shaders::StageSet stages, const Game::DrawEvents::D3D11::Result& events, bool skipped)
 {
-   if (callbacks.luma_stages)
-      return callbacks.luma_stages;
-   if (callbacks.result != Game::DrawResult::None || skipped || !Shaders::IsNeeded())
-      return 0;
+   if (events.luma_stages.Any())
+      return events.luma_stages;
+   if (events.result != Game::DrawResult::None || skipped || !Shaders::IsNeeded())
+      return {};
    return Shaders::Variants::D3D11::BindRequestedResources(context, stages);
 }
 } // namespace
@@ -289,28 +285,28 @@ bool PreOMSetRenderTargetsAndUnorderedAccessViews(ID3D11DeviceContext* context, 
 
 void PostRSSetViewports(ID3D11DeviceContext* context, UINT count, const D3D11_VIEWPORT* viewports)
 {
-   if (IsRecorded(Draw::Recorded::Viewports))
+   if (Draw::GetRecorded().viewports)
       Draw::D3D11::RecordViewports(context, count, viewports);
    Game::Registry::Call(GameEvents().on_bind_viewports, context, count, viewports);
 }
 
 void PostRSSetScissorRects(ID3D11DeviceContext* context, UINT count, const D3D11_RECT* rects)
 {
-   if (IsRecorded(Draw::Recorded::Viewports))
+   if (Draw::GetRecorded().viewports)
       Draw::D3D11::RecordScissorRects(context, count, rects);
    Game::Registry::Call(GameEvents().on_bind_scissor_rects, context, count, rects);
 }
 
 void PostOMSetBlendState(ID3D11DeviceContext* context, ID3D11BlendState* state, const FLOAT blend_factor[4], UINT sample_mask)
 {
-   if (IsRecorded(Draw::Recorded::Blend))
+   if (Draw::GetRecorded().blend)
       Draw::D3D11::RecordBlendState(context, state, blend_factor, sample_mask);
    Game::Registry::Call(GameEvents().on_bind_blend_state, context, state, blend_factor, sample_mask);
 }
 
 void PostOMSetDepthStencilState(ID3D11DeviceContext* context, ID3D11DepthStencilState* state, UINT stencil_ref)
 {
-   if (IsRecorded(Draw::Recorded::Depth))
+   if (Draw::GetRecorded().depth)
       Draw::D3D11::RecordDepthStencilState(context, state, stencil_ref);
    Game::Registry::Call(GameEvents().on_bind_depth_stencil_state, context, state, stencil_ref);
 }
@@ -408,19 +404,19 @@ bool PreDraw(ID3D11DeviceContext* context, const DrawCall& draw)
    if (Trace::Capture::IsCapturing())
       recording = Trace::Capture::D3D11::BeginDraw(context, draw);
    if (Trace::Track::IsActive())
-      Trace::Capture::D3D11::TrackCall(context, Draw::GRAPHICS_STAGES);
+      Trace::Capture::D3D11::TrackCall(context, Shaders::GRAPHICS_STAGES);
 #endif
-   const Draw::D3D11::CallbackResult callbacks = Game::Registry::HasDrawCallbacks() ? Draw::D3D11::RunDrawCallbacks(context, draw) : Draw::D3D11::CallbackResult();
+   const Game::DrawEvents::D3D11::Result events = Game::Registry::HasDrawCallbacks() ? Game::DrawEvents::D3D11::Run(context, draw) : Game::DrawEvents::D3D11::Result();
 #if DEVELOPMENT
-   const bool skipped = callbacks.result == Game::DrawResult::None && Draw::D3D11::IsSkippedByTrace(context, Draw::GRAPHICS_STAGES);
+   const bool skipped = events.result == Game::DrawResult::None && Trace::Capture::D3D11::IsSkipped(context, Shaders::GRAPHICS_STAGES);
 #else
    constexpr bool skipped = false;
 #endif
-   const uint8_t bound = FulfilAfterCallbacks(context, Draw::GRAPHICS_STAGES, callbacks, skipped);
-   const bool handled = RestoreGameBuffers({.context = context, .draw = &draw}, bound, callbacks.result != Game::DrawResult::None || skipped);
+   const Shaders::StageSet bound = FulfilAfterEvents(context, Shaders::GRAPHICS_STAGES, events, skipped);
+   const bool handled = RestoreGameBuffers({.context = context, .draw = &draw}, bound, events.result != Game::DrawResult::None || skipped);
 #if DEVELOPMENT
    if (recording)
-      Trace::Capture::D3D11::End(std::move(*recording), GetOutcome(callbacks.result, skipped));
+      Trace::Capture::D3D11::End(std::move(*recording), GetOutcome(events.result, skipped));
 #endif
    return handled;
 }
@@ -432,20 +428,20 @@ bool PreDispatch(ID3D11DeviceContext* context, const DispatchCall& dispatch)
    if (Trace::Capture::IsCapturing())
       recording = Trace::Capture::D3D11::BeginDispatch(context, dispatch);
    if (Trace::Track::IsActive())
-      Trace::Capture::D3D11::TrackCall(context, Draw::COMPUTE_STAGES);
+      Trace::Capture::D3D11::TrackCall(context, Shaders::COMPUTE_STAGES);
 #endif
-   const Draw::D3D11::CallbackResult callbacks =
-      Game::Registry::HasDrawCallbacks() ? Draw::D3D11::RunDispatchCallbacks(context, dispatch) : Draw::D3D11::CallbackResult();
+   const Game::DrawEvents::D3D11::Result events =
+      Game::Registry::HasDrawCallbacks() ? Game::DrawEvents::D3D11::Run(context, dispatch) : Game::DrawEvents::D3D11::Result();
 #if DEVELOPMENT
-   const bool skipped = callbacks.result == Game::DrawResult::None && Draw::D3D11::IsSkippedByTrace(context, Draw::COMPUTE_STAGES);
+   const bool skipped = events.result == Game::DrawResult::None && Trace::Capture::D3D11::IsSkipped(context, Shaders::COMPUTE_STAGES);
 #else
    constexpr bool skipped = false;
 #endif
-   const uint8_t bound = FulfilAfterCallbacks(context, Draw::COMPUTE_STAGES, callbacks, skipped);
-   const bool handled = RestoreGameBuffers({.context = context, .dispatch = &dispatch}, bound, callbacks.result != Game::DrawResult::None || skipped);
+   const Shaders::StageSet bound = FulfilAfterEvents(context, Shaders::COMPUTE_STAGES, events, skipped);
+   const bool handled = RestoreGameBuffers({.context = context, .dispatch = &dispatch}, bound, events.result != Game::DrawResult::None || skipped);
 #if DEVELOPMENT
    if (recording)
-      Trace::Capture::D3D11::End(std::move(*recording), GetOutcome(callbacks.result, skipped));
+      Trace::Capture::D3D11::End(std::move(*recording), GetOutcome(events.result, skipped));
 #endif
    return handled;
 }

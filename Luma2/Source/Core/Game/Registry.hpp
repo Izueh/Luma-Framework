@@ -12,10 +12,9 @@ const D3D11::Events& GetD3D11Events();
 const D3D12::Events& GetD3D12Events();
 const D3D11::Callbacks& GetD3D11Callbacks();
 const Panels& GetPanels();
-// Null if the game set none for the hash
+// Null if the game set none for the hash (OnShaderDraw)
 D3D11::DrawCallback FindDrawCallback(uint32_t hash);
-D3D11::DrawCallback GetDrawOrDispatchCallback();
-D3D11::DrawCallback GetVariantDrawCallback();
+// Any draw event: OnShaderDraw, on_variant_draw or on_draw_or_dispatch
 bool HasDrawCallbacks();
 
 // The native functions the game's events and callbacks need hooked

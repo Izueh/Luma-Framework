@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-#include "Common/Api.hpp"
+#include "Common/ShaderStage.hpp"
 #include "Settings/Registry.hpp"
 
 // The only place that calls raw ImGui controls for settings, so every panel looks and behaves the same. Games use these in

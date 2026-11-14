@@ -4,7 +4,7 @@
 
 #include <d3d11.h>
 
-#include "Common/Api.hpp"
+#include "Common/ShaderStage.hpp"
 #include "Shaders/Database.hpp"
 
 namespace Luma {

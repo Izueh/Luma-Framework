@@ -10,7 +10,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
-#include "Common/Api.hpp"
+#include "Common/ShaderStage.hpp"
 #include "Shaders/Shaders.hpp"
 
 // Luma's shader objects on D3D11 (variants, Luma's shaders in Resources::Database), built from published compiled shaders, read

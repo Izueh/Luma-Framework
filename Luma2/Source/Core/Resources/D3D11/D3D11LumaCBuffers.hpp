@@ -4,7 +4,8 @@
 
 #include <d3d11.h>
 
-#include "Common/Api.hpp"
+#include "Common/ShaderStage.hpp"
+#include "Shaders/Stages.hpp"
 
 // Restoring the game's buffers at Luma's two cbuffer slots after a draw that bound Luma's there (Options::restore_after_draw, 1.0's
 // ENABLE_AUTO_CBUFFER_RESTORATION). Only those two slots are recorded, per stage of each context.
@@ -17,8 +18,8 @@ void RecordGameBuffers(ID3D11DeviceContext* context, ShaderStage stage, UINT sta
    const UINT* constant_counts);
 // The context's state went back to the defaults (ClearState, or a command list finished or executed without restoring it)
 void ForgetGameBuffers(ID3D11DeviceContext* context);
-// Inside a Luma scope, after the draw: the game's buffers at Luma's slots on `stages` (Draw::GetStageBit bits), as it bound them
-void RestoreGameBuffers(ID3D11DeviceContext* context, uint8_t stages);
+// Inside a Luma scope, after the draw: the game's buffers at Luma's slots on `stages`, as it bound them
+void RestoreGameBuffers(ID3D11DeviceContext* context, Shaders::StageSet stages);
 } // namespace D3D11
 } // namespace LumaCBuffers
 } // namespace Resources

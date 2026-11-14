@@ -5,8 +5,8 @@
 #include <optional>
 #include <utility>
 
-#include "Draw/D3D11/D3D11Callbacks.hpp"
-#include "Game/Registry.hpp"
+#include "Luma.hpp"
+
 #include "Hooks/D3D11/D3D11Stages.hpp"
 #include "Hooks/Lifetime.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
@@ -108,61 +108,6 @@ Bound* GetRecord(Context* context)
    return Hooks::Lifetime::GetOrCreateStateCached<Bound>(context);
 }
 
-// The callback of the first stage of `stages` with one, in 1.0's order (pixel, then vertex)
-Game::D3D11::DrawCallback FindCallback(const Shaders::Variants::D3D11::BoundShaders& bound, uint8_t stages)
-{
-   constexpr std::array ORDER = {ShaderStage::Pixel, ShaderStage::Vertex, ShaderStage::Geometry, ShaderStage::Hull, ShaderStage::Domain, ShaderStage::Compute};
-   for (const ShaderStage stage : ORDER)
-   {
-      if (stages & GetStageBit(stage))
-         return Game::Registry::FindDrawCallback(bound.shaders[size_t(stage)]->hash);
-   }
-   return nullptr;
-}
-
-// The callback running on this thread, which BindLumaShader reports the stages it bound to
-struct Running
-{
-   Context* context = nullptr;
-   uint8_t luma_stages = 0;
-};
-
-thread_local Running* running = nullptr;
-
-// The variant callback first (1.0's OnDrawOrDispatchCustomPipeline), then the one by hash or the generic one
-Game::DrawResult RunCallbacks(Context* context, const Game::D3D11::DrawCall* draw, const Game::D3D11::DispatchCall* dispatch, uint8_t stages)
-{
-   const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(context);
-   const uint8_t variant_stages = bound ? bound->variant_stages & stages : 0;
-   const uint8_t callback_stages = bound ? bound->callback_stages & stages : 0;
-   const Game::D3D11::DrawCallback variant_callback = variant_stages ? Game::Registry::GetVariantDrawCallback() : nullptr;
-   const Game::D3D11::DrawCallback callback = callback_stages ? FindCallback(*bound, callback_stages) : Game::Registry::GetDrawOrDispatchCallback();
-   if (!variant_callback && !callback)
-      return Game::DrawResult::None;
-   Game::D3D11::Call call = {.context = context, .draw = draw, .dispatch = dispatch, .variant_stages = variant_stages};
-   for (size_t stage = 0; bound && stage < bound->shaders.size(); stage++)
-      call.hashes[stage] = bound->shaders[stage] ? bound->shaders[stage]->hash : 0;
-   if (variant_callback)
-   {
-      if (const Game::DrawResult result = variant_callback(call); result != Game::DrawResult::None)
-         return result;
-      // It may have put the game's shaders back (UseOriginal)
-      call.variant_stages = bound->variant_stages & stages;
-   }
-   return callback ? callback(call) : Game::DrawResult::None;
-}
-
-CallbackResult RunCallbacksReporting(Context* context, const Game::D3D11::DrawCall* draw, const Game::D3D11::DispatchCall* dispatch, uint8_t stages)
-{
-   if (!IsEnabled())
-      return {};
-   Running current = {.context = context};
-   Running* const previous = std::exchange(running, &current);
-   const Game::DrawResult result = RunCallbacks(context, draw, dispatch, stages);
-   running = previous;
-   return {result, current.luma_stages};
-}
-
 // The width and height of the view's mip, 0 if it isn't a 2D texture's
 std::pair<UINT, UINT> GetTargetSize(ID3D11RenderTargetView* target)
 {
@@ -188,18 +133,17 @@ void Save(Context* context, StateStack& stack)
    for (size_t index = 0; index < STAGES.size(); index++)
    {
       const ShaderStage stage = ShaderStage(index);
-      const uint8_t bit = GetStageBit(stage);
       const StageFunctions& functions = STAGES[index];
       StageState& state = stack.stages[index];
-      if (mask.shaders & bit)
+      if (mask.shaders.Has(stage))
          state.shader = GetShader(context, stage);
-      if (mask.shader_resources & bit)
+      if (mask.shader_resources.Has(stage))
       {
          const Range range = Clamp(mask.shader_resource_slots, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT);
          state.shader_resources.resize(range.count);
          (context->*functions.get_resources)(range.first, range.count, AsRaw(state.shader_resources));
       }
-      if (mask.constant_buffers & bit)
+      if (mask.constant_buffers.Has(stage))
       {
          const Range range = Clamp(mask.constant_buffer_slots, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT);
          state.constant_buffers.resize(range.count);
@@ -213,14 +157,14 @@ void Save(Context* context, StateStack& stack)
          else
             (context->*functions.get_buffers)(range.first, range.count, AsRaw(state.constant_buffers));
       }
-      if (mask.samplers & bit)
+      if (mask.samplers.Has(stage))
       {
          const Range range = Clamp(mask.sampler_slots, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT);
          state.samplers.resize(range.count);
          (context->*functions.get_samplers)(range.first, range.count, AsRaw(state.samplers));
       }
    }
-   if (mask.unordered_access & COMPUTE_STAGES)
+   if (mask.unordered_access.Has(ShaderStage::Compute))
    {
       StageState& state = stack.stages[size_t(ShaderStage::Compute)];
       state.unordered_access.resize(GetUnorderedAccessSlots(context));
@@ -237,7 +181,7 @@ void Save(Context* context, StateStack& stack)
             stack.render_target_count = i + 1;
       }
       // 1.0's FullGraphics: the output merger's views start after the last render target
-      if (mask.unordered_access & PIXEL)
+      if (mask.unordered_access.Has(ShaderStage::Pixel))
       {
          StageState& state = stack.stages[size_t(ShaderStage::Pixel)];
          state.unordered_access.resize(GetUnorderedAccessSlots(context) - stack.render_target_count);
@@ -272,7 +216,7 @@ void Restore(Context* context, const StateStack& stack)
    if (mask.targets)
    {
       const auto* targets = AsRaw(stack.render_targets);
-      if (mask.unordered_access & PIXEL)
+      if (mask.unordered_access.Has(ShaderStage::Pixel))
       {
          const std::vector<ComPtr<ID3D11UnorderedAccessView>>& views = stack.stages[size_t(ShaderStage::Pixel)].unordered_access;
          // Keeps the counters as they are
@@ -300,20 +244,19 @@ void Restore(Context* context, const StateStack& stack)
    if (mask.rasterizer)
       context->RSSetState(stack.rasterizer.Get());
    ComPtr<Context1> context1;
-   if (mask.constant_buffers)
+   if (mask.constant_buffers.Any())
       context->QueryInterface(IID_PPV_ARGS(&context1));
    for (size_t index = 0; index < STAGES.size(); index++)
    {
       const ShaderStage stage = ShaderStage(index);
-      const uint8_t bit = GetStageBit(stage);
       const StageFunctions& functions = STAGES[index];
       const StageState& state = stack.stages[index];
-      if (mask.shader_resources & bit)
+      if (mask.shader_resources.Has(stage))
       {
          const Range range = Clamp(mask.shader_resource_slots, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT);
          (context->*functions.set_resources)(range.first, range.count, AsRaw(state.shader_resources));
       }
-      if (mask.constant_buffers & bit)
+      if (mask.constant_buffers.Has(stage))
       {
          const Range range = Clamp(mask.constant_buffer_slots, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT);
          if (context1 && !state.first_constants.empty())
@@ -322,15 +265,15 @@ void Restore(Context* context, const StateStack& stack)
          else
             (context->*functions.set_buffers)(range.first, range.count, AsRaw(state.constant_buffers));
       }
-      if (mask.samplers & bit)
+      if (mask.samplers.Has(stage))
       {
          const Range range = Clamp(mask.sampler_slots, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT);
          (context->*functions.set_samplers)(range.first, range.count, AsRaw(state.samplers));
       }
-      if (mask.shaders & bit)
+      if (mask.shaders.Has(stage))
          Shaders::D3D11::Bind(context, stage, state.shader.Get());
    }
-   if (mask.unordered_access & COMPUTE_STAGES)
+   if (mask.unordered_access.Has(ShaderStage::Compute))
    {
       const std::vector<ComPtr<ID3D11UnorderedAccessView>>& views = stack.stages[size_t(ShaderStage::Compute)].unordered_access;
       const std::vector<UINT> counts(views.size(), UINT_MAX);
@@ -452,80 +395,6 @@ bool Scale(Context* context, ID3D11ShaderResourceView* source, ID3D11RenderTarge
       return false;
    return DrawFullscreen(context, {.name = "Luma Scale", .vertex_shader = "Luma_Scale_VS"_h, .pixel_shader = "Luma_Scale_PS"_h, .source = source, .target = target, .sampler = linear_sampler.Get()});
 }
-
-CallbackResult RunDrawCallbacks(Context* context, const Game::D3D11::DrawCall& draw)
-{
-   return RunCallbacksReporting(context, &draw, nullptr, GRAPHICS_STAGES);
-}
-
-CallbackResult RunDispatchCallbacks(Context* context, const Game::D3D11::DispatchCall& dispatch)
-{
-   return RunCallbacksReporting(context, nullptr, &dispatch, COMPUTE_STAGES);
-}
-
-#if DEVELOPMENT
-bool IsSkippedByTrace(Context* context, uint8_t stages)
-{
-   const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(context);
-   if (!bound)
-      return false;
-   for (size_t stage = 0; stage < bound->shaders.size(); stage++)
-   {
-      const Shaders::Database::Shader* shader = bound->shaders[stage];
-      if ((stages & (1u << stage)) && shader && shader->skip_draws.load(std::memory_order_relaxed))
-         return true;
-   }
-   return false;
-}
-#endif
 } // namespace D3D11
 } // namespace Draw
-
-void Game::D3D11::BindLumaShader(ID3D11DeviceContext* context, uint64_t name_hash, const LumaCustomData& custom)
-{
-   ComPtr<ID3D11Device> device;
-   context->GetDevice(&device);
-   const Luma::Shaders::D3D11::Live* shader = Resources::Database::D3D11::GetShader(device.Get(), name_hash);
-   const std::optional<uint32_t> entry = Resources::Database::Find(name_hash);
-   if (!shader || !entry)
-      return;
-   const ShaderStage stage = Resources::Database::Get(*entry).stage;
-   Luma::Shaders::D3D11::Bind(context, stage, shader->object.Get());
-   // From a draw callback, the handler restores the game's buffers at Luma's slots after the call and binds no other requests
-   if (Resources::Database::D3D11::BindRequested(context, stage, *shader->compiled, custom) && Draw::D3D11::running && Draw::D3D11::running->context == context)
-      Draw::D3D11::running->luma_stages |= Draw::GetStageBit(stage);
-}
-
-void Game::D3D11::UseOriginal(const Call& call, ShaderStage stage)
-{
-   Luma::Shaders::Variants::D3D11::UseOriginal(call.context, stage);
-}
-
-void Game::D3D11::RunOriginal(const Call& call)
-{
-   using Function = Hooks::D3D11::Function;
-   ID3D11DeviceContext* context = call.context;
-   if (const DispatchCall* dispatch = call.dispatch)
-   {
-      if (dispatch->arguments)
-         context->DispatchIndirect(dispatch->arguments, dispatch->arguments_offset);
-      else
-         context->Dispatch(dispatch->x, dispatch->y, dispatch->z);
-      return;
-   }
-   const DrawCall& draw = *call.draw;
-   switch (draw.function)
-   {
-   case Function::Draw: context->Draw(draw.vertex_or_index_count, draw.start_vertex_or_index); break;
-   case Function::DrawInstanced: context->DrawInstanced(draw.vertex_or_index_count, draw.instance_count, draw.start_vertex_or_index, draw.start_instance); break;
-   case Function::DrawIndexed: context->DrawIndexed(draw.vertex_or_index_count, draw.start_vertex_or_index, draw.base_vertex); break;
-   case Function::DrawIndexedInstanced:
-      context->DrawIndexedInstanced(draw.vertex_or_index_count, draw.instance_count, draw.start_vertex_or_index, draw.base_vertex, draw.start_instance);
-      break;
-   case Function::DrawAuto: context->DrawAuto(); break;
-   case Function::DrawInstancedIndirect: context->DrawInstancedIndirect(draw.arguments, draw.arguments_offset); break;
-   case Function::DrawIndexedInstancedIndirect: context->DrawIndexedInstancedIndirect(draw.arguments, draw.arguments_offset); break;
-   default: ASSERT_ONCE_MSG(false, "Not a draw function"); break;
-   }
-}
 } // namespace Luma

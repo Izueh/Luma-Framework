@@ -506,7 +506,7 @@ void DescribeState(Recording& recording, ShaderStage stage, bool recorded)
 }
 
 // A game call: its shaders from Variants' record, its main stage's state
-Recording BeginGameCall(ID3D11DeviceContext* context, EventType type, uint8_t stages)
+Recording BeginGameCall(ID3D11DeviceContext* context, EventType type, Shaders::StageSet stages)
 {
    Recording recording = {.event = {.type = type}, .context = context};
    const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(context);
@@ -516,7 +516,7 @@ Recording BeginGameCall(ID3D11DeviceContext* context, EventType type, uint8_t st
    for (uint32_t index = 0; index <= uint32_t(ShaderStage::Compute); index++)
    {
       const ShaderStage stage = ShaderStage(index);
-      if (!(stages & Draw::GetStageBit(stage)) || !GetShader(context, stage))
+      if (!stages.Has(stage) || !GetShader(context, stage))
          continue;
       const Shaders::Database::Shader* shader = bound ? bound->shaders[index] : nullptr;
       Shader& recorded = recording.event.shaders.emplace_back(Shader{
@@ -533,7 +533,7 @@ Recording BeginGameCall(ID3D11DeviceContext* context, EventType type, uint8_t st
          }
          recorded.forced = shader->forced_variant.load(std::memory_order_relaxed);
       }
-      if (bound && (bound->variant_stages & Draw::GetStageBit(stage)))
+      if (bound && bound->variant_stages.Has(stage))
          recorded.variant = bound->sources[index];
       AddConstantBuffers(recording, context1.Get(), stage, shader);
       if (stage == ShaderStage::Pixel)
@@ -547,7 +547,7 @@ Recording BeginGameCall(ID3D11DeviceContext* context, EventType type, uint8_t st
 Recording BeginDraw(ID3D11DeviceContext* context, const Game::D3D11::DrawCall& draw)
 {
    using Function = Hooks::D3D11::Function;
-   Recording recording = BeginGameCall(context, EventType::Draw, Draw::GRAPHICS_STAGES);
+   Recording recording = BeginGameCall(context, EventType::Draw, Shaders::GRAPHICS_STAGES);
    Event& event = recording.event;
    // In Function's order
    constexpr std::array<std::string_view, 7> NAMES = {"Draw", "DrawInstanced", "DrawIndexed", "DrawIndexedInstanced", "DrawAuto", "DrawInstancedIndirect",
@@ -566,7 +566,7 @@ Recording BeginDraw(ID3D11DeviceContext* context, const Game::D3D11::DrawCall& d
 
 Recording BeginDispatch(ID3D11DeviceContext* context, const Game::D3D11::DispatchCall& dispatch)
 {
-   Recording recording = BeginGameCall(context, EventType::Dispatch, Draw::COMPUTE_STAGES);
+   Recording recording = BeginGameCall(context, EventType::Dispatch, Shaders::COMPUTE_STAGES);
    recording.event.name = dispatch.arguments ? "DispatchIndirect" : "Dispatch";
    recording.event.dispatch = {dispatch.x, dispatch.y, dispatch.z};
    recording.event.indirect = dispatch.arguments != nullptr;
@@ -600,10 +600,24 @@ void End(Recording recording, Outcome outcome)
       pending.push_back({added, constant_buffer, std::move(copy), recording.context});
 }
 
-void TrackCall(ID3D11DeviceContext* context, uint8_t stages)
+bool IsSkipped(ID3D11DeviceContext* context, Shaders::StageSet stages)
+{
+   const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(context);
+   if (!bound)
+      return false;
+   for (size_t stage = 0; stage < bound->shaders.size(); stage++)
+   {
+      const Shaders::Database::Shader* shader = bound->shaders[stage];
+      if (stages.Has(ShaderStage(stage)) && shader && shader->skip_draws.load(std::memory_order_relaxed))
+         return true;
+   }
+   return false;
+}
+
+void TrackCall(ID3D11DeviceContext* context, Shaders::StageSet stages)
 {
    const std::optional<Track::Target> target = Track::Get();
-   if (!target || !(stages & Draw::GetStageBit(target->stage)))
+   if (!target || !stages.Has(target->stage))
       return;
    const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(context);
    const Shaders::Database::Shader* shader = bound ? bound->shaders[size_t(target->stage)] : nullptr;

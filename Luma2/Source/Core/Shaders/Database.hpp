@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "Common/Api.hpp"
+#include "Common/ShaderStage.hpp"
 #include "Shaders/Compiler.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Shaders/Variants.hpp"

@@ -4,7 +4,8 @@
 
 #include <d3d11.h>
 
-#include "Common/Api.hpp"
+#include "Common/ShaderStage.hpp"
+#include "Resources/ResourceDatabase.hpp"
 #include "Shaders/D3D11/D3D11Shaders.hpp"
 #include "Shaders/Shaders.hpp"
 
@@ -27,7 +28,7 @@ const Shaders::D3D11::Live* GetShader(ID3D11Device* device, uint64_t name_hash);
 
 // The requests of `compiled`, a shader running on `stage` of the context: each entry uploaded where its contents changed for this context
 // (LumaData with `custom`), and bound at the register it declared. Nothing while Luma is off. Whether anything was bound.
-bool BindRequested(ID3D11DeviceContext* context, ShaderStage stage, const Shaders::CompiledShader& compiled, const LumaCustomData& custom);
+bool BindRequested(ID3D11DeviceContext* context, ShaderStage stage, const Shaders::CompiledShader& compiled, const CustomData& custom);
 // What the context's buffers hold is unknown after a command list boundary (a deferred context's next list starts empty, an
 // executed list may have uploaded its own): they're uploaded again
 void ForgetUploads(ID3D11DeviceContext* context);

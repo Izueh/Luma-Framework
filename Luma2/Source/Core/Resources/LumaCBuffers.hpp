@@ -8,10 +8,16 @@
 #include <type_traits>
 #include <vector>
 
-#include "Common/Api.hpp"
+#include "Common/Math.hpp"
 #include "Frame/Frame.hpp"
 #include "Hooks/Functions.hpp"
 #include "Shaders/Compiler.hpp"
+
+// The HLSL types the cbuffer structs below are written with, for their C++ side: Core's job, so the game's file holds only its structs
+namespace CB {
+using namespace Luma::Math;
+using uint = uint32_t;
+} // namespace CB
 
 // The structs of the cbuffers, shared with the shaders (1.0's cbuffers.h): the game's parts from its Shaders folder, when it has
 // them (CBuffers.hlsl defines empty ones otherwise, as in HLSL), then Luma's with the game's parts in them
@@ -40,6 +46,7 @@ struct GameDeviceData;
 
 namespace Resources {
 namespace Database {
+struct CustomData;
 struct WriteTarget;
 }
 
@@ -94,8 +101,8 @@ constexpr uint32_t DATA_SIZE = (sizeof(CB::LumaInstanceData) + 15) / 16 * 16;
 
 // Their contents now for the context's device: the published LumaSettings, LumaData with a pass's custom values and the game's
 // part. Any thread.
-void WriteSettings(std::span<std::byte> destination, const LumaCustomData& custom, const Database::WriteTarget& target);
-void WriteData(std::span<std::byte> destination, const LumaCustomData& custom, const Database::WriteTarget& target);
+void WriteSettings(std::span<std::byte> destination, const Database::CustomData& custom, const Database::WriteTarget& target);
+void WriteData(std::span<std::byte> destination, const Database::CustomData& custom, const Database::WriteTarget& target);
 
 struct DevSetting
 {

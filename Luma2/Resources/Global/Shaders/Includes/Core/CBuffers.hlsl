@@ -8,10 +8,6 @@
 // as hlsl starts a struct on a new register and c++ doesn't.
 /////////////////////////////////////////
 
-#ifdef __cplusplus
-#include "Common/CBufferTypes.hpp"
-#endif
-
 // In case the per game code had not defined a custom struct, define a generic empty one. This behaviour is matched in c++.
 #ifndef LUMA_GAME_CB_STRUCTS
 #define LUMA_GAME_CB_STRUCTS

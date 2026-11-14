@@ -57,7 +57,7 @@ void ForgetGameBuffers(ID3D11DeviceContext* context)
       *state = {};
 }
 
-void RestoreGameBuffers(ID3D11DeviceContext* context, uint8_t stages)
+void RestoreGameBuffers(ID3D11DeviceContext* context, Shaders::StageSet stages)
 {
    GameBuffers* state = Hooks::Lifetime::GetOrCreateStateCached<GameBuffers>(context);
    if (!state)
@@ -67,7 +67,7 @@ void RestoreGameBuffers(ID3D11DeviceContext* context, uint8_t stages)
    ComPtr<ID3D11DeviceContext1> context1;
    for (uint32_t index = 0; index < state->stages.size(); index++)
    {
-      if (!(stages & (1u << index)))
+      if (!stages.Has(ShaderStage(index)))
          continue;
       Hooks::D3D11::WithStage(ShaderStage(index), [&]<ShaderStage Stage>() {
          using Traits = Hooks::D3D11::StageTraits<Stage>;

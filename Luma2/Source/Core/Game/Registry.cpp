@@ -30,8 +30,6 @@ struct Declarations
    GameDeviceDataType device_data;
    bool options_set = false;
    std::unordered_map<uint32_t, D3D11::DrawCallback> draw_callbacks;
-   D3D11::DrawCallback draw_or_dispatch = nullptr;
-   D3D11::DrawCallback variant_draw = nullptr;
 };
 
 Declarations declarations;
@@ -106,7 +104,7 @@ void SetCallbacks(const D3D11::Callbacks& callbacks)
    declarations.d3d11_callbacks = callbacks;
 }
 
-void D3D11::OnDraw(std::span<const uint32_t> hashes, DrawCallback callback)
+void D3D11::OnShaderDraw(std::span<const uint32_t> hashes, DrawCallback callback)
 {
    for (const uint32_t hash : hashes)
    {
@@ -114,16 +112,6 @@ void D3D11::OnDraw(std::span<const uint32_t> hashes, DrawCallback callback)
       if (!added)
          Utils::Log::Warning("Game: a second draw callback for 0x{:08X} replaces the first", hash);
    }
-}
-
-void D3D11::OnDrawOrDispatch(DrawCallback callback)
-{
-   declarations.draw_or_dispatch = callback;
-}
-
-void D3D11::OnVariantDraw(DrawCallback callback)
-{
-   declarations.variant_draw = callback;
 }
 
 void Shaders::SetDebugName(std::string_view name, std::span<const uint32_t> hashes)
@@ -221,19 +209,10 @@ D3D11::DrawCallback FindDrawCallback(uint32_t hash)
    return it != declarations.draw_callbacks.end() ? it->second : nullptr;
 }
 
-D3D11::DrawCallback GetDrawOrDispatchCallback()
-{
-   return declarations.draw_or_dispatch;
-}
-
-D3D11::DrawCallback GetVariantDrawCallback()
-{
-   return declarations.variant_draw;
-}
-
 bool HasDrawCallbacks()
 {
-   return !declarations.draw_callbacks.empty() || declarations.draw_or_dispatch || declarations.variant_draw;
+   const D3D11::Events& events = declarations.d3d11_events;
+   return !declarations.draw_callbacks.empty() || events.on_draw_or_dispatch || events.on_variant_draw;
 }
 
 Hooks::D3D11::Functions GetCallbackFunctions()
@@ -296,6 +275,9 @@ Hooks::D3D11::Functions GetRequestedFunctions()
    Request(functions, d3d11.on_clear_state, {ClearState});
    Request(functions, d3d11.on_finish_command_list, {FinishCommandList});
    Request(functions, d3d11.on_execute_command_list, {ExecuteCommandList});
+   // The draw events, and the callbacks of OnShaderDraw
+   Request(functions, HasDrawCallbacks(),
+      {Draw, DrawInstanced, DrawIndexed, DrawIndexedInstanced, DrawAuto, DrawInstancedIndirect, DrawIndexedInstancedIndirect, Dispatch, DispatchIndirect});
    return functions;
 }
 

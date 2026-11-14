@@ -10,6 +10,7 @@
 #include <wrl/client.h>
 
 #include "Luma.hpp"
+#include "Shaders/Stages.hpp"
 #include "Trace/Capture.hpp"
 
 // Trace capture on D3D11: a call's state from its context, before the game's draw callbacks run
@@ -36,8 +37,10 @@ void End(Recording recording, Outcome outcome = Outcome::Ran);
 void ReadBackConstantBuffers();
 
 // While Track is active, before the game's draw callbacks: copies the tracked slot if this is the tracked call (`stages` are the
-// call's, Draw::GetStageBit bits)
-void TrackCall(ID3D11DeviceContext* context, uint8_t stages);
+// call's)
+void TrackCall(ID3D11DeviceContext* context, Shaders::StageSet stages);
+// The trace's action on a shader bound to one of `stages` (a call's) skips the call
+bool IsSkipped(ID3D11DeviceContext* context, Shaders::StageSet stages);
 // While Track is active: a deferred context's copy belongs to the command list it ended in, and is read once that list was executed
 void OnFinishCommandList(const ID3D11DeviceContext* context, const ID3D11CommandList* list);
 void OnExecuteCommandList(ID3D11DeviceContext* context, const ID3D11CommandList* list);

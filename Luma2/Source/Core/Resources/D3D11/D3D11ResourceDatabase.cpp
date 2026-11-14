@@ -168,7 +168,7 @@ const Shaders::D3D11::Live* GetShader(ID3D11Device* device, uint64_t name_hash)
    return store->objects[*index].shader.current.load(std::memory_order_acquire);
 }
 
-bool BindRequested(ID3D11DeviceContext* context, ShaderStage stage, const Shaders::CompiledShader& compiled, const LumaCustomData& custom)
+bool BindRequested(ID3D11DeviceContext* context, ShaderStage stage, const Shaders::CompiledShader& compiled, const CustomData& custom)
 {
    if (compiled.requests.empty() || !IsEnabled())
       return false;

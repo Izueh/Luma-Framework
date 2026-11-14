@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-#include "Common/Api.hpp"
+#include "Common/ShaderStage.hpp"
 
 // 1.0's constant buffer tracking: one cbuffer slot of one shader, read again every frame after a capture, so its live values and
 // what changes in them can be watched. Development builds; the draw path asks IsActive() (a relaxed load) and does nothing else

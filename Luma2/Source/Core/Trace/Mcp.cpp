@@ -32,6 +32,7 @@
 #include <span>
 
 #include "Common/Api.hpp"
+#include "Common/ShaderStage.hpp"
 #include "Shaders/Compiler.hpp"
 #include "Shaders/Database.hpp"
 #include "Shaders/Jobs.hpp"

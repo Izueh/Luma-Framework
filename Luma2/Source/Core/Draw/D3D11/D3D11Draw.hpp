@@ -9,6 +9,7 @@
 #include <wrl/client.h>
 
 #include "Draw/Draw.hpp"
+#include "Resources/ResourceDatabase.hpp"
 
 // Draw on D3D11: the state stack, the bound-state cache, and Luma's fullscreen passes. Games reach these through Luma.hpp.
 namespace Luma {
@@ -94,7 +95,7 @@ struct FullscreenPass
    ID3D11DepthStencilState* depth = nullptr;
    // Without alpha the blend factor's alpha is 0 (1.0)
    bool alpha = true;
-   LumaCustomData custom;
+   Resources::Database::CustomData custom;
 };
 
 // Inside a Luma scope. False, drawing nothing, while Luma is off, a shader isn't compiled or the target isn't a 2D texture's.

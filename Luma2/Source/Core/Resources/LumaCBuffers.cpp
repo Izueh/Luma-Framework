@@ -191,7 +191,7 @@ std::vector<Shaders::Compiler::Define> GetDefines()
 }
 
 // LumaSettings has no per pass values
-void WriteSettings(std::span<std::byte> destination, const LumaCustomData&, const Database::WriteTarget& target)
+void WriteSettings(std::span<std::byte> destination, const Database::CustomData&, const Database::WriteTarget& target)
 {
    ASSERT_ONCE(destination.size() >= SETTINGS_SIZE);
    CB::LumaGlobalSettings settings;
@@ -210,7 +210,7 @@ void WriteSettings(std::span<std::byte> destination, const LumaCustomData&, cons
 }
 
 // At every bind (1.0): the caller's context state holds the device's, nothing is looked up
-void WriteData(std::span<std::byte> destination, const LumaCustomData& custom, const Database::WriteTarget& target)
+void WriteData(std::span<std::byte> destination, const Database::CustomData& custom, const Database::WriteTarget& target)
 {
    ASSERT_ONCE(destination.size() >= DATA_SIZE);
    const Frame::Resolutions resolutions = Frame::Read(target.frame);

@@ -152,13 +152,12 @@ void SwapInVariant(ID3D11DeviceContext* context, ShaderStage stage, ID3D11Device
    }
    if (BoundShaders* state = Hooks::Lifetime::GetOrCreateStateCached<BoundShaders>(context))
    {
-      const uint8_t bit = uint8_t(1u << uint32_t(stage));
       state->shaders[size_t(stage)] = game_shader;
       state->originals[size_t(stage)] = replacement ? shader : nullptr;
       state->compiled[size_t(stage)] = replacement ? replacement->compiled.get() : nullptr;
       state->sources[size_t(stage)] = source;
-      state->variant_stages = replacement ? (state->variant_stages | bit) : (state->variant_stages & ~bit);
-      state->callback_stages = game_shader && game_shader->draw_callback ? (state->callback_stages | bit) : (state->callback_stages & ~bit);
+      state->variant_stages.Set(stage, replacement != nullptr);
+      state->callback_stages.Set(stage, game_shader && game_shader->draw_callback);
    }
    if (replacement)
       shader = replacement->object.Get();
@@ -167,14 +166,13 @@ void SwapInVariant(ID3D11DeviceContext* context, ShaderStage stage, ID3D11Device
 void UseOriginal(ID3D11DeviceContext* context, ShaderStage stage)
 {
    BoundShaders* state = Hooks::Lifetime::GetOrCreateStateCached<BoundShaders>(context);
-   const uint8_t bit = uint8_t(1u << uint32_t(stage));
-   if (!state || !(state->variant_stages & bit))
+   if (!state || !state->variant_stages.Has(stage))
       return;
    Hooks::Scope::Guard scope;
    Shaders::D3D11::Bind(context, stage, state->originals[size_t(stage)].Get());
    state->originals[size_t(stage)].Reset();
    state->compiled[size_t(stage)] = nullptr;
-   state->variant_stages &= uint8_t(~bit);
+   state->variant_stages.Remove(stage);
 }
 
 void ForgetBoundShaders(ID3D11DeviceContext* context)
@@ -188,17 +186,18 @@ const BoundShaders* GetBoundShaders(ID3D11DeviceContext* context)
    return Hooks::Lifetime::GetOrCreateStateCached<BoundShaders>(context);
 }
 
-uint8_t BindRequestedResources(ID3D11DeviceContext* context, uint8_t stages)
+StageSet BindRequestedResources(ID3D11DeviceContext* context, StageSet stages)
 {
    const BoundShaders* bound = GetBoundShaders(context);
-   if (!bound || !(bound->variant_stages & stages))
-      return 0;
-   uint8_t fulfilled = 0;
-   for (uint32_t stage = 0; stage < bound->compiled.size(); stage++)
+   if (!bound || !(bound->variant_stages & stages).Any())
+      return {};
+   StageSet fulfilled;
+   for (uint32_t index = 0; index < bound->compiled.size(); index++)
    {
-      if ((bound->variant_stages & stages & (1u << stage)) && bound->compiled[stage] &&
-         Resources::Database::D3D11::BindRequested(context, ShaderStage(stage), *bound->compiled[stage], {}))
-         fulfilled |= uint8_t(1u << stage);
+      const ShaderStage stage = ShaderStage(index);
+      if ((bound->variant_stages & stages).Has(stage) && bound->compiled[index] &&
+         Resources::Database::D3D11::BindRequested(context, stage, *bound->compiled[index], {}))
+         fulfilled.Set(stage);
    }
    return fulfilled;
 }

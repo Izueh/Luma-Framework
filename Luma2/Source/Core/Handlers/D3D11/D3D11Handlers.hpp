@@ -4,7 +4,7 @@
 
 #include <d3d11_4.h>
 
-#include "Common/Api.hpp"
+#include "Common/ShaderStage.hpp"
 #include "Hooks/Functions.hpp"
 #include "Luma.hpp"
 

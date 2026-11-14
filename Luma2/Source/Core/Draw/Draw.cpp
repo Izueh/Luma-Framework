@@ -2,24 +2,22 @@
 
 #include <initializer_list>
 
-#include "Game/Registry.hpp"
-
 namespace Luma {
 namespace Draw {
 namespace {
 // Written while Init runs
-Recorded recorded = Recorded::None;
+Options recorded;
 } // namespace
 
 void SetOptions(const Options& options)
 {
-   recorded = options.record_bound_state;
+   recorded = options;
 }
 
-Recorded GetRecorded()
+Options GetRecorded()
 {
 #if DEVELOPMENT
-   return Recorded::All;
+   return {.viewports = true, .blend = true, .depth = true};
 #else
    return recorded;
 #endif
@@ -33,17 +31,15 @@ Hooks::D3D11::Functions GetD3D11Functions()
       for (const Hooks::D3D11::Function function : requested)
          functions.set(size_t(function));
    };
-   const Recorded groups = GetRecorded();
-   if (Has(groups, Recorded::Viewports))
+   const Options groups = GetRecorded();
+   if (groups.viewports)
       request({RSSetViewports, RSSetScissorRects});
-   if (Has(groups, Recorded::Blend))
+   if (groups.blend)
       request({OMSetBlendState});
-   if (Has(groups, Recorded::Depth))
+   if (groups.depth)
       request({OMSetDepthStencilState});
-   if (groups != Recorded::None)
+   if (groups.Any())
       request({ClearState, FinishCommandList, ExecuteCommandList});
-   if (Game::Registry::HasDrawCallbacks())
-      request({Draw, DrawInstanced, DrawIndexed, DrawIndexedInstanced, DrawAuto, DrawInstancedIndirect, DrawIndexedInstancedIndirect, Dispatch, DispatchIndirect});
    return functions;
 }
 } // namespace Draw

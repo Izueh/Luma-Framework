@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "Common/Api.hpp"
+#include "Common/ShaderStage.hpp"
 #include "Shaders/Shaders.hpp"
 
 struct IUnknown;
@@ -42,6 +42,17 @@ enum class Owner : uint8_t
    Game,
 };
 
+// A pass's values for LumaData (1.0's CustomData1 to 4), given to the writers of the entries it requests
+struct CustomData
+{
+   uint32_t custom_data_1 = 0;
+   uint32_t custom_data_2 = 0;
+   float custom_data_3 = 0.f;
+   float custom_data_4 = 0.f;
+
+   friend bool operator==(const CustomData&, const CustomData&) = default;
+};
+
 // What a constant buffer's contents are written for: the device of the context uploading them and its state, which the context
 // finds once (a write, at every draw with a Luma shader, looks nothing up)
 struct WriteTarget
@@ -65,7 +76,7 @@ struct Entry
    // since its last upload (LumaSettings). Without, a context writes them at every bind and uploads them when the bytes differ from
    // its last upload (LumaData, 1.0's compare).
    uint32_t size = 0;
-   void (*write)(std::span<std::byte> destination, const LumaCustomData& custom, const WriteTarget& target) = nullptr;
+   void (*write)(std::span<std::byte> destination, const CustomData& custom, const WriteTarget& target) = nullptr;
    uint64_t (*get_stamp)() = nullptr;
 };
 

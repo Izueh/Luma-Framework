@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-#include "Common/Api.hpp"
+#include "Common/ShaderStage.hpp"
 #include "Hooks/Functions.hpp"
 #include "Shaders/Variants.hpp"
 

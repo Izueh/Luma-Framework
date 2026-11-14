@@ -10,9 +10,12 @@
 
 #include "Common/Api.hpp"
 #include "Common/Math.hpp"
+#include "Common/ShaderStage.hpp"
 #include "Draw/Draw.hpp"
 #include "Frame/Frame.hpp"
+#include "Game/Events.hpp"
 #include "Resources/LumaCBuffers.hpp"
+#include "Resources/ResourceDatabase.hpp"
 #include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
 #include "Shaders/Defines.hpp"
@@ -117,5 +120,15 @@ Luma::Frame::Resolutions Get(IUnknown* device);
 // What the game renders the scene at, from its SR or TAA path: the output's until set, and again after a resize
 void SetRenderResolution(IUnknown* device, Math::uint2 size);
 } // namespace Frame
+
+// For the draw events (Events::on_variant_draw, on_draw_or_dispatch, OnShaderDraw), inside a Luma scope
+namespace D3D11 {
+// The game's call, with the bindings now on the context
+void RunOriginal(const Call& call);
+// Until the game binds another shader on `stage`. Nothing on a stage without a variant.
+void UseOriginal(const Call& call, ShaderStage stage);
+// With the resources the shader requests. From a draw event, Core then binds no variant's requests for that call.
+void BindLumaShader(ID3D11DeviceContext* context, uint64_t name_hash, const Resources::Database::CustomData& custom = {});
+} // namespace D3D11
 } // namespace Game
 } // namespace Luma
