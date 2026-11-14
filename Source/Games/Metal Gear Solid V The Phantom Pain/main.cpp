@@ -4,7 +4,8 @@
 // motion vectors (a compute pass next to the game's own 8 bit ones). The game records its post processing on deferred contexts, so SR
 // splits the post processing command list right before the game's bloom and runs on the immediate context between its two halves (like
 // Persona 5 Royal at FXAA): bloom, lens flare, DoF, motion blur, the LUT and the tonemap run on its output, and FXAA is skipped.
-// The game quits at startup under ReShade's D3D11 wrapper unless its device check is answered for it ("InstallDeviceCheckFix()").
+// The game quits at startup if its D3D11 device context is wrapped. Luma hooks the real one in place, so that check passes on its own
+// (Test and Development builds log it, see "LogWrapperCheck()").
 // Development builds can also skip FXAA, jitter without SR and flip the SR inputs (MCP "luma_dev_values" or the dev settings).
 
 #define GAME_METAL_GEAR_SOLID_V 1
@@ -17,14 +18,9 @@
 
 #define GEOMETRY_SHADER_SUPPORT 0
 
-// Luma's FSR 4 runs on its own D3D12 device, which ReShade also wraps: ignore the events of non D3D11 devices
-
 #include "..\..\Core\core.hpp"
-#include "..\..\Core\hooks\Hooks.h"
 
 #include <chrono>
-#include <intrin.h>
-#include <Psapi.h>
 
 namespace
 {
@@ -77,57 +73,35 @@ namespace
       const std::lock_guard lock(g_fxaa_targets_mutex);
       if (g_fxaa_targets.emplace(rtv_desc.Format, texture_desc.Width, texture_desc.Height).second)
       {
-         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("MGSV: new FXAA target {}x{}, view format {}", texture_desc.Width, texture_desc.Height, int(rtv_desc.Format)).c_str());
+         Luma::Utils::Log::Info("MGSV: new FXAA target {}x{}, view format {}", texture_desc.Width, texture_desc.Height, int(rtv_desc.Format));
       }
    }
 #endif
 
-#if ENABLE_SAFETYHOOK
-   // The game quits (exit code 0) right after creating its D3D11 device if the device's vtable isn't inside the module named "d3d11.dll",
-   // and Luma's device proxy (like ReShade's device wrapper before) lives in Luma's own module. The game gets that module's range through psapi's "GetModuleInformation()"
-   // (which jumps to kernelbase's), so the game's own calls for "d3d11.dll" get ReShade's module instead.
-   // The cause and the fix are from ghostinthecamera/mgsv-reshade-fix (MIT), which patches ReShade instead.
-   // So for the game's own calls, "d3d11.dll" answers with Luma's module range.
-   safetyhook::InlineHook g_get_module_information_hook;
-
-   BOOL WINAPI HookedGetModuleInformation(HANDLE process, HMODULE module, LPMODULEINFO module_info, DWORD size)
+#if DEVELOPMENT || TEST
+   // Right after creating its D3D11 device, the game checks that entries 3 to 99 of its device context's vtable point inside the module
+   // named "d3d11.dll", and quits (exit code 0, no message) if one doesn't: that's how it detects wrappers such as ReShade's (found by
+   // ghostinthecamera/mgsv-reshade-fix). Luma hooks the real context's methods in place, so the entries stay where they are and the check
+   // passes. The game gives no hint when it fails, so this repeats the check on the real context and logs the outcome.
+   void LogWrapperCheck(ID3D11Device* native_device)
    {
-      if (module && ::Hooks::IsAddressInModule(_ReturnAddress(), GetModuleHandleW(nullptr)))
+      com_ptr<ID3D11DeviceContext> context;
+      native_device->GetImmediateContext(&context);
+      void* const* const vtable = *reinterpret_cast<void* const* const*>(context.get());
+      for (int entry = 3; entry < 100; entry++)
       {
-         const HMODULE luma_module = Luma::Utils::Modules::Self();
-         wchar_t path[MAX_PATH];
-         if (luma_module && module != luma_module && GetModuleFileNameW(module, path, MAX_PATH))
+         HMODULE module = nullptr;
+         char path[MAX_PATH] = "no module";
+         if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCSTR>(vtable[entry]), &module))
+            GetModuleFileNameA(module, path, MAX_PATH);
+         const char* const file_name = strrchr(path, '\\');
+         if (_stricmp(file_name ? file_name + 1 : path, "d3d11.dll") != 0)
          {
-            const wchar_t* file_name = wcsrchr(path, L'\\');
-            if (_wcsicmp(file_name ? file_name + 1 : path, L"d3d11.dll") == 0)
-            {
-               static std::atomic<bool> logged = false;
-               if (!logged.exchange(true))
-               {
-                  Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "MGSV: the game's D3D11 device check gets Luma's module for d3d11.dll");
-               }
-               module = luma_module;
-            }
-         }
-      }
-      return g_get_module_information_hook.stdcall<BOOL>(process, module, module_info, size);
-   }
-
-   // Before the game's device check, which follows its device creation
-   void InstallDeviceCheckFix()
-   {
-      if (g_get_module_information_hook)
-         return;
-      void* const target = GetProcAddress(GetModuleHandleW(L"kernelbase.dll"), "K32GetModuleInformation");
-      if (target)
-      {
-         if (auto hook = safetyhook::InlineHook::create(target, reinterpret_cast<void*>(&HookedGetModuleInformation)))
-         {
-            g_get_module_information_hook = std::move(*hook);
+            Luma::Utils::Log::Error("MGSV: the game's wrapper check will fail and the game will quit: entry {} of its device context's vtable points into \"{}\", outside d3d11.dll", entry, path);
             return;
          }
       }
-      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, "MGSV: couldn't hook GetModuleInformation, the game quits at startup unless ReShade has its own Metal Gear Solid V fix");
+      Luma::Utils::Log::Info("MGSV: the game's wrapper check will pass (entries 3 to 99 of its device context's vtable point into d3d11.dll)");
    }
 #endif
 
@@ -161,7 +135,7 @@ namespace
       const uint32_t count = ++g_sr_fallbacks[int(kind)];
       if (count == 1 || count == 10 || count == 100 || count == 1000 || count % 10000 == 0)
       {
-         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, std::format("MGSV: SR couldn't run before bloom, so it runs at FXAA's slot ({} time{}): {}", count, count == 1 ? "" : "s", reason).c_str());
+         Luma::Utils::Log::Warning("MGSV: SR couldn't run before bloom, so it runs at FXAA's slot ({} time{}): {}", count, count == 1 ? "" : "s", reason);
       }
    }
 
@@ -196,7 +170,7 @@ namespace
    {
       if (!g_sr_disabled.exchange(true))
       {
-         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Error, std::format("MGSV: SR disabled ({}), FXAA is back until another Super Resolution type is picked", reason).c_str());
+         Luma::Utils::Log::Error("MGSV: SR disabled ({}), FXAA is back until another Super Resolution type is picked", reason);
       }
    }
 
@@ -359,7 +333,7 @@ namespace
             g_logged_keys++;
             const float (&eye)[4] = rows[kRowEyePos];
             const float (&forward)[4] = rows[kRowProjectionView + 3];
-            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("MGSV: camera key {} (main frame {}, phase {}): velocity upload {}, eye ({:.4f} {:.4f} {:.4f}), forward ({:.5f} {:.5f} {:.5f} {:.4f}), projection scale ({:.4f} {:.4f})", frame, g_main_frames, frame_phase->phase, velocity_upload, eye[0], eye[1], eye[2], forward[0], forward[1], forward[2], forward[3], rows[kRowProjection][0], rows[kRowProjection + 1][1]).c_str());
+            Luma::Utils::Log::Info("MGSV: camera key {} (main frame {}, phase {}): velocity upload {}, eye ({:.4f} {:.4f} {:.4f}), forward ({:.5f} {:.5f} {:.5f} {:.4f}), projection scale ({:.4f} {:.4f})", frame, g_main_frames, frame_phase->phase, velocity_upload, eye[0], eye[1], eye[2], forward[0], forward[1], forward[2], forward[3], rows[kRowProjection][0], rows[kRowProjection + 1][1]);
          }
 #endif
       }
@@ -424,7 +398,7 @@ namespace
          const std::lock_guard lock(g_view_signatures_mutex);
          if (g_view_signatures.size() < 64 && g_view_signatures.insert(signature).second)
          {
-            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("MGSV: new scene view: perspective {}, aspect ratio {:.3f}, vertical scale {:.3f}, previous view projection in rows 8-11 {}, main view {}", perspective, aspect_ratio, rows[kRowProjection + 1][1], prev_projection_view, main_view).c_str());
+            Luma::Utils::Log::Info("MGSV: new scene view: perspective {}, aspect ratio {:.3f}, vertical scale {:.3f}, previous view projection in rows 8-11 {}, main view {}", perspective, aspect_ratio, rows[kRowProjection + 1][1], prev_projection_view, main_view);
          }
       }
 #endif
@@ -455,10 +429,9 @@ namespace
       rows[kRowCameraCenterOffset][1] += offset_y;
    }
 
-   void OnMapSceneCB(const DeviceData& device_data, ID3D11Buffer* buffer, D3D11_MAP access, void** data)
+   // For write discard maps of buffers (see "PostMap()")
+   void OnMapSceneCB(const DeviceData& device_data, ID3D11Buffer* buffer, void* data)
    {
-      if (access != D3D11_MAP_WRITE_DISCARD)
-         return;
       // Only SR (or the development tools) needs the scene constants: skip the per map work otherwise (the game maps thousands of buffers)
       bool needed = SrUsable(device_data);
 #if DEVELOPMENT
@@ -470,17 +443,13 @@ namespace
       buffer->GetDesc(&desc);
       if (desc.ByteWidth == kSceneCBSize && (desc.BindFlags & D3D11_BIND_CONSTANT_BUFFER) != 0)
       {
-         t_pending_scene_cb_map = {buffer, *data};
+         t_pending_scene_cb_map = {buffer, data};
       }
    }
 
-   // Called before the real unmap, so the mapped memory still takes our changes
-   void OnUnmapSceneCB(const DeviceData& device_data, ID3D11Buffer* buffer)
+   // The unmap of a scene cbuffer this thread mapped, before the real one, so the mapped memory still takes our changes
+   void OnUnmapSceneCB(const DeviceData& device_data, ID3D11Buffer* buffer, void* data)
    {
-      if (t_pending_scene_cb_map.buffer != buffer || t_pending_scene_cb_map.data == nullptr)
-         return;
-      void* const data = t_pending_scene_cb_map.data;
-      t_pending_scene_cb_map = {};
 #if DEVELOPMENT
       g_scene_cb_uploads++;
 #endif
@@ -865,7 +834,7 @@ class MetalGearSolidV final : public Game
       static std::atomic<bool> logged = false;
       if (!logged.exchange(true))
       {
-         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("MGSV: SR runs before bloom (scene {}x{}, texture format {})", desc.Width, desc.Height, int(desc.Format)).c_str());
+         Luma::Utils::Log::Info("MGSV: SR runs before bloom (scene {}x{}, texture format {})", desc.Width, desc.Height, int(desc.Format));
       }
 #endif
       return true;
@@ -987,22 +956,25 @@ class MetalGearSolidV final : public Game
 
 public:
 #if ENABLE_SR // The hooks are only needed for SR (and its development tools)
+   // These two run for every map and unmap of the game's, so they rule out most calls before anything else
    void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override
    {
+      if (type != D3D11_MAP_WRITE_DISCARD) // How the game uploads its scene constants
+         return;
       ID3D11Buffer* buffer = AsBuffer(resource);
       if (!buffer)
          return;
       if (CommandListData* cmd_list_data = GetCommandListData(context))
-         OnMapSceneCB(*cmd_list_data->device_data, buffer, type, &mapped.pData);
+         OnMapSceneCB(*cmd_list_data->device_data, buffer, mapped.pData);
    }
 
    bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) override
    {
-      ID3D11Buffer* buffer = AsBuffer(resource);
-      if (!buffer)
+      if (t_pending_scene_cb_map.buffer == nullptr || resource != t_pending_scene_cb_map.buffer)
          return false;
+      void* const data = std::exchange(t_pending_scene_cb_map, {}).data;
       if (CommandListData* cmd_list_data = GetCommandListData(context))
-         OnUnmapSceneCB(*cmd_list_data->device_data, buffer);
+         OnUnmapSceneCB(*cmd_list_data->device_data, static_cast<ID3D11Buffer*>(resource), data);
       return false;
    }
 
@@ -1044,8 +1016,8 @@ public:
 
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override
    {
-#if ENABLE_SAFETYHOOK
-      InstallDeviceCheckFix();
+#if DEVELOPMENT || TEST
+      LogWrapperCheck(native_device);
 #endif
       device_data.game = new GameDeviceDataMetalGearSolidV;
 #if ENABLE_SR
@@ -1238,7 +1210,7 @@ public:
          g_sr_failures_in_a_row = 0;
          if (g_sr_disabled.exchange(false))
          {
-            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, "MGSV: SR re-enabled (another Super Resolution type was picked)");
+            Luma::Utils::Log::Info("MGSV: SR re-enabled (another Super Resolution type was picked)");
          }
       }
       const bool sr_drawn = game_device_data.sr_drawn.exchange(false);
@@ -1275,7 +1247,7 @@ public:
       if ((fxaa_draws != g_fxaa_draws_last_frame || velocity_draws != g_velocity_draws_last_frame) && g_logged_count_changes < kMaxLoggedCountChanges)
       {
          g_logged_count_changes++;
-         Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("MGSV: per frame draws changed: FXAA {} -> {}, velocity {} -> {}", g_fxaa_draws_last_frame, fxaa_draws, g_velocity_draws_last_frame, velocity_draws).c_str());
+         Luma::Utils::Log::Info("MGSV: per frame draws changed: FXAA {} -> {}, velocity {} -> {}", g_fxaa_draws_last_frame, fxaa_draws, g_velocity_draws_last_frame, velocity_draws);
       }
       g_fxaa_draws_last_frame = fxaa_draws;
       g_velocity_draws_last_frame = velocity_draws;
@@ -1339,9 +1311,8 @@ public:
                   "\n\nMain:"
                   "\nPetarBadzhakov"
                   "\n\nAcknowledgments:"
-                  "\nghostinthecamera (why the game closes under ReShade)"
+                  "\nghostinthecamera (found the game's wrapper check)"
                   "\n\nThird Party:"
-                  "\nReShade"
                   "\nImGui"
                   "\nSafetyHook"
                   "\nAMD FidelityFX Super Resolution"
@@ -1352,7 +1323,7 @@ public:
 
 namespace
 {
-   // Metal Gear Online ("mgsvmgo.exe") shares the game folder, and thus ReShade, with The Phantom Pain: never load in it
+   // Metal Gear Online ("mgsvmgo.exe") shares the game folder, and thus Luma's dxgi.dll, with The Phantom Pain
    bool IsMetalGearOnline()
    {
       char path[MAX_PATH] = {};
@@ -1368,9 +1339,10 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 {
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
    {
-      // A failed attach makes the loader call us with DLL_PROCESS_DETACH right away, and ReShade logs the failed load
+      // MGO imports dxgi.dll, so failing its load would stop MGO from starting: stay loaded without starting Luma, the exports
+      // still forward to the system dxgi.dll
       if (IsMetalGearOnline())
-         return FALSE;
+         return TRUE;
       attached = true;
 
       Globals::SetGlobals(PROJECT_NAME, "Metal Gear Solid V: The Phantom Pain Luma mod");
