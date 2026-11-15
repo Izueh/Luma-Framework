@@ -8,11 +8,12 @@
 namespace Luma {
 namespace Overlay {
 namespace Input {
+// Luma never subclasses the window: other layers (dgVoodoo, Steam's overlay) stack their own on it, and a chain that
+// contains Luma twice recurses until the stack overflows. Messages come from the message queue hooks only.
 void Attach(HWND window);
-// Gives the window its procedure back, unless another subclass went on top: then it stays, passing messages through
 void Detach(HWND window);
 
-// A message for the attached window (or one of its children), from its procedure or from the message queue hooks.
+// A message for the attached window (or one of its children), from the message queue hooks.
 // Handles the toggle key and feeds the overlay while it's open. True if the game must not see it.
 bool HandleMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
 

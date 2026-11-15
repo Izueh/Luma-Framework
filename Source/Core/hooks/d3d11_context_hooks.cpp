@@ -2,7 +2,11 @@
 
 #include <algorithm>
 #include <array>
+#include <deque>
+#include <format>
 #include <initializer_list>
+#include <mutex>
+#include <string>
 #include <vector>
 
 #include <d3d11_4.h>
@@ -396,19 +400,25 @@ void STDMETHODCALLTYPE Flush(ID3D11DeviceContext* context)
    ReportBefore<&Flush<V>, &Callbacks::PreFlush>(context);
 }
 
-#define LUMA_CONTEXT_HOOKS(Type, Method, Version)                                                                                     \
-   Hook{VtableTarget{Vtables::Interface::D3D11ImmediateContext, LumaSlot_##Type##_##Method, #Type "::" #Method " (immediate)", Version}, \
-      reinterpret_cast<void*>(&Method<0>), reinterpret_cast<void**>(&original<&Method<0>>), true},                                   \
-      Hook                                                                                                                           \
-   {                                                                                                                                  \
-      VtableTarget{Vtables::Interface::D3D11DeferredContext, LumaSlot_##Type##_##Method, #Type "::" #Method " (deferred)", Version}, \
-         reinterpret_cast<void*>(&Method<1>), reinterpret_cast<void**>(&original<&Method<1>>), true                                  \
-   }
-#define LUMA_CONTEXT1_HOOKS(Method) LUMA_CONTEXT_HOOKS(ID3D11DeviceContext1, Method, __uuidof(ID3D11DeviceContext1))
-#define LUMA_BASE_HOOKS(Method) LUMA_CONTEXT_HOOKS(ID3D11DeviceContext, Method, GUID_NULL)
-} // namespace
+// Kept for the log: the name of a hook (hooks keep a pointer to it)
+const char* HookName(const char* method, const char* variant)
+{
+   static std::mutex mutex;
+   static auto* names = new std::deque<std::string>();
+   std::scoped_lock lock(mutex);
+   return names->emplace_back(std::format("{} ({})", method, variant)).c_str();
+}
 
-void InstallD3D11Context(const D3D11::Functions& functions)
+// One detour instance per set of methods (V): each has its own original
+#define LUMA_CONTEXT_HOOK(Type, Method, Version)                                                                                             \
+   Hook{VtableTarget{vtable, LumaSlot_##Type##_##Method, HookName(#Type "::" #Method, variant_name), Version},                               \
+      reinterpret_cast<void*>(&Method<V>), reinterpret_cast<void**>(&original<&Method<V>>), true}
+#define LUMA_CONTEXT1_HOOKS(Method) LUMA_CONTEXT_HOOK(ID3D11DeviceContext1, Method, __uuidof(ID3D11DeviceContext1))
+#define LUMA_BASE_HOOKS(Method) LUMA_CONTEXT_HOOK(ID3D11DeviceContext, Method, GUID_NULL)
+
+// The context hooks on the methods recorded for `vtable`. Instance 0 is the immediate context's, 1 the deferred one's, the others contexts D3D11 switched.
+template <size_t V>
+void DeclareContextHooks(const D3D11::Functions& functions, Vtables::Interface vtable, const char* variant_name)
 {
    using D3D11::Function;
    std::vector<Hook> hooks;
@@ -476,6 +486,33 @@ void InstallD3D11Context(const D3D11::Functions& functions)
    add(Function::Flush, {LUMA_BASE_HOOKS(Flush)});
    if (!hooks.empty())
       Declare(hooks);
+}
+} // namespace
+
+void InstallD3D11Context(const D3D11::Functions& functions)
+{
+   DeclareContextHooks<0>(functions, Vtables::Interface::D3D11ImmediateContext, "immediate");
+   DeclareContextHooks<1>(functions, Vtables::Interface::D3D11DeferredContext, "deferred");
+}
+
+void DeclareContextVariant(size_t index, const D3D11::Functions& functions)
+{
+   static_assert(CONTEXT_VARIANT_COUNT == 4);
+   switch (index)
+   {
+   case 0:
+      DeclareContextHooks<2>(functions, Vtables::Interface::D3D11ContextVariant0, "variant 0");
+      break;
+   case 1:
+      DeclareContextHooks<3>(functions, Vtables::Interface::D3D11ContextVariant1, "variant 1");
+      break;
+   case 2:
+      DeclareContextHooks<4>(functions, Vtables::Interface::D3D11ContextVariant2, "variant 2");
+      break;
+   case 3:
+      DeclareContextHooks<5>(functions, Vtables::Interface::D3D11ContextVariant3, "variant 3");
+      break;
+   }
 }
 } // namespace Hooks
 } // namespace Luma

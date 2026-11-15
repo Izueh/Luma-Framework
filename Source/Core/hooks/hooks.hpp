@@ -5,6 +5,7 @@
 #include <string_view>
 #include <variant>
 
+#include <d3d11.h>
 #include <dxgi.h>
 
 #include "hooks/functions.hpp"
@@ -51,6 +52,15 @@ void InstallD3D11(const D3D11::Functions& functions);
 // Called by InstallD3D11
 void InstallD3D11Device(const D3D11::Functions& functions);
 void InstallD3D11Context(const D3D11::Functions& functions);
+
+// D3D11 switches a context to other instances of its methods while the game runs (Blue Reflection's and Borderlands 2's immediate contexts
+// draw through other ones than they were created with). Hooks only cover the instances they were installed on, so every context seen
+// (deferred ones at creation, the immediate one at each present) is checked, and the hooks of its methods are installed if no hooked
+// instance matches it.
+void ObserveContext(ID3D11DeviceContext* context);
+constexpr size_t CONTEXT_VARIANT_COUNT = 4;
+// Declares the context hooks on the methods recorded for `Vtables::Interface::D3D11ContextVariant0 + index`
+void DeclareContextVariant(size_t index, const D3D11::Functions& functions);
 
 // A swapchain the factory hooks can't report: D3D11CreateDeviceAndSwapChain creates it before its device is known.
 // `requested` is the desc the game asked for, before Luma's changes (null if it didn't pass one).

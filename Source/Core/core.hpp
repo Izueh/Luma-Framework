@@ -2776,7 +2776,7 @@ namespace
          decltype(device_data.custom_sampler_by_original_sampler) samplers;
          {
             const std::unique_lock lock_samplers(s_mutex_samplers);
-            ASSERT_ONCE(device_data.custom_sampler_by_original_sampler.empty()); // These should have been cleared already ("OnDestroySampler()")
+            // Not empty when the game releases its device before its samplers (dgVoodoo's caps device), which COM allows: children keep the device alive
             samplers = std::move(device_data.custom_sampler_by_original_sampler);
             device_data.custom_sampler_by_original_sampler.clear();
          }

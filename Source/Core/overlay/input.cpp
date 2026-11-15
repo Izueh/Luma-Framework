@@ -4,7 +4,6 @@
 #include <format>
 #include <iterator>
 #include <mutex>
-#include <unordered_map>
 
 #include "overlay/overlay.hpp"
 #include "utils/config.hpp"
@@ -18,11 +17,9 @@ namespace {
 constexpr const char* CONFIG_SECTION = "Luma";
 constexpr const char* TOGGLE_KEY_CONFIG = "OverlayKey";
 
-// Never held while calling into the overlay or a window procedure
+// Never held while calling into the overlay
 std::mutex mutex;
 HWND attached_window = nullptr;
-// Kept for a window Luma can't unsubclass, so its procedure keeps passing messages through
-std::unordered_map<HWND, WNDPROC> original_procedures;
 
 std::atomic<uint32_t> toggle_key = VK_INSERT;
 std::atomic<bool> capturing = false;
@@ -31,20 +28,6 @@ std::atomic<uint32_t> captured_key = 0;
 bool IsInputMessage(UINT message)
 {
    return (message >= WM_KEYFIRST && message <= WM_KEYLAST) || (message >= WM_MOUSEFIRST && message <= WM_MOUSELAST) || message == WM_INPUT;
-}
-
-LRESULT CALLBACK WindowProcedure(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
-{
-   WNDPROC original = nullptr;
-   {
-      std::scoped_lock lock(mutex);
-      if (const auto it = original_procedures.find(hwnd); it != original_procedures.end())
-         original = it->second;
-   }
-   // WM_INPUT still needs DefWindowProc to free its data
-   if (HandleMessage(hwnd, message, wparam, lparam))
-      return message == WM_INPUT ? DefWindowProcW(hwnd, message, wparam, lparam) : 0;
-   return original ? CallWindowProcW(original, hwnd, message, wparam, lparam) : DefWindowProcW(hwnd, message, wparam, lparam);
 }
 } // namespace
 
@@ -84,8 +67,6 @@ void Attach(HWND window)
       toggle_key = key;
    {
       std::scoped_lock lock(mutex);
-      if (GetWindowLongPtrW(window, GWLP_WNDPROC) != reinterpret_cast<LONG_PTR>(&WindowProcedure))
-         original_procedures[window] = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&WindowProcedure)));
       attached_window = window;
    }
    Utils::Log::Info("Overlay: {} toggles the overlay", GetKeyName(toggle_key));
@@ -94,12 +75,8 @@ void Attach(HWND window)
 void Detach(HWND window)
 {
    std::scoped_lock lock(mutex);
-   attached_window = nullptr;
-   if (GetWindowLongPtrW(window, GWLP_WNDPROC) == reinterpret_cast<LONG_PTR>(&WindowProcedure))
-   {
-      SetWindowLongPtrW(window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(original_procedures[window]));
-      original_procedures.erase(window);
-   }
+   if (attached_window == window)
+      attached_window = nullptr;
 }
 
 uint32_t GetToggleKey()

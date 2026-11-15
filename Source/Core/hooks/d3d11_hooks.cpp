@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <utility>
 
 #include <d3d11_4.h>
@@ -23,6 +24,8 @@ namespace {
 PFN_D3D11_CREATE_DEVICE original_create_device = nullptr;
 PFN_D3D11_CREATE_DEVICE_AND_SWAP_CHAIN original_create_device_and_swapchain = nullptr;
 std::atomic<bool> vtables_resolved = false;
+// For the hooks of context variants, declared as they appear
+D3D11::Functions installed_functions;
 
 // Children return the real device: GetDevice hands the game its proxy instead. Contexts and other children have different
 // functions, and one may jump into another (with the debug layer), so each has a detour and only the outermost call swaps.
@@ -252,8 +255,49 @@ constexpr std::array<void*, sizeof...(Indices)> GetDeviceDetours(std::index_sequ
 }
 } // namespace
 
+void ObserveContext(ID3D11DeviceContext* context)
+{
+   // Before the first device resolved the methods nothing is hooked yet
+   if (!context || !Vtables::Get(Vtables::Interface::D3D11ImmediateContext))
+      return;
+   const auto variant = [](size_t index) { return Vtables::Interface(size_t(Vtables::Interface::D3D11ContextVariant0) + index); };
+   const auto is_hooked = [&] {
+      if (Vtables::Matches(Vtables::Interface::D3D11ImmediateContext, context) || Vtables::Matches(Vtables::Interface::D3D11DeferredContext, context))
+         return true;
+      for (size_t i = 0; i < CONTEXT_VARIANT_COUNT; i++)
+      {
+         if (Vtables::Matches(variant(i), context))
+            return true;
+      }
+      return false;
+   };
+   if (is_hooked())
+      return;
+
+   static std::mutex mutex;
+   std::scoped_lock lock(mutex);
+   if (is_hooked()) // Hooked by another thread meanwhile
+      return;
+   Scope::Guard scope;
+   for (size_t i = 0; i < CONTEXT_VARIANT_COUNT; i++)
+   {
+      if (Vtables::Get(variant(i)))
+         continue;
+      Utils::Log::Info("D3D11: the context {} has methods no hook covers, hooking them (variant {})", static_cast<const void*>(context), i);
+      Vtables::Set(variant(i), context, CONTEXT_VERSIONS);
+      DeclareContextVariant(i, installed_functions);
+      LogSummary();
+      return;
+   }
+   static std::atomic<bool> warned = false;
+   if (!warned.exchange(true))
+      Utils::Log::Warning("D3D11: the context {} has methods no hook covers and all {} variants are used, its calls are not seen", static_cast<const void*>(context),
+         CONTEXT_VARIANT_COUNT);
+}
+
 void InstallD3D11(const D3D11::Functions& functions)
 {
+   installed_functions = functions;
    const std::array hooks = {
       Hook{ExportTarget{L"d3d11.dll", "D3D11CreateDevice"}, reinterpret_cast<void*>(&CreateDevice), reinterpret_cast<void**>(&original_create_device)},
       Hook{ExportTarget{L"d3d11.dll", "D3D11CreateDeviceAndSwapChain"}, reinterpret_cast<void*>(&CreateDeviceAndSwapChain), reinterpret_cast<void**>(&original_create_device_and_swapchain)},
