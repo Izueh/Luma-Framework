@@ -15,6 +15,7 @@
 #include "Frame/Frame.hpp"
 #include "Game/Registry.hpp"
 #include "Hooks/Hooks.hpp"
+#include "Hooks/InputHooks.hpp"
 #include "Hooks/Lifetime.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/Scope.hpp"
@@ -45,6 +46,8 @@ void InstallHooks()
       Hooks::InstallDXGI(functions);
       Hooks::InstallD3D11(functions);
       Hooks::InstallD3D12({});
+      // The overlay sees the game's input on its message queue
+      Hooks::Input::Install();
       return true;
    }();
    static_cast<void>(installed);
@@ -756,16 +759,25 @@ struct GameWindow
 
    ~GameWindow() { DestroyWindow(hwnd); }
 
-   void Key(WPARAM key) { SendMessageW(hwnd, WM_KEYDOWN, key, 0); }
+   // Through the message queue, as a game gets its input: Luma sees it there, and never subclasses the window
+   void Post(UINT message, WPARAM wparam, LPARAM lparam)
+   {
+      PostMessageW(hwnd, message, wparam, lparam);
+      MSG queued;
+      while (PeekMessageW(&queued, hwnd, 0, 0, PM_REMOVE))
+         DispatchMessageW(&queued);
+   }
 
-   void Mouse() { SendMessageW(hwnd, WM_MOUSEMOVE, 0, MAKELPARAM(10, 10)); }
+   void Key(WPARAM key) { Post(WM_KEYDOWN, key, 0); }
 
-   // ImGui captures the mouse on the press and releases it on the release, which sends WM_CAPTURECHANGED back into the
-   // window procedure on the same thread, while the overlay handles the release
+   void Mouse() { Post(WM_MOUSEMOVE, 0, MAKELPARAM(10, 10)); }
+
+   // ImGui captures the mouse on the press and releases it on the release, which sends WM_CAPTURECHANGED into the window
+   // procedure on the same thread, while the overlay handles the release
    void Click()
    {
-      SendMessageW(hwnd, WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(10, 10));
-      SendMessageW(hwnd, WM_LBUTTONUP, 0, MAKELPARAM(10, 10));
+      Post(WM_LBUTTONDOWN, MK_LBUTTON, MAKELPARAM(10, 10));
+      Post(WM_LBUTTONUP, 0, MAKELPARAM(10, 10));
    }
 
    bool IsSubclassed() const { return GetWindowLongPtrW(hwnd, GWLP_WNDPROC) != reinterpret_cast<LONG_PTR>(&GameWindowProcedure); }
@@ -806,7 +818,7 @@ TEST_CASE("Overlay D3D11: attaches to the game's swapchain, toggles, blocks inpu
    // Attached when the swapchain is created, closed
    CHECK(UI::GetSwapchain() == swapchain.Get());
    swapchain->Present(0, 0);
-   CHECK(window.IsSubclassed());
+   CHECK_FALSE(window.IsSubclassed());
    window.Key('A');
    window.Mouse();
    CHECK(game_keys == 1);
@@ -853,8 +865,7 @@ TEST_CASE("Overlay D3D11: attaches to the game's swapchain, toggles, blocks inpu
       CHECK(CountErrors<D3D11_MESSAGE>(info_queue.Get(), D3D11_MESSAGE_SEVERITY_ERROR) == 0);
    info_queue.Reset();
 
-   // The game releases its device before the swapchain (which holds the real device on D3D11): the overlay goes with the
-   // device, and the window gets its procedure back
+   // The game releases its device before the swapchain (which holds the real device on D3D11): the overlay goes with the device
    still_bound.Reset();
    constants.Reset();
    immediate_context.Reset();

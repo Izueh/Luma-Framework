@@ -351,6 +351,7 @@ HRESULT CreateDeferredContextDetour(Device* device, UINT flags, Context** contex
    {
       Scope::Guard scope;
       Track<Handlers::OnDeferredContextDestroyed>(device, *context);
+      ObserveContext(static_cast<ID3D11DeviceContext*>(*context));
       Handlers::PostCreateDeferredContext(device, *context);
    }
    return result;

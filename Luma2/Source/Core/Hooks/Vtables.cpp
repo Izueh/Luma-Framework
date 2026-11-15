@@ -85,6 +85,14 @@ bool Set(Interface interface_type, IUnknown* object, std::span<const InterfaceVe
    return true;
 }
 
+bool Matches(Interface interface_type, IUnknown* object)
+{
+   void* const* vtable = GetVtable(object);
+   std::scoped_lock lock(mutex);
+   const Entry& entry = entries[size_t(interface_type)];
+   return !entry.methods.empty() && SameMethods(entry.methods, vtable);
+}
+
 void* const* Get(Interface interface_type)
 {
    std::scoped_lock lock(mutex);

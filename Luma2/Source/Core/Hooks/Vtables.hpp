@@ -18,6 +18,11 @@ enum class Interface : uint8_t
    D3D11Device,
    D3D11ImmediateContext,
    D3D11DeferredContext,
+   // Contexts whose methods are neither: D3D11 switches a context to other instances of its methods while the game runs
+   D3D11ContextVariant0,
+   D3D11ContextVariant1,
+   D3D11ContextVariant2,
+   D3D11ContextVariant3,
    D3D11DeviceChild,
    D3D12Device,
    D3D12CommandQueue,
@@ -47,6 +52,9 @@ InterfaceVersion GetVersion(std::string_view name, uint32_t method_count)
 // The methods are copied: a vtable can be heap memory owned by its object (D3D11 contexts), freed with it.
 // False if its methods differ from the recorded ones, which hooks may not cover.
 bool Set(Interface interface_type, IUnknown* object, std::span<const InterfaceVersion> versions);
+
+// Whether the object's methods are the recorded ones. False if nothing is recorded.
+bool Matches(Interface interface_type, IUnknown* object);
 
 // The recorded methods (as many as the highest supported version has), null until set
 void* const* Get(Interface interface_type);

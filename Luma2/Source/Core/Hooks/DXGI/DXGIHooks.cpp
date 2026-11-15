@@ -77,15 +77,17 @@ const std::array SWAPCHAIN_VERSIONS = {
    Vtables::GetVersion<IDXGISwapChain4>("IDXGISwapChain4", LumaMethodCount_IDXGISwapChain4),
 };
 
-// What the game asked for when it created or resized a swapchain. Luma changes these (flip model, more buffers, flags, a float format),
-// and the game keeps seeing what it asked for through "GetDesc" and "GetDesc1" (inside a Luma scope, Luma sees the real swapchain).
-// ReShade did the same, and a game that passes back what it reads to "ResizeBuffers" would otherwise resize the swapchain to Luma's own format.
+// What the game asked for when it created or resized a swapchain. Luma changes it (flip model, more buffers, flags, a float format, samples,
+// windowed), and the game keeps seeing all of what it asked for through "GetDesc" and "GetDesc1", as with ReShade (inside a Luma scope, Luma
+// sees the real swapchain). A game that compares it with what it wants recreates its swapchain on any difference (dgVoodoo does, every frame),
+// and one that passes it back to "ResizeBuffers" would resize the swapchain to Luma's own format.
 struct GameSwapchainDesc
 {
-   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
-   UINT buffer_count = 0;
-   DXGI_SWAP_EFFECT swap_effect = DXGI_SWAP_EFFECT_DISCARD;
-   UINT flags = 0;
+   DXGI_SWAP_CHAIN_DESC desc = {}; // As "CreateSwapChain" takes it. A zero width or height stands for the swapchain's real one.
+   // Only in "DXGI_SWAP_CHAIN_DESC1"
+   DXGI_SCALING scaling = DXGI_SCALING_STRETCH;
+   DXGI_ALPHA_MODE alpha_mode = DXGI_ALPHA_MODE_UNSPECIFIED;
+   BOOL stereo = FALSE;
 };
 
 void SetGameDesc(IDXGISwapChain* swapchain, const GameSwapchainDesc& desc)
@@ -104,31 +106,45 @@ std::optional<GameSwapchainDesc> GetGameDesc(IDXGISwapChain* swapchain)
 // Resolves a game resize the way DXGI would against what the game asked for before (zero keeps the buffer count, unknown the format), and records it.
 // Returns the previous desc, to restore if the resize fails. Empty if the swapchain isn't tracked, the arguments are left as they are.
 // Resizes run on the thread presenting, which is the only writer
-std::optional<GameSwapchainDesc> TrackGameResize(IDXGISwapChain* swapchain, UINT& count, DXGI_FORMAT& format, UINT flags)
+std::optional<GameSwapchainDesc> TrackGameResize(IDXGISwapChain* swapchain, UINT& count, UINT width, UINT height, DXGI_FORMAT& format, UINT flags)
 {
    Scope::Guard scope;
-   GameSwapchainDesc* desc = Lifetime::GetState<GameSwapchainDesc>(swapchain);
-   if (!desc)
+   GameSwapchainDesc* game_desc = Lifetime::GetState<GameSwapchainDesc>(swapchain);
+   if (!game_desc)
       return std::nullopt;
-   const GameSwapchainDesc previous = *desc;
+   const GameSwapchainDesc previous = *game_desc;
+   DXGI_SWAP_CHAIN_DESC& desc = game_desc->desc;
    if (count == 0)
-      count = previous.buffer_count;
+      count = desc.BufferCount;
    if (format == DXGI_FORMAT_UNKNOWN)
-      format = previous.format;
-   desc->buffer_count = count;
-   desc->format = format;
-   desc->flags = flags;
+      format = desc.BufferDesc.Format;
+   desc.BufferCount = count;
+   desc.BufferDesc.Width = width;
+   desc.BufferDesc.Height = height;
+   desc.BufferDesc.Format = format;
+   desc.Flags = flags;
    return previous;
 }
 
 GameSwapchainDesc ToGameDesc(const DXGI_SWAP_CHAIN_DESC& desc)
 {
-   return {desc.BufferDesc.Format, desc.BufferCount, desc.SwapEffect, desc.Flags};
+   return {.desc = desc, .scaling = desc.BufferDesc.Scaling == DXGI_MODE_SCALING_CENTERED ? DXGI_SCALING_ASPECT_RATIO_STRETCH : DXGI_SCALING_STRETCH};
 }
 
-GameSwapchainDesc ToGameDesc(const DXGI_SWAP_CHAIN_DESC1& desc)
+// A null fullscreen desc is a windowed swapchain
+GameSwapchainDesc ToGameDesc(const DXGI_SWAP_CHAIN_DESC1& desc, const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen_desc, HWND window)
 {
-   return {desc.Format, desc.BufferCount, desc.SwapEffect, desc.Flags};
+   const DXGI_SWAP_CHAIN_FULLSCREEN_DESC fullscreen = fullscreen_desc ? *fullscreen_desc : DXGI_SWAP_CHAIN_FULLSCREEN_DESC{.Windowed = TRUE};
+   GameSwapchainDesc game_desc = {.scaling = desc.Scaling, .alpha_mode = desc.AlphaMode, .stereo = desc.Stereo};
+   game_desc.desc.BufferDesc = {desc.Width, desc.Height, fullscreen.RefreshRate, desc.Format, fullscreen.ScanlineOrdering, fullscreen.Scaling};
+   game_desc.desc.SampleDesc = desc.SampleDesc;
+   game_desc.desc.BufferUsage = desc.BufferUsage;
+   game_desc.desc.BufferCount = desc.BufferCount;
+   game_desc.desc.OutputWindow = window;
+   game_desc.desc.Windowed = fullscreen.Windowed;
+   game_desc.desc.SwapEffect = desc.SwapEffect;
+   game_desc.desc.Flags = desc.Flags;
+   return game_desc;
 }
 
 void OnFactoryCreated(HRESULT result, void** factory_pointer)
@@ -234,7 +250,7 @@ HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IDXGIFactory2* factory, IUnknow
    std::optional<GameSwapchainDesc> requested;
    if (guard.IsOutermost() && desc && !Scope::IsActive())
    {
-      requested = ToGameDesc(*desc);
+      requested = ToGameDesc(*desc, fullscreen_desc, hwnd);
       game_desc = *desc;
       game_fullscreen_desc = fullscreen_desc ? *fullscreen_desc : DXGI_SWAP_CHAIN_FULLSCREEN_DESC{.Windowed = TRUE};
       {
@@ -260,12 +276,13 @@ HRESULT STDMETHODCALLTYPE GetDesc(IDXGISwapChain* swapchain, DXGI_SWAP_CHAIN_DES
    {
       if (const std::optional<GameSwapchainDesc> game_desc = GetGameDesc(swapchain))
       {
-         if (game_desc->format != DXGI_FORMAT_UNKNOWN)
-            desc->BufferDesc.Format = game_desc->format;
-         if (game_desc->buffer_count != 0)
-            desc->BufferCount = game_desc->buffer_count;
-         desc->SwapEffect = game_desc->swap_effect;
-         desc->Flags = game_desc->flags;
+         const DXGI_SWAP_CHAIN_DESC real_desc = *desc;
+         *desc = game_desc->desc;
+         if (desc->BufferDesc.Width == 0 || desc->BufferDesc.Height == 0)
+         {
+            desc->BufferDesc.Width = real_desc.BufferDesc.Width;
+            desc->BufferDesc.Height = real_desc.BufferDesc.Height;
+         }
       }
    }
    return result;
@@ -278,12 +295,21 @@ HRESULT STDMETHODCALLTYPE GetDesc1(IDXGISwapChain1* swapchain, DXGI_SWAP_CHAIN_D
    {
       if (const std::optional<GameSwapchainDesc> game_desc = GetGameDesc(swapchain))
       {
-         if (game_desc->format != DXGI_FORMAT_UNKNOWN)
-            desc->Format = game_desc->format;
-         if (game_desc->buffer_count != 0)
-            desc->BufferCount = game_desc->buffer_count;
-         desc->SwapEffect = game_desc->swap_effect;
-         desc->Flags = game_desc->flags;
+         const DXGI_SWAP_CHAIN_DESC& game = game_desc->desc;
+         if (game.BufferDesc.Width != 0 && game.BufferDesc.Height != 0)
+         {
+            desc->Width = game.BufferDesc.Width;
+            desc->Height = game.BufferDesc.Height;
+         }
+         desc->Format = game.BufferDesc.Format;
+         desc->Stereo = game_desc->stereo;
+         desc->SampleDesc = game.SampleDesc;
+         desc->BufferUsage = game.BufferUsage;
+         desc->BufferCount = game.BufferCount;
+         desc->Scaling = game_desc->scaling;
+         desc->SwapEffect = game.SwapEffect;
+         desc->AlphaMode = game_desc->alpha_mode;
+         desc->Flags = game.Flags;
       }
    }
    return result;
@@ -296,6 +322,27 @@ HRESULT STDMETHODCALLTYPE GetDevice(IDXGISwapChain* swapchain, REFIID riid, void
    if (SUCCEEDED(result) && !Scope::IsActive())
       DeviceProxy::Replace(device);
    return result;
+}
+
+// D3D11 may switch the immediate context to other instances of its methods while the game runs, and a present is the call every frame makes.
+// D3D12 swapchains have no device.
+void ObserveImmediateContext(IDXGISwapChain* swapchain)
+{
+   ComPtr<ID3D11Device> device;
+   if (FAILED(swapchain->GetDevice(IID_PPV_ARGS(&device))))
+      return;
+   ComPtr<ID3D11DeviceContext> context;
+   device->GetImmediateContext(&context);
+   ObserveContext(context.Get());
+}
+
+// What runs inside the swapchain's own calls isn't the game's: DXGI, and the overlays hooked into them (Steam draws its overlay inside
+// Present, with its own resources Luma never tracked). ReShade didn't see these either ("g_in_dxgi_runtime").
+template <typename Function, typename... Args>
+HRESULT CallRuntime(Function function, Args... args)
+{
+   Scope::Guard scope;
+   return function(args...);
 }
 
 // DXGI_PRESENT_TEST only checks whether the swapchain could present
@@ -311,9 +358,10 @@ HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval,
    if (is_game)
    {
       Scope::Guard scope;
+      ObserveImmediateContext(swapchain);
       Handlers::PrePresent(swapchain);
    }
-   const HRESULT result = original_present(swapchain, sync_interval, flags);
+   const HRESULT result = CallRuntime(original_present, swapchain, sync_interval, flags);
    if (is_game)
    {
       Scope::Guard scope;
@@ -329,9 +377,10 @@ HRESULT STDMETHODCALLTYPE Present1(IDXGISwapChain1* swapchain, UINT sync_interva
    if (is_game)
    {
       Scope::Guard scope;
+      ObserveImmediateContext(swapchain);
       Handlers::PrePresent(swapchain);
    }
-   const HRESULT result = original_present1(swapchain, sync_interval, flags, parameters);
+   const HRESULT result = CallRuntime(original_present1, swapchain, sync_interval, flags, parameters);
    if (is_game)
    {
       Scope::Guard scope;
@@ -348,7 +397,7 @@ HRESULT STDMETHODCALLTYPE SetFullscreenState(IDXGISwapChain* swapchain, BOOL ful
       if (Handlers::PreSetFullscreenState(swapchain, fullscreen, output))
          return S_OK;
    }
-   return original_set_fullscreen_state(swapchain, fullscreen, output);
+   return CallRuntime(original_set_fullscreen_state, swapchain, fullscreen, output);
 }
 
 HRESULT STDMETHODCALLTYPE ResizeBuffers(IDXGISwapChain* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags)
@@ -358,11 +407,11 @@ HRESULT STDMETHODCALLTYPE ResizeBuffers(IDXGISwapChain* swapchain, UINT count, U
    std::optional<GameSwapchainDesc> previous_game_desc;
    if (is_game)
    {
-      previous_game_desc = TrackGameResize(swapchain, count, format, flags);
+      previous_game_desc = TrackGameResize(swapchain, count, width, height, format, flags);
       Scope::Guard scope;
       Handlers::PreResizeBuffers(swapchain, count, width, height, format, flags, nullptr, nullptr);
    }
-   const HRESULT result = original_resize_buffers(swapchain, count, width, height, format, flags);
+   const HRESULT result = CallRuntime(original_resize_buffers, swapchain, count, width, height, format, flags);
    if (is_game && FAILED(result) && previous_game_desc)
       SetGameDesc(swapchain, *previous_game_desc);
    if (is_game && SUCCEEDED(result))
@@ -381,11 +430,11 @@ HRESULT STDMETHODCALLTYPE ResizeBuffers1(IDXGISwapChain3* swapchain, UINT count,
    std::optional<GameSwapchainDesc> previous_game_desc;
    if (is_game)
    {
-      previous_game_desc = TrackGameResize(swapchain, count, format, flags);
+      previous_game_desc = TrackGameResize(swapchain, count, width, height, format, flags);
       Scope::Guard scope;
       Handlers::PreResizeBuffers(swapchain, count, width, height, format, flags, node_masks, present_queues);
    }
-   const HRESULT result = original_resize_buffers1(swapchain, count, width, height, format, flags, node_masks, present_queues);
+   const HRESULT result = CallRuntime(original_resize_buffers1, swapchain, count, width, height, format, flags, node_masks, present_queues);
    if (is_game && FAILED(result) && previous_game_desc)
       SetGameDesc(swapchain, *previous_game_desc);
    if (is_game && SUCCEEDED(result))

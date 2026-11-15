@@ -24,7 +24,7 @@ using Detours::original;
 
 thread_local uint32_t context_depth = 0;
 
-// Detours are instanced per context vtable: 0 is the immediate one, 1 the deferred one
+// Detours are instanced per context vtable: 0 is the immediate one, 1 the deferred one, the others variants (see ObserveContext)
 
 template <auto Detour, auto Pre, typename Context, typename... Args>
 void ReportBefore(Context* context, Args... args)
@@ -458,140 +458,172 @@ struct ContextInterface
 const ContextInterface BASE = {"ID3D11DeviceContext", GUID_NULL};
 const ContextInterface CONTEXT1 = {"ID3D11DeviceContext1", __uuidof(ID3D11DeviceContext1)};
 
-// A method's hooks on the immediate and the deferred context vtables, `Immediate` and `Deferred` being its detour's instances
-template <auto Immediate, auto Deferred>
-void AddContextHooks(std::vector<Hook>& hooks, uint32_t slot, const ContextInterface& interface_type, std::string_view method)
+// The methods recorded for a context vtable, and its name in the log
+struct ContextVtable
 {
-   hooks.push_back({VtableTarget{Vtables::Interface::D3D11ImmediateContext, slot, GetHookName(interface_type.name, method, "immediate"), interface_type.version},
-      reinterpret_cast<void*>(Immediate), reinterpret_cast<void**>(&original<Immediate>), true});
-   hooks.push_back({VtableTarget{Vtables::Interface::D3D11DeferredContext, slot, GetHookName(interface_type.name, method, "deferred"), interface_type.version},
-      reinterpret_cast<void*>(Deferred), reinterpret_cast<void**>(&original<Deferred>), true});
+   Vtables::Interface interface_type;
+   std::string_view name;
+};
+
+// A method's hook on a context vtable, `Detour` being its detour's instance for that vtable
+template <auto Detour>
+void AddContextHook(std::vector<Hook>& hooks, const ContextVtable& vtable, uint32_t slot, const ContextInterface& interface_type, std::string_view method)
+{
+   hooks.push_back({VtableTarget{vtable.interface_type, slot, GetHookName(interface_type.name, method, vtable.name), interface_type.version},
+      reinterpret_cast<void*>(Detour), reinterpret_cast<void**>(&original<Detour>), true});
 }
 
 // The stage's methods: the functions of a stage follow ShaderStage's order in Function
-template <ShaderStage Stage>
-void AddStageHooks(std::vector<Hook>& hooks, const D3D11::Functions& functions)
+template <ShaderStage Stage, size_t V>
+void AddStageHooks(std::vector<Hook>& hooks, const D3D11::Functions& functions, const ContextVtable& vtable)
 {
    using Traits = D3D11::StageTraits<Stage>;
    using D3D11::Function;
    const auto wants = [&](Function first) { return functions.test(size_t(first) + size_t(Stage)); };
    if (wants(Function::VSSetShader))
-      AddContextHooks<&StageSetShader<Stage, 0>, &StageSetShader<Stage, 1>>(hooks, Traits::SetShaderSlot(), BASE, Traits::NAMES[0]);
+      AddContextHook<&StageSetShader<Stage, V>>(hooks, vtable, Traits::SetShaderSlot(), BASE, Traits::NAMES[0]);
    if (wants(Function::VSSetShaderResources))
-      AddContextHooks<&StageSetShaderResources<Stage, 0>, &StageSetShaderResources<Stage, 1>>(hooks, Traits::SetShaderResourcesSlot(), BASE, Traits::NAMES[1]);
+      AddContextHook<&StageSetShaderResources<Stage, V>>(hooks, vtable, Traits::SetShaderResourcesSlot(), BASE, Traits::NAMES[1]);
    if (wants(Function::VSSetConstantBuffers))
    {
-      AddContextHooks<&StageSetConstantBuffers<Stage, 0>, &StageSetConstantBuffers<Stage, 1>>(hooks, Traits::SetConstantBuffersSlot(), BASE, Traits::NAMES[2]);
-      AddContextHooks<&StageSetConstantBuffers1<Stage, 0>, &StageSetConstantBuffers1<Stage, 1>>(hooks, Traits::SetConstantBuffers1Slot(), CONTEXT1,
+      AddContextHook<&StageSetConstantBuffers<Stage, V>>(hooks, vtable, Traits::SetConstantBuffersSlot(), BASE, Traits::NAMES[2]);
+      AddContextHook<&StageSetConstantBuffers1<Stage, V>>(hooks, vtable, Traits::SetConstantBuffers1Slot(), CONTEXT1,
          Traits::NAMES[3]);
    }
    if (wants(Function::VSSetSamplers))
-      AddContextHooks<&StageSetSamplers<Stage, 0>, &StageSetSamplers<Stage, 1>>(hooks, Traits::SetSamplersSlot(), BASE, Traits::NAMES[4]);
+      AddContextHook<&StageSetSamplers<Stage, V>>(hooks, vtable, Traits::SetSamplersSlot(), BASE, Traits::NAMES[4]);
 }
-} // namespace
-
-void InstallD3D11Context(const D3D11::Functions& functions)
+// The context hooks on the methods recorded for `vtable`. Instance 0 is the immediate context's, 1 the deferred one's, the others the variants'.
+template <size_t V>
+void DeclareContextHooks(const D3D11::Functions& functions, const ContextVtable& vtable)
 {
    using D3D11::Function;
    static_assert(size_t(Function::CSSetShader) - size_t(Function::VSSetShader) == size_t(ShaderStage::Compute));
    static_assert(size_t(Function::CSSetSamplers) - size_t(Function::VSSetSamplers) == size_t(ShaderStage::Compute));
    std::vector<Hook> hooks;
-   AddStageHooks<ShaderStage::Vertex>(hooks, functions);
-   AddStageHooks<ShaderStage::Hull>(hooks, functions);
-   AddStageHooks<ShaderStage::Domain>(hooks, functions);
-   AddStageHooks<ShaderStage::Geometry>(hooks, functions);
-   AddStageHooks<ShaderStage::Pixel>(hooks, functions);
-   AddStageHooks<ShaderStage::Compute>(hooks, functions);
+   AddStageHooks<ShaderStage::Vertex, V>(hooks, functions, vtable);
+   AddStageHooks<ShaderStage::Hull, V>(hooks, functions, vtable);
+   AddStageHooks<ShaderStage::Domain, V>(hooks, functions, vtable);
+   AddStageHooks<ShaderStage::Geometry, V>(hooks, functions, vtable);
+   AddStageHooks<ShaderStage::Pixel, V>(hooks, functions, vtable);
+   AddStageHooks<ShaderStage::Compute, V>(hooks, functions, vtable);
    const auto wants = [&](Function function) { return functions.test(size_t(function)); };
    // The others, in Function's order
    if (wants(Function::CSSetUnorderedAccessViews))
-      AddContextHooks<&CSSetUnorderedAccessViews<0>, &CSSetUnorderedAccessViews<1>>(hooks, LumaSlot_ID3D11DeviceContext_CSSetUnorderedAccessViews, BASE,
+      AddContextHook<&CSSetUnorderedAccessViews<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_CSSetUnorderedAccessViews, BASE,
          "CSSetUnorderedAccessViews");
    if (wants(Function::OMSetRenderTargets))
-      AddContextHooks<&OMSetRenderTargets<0>, &OMSetRenderTargets<1>>(hooks, LumaSlot_ID3D11DeviceContext_OMSetRenderTargets, BASE, "OMSetRenderTargets");
+      AddContextHook<&OMSetRenderTargets<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_OMSetRenderTargets, BASE, "OMSetRenderTargets");
    if (wants(Function::OMSetRenderTargetsAndUnorderedAccessViews))
-      AddContextHooks<&OMSetRenderTargetsAndUnorderedAccessViews<0>, &OMSetRenderTargetsAndUnorderedAccessViews<1>>(hooks,
+      AddContextHook<&OMSetRenderTargetsAndUnorderedAccessViews<V>>(hooks, vtable,
          LumaSlot_ID3D11DeviceContext_OMSetRenderTargetsAndUnorderedAccessViews, BASE, "OMSetRenderTargetsAndUnorderedAccessViews");
    if (wants(Function::RSSetViewports))
-      AddContextHooks<&RSSetViewports<0>, &RSSetViewports<1>>(hooks, LumaSlot_ID3D11DeviceContext_RSSetViewports, BASE, "RSSetViewports");
+      AddContextHook<&RSSetViewports<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_RSSetViewports, BASE, "RSSetViewports");
    if (wants(Function::RSSetScissorRects))
-      AddContextHooks<&RSSetScissorRects<0>, &RSSetScissorRects<1>>(hooks, LumaSlot_ID3D11DeviceContext_RSSetScissorRects, BASE, "RSSetScissorRects");
+      AddContextHook<&RSSetScissorRects<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_RSSetScissorRects, BASE, "RSSetScissorRects");
    if (wants(Function::OMSetBlendState))
-      AddContextHooks<&OMSetBlendState<0>, &OMSetBlendState<1>>(hooks, LumaSlot_ID3D11DeviceContext_OMSetBlendState, BASE, "OMSetBlendState");
+      AddContextHook<&OMSetBlendState<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_OMSetBlendState, BASE, "OMSetBlendState");
    if (wants(Function::OMSetDepthStencilState))
-      AddContextHooks<&OMSetDepthStencilState<0>, &OMSetDepthStencilState<1>>(hooks, LumaSlot_ID3D11DeviceContext_OMSetDepthStencilState, BASE,
+      AddContextHook<&OMSetDepthStencilState<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_OMSetDepthStencilState, BASE,
          "OMSetDepthStencilState");
    if (wants(Function::IASetVertexBuffers))
-      AddContextHooks<&IASetVertexBuffers<0>, &IASetVertexBuffers<1>>(hooks, LumaSlot_ID3D11DeviceContext_IASetVertexBuffers, BASE, "IASetVertexBuffers");
+      AddContextHook<&IASetVertexBuffers<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_IASetVertexBuffers, BASE, "IASetVertexBuffers");
    if (wants(Function::IASetIndexBuffer))
-      AddContextHooks<&IASetIndexBuffer<0>, &IASetIndexBuffer<1>>(hooks, LumaSlot_ID3D11DeviceContext_IASetIndexBuffer, BASE, "IASetIndexBuffer");
+      AddContextHook<&IASetIndexBuffer<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_IASetIndexBuffer, BASE, "IASetIndexBuffer");
    if (wants(Function::ClearState))
-      AddContextHooks<&ClearState<0>, &ClearState<1>>(hooks, LumaSlot_ID3D11DeviceContext_ClearState, BASE, "ClearState");
+      AddContextHook<&ClearState<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_ClearState, BASE, "ClearState");
    if (wants(Function::Map))
-      AddContextHooks<&Map<0>, &Map<1>>(hooks, LumaSlot_ID3D11DeviceContext_Map, BASE, "Map");
+      AddContextHook<&Map<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_Map, BASE, "Map");
    if (wants(Function::Unmap))
-      AddContextHooks<&Unmap<0>, &Unmap<1>>(hooks, LumaSlot_ID3D11DeviceContext_Unmap, BASE, "Unmap");
+      AddContextHook<&Unmap<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_Unmap, BASE, "Unmap");
    if (wants(Function::UpdateSubresource))
    {
-      AddContextHooks<&UpdateSubresource<0>, &UpdateSubresource<1>>(hooks, LumaSlot_ID3D11DeviceContext_UpdateSubresource, BASE, "UpdateSubresource");
-      AddContextHooks<&UpdateSubresource1<0>, &UpdateSubresource1<1>>(hooks, LumaSlot_ID3D11DeviceContext1_UpdateSubresource1, CONTEXT1, "UpdateSubresource1");
+      AddContextHook<&UpdateSubresource<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_UpdateSubresource, BASE, "UpdateSubresource");
+      AddContextHook<&UpdateSubresource1<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext1_UpdateSubresource1, CONTEXT1, "UpdateSubresource1");
    }
    if (wants(Function::CopyResource))
-      AddContextHooks<&CopyResource<0>, &CopyResource<1>>(hooks, LumaSlot_ID3D11DeviceContext_CopyResource, BASE, "CopyResource");
+      AddContextHook<&CopyResource<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_CopyResource, BASE, "CopyResource");
    if (wants(Function::CopySubresourceRegion))
    {
-      AddContextHooks<&CopySubresourceRegion<0>, &CopySubresourceRegion<1>>(hooks, LumaSlot_ID3D11DeviceContext_CopySubresourceRegion, BASE,
+      AddContextHook<&CopySubresourceRegion<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_CopySubresourceRegion, BASE,
          "CopySubresourceRegion");
-      AddContextHooks<&CopySubresourceRegion1<0>, &CopySubresourceRegion1<1>>(hooks, LumaSlot_ID3D11DeviceContext1_CopySubresourceRegion1, CONTEXT1,
+      AddContextHook<&CopySubresourceRegion1<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext1_CopySubresourceRegion1, CONTEXT1,
          "CopySubresourceRegion1");
    }
    if (wants(Function::ResolveSubresource))
-      AddContextHooks<&ResolveSubresource<0>, &ResolveSubresource<1>>(hooks, LumaSlot_ID3D11DeviceContext_ResolveSubresource, BASE, "ResolveSubresource");
+      AddContextHook<&ResolveSubresource<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_ResolveSubresource, BASE, "ResolveSubresource");
    if (wants(Function::ClearRenderTargetView))
-      AddContextHooks<&ClearRenderTargetView<0>, &ClearRenderTargetView<1>>(hooks, LumaSlot_ID3D11DeviceContext_ClearRenderTargetView, BASE,
+      AddContextHook<&ClearRenderTargetView<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_ClearRenderTargetView, BASE,
          "ClearRenderTargetView");
    if (wants(Function::CopyStructureCount))
-      AddContextHooks<&CopyStructureCount<0>, &CopyStructureCount<1>>(hooks, LumaSlot_ID3D11DeviceContext_CopyStructureCount, BASE, "CopyStructureCount");
+      AddContextHook<&CopyStructureCount<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_CopyStructureCount, BASE, "CopyStructureCount");
    if (wants(Function::ClearDepthStencilView))
-      AddContextHooks<&ClearDepthStencilView<0>, &ClearDepthStencilView<1>>(hooks, LumaSlot_ID3D11DeviceContext_ClearDepthStencilView, BASE,
+      AddContextHook<&ClearDepthStencilView<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_ClearDepthStencilView, BASE,
          "ClearDepthStencilView");
    if (wants(Function::ClearUnorderedAccessViewUint))
-      AddContextHooks<&ClearUnorderedAccessViewUint<0>, &ClearUnorderedAccessViewUint<1>>(hooks, LumaSlot_ID3D11DeviceContext_ClearUnorderedAccessViewUint,
+      AddContextHook<&ClearUnorderedAccessViewUint<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_ClearUnorderedAccessViewUint,
          BASE, "ClearUnorderedAccessViewUint");
    if (wants(Function::ClearUnorderedAccessViewFloat))
-      AddContextHooks<&ClearUnorderedAccessViewFloat<0>, &ClearUnorderedAccessViewFloat<1>>(hooks, LumaSlot_ID3D11DeviceContext_ClearUnorderedAccessViewFloat,
+      AddContextHook<&ClearUnorderedAccessViewFloat<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_ClearUnorderedAccessViewFloat,
          BASE, "ClearUnorderedAccessViewFloat");
    if (wants(Function::ClearView))
-      AddContextHooks<&ClearView<0>, &ClearView<1>>(hooks, LumaSlot_ID3D11DeviceContext1_ClearView, CONTEXT1, "ClearView");
+      AddContextHook<&ClearView<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext1_ClearView, CONTEXT1, "ClearView");
    if (wants(Function::Draw))
-      AddContextHooks<&Draw<0>, &Draw<1>>(hooks, LumaSlot_ID3D11DeviceContext_Draw, BASE, "Draw");
+      AddContextHook<&Draw<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_Draw, BASE, "Draw");
    if (wants(Function::DrawInstanced))
-      AddContextHooks<&DrawInstanced<0>, &DrawInstanced<1>>(hooks, LumaSlot_ID3D11DeviceContext_DrawInstanced, BASE, "DrawInstanced");
+      AddContextHook<&DrawInstanced<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_DrawInstanced, BASE, "DrawInstanced");
    if (wants(Function::DrawIndexed))
-      AddContextHooks<&DrawIndexed<0>, &DrawIndexed<1>>(hooks, LumaSlot_ID3D11DeviceContext_DrawIndexed, BASE, "DrawIndexed");
+      AddContextHook<&DrawIndexed<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_DrawIndexed, BASE, "DrawIndexed");
    if (wants(Function::DrawIndexedInstanced))
-      AddContextHooks<&DrawIndexedInstanced<0>, &DrawIndexedInstanced<1>>(hooks, LumaSlot_ID3D11DeviceContext_DrawIndexedInstanced, BASE,
+      AddContextHook<&DrawIndexedInstanced<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_DrawIndexedInstanced, BASE,
          "DrawIndexedInstanced");
    if (wants(Function::DrawAuto))
-      AddContextHooks<&DrawAuto<0>, &DrawAuto<1>>(hooks, LumaSlot_ID3D11DeviceContext_DrawAuto, BASE, "DrawAuto");
+      AddContextHook<&DrawAuto<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_DrawAuto, BASE, "DrawAuto");
    if (wants(Function::DrawInstancedIndirect))
-      AddContextHooks<&DrawInstancedIndirect<0>, &DrawInstancedIndirect<1>>(hooks, LumaSlot_ID3D11DeviceContext_DrawInstancedIndirect, BASE,
+      AddContextHook<&DrawInstancedIndirect<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_DrawInstancedIndirect, BASE,
          "DrawInstancedIndirect");
    if (wants(Function::DrawIndexedInstancedIndirect))
-      AddContextHooks<&DrawIndexedInstancedIndirect<0>, &DrawIndexedInstancedIndirect<1>>(hooks, LumaSlot_ID3D11DeviceContext_DrawIndexedInstancedIndirect,
+      AddContextHook<&DrawIndexedInstancedIndirect<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_DrawIndexedInstancedIndirect,
          BASE, "DrawIndexedInstancedIndirect");
    if (wants(Function::Dispatch))
-      AddContextHooks<&Dispatch<0>, &Dispatch<1>>(hooks, LumaSlot_ID3D11DeviceContext_Dispatch, BASE, "Dispatch");
+      AddContextHook<&Dispatch<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_Dispatch, BASE, "Dispatch");
    if (wants(Function::DispatchIndirect))
-      AddContextHooks<&DispatchIndirect<0>, &DispatchIndirect<1>>(hooks, LumaSlot_ID3D11DeviceContext_DispatchIndirect, BASE, "DispatchIndirect");
+      AddContextHook<&DispatchIndirect<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_DispatchIndirect, BASE, "DispatchIndirect");
    if (wants(Function::FinishCommandList))
-      AddContextHooks<&FinishCommandList<0>, &FinishCommandList<1>>(hooks, LumaSlot_ID3D11DeviceContext_FinishCommandList, BASE, "FinishCommandList");
+      AddContextHook<&FinishCommandList<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_FinishCommandList, BASE, "FinishCommandList");
    if (wants(Function::ExecuteCommandList))
-      AddContextHooks<&ExecuteCommandList<0>, &ExecuteCommandList<1>>(hooks, LumaSlot_ID3D11DeviceContext_ExecuteCommandList, BASE, "ExecuteCommandList");
+      AddContextHook<&ExecuteCommandList<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_ExecuteCommandList, BASE, "ExecuteCommandList");
    if (wants(Function::Flush))
-      AddContextHooks<&Flush<0>, &Flush<1>>(hooks, LumaSlot_ID3D11DeviceContext_Flush, BASE, "Flush");
+      AddContextHook<&Flush<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_Flush, BASE, "Flush");
    if (!hooks.empty())
       Declare(hooks);
+}
+} // namespace
+
+void InstallD3D11Context(const D3D11::Functions& functions)
+{
+   DeclareContextHooks<0>(functions, {Vtables::Interface::D3D11ImmediateContext, "immediate"});
+   DeclareContextHooks<1>(functions, {Vtables::Interface::D3D11DeferredContext, "deferred"});
+}
+
+void DeclareContextVariant(size_t index, const D3D11::Functions& functions)
+{
+   static_assert(CONTEXT_VARIANT_COUNT == 4);
+   switch (index)
+   {
+   case 0:
+      DeclareContextHooks<2>(functions, {Vtables::Interface::D3D11ContextVariant0, "variant 0"});
+      break;
+   case 1:
+      DeclareContextHooks<3>(functions, {Vtables::Interface::D3D11ContextVariant1, "variant 1"});
+      break;
+   case 2:
+      DeclareContextHooks<4>(functions, {Vtables::Interface::D3D11ContextVariant2, "variant 2"});
+      break;
+   case 3:
+      DeclareContextHooks<5>(functions, {Vtables::Interface::D3D11ContextVariant3, "variant 3"});
+      break;
+   }
 }
 } // namespace Hooks
 } // namespace Luma
