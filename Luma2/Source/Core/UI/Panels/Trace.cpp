@@ -349,18 +349,6 @@ void DrawTrackButton(const Trace::Track::Target& target, bool tracking)
       Trace::Track::Set(tracking ? std::nullopt : std::optional(target));
 }
 
-// The instance of the event's `stage` shader in the frame: how many calls of it came before
-uint32_t GetInstance(size_t index, ShaderStage stage, uint32_t hash)
-{
-   uint32_t instance = 0;
-   for (size_t i = 0; i < index; i++)
-   {
-      for (const Trace::Capture::Shader& shader : frame->events[i].shaders)
-         instance += shader.stage == stage && shader.hash == hash && shader.luma_shader.empty();
-   }
-   return instance;
-}
-
 void DrawConstantBuffers(const Event& event, size_t index)
 {
    // One selector per stage over its bound slots, the selected slot's contents below it
@@ -396,7 +384,7 @@ void DrawConstantBuffers(const Event& event, size_t index)
       selected_slot = buffer.slot;
 
       const bool trackable = shader.luma_shader.empty() && shader.hash != 0;
-      const Trace::Track::Target target = {shader.hash, shader.stage, buffer.slot, trackable ? GetInstance(index, shader.stage, shader.hash) : 0};
+      const Trace::Track::Target target = {shader.hash, shader.stage, buffer.slot, trackable ? Trace::Capture::GetInstance(*frame, index, shader.stage, shader.hash) : 0};
       const std::optional<Trace::Track::Target> tracked_target = Trace::Track::Get();
       const bool tracking = trackable && tracked_target == target;
       if (trackable)
@@ -428,8 +416,8 @@ void DrawConstantBuffers(const Event& event, size_t index)
       else if (buffer.contents.empty())
       {
          Widgets::TextDim(!event.list.empty() ? "Contents not read: not in an upload heap (D3D12), or the capture's copy limit"
-                         : event.deferred      ? "Contents not read: recorded on a deferred context (Track reads them)"
-                                               : "Contents not read (the capture's copy limit)");
+               : event.deferred               ? "Contents not read: recorded on a deferred context (Track reads them)"
+                                              : "Contents not read (the capture's copy limit)");
       }
       else
       {
@@ -527,8 +515,7 @@ void DrawEvent(const Event& event, size_t index)
          {"Index", std::to_string(index)},
          {"Function", event.name},
          {"Outcome", std::string(GetOutcomeName(event.outcome)), event.outcome == Outcome::Ran ? Tone::Info : Tone::Warning},
-         {"Thread", event.list.empty() ? std::format("{}{}", event.thread, event.deferred ? " (deferred context)" : " (immediate context)")
-                                       : std::format("{} (command list {}, queue {})", event.thread, event.list, event.queue)},
+         {"Thread", event.list.empty() ? std::format("{}{}", event.thread, event.deferred ? " (deferred context)" : " (immediate context)") : std::format("{} (command list {}, queue {})", event.thread, event.list, event.queue)},
       };
       if (is_dispatch)
          rows.push_back({"Groups", std::format("{} x {} x {}", event.dispatch[0], event.dispatch[1], event.dispatch[2])});

@@ -30,7 +30,10 @@
 #if DEVELOPMENT
 #include "Trace/Capture.hpp"
 #include "Trace/D3D11/D3D11Capture.hpp"
+#include "Trace/D3D11/D3D11Readback.hpp"
 #include "Trace/D3D12/D3D12Capture.hpp"
+#include "Trace/D3D12/D3D12Readback.hpp"
+#include "Trace/Readback.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Trace/D3D12/D3D12Stats.hpp"
 #endif
@@ -337,12 +340,19 @@ void PrePresent(IDXGISwapChain* swapchain)
    // A capture is one frame, present to present: what's drawn next (the game's present callback, the overlay) isn't in it. D3D12's
    // contents were copied at the calls; its events reached the frame when their lists were executed.
    if (const std::optional<Presenter> presenting = FindPresenter(swapchain); presenting && std::holds_alternative<ID3D12CommandQueue*>(*presenting))
+   {
       Trace::Capture::D3D12::ReadBackTracked();
+      // Before the overlay: a swapchain readback is the game's image
+      Trace::Readback::D3D12::ReadBack(swapchain, std::get<ID3D12CommandQueue*>(*presenting));
+   }
    else
    {
       Trace::Capture::D3D11::ReadBackConstantBuffers();
       Trace::Capture::D3D11::ReadBackTracked();
+      if (presenting)
+         Trace::Readback::D3D11::ReadBack(swapchain, std::get<ID3D11Device*>(*presenting));
    }
+   Trace::Readback::OnPresent();
    Trace::Capture::AdvanceFrame();
 #endif
    // The one writer of the settings: changes from other threads land here

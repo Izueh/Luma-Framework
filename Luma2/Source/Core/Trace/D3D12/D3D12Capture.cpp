@@ -64,6 +64,9 @@ struct ListState
    D3D12_PRIMITIVE_TOPOLOGY topology = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
    std::array<float, 4> blend_factor = {1.f, 1.f, 1.f, 1.f};
    UINT stencil_ref = 0;
+   // The state each resource was last moved to on this list by a whole resource (or first subresource) transition: what a readback's
+   // barriers start from. A ClearState keeps them.
+   std::vector<std::pair<ID3D12Resource*, D3D12_RESOURCE_STATES>> resource_states;
    // Recorded while capturing, until the list is reset
    std::vector<Event> events;
 };
@@ -358,7 +361,9 @@ ConstantBuffer DescribeConstantBuffer(ShaderStage stage, uint32_t slot, uint32_t
    buffer.size = uint32_t(info->desc.Width);
    const uint64_t offset = address - info->address;
    const uint64_t available = info->desc.Width - offset;
-   const uint64_t bound = std::min<uint64_t>(size ? size : declared ? declared : MAX_CONSTANT_BUFFER_BYTES, available);
+   const uint64_t bound = std::min<uint64_t>(size ? size : declared ? declared
+                                                                    : MAX_CONSTANT_BUFFER_BYTES,
+      available);
    buffer.first_constant = uint32_t(offset / 16);
    buffer.constant_count = uint32_t((bound + 15) / 16);
    if (info->mapped)
@@ -375,8 +380,7 @@ void AddConstantBuffers(std::vector<ConstantBuffer>& buffers, const ListState& s
       return;
    const std::vector<RootArgument>& arguments = state.arguments[compute];
    // Space 0 only for the slot the trace's Track names, and for the declared sizes (reflection's bind points)
-   const auto wanted = [&](uint32_t space, uint32_t reg)
-   { return (!only_slot || (*only_slot == reg && space == 0)) && Reads(shader, BindingType::ConstantBuffer, space, reg); };
+   const auto wanted = [&](uint32_t space, uint32_t reg) { return (!only_slot || (*only_slot == reg && space == 0)) && Reads(shader, BindingType::ConstantBuffer, space, reg); };
    const auto declared = [&](uint32_t space, uint32_t reg) { return space == 0 ? GetDeclaredSize(shader, reg) : 0u; };
    for (size_t index = 0; index < layout->parameters.size() && index < arguments.size(); index++)
    {
@@ -396,8 +400,7 @@ void AddConstantBuffers(std::vector<ConstantBuffer>& buffers, const ListState& s
             std::vector<uint32_t> values = argument.constants;
             values.resize(parameter.constant_count);
             const auto* bytes = reinterpret_cast<const std::byte*>(values.data());
-            buffers.push_back({.stage = stage, .slot = parameter.shader_register, .id = "root constants", .size = parameter.constant_count * 4,
-               .contents = std::vector<std::byte>(bytes, bytes + values.size() * 4), .contents_ranged = true, .space = parameter.space});
+            buffers.push_back({.stage = stage, .slot = parameter.shader_register, .id = "root constants", .size = parameter.constant_count * 4, .contents = std::vector<std::byte>(bytes, bytes + values.size() * 4), .contents_ranged = true, .space = parameter.space});
          }
          break;
       case D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE:
@@ -429,8 +432,7 @@ void AddViews(Event& event, const ListState& state, bool compute, ShaderStage st
    if (!layout)
       return;
    const std::vector<RootArgument>& arguments = state.arguments[compute];
-   const auto with_space = [](auto binding, uint32_t space)
-   {
+   const auto with_space = [](auto binding, uint32_t space) {
       binding.space = space;
       return binding;
    };
@@ -598,8 +600,102 @@ void OnClearState(ID3D12GraphicsCommandList* list)
    if (ListState* state = GetState(list))
    {
       std::vector<Event> events = std::move(state->events);
+      std::vector<std::pair<ID3D12Resource*, D3D12_RESOURCE_STATES>> resource_states = std::move(state->resource_states);
       *state = {};
       state->events = std::move(events);
+      state->resource_states = std::move(resource_states);
+   }
+}
+
+void OnResourceBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers)
+{
+   ListState* state = GetState(list);
+   if (!state || !barriers)
+      return;
+   for (UINT i = 0; i < count; i++)
+   {
+      const D3D12_RESOURCE_BARRIER& barrier = barriers[i];
+      if (barrier.Type != D3D12_RESOURCE_BARRIER_TYPE_TRANSITION || barrier.Flags == D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY ||
+         (barrier.Transition.Subresource != D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES && barrier.Transition.Subresource != 0))
+         continue;
+      const auto it = std::ranges::find(state->resource_states, barrier.Transition.pResource, &std::pair<ID3D12Resource*, D3D12_RESOURCE_STATES>::first);
+      if (it != state->resource_states.end())
+         it->second = barrier.Transition.StateAfter;
+      else
+         state->resource_states.emplace_back(barrier.Transition.pResource, barrier.Transition.StateAfter);
+   }
+}
+
+std::optional<BoundView> FindBoundView(ID3D12GraphicsCommandList* list, Readback::ViewKind view, ShaderStage stage, uint32_t slot)
+{
+   const ListState* state = GetState(list);
+   if (!state)
+      return std::nullopt;
+   const auto found = [&](const Descriptor& descriptor, std::optional<D3D12_RESOURCE_STATES> required) -> std::optional<BoundView> {
+      if (!descriptor.resource)
+         return std::nullopt;
+      // A resource destroyed since the view was written, or another at its address, is never touched
+      const std::optional<ResourceInfo> info = Resources::Descriptors::D3D12::FindResource(descriptor.resource);
+      if (!info || (descriptor.resource_id && info->id != descriptor.resource_id))
+         return std::nullopt;
+      BoundView bound = {.resource = descriptor.resource, .format = GetViewFormat(descriptor), .state = required};
+      if (!bound.state)
+      {
+         const auto it = std::ranges::find(state->resource_states, descriptor.resource, &std::pair<ID3D12Resource*, D3D12_RESOURCE_STATES>::first);
+         if (it != state->resource_states.end())
+            bound.state = it->second;
+      }
+      return bound;
+   };
+   switch (view)
+   {
+   case Readback::ViewKind::RenderTarget:
+   {
+      if (slot >= state->render_targets.size())
+         return std::nullopt;
+      const std::optional<Descriptor> descriptor = Resources::Descriptors::D3D12::Read(state->render_targets[slot]);
+      // A render target being drawn to is in that state alone
+      return descriptor && descriptor->kind == Kind::RenderTarget ? found(*descriptor, D3D12_RESOURCE_STATE_RENDER_TARGET) : std::nullopt;
+   }
+   case Readback::ViewKind::Depth:
+   case Readback::ViewKind::Stencil:
+   {
+      if (!state->depth_stencil)
+         return std::nullopt;
+      const std::optional<Descriptor> descriptor = Resources::Descriptors::D3D12::Read(*state->depth_stencil);
+      return descriptor && descriptor->kind == Kind::DepthStencil ? found(*descriptor, std::nullopt) : std::nullopt;
+   }
+   case Readback::ViewKind::ShaderResource:
+   case Readback::ViewKind::UnorderedAccess:
+   {
+      const bool compute = stage == ShaderStage::Compute;
+      const bool uav = view == Readback::ViewKind::UnorderedAccess;
+      const RootLayout* layout = state->layouts[compute];
+      if (!layout)
+         return std::nullopt;
+      const std::vector<RootArgument>& arguments = state->arguments[compute];
+      for (size_t index = 0; index < layout->parameters.size() && index < arguments.size(); index++)
+      {
+         const RootParameter& parameter = layout->parameters[index];
+         const RootArgument& argument = arguments[index];
+         if (IsLumaParameter(*layout, index) || !IsVisible(parameter, compute, stage) || parameter.type != D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE ||
+            argument.type != RootArgument::Type::Table)
+            continue;
+         for (const Shaders::Database::D3D12::RootRange& range : parameter.ranges)
+         {
+            if (range.space != 0 || range.type != (uav ? D3D12_DESCRIPTOR_RANGE_TYPE_UAV : D3D12_DESCRIPTOR_RANGE_TYPE_SRV) || slot < range.base_register ||
+               slot - range.base_register >= range.count)
+               continue;
+            const std::optional<Descriptor> descriptor = Resources::Descriptors::D3D12::Read(D3D12_GPU_DESCRIPTOR_HANDLE{argument.value}, range.offset + (slot - range.base_register));
+            if (!descriptor || descriptor->kind != (uav ? Kind::UnorderedAccess : Kind::ShaderResource))
+               return std::nullopt;
+            // A UAV being written is in that state alone
+            return found(*descriptor, uav ? std::optional(D3D12_RESOURCE_STATE_UNORDERED_ACCESS) : std::nullopt);
+         }
+      }
+      return std::nullopt;
+   }
+   default: return std::nullopt;
    }
 }
 
@@ -789,8 +885,7 @@ void TrackCall(ID3D12GraphicsCommandList* list, Shaders::StageSet stages)
    if (buffers.empty() || buffers.front().contents.empty())
       return;
    ConstantBuffer& buffer = buffers.front();
-   Track::Reading reading = {.buffer = std::move(buffer.id), .first_constant = buffer.first_constant, .constant_count = buffer.constant_count,
-      .contents = std::move(buffer.contents)};
+   Track::Reading reading = {.buffer = std::move(buffer.id), .first_constant = buffer.first_constant, .constant_count = buffer.constant_count, .contents = std::move(buffer.contents)};
    std::scoped_lock lock(tracked_mutex);
    tracked_reading = std::move(reading);
 }

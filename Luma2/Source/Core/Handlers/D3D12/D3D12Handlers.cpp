@@ -17,7 +17,9 @@
 #if DEVELOPMENT
 #include "Trace/Capture.hpp"
 #include "Trace/D3D12/D3D12Capture.hpp"
+#include "Trace/D3D12/D3D12Readback.hpp"
 #include "Trace/D3D12/D3D12Stats.hpp"
+#include "Trace/Readback.hpp"
 #include "Trace/Track.hpp"
 #endif
 #include "UI/Overlay.hpp"
@@ -89,11 +91,22 @@ bool RunCall(ID3D12GraphicsCommandList* list, const Call& call)
 #endif
    if (result == Game::DrawResult::None && !skipped)
       BindVariantRequests(list);
+   bool handled = result != Game::DrawResult::None || skipped;
 #if DEVELOPMENT
+   // Last: the call as it ran is what's read
+   if (Trace::Readback::IsArmed())
+   {
+      Game::D3D12::Call original = {.list = list};
+      if constexpr (dispatch)
+         original.dispatch = &call;
+      else
+         original.draw = &call;
+      handled = Trace::Readback::D3D12::ReadAfterCall(original, stages, handled);
+   }
    if (recording)
       Trace::Capture::D3D12::End(std::move(*recording), GetOutcome(result, skipped));
 #endif
-   return result != Game::DrawResult::None || skipped;
+   return handled;
 }
 } // namespace
 
@@ -135,6 +148,7 @@ void PostExecuteCommandLists(ID3D12CommandQueue* queue, UINT count, ID3D12Comman
    Hooks::Lifetime::D3D12::MoveReferencesToQueue(queue, count, lists);
 #if DEVELOPMENT
    Trace::Capture::D3D12::OnExecute(queue, count, lists);
+   Trace::Readback::D3D12::OnExecute(queue, count, lists);
    Trace::Stats::D3D12::RecordExecute(count);
 #endif
 }
@@ -355,6 +369,13 @@ void PreSetStencilRef([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_
 {
 #if DEVELOPMENT
    Trace::Capture::D3D12::OnSetStencilRef(list, stencil_ref);
+#endif
+}
+
+void PreResourceBarrier([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] UINT count, [[maybe_unused]] const D3D12_RESOURCE_BARRIER* barriers)
+{
+#if DEVELOPMENT
+   Trace::Capture::D3D12::OnResourceBarrier(list, count, barriers);
 #endif
 }
 

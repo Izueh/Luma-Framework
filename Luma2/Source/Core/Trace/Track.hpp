@@ -55,6 +55,8 @@ uint32_t CountCall();
 void SetReading(std::optional<Reading> reading);
 // The last reading, empty before the first
 std::optional<Reading> GetReading();
+// Presents since the tracking started, whether they read the slot or not
+uint64_t GetFrame();
 } // namespace Track
 } // namespace Trace
 } // namespace Luma

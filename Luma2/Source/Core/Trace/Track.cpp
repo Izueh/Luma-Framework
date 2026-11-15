@@ -84,6 +84,12 @@ std::optional<Reading> GetReading()
    std::scoped_lock lock(mutex);
    return last;
 }
+
+uint64_t GetFrame()
+{
+   std::scoped_lock lock(mutex);
+   return frame;
+}
 } // namespace Track
 } // namespace Trace
 } // namespace Luma

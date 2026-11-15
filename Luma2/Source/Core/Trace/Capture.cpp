@@ -35,6 +35,17 @@ const Shader* GetPrimaryShader(const Event& event)
    return event.shaders.empty() ? nullptr : &event.shaders.front();
 }
 
+uint32_t GetInstance(const Frame& frame, size_t index, ShaderStage stage, uint32_t hash)
+{
+   uint32_t instance = 0;
+   for (size_t i = 0; i < index && i < frame.events.size(); i++)
+   {
+      for (const Shader& shader : frame.events[i].shaders)
+         instance += shader.stage == stage && shader.hash == hash && shader.luma_shader.empty();
+   }
+   return instance;
+}
+
 bool Matches(const Event& event, const Filter& filter)
 {
    const bool has_shader_filter = filter.stage || filter.hash || !filter.text.empty();
@@ -82,7 +93,7 @@ Hooks::D3D12::Functions GetD3D12Functions()
    using enum Hooks::D3D12::Function;
    Hooks::D3D12::Functions functions;
    for (const Hooks::D3D12::Function function : {CreateRootSignature, CreatePipelineState, CreateDescriptorHeap, CreateView, CopyDescriptors, CreateResource,
-           Reset, ClearState, SetPipelineState, SetRootSignature, OMSetRenderTargets, SetDescriptorHeaps, SetRootArguments, SetFixedState, Draw, Dispatch,
+           Reset, ClearState, SetPipelineState, SetRootSignature, OMSetRenderTargets, SetDescriptorHeaps, SetRootArguments, SetFixedState, ResourceBarrier, Draw, Dispatch,
            ExecuteIndirect, ExecuteBundle})
       functions.set(size_t(function));
    return functions;

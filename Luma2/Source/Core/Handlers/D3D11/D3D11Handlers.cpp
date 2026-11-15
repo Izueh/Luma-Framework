@@ -19,6 +19,8 @@
 #if DEVELOPMENT
 #include "Trace/Capture.hpp"
 #include "Trace/D3D11/D3D11Capture.hpp"
+#include "Trace/D3D11/D3D11Readback.hpp"
+#include "Trace/Readback.hpp"
 #include "Trace/Track.hpp"
 #endif
 #include "UI/Overlay.hpp"
@@ -426,8 +428,11 @@ bool PreDraw(ID3D11DeviceContext* context, const DrawCall& draw)
    constexpr bool skipped = false;
 #endif
    const Shaders::StageSet bound = FulfilAfterEvents(context, Shaders::GRAPHICS_STAGES, events, skipped, before);
-   const bool handled = RestoreGameBuffers({.context = context, .draw = &draw}, bound, events.result != Game::DrawResult::None || skipped);
+   bool handled = RestoreGameBuffers({.context = context, .draw = &draw}, bound, events.result != Game::DrawResult::None || skipped);
 #if DEVELOPMENT
+   // Last: the call as it ran is what's read
+   if (Trace::Readback::IsArmed())
+      handled = Trace::Readback::D3D11::ReadAfterCall({.context = context, .draw = &draw}, Shaders::GRAPHICS_STAGES, handled);
    if (recording)
       Trace::Capture::D3D11::End(std::move(*recording), GetOutcome(events.result, skipped));
 #endif
@@ -452,8 +457,10 @@ bool PreDispatch(ID3D11DeviceContext* context, const DispatchCall& dispatch)
    constexpr bool skipped = false;
 #endif
    const Shaders::StageSet bound = FulfilAfterEvents(context, Shaders::COMPUTE_STAGES, events, skipped, before);
-   const bool handled = RestoreGameBuffers({.context = context, .dispatch = &dispatch}, bound, events.result != Game::DrawResult::None || skipped);
+   bool handled = RestoreGameBuffers({.context = context, .dispatch = &dispatch}, bound, events.result != Game::DrawResult::None || skipped);
 #if DEVELOPMENT
+   if (Trace::Readback::IsArmed())
+      handled = Trace::Readback::D3D11::ReadAfterCall({.context = context, .dispatch = &dispatch}, Shaders::COMPUTE_STAGES, handled);
    if (recording)
       Trace::Capture::D3D11::End(std::move(*recording), GetOutcome(events.result, skipped));
 #endif

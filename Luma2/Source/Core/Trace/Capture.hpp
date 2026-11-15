@@ -175,6 +175,8 @@ struct Frame
 // The shader a call is listed by: the pixel one, else the vertex one (a draw without a pixel shader, as a depth only pass), else the
 // compute one, else the first. Null for a present.
 const Shader* GetPrimaryShader(const Event& event);
+// The instance of the `stage` shader `hash` at `index` in the frame: how many calls of it came before (Track's and readbacks' instance)
+uint32_t GetInstance(const Frame& frame, size_t index, ShaderStage stage, uint32_t hash);
 
 // What the trace list shows, in the overlay and through MCP's trace_list. A call is one event with all its stages: the shader
 // conditions match any of them.

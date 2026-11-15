@@ -68,6 +68,8 @@ void PreSetBlendFactor(ID3D12GraphicsCommandList* list, const FLOAT factor[4]);
 void PreSetStencilRef(ID3D12GraphicsCommandList* list, UINT stencil_ref);
 // DrawInstanced, DrawIndexedInstanced, DispatchMesh, and Dispatch: true when the game's call doesn't run (a draw event or the
 // trace skipped or replaced it)
+void PreResourceBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers);
+
 bool PreDraw(ID3D12GraphicsCommandList* list, const Game::D3D12::DrawCall& draw);
 bool PreDispatch(ID3D12GraphicsCommandList* list, const Game::D3D12::DispatchCall& dispatch);
 // A draw or a dispatch by the pipeline bound

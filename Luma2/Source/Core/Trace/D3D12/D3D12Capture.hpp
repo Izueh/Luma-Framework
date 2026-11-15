@@ -8,6 +8,7 @@
 #include "Luma.hpp"
 #include "Shaders/Stages.hpp"
 #include "Trace/Capture.hpp"
+#include "Trace/Readback.hpp"
 
 // Trace capture on D3D12. A command list records what the game sets on it (root signatures and arguments, render targets,
 // viewports, topology), and its calls' events while a capture runs; the events go into the frame when a queue executes the list,
@@ -47,6 +48,20 @@ void End(Recording recording, Outcome outcome = Outcome::Ran);
 void OnExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle);
 // The lists' events go into the frame, in this order
 void OnExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists);
+
+// The list's transitions, for the states a readback's barriers start from
+void OnResourceBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers);
+
+struct BoundView
+{
+   ID3D12Resource* resource = nullptr; // Alive: the game's call reads or writes it
+   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN; // The view's, unknown for a view without a desc
+   // The state the resource is in at the call, when the list knows it (a render target and a UAV are in theirs alone)
+   std::optional<D3D12_RESOURCE_STATES> state;
+};
+
+// The view of the call about to run on `list` at `slot` (space 0) of `stage`, from the list's record
+std::optional<BoundView> FindBoundView(ID3D12GraphicsCommandList* list, Readback::ViewKind view, ShaderStage stage, uint32_t slot);
 
 // While Track is active, before the game's draw events: copies the tracked slot if this is the tracked call (from an upload heap)
 void TrackCall(ID3D12GraphicsCommandList* list, Shaders::StageSet stages);

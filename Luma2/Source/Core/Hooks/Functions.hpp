@@ -127,6 +127,7 @@ enum class Function : uint32_t
    SetDescriptorHeaps,
    SetRootArguments, // Tables, root descriptors and constants, graphics and compute
    SetFixedState, // RSSetViewports, RSSetScissorRects, IASetPrimitiveTopology, OMSetBlendFactor, OMSetStencilRef
+   ResourceBarrier,
    Draw, // DrawInstanced, DrawIndexedInstanced, DispatchMesh
    Dispatch,
    ExecuteIndirect,

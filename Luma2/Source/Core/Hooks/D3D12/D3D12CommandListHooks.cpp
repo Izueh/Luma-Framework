@@ -150,8 +150,7 @@ void STDMETHODCALLTYPE DrawInstanced(ID3D12GraphicsCommandList* list, UINT verte
 {
    if (!Scope::IsActive() &&
       Detours::Report(&Handlers::PreDraw, list,
-         Game::D3D12::DrawCall{.function = DrawFunction::DrawInstanced, .vertex_or_index_count = vertex_count, .instance_count = instance_count,
-            .start_vertex_or_index = start_vertex, .start_instance = start_instance}))
+         Game::D3D12::DrawCall{.function = DrawFunction::DrawInstanced, .vertex_or_index_count = vertex_count, .instance_count = instance_count, .start_vertex_or_index = start_vertex, .start_instance = start_instance}))
       return;
    original<&DrawInstanced>(list, vertex_count, instance_count, start_vertex, start_instance);
 }
@@ -161,8 +160,7 @@ void STDMETHODCALLTYPE DrawIndexedInstanced(ID3D12GraphicsCommandList* list, UIN
 {
    if (!Scope::IsActive() &&
       Detours::Report(&Handlers::PreDraw, list,
-         Game::D3D12::DrawCall{.function = DrawFunction::DrawIndexedInstanced, .vertex_or_index_count = index_count, .instance_count = instance_count,
-            .start_vertex_or_index = start_index, .base_vertex = base_vertex, .start_instance = start_instance}))
+         Game::D3D12::DrawCall{.function = DrawFunction::DrawIndexedInstanced, .vertex_or_index_count = index_count, .instance_count = instance_count, .start_vertex_or_index = start_index, .base_vertex = base_vertex, .start_instance = start_instance}))
       return;
    original<&DrawIndexedInstanced>(list, index_count, instance_count, start_index, base_vertex, start_instance);
 }
@@ -196,6 +194,13 @@ void STDMETHODCALLTYPE ExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12Grap
    if (!Scope::IsActive())
       Detours::Report(&Handlers::PreExecuteBundle, list, bundle);
    original<&ExecuteBundle>(list, bundle);
+}
+
+void STDMETHODCALLTYPE ResourceBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers)
+{
+   if (!Scope::IsActive())
+      Detours::Report(&Handlers::PreResourceBarrier, list, count, barriers);
+   original<&ResourceBarrier>(list, count, barriers);
 }
 
 template <auto Detour>
@@ -247,6 +252,7 @@ void InstallD3D12CommandList(const D3D12::Functions& functions)
                                    ListHook<&OMSetBlendFactor>(LumaSlot_ID3D12GraphicsCommandList_OMSetBlendFactor, "ID3D12GraphicsCommandList::OMSetBlendFactor"),
                                    ListHook<&OMSetStencilRef>(LumaSlot_ID3D12GraphicsCommandList_OMSetStencilRef, "ID3D12GraphicsCommandList::OMSetStencilRef"),
                                 });
+   add(Function::ResourceBarrier, {ListHook<&ResourceBarrier>(LumaSlot_ID3D12GraphicsCommandList_ResourceBarrier, "ID3D12GraphicsCommandList::ResourceBarrier")});
    add(Function::Draw, {
                           ListHook<&DrawInstanced>(LumaSlot_ID3D12GraphicsCommandList_DrawInstanced, "ID3D12GraphicsCommandList::DrawInstanced"),
                           ListHook<&DrawIndexedInstanced>(LumaSlot_ID3D12GraphicsCommandList_DrawIndexedInstanced, "ID3D12GraphicsCommandList::DrawIndexedInstanced"),
