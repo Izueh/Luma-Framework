@@ -53,6 +53,7 @@ struct PatchesInfo
    uint32_t unmatched = 0;
    uint32_t failed = 0;
    uint32_t pending = 0;
+   uint32_t broken_recipes = 0;
 };
 
 struct JobsInfo

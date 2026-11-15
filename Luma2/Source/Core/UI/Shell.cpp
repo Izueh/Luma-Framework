@@ -280,6 +280,9 @@ std::vector<Widgets::StatusItem> GetStatusItems(const Trace::Status& status)
    }
    if (const Shaders::BuildInfo& build = Shaders::GetLastBuild(); build.failed)
       items.push_back({Icons::ERROR_, std::format("{} shader{} failed", build.failed, build.failed == 1 ? "" : "s"), Tone::Error, build.errors});
+   if (status.patches.broken_recipes)
+      items.push_back({Icons::PATCH, std::format("{} recipe{} broken", status.patches.broken_recipes, status.patches.broken_recipes == 1 ? "" : "s"), Tone::Error,
+         "Didn't parse: their shaders run as the game made them. See the Patches tab."});
    if (status.patches.failed)
       items.push_back({Icons::PATCH, std::format("{} patch{} failed", status.patches.failed, status.patches.failed == 1 ? "" : "es"), Tone::Warning,
          "The shaders run as the game made them: see the Patches tab"});

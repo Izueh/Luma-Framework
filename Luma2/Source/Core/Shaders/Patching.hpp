@@ -110,6 +110,7 @@ struct Status
    uint32_t unmatched = 0;
    uint32_t failed = 0; // Matched, but unusable (a missing resource, D3D12 bindings) or the recipe failed
    uint32_t pending = 0; // Created since the last job
+   uint32_t broken_recipes = 0; // Didn't parse: their shaders run as the game made them
    uint64_t generation = 0; // Moves with each finished job
 };
 

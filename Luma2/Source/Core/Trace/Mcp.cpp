@@ -237,6 +237,7 @@ struct PatchState
    uint32_t unmatched = 0;
    uint32_t failed = 0;
    uint32_t pending = 0;
+   uint32_t broken_recipes = 0;
    std::vector<PatchRecipe> recipes;
    std::vector<PatchShader> shaders;
    std::vector<std::string> ignored_args;
@@ -961,6 +962,7 @@ std::string PatchState(const Request& request)
    reply.unmatched = status.unmatched;
    reply.failed = status.failed;
    reply.pending = status.pending;
+   reply.broken_recipes = status.broken_recipes;
    for (Shaders::Patching::RecipeInfo& recipe : Shaders::Patching::GetRecipes())
    {
       Replies::PatchRecipe& info = reply.recipes.emplace_back();

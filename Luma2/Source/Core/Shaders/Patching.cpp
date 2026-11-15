@@ -245,12 +245,15 @@ void Parse(Recipe& recipe)
    if (!text)
    {
       recipe.error = "The file is gone";
+      recipe.parsed.reset();
       return;
    }
    auto parsed = dxp::sm5::Recipe::ParseFromText(*text, recipe.identity);
    if (!parsed)
    {
+      // Its shaders go back to the game's (1.0 skipped a recipe that didn't parse) until it's fixed and reloaded
       recipe.error = parsed.error();
+      recipe.parsed.reset();
       Utils::Log::Error("Shaders: recipe {} doesn't parse: {}", recipe.identity, recipe.error);
       return;
    }
@@ -864,6 +867,7 @@ Status GetStatus()
    {
       std::scoped_lock lock(recipes_mutex);
       status.recipes = uint32_t(recipes.size());
+      status.broken_recipes = uint32_t(std::ranges::count_if(recipes, [](const Recipe& recipe) { return !recipe.error.empty(); }));
    }
 #endif
    {

@@ -112,7 +112,8 @@ Status GetStatus()
       .patched = patching.patched,
       .unmatched = patching.unmatched,
       .failed = patching.failed,
-      .pending = patching.pending};
+      .pending = patching.pending,
+      .broken_recipes = patching.broken_recipes};
    const System::Jobs::Status jobs = System::Jobs::GetStatus();
    status.shaders.job = jobs.name;
    status.jobs = {jobs.threads, jobs.running, jobs.queued};
