@@ -38,6 +38,7 @@
     <ClCompile Include="HooksTests.cpp" />
     <ClCompile Include="DevicesTests.cpp" />
     <ClCompile Include="GameTests.cpp" />
+    <ClCompile Include="ResourcesTests.cpp" />
     <ClCompile Include="McpTests.cpp" />
     <ClCompile Include="TraceTests.cpp" />
     <ClCompile Include="PatchingTests.cpp" />

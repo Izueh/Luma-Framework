@@ -18,7 +18,9 @@
 #include "Resources/Bindings.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
+#include "Resources/Samplers.hpp"
 #include "Resources/Textures.hpp"
+#include "Resources/Upgrade.hpp"
 #include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
 #include "Shaders/Defines.hpp"
@@ -91,13 +93,15 @@ struct GameDeviceDataType
 struct Options
 {
    // The LumaData writer runs at every draw with a Luma shader; LumaData uploads only when its bytes changed (1.0)
-   Resources::LumaCBuffers::Options cbuffers;
+   Luma::Resources::LumaCBuffers::Options cbuffers;
    // The bound-state cache's groups
    Draw::Options draw;
    // Where Luma's own bindings go (D3D12's register space)
-   Resources::Bindings::Options bindings;
+   Luma::Resources::Bindings::Options bindings;
    // The .dds files of the Textures folders, as Resources::Database entries
-   Resources::Textures::Options textures;
+   Luma::Resources::Textures::Options textures;
+   // 1.0's enable_samplers_upgrade: the game's anisotropic samplers get Luma's mirrors (16x, SR's LOD bias)
+   Luma::Resources::Samplers::Options samplers;
    // The game's own bytecode patches (recipes are files in the Recipes folder)
    Luma::Shaders::Patching::Options patching;
    GameDeviceDataType device_data;
@@ -105,6 +109,12 @@ struct Options
 
 // Once, in Init. A second call is ignored.
 void SetOptions(const Options& options);
+
+// The game's textures Luma upgrades, through mirrors (1.0's texture_upgrade_formats and the other texture_format_upgrades_* statics). The
+// rules name DXGI formats, which D3D11 and D3D12 share: one call for both (Guidelines.md section 4). In Init.
+namespace Resources {
+void SetUpgrades(const Luma::Resources::Upgrade::Rules& rules);
+} // namespace Resources
 
 // Drawn with UI::Widgets. Plain settings go through the registry instead.
 struct Panels
@@ -118,7 +128,7 @@ struct Panels
 void SetPanels(const Panels& panels);
 
 // The game's part is its GameSettings member. Written on the presenting thread only; contexts upload what was last published.
-using Resources::LumaCBuffers::cb_luma_global_settings;
+using Luma::Resources::LumaCBuffers::cb_luma_global_settings;
 
 // Core publishes at every present: this shows a change made elsewhere (on_init_swapchain) sooner. Presenting thread only.
 void MarkLumaSettingsDirty();
@@ -140,7 +150,7 @@ void RunOriginal(const Call& call);
 // Until the game binds another shader on `stage`. Nothing on a stage without a variant.
 void UseOriginal(const Call& call, ShaderStage stage);
 // With the resources the shader requests. From a draw event, Core then binds no variant's requests for that call.
-void BindLumaShader(ID3D11DeviceContext* context, uint64_t name_hash, const Resources::Database::CustomData& custom = {});
+void BindLumaShader(ID3D11DeviceContext* context, uint64_t name_hash, const Luma::Resources::Database::CustomData& custom = {});
 // A texture of the Textures folders (Options::textures), by its file's name: "fast_noise"_h. Null if it didn't load. Lives as long
 // as the device.
 ID3D11ShaderResourceView* GetTexture(ID3D11Device* device, uint64_t name_hash);

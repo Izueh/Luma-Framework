@@ -10,6 +10,7 @@
 #include <wrl/client.h>
 
 #include "Hooks/D3D11/D3D11Stages.hpp"
+#include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
 #include "Shaders/Database.hpp"
 #include "Trace/Readback.hpp"
@@ -296,7 +297,20 @@ bool ReadAfterCall(const Game::D3D11::Call& call, Shaders::StageSet stages, bool
    if (!handled)
       Game::D3D11::RunOriginal(call);
    const bool compute = call.dispatch != nullptr;
-   const Found found = FindView(call.context, *target, compute);
+   Found found = FindView(call.context, *target, compute);
+   // The bound view is a mirror's: named after the game's texture, which `original` reads instead
+   ComPtr<ID3D11Resource> named = found.resource;
+   bool mirrored = false;
+   if (ID3D11Resource* original = found.resource ? Resources::Mirrors::D3D11::GetOriginal(found.resource.Get()) : nullptr)
+   {
+      named = original;
+      mirrored = !target->original;
+      if (target->original)
+      {
+         found.resource = original;
+         found.view_format = DXGI_FORMAT_UNKNOWN;
+      }
+   }
    if (!found.resource)
    {
       // Reported at the present: the slot was empty at the call
@@ -306,7 +320,7 @@ bool ReadAfterCall(const Game::D3D11::Call& call, Shaders::StageSet stages, bool
    }
    ComPtr<ID3D11Device> device;
    call.context->GetDevice(&device);
-   Copy copy = {.texture = CreateCopy(device.Get(), found.resource.Get()), .view_format = found.view_format, .resource = GetId(found.resource.Get())};
+   Copy copy = {.texture = CreateCopy(device.Get(), found.resource.Get()), .view_format = found.view_format, .resource = GetId(named.Get()), .mirrored = mirrored};
    if (!copy.texture)
    {
       MarkCopied();

@@ -42,6 +42,17 @@ struct ShadersInfo
    std::string job; // The oldest running job, empty when idle
 };
 
+// Resources::Mirrors and Samplers
+struct ResourcesInfo
+{
+   bool upgrades = false; // Rules exist
+   bool samplers = false; // Sampler upgrades are on
+   uint32_t mirrors = 0;
+   uint64_t mirror_mb = 0;
+   uint32_t views = 0;
+   float lod_bias_offset = 0.f;
+};
+
 // Shaders::Patching: recipes and the game's bytecode patches
 struct PatchesInfo
 {
@@ -127,6 +138,7 @@ struct Status
    CountsInfo counts;
    ShadersInfo shaders;
    PatchesInfo patches;
+   ResourcesInfo resources;
    JobsInfo jobs;
    ValidationInfo validation;
    std::optional<D3D12Info> d3d12; // Once a D3D12 device was created

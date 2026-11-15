@@ -15,6 +15,8 @@
 #include "Settings/Registry.hpp"
 #include "Settings/Storage.hpp"
 #include "Resources/LumaCBuffers.hpp"
+#include "Resources/Mirrors.hpp"
+#include "Resources/Samplers.hpp"
 #include "Resources/Textures.hpp"
 #include "Shaders/Patching.hpp"
 #include "Shaders/Shaders.hpp"
@@ -97,6 +99,8 @@ Hooks::D3D11::Functions GetCoreFunctions()
       functions.set(size_t(function));
    functions |= Shaders::GetD3D11Functions();
    functions |= Resources::LumaCBuffers::GetD3D11Functions();
+   functions |= Resources::Mirrors::GetD3D11Functions();
+   functions |= Resources::Samplers::GetD3D11Functions();
    functions |= Luma::Draw::GetD3D11Functions();
 #if DEVELOPMENT
    functions |= Trace::Capture::GetD3D11Functions();
@@ -136,6 +140,8 @@ void Initialize()
    Settings::Register(SETTINGS, Settings::Kind::Luma);
    Settings::SetDefault(Settings::Core::WORKER_THREADS, GetDefaultWorkerThreads());
    Shaders::Register();
+   Resources::Mirrors::Register();
+   Resources::Samplers::Register();
    Validation::Register();
    Game::Init();
    Game::Registry::LogDeclarations();

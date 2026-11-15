@@ -14,7 +14,9 @@
 #include "Hooks/Lifetime.hpp"
 #include "Resources/Bindings.hpp"
 #include "Resources/LumaCBuffers.hpp"
+#include "Resources/Samplers.hpp"
 #include "Resources/Textures.hpp"
+#include "Resources/Upgrade.hpp"
 #include "Shaders/Patching.hpp"
 #include "Shaders/Database.hpp"
 #include "Shaders/Files.hpp"
@@ -153,17 +155,23 @@ void SetOptions(const Options& options)
       return;
    }
    declarations.options_set = true;
-   Resources::LumaCBuffers::SetOptions(options.cbuffers);
-   Resources::Bindings::SetOptions(options.bindings);
-   Resources::Textures::SetOptions(options.textures);
+   Luma::Resources::LumaCBuffers::SetOptions(options.cbuffers);
+   Luma::Resources::Bindings::SetOptions(options.bindings);
+   Luma::Resources::Textures::SetOptions(options.textures);
    Luma::Shaders::Patching::SetOptions(options.patching);
+   Luma::Resources::Samplers::SetOptions(options.samplers);
    Draw::SetOptions(options.draw);
    declarations.device_data = options.device_data;
 }
 
+void Resources::SetUpgrades(const Luma::Resources::Upgrade::Rules& rules)
+{
+   Luma::Resources::Upgrade::SetRules(rules);
+}
+
 void MarkLumaSettingsDirty()
 {
-   Resources::LumaCBuffers::MarkSettingsDirty();
+   Luma::Resources::LumaCBuffers::MarkSettingsDirty();
 }
 
 void SetPanels(const Panels& panels)
@@ -347,10 +355,12 @@ void LogDeclarations()
 void Reset()
 {
    declarations = {};
-   Resources::LumaCBuffers::SetOptions({});
-   Resources::Bindings::SetOptions({});
-   Resources::Textures::SetOptions({});
+   Luma::Resources::LumaCBuffers::SetOptions({});
+   Luma::Resources::Bindings::SetOptions({});
+   Luma::Resources::Textures::SetOptions({});
    Luma::Shaders::Patching::SetOptions({});
+   Luma::Resources::Samplers::SetOptions({});
+   Luma::Resources::Upgrade::SetRules({});
    Draw::SetOptions({});
 }
 

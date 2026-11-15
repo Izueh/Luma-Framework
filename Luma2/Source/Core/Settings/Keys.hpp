@@ -23,6 +23,13 @@ inline constexpr Id<float> OVERLAY_OPACITY = {"Luma.Overlay.Opacity"};
 inline constexpr Id<float> OVERLAY_HDR_PAPER_WHITE = {"Luma.Overlay.HdrPaperWhite"};
 // The most background jobs (System::Jobs) that run at once
 inline constexpr Id<int32_t> WORKER_THREADS = {"Luma.Advanced.WorkerThreads"};
+// Luma's mirrors of the game's textures swapped in (Resources::Mirrors), Development
+inline constexpr Id<bool> UPGRADES = {"Luma.Resources.Upgrades"};
+// Luma's mirrors of the game's samplers swapped in (Resources::Samplers), Development
+inline constexpr Id<bool> SAMPLERS = {"Luma.Resources.Samplers"};
+// Development builds: replaces the sampler LOD bias offset (0 until SR sets one, Step 7), 1.0's custom_texture_mip_lod_bias_offset
+inline constexpr Id<bool> SAMPLERS_CUSTOM_BIAS = {"Luma.Development.Samplers.CustomBias"};
+inline constexpr Id<float> SAMPLERS_BIAS = {"Luma.Development.Samplers.Bias"};
 // Compiles the shaders as soon as a define changes
 inline constexpr Id<bool> AUTO_COMPILE = {"Luma.Shaders.AutoCompile"};
 // Development and Test builds: writes the game's shaders to Luma/Dump

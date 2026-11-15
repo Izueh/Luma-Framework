@@ -20,6 +20,7 @@
 #include "UI/Icons.hpp"
 #include "UI/Input.hpp"
 #include "UI/Panels/Patches.hpp"
+#include "UI/Panels/Resources.hpp"
 #include "UI/Panels/Shaders.hpp"
 #include "UI/Panels/Trace.hpp"
 #include "UI/Style.hpp"
@@ -36,6 +37,7 @@ enum class Tab : uint8_t
    Settings,
    Shaders,
    Patches,
+   Resources,
    Trace,
    Info,
 };
@@ -306,6 +308,7 @@ void DrawTabBar()
    tab(Tab::Settings, "Settings", Icons::SLIDERS);
    tab(Tab::Shaders, "Shaders", Icons::CODE);
    tab(Tab::Patches, "Patches", Icons::PATCH);
+   tab(Tab::Resources, "Resources", Icons::LAYERS);
    tab(Tab::Trace, "Trace", Icons::LIST);
    tab(Tab::Info, "Info", nullptr);
    ImGui::EndTabBar();
@@ -323,6 +326,7 @@ void DrawContent(const Trace::Status& status)
       break;
    case Tab::Shaders: Panels::DrawShaders(); break;
    case Tab::Patches: Panels::DrawPatches(); break;
+   case Tab::Resources: Panels::DrawResources(); break;
    case Tab::Trace: Panels::DrawTrace(); break;
    case Tab::Info: DrawInfo(status); break;
    }

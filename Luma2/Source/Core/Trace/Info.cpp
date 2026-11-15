@@ -14,6 +14,8 @@
 #include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Resources/Bindings.hpp"
+#include "Resources/Mirrors.hpp"
+#include "Resources/Samplers.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
@@ -114,6 +116,13 @@ Status GetStatus()
       .failed = patching.failed,
       .pending = patching.pending,
       .broken_recipes = patching.broken_recipes};
+   const Resources::Mirrors::Stats mirrors = Resources::Mirrors::GetStats();
+   status.resources = {.upgrades = Resources::Mirrors::IsNeeded(),
+      .samplers = Resources::Samplers::IsNeeded(),
+      .mirrors = mirrors.mirrors,
+      .mirror_mb = mirrors.bytes >> 20,
+      .views = mirrors.views,
+      .lod_bias_offset = Resources::Samplers::GetLodBiasOffset()};
    const System::Jobs::Status jobs = System::Jobs::GetStatus();
    status.shaders.job = jobs.name;
    status.jobs = {jobs.threads, jobs.running, jobs.queued};

@@ -375,7 +375,19 @@ void Luma::Game::Init()
       },
       // 1.0's UseLumaFastNoise: the FAST noise texture, which SSAO Temporal and the Dithering Fix recipe read
       .textures = {.load = true},
+      .samplers = {.upgrade = true},
       .device_data = GameDeviceDataType::Of<GameDeviceData>(),
+   });
+   // Texture upgrades (8 bit unorm and 11 bit float etc to 16 bit float). 1.0 also listed the 8 bit RGBA and BGRA formats, under
+   // "#if 0 // Probably not needed".
+   Resources::SetUpgrades({
+      .formats = {DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R10G10B10A2_TYPELESS, DXGI_FORMAT_R11G11B10_FLOAT},
+      // Upgrade all 16:9 render targets too, because the game defaults to that aspect ratio internally unless mods are applied
+      .size_filters = Luma::Resources::Upgrade::SizeFilters::SwapchainResolution | Luma::Resources::Upgrade::SizeFilters::SwapchainAspectRatio |
+         Luma::Resources::Upgrade::SizeFilters::CustomAspectRatio,
+      .custom_aspect_ratios = {16.f / 9.f},
+      // LUT is 3D 32x
+      .lut = {.size = 32, .dimensions = Luma::Resources::Upgrade::LutDimensions::_3D},
    });
    SetEvents(D3D11::Events{
       .on_init_swapchain = &D3D11Events::OnInitSwapchain,
