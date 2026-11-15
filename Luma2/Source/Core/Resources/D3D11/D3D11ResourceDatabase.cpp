@@ -10,14 +10,18 @@
 
 #include <wrl/client.h>
 
+#include <DDSTextureLoader11.h>
+
 #include "Frame/Frame.hpp"
 #include "Hooks/D3D11/D3D11Stages.hpp"
 #include "Hooks/Lifetime.hpp"
 #include "Luma.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
+#include "Resources/Textures.hpp"
 #include "Utils/Debug.hpp"
 #include "Utils/Log.hpp"
+#include "Utils/Strings.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -30,6 +34,7 @@ struct Object
 {
    Shaders::D3D11::Published shader;
    ComPtr<ID3D11Buffer> buffer;
+   ComPtr<ID3D11ShaderResourceView> view; // Textures
 };
 
 // In the device's private data. Its objects hold the device: they're released when the game releases it.
@@ -62,6 +67,18 @@ ComPtr<ID3D11Buffer> CreateBuffer(ID3D11Device* device, const Entry& entry)
    if (FAILED(device->CreateBuffer(&desc, nullptr, &buffer)))
       Utils::Log::Error("Resources: \"{}\" ({} bytes) couldn't be created", entry.name, entry.size);
    return buffer;
+}
+
+// A .dds file as a texture and its view. In the device's creation: the files are few and small (a noise texture), read once per device.
+ComPtr<ID3D11ShaderResourceView> LoadTexture(ID3D11Device* device, uint32_t index)
+{
+   const Entry& entry = Get(index);
+   const std::filesystem::path path = Textures::Find(index);
+   ComPtr<ID3D11ShaderResourceView> view;
+   const HRESULT result = path.empty() ? HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) : DirectX::CreateDDSTextureFromFile(device, path.c_str(), nullptr, &view);
+   if (FAILED(result))
+      Utils::Log::Error("Resources: texture \"{}\" ({}) couldn't be loaded (0x{:08X})", entry.name, entry.file, uint32_t(result));
+   return view;
 }
 
 // With the store locked
@@ -128,6 +145,8 @@ void CreateDeviceObjects(ID3D11Device* device)
    {
       if (const Entry& entry = Get(index); entry.kind == Kind::ConstantBuffer)
          store->objects[index].buffer = CreateBuffer(device, entry);
+      else if (entry.kind == Kind::Texture)
+         store->objects[index].view = LoadTexture(device, index);
    }
    UpdateShaders(device, *store);
 }
@@ -154,6 +173,7 @@ void ReleaseDeviceObjects(ID3D11Device* device)
    {
       Shaders::D3D11::Release(store->objects[index].shader);
       store->objects[index].buffer.Reset();
+      store->objects[index].view.Reset();
    }
    store->retired.lives.clear();
    store->released = true;
@@ -166,6 +186,36 @@ const Shaders::D3D11::Live* GetShader(ID3D11Device* device, uint64_t name_hash)
    if (!store || !index || *index >= store->count)
       return nullptr;
    return store->objects[*index].shader.current.load(std::memory_order_acquire);
+}
+
+ID3D11ShaderResourceView* GetTexture(ID3D11Device* device, uint64_t name_hash)
+{
+   const Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->count)
+      return nullptr;
+   return store->objects[*index].view.Get();
+}
+
+bool HasRequested(ID3D11DeviceContext* context, const Shaders::CompiledShader& compiled)
+{
+   if (compiled.requests.empty())
+      return true;
+   Context* state = Hooks::Lifetime::GetOrCreateStateCached<Context>(context);
+   const Store* store = state ? GetStore(context, *state) : nullptr;
+   if (!store)
+      return false;
+   return std::ranges::all_of(compiled.requests, [store](const Shaders::Request& request) {
+      if (request.entry >= store->count)
+         return false;
+      const Object& object = store->objects[request.entry];
+      switch (Get(request.entry).kind)
+      {
+      case Kind::ConstantBuffer: return object.buffer != nullptr;
+      case Kind::Texture: return object.view != nullptr;
+      default: return false;
+      }
+   });
 }
 
 bool BindRequested(ID3D11DeviceContext* context, ShaderStage stage, const Shaders::CompiledShader& compiled, const CustomData& custom)
@@ -183,6 +233,15 @@ bool BindRequested(ID3D11DeviceContext* context, ShaderStage stage, const Shader
       if (request.entry >= store->count)
          continue;
       const Entry& entry = Get(request.entry);
+      if (entry.kind == Kind::Texture)
+      {
+         if (ID3D11ShaderResourceView* view = store->objects[request.entry].view.Get())
+         {
+            Hooks::D3D11::WithStage(stage, [&]<ShaderStage Stage>() { (context->*Hooks::D3D11::StageTraits<Stage>::SetShaderResources)(request.slot, 1, &view); });
+            bound = true;
+         }
+         continue;
+      }
       ID3D11Buffer* buffer = store->objects[request.entry].buffer.Get();
       if (entry.kind != Kind::ConstantBuffer || !buffer)
          continue;

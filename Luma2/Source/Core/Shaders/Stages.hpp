@@ -52,6 +52,13 @@ struct StageSet
       return a;
    }
 
+   // The stages of `a` that aren't in `b`
+   friend constexpr StageSet operator-(StageSet a, const StageSet& b)
+   {
+      a.bits &= ~b.bits;
+      return a;
+   }
+
    friend constexpr StageSet operator|(StageSet a, const StageSet& b)
    {
       a |= b;

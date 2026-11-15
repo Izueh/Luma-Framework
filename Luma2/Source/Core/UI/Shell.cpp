@@ -19,6 +19,7 @@
 #include "Trace/Info.hpp"
 #include "UI/Icons.hpp"
 #include "UI/Input.hpp"
+#include "UI/Panels/Patches.hpp"
 #include "UI/Panels/Shaders.hpp"
 #include "UI/Panels/Trace.hpp"
 #include "UI/Style.hpp"
@@ -34,6 +35,7 @@ enum class Tab : uint8_t
 {
    Settings,
    Shaders,
+   Patches,
    Trace,
    Info,
 };
@@ -278,6 +280,9 @@ std::vector<Widgets::StatusItem> GetStatusItems(const Trace::Status& status)
    }
    if (const Shaders::BuildInfo& build = Shaders::GetLastBuild(); build.failed)
       items.push_back({Icons::ERROR_, std::format("{} shader{} failed", build.failed, build.failed == 1 ? "" : "s"), Tone::Error, build.errors});
+   if (status.patches.failed)
+      items.push_back({Icons::PATCH, std::format("{} patch{} failed", status.patches.failed, status.patches.failed == 1 ? "" : "es"), Tone::Warning,
+         "The shaders run as the game made them: see the Patches tab"});
    if (status.validation.errors || status.validation.corruptions)
       items.push_back({Icons::WARNING, std::format("{} validation errors", status.validation.errors + status.validation.corruptions), Tone::Error, "See Luma.log"});
    return items;
@@ -297,6 +302,7 @@ void DrawTabBar()
    };
    tab(Tab::Settings, "Settings", Icons::SLIDERS);
    tab(Tab::Shaders, "Shaders", Icons::CODE);
+   tab(Tab::Patches, "Patches", Icons::PATCH);
    tab(Tab::Trace, "Trace", Icons::LIST);
    tab(Tab::Info, "Info", nullptr);
    ImGui::EndTabBar();
@@ -313,6 +319,7 @@ void DrawContent(const Trace::Status& status)
       DrawAbout();
       break;
    case Tab::Shaders: Panels::DrawShaders(); break;
+   case Tab::Patches: Panels::DrawPatches(); break;
    case Tab::Trace: Panels::DrawTrace(); break;
    case Tab::Info: DrawInfo(status); break;
    }

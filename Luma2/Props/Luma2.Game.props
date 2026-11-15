@@ -5,6 +5,16 @@
     <!-- Every game is built as the system dll it replaces, in its own output folder so they don't overwrite each other -->
     <TargetName>$(LumaDllName)</TargetName>
     <OutDir>$(Luma2Root)Binaries\$(Configuration)\$(ProjectName)\</OutDir>
+    <!-- Optional SDKs, opted into per game in its project's Globals (Guidelines section 7) -->
+    <UseLumaDXP Condition="'$(UseLumaDXP)'==''">false</UseLumaDXP>
+  </PropertyGroup>
+
+  <!-- DXP (DirectXShaderPatcher), for shader patching recipes: 1.0's vcpkg port (Source/External/vcpkg-ports/dxp), through the game
+       project's vcpkg.json and vcpkg-configuration.json -->
+  <PropertyGroup Condition="'$(UseLumaDXP)'=='true'">
+    <VcpkgEnabled>true</VcpkgEnabled>
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
+    <VcpkgManifestRoot>$(MSBuildProjectDirectory)</VcpkgManifestRoot>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
@@ -13,6 +23,12 @@
            as the game's files win a name clash at runtime -->
       <AdditionalIncludeDirectories>$(Luma2Root)Resources\$(ProjectName)\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
+    <ClCompile Condition="'$(UseLumaDXP)'=='true'">
+      <PreprocessorDefinitions>LUMA_USE_DXP=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <Link Condition="'$(UseLumaDXP)'=='true'">
+      <AdditionalDependencies>dxpatcher.lib;Ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
   </ItemDefinitionGroup>
 
   <!-- Copies the dll and its pdb into the game when "LumaGameDir" is set (e.g. in the project's .vcxproj.user file), next to the "Luma" folder the mod reads and writes -->

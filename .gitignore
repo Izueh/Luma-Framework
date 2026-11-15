@@ -39,6 +39,7 @@
 *.exp
 *.vcxproj.user
 Source/Games/**/vcpkg_installed/**
+Luma2/Source/Games/**/vcpkg_installed/**
 
 # JetBrains
 .idea/

@@ -9,6 +9,7 @@
 #include "Game/Registry.hpp"
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/DeviceProxy.hpp"
+#include "Luma.hpp"
 #include "Resources/D3D11/D3D11LumaCBuffers.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
 #include "Resources/LumaCBuffers.hpp"
@@ -37,7 +38,6 @@ const Game::D3D11::Callbacks& GameCallbacks()
 {
    return Game::Registry::GetD3D11Callbacks();
 }
-
 
 bool IsRestoringGameBuffers()
 {
@@ -82,15 +82,26 @@ bool RestoreGameBuffers(const Game::D3D11::Call& call, Shaders::StageSet stages,
    return true;
 }
 
+// Before the events: a patch's resources, as 1.0 bound a recipe's before OnDrawOrDispatchCustomPipeline, so a callback sees the
+// call as it will run (a patch missing one already gave way to the game's shader). The stages where something was bound.
+Shaders::StageSet FulfilBeforeEvents(ID3D11DeviceContext* context, Shaders::StageSet stages)
+{
+   if (!Shaders::IsNeeded() || !IsEnabled())
+      return {};
+   return Shaders::Variants::D3D11::BindPatchResources(context, stages);
+}
+
 // After the callbacks, which may have bound other shaders: the variants' requests are bound only for a call that runs as the game
-// made it, and not when a callback bound Luma's cbuffers itself. The stages where Luma's cbuffers are bound.
-Shaders::StageSet FulfilAfterEvents(ID3D11DeviceContext* context, Shaders::StageSet stages, const Game::DrawEvents::D3D11::Result& events, bool skipped)
+// made it, and not when a callback bound Luma's cbuffers itself, nor again where a patch's were bound before the events. The
+// stages where Luma's cbuffers are bound.
+Shaders::StageSet FulfilAfterEvents(ID3D11DeviceContext* context, Shaders::StageSet stages, const Game::DrawEvents::D3D11::Result& events, bool skipped,
+   Shaders::StageSet before)
 {
    if (events.luma_stages.Any())
-      return events.luma_stages;
+      return events.luma_stages | before;
    if (events.result != Game::DrawResult::None || skipped || !Shaders::IsNeeded())
-      return {};
-   return Shaders::Variants::D3D11::BindRequestedResources(context, stages);
+      return before;
+   return Shaders::Variants::D3D11::BindRequestedResources(context, stages - before) | before;
 }
 } // namespace
 
@@ -407,13 +418,14 @@ bool PreDraw(ID3D11DeviceContext* context, const DrawCall& draw)
    if (Trace::Track::IsActive())
       Trace::Capture::D3D11::TrackCall(context, Shaders::GRAPHICS_STAGES);
 #endif
+   const Shaders::StageSet before = FulfilBeforeEvents(context, Shaders::GRAPHICS_STAGES);
    const Game::DrawEvents::D3D11::Result events = Game::Registry::HasDrawCallbacks() ? Game::DrawEvents::D3D11::Run(context, draw) : Game::DrawEvents::D3D11::Result();
 #if DEVELOPMENT
    const bool skipped = events.result == Game::DrawResult::None && Trace::Capture::D3D11::IsSkipped(context, Shaders::GRAPHICS_STAGES);
 #else
    constexpr bool skipped = false;
 #endif
-   const Shaders::StageSet bound = FulfilAfterEvents(context, Shaders::GRAPHICS_STAGES, events, skipped);
+   const Shaders::StageSet bound = FulfilAfterEvents(context, Shaders::GRAPHICS_STAGES, events, skipped, before);
    const bool handled = RestoreGameBuffers({.context = context, .draw = &draw}, bound, events.result != Game::DrawResult::None || skipped);
 #if DEVELOPMENT
    if (recording)
@@ -431,6 +443,7 @@ bool PreDispatch(ID3D11DeviceContext* context, const DispatchCall& dispatch)
    if (Trace::Track::IsActive())
       Trace::Capture::D3D11::TrackCall(context, Shaders::COMPUTE_STAGES);
 #endif
+   const Shaders::StageSet before = FulfilBeforeEvents(context, Shaders::COMPUTE_STAGES);
    const Game::DrawEvents::D3D11::Result events =
       Game::Registry::HasDrawCallbacks() ? Game::DrawEvents::D3D11::Run(context, dispatch) : Game::DrawEvents::D3D11::Result();
 #if DEVELOPMENT
@@ -438,7 +451,7 @@ bool PreDispatch(ID3D11DeviceContext* context, const DispatchCall& dispatch)
 #else
    constexpr bool skipped = false;
 #endif
-   const Shaders::StageSet bound = FulfilAfterEvents(context, Shaders::COMPUTE_STAGES, events, skipped);
+   const Shaders::StageSet bound = FulfilAfterEvents(context, Shaders::COMPUTE_STAGES, events, skipped, before);
    const bool handled = RestoreGameBuffers({.context = context, .dispatch = &dispatch}, bound, events.result != Game::DrawResult::None || skipped);
 #if DEVELOPMENT
    if (recording)

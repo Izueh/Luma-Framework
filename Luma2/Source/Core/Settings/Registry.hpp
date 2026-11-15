@@ -65,7 +65,7 @@ struct Define
    std::string_view name;
 };
 
-// Enables a shader patch, or sets one of its environment values. Step 3: a change re-patches.
+// Enables a shader patch (a recipe), or sets one of its environment values: Shaders::Patching listens to the changes and patches again
 struct Recipe
 {
    std::string_view identity;
@@ -81,7 +81,7 @@ enum class Kind : uint8_t
    Game, // Settings::Register: [<Category>] in the file
    Luma, // Core's own: [Luma.<Category>]
    Define, // A shader define, Luma's or the game's (Game::Shaders::AddDefine): [Defines], by the define's name
-   Recipe, // A shader patch's switch or value (Step 3): [Recipes]
+   Recipe, // A recipe's switch or environment value (Shaders::Patching): [Recipes."<identity>"]
    Development, // The dev sliders and Development tools: [Development], in the settings view's Development Settings section
 };
 

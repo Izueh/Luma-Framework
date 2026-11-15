@@ -26,6 +26,11 @@ void ReleaseDeviceObjects(ID3D11Device* device);
 // replaces it: for a pass, not to keep.
 const Shaders::D3D11::Live* GetShader(ID3D11Device* device, uint64_t name_hash);
 
+// Any thread: a texture entry's view on the device, null if it couldn't be loaded (or there's no such entry). Lives as long as the device.
+ID3D11ShaderResourceView* GetTexture(ID3D11Device* device, uint64_t name_hash);
+// Whether every entry `compiled` requests has an object on the context's device (a texture that failed to load doesn't)
+bool HasRequested(ID3D11DeviceContext* context, const Shaders::CompiledShader& compiled);
+
 // The requests of `compiled`, a shader running on `stage` of the context: each entry uploaded where its contents changed for this context
 // (LumaData with `custom`), and bound at the register it declared. Nothing while Luma is off. Whether anything was bound.
 bool BindRequested(ID3D11DeviceContext* context, ShaderStage stage, const Shaders::CompiledShader& compiled, const CustomData& custom);

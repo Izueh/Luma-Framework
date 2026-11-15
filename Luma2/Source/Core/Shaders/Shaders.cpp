@@ -18,6 +18,7 @@
 #include "Shaders/Database.hpp"
 #include "Shaders/Defines.hpp"
 #include "Shaders/Files.hpp"
+#include "Shaders/Patching.hpp"
 #include "System/Jobs.hpp"
 #include "Shaders/Variants.hpp"
 #include "System/Paths.hpp"
@@ -284,7 +285,8 @@ void Start()
 #if DEVELOPMENT || TEST
    needed = true;
 #else
-   needed = Game::Registry::HasDrawCallbacks() || std::ranges::any_of(files, [](const Files::File& file) { return file.kind == Files::Kind::Replacement; });
+   needed = Game::Registry::HasDrawCallbacks() || Patching::IsNeeded() ||
+      std::ranges::any_of(files, [](const Files::File& file) { return file.kind == Files::Kind::Replacement; });
 #endif
    started = true;
    if (needed || any_program)

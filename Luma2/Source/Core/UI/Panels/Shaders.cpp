@@ -114,6 +114,8 @@ void DrawShaders()
    std::map<std::string, Entry> files;
    for (Shaders::Variants::Variant& replacement : Shaders::Variants::GetAll())
    {
+      if (replacement.source != Shaders::Variants::Source::File)
+         continue;
       Entry& entry = files[replacement.file];
       entry.file = replacement.file;
       entry.replacements.push_back(std::move(replacement));
@@ -153,7 +155,7 @@ void DrawShaders()
    std::vector<const Shaders::Database::Shader*> replaced;
    for (const Shaders::Database::Shader* shader : Shaders::Database::GetShaders())
    {
-      if (shader->objects && Shaders::Variants::HasVariant(shader->hash))
+      if (shader->objects && Shaders::Variants::GetCompiledShader(shader->hash, Shaders::Variants::Source::File))
          replaced.push_back(shader);
    }
    std::ranges::sort(replaced, [](const auto* a, const auto* b) { return std::pair(a->stage, a->hash) < std::pair(b->stage, b->hash); });

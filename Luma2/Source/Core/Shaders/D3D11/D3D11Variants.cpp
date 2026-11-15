@@ -186,6 +186,26 @@ const BoundShaders* GetBoundShaders(ID3D11DeviceContext* context)
    return Hooks::Lifetime::GetOrCreateStateCached<BoundShaders>(context);
 }
 
+StageSet BindPatchResources(ID3D11DeviceContext* context, StageSet stages)
+{
+   const BoundShaders* bound = GetBoundShaders(context);
+   if (!bound || !(bound->variant_stages & stages).Any())
+      return {};
+   StageSet fulfilled;
+   for (uint32_t index = 0; index < bound->compiled.size(); index++)
+   {
+      const ShaderStage stage = ShaderStage(index);
+      const CompiledShader* compiled = bound->compiled[index];
+      if (!(bound->variant_stages & stages).Has(stage) || bound->sources[index] != Source::Patch || !compiled || compiled->requests.empty())
+         continue;
+      if (!Resources::Database::D3D11::HasRequested(context, *compiled))
+         UseOriginal(context, stage);
+      else if (Resources::Database::D3D11::BindRequested(context, stage, *compiled, {}))
+         fulfilled.Set(stage);
+   }
+   return fulfilled;
+}
+
 StageSet BindRequestedResources(ID3D11DeviceContext* context, StageSet stages)
 {
    const BoundShaders* bound = GetBoundShaders(context);

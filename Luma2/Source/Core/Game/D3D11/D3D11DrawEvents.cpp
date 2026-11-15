@@ -108,6 +108,11 @@ void Game::D3D11::BindLumaShader(ID3D11DeviceContext* context, uint64_t name_has
       running->luma_stages.Set(stage);
 }
 
+ID3D11ShaderResourceView* Game::D3D11::GetTexture(ID3D11Device* device, uint64_t name_hash)
+{
+   return Luma::Resources::Database::D3D11::GetTexture(device, name_hash);
+}
+
 void Game::D3D11::UseOriginal(const Call& call, ShaderStage stage)
 {
    Luma::Shaders::Variants::D3D11::UseOriginal(call.context, stage);

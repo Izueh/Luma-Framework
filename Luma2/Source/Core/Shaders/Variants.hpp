@@ -26,6 +26,8 @@ enum class Source : uint8_t
 inline constexpr size_t SOURCE_COUNT = 2;
 // The priority of a replacement file's variant
 inline constexpr int32_t FILE_PRIORITY = 100;
+// A patch's: below a file's, as 1.0 took a replacement file over a patch
+inline constexpr int32_t PATCH_PRIORITY = 50;
 
 // "file", "patch"
 std::string_view GetName(Source source);
@@ -69,6 +71,9 @@ size_t FindChoice(std::span<const Choice> choices, Choice choice);
 // Any thread, publishers serialized: a build's variants of one source, replacing that source's. Hashes it doesn't have lose their variant of the
 // source; a failed one keeps its last bytecode.
 void Publish(Source source, std::vector<Variant> variants);
+// Any thread, publishers serialized: some hashes' variants of one source, replacing only those hashes' (`removed` lose theirs).
+// For a source that changes a few hashes at a time (patches, as the game creates shaders).
+void Update(Source source, std::vector<Variant> changed, std::span<const uint32_t> removed);
 // Any thread: the hash's variants, highest priority first
 std::vector<Variant> GetVariants(uint32_t hash);
 // Any thread: null if the hash has no variant of the source that compiled

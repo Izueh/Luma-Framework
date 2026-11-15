@@ -22,6 +22,7 @@
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Frame/Frame.hpp"
+#include "Shaders/Patching.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
 #include "Shaders/Database.hpp"
 #include "Shaders/Shaders.hpp"
@@ -355,6 +356,8 @@ void PrePresent(IDXGISwapChain* swapchain)
    if (Shaders::IsNeeded())
       Shaders::Database::QueueDumps();
 #endif
+   // The shaders the game created since, or all of them after a recipe change, patched on a job
+   Shaders::Patching::OnPresent();
    Shaders::CountFrame();
    if (const std::optional<Presenter> presenter = FindPresenter(swapchain))
    {

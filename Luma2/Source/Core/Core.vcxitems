@@ -57,5 +57,10 @@
       <ObjectFileName>$(IntDir)imgui\</ObjectFileName>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
+    <!-- Textures from disk: DirectXTex's DDS loader (Resources::Database) -->
+    <ClCompile Include="$(Luma2ExternalDir)DirectXTex\DDSTextureLoader11.cpp">
+      <ObjectFileName>$(IntDir)DirectXTex\</ObjectFileName>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
   </ItemGroup>
 </Project>

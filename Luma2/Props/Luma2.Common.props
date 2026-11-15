@@ -36,7 +36,7 @@
   <PropertyGroup>
     <OutDir>$(Luma2Root)Binaries\$(Configuration)\</OutDir>
     <IntDir>$(Luma2Root)Binaries\Intermediate\$(ProjectName)\$(Configuration)\</IntDir>
-    <ExternalIncludePath>$(LumaExternalDir)safetyhook\include;$(LumaExternalDir)zydis\include;$(LumaExternalDir)zydis\dependencies\zycore\include;$(Luma2ExternalDir)glaze\include;$(Luma2ExternalDir)imgui;$(Luma2ExternalDir)doctest;$(Luma2ExternalDir)Fonts\FontAwesome;$(ExternalIncludePath)</ExternalIncludePath>
+    <ExternalIncludePath>$(LumaExternalDir)safetyhook\include;$(LumaExternalDir)zydis\include;$(LumaExternalDir)zydis\dependencies\zycore\include;$(Luma2ExternalDir)glaze\include;$(Luma2ExternalDir)imgui;$(Luma2ExternalDir)doctest;$(Luma2ExternalDir)Fonts\FontAwesome;$(Luma2ExternalDir)DirectXTex;$(ExternalIncludePath)</ExternalIncludePath>
   </PropertyGroup>
 
   <ItemDefinitionGroup>

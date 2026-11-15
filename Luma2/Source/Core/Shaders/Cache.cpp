@@ -94,6 +94,13 @@ uint64_t GetKey(std::string_view preprocessed, std::string_view target, std::str
    return Hash(entry, Hash("|", hash));
 }
 
+uint64_t GetPatchKey(uint32_t hash, std::string_view patch)
+{
+   uint64_t key = Hash("patch|", Hash(std::string_view(reinterpret_cast<const char*>(&VERSION), sizeof(VERSION)), FNV_OFFSET));
+   key = Hash(std::string_view(reinterpret_cast<const char*>(&hash), sizeof(hash)), key);
+   return Hash(patch, Hash("|", key));
+}
+
 std::optional<Bytecode> ReadShader(uint64_t key)
 {
    const std::optional<std::string> data = Read(GetShaderPath(key));
@@ -115,6 +122,16 @@ std::optional<std::string> ReadReflection(uint32_t hash)
 void WriteReflection(uint32_t hash, std::string_view text)
 {
    Write(GetReflectionPath(hash), text);
+}
+
+std::optional<std::string> ReadPatchIndex()
+{
+   return Read(GetDirectory() / L"Patches.json");
+}
+
+void WritePatchIndex(std::string_view text)
+{
+   Write(GetDirectory() / L"Patches.json", text);
 }
 } // namespace Cache
 } // namespace Shaders

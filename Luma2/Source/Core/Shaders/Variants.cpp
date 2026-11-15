@@ -111,6 +111,45 @@ void Publish(Source source, std::vector<Variant> published)
    generation.fetch_add(1, std::memory_order_release);
 }
 
+void Update(Source source, std::vector<Variant> changed, std::span<const uint32_t> removed)
+{
+   if (changed.empty() && removed.empty())
+      return;
+   std::scoped_lock publishing(publish_mutex);
+   {
+      std::scoped_lock lock(mutex);
+      const auto drop = [&](uint32_t hash) -> std::shared_ptr<const CompiledShader> {
+         const auto it = variants.find(hash);
+         if (it == variants.end())
+            return nullptr;
+         std::shared_ptr<const CompiledShader> previous;
+         for (const Variant& variant : it->second)
+         {
+            if (variant.source == source)
+               previous = variant.compiled;
+         }
+         std::erase_if(it->second, [source](const Variant& variant) { return variant.source == source; });
+         if (it->second.empty())
+            variants.erase(it);
+         return previous;
+      };
+      for (const uint32_t hash : removed)
+         drop(hash);
+      for (Variant& variant : changed)
+      {
+         variant.source = source;
+         // The same bytes as before are the same compiled shader: nothing is recreated from it
+         if (const std::shared_ptr<const CompiledShader> previous = drop(variant.hash);
+            previous && (variant.failed || (variant.compiled && variant.compiled->bytecode == previous->bytecode && variant.compiled->requests == previous->requests)))
+            variant.compiled = previous;
+         std::vector<Variant>& list = variants[variant.hash];
+         list.push_back(std::move(variant));
+         std::ranges::stable_sort(list, std::ranges::greater(), &Variant::priority);
+      }
+   }
+   generation.fetch_add(1, std::memory_order_release);
+}
+
 std::vector<Variant> GetVariants(uint32_t hash)
 {
    std::shared_lock lock(mutex);

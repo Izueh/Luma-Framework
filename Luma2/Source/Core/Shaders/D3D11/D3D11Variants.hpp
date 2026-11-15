@@ -47,6 +47,10 @@ void UseOriginal(ID3D11DeviceContext* context, ShaderStage stage);
 void ForgetBoundShaders(ID3D11DeviceContext* context);
 // The context's record, null for a context without private data
 const BoundShaders* GetBoundShaders(ID3D11DeviceContext* context);
+// Before a draw or dispatch's events (1.0's OnDrawOrDispatchCustomPipeline): the resources the patches running on `stages` request.
+// A patch whose resource the device doesn't have (a texture that didn't load) gives way to the game's shader for this call. The
+// stages where something was bound.
+StageSet BindPatchResources(ID3D11DeviceContext* context, StageSet stages);
 // Before a draw or dispatch: the resources the variants running on `stages` request, bound where they declared them. The stages
 // where something was bound.
 StageSet BindRequestedResources(ID3D11DeviceContext* context, StageSet stages);

@@ -15,6 +15,8 @@
 #include "Settings/Registry.hpp"
 #include "Settings/Storage.hpp"
 #include "Resources/LumaCBuffers.hpp"
+#include "Resources/Textures.hpp"
+#include "Shaders/Patching.hpp"
 #include "Shaders/Shaders.hpp"
 #include "System/Jobs.hpp"
 #include "System/Loader.hpp"
@@ -140,6 +142,10 @@ void Initialize()
    System::Paths::ResolveRoots();
    // Named from the shader files the game's name finds
    Resources::LumaCBuffers::Register();
+   // After Core's cbuffers, whose names a file can't take
+   Resources::Textures::Register();
+   // The recipes' settings, before the saved values load
+   Shaders::Patching::Register();
    const std::filesystem::path settings_path = System::Paths::GetConfig();
    UI::Input::Initialize();
    UI::Initialize();

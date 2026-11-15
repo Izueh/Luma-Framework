@@ -25,12 +25,22 @@ struct Program
    uint32_t minor = 0;
    bool dxil = false;
 };
+
 // From the program chunk: SHEX (SM5), SHDR (SM4) or DXIL (SM6)
 std::optional<Program> GetProgram(std::span<const uint8_t> bytecode);
 // "ps_5_0", "vs_6_6", "lib_6_3"; empty if there's no program chunk or the kind is unknown
 std::string GetTarget(std::span<const uint8_t> bytecode);
 // The pipeline stage of a program kind, none for libraries, mesh and amplification shaders
 std::optional<ShaderStage> GetStage(const Program& program);
+
+// SM4/SM5 programs (SHEX or SHDR): the instructions after the version and length tokens, what 1.0 gave a game's bytecode patch
+// callback. Empty without one.
+std::span<const uint8_t> GetProgramCode(std::span<const uint8_t> bytecode);
+// The container with its program's instructions replaced by `code` (a multiple of 4 bytes): chunk sizes and offsets moved, and
+// the checksum computed again, or the API refuses it. Empty if the container has no SM4/SM5 program.
+std::vector<uint8_t> ReplaceProgramCode(std::span<const uint8_t> bytecode, std::span<const uint8_t> code);
+// The container's checksum (DXBC's own MD5 variant) written in its header
+void Sign(std::span<uint8_t> bytecode);
 
 // The root signature compiled into the shader (an "RTS0" chunk, D3D12), empty without one
 std::span<const uint8_t> GetRootSignature(std::span<const uint8_t> bytecode);
@@ -55,6 +65,7 @@ struct Signature
    std::vector<Element> outputs; // OSG1, OSG5 or OSGN
    std::vector<Element> patch_constants; // PSG1 or PCSG: hull shader outputs, domain shader inputs
 };
+
 // Each list empty if the shader has no such chunk (compute shaders, a pixel shader writing nothing)
 Signature GetSignature(std::span<const uint8_t> bytecode);
 // "TEXCOORD0", "SV_POSITION0"
@@ -93,6 +104,7 @@ struct Bindings
    bool UsesSpace(uint32_t space) const;
    bool HasUnbounded() const;
 };
+
 // Without reflection: the declarations in SHEX or SHDR, PSV0's resource list for DXIL, SFI0's feature flags for heap indexing
 Bindings GetBindings(std::span<const uint8_t> bytecode);
 } // namespace Container

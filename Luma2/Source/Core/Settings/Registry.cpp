@@ -123,11 +123,7 @@ void ApplySource(const Setting& setting, const Value& value)
       if (binding->target)
          *binding->target = binding->parse ? binding->parse(ToFloat(value)) : ToFloat(value);
    }
-   // A define's change is Shaders' (a change listener): nothing to write
-   else if (std::holds_alternative<Sources::Recipe>(setting.source))
-   {
-      LUMA_UNIMPLEMENTED("Settings::Sources::Recipe (Step 3)");
-   }
+   // A define's or a recipe's change is Shaders' (a change listener): nothing to write
 }
 
 template <typename T>

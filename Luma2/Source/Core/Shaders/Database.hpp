@@ -54,9 +54,8 @@ struct Shader
    bool draw_callback = false; // Game::OnDraw named it
    // The game's objects with this bytecode now
    std::atomic<uint32_t> objects = 0;
-#if DEVELOPMENT || TEST // For dumping
+   // Kept for dumping (Development and Test builds) and patching (Shaders::Patching, which patches again after a change)
    Bytecode bytecode;
-#endif
 #if DEVELOPMENT
    Reflection reflection;
    // The trace's per shader actions: the variant (or the original) its binds take until cleared, its draws don't run

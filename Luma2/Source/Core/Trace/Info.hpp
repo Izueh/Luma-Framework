@@ -42,6 +42,19 @@ struct ShadersInfo
    std::string job; // The oldest running job, empty when idle
 };
 
+// Shaders::Patching: recipes and the game's bytecode patches
+struct PatchesInfo
+{
+   bool needed = false;
+   bool loaded = true; // False after "Unload Patches"
+   bool running = false;
+   uint32_t recipes = 0;
+   uint32_t patched = 0;
+   uint32_t unmatched = 0;
+   uint32_t failed = 0;
+   uint32_t pending = 0;
+};
+
 struct JobsInfo
 {
    uint32_t threads = 0; // The most that run at once (Luma.Advanced.WorkerThreads)
@@ -112,6 +125,7 @@ struct Status
    bool overlay_open = false;
    CountsInfo counts;
    ShadersInfo shaders;
+   PatchesInfo patches;
    JobsInfo jobs;
    ValidationInfo validation;
    std::optional<D3D12Info> d3d12; // Once a D3D12 device was created

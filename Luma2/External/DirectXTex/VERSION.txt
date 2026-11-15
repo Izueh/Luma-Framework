@@ -1,0 +1,1 @@
+DirectXTex may2026 (https://github.com/microsoft/DirectXTex/tree/may2026/DDSTextureLoader), unmodified

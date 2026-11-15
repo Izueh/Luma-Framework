@@ -18,6 +18,7 @@
 #include "Hooks/Scope.hpp"
 #include "Luma.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
+#include "Shaders/Patching.hpp"
 #include "System/Jobs.hpp"
 #include "Utils/Hash.hpp"
 #include "Utils/Log.hpp"
@@ -299,6 +300,9 @@ bool NeedsDescCopy([[maybe_unused]] const Database::D3D12::PipelineDesc& desc)
 #if DEVELOPMENT || TEST
    return true;
 #else
+   // Any shader may get a patch: which ones is known only once they're patched, after the creation
+   if (Patching::IsNeeded())
+      return true;
    return std::ranges::any_of(desc.stages, [](std::span<const uint8_t> bytecode) { return !bytecode.empty() && HasReplacementFile(Utils::Hash::CRC32(bytecode)); });
 #endif
 }

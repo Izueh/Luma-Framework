@@ -20,6 +20,7 @@
 #include "Hooks/Hooks.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Shaders/Database.hpp"
+#include "Shaders/Patching.hpp"
 #include "System/Jobs.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Shaders/Variants.hpp"
@@ -103,6 +104,15 @@ Status GetStatus()
    for (const Shaders::Database::Shader* shader : Shaders::Database::GetShaders())
       status.shaders.replaced += shader->objects && Shaders::Variants::HasVariant(shader->hash);
    status.shaders.has_compilation_errors = Shaders::GetLastBuild().failed != 0;
+   const Shaders::Patching::Status patching = Shaders::Patching::GetStatus();
+   status.patches = {.needed = patching.needed,
+      .loaded = patching.loaded,
+      .running = patching.running,
+      .recipes = patching.recipes,
+      .patched = patching.patched,
+      .unmatched = patching.unmatched,
+      .failed = patching.failed,
+      .pending = patching.pending};
    const System::Jobs::Status jobs = System::Jobs::GetStatus();
    status.shaders.job = jobs.name;
    status.jobs = {jobs.threads, jobs.running, jobs.queued};

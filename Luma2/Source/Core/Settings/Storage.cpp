@@ -114,7 +114,7 @@ std::string_view WithoutPrefix(std::string_view key, std::string_view prefix)
 }
 
 // Where a setting is in the file, by its kind: a game's in [<Category>], Luma's in [Luma.<Category>] ([Luma] for its "Luma"
-// category), defines in [Defines] by their name, recipes in [Recipes], development ones in [Development]. The key leaves out
+// category), defines in [Defines] by their name, recipes in [Recipes."<identity>"], development ones in [Development]. The key leaves out
 // what the table already says: "Luma.Overlay.Key" is Key in [Luma.Overlay].
 struct Place
 {
@@ -139,7 +139,13 @@ Place GetPlace(const Setting& setting)
       const Sources::Define* define = std::get_if<Sources::Define>(&setting.source);
       return {{"Defines"}, define ? define->name : WithoutPrefix(setting.key, "Defines")};
    }
-   case Kind::Recipe: return {{"Recipes"}, WithoutPrefix(setting.key, "Recipes")};
+   case Kind::Recipe:
+   {
+      // A table per recipe, by its identity: its switch is Enabled, its environment values by name
+      if (const Sources::Recipe* recipe = std::get_if<Sources::Recipe>(&setting.source))
+         return {{"Recipes", recipe->identity}, recipe->env.empty() ? std::string_view("Enabled") : recipe->env};
+      return {{"Recipes"}, WithoutPrefix(setting.key, "Recipes")};
+   }
    case Kind::Development: return {{"Development"}, WithoutPrefix(WithoutPrefix(setting.key, "Luma"), "Development")};
    default: return {{category}, WithoutPrefix(setting.key, category)};
    }

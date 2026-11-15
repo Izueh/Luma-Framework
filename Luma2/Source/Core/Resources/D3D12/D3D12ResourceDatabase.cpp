@@ -170,6 +170,15 @@ void Bind(ID3D12GraphicsCommandList* list, List& state, bool compute, uint32_t i
 void CreateDeviceObjects(ID3D12Device* device)
 {
    Hooks::Lifetime::SetState<Store>(device);
+   // Luma's views need its descriptor heap tail, built with the D3D12 passes
+   for (uint32_t index = 0; index < GetCount(); index++)
+   {
+      if (Get(index).kind == Kind::Texture)
+      {
+         LUMA_UNIMPLEMENTED("Resources::Database textures on D3D12 (the heap tail, Step 5)");
+         break;
+      }
+   }
 }
 
 void ReleaseDeviceObjects(ID3D12Device* device)

@@ -14,6 +14,8 @@
 #include "Hooks/Lifetime.hpp"
 #include "Resources/Bindings.hpp"
 #include "Resources/LumaCBuffers.hpp"
+#include "Resources/Textures.hpp"
+#include "Shaders/Patching.hpp"
 #include "Shaders/Database.hpp"
 #include "Shaders/Files.hpp"
 #include "Utils/Debug.hpp"
@@ -153,6 +155,8 @@ void SetOptions(const Options& options)
    declarations.options_set = true;
    Resources::LumaCBuffers::SetOptions(options.cbuffers);
    Resources::Bindings::SetOptions(options.bindings);
+   Resources::Textures::SetOptions(options.textures);
+   Luma::Shaders::Patching::SetOptions(options.patching);
    Draw::SetOptions(options.draw);
    declarations.device_data = options.device_data;
 }
@@ -345,6 +349,8 @@ void Reset()
    declarations = {};
    Resources::LumaCBuffers::SetOptions({});
    Resources::Bindings::SetOptions({});
+   Resources::Textures::SetOptions({});
+   Luma::Shaders::Patching::SetOptions({});
    Draw::SetOptions({});
 }
 

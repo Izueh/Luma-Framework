@@ -38,7 +38,8 @@ std::vector<Element> ReadElements(std::span<const uint8_t> chunk, Layout layout)
    // The element count and where the elements start; names are offsets from the chunk's start too
    const uint32_t count = Read32(chunk, 0);
    const size_t start = Read32(chunk, 4);
-   const size_t size = layout == Layout::Base ? 24 : layout == Layout::Stream ? 28 : 32;
+   const size_t size = layout == Layout::Base ? 24 : layout == Layout::Stream ? 28
+                                                                              : 32;
    if (chunk.size() < 8 || start + size_t(count) * size > chunk.size())
       return {};
    std::vector<Element> elements;
@@ -66,6 +67,123 @@ std::vector<Element> ReadElements(std::span<const uint8_t> chunk, Layout layout)
       elements.push_back(std::move(element));
    }
    return elements;
+}
+
+// DXBC's checksum: MD5 rounds over the container after its checksum field, finished DXBC's own way (from dxbc-spirv by Philip
+// Rebohle, MIT, as 1.0's CalcDXBCHash)
+class Md5
+{
+public:
+   void Update(const uint8_t* data, size_t size)
+   {
+      size_t offset = size_t(total % 64);
+      total += size;
+      if (offset)
+      {
+         const size_t n = std::min(size, 64 - offset);
+         std::memcpy(block.data() + offset, data, n);
+         data += n;
+         size -= n;
+         if (offset + n < 64)
+            return;
+         Process(block.data());
+      }
+      for (; size >= 64; data += 64, size -= 64)
+         Process(data);
+      if (size)
+         std::memcpy(block.data(), data, size);
+   }
+
+   std::array<uint32_t, 4> state = {0x67452301u, 0xefcdab89u, 0x98badcfeu, 0x10325476u};
+
+private:
+   std::array<uint8_t, 64> block = {};
+   uint64_t total = 0;
+
+   void Process(const uint8_t* data)
+   {
+      static constexpr std::array<uint8_t, 64> SHIFTS = {7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5, 9, 14,
+         20, 5, 9, 14, 20, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21};
+      static constexpr std::array<uint32_t, 64> CONSTANTS = {0xd76aa478u, 0xe8c7b756u, 0x242070dbu, 0xc1bdceeeu, 0xf57c0fafu, 0x4787c62au, 0xa8304613u,
+         0xfd469501u, 0x698098d8u, 0x8b44f7afu, 0xffff5bb1u, 0x895cd7beu, 0x6b901122u, 0xfd987193u, 0xa679438eu, 0x49b40821u, 0xf61e2562u, 0xc040b340u,
+         0x265e5a51u, 0xe9b6c7aau, 0xd62f105du, 0x02441453u, 0xd8a1e681u, 0xe7d3fbc8u, 0x21e1cde6u, 0xc33707d6u, 0xf4d50d87u, 0x455a14edu, 0xa9e3e905u,
+         0xfcefa3f8u, 0x676f02d9u, 0x8d2a4c8au, 0xfffa3942u, 0x8771f681u, 0x6d9d6122u, 0xfde5380cu, 0xa4beea44u, 0x4bdecfa9u, 0xf6bb4b60u, 0xbebfbc70u,
+         0x289b7ec6u, 0xeaa127fau, 0xd4ef3085u, 0x04881d05u, 0xd9d4d039u, 0xe6db99e5u, 0x1fa27cf8u, 0xc4ac5665u, 0xf4292244u, 0x432aff97u, 0xab9423a7u,
+         0xfc93a039u, 0x655b59c3u, 0x8f0ccc92u, 0xffeff47du, 0x85845dd1u, 0x6fa87e4fu, 0xfe2ce6e0u, 0xa3014314u, 0x4e0811a1u, 0xf7537e82u, 0xbd3af235u,
+         0x2ad7d2bbu, 0xeb86d391u};
+      std::array<uint32_t, 4> s = state;
+      for (uint32_t i = 0; i < 64; i++)
+      {
+         uint32_t f = 0;
+         uint32_t g = 0;
+         if (i < 16)
+            f = (s[1] & s[2]) | (~s[1] & s[3]), g = i;
+         else if (i < 32)
+            f = (s[3] & s[1]) | (~s[3] & s[2]), g = (5 * i + 1) % 16;
+         else if (i < 48)
+            f = s[1] ^ s[2] ^ s[3], g = (3 * i + 5) % 16;
+         else
+            f = s[2] ^ (s[1] | ~s[3]), g = (7 * i) % 16;
+         uint32_t word = 0;
+         std::memcpy(&word, data + 4 * g, 4);
+         f = f + s[0] + CONSTANTS[i] + word;
+         s[0] = s[3];
+         s[3] = s[2];
+         s[2] = s[1];
+         s[1] += (f << SHIFTS[i]) | (f >> (32 - SHIFTS[i]));
+      }
+      for (size_t i = 0; i < 4; i++)
+         state[i] += s[i];
+   }
+};
+
+std::array<uint32_t, 4> GetChecksum(std::span<const uint8_t> container)
+{
+   // After "DXBC" and the checksum itself
+   constexpr size_t START = 20;
+   const uint8_t* bytes = container.data() + START;
+   const size_t size = container.size() - START;
+   const uint32_t bits = uint32_t(size) * 8;
+   const uint32_t magic = (bits >> 2) | 1;
+   const size_t remainder = size % 64;
+   const size_t padding = 64 - remainder;
+   static constexpr std::array<uint8_t, 64> PADDING = {0x80};
+   Md5 md5;
+   md5.Update(bytes, size - remainder);
+   // Not MD5's own finish: the padding depends on the size
+   if (remainder >= 56)
+   {
+      md5.Update(bytes + size - remainder, remainder);
+      md5.Update(PADDING.data(), padding);
+      md5.Update(reinterpret_cast<const uint8_t*>(&bits), 4);
+      md5.Update(PADDING.data() + 4, 64 - 8);
+      md5.Update(reinterpret_cast<const uint8_t*>(&magic), 4);
+   }
+   else
+   {
+      md5.Update(reinterpret_cast<const uint8_t*>(&bits), 4);
+      if (remainder)
+         md5.Update(bytes + size - remainder, remainder);
+      md5.Update(PADDING.data(), padding - 8);
+      md5.Update(reinterpret_cast<const uint8_t*>(&magic), 4);
+   }
+   return md5.state;
+}
+
+// The offset of the program chunk's header ("SHEX" or "SHDR"), 0 without one
+size_t FindProgramChunk(std::span<const uint8_t> bytecode)
+{
+   if (bytecode.size() < 32 || std::memcmp(bytecode.data(), "DXBC", 4) != 0)
+      return 0;
+   const uint32_t chunk_count = Read32(bytecode, 28);
+   for (uint32_t i = 0; i < chunk_count && 32 + size_t(i + 1) * 4 <= bytecode.size(); i++)
+   {
+      const size_t chunk = Read32(bytecode, 32 + size_t(i) * 4);
+      if (chunk + 16 <= bytecode.size() && (std::memcmp(bytecode.data() + chunk, "SHEX", 4) == 0 || std::memcmp(bytecode.data() + chunk, "SHDR", 4) == 0) &&
+         chunk + 8 + Read32(bytecode, chunk + 4) <= bytecode.size())
+         return chunk;
+   }
+   return 0;
 }
 
 // SFI0's feature flags (D3D_SHADER_FEATURE_*_DESCRIPTOR_HEAP_INDEXING)
@@ -320,6 +438,56 @@ Bindings GetBindings(std::span<const uint8_t> bytecode)
    if (const std::span<const uint8_t> chunk = GetChunk(bytecode, "PSV0"); !chunk.empty())
       result.found = ReadValidationBindings(chunk, result.bindings);
    return result;
+}
+
+std::span<const uint8_t> GetProgramCode(std::span<const uint8_t> bytecode)
+{
+   const size_t chunk = FindProgramChunk(bytecode);
+   if (!chunk)
+      return {};
+   // The chunk is the version token, the length in tokens (both counted), then the instructions
+   const size_t tokens = Read32(bytecode, chunk + 12);
+   const size_t size = Read32(bytecode, chunk + 4);
+   if (tokens < 2 || tokens * 4 > size)
+      return {};
+   return bytecode.subspan(chunk + 16, tokens * 4 - 8);
+}
+
+std::vector<uint8_t> ReplaceProgramCode(std::span<const uint8_t> bytecode, std::span<const uint8_t> code)
+{
+   const size_t chunk = FindProgramChunk(bytecode);
+   if (!chunk || code.size() % 4 != 0)
+      return {};
+   const uint32_t chunk_count = Read32(bytecode, 28);
+   const size_t old_size = Read32(bytecode, chunk + 4);
+   const size_t new_size = 8 + code.size();
+   const size_t old_end = chunk + 8 + old_size;
+   std::vector<uint8_t> result;
+   result.reserve(bytecode.size() - old_size + new_size);
+   result.insert(result.end(), bytecode.begin(), bytecode.begin() + chunk + 16);
+   result.insert(result.end(), code.begin(), code.end());
+   result.insert(result.end(), bytecode.begin() + old_end, bytecode.end());
+   const auto write = [&](size_t offset, uint32_t value) { std::memcpy(result.data() + offset, &value, 4); };
+   const int64_t delta = int64_t(new_size) - int64_t(old_size);
+   write(24, uint32_t(result.size()));
+   write(chunk + 4, uint32_t(new_size));
+   write(chunk + 12, uint32_t(new_size / 4));
+   for (uint32_t i = 0; i < chunk_count; i++)
+   {
+      const uint32_t offset = Read32(bytecode, 32 + size_t(i) * 4);
+      if (offset > chunk)
+         write(32 + size_t(i) * 4, uint32_t(int64_t(offset) + delta));
+   }
+   Sign(result);
+   return result;
+}
+
+void Sign(std::span<uint8_t> bytecode)
+{
+   if (bytecode.size() < 32)
+      return;
+   const std::array<uint32_t, 4> checksum = GetChecksum(bytecode);
+   std::memcpy(bytecode.data() + 4, checksum.data(), 16);
 }
 } // namespace Container
 } // namespace Shaders

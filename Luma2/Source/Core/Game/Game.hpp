@@ -18,9 +18,13 @@
 #include "Resources/Bindings.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
+#include "Resources/Textures.hpp"
 #include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
 #include "Shaders/Defines.hpp"
+#include "Shaders/Patching.hpp"
+// "name"_h, how Luma's resources and shaders are named in the calls below
+#include "Utils/Hash.hpp"
 
 namespace Luma {
 namespace Game {
@@ -92,6 +96,10 @@ struct Options
    Draw::Options draw;
    // Where Luma's own bindings go (D3D12's register space)
    Resources::Bindings::Options bindings;
+   // The .dds files of the Textures folders, as Resources::Database entries
+   Resources::Textures::Options textures;
+   // The game's own bytecode patches (recipes are files in the Recipes folder)
+   Luma::Shaders::Patching::Options patching;
    GameDeviceDataType device_data;
 };
 
@@ -133,6 +141,9 @@ void RunOriginal(const Call& call);
 void UseOriginal(const Call& call, ShaderStage stage);
 // With the resources the shader requests. From a draw event, Core then binds no variant's requests for that call.
 void BindLumaShader(ID3D11DeviceContext* context, uint64_t name_hash, const Resources::Database::CustomData& custom = {});
+// A texture of the Textures folders (Options::textures), by its file's name: "fast_noise"_h. Null if it didn't load. Lives as long
+// as the device.
+ID3D11ShaderResourceView* GetTexture(ID3D11Device* device, uint64_t name_hash);
 } // namespace D3D11
 
 // For the D3D12 draw events, inside a Luma scope. Luma's shaders bound from a draw event come with the D3D12 passes (Step 5).

@@ -38,7 +38,7 @@ void Register();
 // decides whether the feature is needed and queues the first build
 void Start();
 // Decided by Start: always in Development and Test builds (files can be added while the game runs, dumping), otherwise when
-// there are replacement files or draw callbacks (which find the game's shaders by the binds this tracks)
+// there are replacement files, patches or draw callbacks (which find the game's shaders by the binds this tracks)
 bool IsNeeded();
 // The native functions to hook: creations (the database), binds (the variants), draws (the resources variants request) and
 // what resets a context's state. None if it isn't needed.

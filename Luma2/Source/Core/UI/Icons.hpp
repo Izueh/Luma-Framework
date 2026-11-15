@@ -41,6 +41,7 @@ inline constexpr const char* FILTER = ICON_FA_FILTER;
 inline constexpr const char* TRACK = ICON_FA_CROSSHAIRS;
 inline constexpr const char* STOP = ICON_FA_STOP;
 inline constexpr const char* VARIANT = ICON_FA_CODE_BRANCH;
+inline constexpr const char* PATCH = ICON_FA_BANDAGE;
 
 // Category headers
 inline constexpr const char* OVERLAY = ICON_FA_WINDOW_MAXIMIZE;

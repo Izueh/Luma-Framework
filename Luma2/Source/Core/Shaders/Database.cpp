@@ -21,6 +21,7 @@
 #include "Shaders/Cache.hpp"
 #include "Shaders/Compiler.hpp"
 #include "Settings/Registry.hpp"
+#include "Shaders/Patching.hpp"
 #include "Shaders/Signatures.hpp"
 #include "System/Jobs.hpp"
 #include "System/Paths.hpp"
@@ -343,6 +344,9 @@ Shader& Track(ShaderStage stage, std::span<const uint8_t> bytecode)
    added->draw_callback = Game::Registry::FindDrawCallback(hash) != nullptr || Game::Registry::FindD3D12DrawCallback(hash) != nullptr;
 #if DEVELOPMENT || TEST
    added->bytecode.assign(bytecode.begin(), bytecode.end());
+#else
+   if (Patching::IsNeeded())
+      added->bytecode.assign(bytecode.begin(), bytecode.end());
 #endif
 #if DEVELOPMENT
    added->reflection = Reflect(*added);
@@ -350,7 +354,11 @@ Shader& Track(ShaderStage stage, std::span<const uint8_t> bytecode)
    added->bindings = Container::GetBindings(bytecode);
    CheckLumaSpace(*added);
 #endif
+   const Shader* const tracked = added.get();
    Shader& kept = Add(std::move(added));
+   // Once per hash, by the thread whose shader was kept: the game's sync patch runs in this creation call
+   if (&kept == tracked)
+      Patching::TrackShader(kept);
 #if DEVELOPMENT
    // Replacements compiled before the game created their original are checked now
    for (const Variants::Variant& variant : Variants::GetVariants(hash))

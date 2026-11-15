@@ -23,9 +23,9 @@ struct GameDeviceData;
 }
 
 // Luma's named resources, which any module resolves by "name"_h and the framework creates and releases on every device (nothing
-// of Luma's keeps a device alive): Luma's shaders, found in the files, and its cbuffers. Everything Luma ships is registered by
-// Core at init from what's on disk; a game registers only what it captures from the game at runtime. Textures from disk and
-// invalidation (a resize) come with Step 4.
+// of Luma's keeps a device alive): Luma's shaders, found in the files, its cbuffers, and the textures in the Textures folders
+// (Resources::Textures). Everything Luma ships is registered by Core at init from what's on disk; a game registers only what it
+// captures from the game at runtime. Invalidation (a resize) comes with Step 4.
 namespace Luma {
 namespace Resources {
 namespace Database {
@@ -33,6 +33,7 @@ enum class Kind : uint8_t
 {
    Shader,
    ConstantBuffer,
+   Texture, // Bound as a shader resource view
 };
 
 // Core's entries are read-only: a game registering one of their names is refused
@@ -70,7 +71,7 @@ struct Entry
    Owner owner = Owner::Core;
    // Shaders: their stage, compiled by Shaders and published here
    ShaderStage stage = ShaderStage::Pixel;
-   std::string file; // From the Shaders root
+   std::string file; // Shaders: from the Shaders root. Textures: from the Textures root.
    // Constant buffers: their size and their contents now for a pass's custom values and the context's device. With a stamp, which
    // moves whenever their contents may have changed (1.0's dirty flag), a context writes and uploads them again only when it moved
    // since its last upload (LumaSettings). Without, a context writes them at every bind and uploads them when the bytes differ from
