@@ -499,6 +499,17 @@ Before Step 2, which queues pipeline creation on it. `Guidelines.md` section 9 (
 4. RDEF updated for 5.1 (or stripped), and the output target part of what a cache key includes.
 SM5.0 and 5.1 stages mix in one pipeline (Step 2A), so Luma needs nothing else for it.
 
+**DXP side: done in DXP 0.11.0** (tag `v0.11.0`, DXP repo `docs/sm51_upgrade.md`). The four items above exist, with these decisions: a recipe-level `upgrade_to_sm51: never|auto|always` (default `never`, so D3D11 can't get SM5.1 by accident), `space:` on every `add_resource` declaration (a number, or the name of an env variable), per-space register allocation, `new_bindings` with the real space, RDEF dropped. DXP also reads SM5.1 input, so Luma's recipe chain works on upgraded output. A shared recipe uses `upgrade_to_sm51: auto` and `env: {LUMA_SPACE: 0}` with `space: LUMA_SPACE`: D3D11 passes nothing and stays SM5.0, D3D12 sets `LUMA_SPACE` to `Options::bindings.d3d12_space` and gets SM5.1. Verified offline: a pipeline with an SM5.0 VS and a patched SM5.1 PS reading `b13` in space 100 draws correctly on WARP and an RTX GPU (debug layer and GPU-based validation); FF7R's dithering fix with its texture in space 100 yields 129 valid SM5.1 shaders of the 194 in 1.0's dump.
+
+**TODO, moved into Step 4 part D (owner's decision): FF7R's patches on D3D12 use the SM5.1 upgrade.** Today a patch that adds a binding falls back to the game's pipeline on D3D12 (`Shaders/Patching.cpp`, `ResolveBindings`: `LUMA_UNIMPLEMENTED` "Adds bindings, which D3D12 can't take until DXP upgrades patches to SM5.1"). To pick up:
+1. Port: `Source/External/vcpkg-ports/dxp` to 0.11.0 (`vcpkg.json` version, both SHA512 in `portfile.cmake`, from the published `v0.11.0` zips). The port is shared with 1.0: DXP's API is additive, build one 1.0 game that uses `UseLumaDXP` to confirm.
+2. Recipes: FF7R's recipes that run on D3D12 get `upgrade_to_sm51: auto`, `env: {LUMA_SPACE: 0}`, and `space: LUMA_SPACE` on the declarations Luma binds in its space (the register stays the same on both APIs). Hide `LUMA_SPACE` from the Recipes settings and the Patches tab: it is the host's, not a user's.
+3. `RunChain` (`Shaders/Patching.cpp`): on D3D12 `link_options.SetEnv("LUMA_SPACE", Resources::Bindings::GetOptions().d3d12_space)`; D3D11 sets nothing. Add the space to the cache key on D3D12 (`Cache::GetPatchKey` string), so D3D11 and D3D12 bytecode never share an entry; the DXP version is already in it.
+4. `ResolveBindings`: on D3D12 accept a patch whose bindings are Luma's cbuffers (`LumaSettings`, `LumaData`) at their root slots (`settings_slot`, `data_slot`) in `d3d12_space`, with no `Request` needed (every extended root signature carries those root CBVs, set at a variant's draw). Compare what DXP reports (`register_index`, `space`) with Luma's slots and fail the patch with a message on a mismatch. Anything else (texture, sampler, UAV, buffer) keeps today's failure.
+5. Textures stay out: FF7R's dithering fix adds `fast_noise`, a texture, and D3D12 needs the descriptor table in Luma's space and the descriptor heap tail (2B "designed, deferred", Step 5). DXP already declares and emits it in space 100. Decide with the owner which FF7R D3D12 patch comes first: one that only reads Luma's cbuffers needs items 1-4; the dithering fix needs the heap tail as well.
+6. Dev tooling: the Development assert for "a game shader declaring anything in Luma's space" (`Container::GetBindings`) must look at the game's original bytecode, not at patched output (a patched shader declaring `b13, space100` is the point).
+7. Verify once (Development-Release, FF7R, D3D12, MCP): `luma_patch_state` lists the patched shaders as ready, `luma_trace_get` on a patched draw shows `LumaSettings` and `LumaData` at `b13`/`b12` `space100`, `luma_set_recipe` off and on switches the draw between the game's pipeline and the patch, a second boot loads them from the cache, no debug layer messages; D3D11 unchanged (13 patched pixel shaders, `fast_noise` at t127).
+
 **Notes (built, verified in FF7R on D3D11 and D3D12 except where said):**
 * DXP: recipe-level `meta:` added to DXP itself (0.10.0, `Recipe::GetMeta()`, SM5 and SM6; DXP commit `da77209`), so a recipe describes itself. Luma reads `name` (its presence makes the recipe a user's: visible in Release unless `visibility` says otherwise), `description`, `default_enabled`, `visibility` (`release`, `test`, `development`) and `env: {VAR: {label, tooltip, visibility}}`; an undescribed env value is Development only. FF7R's `PS/dithering_fix.recipe.yml` has its 1.0 registration as `meta`. Released as `v0.10.0`; the vcpkg port (shared with 1.0) downloads it.
 * Build: `UseLumaDXP` in `Luma2.Game.props` (vcpkg manifest mode for that project, `LUMA_USE_DXP=1`, `dxpatcher.lib`), FF7R's `vcpkg.json` and `vcpkg-configuration.json` pointing at 1.0's overlay port. Without it the recipes folder is logged as ignored and only the game's bytecode callbacks patch.
@@ -519,39 +530,152 @@ SM5.0 and 5.1 stages mix in one pipeline (Step 2A), so Luma needs nothing else f
 
 ---
 
-## Step 4: Resources: database, mirrors, upgrades, samplers
+## Step 4: Resources: mirrors, upgrades, samplers, D3D12 bindings
 
-**Goal:** FF7R's texture format upgrades, LUT upgrade and sampler upgrade work through mirrors on both APIs.
+**Goal:** FF7R's texture format upgrades, LUT upgrade and sampler upgrade work through mirrors on both APIs, measured against goldens from the 1.0 build. On D3D12, Luma gets its own descriptors (the heap tail) and textures, so Step 3's patches that add bindings (the dithering fix) run there too.
 
-**Read first:** the texture, sampler and managed texture rows of the reference map, FF7R's upgrade configuration at the end of its `main.cpp`, `Design.md` "Resources" and "DX12 binding model".
+**Read first:** `Guidelines.md` sections 4, 6, 7, 11 and the §17 rows on textures, releasing and D3D12. In 1.0: `includes/resource_upgrades.hpp/.inl` (configuration, `GetOptionalResourceUpgradeDesc`, `FindOrCreateIndirectUpgradedResource(View)`), `core.hpp` 7053–8830 (samplers, `OnCreateResource`/`OnInitResource`, `OnCreateResourceView`, `OnSetViews`, Map/Unmap/UpdateSubresource, clears, `OnCopyResource_Internal`, `OnCopyResource`, `OnCopyTextureRegion`, `OnResolveTextureRegion`), `utils/resource.hpp`, `utils/format.hpp`, `mcp_server.inl` and `Scripts/luma_mcp.py` (the readback tools), FF7R `main.cpp` 2074–2108 (its configuration) and 1810–1855 (the LOD bias refresh). In 2.0: `Resources/*`, `Resources/D3D12/D3D12Descriptors.*`, `Shaders/D3D12/D3D12Variants.cpp`, `Draw/D3D12/D3D12Recorded.cpp`, `Shaders/Patching.cpp`, `Hooks/D3D12/D3D12Lifetime.*`, Step 2's and Step 3's notes.
 
-**Build, part A (shared and D3D11):**
-* `Resources::Upgrade`: rules as data. Port 1.0's configuration surface one to one (formats, 2D size filters, aspect ratios and pixel threshold, custom sizes, LUT size and dimensions, depth formats), and `GetBestResourceUpgradeFormat` and its view counterpart.
-* `Resources::Mirrors` on D3D11: mirror textures and mirrored views (SRV, RTV, UAV, DSV), created when a rule matches at creation. Swapped at bind for every stage. Copies, resolves and clears redirected or converted by the table in `Design.md` "Copies and clears". `Map`, `UpdateSubresource` and initial data converted into the mirror (`ConvertResourceData`).
-* `Resources::Samplers`: sampler mirrors with LOD bias and anisotropy, refreshed on change.
-* `Resources::Database`: named entries, invalidation events, DDS loading from `Textures` folders (FF7R's noise texture).
-* Trace: mirror info on every event that touches one. Dev UI Resources tab (mirrors, database entries). MCP `luma_read_resource`, `luma_read_cbuffer`, `luma_compare`, `luma_golden`.
+### What 1.0 actually does for FF7R (checked, not assumed)
 
-**Build, part B (D3D12):**
-* Mirror resources with a matching barrier for every barrier on the original.
-* Swap at descriptor write: a view created or copied for a mirrored resource is written as the mirror's view. A resource that gains a mirror later has its existing descriptors rewritten through the resource → slots index from Step 2.
-* RTV and DSV handles replaced at `OMSetRenderTargets`.
-* PSO variants keyed by render target formats, since D3D12 bakes them into the PSO. Chosen at draw from the command list record, because the PSO and the targets can be bound in either order.
-* Shadow descriptor heaps only if Step 2's research showed FF7R writes descriptors once and needs a per-draw choice. Otherwise they stay unbuilt.
-* Mirror memory: a pool of committed resources keyed by desc.
+* **Direct upgrades.** FF7R never sets `enable_indirect_texture_format_upgrades`, so 1.0 edits the desc at creation (`OnCreateResource` returns the upgraded desc): every rule-matching texture *is* RGBA16F, its views too. 2.0 builds mirrors only (§6). So the 1.0 goldens come from a direct upgrade, and 2.0's mirrors must reproduce that image.
+* Rules: `texture_upgrade_formats` = `R10G10B10A2_UNORM`, `R10G10B10A2_TYPELESS`, `R11G11B10_FLOAT` (the 8-bit formats are under `#if 0`); size filters = 1.0's default (`SwapchainResolution | SwapchainAspectRatio`) plus `CustomAspectRatio` {16:9}; aspect pixel threshold 1 (default); LUT 32, 3D. Only textures with `RENDER_TARGET` or `UNORDERED_ACCESS` (no chains, so no writable-SRV case), `USAGE_DEFAULT`. Upgrade format: `GetBestResourceUpgradeFormat` (RGBA16F for color; depth rules unused by FF7R). The swapchain upgrade is Step 5.
+* Samplers: `enable_samplers_upgrade = true`, mode 4 (default): anisotropic (and comparison anisotropic, `upgrade_comparison_samplers` true) samplers get `MaxAnisotropy` 16 and `MipLODBias += texture_mip_lod_bias_offset`, `MinLOD` lowered by any negative bias change; other filters untouched; a desc that ends up identical isn't mirrored (D3D11 would return the same object). The offset is `SR::GetMipLODBias` once SR runs (Step 7), 0 until then; Development has `custom_texture_mip_lod_bias_offset` to set it by hand, and every sampler's mirror per offset is created at once when it changes (main.cpp 1814–1855).
+* Copies: `OnCopyResource` swaps source and destination to their mirrors, then copies natively when formats are copy-compatible and sizes equal, otherwise through a pixel shader copy (`OnCopyResource_Internal`: Copy or Scale VS/PS, temporary SRV/RTV proxies when the bind flags lack them, an MSAA source resolved first). Clears go to the mirror's view. `UpdateSubresource` and `Map`/`Unmap` writes are converted (`ConvertResourceData`) into the mirror. `Map` for read of an upgraded texture is asserted as unsupported.
 
-**Not in this step:** the swapchain (Step 5), chains by hash and scaling (Step 6), reserved resources, cross-queue resources, bundles (declared exclusions, visible in trace).
+### Lessons from Steps 0–3 applied here
 
-**Verify (once):**
-* FF7R D3D11: `luma_read_resource` of the tonemap input shows the upgraded format with values above 1.0 where 1.0's build has them. `luma_compare` against the Step 1 goldens for the tonemap input and output.
-* Upgrades off (the runtime switch) returns the Step 1 image.
-* The LUT is upgraded and sampled correctly (no banding or shift against the golden).
-* Sampler LOD bias changes when its setting changes.
-* D3D12: the same checks against the D3D11 result. Debug layer clean. A resolution change in the game recreates mirrors without leaks (counts in `luma_status`).
+* **Research build first on D3D12** (2A's model worked: the answers changed the design). Part C is research only, reported to the owner before part D is built.
+* **Game-facing API reviewed before porting.** Step 1's corrections cost a whole unit. The game declarations of this step (sketch below: `Game::Resources::SetUpgrades` and `Options::samplers`) are shown to the owner before FF7R is ported onto them.
+* **Verify each part in the game when it's done**, over MCP, and write the result in its notes. Steps 0–2 piled up "Not verified" lists that later units had to discover. A part isn't finished with an unverified Verify list unless the owner agrees.
+* **Read 1.0's project files, not only its defines.** Step 1 got FAST noise wrong from a define; this step nearly took FF7R for an indirect-upgrade game. A claim about what 1.0 does names the line that does it.
+* **Keys hash fields, not bytes.** Step 2B's pipeline library missed every boot over struct padding. The mirror pool, sampler mirrors and PSO format variants key by `ContentHasher`-style field hashes.
+* **D3D12 refuses what D3D11 tolerates.** Run part D's verify with the debug layer and GPU-based validation (`Luma.Development.GpuValidation`).
+* **Hot paths measured offline** (Step 1's WARP numbers): the bind swap cost with and without mirrors goes in the notes, against Step 1's figures.
+* Implementation agents run on Opus. Deploy Development-Release last, it's the build MCP needs.
 
-**Decide first:**
-* D3D11 mirrors are swapped at bind, as 1.0's indirect path. Confirm no FF7R path reads a bound view back and compares pointers.
-* Memory: mirrors double the upgraded targets. Recommended: accept it, measure in FF7R at 4K and note the number.
+### Game declarations (sketch, to confirm with the owner before building)
+
+1.0 keeps this configuration as process-wide statics of `ResourceUpgradeManager` (`resource_upgrades.hpp`), re-exported by reference in `core.hpp` 374–396 and assigned by the game in `OnDllMain`/`OnInit`, typed natively (`std::unordered_set<DXGI_FORMAT> texture_upgrade_formats`, `DXGI_FORMAT` in `texture_custom_dimensions_upgrades`). INSIDE changes `texture_format_upgrades_2d_custom_aspect_ratios` at runtime (under `resource_upgrades.mutex`); `enable_samplers_upgrade` "can't be changed after boot". 2.0 keeps the native types and splits by what each value is:
+
+```cpp
+// Upgrade rules: their own call, typed by the API's format family (DXGI covers D3D11 and D3D12, so one declaration serves both).
+Game::Resources::SetUpgrades({               // Resources::Upgrade::Rules, 1.0's names in comments
+   .formats = {DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R10G10B10A2_TYPELESS, DXGI_FORMAT_R11G11B10_FLOAT},  // texture_upgrade_formats
+   .depth_formats = {},                      // texture_depth_upgrade_formats
+   .size_filters = SizeFilters::SwapchainResolution | SizeFilters::SwapchainAspectRatio | SizeFilters::CustomAspectRatio,
+   .custom_aspect_ratios = {16.f / 9.f},
+   .custom_sizes = {},                       // texture_format_upgrades_2d_custom_sizes
+   .aspect_ratio_pixel_threshold = 1,
+   .lut = {.size = 32, .dimensions = LutDimensions::_3D},
+   .custom_dimensions = {},                  // texture_custom_dimensions_upgrades (declared, LUMA_UNIMPLEMENTED: a size change is Step 6's Scaling)
+});
+
+// Fixed for the process, no API type: stays in Options.
+Game::SetOptions({
+   .samplers = {.upgrade = true},            // enable_samplers_upgrade; mode, comparison and linear flags as Development settings
+});
+```
+
+* `Rules` names `DXGI_FORMAT` (from `<dxgiformat.h>`, the enum only). D3D11 and D3D12 read the same rules; the matching (`Match` on a small `Resources::TextureDesc` both backends fill) never depends on the format type beyond set membership. A Vulkan backend would add an overload of `SetUpgrades` taking `VkFormat` rules; no template or `std::variant` until then (§2, simple first).
+* Not in `Options`, which is API-neutral and init-only (§8): the rules carry API types, and 1.0 games change parts of them at runtime. `SetUpgrades` is called in `Init` for now; a runtime setter for what INSIDE changes (`SetCustomAspectRatios`, applied at present, existing mirrors kept) comes with INSIDE's port.
+* Defaults are 1.0's. A game that never calls `SetUpgrades` has no rules, and `Upgrade::IsNeeded()` is false (§7).
+
+### Part A: inspection first (MCP readback and goldens)
+
+Before any upgrade, so every later check is a number.
+
+* MCP `luma_read_resource`, `luma_read_cbuffer`, `luma_compare`, `luma_golden`, wire-compatible with `Scripts/luma_mcp.py` (1.0's arguments and reply fields; extend the bridge only where 2.0 adds something). Readback on both APIs from a trace entry and slot (SRV, RTV, UAV, DSV, cbuffer): D3D11 a staging copy read at the present; D3D12 a readback buffer copied on the queue after the list (`CopyTextureRegion` into a placed footprint, Luma's fence). A mirrored view reads the mirror by default, the original with `original=1`. Files as 1.0's (`%TEMP%\luma-mcp`, `.bin` + `.json` + `.png` preview).
+* **Goldens**: the owner packages the 1.0 FF7R build (commit `5788b1c6`, as Step 1 decided) once. From a fixed save, camera still, game paused where possible, fixed settings written down in the notes: `luma_golden` stores the tonemap input, the tonemap output, the LUT and the final image on D3D11, and a second capture of each gives the noise floor. The 2.0 D3D11 build's Step 3 image (no upgrades) is captured the same way as the "upgrades off" reference.
+* Trace v1 extended (§17 "Trace entries", "v1, extend"): copies, resolves, clears, CPU writes (`Map` write, `UpdateSubresource`) as events, with source and destination, on both APIs. Every view in an event shows `mirror` (format, size) when one was swapped in. 1.0's "Ignore Buffer Writes" filter comes with them.
+
+**Verify A:** the four tools answer on D3D11 and D3D12 against the 2.0 build; goldens and noise floors stored; a copy and a clear appear in a capture.
+
+### Part B: mirrors, upgrades and samplers on D3D11 (shared logic first)
+
+* `Resources::Upgrade` (shared): `Rules` above, `Match(TextureDesc, Frame state) -> optional<TextureDesc>` (1.0's `GetOptionalResourceUpgradeDesc`, ported one to one: usage filter, LUT, aspect ratios with the pixel threshold and `PadTo4Px`, mips, cubes, `No1Px`, display size taken as the screen's until Step 5), `GetBestFormat`, `GetBestViewFormat` (1.0's two functions, typeless views included). doctests for the matching table (cheaper than a launch, §2).
+* `Resources::Mirrors::D3D11` (`Resources/D3D11/D3D11Mirrors.cpp`):
+  * Created in `PostCreateTexture{1D,2D,3D}` when `Match` says so: same desc with the upgraded format, initial data converted (`ConvertResourceData`, ported as `Resources/Conversion.*`, shared by both APIs), held in the original's private data, released with it (§5, §6). Never on the swapchain's buffers (Step 5).
+  * Mirrored views: when the game creates a view of a mirrored texture, Luma creates the matching view of the mirror (`GetBestViewFormat`), held in the game view's private data. No side maps.
+  * **Swap at bind** for every stage: `*SetShaderResources`, `CSSetUnorderedAccessViews`, `OMSetRenderTargets`, `OMSetRenderTargetsAndUnorderedAccessViews`. The check is one `GetPrivateData` per view, skipped entirely while no mirror exists on the device (an atomic count). With `Luma.Enabled` or `Luma.Resources.Upgrades` off nothing is swapped.
+  * Copies, resolves, clears, writes, as 1.0 (table below). The converting copy uses Luma's `Luma_Copy`/`Luma_Scale` programs through `Draw::DrawFullscreen` and the `FULL_GRAPHICS` preset (1.0's `DrawStateStack<FullGraphics>`), its temporary proxies per device in `Resources::Database` (not `DeviceData` fields).
+  * Writes go to the mirror while swapping is on; data uploads (`UpdateSubresource`, `Map` write, initial data) are converted into the mirror *always*, so a persistent texture stays right across a toggle. Render targets written while off leave a stale mirror until the next frame writes them again: accepted, as with `Luma.Enabled` (§7).
+  * `Map` read and the `*Get*` state getters of a mirrored resource or view: counted and asserted once in Development (the 1.0 "readback" case). The Decide-first below says what happens if FF7R does it.
+* `Resources::Samplers` (shared mode logic, `D3D11Samplers`): 1.0's `CreateCustomSampler` (Publishing branch for Release and Test, the Development modes behind Development settings `Luma.Development.Samplers.Mode`, `.Mode2`, `.UpgradeComparison`, `.ForceLinear`), one mirror per (sampler, bias offset) in the sampler's private data, swapped at `*SetSamplers` for every stage. The offset is `Frame`'s (a per-device float, 0 until Step 7), plus `Luma.Development.Samplers.LodBiasOffset` (1.0's `custom_texture_mip_lod_bias_offset`). A change creates the new mirrors at the present (1.0 creates them at once for the same reason: no hitch at bind); old ones stay until the device goes (they're tiny and a toggle back reuses them).
+* Settings: `Luma.Resources.Upgrades` (bool, default on; 1.0's `AllowedEnabled`/`AllowedDisabled`) and `Luma.Resources.Samplers` (bool, default on), Development visibility (1.0 had no Release toggle for either; `Luma.Enabled` is the user's switch). In `Settings/Keys.hpp`.
+* Inspection: Dev UI "Resources" tab (`UI/Panels/Resources.cpp`): mirrors (original desc → mirror desc, size in memory, views, last bound frame), sampler mirrors (original → mirror desc), `Resources::Database` entries, totals. `luma_status` gains `resources: {mirrors, mirror_bytes, views, samplers}`.
+* FF7R: `Init()` calls `SetUpgrades` and sets `.samplers` as above. No game code changes.
+
+**Copies and clears (D3D11, from 1.0):**
+
+| Call | Source mirrored | Dest mirrored | Action |
+|---|---|---|---|
+| `CopyResource`, `CopySubresourceRegion` | yes or no | yes or no | swap each side to its mirror; native copy if copy-compatible formats and equal sizes, else the converting pixel shader copy into the (swapped) destination |
+| same | yes | no | if the formats are incompatible: converting copy into the original destination (1.0 `OnCopyResource_Internal`); compatible: native copy from the mirror |
+| `ResolveSubresource` | either | either | swap both; format argument mapped with `GetBestViewFormat` |
+| `ClearRenderTargetView`, `ClearDepthStencilView`, `ClearUnorderedAccessView{Uint,Float}`, `ClearView` | – | view mirrored | issue on the mirror's view in place of the game's |
+| `UpdateSubresource`, `Map`/`Unmap` write | – | mirrored | convert and write the mirror (and let the original's write happen) |
+| `GenerateMips`, `DiscardResource`, `DiscardView`, `SetResourceMinLOD`, `CopyStructureCount` | – | mirrored | apply to the mirror (1.0 has no handling: a §17 row if kept) |
+
+A copy from a mirrored source into a texture that has no mirror keeps 1.0's behaviour (it's where 1.0's chains would create one). Count these in Development: if FF7R does any that matter for the image, a minimal direct chain (Step 6's `Direct`) comes forward into this step, decided with the owner.
+
+**Verify B (FF7R D3D11, Development-Release, then Publishing-Release):**
+* `luma_read_resource` of the tonemap input shows `R16G16B16A16_FLOAT` with values above 1.0; `luma_compare` against the 1.0 golden of the tonemap input and output within the noise floor.
+* The LUT's mirror is 32x32x32 RGBA16F and `luma_compare` of the LUT and the tonemap output against 1.0 shows no banding or shift.
+* `Luma.Resources.Upgrades` off: the image matches the Step 3 golden; on again: the 1.0 golden, with nothing recreated (mirror count unchanged).
+* `Luma.Development.Samplers.LodBiasOffset` changed: trace shows the mirror sampler with the new bias on a material draw; anisotropy 16.
+* Mirror memory at 3840x2160 written in the notes (`luma_status`). Bind swap cost offline on WARP against Step 1's figures.
+* Alt-tab and a resolution change: mirrors follow their originals (count back to the same number), no leak in `luma_status` over a few resizes.
+
+### Part C: D3D12 research build (answers into Notes, reported before part D)
+
+As 2A: counters in Development, logged once, in `luma_status.d3d12` and `D3D12Stats.json`.
+
+* Textures that match FF7R's rules: by creation kind (committed, placed, reserved), heap kind, initial state, flags (`ALLOW_RENDER_TARGET`, `ALLOW_UNORDERED_ACCESS`, `ALLOW_SIMULTANEOUS_ACCESS`), and whether placed ones share heap ranges (aliasing) and receive aliasing barriers.
+* Barriers on them: `ResourceBarrier` (legacy) vs enhanced barriers (`Barrier`), transitions per frame, split barriers, `UAV` barriers, subresource-specific transitions.
+* Views of them: where written (CPU heap vs shader-visible), how many `CopyDescriptors*` carry them per frame, RTV/DSV handles bound with `RTsSingleHandleToDescriptorRange`.
+* PSOs whose `RTVFormats` include an upgradable format, per pipeline; how many render target format combinations FF7R draws them with.
+* Uploads into a rule-matching texture (`CopyTextureRegion` from a buffer footprint): expected none.
+* Samplers: sampler descriptors created (filters, anisotropy, bias), copies into sampler heaps per frame, static samplers in root signatures with an anisotropic filter.
+* `ClearUnorderedAccessView*` on rule-matching textures (they need a GPU handle in a shader-visible heap: the tail).
+* Heap sizes against the device limit again (2A: one CBV/SRV/UAV heap of 500000, the tail fits).
+
+### Part D: D3D12 mirrors, bindings, textures and patches
+
+Built on part C's answers; the shapes below are the starting point.
+
+* **Descriptor side table in every build** (2C's `D3D12Descriptors`, Development only until now): resource and view desc per descriptor, written by `Create*View`, `CreateSampler` and `CopyDescriptors*`. Needed by the swap below.
+* **Mirror resources** (`Resources/D3D12/D3D12Mirrors.cpp`): created at the original's creation when `Match` says so, committed, from a pool keyed by the desc's fields (resources of a desc that died wait in the pool and are reused, released after the fence: §4), in the original's initial state, held in the original's private data. Every barrier on the original gets the same barrier on the mirror, appended to the game's array in the same call (legacy and enhanced). Aliasing barriers and placed aliasing: per part C, at least `LUMA_UNIMPLEMENTED` if seen. Reserved resources: not mirrored (a declared exclusion, visible in trace).
+* **Mirrored views** live in Luma's CPU heaps (one per kind: CBV/SRV/UAV, RTV, DSV, sampler), one per (game view desc, mirror), created when the game writes the original view.
+* **The swap is at the copy into a shader-visible heap** (owner's decision, a §4 and §17 change): the game's CPU slot keeps the game's view. In `CopyDescriptors`/`CopyDescriptorsSimple` into a shader-visible heap, each source descriptor that is a view of a mirrored resource is copied from Luma's mirror view instead (the hook already splits ranges into runs). So `Luma.Enabled` and `Luma.Resources.Upgrades` take effect at the next copy, which for an engine copying per draw (Unreal) is the next draw, and nothing in the game's heaps is ever rewritten. A view the game writes straight into a shader-visible heap is swapped at `Create*View` (it has no copy to swap at): counted in part C, `ASSERT_ONCE` in Development, and that view doesn't follow a toggle until the game writes it again.
+* **RTV and DSV**: swapped at `OMSetRenderTargets` by replacing the CPU handles (a single-range argument becomes Luma's own contiguous range for that call), and at `ClearRenderTargetView`, `ClearDepthStencilView`, `DiscardResource`, `ResolveSubresource(Region)`, `CopyResource`, `CopyTextureRegion` (resource arguments). `ClearUnorderedAccessView*` needs the mirror's UAV at a GPU handle: from the heap tail.
+* **Samplers**: sampler mirrors are descriptors in Luma's CPU sampler heap, swapped at the copy into a shader-visible sampler heap like views. Static samplers in a root signature are not changed (the signature is created once): counted in part C, a `LUMA_UNIMPLEMENTED` if FF7R has anisotropic ones.
+* **PSO variants by render target format**: a graphics pipeline whose `RTVFormats`/`DSVFormat` include an upgradable format gets a format variant per variant source (the game's PSO included) with the upgraded formats, created with the others (Step 2B's job, Luma's pipeline library, keyed by the formats too). Which one runs is decided at draw, from the list record's bound targets (after the swap) and the bound pipeline, behind a dirty flag set by `SetPipelineState` and `OMSetRenderTargets` (§4's cross-bind rule). A combination with no variant (some targets mirrored, others not) is created on the spot, logged once per pipeline, and then cached. Compute pipelines are unaffected.
+* **Heap tail** (2B's design, built here): `CreateDescriptorHeap` of a shader-visible CBV/SRV/UAV or sampler heap adds Luma's descriptors at the end, `GetDesc` answers the game's size; a heap at the device's limit uses part C's hole tracking or gets no tail (Luma's bindings in that heap then fall back, logged). Luma allocates per heap a range for its textures' SRVs, its UAV clear handles and later its passes' views (Step 5 adds its own users, not the tail).
+* **Luma's textures on D3D12**: `Resources::Textures` (`.dds` files) created per device in a default heap and uploaded on a copy queue of Luma's at device creation (fence waited), their SRVs written into every heap's tail. **Luma's descriptor table**: one table parameter of SRVs in Luma's space appended to every extended root signature after the two root CBVs (1 DWORD more), pointing into the bound heap's tail, set at a variant's draw like the CBVs (§4: extended at creation). A signature without room keeps today's CBV-only extension.
+* **Step 3's D3D12 patches** (the TODO under Step 3, items 1–7, done here): DXP 0.11.0 port, FF7R's recipes with `upgrade_to_sm51: auto` and `LUMA_SPACE`, `RunChain` passing the space and keying the cache with it, `ResolveBindings` accepting Luma's cbuffers at their root slots and, now that the table exists, textures at their registers in Luma's space (`fast_noise`), the Development "game shader in Luma's space" assert reading the original bytecode.
+* Trace on D3D12 shows mirrors, format variants and Luma's table like D3D11's.
+
+**Verify D (FF7R D3D12, debug layer and GPU-based validation):**
+* Part B's list against the D3D11 result (not 1.0): tonemap input RGBA16F, `luma_compare` of tonemap input and output and the LUT against the 2.0 D3D11 capture within the noise floor; upgrades off, sampler bias change, `Luma.Enabled` off and on take effect at once, with no descriptor rewritten (count).
+* No debug layer or validation messages from Luma's barriers, views, format variants or the tail.
+* A resolution change and alt-tab recreate mirrors and views without leaks (`luma_status` counts, pool size).
+* Step 3's TODO verify: the dithering fix's patched draws on D3D12 show `LumaSettings`/`LumaData` at `b13`/`b12 space100` and `fast_noise` in Luma's table; `luma_set_recipe` off/on switches them; a second boot takes them from the cache; D3D11 still has 13 patched shaders with `fast_noise` at t127.
+* Second boot: format variants come from Luma's pipeline library.
+
+**Not in this step:** the swapchain and its buffers (Step 5), chains and size changes (Step 6; `custom_dimensions` declared and `LUMA_UNIMPLEMENTED`), 1.0's in-place ("direct") upgrade (below), reserved resources, cross-queue resource use, shadow descriptor heaps (2A showed they aren't needed), SR's bias source (Step 7, the offset stays 0).
+
+**Decided with the owner (before building):**
+* **Mirrors only, no in-place upgrade now.** Games that ship DLSS or Streamline (whose own D3D calls Luma can't swap, 1.0's warning) are unlikely to need upgrades. If one does, 1.0's direct upgrade comes back as a per-game option: a §17 "idea" row and an Additional considerations entry.
+* **D3D12 views swap at the copy into a shader-visible heap**, not at `Create*View`: the game's CPU heaps keep the game's views, toggles act at the next copy with nothing rewritten, and it's the same point as D3D11's bind. Views written straight into a shader-visible heap are the exception (swapped at write).
+* **Step 3's D3D12 TODO is folded into part D**: the heap tail and D3D12 textures are this step's Resources work, and the dithering fix is their first user.
+* **MCP readback tools are ported first** and the 1.0 goldens captured before any upgrade work. The owner packages the 1.0 build; the agent captures over MCP.
+
+**Decide first (recommended defaults, take them unless the code says otherwise):**
+* `Get*` readback of a swapped view or Map read of a mirrored texture: if FF7R does neither (part B's counter), nothing more. If it does, answer the getters with the game's view (a per-context record of what the game bound), as 1.0 never did: a §17 row.
+* Format variant for mixed target sets on D3D12: created on the spot at draw (a stall the first time) rather than falling back to the game's PSO, which would draw into the wrong format. Recommended as written; revisit if part C shows many combinations.
+* Memory: accept the doubled targets, measure at 4K, note the number.
+* Mirror creation on D3D12 synchronous at the original's creation (it's the game's creation call, already allowed to be slow), not a job.
 
 ---
 
@@ -572,7 +696,7 @@ SM5.0 and 5.1 stages mix in one pipeline (Step 2A), so Luma needs nothing else f
 * A switch per composition stage (`Guidelines.md` section 12), as settings. Cheap runtime flags in the composition cbuffer where the shader allows it, defines otherwise.
 * Debug draw of any view of a captured event into the composition (1.0's "Debug Draw Shader Instance" and resource highlight).
 * Release UI: the Display category (output mode, peak white, paper white, UI paper white, gamma) built from settings, matching 1.0's options.
-* D3D12 passes' bindings: Luma's views in a descriptor table in Luma's space (`Options::bindings.d3d12_space`), its descriptors in the heap tail (2B's design, built here first), the table appended to extended signatures after the two root CBVs (1 DWORD more). Luma's samplers as static samplers in Luma's space: no heap and no root cost. A signature without room stays the game's, and those pipelines keep the game's shaders.
+* D3D12 passes' bindings: Luma's views in its descriptor table in Luma's space (`Options::bindings.d3d12_space`), allocated in the heap tail (both built in Step 4 part D), the passes adding their RTVs, UAVs and SRVs to it. Luma's samplers as static samplers in Luma's space: no heap and no root cost. A signature without room stays the game's, and those pipelines keep the game's shaders.
 * FF7R: the output pass callbacks.
 
 **Verify (once):**
@@ -691,9 +815,11 @@ Update when a backend gains or skips something. `—` means `LUMA_UNIMPLEMENTED`
 | Resource database (Luma's shaders, cbuffers) | Step 1 | — | 1 / 2 |
 | Draw callbacks, state stack, passes | Step 1 | — | 1 / 2 |
 | Trace capture | Step 1 (draws, dispatches, Luma passes) | — | 1 / 2 |
-| Shader patching (DXBC) | Step 3 | Step 3, patches adding bindings — | 3 |
+| Shader patching (DXBC) | Step 3 | Step 3, patches adding bindings — until Step 4D | 3 / 4 |
 | Shader patching (DXIL) | n/a | — | first SM6 game |
-| Mirrors, format upgrades, samplers | | | 4 |
+| Mirrors, format upgrades, samplers | | | 4B / 4D |
+| Descriptor heap tail, Luma's textures and descriptor table | n/a | | 4D |
+| MCP readback, goldens | | | 4A |
 | Swapchain output modes, composition, spoofing | | | 5 |
 | Chains and scaling | | | 6 |
 | DLSS, FSR | | | 7 |
@@ -729,5 +855,6 @@ Proposals found during the review. None is committed work until it's moved into 
 * **Mod and Core version check.** Each game DLL compiles Core: it should log the commit it was built from.
 * **Output resolution decoupling.** With a Luma-owned swapchain the real swapchain can be a different size from what the game renders to. That gives borderless upscaling for games with fixed resolutions. Not planned, but Step 5 shouldn't prevent it.
 * **Frame generation hooks.** FF7R has a disabled `ENABLE_FRAMEGEN` path with a hudless target. The composition stage in Step 5 is where a hudless output would be exposed.
+* **In-place (direct) upgrade.** 1.0's desc-edit upgrade as a per-game option, for a game whose DLSS or Streamline calls Luma can't see into (mirrors would be missed there). Not built in Step 4 (owner: such games rarely need upgrades); build it when one does.
 * **1.0 settings migration.** Users of 1.0 mods have values in the old config. Decide at Step 8 whether to import them once or start from defaults.
 * **Global shaders during the transition.** `Resources/Global` is a regrouped copy of 1.0's `Shaders/Global` and `Shaders/Includes`. A fix made on one side has to be made on the other until the swap. File names and contents stay the same so the two can still be compared file by file.
