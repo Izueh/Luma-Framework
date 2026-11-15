@@ -51,13 +51,13 @@ inline void EngineJitter::Find(const Frostbite::SettingsLookup& lookup)
    const uint16_t container_size = Frostbite::FindClassFields("WorldRenderSettings", fields);
    if (container_size == 0)
    {
-      LogDiagnostic(reshade::log::level::warning, "the engine's jitter settings weren't found in its type info, so SR gets the game's own jitter");
+      LogDiagnostic(LogLevel::Warning, "the engine's jitter settings weren't found in its type info, so SR gets the game's own jitter");
       return;
    }
    uint8_t* const found_container = lookup.GetContainer("WorldRender");
    if (!found_container || !MemoryScan::IsReadable(found_container, container_size))
    {
-      LogDiagnostic(reshade::log::level::warning, "the engine's \"WorldRender\" settings weren't found, so SR gets the game's own jitter");
+      LogDiagnostic(LogLevel::Warning, "the engine's \"WorldRender\" settings weren't found, so SR gets the game's own jitter");
       return;
    }
    container = found_container;
@@ -70,8 +70,8 @@ inline void EngineJitter::Find(const Frostbite::SettingsLookup& lookup)
    constexpr uint32_t kMinTablePoints = 64;
    const bool table_found = game_use_cmj && game_count >= kMinTablePoints && FindTable();
    if (!table_found)
-      LogDiagnostic(reshade::log::level::warning, "the engine's jitter table wasn't found, so SR gets the engine's own Halton (which starts at the pixel corner)");
-   LogDiagnostic(reshade::log::level::info, "the engine's jitter settings were found: {} points, {} (the game's own)", game_count, GetSequenceName(game_use_cmj));
+      LogDiagnostic(LogLevel::Warning, "the engine's jitter table wasn't found, so SR gets the engine's own Halton (which starts at the pixel corner)");
+   LogDiagnostic(LogLevel::Info, "the engine's jitter settings were found: {} points, {} (the game's own)", game_count, GetSequenceName(game_use_cmj));
 }
 
 // At every present, before the engine's next frame reads the settings

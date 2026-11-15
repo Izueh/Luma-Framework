@@ -37,7 +37,7 @@ private:
 // The saved scale, if one was chosen. It's applied once the game's setting is found.
 inline void RenderScale::LoadConfig()
 {
-   saved = reshade::get_config_value(nullptr, NAME, kConfigName, scale);
+   saved = Config::Get(NAME, kConfigName, scale);
    scale = std::clamp(scale, kMin, kMax);
 }
 
@@ -51,23 +51,23 @@ inline void RenderScale::Find(const Frostbite::SettingsLookup& lookup)
    const uint16_t container_size = Frostbite::FindClassFields("GameRenderSettings", fields);
    if (container_size == 0)
    {
-      LogDiagnostic(reshade::log::level::warning, "the game's resolution scale wasn't found in its type info");
+      LogDiagnostic(LogLevel::Warning, "the game's resolution scale wasn't found in its type info");
       return;
    }
    uint8_t* const container = lookup.GetContainer("Render");
    if (!container || !MemoryScan::IsReadable(container, container_size))
    {
-      LogDiagnostic(reshade::log::level::warning, "the engine's \"Render\" settings weren't found");
+      LogDiagnostic(LogLevel::Warning, "the engine's \"Render\" settings weren't found");
       return;
    }
    float* const field = reinterpret_cast<float*>(container + fields[0].offset);
    if (!IsPlausible(*field))
    {
-      LogDiagnostic(reshade::log::level::warning, "the game's resolution scale reads {}, so it's not the field", *field);
+      LogDiagnostic(LogLevel::Warning, "the game's resolution scale reads {}, so it's not the field", *field);
       return;
    }
    game_scale = field;
-   LogDiagnostic(reshade::log::level::info, "the game's resolution scale was found: {}", *game_scale);
+   LogDiagnostic(LogLevel::Info, "the game's resolution scale was found: {}", *game_scale);
    if (saved)
       Apply();
    else
@@ -83,12 +83,16 @@ inline void RenderScale::DrawSetting()
    bool changed = ImGui::IsItemDeactivatedAfterEdit();
    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
       ImGui::SetTooltip("Renders the game at this multiple of the screen resolution, then scales it down (supersampling).\nSharper, but much heavier: 2 renders 4 times the pixels.\nGreyed out while the game's own setting isn't available (it's looked up at the first frame in game).");
+   // Core's reset button draws its placeholder (while the scale is the default) with an empty label, which takes the ID of what holds
+   // it (the Settings tab) and clashes with it
+   ImGui::PushID(kConfigName);
    changed |= DrawResetButton<float, false>(scale, kDefault, kConfigName);
+   ImGui::PopID();
    ImGui::EndDisabled();
    if (!changed)
       return;
    saved = true;
-   reshade::set_config_value(nullptr, NAME, kConfigName, scale);
+   Config::Set(NAME, kConfigName, scale);
    Apply();
 }
 
@@ -96,5 +100,5 @@ inline void RenderScale::DrawSetting()
 inline void RenderScale::Apply()
 {
    *game_scale = scale;
-   LogDiagnostic(reshade::log::level::info, "set the game's resolution scale to {}", scale);
+   LogDiagnostic(LogLevel::Info, "set the game's resolution scale to {}", scale);
 }

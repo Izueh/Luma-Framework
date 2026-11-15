@@ -10,16 +10,23 @@
 class CameraCapture
 {
 public:
+   // A constant buffer binding: the buffer, and where its constants start in it
+   struct Binding
+   {
+      const ID3D11Resource* buffer = nullptr;
+      uint64_t offset = 0; // In bytes
+   };
+
    // The large dynamic constant buffers the game uploads its per frame constants to
    static bool MayHoldCamera(const D3D11_BUFFER_DESC& desc);
-   // The camera's constant buffer, if this binding update has it (null otherwise)
-   static const reshade::api::buffer_range* FindBinding(reshade::api::shader_stage stages, const reshade::api::descriptor_table_update& update);
+   // The camera's constant buffer, if this vertex shader binding call sets it (no buffer otherwise)
+   static Binding FindBinding(UINT start, UINT count, ID3D11Buffer* const* buffers, const UINT* first_constant);
 
    // From any thread
-   void OnBufferMapped(uint64_t buffer, const void* data, uint64_t size);
-   void OnBufferDestroyed(uint64_t buffer);
+   void OnBufferMapped(const ID3D11Resource* buffer, const void* data, uint64_t size);
+   void OnBufferDestroyed(const ID3D11Resource* buffer);
    // From the immediate context, so the game's render thread, where the camera is also used (the resolve and present)
-   void OnCameraBound(const reshade::api::buffer_range& binding, RenderSize render_size);
+   void OnCameraBound(Binding binding, RenderSize render_size);
 
    // The main camera, as last bound this frame (null if none was)
    const Camera* GetCamera() const
@@ -33,15 +40,17 @@ public:
 private:
    struct MappedBuffer
    {
-      uint64_t handle;
+      const ID3D11Resource* buffer;
       const uint8_t* data;
       uint64_t size;
    };
-   static constexpr uint32_t kCameraSlot = 2; // In the scene's vertex shaders
+   static constexpr UINT kCameraSlot = 2; // In the scene's vertex shaders
+   // "first_constant" counts float4 constants
+   static constexpr UINT kConstantSize = 16;
    static constexpr size_t kMaxMappedBuffers = 64;
 
    // The caller holds the mutex
-   MappedBuffer* FindMappedBuffer(uint64_t handle);
+   MappedBuffer* FindMappedBuffer(const ID3D11Resource* buffer);
 
    // The mutex guards the mapped buffers. The camera is only used on the render thread.
    std::mutex mutex;
@@ -58,18 +67,21 @@ inline bool CameraCapture::MayHoldCamera(const D3D11_BUFFER_DESC& desc)
    return (desc.BindFlags & D3D11_BIND_CONSTANT_BUFFER) && desc.Usage == D3D11_USAGE_DYNAMIC && desc.ByteWidth >= 65536;
 }
 
-// Runs for every binding the game makes, so integer checks only. An update can cover a range of slots.
-inline const reshade::api::buffer_range* CameraCapture::FindBinding(reshade::api::shader_stage stages, const reshade::api::descriptor_table_update& update)
+// Runs for every vertex shader constant buffer binding the game makes, so integer checks only. A call can cover a range of slots, and
+// "VSSetConstantBuffers1" binds a range of a buffer.
+inline CameraCapture::Binding CameraCapture::FindBinding(UINT start, UINT count, ID3D11Buffer* const* buffers, const UINT* first_constant)
 {
-   if (update.type != reshade::api::descriptor_type::constant_buffer || !(uint32_t(stages) & uint32_t(reshade::api::shader_stage::vertex)))
-      return nullptr;
-   if (kCameraSlot < update.binding || kCameraSlot >= update.binding + update.count)
-      return nullptr;
-   return &static_cast<const reshade::api::buffer_range*>(update.descriptors)[kCameraSlot - update.binding];
+   if (!buffers || kCameraSlot < start || kCameraSlot >= start + count)
+      return {};
+   const UINT index = kCameraSlot - start;
+   Binding binding = {.buffer = buffers[index]};
+   if (first_constant)
+      binding.offset = uint64_t(first_constant[index]) * kConstantSize;
+   return binding;
 }
 
 // The latest map wins: a discard returns the buffer's new memory, which the later uploads go to
-inline void CameraCapture::OnBufferMapped(uint64_t buffer, const void* data, uint64_t size)
+inline void CameraCapture::OnBufferMapped(const ID3D11Resource* buffer, const void* data, uint64_t size)
 {
    const MappedBuffer map = {buffer, static_cast<const uint8_t*>(data), size};
    const std::lock_guard lock(mutex);
@@ -84,12 +96,12 @@ inline void CameraCapture::OnBufferMapped(uint64_t buffer, const void* data, uin
    else if (!logged_overflow)
    {
       logged_overflow = true;
-      LogDiagnostic(reshade::log::level::warning, "over {} large constant buffers were mapped in a frame, so the camera can be missed", kMaxMappedBuffers);
+      LogDiagnostic(LogLevel::Warning, "over {} large constant buffers were mapped in a frame, so the camera can be missed", kMaxMappedBuffers);
    }
 }
 
-// A destroyed buffer's handle can be reused
-inline void CameraCapture::OnBufferDestroyed(uint64_t buffer)
+// A destroyed buffer's address can be reused by a new one
+inline void CameraCapture::OnBufferDestroyed(const ID3D11Resource* buffer)
 {
    const std::lock_guard lock(mutex);
    if (MappedBuffer* known = FindMappedBuffer(buffer))
@@ -97,10 +109,10 @@ inline void CameraCapture::OnBufferDestroyed(uint64_t buffer)
 }
 
 // Keeps the bound block if it's the main camera, read from where its buffer was last mapped (the game wrote it there before binding it)
-inline void CameraCapture::OnCameraBound(const reshade::api::buffer_range& binding, RenderSize render_size)
+inline void CameraCapture::OnCameraBound(Binding binding, RenderSize render_size)
 {
    const std::lock_guard lock(mutex);
-   const MappedBuffer* map = FindMappedBuffer(binding.buffer.handle);
+   const MappedBuffer* map = FindMappedBuffer(binding.buffer);
    // The binding's offset is into the buffer, so the block has to be within what was mapped
    if (!map || binding.offset + sizeof(Camera) > map->size)
       return;
@@ -120,10 +132,10 @@ inline void CameraCapture::EndFrame()
 }
 
 // A linear search: only a handful of large buffers are mapped in a frame
-inline CameraCapture::MappedBuffer* CameraCapture::FindMappedBuffer(uint64_t handle)
+inline CameraCapture::MappedBuffer* CameraCapture::FindMappedBuffer(const ID3D11Resource* buffer)
 {
    for (size_t i = 0; i < mapped_count; i++)
-      if (mapped_buffers[i].handle == handle)
+      if (mapped_buffers[i].buffer == buffer)
          return &mapped_buffers[i];
    return nullptr;
 }

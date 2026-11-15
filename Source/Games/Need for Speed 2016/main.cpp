@@ -13,9 +13,6 @@
 
 #define GEOMETRY_SHADER_SUPPORT 0
 
-// FSR 4 and XeSS run on a D3D12 device (Luma's interop), which ReShade wraps too: ignore its events
-#define CHECK_GRAPHICS_API_COMPATIBILITY 1
-
 // For "original_draw_dispatch_func" in all builds (the depth of field resolve runs natively before SR)
 #define ENABLE_POST_DRAW_DISPATCH_CALLBACK 1
 
@@ -89,13 +86,19 @@ class NeedForSpeed2016 final : public Game
 public:
    // Luma's global settings for the mod, at load
    static void SetLumaGlobals();
-   static void UnregisterEvents();
 
    void OnInit(bool async) override;
    void OnCreateDevice(ID3D11Device* native_device, DeviceData& device_data) override;
    void OnDestroyDeviceData(DeviceData& device_data) override;
-   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override;
+   DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override;
    void OnPresent(ID3D11Device* native_device, DeviceData& device_data) override;
+
+   // The camera capture's D3D11 hooks: overriding these makes core hook the calls. They run for every map, resource destruction and
+   // vertex shader constant buffer binding of the game, so the cheap checks come first.
+   void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) override;
+   void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource) override;
+   bool PreVSSetConstantBuffers(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11Buffer** buffers, const UINT* first_constant, const UINT* num_constants) override;
+
    void LoadConfigs() override;
    void DrawImGuiSettings(DeviceData& device_data) override;
 #if DEVELOPMENT
@@ -111,13 +114,6 @@ public:
    }
 
 private:
-   // ReShade events, for the camera. They run for every map, destruction and binding of the game, so the cheap checks come first. The
-   // SR interop's D3D12 device sends its events here too.
-   static void RegisterEvents();
-   static void OnBufferMapped(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data);
-   static void OnResourceDestroyed(reshade::api::device* device, reshade::api::resource resource);
-   static void OnDescriptorsPushed(reshade::api::command_list* cmd_list, reshade::api::shader_stage stages, reshade::api::pipeline_layout layout, uint32_t layout_param, const reshade::api::descriptor_table_update& update);
-
    // The mod's state for a device whose data Luma created (it calls the game only for those)
    static NeedForSpeed2016GameDeviceData& GetGameData(DeviceData& device_data)
    {
@@ -127,8 +123,20 @@ private:
    {
       return *static_cast<const NeedForSpeed2016GameDeviceData*>(device_data.game);
    }
-   // Null until Luma created the device's data
-   static NeedForSpeed2016GameDeviceData* FindGameData(reshade::api::device* device);
+   // Null until Luma created the device's data: the hooks can run before
+   static NeedForSpeed2016GameDeviceData* FindGameData(const DeviceData* device_data)
+   {
+      if (!device_data || !device_data->game)
+         return nullptr;
+      return static_cast<NeedForSpeed2016GameDeviceData*>(device_data->game);
+   }
+   static NeedForSpeed2016GameDeviceData* FindGameData(const ID3D11DeviceContext* context)
+   {
+      const CommandListData* cmd_list_data = GetCommandListData(context);
+      if (!cmd_list_data)
+         return nullptr;
+      return FindGameData(cmd_list_data->device_data);
+   }
    // The game renders on the immediate context; deferred ones record command lists on its worker threads
    static bool IsImmediate(ID3D11DeviceContext* context)
    {
@@ -259,7 +267,6 @@ void NeedForSpeed2016::OnInit(bool async)
    luma_settings_cbuffer_index = -1;
    luma_data_cbuffer_index = -1;
    luma_ui_cbuffer_index = -1;
-   RegisterEvents();
 }
 
 // The mod's state for the game's device
@@ -276,7 +283,7 @@ void NeedForSpeed2016::OnDestroyDeviceData(DeviceData& device_data)
 }
 
 // Every draw and dispatch of the game: only the TAA resolve's are replaced
-DrawOrDispatchOverrideType NeedForSpeed2016::OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, reshade::api::shader_stage stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
+DrawOrDispatchOverrideType NeedForSpeed2016::OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func)
 {
    const ResolveVariant variant = GetResolveVariant(original_shader_hashes);
    if (variant == ResolveVariant::None)
@@ -332,65 +339,40 @@ void NeedForSpeed2016::PrintImGuiInfo(const DeviceData& device_data)
 }
 #endif
 
-// The camera capture's ReShade events (core registers its own)
-void NeedForSpeed2016::RegisterEvents()
+// Records the large dynamic constant buffers' CPU memory, where the camera is read when it's bound. From any context: the game also
+// uploads on its worker threads. Every write counts: the game suballocates with no overwrite maps and renames with discards.
+void NeedForSpeed2016::PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped)
 {
-   reshade::register_event<reshade::addon_event::map_buffer_region>(OnBufferMapped);
-   reshade::register_event<reshade::addon_event::destroy_resource>(OnResourceDestroyed);
-   reshade::register_event<reshade::addon_event::push_descriptors>(OnDescriptorsPushed);
-}
-
-// So a reload doesn't register them twice
-void NeedForSpeed2016::UnregisterEvents()
-{
-   reshade::unregister_event<reshade::addon_event::map_buffer_region>(OnBufferMapped);
-   reshade::unregister_event<reshade::addon_event::destroy_resource>(OnResourceDestroyed);
-   reshade::unregister_event<reshade::addon_event::push_descriptors>(OnDescriptorsPushed);
-}
-
-// Records the large dynamic constant buffers' CPU memory, where the camera is read when it's bound
-void NeedForSpeed2016::OnBufferMapped(reshade::api::device* device, reshade::api::resource resource, uint64_t offset, uint64_t size, reshade::api::map_access access, void** data)
-{
-   const bool writes = access == reshade::api::map_access::write_only || access == reshade::api::map_access::write_discard;
-   if (device->get_api() != reshade::api::device_api::d3d11 || !writes || !data || !*data)
+   const bool writes = type == D3D11_MAP_WRITE || type == D3D11_MAP_WRITE_DISCARD || type == D3D11_MAP_WRITE_NO_OVERWRITE;
+   if (!writes || !mapped.pData)
+      return;
+   ID3D11Buffer* buffer = AsBuffer(resource);
+   if (!buffer)
       return;
    D3D11_BUFFER_DESC desc = {};
-   reinterpret_cast<ID3D11Buffer*>(resource.handle)->GetDesc(&desc);
+   buffer->GetDesc(&desc);
    if (!CameraCapture::MayHoldCamera(desc))
       return;
-   if (NeedForSpeed2016GameDeviceData* game_data = FindGameData(device))
-      game_data->camera_capture.OnBufferMapped(resource.handle, *data, desc.ByteWidth);
+   if (NeedForSpeed2016GameDeviceData* game_data = FindGameData(context))
+      game_data->camera_capture.OnBufferMapped(buffer, mapped.pData, desc.ByteWidth);
 }
 
-// So a destroyed buffer's reused handle isn't taken for the old mapping
-void NeedForSpeed2016::OnResourceDestroyed(reshade::api::device* device, reshade::api::resource resource)
+// So a destroyed buffer's reused address isn't taken for the old mapping
+void NeedForSpeed2016::OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource)
 {
-   if (device->get_api() != reshade::api::device_api::d3d11)
-      return;
-   if (NeedForSpeed2016GameDeviceData* game_data = FindGameData(device))
-      game_data->camera_capture.OnBufferDestroyed(resource.handle);
+   if (NeedForSpeed2016GameDeviceData* game_data = FindGameData(GetDeviceData(device)))
+      game_data->camera_capture.OnBufferDestroyed(resource);
 }
 
-// The game binds the camera on the immediate context
-void NeedForSpeed2016::OnDescriptorsPushed(reshade::api::command_list* cmd_list, reshade::api::shader_stage stages, reshade::api::pipeline_layout layout, uint32_t layout_param, const reshade::api::descriptor_table_update& update)
+// The game binds the camera on the immediate context. Never skips the game's call.
+bool NeedForSpeed2016::PreVSSetConstantBuffers(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11Buffer** buffers, const UINT* first_constant, const UINT* num_constants)
 {
-   const reshade::api::buffer_range* binding = CameraCapture::FindBinding(stages, update);
-   reshade::api::device* device = cmd_list->get_device();
-   if (!binding || device->get_api() != reshade::api::device_api::d3d11)
-      return;
-   if (!IsImmediate(reinterpret_cast<ID3D11DeviceContext*>(cmd_list->get_native())))
-      return;
-   if (NeedForSpeed2016GameDeviceData* game_data = FindGameData(device))
-      game_data->camera_capture.OnCameraBound(*binding, game_data->render_size);
-}
-
-// ReShade's events can come before Luma created the device's data, and from the SR interop's D3D12 device
-NeedForSpeed2016GameDeviceData* NeedForSpeed2016::FindGameData(reshade::api::device* device)
-{
-   DeviceData* device_data = device->get_private_data<DeviceData>();
-   if (!device_data || !device_data->game)
-      return nullptr;
-   return static_cast<NeedForSpeed2016GameDeviceData*>(device_data->game);
+   const CameraCapture::Binding binding = CameraCapture::FindBinding(start, count, buffers, first_constant);
+   if (!binding.buffer || !IsImmediate(context))
+      return false;
+   if (NeedForSpeed2016GameDeviceData* game_data = FindGameData(context))
+      game_data->camera_capture.OnCameraBound(binding, game_data->render_size);
+   return false;
 }
 
 // The engine's settings are looked up at the first frame in game (one with a camera), and the jitter is then set every frame
@@ -400,7 +382,7 @@ void NeedForSpeed2016::UpdateEngineSettings(const DeviceData& device_data, const
    {
       engine_settings_searched = true;
       if (!settings_lookup.Find("WorldRender"))
-         LogDiagnostic(reshade::log::level::warning, "the engine's settings lookup wasn't found, so the jitter and the resolution scale can't be set");
+         LogDiagnostic(LogLevel::Warning, "the engine's settings lookup wasn't found, so the jitter and the resolution scale can't be set");
       engine_jitter.Find(settings_lookup);
       render_scale.Find(settings_lookup);
    }
@@ -411,17 +393,14 @@ void NeedForSpeed2016::UpdateEngineSettings(const DeviceData& device_data, const
    engine_jitter.Apply(sr_selected, sr_phases);
 }
 
-// The globals and the game object before core starts, and the mod's events off before core shuts down
+// The globals and the game before core starts: "SetGame()" also installs the hooks the game's overrides need. Always TRUE: Luma is the
+// game's dxgi.dll, so a failed load would stop the game.
 BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserved)
 {
    if (ul_reason_for_call == DLL_PROCESS_ATTACH)
    {
       NeedForSpeed2016::SetLumaGlobals();
-      game = new NeedForSpeed2016();
-   }
-   else if (ul_reason_for_call == DLL_PROCESS_DETACH)
-   {
-      NeedForSpeed2016::UnregisterEvents();
+      SetGame<NeedForSpeed2016>();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);
