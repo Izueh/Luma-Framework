@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "final-fantasy-vii-remake-luma2",
+  "version-string": "2.0.0",
+  "description": "Final Fantasy VII Remake Luma 2 mod",
+  "dependencies": [
+    "dxp"
+  ]
+}

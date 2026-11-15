@@ -1,4 +1,10 @@
 version: 1
+# What Luma shows for it (DXP reports `meta` without reading it)
+meta:
+  name: Dithering Fix (Experimental)
+  description: Fixes dithering that can cause checkered patterns when using Super Resolution.
+  default_enabled: true
+  visibility: release
 steps:
   # Step 1: Replace the z-computation chain (ishl→iadd→ftoi→and) with
   #         a mov of the frame counter (cb1[139].y) into z + a new and

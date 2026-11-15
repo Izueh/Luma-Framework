@@ -6,6 +6,8 @@
     <ProjectGuid>{F382787C-51CA-4EB8-80B1-F627CE17FE08}</ProjectGuid>
     <RootNamespace>FinalFantasyVIIRemake</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <!-- The Dithering Fix recipe -->
+    <UseLumaDXP>true</UseLumaDXP>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">

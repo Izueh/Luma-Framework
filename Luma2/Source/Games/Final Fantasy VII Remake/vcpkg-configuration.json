@@ -1,0 +1,5 @@
+{
+  "overlay-ports": [
+    "../../../../Source/External/vcpkg-ports"
+  ]
+}
