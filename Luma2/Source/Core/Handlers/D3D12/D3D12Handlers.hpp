@@ -70,6 +70,28 @@ void PreSetStencilRef(ID3D12GraphicsCommandList* list, UINT stencil_ref);
 // trace skipped or replaced it)
 void PreResourceBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers);
 
+// Copies and clears: true skips the call. The locations are copies of the game's, which can be edited.
+bool PreCopyResource(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, ID3D12Resource*& source);
+bool PreCopyTextureRegion(ID3D12GraphicsCommandList* list, D3D12_TEXTURE_COPY_LOCATION& destination, UINT x, UINT y, UINT z, D3D12_TEXTURE_COPY_LOCATION& source,
+   const D3D12_BOX* box);
+bool PreCopyBufferRegion(ID3D12GraphicsCommandList* list, ID3D12Resource* destination, UINT64 destination_offset, ID3D12Resource* source, UINT64 source_offset,
+   UINT64 size);
+bool PreResolveSubresource(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, UINT destination_subresource, ID3D12Resource*& source,
+   UINT source_subresource, DXGI_FORMAT& format);
+bool PreClearRenderTargetView(ID3D12GraphicsCommandList* list, D3D12_CPU_DESCRIPTOR_HANDLE& view, const FLOAT color[4], UINT rect_count, const D3D12_RECT* rects);
+bool PreClearDepthStencilView(ID3D12GraphicsCommandList* list, D3D12_CPU_DESCRIPTOR_HANDLE& view, D3D12_CLEAR_FLAGS flags, FLOAT depth, UINT8 stencil, UINT rect_count,
+   const D3D12_RECT* rects);
+
+// One of the two is set: ClearUnorderedAccessViewUint's or ClearUnorderedAccessViewFloat's
+struct ClearValues
+{
+   const UINT* uint_values = nullptr;
+   const FLOAT* float_values = nullptr;
+};
+
+bool PreClearUnorderedAccessView(ID3D12GraphicsCommandList* list, D3D12_GPU_DESCRIPTOR_HANDLE& gpu, D3D12_CPU_DESCRIPTOR_HANDLE& cpu, ID3D12Resource*& resource,
+   ClearValues values, UINT rect_count, const D3D12_RECT* rects);
+
 bool PreDraw(ID3D12GraphicsCommandList* list, const Game::D3D12::DrawCall& draw);
 bool PreDispatch(ID3D12GraphicsCommandList* list, const Game::D3D12::DispatchCall& dispatch);
 // A draw or a dispatch by the pipeline bound

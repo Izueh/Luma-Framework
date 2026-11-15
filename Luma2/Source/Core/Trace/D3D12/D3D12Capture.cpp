@@ -607,6 +607,47 @@ void OnClearState(ID3D12GraphicsCommandList* list)
    }
 }
 
+namespace {
+void AddResourceEvent(ID3D12GraphicsCommandList* list, Event event)
+{
+   if (ListState* state = GetState(list))
+   {
+      event.thread = GetCurrentThreadId();
+      state->events.push_back(std::move(event));
+   }
+}
+} // namespace
+
+void AddCopy(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* destination, ID3D12Resource* source, const Copy& copy)
+{
+   Event event = {.type = EventType::Copy, .name = std::string(name)};
+   if (source)
+      event.source = DescribeResource(source, 0);
+   if (destination)
+      event.target = DescribeResource(destination, 0);
+   event.copy = copy;
+   AddResourceEvent(list, std::move(event));
+}
+
+void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* resource, const std::array<float, 4>& values)
+{
+   Event event = {.type = EventType::Clear, .name = std::string(name)};
+   if (resource)
+      event.target = DescribeResource(resource, 0);
+   event.clear_values = values;
+   AddResourceEvent(list, std::move(event));
+}
+
+void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, D3D12_CPU_DESCRIPTOR_HANDLE view, const std::array<float, 4>& values)
+{
+   const std::optional<Descriptor> descriptor = Resources::Descriptors::D3D12::Read(view);
+   Event event = {.type = EventType::Clear, .name = std::string(name)};
+   if (descriptor && descriptor->resource)
+      event.target = DescribeResource(descriptor->resource, descriptor->resource_id);
+   event.clear_values = values;
+   AddResourceEvent(list, std::move(event));
+}
+
 void OnResourceBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers)
 {
    ListState* state = GetState(list);

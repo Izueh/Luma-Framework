@@ -379,6 +379,97 @@ void PreResourceBarrier([[maybe_unused]] ID3D12GraphicsCommandList* list, [[mayb
 #endif
 }
 
+bool PreCopyResource([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] ID3D12Resource*& destination, [[maybe_unused]] ID3D12Resource*& source)
+{
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D12::AddCopy(list, "CopyResource", destination, source, {});
+#endif
+   return false;
+}
+
+bool PreCopyTextureRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] D3D12_TEXTURE_COPY_LOCATION& destination, [[maybe_unused]] UINT x,
+   [[maybe_unused]] UINT y, [[maybe_unused]] UINT z, [[maybe_unused]] D3D12_TEXTURE_COPY_LOCATION& source, [[maybe_unused]] const D3D12_BOX* box)
+{
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+   {
+      // A footprint (an upload or a readback) has no subresource
+      const auto subresource = [](const D3D12_TEXTURE_COPY_LOCATION& location) {
+         return location.Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX ? location.SubresourceIndex : 0u;
+      };
+      Trace::Capture::Copy copy = {.kind = Trace::Capture::CopyKind::Region,
+         .source_subresource = subresource(source),
+         .destination_subresource = subresource(destination),
+         .destination_offset = {x, y, z}};
+      if (box)
+         copy.source_box = std::array<uint32_t, 6>{box->left, box->top, box->front, box->right, box->bottom, box->back};
+      Trace::Capture::D3D12::AddCopy(list, "CopyTextureRegion", destination.pResource, source.pResource, copy);
+   }
+#endif
+   return false;
+}
+
+bool PreCopyBufferRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] ID3D12Resource* destination, [[maybe_unused]] UINT64 destination_offset,
+   [[maybe_unused]] ID3D12Resource* source, [[maybe_unused]] UINT64 source_offset, [[maybe_unused]] UINT64 size)
+{
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D12::AddCopy(list, "CopyBufferRegion", destination, source,
+         {.kind = Trace::Capture::CopyKind::BufferRegion,
+            .destination_offset = {uint32_t(destination_offset), 0, 0},
+            .source_box = std::array<uint32_t, 6>{uint32_t(source_offset), 0, 0, uint32_t(source_offset + size), 1, 1}});
+#endif
+   return false;
+}
+
+bool PreResolveSubresource([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] ID3D12Resource*& destination, [[maybe_unused]] UINT destination_subresource,
+   [[maybe_unused]] ID3D12Resource*& source, [[maybe_unused]] UINT source_subresource, [[maybe_unused]] DXGI_FORMAT& format)
+{
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D12::AddCopy(list, "ResolveSubresource", destination, source,
+         {.kind = Trace::Capture::CopyKind::Resolve, .source_subresource = source_subresource, .destination_subresource = destination_subresource, .resolve_format = uint32_t(format)});
+#endif
+   return false;
+}
+
+bool PreClearRenderTargetView([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE& view, [[maybe_unused]] const FLOAT color[4],
+   [[maybe_unused]] UINT rect_count, [[maybe_unused]] const D3D12_RECT* rects)
+{
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D12::AddClear(list, "ClearRenderTargetView", view, {color[0], color[1], color[2], color[3]});
+#endif
+   return false;
+}
+
+bool PreClearDepthStencilView([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE& view, [[maybe_unused]] D3D12_CLEAR_FLAGS flags,
+   [[maybe_unused]] FLOAT depth, [[maybe_unused]] UINT8 stencil, [[maybe_unused]] UINT rect_count, [[maybe_unused]] const D3D12_RECT* rects)
+{
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D12::AddClear(list, "ClearDepthStencilView", view,
+         {(flags & D3D12_CLEAR_FLAG_DEPTH) ? depth : 0.f, (flags & D3D12_CLEAR_FLAG_STENCIL) ? float(stencil) : 0.f, 0.f, 0.f});
+#endif
+   return false;
+}
+
+bool PreClearUnorderedAccessView([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] D3D12_GPU_DESCRIPTOR_HANDLE& gpu, [[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE& cpu,
+   [[maybe_unused]] ID3D12Resource*& resource, [[maybe_unused]] ClearValues values, [[maybe_unused]] UINT rect_count, [[maybe_unused]] const D3D12_RECT* rects)
+{
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+   {
+      const std::array<float, 4> cleared = values.float_values
+         ? std::array<float, 4>{values.float_values[0], values.float_values[1], values.float_values[2], values.float_values[3]}
+         : std::array<float, 4>{float(values.uint_values[0]), float(values.uint_values[1]), float(values.uint_values[2]), float(values.uint_values[3])};
+      Trace::Capture::D3D12::AddClear(list, values.float_values ? "ClearUnorderedAccessViewFloat" : "ClearUnorderedAccessViewUint", resource, cleared);
+   }
+#endif
+   return false;
+}
+
 bool PreDraw(ID3D12GraphicsCommandList* list, const Game::D3D12::DrawCall& draw)
 {
    return RunCall(list, draw);

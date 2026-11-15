@@ -203,6 +203,79 @@ void STDMETHODCALLTYPE ResourceBarrier(ID3D12GraphicsCommandList* list, UINT cou
    original<&ResourceBarrier>(list, count, barriers);
 }
 
+// Copies and clears: the handlers may change the resources and handles (Luma's mirrors) or skip the call
+void STDMETHODCALLTYPE CopyResource(ID3D12GraphicsCommandList* list, ID3D12Resource* destination, ID3D12Resource* source)
+{
+   if (!Scope::IsActive() && Detours::Report(&Handlers::PreCopyResource, list, std::ref(destination), std::ref(source)))
+      return;
+   original<&CopyResource>(list, destination, source);
+}
+
+void STDMETHODCALLTYPE CopyTextureRegion(ID3D12GraphicsCommandList* list, const D3D12_TEXTURE_COPY_LOCATION* destination, UINT x, UINT y, UINT z,
+   const D3D12_TEXTURE_COPY_LOCATION* source, const D3D12_BOX* box)
+{
+   if (Scope::IsActive() || !destination || !source)
+      return original<&CopyTextureRegion>(list, destination, x, y, z, source, box);
+   D3D12_TEXTURE_COPY_LOCATION destination_copy = *destination;
+   D3D12_TEXTURE_COPY_LOCATION source_copy = *source;
+   if (Detours::Report(&Handlers::PreCopyTextureRegion, list, std::ref(destination_copy), x, y, z, std::ref(source_copy), box))
+      return;
+   original<&CopyTextureRegion>(list, &destination_copy, x, y, z, &source_copy, box);
+}
+
+void STDMETHODCALLTYPE CopyBufferRegion(ID3D12GraphicsCommandList* list, ID3D12Resource* destination, UINT64 destination_offset, ID3D12Resource* source,
+   UINT64 source_offset, UINT64 size)
+{
+   if (!Scope::IsActive() && Detours::Report(&Handlers::PreCopyBufferRegion, list, destination, destination_offset, source, source_offset, size))
+      return;
+   original<&CopyBufferRegion>(list, destination, destination_offset, source, source_offset, size);
+}
+
+void STDMETHODCALLTYPE ResolveSubresource(ID3D12GraphicsCommandList* list, ID3D12Resource* destination, UINT destination_subresource, ID3D12Resource* source,
+   UINT source_subresource, DXGI_FORMAT format)
+{
+   if (!Scope::IsActive() &&
+      Detours::Report(&Handlers::PreResolveSubresource, list, std::ref(destination), destination_subresource, std::ref(source), source_subresource, std::ref(format)))
+      return;
+   original<&ResolveSubresource>(list, destination, destination_subresource, source, source_subresource, format);
+}
+
+void STDMETHODCALLTYPE ClearRenderTargetView(ID3D12GraphicsCommandList* list, D3D12_CPU_DESCRIPTOR_HANDLE view, const FLOAT color[4], UINT rect_count,
+   const D3D12_RECT* rects)
+{
+   if (!Scope::IsActive() && Detours::Report(&Handlers::PreClearRenderTargetView, list, std::ref(view), color, rect_count, rects))
+      return;
+   original<&ClearRenderTargetView>(list, view, color, rect_count, rects);
+}
+
+void STDMETHODCALLTYPE ClearDepthStencilView(ID3D12GraphicsCommandList* list, D3D12_CPU_DESCRIPTOR_HANDLE view, D3D12_CLEAR_FLAGS flags, FLOAT depth,
+   UINT8 stencil, UINT rect_count, const D3D12_RECT* rects)
+{
+   if (!Scope::IsActive() && Detours::Report(&Handlers::PreClearDepthStencilView, list, std::ref(view), flags, depth, stencil, rect_count, rects))
+      return;
+   original<&ClearDepthStencilView>(list, view, flags, depth, stencil, rect_count, rects);
+}
+
+void STDMETHODCALLTYPE ClearUnorderedAccessViewUint(ID3D12GraphicsCommandList* list, D3D12_GPU_DESCRIPTOR_HANDLE gpu, D3D12_CPU_DESCRIPTOR_HANDLE cpu,
+   ID3D12Resource* resource, const UINT values[4], UINT rect_count, const D3D12_RECT* rects)
+{
+   if (!Scope::IsActive() &&
+      Detours::Report(&Handlers::PreClearUnorderedAccessView, list, std::ref(gpu), std::ref(cpu), std::ref(resource), Handlers::ClearValues{values, nullptr}, rect_count,
+         rects))
+      return;
+   original<&ClearUnorderedAccessViewUint>(list, gpu, cpu, resource, values, rect_count, rects);
+}
+
+void STDMETHODCALLTYPE ClearUnorderedAccessViewFloat(ID3D12GraphicsCommandList* list, D3D12_GPU_DESCRIPTOR_HANDLE gpu, D3D12_CPU_DESCRIPTOR_HANDLE cpu,
+   ID3D12Resource* resource, const FLOAT values[4], UINT rect_count, const D3D12_RECT* rects)
+{
+   if (!Scope::IsActive() &&
+      Detours::Report(&Handlers::PreClearUnorderedAccessView, list, std::ref(gpu), std::ref(cpu), std::ref(resource), Handlers::ClearValues{nullptr, values}, rect_count,
+         rects))
+      return;
+   original<&ClearUnorderedAccessViewFloat>(list, gpu, cpu, resource, values, rect_count, rects);
+}
+
 template <auto Detour>
 Hook ListHook(uint32_t slot, const char* name, const IID& version = GUID_NULL)
 {
@@ -253,6 +326,18 @@ void InstallD3D12CommandList(const D3D12::Functions& functions)
                                    ListHook<&OMSetStencilRef>(LumaSlot_ID3D12GraphicsCommandList_OMSetStencilRef, "ID3D12GraphicsCommandList::OMSetStencilRef"),
                                 });
    add(Function::ResourceBarrier, {ListHook<&ResourceBarrier>(LumaSlot_ID3D12GraphicsCommandList_ResourceBarrier, "ID3D12GraphicsCommandList::ResourceBarrier")});
+   add(Function::Copy, {
+                          ListHook<&CopyResource>(LumaSlot_ID3D12GraphicsCommandList_CopyResource, "ID3D12GraphicsCommandList::CopyResource"),
+                          ListHook<&CopyTextureRegion>(LumaSlot_ID3D12GraphicsCommandList_CopyTextureRegion, "ID3D12GraphicsCommandList::CopyTextureRegion"),
+                          ListHook<&CopyBufferRegion>(LumaSlot_ID3D12GraphicsCommandList_CopyBufferRegion, "ID3D12GraphicsCommandList::CopyBufferRegion"),
+                          ListHook<&ResolveSubresource>(LumaSlot_ID3D12GraphicsCommandList_ResolveSubresource, "ID3D12GraphicsCommandList::ResolveSubresource"),
+                       });
+   add(Function::Clear, {
+                           ListHook<&ClearRenderTargetView>(LumaSlot_ID3D12GraphicsCommandList_ClearRenderTargetView, "ID3D12GraphicsCommandList::ClearRenderTargetView"),
+                           ListHook<&ClearDepthStencilView>(LumaSlot_ID3D12GraphicsCommandList_ClearDepthStencilView, "ID3D12GraphicsCommandList::ClearDepthStencilView"),
+                           ListHook<&ClearUnorderedAccessViewUint>(LumaSlot_ID3D12GraphicsCommandList_ClearUnorderedAccessViewUint, "ID3D12GraphicsCommandList::ClearUnorderedAccessViewUint"),
+                           ListHook<&ClearUnorderedAccessViewFloat>(LumaSlot_ID3D12GraphicsCommandList_ClearUnorderedAccessViewFloat, "ID3D12GraphicsCommandList::ClearUnorderedAccessViewFloat"),
+                        });
    add(Function::Draw, {
                           ListHook<&DrawInstanced>(LumaSlot_ID3D12GraphicsCommandList_DrawInstanced, "ID3D12GraphicsCommandList::DrawInstanced"),
                           ListHook<&DrawIndexedInstanced>(LumaSlot_ID3D12GraphicsCommandList_DrawIndexedInstanced, "ID3D12GraphicsCommandList::DrawIndexedInstanced"),

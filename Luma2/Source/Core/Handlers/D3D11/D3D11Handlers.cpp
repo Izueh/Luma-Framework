@@ -148,12 +148,12 @@ void OnDeviceDestroyed(ID3D11Device* device)
 
 void PreCreateBuffer(ID3D11Device* device, D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA*& initial_data)
 {
-   Game::Registry::Call(GameCallbacks().pre_create_buffer, device, desc, initial_data);
+   Game::Registry::Call(GameEvents().on_create_buffer, device, desc, initial_data);
 }
 
 void PostCreateBuffer(ID3D11Device* device, const D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Buffer* buffer)
 {
-   Game::Registry::Call(GameCallbacks().post_create_buffer, device, desc, initial_data, buffer);
+   Game::Registry::Call(GameEvents().on_init_buffer, device, desc, initial_data, buffer);
 }
 
 void PreCreateTexture1D(ID3D11Device*, D3D11_TEXTURE1D_DESC&, const D3D11_SUBRESOURCE_DATA*&) {}
@@ -162,12 +162,12 @@ void PostCreateTexture1D(ID3D11Device*, const D3D11_TEXTURE1D_DESC&, const D3D11
 
 void PreCreateTexture2D(ID3D11Device* device, D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA*& initial_data)
 {
-   Game::Registry::Call(GameCallbacks().pre_create_texture_2d, device, desc, initial_data);
+   Game::Registry::Call(GameEvents().on_create_texture_2d, device, desc, initial_data);
 }
 
 void PostCreateTexture2D(ID3D11Device* device, const D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture2D* texture)
 {
-   Game::Registry::Call(GameCallbacks().post_create_texture_2d, device, desc, initial_data, texture);
+   Game::Registry::Call(GameEvents().on_init_texture_2d, device, desc, initial_data, texture);
 }
 
 void PreCreateTexture3D(ID3D11Device*, D3D11_TEXTURE3D_DESC1&, const D3D11_SUBRESOURCE_DATA*&) {}
@@ -178,45 +178,45 @@ void PostOpenSharedResource(ID3D11Device*, ID3D11Resource*) {}
 
 void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource)
 {
-   Game::Registry::Call(GameCallbacks().on_resource_destroyed, device, resource);
+   Game::Registry::Call(GameEvents().on_resource_destroyed, device, resource);
 }
 
 void PreCreateShaderResourceView(ID3D11Device*, ID3D11Resource*, std::optional<D3D11_SHADER_RESOURCE_VIEW_DESC1>&) {}
 
 void PostCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_SHADER_RESOURCE_VIEW_DESC1* desc, ID3D11ShaderResourceView* view)
 {
-   Game::Registry::Call(GameCallbacks().post_create_shader_resource_view, device, resource, desc, view);
+   Game::Registry::Call(GameEvents().on_init_shader_resource_view, device, resource, desc, view);
 }
 
 void PreCreateRenderTargetView(ID3D11Device*, ID3D11Resource*, std::optional<D3D11_RENDER_TARGET_VIEW_DESC1>&) {}
 
 void PostCreateRenderTargetView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_RENDER_TARGET_VIEW_DESC1* desc, ID3D11RenderTargetView* view)
 {
-   Game::Registry::Call(GameCallbacks().post_create_render_target_view, device, resource, desc, view);
+   Game::Registry::Call(GameEvents().on_init_render_target_view, device, resource, desc, view);
 }
 
 void PreCreateUnorderedAccessView(ID3D11Device*, ID3D11Resource*, std::optional<D3D11_UNORDERED_ACCESS_VIEW_DESC1>&) {}
 
 void PostCreateUnorderedAccessView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_UNORDERED_ACCESS_VIEW_DESC1* desc, ID3D11UnorderedAccessView* view)
 {
-   Game::Registry::Call(GameCallbacks().post_create_unordered_access_view, device, resource, desc, view);
+   Game::Registry::Call(GameEvents().on_init_unordered_access_view, device, resource, desc, view);
 }
 
 void PreCreateDepthStencilView(ID3D11Device*, ID3D11Resource*, std::optional<D3D11_DEPTH_STENCIL_VIEW_DESC>&) {}
 
 void PostCreateDepthStencilView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_DEPTH_STENCIL_VIEW_DESC* desc, ID3D11DepthStencilView* view)
 {
-   Game::Registry::Call(GameCallbacks().post_create_depth_stencil_view, device, resource, desc, view);
+   Game::Registry::Call(GameEvents().on_init_depth_stencil_view, device, resource, desc, view);
 }
 
 void OnViewDestroyed(ID3D11Device* device, const ID3D11View* view)
 {
-   Game::Registry::Call(GameCallbacks().on_view_destroyed, device, view);
+   Game::Registry::Call(GameEvents().on_view_destroyed, device, view);
 }
 
 void PreCreateSamplerState(ID3D11Device* device, D3D11_SAMPLER_DESC& desc)
 {
-   Game::Registry::Call(GameCallbacks().pre_create_sampler_state, device, desc);
+   Game::Registry::Call(GameEvents().on_create_sampler_state, device, desc);
 }
 
 void PostCreateSamplerState(ID3D11Device*, const D3D11_SAMPLER_DESC&, ID3D11SamplerState*) {}
@@ -287,13 +287,13 @@ bool PreCSSetUnorderedAccessViews(ID3D11DeviceContext*, UINT, UINT, ID3D11Unorde
 
 bool PreOMSetRenderTargets(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views, ID3D11DepthStencilView*& depth_stencil)
 {
-   return Game::Registry::Call(GameCallbacks().pre_om_set_render_targets, context, count, views, depth_stencil);
+   return Game::Registry::Call(GameEvents().on_bind_render_targets, context, count, views, depth_stencil);
 }
 
 bool PreOMSetRenderTargetsAndUnorderedAccessViews(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views,
    ID3D11DepthStencilView*& depth_stencil, UINT uav_start, UINT uav_count, ID3D11UnorderedAccessView** uavs, const UINT* initial_counts)
 {
-   return Game::Registry::Call(GameCallbacks().pre_om_set_render_targets_and_unordered_access_views, context, count, views, depth_stencil, uav_start, uav_count, uavs,
+   return Game::Registry::Call(GameEvents().on_bind_render_targets_and_unordered_access_views, context, count, views, depth_stencil, uav_start, uav_count, uavs,
       initial_counts);
 }
 
@@ -343,46 +343,91 @@ void PostClearState(ID3D11DeviceContext* context)
 
 void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped)
 {
-   Game::Registry::Call(GameCallbacks().post_map, context, resource, subresource, type, flags, mapped);
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing() && type != D3D11_MAP_READ)
+      Trace::Capture::D3D11::AddWrite(context, "Map", resource);
+#endif
+   Game::Registry::Call(GameEvents().on_map, context, resource, subresource, type, flags, mapped);
 }
 
 bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource)
 {
-   return Game::Registry::Call(GameCallbacks().pre_unmap, context, resource, subresource);
+   return Game::Registry::Call(GameEvents().on_unmap, context, resource, subresource);
 }
 
 void PostUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource)
 {
-   Game::Registry::Call(GameCallbacks().post_unmap, context, resource, subresource);
+   Game::Registry::Call(GameEvents().on_unmapped, context, resource, subresource);
 }
 
 bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data,
    UINT row_pitch, UINT depth_pitch, UINT copy_flags)
 {
-   return Game::Registry::Call(GameCallbacks().pre_update_subresource, context, resource, subresource, box, data, row_pitch, depth_pitch, copy_flags);
+   if (Game::Registry::Call(GameEvents().on_update_subresource, context, resource, subresource, box, data, row_pitch, depth_pitch, copy_flags))
+      return true;
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D11::AddWrite(context, "UpdateSubresource", resource);
+#endif
+   return false;
 }
 
 bool PreCopyResource(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source)
 {
-   return Game::Registry::Call(GameCallbacks().pre_copy_resource, context, destination, source);
+   if (Game::Registry::Call(GameEvents().on_copy_resource, context, destination, source))
+      return true;
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D11::AddCopy(context, "CopyResource", destination, source, {});
+#endif
+   return false;
 }
 
 bool PreCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, UINT x, UINT y, UINT z,
    ID3D11Resource* source, UINT source_subresource, const D3D11_BOX* box, UINT copy_flags)
 {
-   return Game::Registry::Call(GameCallbacks().pre_copy_subresource_region, context, destination, destination_subresource, x, y, z, source, source_subresource, box,
-      copy_flags);
+   if (Game::Registry::Call(GameEvents().on_copy_subresource_region, context, destination, destination_subresource, x, y, z, source, source_subresource, box,
+          copy_flags))
+      return true;
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+   {
+      D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
+      destination->GetType(&dimension);
+      Trace::Capture::Copy copy = {.kind = dimension == D3D11_RESOURCE_DIMENSION_BUFFER ? Trace::Capture::CopyKind::BufferRegion : Trace::Capture::CopyKind::Region,
+         .source_subresource = source_subresource,
+         .destination_subresource = destination_subresource,
+         .destination_offset = {x, y, z}};
+      if (box)
+         copy.source_box = std::array<uint32_t, 6>{box->left, box->top, box->front, box->right, box->bottom, box->back};
+      Trace::Capture::D3D11::AddCopy(context, "CopySubresourceRegion", destination, source, copy);
+   }
+#endif
+   return false;
 }
 
 bool PreResolveSubresource(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, ID3D11Resource* source,
    UINT source_subresource, DXGI_FORMAT format)
 {
-   return Game::Registry::Call(GameCallbacks().pre_resolve_subresource, context, destination, destination_subresource, source, source_subresource, format);
+   if (Game::Registry::Call(GameEvents().on_resolve_subresource, context, destination, destination_subresource, source, source_subresource, format))
+      return true;
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D11::AddCopy(context, "ResolveSubresource", destination, source,
+         {.kind = Trace::Capture::CopyKind::Resolve, .source_subresource = source_subresource, .destination_subresource = destination_subresource, .resolve_format = uint32_t(format)});
+#endif
+   return false;
 }
 
 bool PreClearRenderTargetView(ID3D11DeviceContext* context, ID3D11RenderTargetView* view, const FLOAT color[4])
 {
-   return Game::Registry::Call(GameCallbacks().pre_clear_render_target_view, context, view, color);
+   if (Game::Registry::Call(GameEvents().on_clear_render_target_view, context, view, color))
+      return true;
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D11::AddClear(context, "ClearRenderTargetView", view, {color[0], color[1], color[2], color[3]});
+#endif
+   return false;
 }
 
 bool PreCopyStructureCount(ID3D11DeviceContext* context, ID3D11Buffer* destination, UINT destination_offset, ID3D11UnorderedAccessView* source)
@@ -390,24 +435,46 @@ bool PreCopyStructureCount(ID3D11DeviceContext* context, ID3D11Buffer* destinati
    return Game::Registry::Call(GameCallbacks().pre_copy_structure_count, context, destination, destination_offset, source);
 }
 
-bool PreClearDepthStencilView(ID3D11DeviceContext*, ID3D11DepthStencilView*, UINT, FLOAT, UINT8)
+bool PreClearDepthStencilView([[maybe_unused]] ID3D11DeviceContext* context, [[maybe_unused]] ID3D11DepthStencilView* view, [[maybe_unused]] UINT flags,
+   [[maybe_unused]] FLOAT depth, [[maybe_unused]] UINT8 stencil)
 {
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D11::AddClear(context, "ClearDepthStencilView", view,
+         {(flags & D3D11_CLEAR_DEPTH) ? depth : 0.f, (flags & D3D11_CLEAR_STENCIL) ? float(stencil) : 0.f, 0.f, 0.f});
+#endif
    return false;
 }
 
-bool PreClearUnorderedAccessViewUint(ID3D11DeviceContext*, ID3D11UnorderedAccessView*, const UINT[4])
+bool PreClearUnorderedAccessViewUint([[maybe_unused]] ID3D11DeviceContext* context, [[maybe_unused]] ID3D11UnorderedAccessView* view,
+   [[maybe_unused]] const UINT values[4])
 {
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D11::AddClear(context, "ClearUnorderedAccessViewUint", view, {float(values[0]), float(values[1]), float(values[2]), float(values[3])});
+#endif
    return false;
 }
 
-bool PreClearUnorderedAccessViewFloat(ID3D11DeviceContext*, ID3D11UnorderedAccessView*, const FLOAT[4])
+bool PreClearUnorderedAccessViewFloat([[maybe_unused]] ID3D11DeviceContext* context, [[maybe_unused]] ID3D11UnorderedAccessView* view,
+   [[maybe_unused]] const FLOAT values[4])
 {
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D11::AddClear(context, "ClearUnorderedAccessViewFloat", view, {values[0], values[1], values[2], values[3]});
+#endif
    return false;
 }
 
 bool PreClearView(ID3D11DeviceContext* context, ID3D11View* view, const FLOAT color[4], const D3D11_RECT* rects, UINT rect_count)
 {
-   return Game::Registry::Call(GameCallbacks().pre_clear_view, context, view, color, rects, rect_count);
+   if (Game::Registry::Call(GameEvents().on_clear_view, context, view, color, rects, rect_count))
+      return true;
+#if DEVELOPMENT
+   if (Trace::Capture::IsCapturing())
+      Trace::Capture::D3D11::AddClear(context, "ClearView", view, {color[0], color[1], color[2], color[3]});
+#endif
+   return false;
 }
 
 // The trace records the state before the game's callback changes it (1.0), and what the callback did with the call

@@ -25,6 +25,29 @@ enum class EventType : uint8_t
    Dispatch,
    LumaPass, // Luma's own pass (Draw's helpers)
    Present,
+   Copy, // A copy or a resolve of a whole resource or a region
+   Clear, // A view cleared
+   CpuWrite, // Map for writing, UpdateSubresource
+};
+
+enum class CopyKind : uint8_t
+{
+   Resource,
+   Region,
+   Resolve,
+   BufferRegion,
+};
+
+// A copy's arguments, as the game passed them (1.0's copy_info)
+struct Copy
+{
+   CopyKind kind = CopyKind::Resource;
+   uint32_t source_subresource = 0;
+   uint32_t destination_subresource = 0;
+   std::array<uint32_t, 3> destination_offset = {};
+   // left, top, front, right, bottom, back (bytes for buffers)
+   std::optional<std::array<uint32_t, 6>> source_box;
+   uint32_t resolve_format = 0;
 };
 
 // What happened to the game's call
@@ -44,6 +67,8 @@ struct Resource
    // Width, height, depth or array size, mips
    std::array<uint32_t, 4> size = {};
    std::string debug_name;
+   // Luma's mirror of it swapped in for the game's (Resources::Mirrors): its format and size
+   std::optional<std::string> mirror;
 };
 
 struct View
@@ -164,6 +189,14 @@ struct Event
    Rasterizer rasterizer;
    std::vector<std::array<float, 6>> viewports; // x, y, width, height, min depth, max depth
    std::vector<std::array<int32_t, 4>> scissor_rects; // left, top, right, bottom
+
+   // Copies, clears and CPU writes name whole resources, not views (1.0's "source" and "target"): a copy's source and destination, a
+   // cleared view's resource, the resource written
+   std::optional<Resource> source;
+   std::optional<Resource> target;
+   std::optional<Copy> copy;
+   // A clear's color, or depth and stencil (1.0 kept them in the blend factor)
+   std::array<float, 4> clear_values = {};
 };
 
 struct Frame
@@ -192,9 +225,15 @@ struct Filter
    std::string text;
    bool replaced_only = false; // Its primary shader has variants
    bool cancelled_only = false; // A draw callback or the trace skipped or replaced it
+   // Copies, clears and CPU writes; CPU writes to buffers (cbuffer uploads, frequent) only with `buffer_writes` (1.0's
+   // include_buffer_writes)
+   bool copies = true;
+   bool buffer_writes = false;
 };
 
 bool Matches(const Event& event, const Filter& filter);
+// A copy, a clear or a CPU write: whole resources, no shader
+bool IsResourceEvent(const Event& event);
 
 // The native functions to hook: the draws and dispatches it records (Development builds always install them)
 Hooks::D3D11::Functions GetD3D11Functions();

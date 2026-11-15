@@ -189,6 +189,14 @@ Hooks::D3D11::Functions GetOwnedFunctions()
            RSSetViewports, RSSetScissorRects, OMSetBlendState, OMSetDepthStencilState,
            // What resets a context's state
            ClearState, FinishCommandList, ExecuteCommandList,
+           // Resources: mirrors (creation, views, binds, writes, copies, clears) and sampler mirrors, and trace's copy, clear and write
+           // events
+           CreateBuffer, CreateTexture1D, CreateTexture2D, CreateTexture3D, OpenSharedResource, CreateShaderResourceView, CreateRenderTargetView,
+           CreateUnorderedAccessView, CreateDepthStencilView, CreateSamplerState, VSSetShaderResources, HSSetShaderResources, DSSetShaderResources,
+           GSSetShaderResources, PSSetShaderResources, CSSetShaderResources, VSSetSamplers, HSSetSamplers, DSSetSamplers, GSSetSamplers, PSSetSamplers,
+           CSSetSamplers, CSSetUnorderedAccessViews, OMSetRenderTargets, OMSetRenderTargetsAndUnorderedAccessViews, Map, Unmap, UpdateSubresource,
+           CopyResource, CopySubresourceRegion, ResolveSubresource, ClearRenderTargetView, ClearDepthStencilView, ClearUnorderedAccessViewUint,
+           ClearUnorderedAccessViewFloat, ClearView,
            // The variants' requests, the draw callbacks, trace
            Draw, DrawInstanced, DrawIndexed, DrawIndexedInstanced, DrawAuto, DrawInstancedIndirect, DrawIndexedInstancedIndirect, Dispatch, DispatchIndirect})
       functions.set(size_t(function));

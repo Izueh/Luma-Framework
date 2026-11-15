@@ -128,6 +128,8 @@ enum class Function : uint32_t
    SetRootArguments, // Tables, root descriptors and constants, graphics and compute
    SetFixedState, // RSSetViewports, RSSetScissorRects, IASetPrimitiveTopology, OMSetBlendFactor, OMSetStencilRef
    ResourceBarrier,
+   Copy, // CopyResource, CopyTextureRegion, CopyBufferRegion, ResolveSubresource
+   Clear, // ClearRenderTargetView, ClearDepthStencilView, ClearUnorderedAccessViewUint and Float
    Draw, // DrawInstanced, DrawIndexedInstanced, DispatchMesh
    Dispatch,
    ExecuteIndirect,

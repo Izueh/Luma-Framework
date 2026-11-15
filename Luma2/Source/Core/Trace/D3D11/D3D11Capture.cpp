@@ -558,6 +558,46 @@ void End(Recording recording, Outcome outcome)
       pending.push_back({added, constant_buffer, std::move(copy), recording.context});
 }
 
+namespace {
+Event MakeResourceEvent(ID3D11DeviceContext* context, EventType type, std::string_view name)
+{
+   return {.type = type, .thread = GetCurrentThreadId(), .deferred = context->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED, .name = std::string(name)};
+}
+} // namespace
+
+void AddCopy(ID3D11DeviceContext* context, std::string_view name, ID3D11Resource* destination, ID3D11Resource* source, const Copy& copy)
+{
+   Event event = MakeResourceEvent(context, EventType::Copy, name);
+   if (source)
+      event.source = DescribeResource(source);
+   if (destination)
+      event.target = DescribeResource(destination);
+   event.copy = copy;
+   Add(std::move(event));
+}
+
+void AddClear(ID3D11DeviceContext* context, std::string_view name, ID3D11View* view, const std::array<float, 4>& values)
+{
+   Event event = MakeResourceEvent(context, EventType::Clear, name);
+   if (view)
+   {
+      ComPtr<ID3D11Resource> resource;
+      view->GetResource(&resource);
+      if (resource)
+         event.target = DescribeResource(resource.Get());
+   }
+   event.clear_values = values;
+   Add(std::move(event));
+}
+
+void AddWrite(ID3D11DeviceContext* context, std::string_view name, ID3D11Resource* resource)
+{
+   Event event = MakeResourceEvent(context, EventType::CpuWrite, name);
+   if (resource)
+      event.target = DescribeResource(resource);
+   Add(std::move(event));
+}
+
 bool IsSkipped(ID3D11DeviceContext* context, Shaders::StageSet stages)
 {
    const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(context);

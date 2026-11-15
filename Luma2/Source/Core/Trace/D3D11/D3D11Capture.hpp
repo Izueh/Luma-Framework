@@ -1,6 +1,7 @@
 #pragma once
 
 #if DEVELOPMENT
+#include <array>
 #include <cstdint>
 #include <string_view>
 #include <utility>
@@ -32,6 +33,12 @@ Recording BeginDispatch(ID3D11DeviceContext* context, const Game::D3D11::Dispatc
 // Luma's own pass, after it set its state: `shader` is its custom shader's "name"_h
 Recording BeginPass(ID3D11DeviceContext* context, std::string_view name, ShaderStage stage, uint64_t shader);
 void End(Recording recording, Outcome outcome = Outcome::Ran);
+
+// While capturing, as the game made the call (before Luma redirects it to mirrors): a copy or a resolve, a view cleared, a resource
+// written by the CPU. `name` is the native function's.
+void AddCopy(ID3D11DeviceContext* context, std::string_view name, ID3D11Resource* destination, ID3D11Resource* source, const Copy& copy);
+void AddClear(ID3D11DeviceContext* context, std::string_view name, ID3D11View* view, const std::array<float, 4>& values);
+void AddWrite(ID3D11DeviceContext* context, std::string_view name, ID3D11Resource* resource);
 
 // Presenting thread, before Capture::OnPresent: the copies read back into their events
 void ReadBackConstantBuffers();

@@ -93,6 +93,13 @@ Widgets::ListEntry Describe(const Event& event, size_t index)
       return {std::format("{:>5} Present", index), Tone::Info};
    if (event.type == EventType::LumaPass)
       return {std::format("{:>5} {} (Luma){}", index, event.name, thread), Tone::Injected};
+   // A copy, clear or write: its function and the resource written
+   if (Trace::Capture::IsResourceEvent(event))
+   {
+      const std::string target = event.target ? std::format(" {} {}x{}", Utils::Format::GetName(event.target->format), event.target->size[0], event.target->size[1])
+                                              : std::string();
+      return {std::format("{:>5} {}{}{}", index, event.name, target, thread), Tone::Info};
+   }
    // Labelled by its primary shader; the other stages are in its detail and match the filters too
    const Trace::Capture::Shader* shader = Trace::Capture::GetPrimaryShader(event);
    std::string label = std::format("{:>5} ", index);
@@ -499,8 +506,69 @@ void DrawStates(const Event& event)
    }
 }
 
+// A copy's, clear's or write's whole resource
+void DrawResource(std::string_view label, const Trace::Capture::Resource& resource)
+{
+   std::vector<PropertyRow> rows = {
+      {"Resource", resource.id},
+      {"Type", resource.type},
+      {"Format", std::string(Utils::Format::GetName(resource.format))},
+      {"Size", std::format("{} x {} x {}, {} mips", resource.size[0], resource.size[1], resource.size[2], resource.size[3])},
+   };
+   if (!resource.debug_name.empty())
+      rows.push_back({"Name", resource.debug_name});
+   if (resource.mirror)
+      rows.push_back({"Mirror", *resource.mirror, Tone::Injected});
+   Widgets::PropertyGrid(label, rows);
+}
+
+void DrawResourceEvent(const Event& event, size_t index)
+{
+   if (Widgets::Section(event.type == EventType::Copy ? "Copy" : event.type == EventType::Clear ? "Clear"
+                                                                                                : "CPU Write"))
+   {
+      std::vector<PropertyRow> rows = {
+         {"Index", std::to_string(index)},
+         {"Function", event.name},
+         {"Thread", event.list.empty() ? std::format("{}{}", event.thread, event.deferred ? " (deferred context)" : " (immediate context)") : std::format("{} (command list {}, queue {})", event.thread, event.list, event.queue)},
+      };
+      if (const std::optional<Trace::Capture::Copy>& copy = event.copy)
+      {
+         rows.push_back({"Subresources", std::format("{} -> {}", copy->source_subresource, copy->destination_subresource)});
+         if (copy->kind != Trace::Capture::CopyKind::Resource && copy->kind != Trace::Capture::CopyKind::Resolve)
+            rows.push_back({"Offset", std::format("{}, {}, {}", copy->destination_offset[0], copy->destination_offset[1], copy->destination_offset[2])});
+         if (copy->source_box)
+         {
+            const std::array<uint32_t, 6>& box = *copy->source_box;
+            rows.push_back({"Source box", std::format("{}, {}, {} to {}, {}, {}", box[0], box[1], box[2], box[3], box[4], box[5])});
+         }
+         if (copy->kind == Trace::Capture::CopyKind::Resolve)
+            rows.push_back({"Resolve format", std::string(Utils::Format::GetName(copy->resolve_format))});
+      }
+      if (event.type == EventType::Clear)
+      {
+         const std::array<float, 4>& values = event.clear_values;
+         rows.push_back({"Values", std::format("{} {} {} {}", values[0], values[1], values[2], values[3])});
+      }
+      Widgets::PropertyGrid("Call", rows);
+      Widgets::EndSection();
+   }
+   if (event.source && Widgets::Section("Source"))
+   {
+      DrawResource("Source", *event.source);
+      Widgets::EndSection();
+   }
+   if (event.target && Widgets::Section(event.type == EventType::Copy ? "Destination" : "Resource"))
+   {
+      DrawResource("Target", *event.target);
+      Widgets::EndSection();
+   }
+}
+
 void DrawEvent(const Event& event, size_t index)
 {
+   if (Trace::Capture::IsResourceEvent(event))
+      return DrawResourceEvent(event, index);
    if (!event.shaders.empty() && Widgets::Section("Shaders"))
    {
       for (const Trace::Capture::Shader& shader : event.shaders)
@@ -584,6 +652,8 @@ void DrawFilters()
    chip("Luma passes", filter.luma_passes, "Lists Luma's own passes");
    chip("Replaced", filter.replaced_only, "Only the calls whose shader has a variant");
    chip("Unique", unique_only, "Only the first call of each shader");
+   chip("Copies", filter.copies, "Lists copies, resolves, clears and CPU writes");
+   chip("Buffer writes", filter.buffer_writes, "Also lists CPU writes to buffers (cbuffer uploads, many a frame). Off, as 1.0.");
    if (chip("Threads", show_thread, "Shows each call's thread and deferred context"))
       Rebuild();
 }

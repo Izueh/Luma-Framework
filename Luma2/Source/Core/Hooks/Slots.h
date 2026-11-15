@@ -134,6 +134,14 @@
    SLOT(ID3D12GraphicsCommandList, SetComputeRootSignature)             \
    SLOT(ID3D12GraphicsCommandList, OMSetRenderTargets)                     SLOT(ID3D12GraphicsCommandList, SetDescriptorHeaps)                     SLOT(ID3D12GraphicsCommandList, SetGraphicsRootDescriptorTable)         SLOT(ID3D12GraphicsCommandList, SetComputeRootDescriptorTable)          SLOT(ID3D12GraphicsCommandList, SetGraphicsRoot32BitConstant)           SLOT(ID3D12GraphicsCommandList, SetComputeRoot32BitConstant)            SLOT(ID3D12GraphicsCommandList, SetGraphicsRoot32BitConstants)          SLOT(ID3D12GraphicsCommandList, SetComputeRoot32BitConstants)           SLOT(ID3D12GraphicsCommandList, SetGraphicsRootConstantBufferView)      SLOT(ID3D12GraphicsCommandList, SetComputeRootConstantBufferView)       SLOT(ID3D12GraphicsCommandList, SetGraphicsRootShaderResourceView)      SLOT(ID3D12GraphicsCommandList, SetComputeRootShaderResourceView)       SLOT(ID3D12GraphicsCommandList, SetGraphicsRootUnorderedAccessView)     SLOT(ID3D12GraphicsCommandList, SetComputeRootUnorderedAccessView)      SLOT(ID3D12GraphicsCommandList, RSSetViewports)                         SLOT(ID3D12GraphicsCommandList, RSSetScissorRects)                      SLOT(ID3D12GraphicsCommandList, IASetPrimitiveTopology)                 SLOT(ID3D12GraphicsCommandList, OMSetBlendFactor)                       SLOT(ID3D12GraphicsCommandList, OMSetStencilRef)                     \
    SLOT(ID3D12GraphicsCommandList, ResourceBarrier)                     \
+   SLOT(ID3D12GraphicsCommandList, CopyResource)                        \
+   SLOT(ID3D12GraphicsCommandList, CopyTextureRegion)                   \
+   SLOT(ID3D12GraphicsCommandList, CopyBufferRegion)                    \
+   SLOT(ID3D12GraphicsCommandList, ResolveSubresource)                  \
+   SLOT(ID3D12GraphicsCommandList, ClearRenderTargetView)               \
+   SLOT(ID3D12GraphicsCommandList, ClearDepthStencilView)               \
+   SLOT(ID3D12GraphicsCommandList, ClearUnorderedAccessViewUint)        \
+   SLOT(ID3D12GraphicsCommandList, ClearUnorderedAccessViewFloat)       \
    SLOT(ID3D12GraphicsCommandList, DrawInstanced)                       \
    SLOT(ID3D12GraphicsCommandList, DrawIndexedInstanced)                \
    SLOT(ID3D12GraphicsCommandList, Dispatch)                            \

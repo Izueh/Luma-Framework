@@ -34,6 +34,8 @@ void OnDeviceDestroyed(ID3D12Device*) { calls.push_back("device destroyed"); }
 
 void OnMap(ID3D11DeviceContext*, ID3D11Resource*, UINT, D3D11_MAP, UINT, D3D11_MAPPED_SUBRESOURCE&) { calls.push_back("map"); }
 
+void OnSetIndexBuffer(ID3D11DeviceContext*, ID3D11Buffer*, DXGI_FORMAT, UINT) { calls.push_back("index buffer"); }
+
 void OnBindConstantBuffers(ID3D11DeviceContext*, ShaderStage, UINT, UINT, ID3D11Buffer* const*) {}
 
 void OnSettingChanged(const Settings::Setting& setting, const Settings::Value&) { calls.push_back("setting " + std::string(setting.key)); }
@@ -105,14 +107,14 @@ TEST_CASE("Game: events and callbacks request the hooks of their native function
    Fixture fixture;
    CHECK(Game::Registry::GetRequestedFunctions().none());
    Game::SetEvents(Game::D3D11::Events{.on_init_device = &OnDeviceCreated11, .on_bind_constant_buffers = &OnBindConstantBuffers});
-   Game::SetCallbacks(Game::D3D11::Callbacks{.post_map = &OnMap});
+   Game::SetCallbacks(Game::D3D11::Callbacks{.post_ia_set_index_buffer = &OnSetIndexBuffer});
    const Hooks::D3D11::Functions functions = Game::Registry::GetRequestedFunctions();
    using enum Hooks::D3D11::Function;
    CHECK(functions.count() == 7);
-   CHECK(functions.test(size_t(Map)));
+   CHECK(functions.test(size_t(IASetIndexBuffer)));
    CHECK(functions.test(size_t(VSSetConstantBuffers)));
    CHECK(functions.test(size_t(CSSetConstantBuffers)));
-   CHECK_FALSE(functions.test(size_t(Unmap)));
+   CHECK_FALSE(functions.test(size_t(IASetVertexBuffers)));
    // The event's functions are Core's, the callback's aren't
    CHECK(Game::Registry::GetCallbackFunctions().count() == 1);
 }

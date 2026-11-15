@@ -46,11 +46,32 @@ uint32_t GetInstance(const Frame& frame, size_t index, ShaderStage stage, uint32
    return instance;
 }
 
+bool IsResourceEvent(const Event& event)
+{
+   return event.type == EventType::Copy || event.type == EventType::Clear || event.type == EventType::CpuWrite;
+}
+
 bool Matches(const Event& event, const Filter& filter)
 {
    const bool has_shader_filter = filter.stage || filter.hash || !filter.text.empty();
    if (event.type == EventType::Present)
       return !has_shader_filter && !filter.replaced_only && !filter.cancelled_only;
+   if (IsResourceEvent(event))
+   {
+      if (!filter.copies || filter.stage || filter.hash || filter.replaced_only || filter.cancelled_only)
+         return false;
+      if (event.type == EventType::CpuWrite && event.target && event.target->type == "Buffer" && !filter.buffer_writes)
+         return false;
+      if (filter.text.empty())
+         return true;
+      const auto has = [&](const std::optional<Resource>& resource) {
+         const auto contains = [&](std::string_view text) {
+            return !std::ranges::search(text, filter.text, [](char a, char b) { return std::tolower(uint8_t(a)) == std::tolower(uint8_t(b)); }).empty();
+         };
+         return resource && (contains(resource->id) || contains(resource->debug_name));
+      };
+      return has(event.source) || has(event.target);
+   }
    if (event.type == EventType::LumaPass && !filter.luma_passes)
       return false;
    const Shader* primary = GetPrimaryShader(event);
@@ -83,7 +104,10 @@ Hooks::D3D11::Functions GetD3D11Functions()
    using enum Hooks::D3D11::Function;
    Hooks::D3D11::Functions functions;
    for (const Hooks::D3D11::Function function :
-      {Draw, DrawInstanced, DrawIndexed, DrawIndexedInstanced, DrawAuto, DrawInstancedIndirect, DrawIndexedInstancedIndirect, Dispatch, DispatchIndirect})
+      {Draw, DrawInstanced, DrawIndexed, DrawIndexedInstanced, DrawAuto, DrawInstancedIndirect, DrawIndexedInstancedIndirect, Dispatch, DispatchIndirect,
+         // Copies, clears and CPU writes
+         Map, UpdateSubresource, CopyResource, CopySubresourceRegion, ResolveSubresource, ClearRenderTargetView, ClearDepthStencilView,
+         ClearUnorderedAccessViewUint, ClearUnorderedAccessViewFloat, ClearView})
       functions.set(size_t(function));
    return functions;
 }
@@ -93,7 +117,7 @@ Hooks::D3D12::Functions GetD3D12Functions()
    using enum Hooks::D3D12::Function;
    Hooks::D3D12::Functions functions;
    for (const Hooks::D3D12::Function function : {CreateRootSignature, CreatePipelineState, CreateDescriptorHeap, CreateView, CopyDescriptors, CreateResource,
-           Reset, ClearState, SetPipelineState, SetRootSignature, OMSetRenderTargets, SetDescriptorHeaps, SetRootArguments, SetFixedState, ResourceBarrier, Draw, Dispatch,
+           Reset, ClearState, SetPipelineState, SetRootSignature, OMSetRenderTargets, SetDescriptorHeaps, SetRootArguments, SetFixedState, ResourceBarrier, Copy, Clear, Draw, Dispatch,
            ExecuteIndirect, ExecuteBundle})
       functions.set(size_t(function));
    return functions;

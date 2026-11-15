@@ -1,7 +1,9 @@
 #pragma once
 
 #if DEVELOPMENT
+#include <array>
 #include <cstdint>
+#include <string_view>
 
 #include <d3d12.h>
 
@@ -48,6 +50,12 @@ void End(Recording recording, Outcome outcome = Outcome::Ran);
 void OnExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle);
 // The lists' events go into the frame, in this order
 void OnExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists);
+
+// While capturing, as the game made the call (before Luma redirects it to mirrors): a copy or a resolve, a view or resource cleared.
+// Kept by the list until a queue executes it, like its draws.
+void AddCopy(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* destination, ID3D12Resource* source, const Copy& copy);
+void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, D3D12_CPU_DESCRIPTOR_HANDLE view, const std::array<float, 4>& values);
+void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* resource, const std::array<float, 4>& values);
 
 // The list's transitions, for the states a readback's barriers start from
 void OnResourceBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers);

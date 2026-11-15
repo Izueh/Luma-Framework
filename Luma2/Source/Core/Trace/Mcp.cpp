@@ -283,7 +283,7 @@ struct TraceCapture
 struct TraceEntry
 {
    size_t index = 0;
-   std::string type; // shader, custom, present
+   std::string type; // shader, custom, present, copy, clear, cpu_write
    std::optional<bool> deferred;
    std::optional<std::string> queue; // D3D12: the queue that executed it, and its command list
    std::optional<std::string> list;
@@ -297,6 +297,7 @@ struct TraceEntry
    std::optional<std::string> outcome; // skipped, replaced, skipped_by_trace
    std::optional<std::string> rt0;
    std::optional<std::string> depth;
+   std::optional<std::string> copy_kind; // A copy other than a whole resource's: region, resolve, buffer_region
 };
 
 struct TraceList
@@ -414,6 +415,27 @@ struct TraceSampler
    std::optional<uint32_t> space;
 };
 
+// A copy's, clear's or CPU write's whole resource (1.0's "source" and "target")
+struct TraceResource
+{
+   std::string format;
+   std::array<uint32_t, 4> size = {};
+   std::string type;
+   std::string resource;
+   std::optional<std::string> debug_name;
+   std::optional<std::string> mirror;
+};
+
+struct TraceCopy
+{
+   std::string kind;
+   uint32_t source_subresource = 0;
+   uint32_t dest_subresource = 0;
+   std::array<uint32_t, 3> dest_offset = {};
+   std::optional<std::array<uint32_t, 6>> source_box;
+   std::optional<std::string> resolve_format;
+};
+
 // The entry's luma_trace_list fields, then its state
 struct TraceGet
 {
@@ -433,7 +455,12 @@ struct TraceGet
    std::optional<std::string> outcome;
    std::optional<std::string> rt0;
    std::optional<std::string> depth;
+   std::optional<std::string> copy_kind;
    uint32_t thread = 0;
+   std::optional<TraceResource> source;
+   std::optional<TraceResource> target;
+   std::optional<TraceCopy> copy;
+   std::optional<std::array<float, 4>> clear_values;
    std::vector<TraceShader> shaders;
    TraceDraw draw;
    std::optional<TraceDepthStencil> depth_stencil;
@@ -1197,6 +1224,9 @@ std::string_view GetTypeName(EventType type)
    {
    case EventType::LumaPass: return "custom";
    case EventType::Present: return "present";
+   case EventType::Copy: return "copy";
+   case EventType::Clear: return "clear";
+   case EventType::CpuWrite: return "cpu_write";
    default: return "shader";
    }
 }
@@ -1213,8 +1243,16 @@ void WriteSummary(Reply& reply, const Event& event, size_t index)
       reply.queue = event.queue;
    if (!event.list.empty())
       reply.list = event.list;
-   if (event.type == EventType::LumaPass || event.type == EventType::Present)
+   if (event.type == EventType::LumaPass || event.type == EventType::Present || Capture::IsResourceEvent(event))
       reply.name = event.name;
+   // A copy's, clear's or write's target, as 1.0 listed it
+   if (event.target)
+      reply.rt0 = std::format("{} {}x{}", Utils::Format::GetName(event.target->format), event.target->size[0], event.target->size[1]);
+   if (event.copy && event.copy->kind != Capture::CopyKind::Resource)
+   {
+      constexpr std::string_view KINDS[] = {"resource", "region", "resolve", "buffer_region"};
+      reply.copy_kind = std::string(KINDS[size_t(event.copy->kind)]);
+   }
    // 1.0 listed an entry per stage; 2.0 lists the call once, by its primary shader, with its stages
    if (!event.shaders.empty())
    {
@@ -1254,7 +1292,8 @@ bool HasResource(const Event& event, std::string_view id)
 {
    const auto in = [&](const std::vector<Capture::View>& views) { return std::ranges::any_of(views, [&](const Capture::View& view) { return view.resource.id == id; }); };
    return in(event.render_targets) || in(event.shader_resources) || in(event.unordered_access) || (event.depth_stencil_view && event.depth_stencil_view->resource.id == id) ||
-      std::ranges::any_of(event.constant_buffers, [&](const Capture::ConstantBuffer& buffer) { return buffer.id == id; });
+      std::ranges::any_of(event.constant_buffers, [&](const Capture::ConstantBuffer& buffer) { return buffer.id == id; }) ||
+      (event.source && event.source->id == id) || (event.target && event.target->id == id);
 }
 
 // Waits on the pipe thread for the capture of the next frame
@@ -1366,6 +1405,7 @@ std::string TraceList(const Request& request)
       .text = arg("filter").value_or(std::string()),
       .replaced_only = GetBool(request, "replaced_only"),
       .cancelled_only = GetBool(request, "cancelled_only"),
+      .buffer_writes = GetBool(request, "include_buffer_writes"),
    };
    if (const std::optional<std::string> stage = arg("stage"); stage && !(filter.stage = ParseStage(*stage)))
       return Error("'stage' is VS, HS, DS, GS, PS or CS");
@@ -1374,7 +1414,7 @@ std::string TraceList(const Request& request)
    const uint32_t offset = GetNumber(request, "offset", 0, 0, UINT32_MAX);
    const uint32_t limit = GetNumber(request, "limit", 300, 1, 5000);
    Replies::TraceList reply;
-   // 2.0 records no binding or buffer write entries yet: those switches have nothing to include
+   // 2.0 records no binding entries yet: include_bindings has nothing to include
    reply.ignored_args = GetIgnoredArgs(request,
       {"type", "stage", "resource", "variant", "hash", "filter", "include_vs", "include_bindings", "include_buffer_writes", "replaced_only", "cancelled_only", "offset",
          "limit"});
@@ -1421,6 +1461,26 @@ std::string TraceGet(const Request& request)
    reply.ignored_args = GetIgnoredArgs(request, {"index"});
    WriteSummary(reply, event, index);
    reply.thread = event.thread;
+   if (Capture::IsResourceEvent(event))
+   {
+      const auto to_reply = [](const Capture::Resource& resource) {
+         return Replies::TraceResource{std::string(Utils::Format::GetName(resource.format)), resource.size, resource.type, resource.id,
+            resource.debug_name.empty() ? std::nullopt : std::optional(resource.debug_name), resource.mirror};
+      };
+      if (event.source)
+         reply.source = to_reply(*event.source);
+      if (event.target)
+         reply.target = to_reply(*event.target);
+      if (const std::optional<Capture::Copy>& copy = event.copy)
+      {
+         constexpr std::string_view KINDS[] = {"resource", "region", "resolve", "buffer_region"};
+         reply.copy = Replies::TraceCopy{std::string(KINDS[size_t(copy->kind)]), copy->source_subresource, copy->destination_subresource, copy->destination_offset,
+            copy->source_box, copy->kind == Capture::CopyKind::Resolve ? std::optional(std::string(Utils::Format::GetName(copy->resolve_format))) : std::nullopt};
+      }
+      if (event.type == EventType::Clear)
+         reply.clear_values = event.clear_values;
+      return Utils::Json::Write(reply);
+   }
    for (const Capture::Shader& shader : event.shaders)
    {
       Replies::TraceShader& entry = reply.shaders.emplace_back();
