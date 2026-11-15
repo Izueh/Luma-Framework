@@ -77,8 +77,10 @@ std::shared_ptr<const CompiledShader> GetCompiledShader(uint32_t hash, Source so
 bool HasVariant(uint32_t hash);
 // Any thread: every hash's variants
 std::vector<Variant> GetAll();
-// Any thread: changes with every publication
+// Any thread: changes with every publication, and with every choice forced in trace
 uint64_t GetGeneration();
+// Any thread, after a Database::Shader's forced_variant changed: D3D12 builds the pipelines of the new choice
+void MarkChoiceChanged();
 
 // The load and unload toggles: unloaded, binds keep the game's shaders and the variants stay for the next load. Any thread
 // reads it.

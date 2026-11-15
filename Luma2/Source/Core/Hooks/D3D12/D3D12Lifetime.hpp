@@ -31,10 +31,13 @@ struct Object
 // Drops Luma's own reference to the previous object: it lives on in the lists that bound it
 void Replace(Object& object, Microsoft::WRL::ComPtr<IUnknown> replacement);
 // `list` (recorded on this thread) keeps the object alive until it has executed. Returns the object the list holds, the one
-// to bind, or null. A closed list executed more than once isn't covered: its references go with the first execution.
+// to bind, or null.
 IUnknown* Reference(ID3D12GraphicsCommandList* list, Object& object);
-// After ExecuteCommandLists: the lists' references move to the queue, and what the GPU finished with is released
+// After ExecuteCommandLists: the queue holds the lists' references until the GPU has passed this execution, and what it
+// finished with is released. The lists keep theirs too, for a closed list executed again (or a bundle), until they're reset.
 void MoveReferencesToQueue(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists);
+// The list is reset: what it recorded before is the queues' to release
+void ForgetReferences(ID3D12GraphicsCommandList* list);
 } // namespace D3D12
 } // namespace Lifetime
 } // namespace Hooks

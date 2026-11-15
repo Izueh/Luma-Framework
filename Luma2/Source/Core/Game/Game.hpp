@@ -9,11 +9,13 @@
 #include <Windows.h>
 
 #include "Common/Api.hpp"
+#include "Common/Device.hpp"
 #include "Common/Math.hpp"
 #include "Common/ShaderStage.hpp"
 #include "Draw/Draw.hpp"
 #include "Frame/Frame.hpp"
 #include "Game/Events.hpp"
+#include "Resources/Bindings.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Settings/Keys.hpp"
@@ -88,6 +90,8 @@ struct Options
    Resources::LumaCBuffers::Options cbuffers;
    // The bound-state cache's groups
    Draw::Options draw;
+   // Where Luma's own bindings go (D3D12's register space)
+   Resources::Bindings::Options bindings;
    GameDeviceDataType device_data;
 };
 
@@ -112,13 +116,13 @@ using Resources::LumaCBuffers::cb_luma_global_settings;
 void MarkLumaSettingsDirty();
 
 // Null for a device Luma doesn't know. Any thread, the device or the game's proxy of it.
-GameDeviceData* GetGameDeviceData(IUnknown* device);
+GameDeviceData* GetGameDeviceData(Device device);
 
 // The device's resolutions (Luma::Frame). Any thread, the device or the game's proxy of it.
 namespace Frame {
-Luma::Frame::Resolutions Get(IUnknown* device);
+Luma::Frame::Resolutions Get(Device device);
 // What the game renders the scene at, from its SR or TAA path: the output's until set, and again after a resize
-void SetRenderResolution(IUnknown* device, Math::uint2 size);
+void SetRenderResolution(Device device, Math::uint2 size);
 } // namespace Frame
 
 // For the draw events (Events::on_variant_draw, on_draw_or_dispatch, OnShaderDraw), inside a Luma scope
@@ -130,5 +134,14 @@ void UseOriginal(const Call& call, ShaderStage stage);
 // With the resources the shader requests. From a draw event, Core then binds no variant's requests for that call.
 void BindLumaShader(ID3D11DeviceContext* context, uint64_t name_hash, const Resources::Database::CustomData& custom = {});
 } // namespace D3D11
+
+// For the D3D12 draw events, inside a Luma scope. Luma's shaders bound from a draw event come with the D3D12 passes (Step 5).
+namespace D3D12 {
+// The game's call on its list, with what the list has bound now (Luma's cbuffers for the variant bound included)
+void RunOriginal(const Call& call);
+// D3D12 can't put one stage back: the game's whole pipeline is bound, every stage of the call runs the game's shader, until the
+// game binds another pipeline
+void UseOriginal(const Call& call);
+} // namespace D3D12
 } // namespace Game
 } // namespace Luma

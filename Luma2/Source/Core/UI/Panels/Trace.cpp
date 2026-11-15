@@ -161,6 +161,12 @@ TableRow ViewRow(std::string slot, const Trace::Capture::View& view)
    return {{std::move(slot)}, {std::string(Utils::Format::GetName(view.format))}, {GetSize(view)}, {std::to_string(view.mip)}, {DescribeResource(view.resource)}};
 }
 
+// "t3", "t3 space1" (D3D12)
+std::string FormatRegister(std::string_view prefix, uint32_t slot, uint32_t space)
+{
+   return space == 0 ? std::format("{}{}", prefix, slot) : std::format("{}{} space{}", prefix, slot, space);
+}
+
 // Columns shared by the view tables
 constexpr std::array<TableColumn, 5> VIEW_COLUMNS = {{{"Slot", 44.f}, {"Format", 0.f}, {"Size", 90.f}, {"Mip", 32.f}, {"Resource", 0.f}}};
 
@@ -168,7 +174,7 @@ void DrawViews(std::string_view id, std::string_view slot_prefix, std::span<cons
 {
    std::vector<TableRow> rows;
    for (const Trace::Capture::View& view : views)
-      rows.push_back(ViewRow(std::format("{}{}", slot_prefix, view.slot), view));
+      rows.push_back(ViewRow(FormatRegister(slot_prefix, view.slot, view.space), view));
    Widgets::DataTable(id, VIEW_COLUMNS, rows);
 }
 
@@ -201,7 +207,10 @@ void DrawVariantPicker(const Trace::Capture::Shader& shader, Shaders::Database::
       ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8.f);
    const bool changed = labels.size() <= Widgets::MAX_SEGMENTS ? Widgets::Segmented("Variant", index, labels) : Widgets::Combo("Variant", index, labels);
    if (changed)
+   {
       live.forced_variant = choices[size_t(index)];
+      Shaders::Variants::MarkChoiceChanged();
+   }
    ImGui::SetItemTooltip("What this shader's binds take from now on: Auto is the highest-priority variant, Original the game's shader");
 }
 
@@ -259,7 +268,7 @@ void DrawShader(const Trace::Capture::Shader& shader)
 std::span<const std::byte> GetBoundContents(const Trace::Capture::ConstantBuffer& buffer)
 {
    std::span<const std::byte> contents = buffer.contents;
-   if (buffer.constant_count)
+   if (buffer.constant_count && !buffer.contents_ranged)
    {
       const size_t first = std::min<size_t>(size_t(buffer.first_constant) * 16, contents.size());
       contents = contents.subspan(first, std::min<size_t>(size_t(buffer.constant_count) * 16, contents.size() - first));
@@ -372,7 +381,7 @@ void DrawConstantBuffers(const Event& event, size_t index)
          current = buffers.begin();
       std::vector<std::string> names;
       for (const Trace::Capture::ConstantBuffer* buffer : buffers)
-         names.push_back(std::format("b{}", buffer->slot));
+         names.push_back(FormatRegister("b", buffer->slot, buffer->space));
       const std::vector<std::string_view> labels(names.begin(), names.end());
       int32_t choice = int32_t(current - buffers.begin());
       Widgets::RowLabel(std::format("{} slots", GetStageTitle(shader.stage)));
@@ -418,7 +427,9 @@ void DrawConstantBuffers(const Event& event, size_t index)
       }
       else if (buffer.contents.empty())
       {
-         Widgets::TextDim(event.deferred ? "Contents not read: recorded on a deferred context (Track reads them)" : "Contents not read (the capture's copy limit)");
+         Widgets::TextDim(!event.list.empty() ? "Contents not read: not in an upload heap (D3D12), or the capture's copy limit"
+                         : event.deferred      ? "Contents not read: recorded on a deferred context (Track reads them)"
+                                               : "Contents not read (the capture's copy limit)");
       }
       else
       {
@@ -516,7 +527,8 @@ void DrawEvent(const Event& event, size_t index)
          {"Index", std::to_string(index)},
          {"Function", event.name},
          {"Outcome", std::string(GetOutcomeName(event.outcome)), event.outcome == Outcome::Ran ? Tone::Info : Tone::Warning},
-         {"Thread", std::format("{}{}", event.thread, event.deferred ? " (deferred context)" : " (immediate context)")},
+         {"Thread", event.list.empty() ? std::format("{}{}", event.thread, event.deferred ? " (deferred context)" : " (immediate context)")
+                                       : std::format("{} (command list {}, queue {})", event.thread, event.list, event.queue)},
       };
       if (is_dispatch)
          rows.push_back({"Groups", std::format("{} x {} x {}", event.dispatch[0], event.dispatch[1], event.dispatch[2])});
@@ -562,7 +574,7 @@ void DrawEvent(const Event& event, size_t index)
       constexpr std::array<TableColumn, 4> COLUMNS = {{{"Slot", 44.f}, {"Filter", 0.f}, {"Address", 0.f}, {"Mip bias", 64.f}}};
       std::vector<TableRow> rows;
       for (const Trace::Capture::Sampler& sampler : event.samplers)
-         rows.push_back({{std::format("s{}", sampler.slot)}, {sampler.filter}, {sampler.address_names}, {std::format("{}", sampler.mip_lod_bias)}});
+         rows.push_back({{FormatRegister("s", sampler.slot, sampler.space)}, {sampler.filter}, {sampler.address_names}, {std::format("{}", sampler.mip_lod_bias)}});
       Widgets::DataTable("Samplers", COLUMNS, rows);
       Widgets::EndSection();
    }

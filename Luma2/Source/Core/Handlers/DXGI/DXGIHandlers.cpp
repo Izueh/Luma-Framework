@@ -1,4 +1,5 @@
 #include "Handlers/DXGI/DXGIHandlers.hpp"
+#include "Handlers/D3D12/D3D12Handlers.hpp"
 
 #include <algorithm>
 #include <array>
@@ -28,6 +29,9 @@
 #if DEVELOPMENT
 #include "Trace/Capture.hpp"
 #include "Trace/D3D11/D3D11Capture.hpp"
+#include "Trace/D3D12/D3D12Capture.hpp"
+#include "Resources/D3D12/D3D12Descriptors.hpp"
+#include "Trace/D3D12/D3D12Stats.hpp"
 #endif
 #include "Trace/Info.hpp"
 #include "Trace/Mcp.hpp"
@@ -161,9 +165,22 @@ void ReportCreateSwapchain(bool d3d11, Game::SwapchainDesc& desc)
 void ReportInitSwapchain(IDXGISwapChain* swapchain, const Presenter& presenter, bool resize)
 {
    if (auto* const* device = std::get_if<ID3D11Device*>(&presenter))
+   {
       Game::Registry::Call(Game::Registry::GetD3D11Events().on_init_swapchain, swapchain, *device, resize);
-   else
-      Game::Registry::Call(Game::Registry::GetD3D12Events().on_init_swapchain, swapchain, std::get<ID3D12CommandQueue*>(presenter), resize);
+      return;
+   }
+#if DEVELOPMENT
+   // DXGI creates the buffers itself: trace knows them from here
+   DXGI_SWAP_CHAIN_DESC desc = {};
+   swapchain->GetDesc(&desc);
+   for (UINT i = 0; i < desc.BufferCount; i++)
+   {
+      Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
+      if (SUCCEEDED(swapchain->GetBuffer(i, IID_PPV_ARGS(&buffer))))
+         Resources::Descriptors::D3D12::TrackResource(buffer.Get());
+   }
+#endif
+   Game::Registry::Call(Game::Registry::GetD3D12Events().on_init_swapchain, swapchain, std::get<ID3D12CommandQueue*>(presenter), resize);
 }
 } // namespace
 
@@ -316,9 +333,15 @@ void PrePresent(IDXGISwapChain* swapchain)
 {
    Trace::RecordPresent();
 #if DEVELOPMENT
-   // A capture is one frame, present to present: what's drawn next (the game's present callback, the overlay) isn't in it
-   Trace::Capture::D3D11::ReadBackConstantBuffers();
-   Trace::Capture::D3D11::ReadBackTracked();
+   // A capture is one frame, present to present: what's drawn next (the game's present callback, the overlay) isn't in it. D3D12's
+   // contents were copied at the calls; its events reached the frame when their lists were executed.
+   if (const std::optional<Presenter> presenting = FindPresenter(swapchain); presenting && std::holds_alternative<ID3D12CommandQueue*>(*presenting))
+      Trace::Capture::D3D12::ReadBackTracked();
+   else
+   {
+      Trace::Capture::D3D11::ReadBackConstantBuffers();
+      Trace::Capture::D3D11::ReadBackTracked();
+   }
    Trace::Capture::AdvanceFrame();
 #endif
    // The one writer of the settings: changes from other threads land here
@@ -344,7 +367,14 @@ void PrePresent(IDXGISwapChain* swapchain)
          Resources::Database::D3D11::UpdateShaderObjects(*device);
       }
       else
+      {
          Game::Registry::Call(Game::Registry::GetD3D12Events().on_present, swapchain, std::get<ID3D12CommandQueue*>(*presenter));
+         // After the game's callback, as D3D11's variants: pipelines whose choice changed are made again
+         PresentD3D12();
+#if DEVELOPMENT
+         Trace::Stats::D3D12::CountFrame();
+#endif
+      }
    }
    // Last, on top of everything the game and Luma drew
    UI::DrawOverlay(swapchain);

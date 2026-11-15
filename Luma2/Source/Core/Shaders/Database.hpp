@@ -12,6 +12,7 @@
 
 #include "Common/Api.hpp"
 #include "Common/ShaderStage.hpp"
+#include "Shaders/Container.hpp"
 #include "Shaders/Compiler.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Shaders/Variants.hpp"
@@ -42,6 +43,12 @@ struct Shader
    uint32_t hash = 0;
    ShaderStage stage = ShaderStage::Pixel;
    std::string target; // "ps_5_0", empty if the bytecode doesn't say
+#if DEVELOPMENT
+   // What a replacement must link like (Signatures::Check)
+   Container::Signature signature;
+   // The registers it declares, in every space (trace reads them; Luma's space is checked against them)
+   Container::Bindings bindings;
+#endif
    uint32_t size = 0;
    std::string_view name; // Game::Shaders::SetDebugName
    bool draw_callback = false; // Game::OnDraw named it
@@ -68,11 +75,11 @@ std::string_view GetName(uint32_t hash);
 Shader* Find(uint32_t hash);
 // Any thread: adds `shader` unless another thread added its hash first, and returns the one kept
 Shader& Add(std::unique_ptr<Shader> shader);
+// Any thread: the shader of `bytecode`, added (and reflected in Development) the first time its hash is seen. Each API attaches
+// its objects to it.
+Shader& Track(ShaderStage stage, std::span<const uint8_t> bytecode);
 // Any thread
 std::vector<const Shader*> GetShaders();
-
-// "ps_5_0" from the program chunk of DXBC bytecode, empty if it has none
-std::string GetTarget(std::span<const uint8_t> bytecode);
 
 #if DEVELOPMENT || TEST
 // Presenting thread: dumps the shaders created since the last present to Luma/Dump, once each, on the job queue

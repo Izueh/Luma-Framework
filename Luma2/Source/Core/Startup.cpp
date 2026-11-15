@@ -19,8 +19,10 @@
 #include "System/Jobs.hpp"
 #include "System/Loader.hpp"
 #include "System/Paths.hpp"
+#include "Validation/Validation.hpp"
 #if DEVELOPMENT
 #include "Trace/Capture.hpp"
+#include "Trace/D3D12/D3D12Stats.hpp"
 #endif
 #include "Trace/Info.hpp"
 #include "Trace/Mcp.hpp"
@@ -71,6 +73,18 @@ int32_t GetDefaultWorkerThreads()
    return std::clamp(int32_t(std::thread::hardware_concurrency() / 4), 1, 4);
 }
 
+// What Core's features and the game's draw events need hooked on D3D12 this run. The game has no native D3D12 callbacks.
+Hooks::D3D12::Functions GetCoreD3D12Functions()
+{
+   Hooks::D3D12::Functions functions = Shaders::GetD3D12Functions();
+   functions |= Game::Registry::GetRequestedD3D12Functions();
+#if DEVELOPMENT
+   functions |= Trace::Capture::GetD3D12Functions();
+   functions |= Trace::Stats::D3D12::GetD3D12Functions();
+#endif
+   return functions;
+}
+
 // What Core's own features need hooked this run, each feature asked once
 Hooks::D3D11::Functions GetCoreFunctions()
 {
@@ -103,7 +117,7 @@ void InstallHooks()
    if (!api || *api == Api::D3D11)
       Hooks::InstallD3D11(functions);
    if (!api || *api == Api::D3D12)
-      Hooks::InstallD3D12();
+      Hooks::InstallD3D12(GetCoreD3D12Functions());
    Hooks::Input::Install();
 }
 } // namespace
@@ -120,6 +134,7 @@ void Initialize()
    Settings::Register(SETTINGS, Settings::Kind::Luma);
    Settings::SetDefault(Settings::Core::WORKER_THREADS, GetDefaultWorkerThreads());
    Shaders::Register();
+   Validation::Register();
    Game::Init();
    Game::Registry::LogDeclarations();
    System::Paths::ResolveRoots();

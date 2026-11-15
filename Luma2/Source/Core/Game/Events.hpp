@@ -121,6 +121,63 @@ void OnShaderDraw(std::span<const uint32_t> hashes, DrawCallback callback);
 } // namespace D3D11
 
 namespace D3D12 {
+// The command list call: its arguments, the others zero
+enum class DrawFunction : uint8_t
+{
+   DrawInstanced,
+   DrawIndexedInstanced,
+   DispatchMesh,
+   ExecuteIndirect, // Draws of a graphics pipeline
+};
+
+struct IndirectArguments
+{
+   ID3D12CommandSignature* signature = nullptr;
+   UINT max_count = 0;
+   ID3D12Resource* arguments = nullptr;
+   UINT64 arguments_offset = 0;
+   ID3D12Resource* count_buffer = nullptr;
+   UINT64 count_offset = 0;
+};
+
+struct DrawCall
+{
+   DrawFunction function = DrawFunction::DrawInstanced;
+   UINT vertex_or_index_count = 0;
+   UINT instance_count = 0;
+   UINT start_vertex_or_index = 0;
+   INT base_vertex = 0;
+   UINT start_instance = 0;
+   std::array<UINT, 3> mesh_groups = {}; // DispatchMesh
+   IndirectArguments indirect;
+};
+
+struct DispatchCall
+{
+   UINT x = 0;
+   UINT y = 0;
+   UINT z = 0;
+   bool indirect_call = false; // ExecuteIndirect with a compute pipeline bound
+   IndirectArguments indirect;
+};
+
+// A draw or a dispatch of the game, as its draw events get it. D3D12 bakes the shaders into a pipeline: `pipeline` is the game's
+// (bound by the game, the variant runs in its place), null for a state object or one Luma didn't see created.
+struct Call
+{
+   ID3D12GraphicsCommandList* list = nullptr;
+   const DrawCall* draw = nullptr; // Null for a dispatch
+   const DispatchCall* dispatch = nullptr; // Null for a draw
+   ID3D12PipelineState* pipeline = nullptr;
+   // The game's shader per stage (ShaderStage order), 0 where the pipeline has none
+   std::array<uint32_t, 6> hashes = {};
+   // The stages running a variant of the game's shader: the variant pipeline is bound
+   Luma::Shaders::StageSet variant_stages;
+};
+
+using DrawCallback = DrawResult (*)(const Call& call);
+
+// As D3D11's: each runs where 1.0's Core called the game, set in Init, with the real API objects
 struct Events
 {
    void (*on_init_device)(ID3D12Device* device) = nullptr;
@@ -128,7 +185,16 @@ struct Events
    void (*on_create_swapchain)(SwapchainDesc& desc) = nullptr;
    void (*on_init_swapchain)(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue, bool resize) = nullptr;
    void (*on_present)(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue) = nullptr;
+
+   // Draws, dispatches and ExecuteIndirect on the game's command lists (bundles included), as D3D11's: before the game's call,
+   // the variants' requests bound after them when they all return None. Their own list calls aren't hooked or traced. None while
+   // Luma is off.
+   DrawResult (*on_variant_draw)(const Call& call) = nullptr;
+   DrawResult (*on_draw_or_dispatch)(const Call& call) = nullptr;
 };
+
+// As D3D11's OnShaderDraw: `callback` runs in place of on_draw_or_dispatch for a call whose pipeline has any of `hashes`
+void OnShaderDraw(std::span<const uint32_t> hashes, DrawCallback callback);
 } // namespace D3D12
 
 // Replace the events set before for that API

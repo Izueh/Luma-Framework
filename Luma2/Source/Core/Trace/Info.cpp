@@ -6,7 +6,17 @@
 
 #include <Windows.h>
 
+#include <format>
+#include <set>
+
+#include "Common/Api.hpp"
 #include "Game/Registry.hpp"
+#include "Resources/D3D12/D3D12Descriptors.hpp"
+#include "Resources/D3D12/D3D12ResourceDatabase.hpp"
+#include "Resources/Bindings.hpp"
+#include "Shaders/D3D12/D3D12Database.hpp"
+#include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
+#include "Shaders/D3D12/D3D12Variants.hpp"
 #include "Hooks/Hooks.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Shaders/Database.hpp"
@@ -97,8 +107,38 @@ Status GetStatus()
    status.shaders.job = jobs.name;
    status.jobs = {jobs.threads, jobs.running, jobs.queued};
 
+   if (Shaders::GetApi() == Api::D3D12)
+   {
+      D3D12Info& d3d12 = status.d3d12.emplace();
+      const Shaders::Database::D3D12::Stats database = Shaders::Database::D3D12::GetStats();
+      d3d12.pipelines = database.pipelines;
+      d3d12.extended_root_signatures = database.extended_signatures;
+      d3d12.unextended_root_signatures = database.unextended_signatures;
+      const Shaders::Variants::D3D12::Stats variants = Shaders::Variants::D3D12::GetStats();
+      d3d12.variant_pipelines = {variants.pipelines, variants.ready, variants.pending, variants.failed};
+      const Shaders::PipelineLibrary::D3D12::Stats library = Shaders::PipelineLibrary::D3D12::GetStats();
+      d3d12.luma_pipeline_library = {library.hits, library.misses, library.stored};
+      d3d12.cbuffer_ring_bytes = Resources::Database::D3D12::GetStats().ring_bytes;
+      d3d12.register_model = std::format("space{}", Resources::Bindings::GetOptions().d3d12_space);
+#if DEVELOPMENT
+      const Resources::Descriptors::D3D12::Stats descriptors = Resources::Descriptors::D3D12::GetStats();
+      d3d12.descriptor_heaps = descriptors.heaps;
+      d3d12.resources = descriptors.resources;
+      std::set<uint32_t> spaces;
+      for (const Shaders::Database::Shader* shader : Shaders::Database::GetShaders())
+      {
+         const Shaders::Container::Bindings& bindings = shader->bindings;
+         for (const Shaders::Container::Binding& binding : bindings.bindings)
+            spaces.insert(binding.space);
+         d3d12.heap_indexed_shaders += bindings.resource_heap_indexed || bindings.sampler_heap_indexed;
+         d3d12.unbounded_array_shaders += bindings.HasUnbounded();
+      }
+      d3d12.game_register_spaces.assign(spaces.begin(), spaces.end());
+#endif
+   }
+
    const Validation::Counts validation = Validation::GetCounts();
-   status.validation = {Validation::DEBUG_LAYER, Validation::GPU_VALIDATION, validation.corruptions, validation.errors, validation.warnings};
+   status.validation = {Validation::IsDebugLayerOn(), Validation::IsGpuValidationOn(), validation.corruptions, validation.errors, validation.warnings};
 
    MEMORYSTATUSEX memory = {sizeof(MEMORYSTATUSEX)};
    if (GlobalMemoryStatusEx(&memory))

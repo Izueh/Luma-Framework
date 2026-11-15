@@ -44,7 +44,7 @@ void InstallHooks()
          functions.set(size_t(function));
       Hooks::InstallDXGI(functions);
       Hooks::InstallD3D11(functions);
-      Hooks::InstallD3D12();
+      Hooks::InstallD3D12({});
       return true;
    }();
    static_cast<void>(installed);

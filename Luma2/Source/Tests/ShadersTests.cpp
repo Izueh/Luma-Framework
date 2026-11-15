@@ -18,17 +18,21 @@
 #include <vector>
 
 #include <d3d11shader.h>
+#include <d3d12.h>
 #include <d3dcompiler.h>
 #include <wrl/client.h>
 
 #include "Luma.hpp"
 #include "Shaders/Cache.hpp"
 #include "Shaders/Compiler.hpp"
+#include "Shaders/Container.hpp"
+#include "Shaders/D3D12/D3D12RootSignatures.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Shaders/Database.hpp"
 #include "Shaders/Defines.hpp"
 #include "Shaders/Files.hpp"
+#include "Shaders/Signatures.hpp"
 #include "Shaders/Variants.hpp"
 #include "Utils/Hash.hpp"
 
@@ -133,16 +137,191 @@ TEST_CASE("Shaders: the target of DXBC bytecode")
    const std::string_view vertex = "float4 main() : SV_Position { return 1; }";
    Microsoft::WRL::ComPtr<ID3DBlob> vertex_blob;
    REQUIRE(SUCCEEDED(D3DCompile(vertex.data(), vertex.size(), nullptr, nullptr, nullptr, "main", "vs_4_0", 0, 0, &vertex_blob, nullptr)));
-   CHECK(Shaders::Database::GetTarget(GetBytes(vertex_blob.Get())) == "vs_4_0");
+   CHECK(Shaders::Container::GetTarget(GetBytes(vertex_blob.Get())) == "vs_4_0");
    Microsoft::WRL::ComPtr<ID3DBlob> pixel;
    REQUIRE(SUCCEEDED(D3DCompile(source.data(), source.size(), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, &pixel, nullptr)));
-   CHECK(Shaders::Database::GetTarget(GetBytes(pixel.Get())) == "ps_5_0");
+   CHECK(Shaders::Container::GetTarget(GetBytes(pixel.Get())) == "ps_5_0");
    const std::string_view compute = "RWBuffer<float> output : register(u0); [numthreads(1, 1, 1)] void main() { output[0] = 1; }";
    Microsoft::WRL::ComPtr<ID3DBlob> compute_blob;
    REQUIRE(SUCCEEDED(D3DCompile(compute.data(), compute.size(), nullptr, nullptr, nullptr, "main", "cs_5_0", 0, 0, &compute_blob, nullptr)));
-   CHECK(Shaders::Database::GetTarget(GetBytes(compute_blob.Get())) == "cs_5_0");
+   CHECK(Shaders::Container::GetTarget(GetBytes(compute_blob.Get())) == "cs_5_0");
    const std::array<uint8_t, 8> garbage = {1, 2, 3, 4, 5, 6, 7, 8};
-   CHECK(Shaders::Database::GetTarget(garbage).empty());
+   CHECK(Shaders::Container::GetTarget(garbage).empty());
+}
+
+namespace {
+Shaders::Container::Signature CompileSignature(std::string_view source, const char* target)
+{
+   Microsoft::WRL::ComPtr<ID3DBlob> blob;
+   REQUIRE(SUCCEEDED(D3DCompile(source.data(), source.size(), nullptr, nullptr, nullptr, "main", target, 0, 0, &blob, nullptr)));
+   return Shaders::Container::GetSignature(GetBytes(blob.Get()));
+}
+} // namespace
+
+TEST_CASE("Shaders: signatures from the container, without reflection")
+{
+   const Shaders::Container::Signature vertex = CompileSignature(
+      "void main(float4 v0 : ATTRIBUTE0, out float4 o0 : TEXCOORD0, out float4 o1 : SV_Position) { o0 = v0; o1 = v0; }", "vs_5_0");
+   REQUIRE(vertex.inputs.size() == 1);
+   CHECK(vertex.inputs[0].semantic == "ATTRIBUTE");
+   REQUIRE(vertex.outputs.size() == 2);
+   CHECK(vertex.outputs[0].semantic == "TEXCOORD");
+   CHECK(vertex.outputs[0].reg == 0);
+   CHECK(vertex.outputs[1].semantic == "SV_POSITION");
+   CHECK(vertex.outputs[1].reg == 1);
+   CHECK(vertex.outputs[1].mask == 0xF);
+   // SM5.1 writes the same chunks
+   CHECK(CompileSignature("float4 main(float4 p : SV_Position) : SV_Target { return p; }", "ps_5_1").inputs.size() == 1);
+}
+
+TEST_CASE("Shaders: a replacement that moves an input to another register doesn't link like the original")
+{
+   using Shaders::Signatures::Compare;
+   // The game's motion blur pixel shader reads SV_Position after an unused TEXCOORD0 (register 1)
+   const Shaders::Container::Signature original =
+      CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position) : SV_Target { return p.x; }", "ps_5_0");
+   const Shaders::Container::Signature dropped = CompileSignature("float4 main(float4 p : SV_Position) : SV_Target { return p.x; }", "ps_5_1");
+   const std::vector<std::string> differences = Compare(ShaderStage::Pixel, original, dropped);
+   REQUIRE(differences.size() == 1);
+   CHECK(differences[0] == "input SV_POSITION0 is in register 0, the original's in 1");
+   // Keeping the unused input fixes it, whatever the case of the semantic
+   CHECK(Compare(ShaderStage::Pixel, original,
+      CompileSignature("float4 main(float4 t : texcoord0, float4 p : SV_POSITION) : SV_Target { return p.x; }", "ps_5_1")).empty());
+   // Front facing comes from the rasterizer, not the vertex shader
+   CHECK(Compare(ShaderStage::Pixel, original,
+      CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position, bool f : SV_IsFrontFace) : SV_Target { return f ? p.x : 0; }", "ps_5_1")).empty());
+   CHECK(Compare(ShaderStage::Pixel, original,
+      CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position, float4 c : COLOR0) : SV_Target { return p.x + c; }", "ps_5_1")) ==
+      std::vector<std::string>{"input COLOR0 isn't one of the original's"});
+   // A replacement may declare more components than the original, as long as it reads only the original's
+   const Shaders::Container::Signature narrow =
+      CompileSignature("float4 main(float2 t : TEXCOORD0, float4 p : SV_Position) : SV_Target { return t.x + p.x; }", "ps_5_0");
+   CHECK(Compare(ShaderStage::Pixel, narrow,
+      CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position) : SV_Target { return t.y + p.x; }", "ps_5_1")).empty());
+   CHECK(Compare(ShaderStage::Pixel, narrow,
+      CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position) : SV_Target { return t.z + p.x; }", "ps_5_1")) ==
+      std::vector<std::string>{"input TEXCOORD0 reads .z, the original declares .xy"});
+   // Another render target
+   CHECK(Compare(ShaderStage::Pixel, original,
+      CompileSignature("void main(float4 t : TEXCOORD0, float4 p : SV_Position, out float4 a : SV_Target0, out float4 b : SV_Target1) { a = p.x; b = 0; }", "ps_5_1")) ==
+      std::vector<std::string>{"output SV_TARGET1 isn't written by the original"});
+
+   // Vertex shader outputs: what the next stage reads must stay where it was
+   const Shaders::Container::Signature vertex = CompileSignature(
+      "void main(float4 v0 : ATTRIBUTE0, out float4 o0 : TEXCOORD0, out float4 o1 : SV_Position) { o0 = v0; o1 = v0; }", "vs_5_0");
+   CHECK(Compare(ShaderStage::Vertex, vertex,
+      CompileSignature("void main(float4 v0 : ATTRIBUTE0, float2 v1 : ATTRIBUTE1, out float4 o0 : TEXCOORD0, out float4 o1 : SV_Position) { o0 = v0 + v1.x; o1 = v0; }", "vs_5_1")) ==
+      std::vector<std::string>{"input ATTRIBUTE1 isn't one of the original's"});
+   CHECK(Compare(ShaderStage::Vertex, vertex,
+      CompileSignature("void main(float4 v0 : ATTRIBUTE0, out float4 o1 : SV_Position, out float4 o0 : TEXCOORD0) { o0 = v0; o1 = v0; }", "vs_5_1")).size() == 2);
+}
+
+TEST_CASE("Shaders: the registers and spaces a shader declares, without reflection")
+{
+   using Shaders::Container::BindingType;
+   // SM5.0: one register each, space 0
+   Microsoft::WRL::ComPtr<ID3DBlob> blob;
+   const std::string_view sm50 = "Texture2D t : register(t3); SamplerState s : register(s1); cbuffer c : register(b2) { float4 v; }"
+                                 "float4 main(float4 p : SV_Position) : SV_Target { return t.Sample(s, p.xy) * v; }";
+   REQUIRE(SUCCEEDED(D3DCompile(sm50.data(), sm50.size(), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, &blob, nullptr)));
+   const Shaders::Container::Bindings old = Shaders::Container::GetBindings(GetBytes(blob.Get()));
+   CHECK(old.found);
+   CHECK(old.Declares(BindingType::ShaderResource, 0, 3));
+   CHECK(old.Declares(BindingType::Sampler, 0, 1));
+   CHECK(old.Declares(BindingType::ConstantBuffer, 0, 2));
+   CHECK_FALSE(old.Declares(BindingType::ShaderResource, 0, 2));
+   CHECK_FALSE(old.UsesSpace(1));
+
+   // SM5.1: ranges in spaces, unbounded arrays
+   const std::string_view sm51 = "Texture2D t[4] : register(t2, space1); Texture2D u[] : register(t0, space7); RWTexture2D<float4> w : register(u1, space3);"
+                                 "cbuffer c : register(b5, space100) { float4 v; } SamplerState s : register(s0, space2);"
+                                 "float4 main(float4 p : SV_Position) : SV_Target { w[uint2(0, 0)] = v; return t[uint(p.x) % 4].Sample(s, p.xy) + u[uint(p.y)].Sample(s, p.xy); }";
+   blob.Reset();
+   REQUIRE(SUCCEEDED(D3DCompile(sm51.data(), sm51.size(), nullptr, nullptr, nullptr, "main", "ps_5_1", D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES, 0, &blob, nullptr)));
+   const Shaders::Container::Bindings bindings = Shaders::Container::GetBindings(GetBytes(blob.Get()));
+   CHECK(bindings.found);
+   CHECK(bindings.Declares(BindingType::ShaderResource, 1, 2));
+   CHECK(bindings.Declares(BindingType::ShaderResource, 1, 5));
+   CHECK_FALSE(bindings.Declares(BindingType::ShaderResource, 1, 6));
+   CHECK_FALSE(bindings.Declares(BindingType::ShaderResource, 0, 2));
+   CHECK(bindings.Declares(BindingType::ShaderResource, 7, 100000));
+   CHECK(bindings.HasUnbounded());
+   CHECK(bindings.Declares(BindingType::UnorderedAccess, 3, 1));
+   CHECK(bindings.Declares(BindingType::ConstantBuffer, 100, 5));
+   CHECK(bindings.Declares(BindingType::Sampler, 2, 0));
+   CHECK(bindings.UsesSpace(100));
+   CHECK_FALSE(bindings.resource_heap_indexed);
+
+   // SM6 (DXIL): PSV0's resource list, SFI0's heap indexing flag
+   std::vector<uint8_t> psv;
+   const auto put = [](std::vector<uint8_t>& bytes, uint32_t value)
+   {
+      const auto* data = reinterpret_cast<const uint8_t*>(&value);
+      bytes.insert(bytes.end(), data, data + 4);
+   };
+   put(psv, 8); // Runtime info's size, then the info
+   put(psv, 0);
+   put(psv, 0);
+   put(psv, 2); // Resources, each 24 bytes (PSVResourceBindInfo1)
+   put(psv, 24);
+   for (const std::array<uint32_t, 6> resource : {std::array<uint32_t, 6>{3, 4, 0, UINT32_MAX, 0, 0}, std::array<uint32_t, 6>{2, 0, 1, 1, 0, 0}})
+   {
+      for (const uint32_t value : resource)
+         put(psv, value);
+   }
+   std::vector<uint8_t> features;
+   put(features, 0x2000000);
+   put(features, 0);
+   std::vector<uint8_t> container = {'D', 'X', 'B', 'C'};
+   container.resize(20);
+   put(container, 1);
+   const uint32_t size = 32 + 8 + 8 + uint32_t(psv.size()) + 8 + uint32_t(features.size());
+   put(container, size);
+   put(container, 2);
+   put(container, 40);
+   put(container, 48 + uint32_t(psv.size()));
+   container.insert(container.end(), {'P', 'S', 'V', '0'});
+   put(container, uint32_t(psv.size()));
+   container.insert(container.end(), psv.begin(), psv.end());
+   container.insert(container.end(), {'S', 'F', 'I', '0'});
+   put(container, uint32_t(features.size()));
+   container.insert(container.end(), features.begin(), features.end());
+   const Shaders::Container::Bindings dxil = Shaders::Container::GetBindings(container);
+   CHECK(dxil.found);
+   CHECK(dxil.Declares(BindingType::ShaderResource, 4, 12345));
+   CHECK(dxil.Declares(BindingType::ConstantBuffer, 0, 1));
+   CHECK_FALSE(dxil.Declares(BindingType::ConstantBuffer, 0, 0));
+   CHECK(dxil.resource_heap_indexed);
+   CHECK_FALSE(dxil.sampler_heap_indexed);
+}
+
+TEST_CASE("Shaders: a D3D12 root signature using anything in Luma's space isn't extended")
+{
+   REQUIRE(LoadLibraryW(L"d3d12.dll"));
+   const auto serialize = reinterpret_cast<PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE>(
+      GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12SerializeVersionedRootSignature"));
+   REQUIRE(serialize);
+   const auto make = [&](uint32_t range_space, uint32_t sampler_space)
+   {
+      const D3D12_DESCRIPTOR_RANGE1 range = {D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0, range_space, D3D12_DESCRIPTOR_RANGE_FLAG_NONE, 0};
+      D3D12_ROOT_PARAMETER1 parameter = {};
+      parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+      parameter.DescriptorTable = {1, &range};
+      D3D12_STATIC_SAMPLER_DESC sampler = {};
+      sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+      sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+      sampler.MaxLOD = D3D12_FLOAT32_MAX;
+      sampler.RegisterSpace = sampler_space;
+      D3D12_VERSIONED_ROOT_SIGNATURE_DESC desc = {.Version = D3D_ROOT_SIGNATURE_VERSION_1_1};
+      desc.Desc_1_1 = {1, &parameter, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+      Microsoft::WRL::ComPtr<ID3DBlob> blob;
+      REQUIRE(SUCCEEDED(serialize(&desc, &blob, nullptr)));
+      return std::vector<uint8_t>(GetBytes(blob.Get()).begin(), GetBytes(blob.Get()).end());
+   };
+   // Luma's default space is 100: any register there is a conflict (Development asserts once), any other space is the game's
+   CHECK_FALSE(Shaders::RootSignatures::D3D12::Extend(make(1, 0)).blob.empty());
+   CHECK(Shaders::RootSignatures::D3D12::Extend(make(100, 0)).blob.empty());
+   CHECK(Shaders::RootSignatures::D3D12::Extend(make(0, 100)).blob.empty());
 }
 
 TEST_CASE("Shaders: a Luma file's declaration lines are its programs")

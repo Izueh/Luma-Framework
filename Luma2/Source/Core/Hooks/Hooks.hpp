@@ -48,10 +48,13 @@ struct Counts
 // `functions` adds the others.
 void InstallDXGI(const D3D11::Functions& functions);
 void InstallD3D11(const D3D11::Functions& functions);
-void InstallD3D12();
+void InstallD3D12(const D3D12::Functions& functions);
 // Called by InstallD3D11
 void InstallD3D11Device(const D3D11::Functions& functions);
 void InstallD3D11Context(const D3D11::Functions& functions);
+// Called by InstallD3D12
+void InstallD3D12Device(const D3D12::Functions& functions);
+void InstallD3D12CommandList(const D3D12::Functions& functions);
 
 // A swapchain the factory hooks can't report: D3D11CreateDeviceAndSwapChain creates it before its device is known.
 // `requested` is the desc the game asked for, before Luma's changes (null if it didn't pass one).

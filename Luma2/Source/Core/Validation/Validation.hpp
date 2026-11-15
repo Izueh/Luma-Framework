@@ -35,6 +35,15 @@ struct Counts
    uint64_t warnings = 0;
 };
 
+// The GPU validation setting (Development builds)
+void Register();
+// Whether the debug layer, and its GPU-based validation, were turned on for this run's D3D12 devices: by the build
+// (LumaDebugLayer, LumaGpuValidation) or the setting
+bool IsDebugLayerOn();
+bool IsGpuValidationOn();
+// D3D12: at the first device's creation, what this run uses (the debug layer can't be turned on once a device exists)
+void SetD3D12Layers(bool debug_layer, bool gpu_validation);
+
 // Each message id is logged a few times, then only counted
 void Report(Api api, Severity severity, int32_t id, std::string_view text);
 Counts GetCounts();

@@ -96,6 +96,15 @@ IUnknown* Reference(ID3D12GraphicsCommandList* list, Object& object)
    return current;
 }
 
+void ForgetReferences(ID3D12GraphicsCommandList* list)
+{
+   if (ListReferences* references = GetState<ListReferences>(list))
+   {
+      references->objects.clear();
+      references->held.fill(nullptr);
+   }
+}
+
 void MoveReferencesToQueue(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists)
 {
    References executed;
@@ -104,9 +113,7 @@ void MoveReferencesToQueue(ID3D12CommandQueue* queue, UINT count, ID3D12CommandL
       ListReferences* references = lists[i] ? GetState<ListReferences>(lists[i]) : nullptr;
       if (!references)
          continue;
-      std::move(references->objects.begin(), references->objects.end(), std::back_inserter(executed));
-      references->objects.clear();
-      references->held.fill(nullptr);
+      executed.insert(executed.end(), references->objects.begin(), references->objects.end());
    }
 
    QueueReferences* queue_references = GetState<QueueReferences>(queue);

@@ -25,6 +25,7 @@ enum class Interface : uint8_t
    D3D12GraphicsCommandList,
    D3D12DescriptorHeap,
    D3D12Fence,
+   D3D12PipelineLibrary,
    Count,
 };
 

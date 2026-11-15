@@ -209,6 +209,8 @@ struct TraceEntry
    size_t index = 0;
    std::string type; // shader, custom, present
    std::optional<bool> deferred;
+   std::optional<std::string> queue; // D3D12: the queue that executed it, and its command list
+   std::optional<std::string> list;
    std::optional<std::string> name;
    std::optional<std::string> stage; // The primary shader's (PS, else VS, else CS)
    std::optional<std::string> stages; // Every stage of the call with a shader, "VS PS"
@@ -272,6 +274,7 @@ struct TraceView
    std::optional<std::string> debug_name;
    std::optional<uint32_t> write_mask;
    std::optional<std::string> blend;
+   std::optional<uint32_t> space; // D3D12, a register space other than 0
 };
 
 struct TraceDepthStencil
@@ -321,6 +324,7 @@ struct TraceConstantBuffer
    std::optional<std::string> layout;
    std::optional<std::vector<TraceField>> fields;
    std::optional<bool> fields_truncated;
+   std::optional<uint32_t> space;
 };
 
 struct TraceSampler
@@ -331,6 +335,7 @@ struct TraceSampler
    std::string address;
    std::array<uint32_t, 3> address_ids = {};
    float mip_lod_bias = 0.f;
+   std::optional<uint32_t> space;
 };
 
 // The entry's luma_trace_list fields, then its state
@@ -340,6 +345,8 @@ struct TraceGet
    size_t index = 0;
    std::string type;
    std::optional<bool> deferred;
+   std::optional<std::string> queue;
+   std::optional<std::string> list;
    std::optional<std::string> name;
    std::optional<std::string> stage;
    std::optional<std::string> stages;
@@ -759,6 +766,7 @@ std::string ShaderState(const Request& request)
          if (choice == CHOICES.end())
             return Error("'variant' is auto, original, file or patch");
          shader->forced_variant = *choice;
+         Shaders::Variants::MarkChoiceChanged();
       }
       if (shader)
       {
@@ -900,6 +908,10 @@ void WriteSummary(Reply& reply, const Event& event, size_t index)
    reply.type = GetTypeName(event.type);
    if (event.deferred)
       reply.deferred = true;
+   if (!event.queue.empty())
+      reply.queue = event.queue;
+   if (!event.list.empty())
+      reply.list = event.list;
    if (event.type == EventType::LumaPass || event.type == EventType::Present)
       reply.name = event.name;
    // 1.0 listed an entry per stage; 2.0 lists the call once, by its primary shader, with its stages
@@ -1092,6 +1104,8 @@ Replies::TraceView ToReply(const Capture::View& view)
       view.size, view.mip, resource.type, resource.id};
    if (!resource.debug_name.empty())
       reply.debug_name = resource.debug_name;
+   if (view.space != 0)
+      reply.space = view.space;
    return reply;
 }
 
@@ -1185,17 +1199,20 @@ std::string TraceGet(const Request& request)
          entry.first_constant = buffer.first_constant;
          entry.num_constants = buffer.constant_count;
       }
+      if (buffer.space != 0)
+         entry.space = buffer.space;
       if (buffer.contents.empty())
          continue;
       std::span<const std::byte> contents = buffer.contents;
-      if (buffer.constant_count)
+      if (buffer.constant_count && !buffer.contents_ranged)
       {
          const size_t first = std::min<size_t>(size_t(buffer.first_constant) * 16, contents.size());
          contents = contents.subspan(first, std::min<size_t>(size_t(buffer.constant_count) * 16, contents.size() - first));
       }
       uint32_t hash = 0;
+      // The shader's layouts are by space 0 slot: another space's buffer is shown raw
       for (const Capture::Shader& shader : event.shaders)
-         hash = shader.stage == buffer.stage ? shader.hash : hash;
+         hash = shader.stage == buffer.stage && buffer.space == 0 ? shader.hash : hash;
       const Cbuffers::Description description = Cbuffers::Describe(hash, buffer.slot, contents);
       entry.layout = description.source;
       entry.fields.emplace();
@@ -1208,7 +1225,8 @@ std::string TraceGet(const Request& request)
          entry.fields_truncated = true;
    }
    for (const Capture::Sampler& sampler : event.samplers)
-      reply.samplers.push_back({sampler.slot, sampler.filter, sampler.filter_id, sampler.address_names, sampler.address, sampler.mip_lod_bias});
+      reply.samplers.push_back({sampler.slot, sampler.filter, sampler.filter_id, sampler.address_names, sampler.address, sampler.mip_lod_bias,
+         sampler.space != 0 ? std::optional<uint32_t>(sampler.space) : std::nullopt});
    return Utils::Json::Write(reply);
 }
 #endif

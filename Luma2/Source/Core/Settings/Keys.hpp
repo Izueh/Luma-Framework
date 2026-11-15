@@ -27,6 +27,8 @@ inline constexpr Id<int32_t> WORKER_THREADS = {"Luma.Advanced.WorkerThreads"};
 inline constexpr Id<bool> AUTO_COMPILE = {"Luma.Shaders.AutoCompile"};
 // Development and Test builds: writes the game's shaders to Luma/Dump
 inline constexpr Id<bool> DUMP_SHADERS = {"Luma.Development.DumpShaders"};
+// Development builds: D3D12's debug layer with GPU-based validation, from the game's next start
+inline constexpr Id<bool> GPU_VALIDATION = {"Luma.Development.GpuValidation"};
 // Development builds: DevSetting01 to 10 of LumaSettings
 inline constexpr std::array<Id<float>, 10> DEV_SETTINGS = {{
    {"Luma.Development.Setting01"},

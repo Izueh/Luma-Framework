@@ -109,6 +109,7 @@ void PostCreateDevice(ID3D11Device* device)
       Hooks::DeviceProxy::GetCount());
    Game::Registry::CreateDeviceData(device);
    Frame::CreateDeviceState(device);
+   Shaders::SetApi(Api::D3D11);
    // Before the game's callback, which may create shaders: their variants and Luma's objects are found in these stores
    if (Shaders::IsNeeded())
       Shaders::Variants::D3D11::CreateVariantStore(device);

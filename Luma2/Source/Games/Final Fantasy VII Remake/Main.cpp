@@ -87,8 +87,9 @@ void UpdateLumaInstanceDataCB(CB::LumaInstanceData& data, const GameDeviceData& 
    data.GameData.ViewportRect = game_device_data.viewport_rect;
 }
 
-// 1.0's OnInitSwapchain, at creation and after each resize: Core set the device's output resolution from the swapchain before this
-void OnInitSwapchain(IDXGISwapChain*, ID3D11Device* device, bool)
+// 1.0's OnInitSwapchain, at creation and after each resize: Core set the device's output resolution from the swapchain before this.
+// Either API's device.
+void OnInitSwapchain(Luma::Device device)
 {
    GameDeviceData* game_device_data = Luma::Game::GetGameDeviceData(device);
    if (!game_device_data)
@@ -104,12 +105,40 @@ void OnInitSwapchain(IDXGISwapChain*, ID3D11Device* device, bool)
 }
 
 // 1.0's OnPresent, its part not about TAA and SR (Step 7)
-void OnPresent(IDXGISwapChain*, ID3D11Device*)
+void OnPresent()
 {
    static std::mt19937 random_generator(uint32_t(std::chrono::system_clock::now().time_since_epoch().count()));
    static auto random_range = static_cast<float>((std::mt19937::max)() - (std::mt19937::min)());
    cb_luma_global_settings.GameSettings.custom_random = static_cast<float>(random_generator() + (std::mt19937::min)()) / random_range;
 }
+
+// The game runs on D3D11 or D3D12 (its -d3d11 and -dx12 switches): the same code from each API's events
+namespace D3D11Events {
+void OnInitSwapchain(IDXGISwapChain*, ID3D11Device* device, bool)
+{
+   ::OnInitSwapchain(device);
+}
+
+void OnPresent(IDXGISwapChain*, ID3D11Device*)
+{
+   ::OnPresent();
+}
+} // namespace D3D11Events
+
+namespace D3D12Events {
+// The queue's device: the one the game data and resolutions are kept on
+void OnInitSwapchain(IDXGISwapChain*, ID3D12CommandQueue* queue, bool)
+{
+   Microsoft::WRL::ComPtr<ID3D12Device> device;
+   if (SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&device))))
+      ::OnInitSwapchain(device.Get());
+}
+
+void OnPresent(IDXGISwapChain*, ID3D12CommandQueue*)
+{
+   ::OnPresent();
+}
+} // namespace D3D12Events
 
 namespace Defines = Luma::Shaders::Defines;
 using Luma::Settings::EnumIndex;
@@ -333,8 +362,12 @@ void Luma::Game::Init()
       .device_data = GameDeviceDataType::Of<GameDeviceData>(),
    });
    SetEvents(D3D11::Events{
-      .on_init_swapchain = &OnInitSwapchain,
-      .on_present = &OnPresent,
+      .on_init_swapchain = &D3D11Events::OnInitSwapchain,
+      .on_present = &D3D11Events::OnPresent,
+   });
+   SetEvents(D3D12::Events{
+      .on_init_swapchain = &D3D12Events::OnInitSwapchain,
+      .on_present = &D3D12Events::OnPresent,
    });
    // 1.0's draw callbacks wait for their steps: TAA (has_drawn_taa, then SR: Step 7), Output HDR and SDR (the display mode switch:
    // Step 5; the two pass UI split is ENABLE_FRAMEGEN, never on in 1.0), DoF and Motion Blur (the SR sampler: Step 7), SSAO Temporal

@@ -77,6 +77,17 @@ Hooks::D3D11::Functions GetD3D11Functions()
    return functions;
 }
 
+Hooks::D3D12::Functions GetD3D12Functions()
+{
+   using enum Hooks::D3D12::Function;
+   Hooks::D3D12::Functions functions;
+   for (const Hooks::D3D12::Function function : {CreateRootSignature, CreatePipelineState, CreateDescriptorHeap, CreateView, CopyDescriptors, CreateResource,
+           Reset, ClearState, SetPipelineState, SetRootSignature, OMSetRenderTargets, SetDescriptorHeaps, SetRootArguments, SetFixedState, Draw, Dispatch,
+           ExecuteIndirect, ExecuteBundle})
+      functions.set(size_t(function));
+   return functions;
+}
+
 bool IsCapturing()
 {
    return capturing.load(std::memory_order_relaxed);

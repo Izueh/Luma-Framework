@@ -5,6 +5,7 @@
 #include <format>
 #include <memory>
 #include <mutex>
+#include <unordered_set>
 #include <utility>
 
 #include "Game/Registry.hpp"
@@ -34,6 +35,13 @@ bool started = false;
 bool needed = false;
 bool building = false;
 bool reload_pending = false;
+// Any thread sets it (a device's creation), the presenting thread builds for it
+std::atomic<int32_t> api = -1;
+// The API the shaders were last built for (presenting thread)
+std::optional<Api> built_api;
+// Replacement file hashes, added by each scan. Never held with another lock.
+std::mutex replaced_mutex;
+std::unordered_set<uint32_t> replaced;
 // Written on the presenting thread. Never held with another lock.
 std::mutex last_build_mutex;
 BuildInfo last_build;
@@ -138,11 +146,22 @@ void AddMessages(BuildInfo& info, std::string_view file, const Result& result)
       info.errors += std::format("{}: {}\n", file, result.messages);
 }
 
+void AddReplaced(const std::vector<Files::File>& files)
+{
+   std::scoped_lock lock(replaced_mutex);
+   for (const Files::File& file : files)
+   {
+      for (const Files::Hash& hash : file.hashes)
+         replaced.insert(hash.value);
+   }
+}
+
 // Worker thread
-Build Run(std::vector<Compiler::Define> defines)
+Build Run(std::vector<Compiler::Define> defines, Api build_api)
 {
    const std::span<const std::filesystem::path> roots = System::Paths::GetShaderRoots();
    const std::vector<Files::File> files = Files::Scan(roots);
+   AddReplaced(files);
    Build build;
    uint32_t total = 0;
    for (const Files::File& file : files)
@@ -159,7 +178,7 @@ Build Run(std::vector<Compiler::Define> defines)
          // The hash being compiled, for a file of several
          std::vector<Compiler::Define> hash_defines = defines;
          hash_defines.push_back({"_" + hash.text, "1"});
-         Result result = Compile(roots, file.path, hash_defines, file.target, "main", build.info);
+         Result result = Compile(roots, file.path, hash_defines, GetTarget(file.target, build_api), "main", build.info);
          AddMessages(build.info, file.name, result);
          build.replacements.push_back({.hash = hash.value,
             .source = Variants::Source::File,
@@ -185,7 +204,7 @@ Build Run(std::vector<Compiler::Define> defines)
             shader_defines.push_back({std::string(stage), "1"});
          for (const auto& [name, value] : declared.defines)
             shader_defines.push_back({name, value});
-         Result result = Compile(roots, file.path, shader_defines, declared.target, declared.entry, build.info);
+         Result result = Compile(roots, file.path, shader_defines, GetTarget(declared.target, build_api), declared.entry, build.info);
          AddMessages(build.info, file.name, result);
          build.luma_shaders.push_back({*entry, {std::move(result.compiled), std::move(result.messages), result.failed}});
          System::Jobs::SetProgress(++done, total);
@@ -241,6 +260,9 @@ void Start()
 {
    std::vector<std::string> overridden;
    const std::vector<Files::File> files = Files::Scan(System::Paths::GetShaderRoots(), &overridden);
+   AddReplaced(files);
+   if (const std::optional<Api> declared = Game::Registry::GetInfo().api)
+      SetApi(*declared);
 #if DEVELOPMENT
    // The documented override (a game's file replacing a shared one), logged so it's never by accident
    for (const std::string& path : overridden)
@@ -292,19 +314,84 @@ Hooks::D3D11::Functions GetD3D11Functions()
    return functions;
 }
 
+Hooks::D3D12::Functions GetD3D12Functions()
+{
+   using enum Hooks::D3D12::Function;
+   Hooks::D3D12::Functions functions;
+   if (!needed)
+      return functions;
+   for (const Hooks::D3D12::Function function :
+      {// The database, the extended root signatures, the variant pipelines
+         CreatePipelineState, CreateRootSignature, CreateStateObject,
+         // The variants swapped in, and what resets a list
+         Reset, ClearState, SetPipelineState,
+         // Luma's cbuffers at Luma's root parameters
+         SetRootSignature, Draw, Dispatch, ExecuteIndirect, ExecuteBundle})
+      functions.set(size_t(function));
+   return functions;
+}
+
+void SetApi(Api set)
+{
+   int32_t expected = -1;
+   if (!api.compare_exchange_strong(expected, int32_t(set)) && expected != int32_t(set))
+      Utils::Log::Warning("Shaders: a {} device after a {} one, the shaders stay built for {}", GetName(set), GetName(Api(expected)), GetName(Api(expected)));
+}
+
+std::optional<Api> GetApi()
+{
+   const int32_t value = api.load(std::memory_order_acquire);
+   return value < 0 ? std::nullopt : std::optional(Api(value));
+}
+
+std::string GetTarget(std::string_view target, Api build_api)
+{
+   std::string result(target);
+   if (build_api == Api::D3D12 && result.ends_with("_5_0"))
+      result.back() = '1';
+   return result;
+}
+
+bool HasReplacementFile(uint32_t hash)
+{
+   std::scoped_lock lock(replaced_mutex);
+   return replaced.contains(hash);
+}
+
 void Reload()
 {
+   const std::optional<Api> build_api = GetApi();
+   // Built at the first present after a device says which API (CountFrame)
+   if (!build_api)
+   {
+      reload_pending = true;
+      return;
+   }
    if (building)
    {
       reload_pending = true;
       return;
    }
    building = true;
+   built_api = build_api;
    std::vector<Compiler::Define> defines = Defines::Collect();
    Defines::SetCompiled(defines);
+   // The registers of Luma's cbuffers depend on the API
+   for (const Compiler::Define& register_define : Resources::LumaCBuffers::GetDefines(*build_api))
+   {
+      for (Compiler::Define& define : defines)
+      {
+         if (define.name == register_define.name)
+            define.value = register_define.value;
+      }
+   }
+   // "#if _D3D12" in shaders of games that run on both APIs
+   defines.push_back({"_D3D11", *build_api == Api::D3D11 ? "1" : "0"});
+   defines.push_back({"_D3D12", *build_api == Api::D3D12 ? "1" : "0"});
    auto build = std::make_shared<Build>();
    System::Jobs::Queue(
-      "Compiling shaders", [build, defines = std::move(defines)] { *build = Run(defines); }, [build] { return Publish(std::move(*build)); });
+      "Compiling shaders", [build, defines = std::move(defines), build_api = *build_api] { *build = Run(defines, build_api); },
+      [build] { return Publish(std::move(*build)); });
 }
 
 void Unload()
@@ -322,6 +409,12 @@ void Load()
 
 void CountFrame()
 {
+   // A build that waited for the API
+   if (started && !building && reload_pending && GetApi())
+   {
+      reload_pending = false;
+      Reload();
+   }
    frame.fetch_add(1, std::memory_order_release);
 }
 

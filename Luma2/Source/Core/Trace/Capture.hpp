@@ -56,6 +56,7 @@ struct View
    // A render target's blend ("SRC_ALPHA ADD INV_SRC_ALPHA / alpha ONE ADD ZERO"), empty when off, and write mask
    std::string blend;
    uint8_t write_mask = 0;
+   uint32_t space = 0; // D3D12's register space, after the slot
 };
 
 struct Sampler
@@ -66,6 +67,7 @@ struct Sampler
    std::array<uint32_t, 3> address = {}; // U, V, W
    std::string address_names;
    float mip_lod_bias = 0.f;
+   uint32_t space = 0;
 };
 
 struct ConstantBuffer
@@ -77,8 +79,12 @@ struct ConstantBuffer
    // The D3D11.1 range, 0 when the whole buffer is bound
    uint32_t first_constant = 0;
    uint32_t constant_count = 0;
-   // Read back at the end of the capture, for buffers the shader reads on the immediate context
+   // Read back at the end of the capture, for buffers the shader reads on the immediate context (D3D11); copied at the call from
+   // an upload heap buffer's memory, or the root constants (D3D12)
    std::vector<std::byte> contents;
+   // The contents are the bound range only (D3D12, whose buffers are often large rings), not the whole buffer
+   bool contents_ranged = false;
+   uint32_t space = 0;
 };
 
 struct Shader
@@ -125,6 +131,9 @@ struct Event
    EventType type = EventType::Draw;
    uint32_t thread = 0;
    bool deferred = false; // Recorded on a deferred context, in recording order
+   // D3D12: the queue that executed the command list the call was recorded on (events are in submission order), and the list
+   std::string queue;
+   std::string list;
    std::string name; // A Luma pass's name, or the native function
    std::vector<Shader> shaders;
    Outcome outcome = Outcome::Ran;
@@ -187,6 +196,8 @@ bool Matches(const Event& event, const Filter& filter);
 
 // The native functions to hook: the draws and dispatches it records (Development builds always install them)
 Hooks::D3D11::Functions GetD3D11Functions();
+// The D3D12 ones: draws, and the list state and descriptors a call's state is read from
+Hooks::D3D12::Functions GetD3D12Functions();
 // Any thread, on the draw path
 bool IsCapturing();
 // Any thread: captures the frame starting at the next present

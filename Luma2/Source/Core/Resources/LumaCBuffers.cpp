@@ -1,5 +1,7 @@
 #include "Resources/LumaCBuffers.hpp"
 
+#include "Resources/Bindings.hpp"
+
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -176,17 +178,27 @@ std::vector<Shaders::Request> GetRequests()
    return {{settings_entry, options.settings_slot}, {data_entry, options.data_slot}};
 }
 
-std::vector<Shaders::Compiler::Define> GetDefines()
+std::optional<uint32_t> GetRootIndex(uint32_t entry)
+{
+   if (entry == settings_entry)
+      return 0;
+   if (entry == data_entry)
+      return 1;
+   return std::nullopt;
+}
+
+std::vector<Shaders::Compiler::Define> GetDefines(Api api)
 {
    const uint32_t settings_slot = options.settings_slot;
    const uint32_t data_slot = options.data_slot;
    ASSERT_ONCE_MSG(settings_slot < SLOT_COUNT && data_slot < SLOT_COUNT && settings_slot != data_slot, "The Luma cbuffer slots must be two different ones of 0 to 13");
    // 1.0 gives the UI cbuffer (unused yet) a free slot too: the compiler fails on two cbuffers with the same one
    const uint32_t ui_slot = FindFreeSlot(SLOT_COUNT / 2 - 2, {settings_slot, data_slot});
+   const std::string space = api == Api::D3D12 ? std::format(", space{}", Bindings::GetOptions().d3d12_space) : std::string();
    return {
-      {"LUMA_SETTINGS_CB_INDEX", std::format("b{}", settings_slot)},
-      {"LUMA_DATA_CB_INDEX", std::format("b{}", data_slot)},
-      {"LUMA_UI_DATA_CB_INDEX", std::format("b{}", ui_slot)},
+      {"LUMA_SETTINGS_CB_INDEX", std::format("b{}{}", settings_slot, space)},
+      {"LUMA_DATA_CB_INDEX", std::format("b{}{}", data_slot, space)},
+      {"LUMA_UI_DATA_CB_INDEX", std::format("b{}{}", ui_slot, space)},
    };
 }
 

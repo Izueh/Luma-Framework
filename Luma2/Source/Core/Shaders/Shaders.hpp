@@ -1,9 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <string_view>
 #include <string>
 #include <vector>
 
+#include "Common/Api.hpp"
 #include "Hooks/Functions.hpp"
 
 // Game shaders replaced by files, Luma's own shaders, their defines. One feature with one need decision: Core asks
@@ -40,6 +43,19 @@ bool IsNeeded();
 // The native functions to hook: creations (the database), binds (the variants), draws (the resources variants request) and
 // what resets a context's state. None if it isn't needed.
 Hooks::D3D11::Functions GetD3D11Functions();
+// Pipeline and root signature creation (the database, the extended signatures, the variants), the binds and draws (the variants
+// and their requests). None if it isn't needed.
+Hooks::D3D12::Functions GetD3D12Functions();
+
+// Any thread, at each device's creation: the build compiles for the API of the first device (D3D12: SM5.1, Luma's cbuffers in
+// their own register space). Until one is known, a game that didn't declare its API (Game::Info::api) builds nothing.
+void SetApi(Api api);
+// The API the shaders are built for, once known
+std::optional<Api> GetApi();
+// The target a file declares, for the API built for: "ps_5_0" is "ps_5_1" on D3D12
+std::string GetTarget(std::string_view target, Api api);
+// Hashes with a replacement file, from the scans so far
+bool HasReplacementFile(uint32_t hash);
 
 // Presenting thread: compiles what changed (from the cache when it can) and publishes the result at a later present
 void Reload();

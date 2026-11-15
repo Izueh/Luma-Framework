@@ -8,6 +8,9 @@
 #include <unordered_map>
 #include <utility>
 
+#include "Shaders/Database.hpp"
+#include "Shaders/Signatures.hpp"
+
 namespace Luma {
 namespace Shaders {
 namespace Variants {
@@ -89,6 +92,18 @@ void Publish(Source source, std::vector<Variant> published)
    std::erase_if(next, [](const auto& entry) { return entry.second.empty(); });
    for (auto& [hash, list] : next)
       std::ranges::stable_sort(list, std::ranges::greater(), &Variant::priority);
+#if DEVELOPMENT
+   // Replacements whose original the game created already; the others are checked when it does (Database::Track)
+   for (const auto& [hash, list] : next)
+   {
+      const Database::Shader* original = Database::Find(hash);
+      for (const Variant& variant : list)
+      {
+         if (original && variant.source == source && variant.compiled)
+            Signatures::Check(hash, original->stage, original->signature, variant.compiled->bytecode, variant.file);
+      }
+   }
+#endif
    {
       std::scoped_lock lock(mutex);
       variants.swap(next);
@@ -127,6 +142,11 @@ std::vector<Variant> GetAll()
    for (const auto& [hash, hash_variants] : variants)
       list.append_range(hash_variants);
    return list;
+}
+
+void MarkChoiceChanged()
+{
+   generation.fetch_add(1, std::memory_order_release);
 }
 
 uint64_t GetGeneration()

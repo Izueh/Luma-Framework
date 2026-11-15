@@ -17,6 +17,7 @@
 #include "Shaders/D3D11/D3D11Variants.hpp"
 #include "Shaders/Database.hpp"
 #include "Shaders/Variants.hpp"
+#include "Trace/StateNames.hpp"
 #include "Trace/Track.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -66,34 +67,6 @@ std::atomic<uint64_t> copied_bytes = 0;
 
 // WKPDID_D3DDebugObjectName, without linking dxguid
 constexpr GUID DEBUG_OBJECT_NAME = {0x429b8c22, 0x9188, 0x4b0c, {0x87, 0x42, 0xac, 0xb0, 0xbf, 0x85, 0xc2, 0x00}};
-
-template <size_t N>
-std::string GetEnumName(const std::array<std::string_view, N>& names, uint32_t value)
-{
-   return value < N && !names[value].empty() ? std::string(names[value]) : std::to_string(value);
-}
-
-constexpr std::array<std::string_view, 20> BLEND_NAMES = {"", "ZERO", "ONE", "SRC_COLOR", "INV_SRC_COLOR", "SRC_ALPHA", "INV_SRC_ALPHA", "DEST_ALPHA",
-   "INV_DEST_ALPHA", "DEST_COLOR", "INV_DEST_COLOR", "SRC_ALPHA_SAT", "", "", "BLEND_FACTOR", "INV_BLEND_FACTOR", "SRC1_COLOR", "INV_SRC1_COLOR", "SRC1_ALPHA",
-   "INV_SRC1_ALPHA"};
-constexpr std::array<std::string_view, 6> BLEND_OP_NAMES = {"", "ADD", "SUBTRACT", "REV_SUBTRACT", "MIN", "MAX"};
-constexpr std::array<std::string_view, 9> COMPARISON_NAMES = {"", "NEVER", "LESS", "EQUAL", "LESS_EQUAL", "GREATER", "NOT_EQUAL", "GREATER_EQUAL", "ALWAYS"};
-constexpr std::array<std::string_view, 9> STENCIL_OP_NAMES = {"", "KEEP", "ZERO", "REPLACE", "INCR_SAT", "DECR_SAT", "INVERT", "INCR", "DECR"};
-constexpr std::array<std::string_view, 4> CULL_NAMES = {"", "NONE", "FRONT", "BACK"};
-constexpr std::array<std::string_view, 4> FILL_NAMES = {"", "", "WIREFRAME", "SOLID"};
-constexpr std::array<std::string_view, 6> ADDRESS_NAMES = {"", "WRAP", "MIRROR", "CLAMP", "BORDER", "MIRROR_ONCE"};
-
-// "MIN_LINEAR_MAG_POINT_MIP_LINEAR", "ANISOTROPIC", with the reduction's prefix
-std::string GetFilterName(D3D11_FILTER filter)
-{
-   constexpr std::array<std::string_view, 4> REDUCTIONS = {"", "COMPARISON_", "MINIMUM_", "MAXIMUM_"};
-   const uint32_t value = uint32_t(filter);
-   const std::string_view reduction = REDUCTIONS[(value >> 7) & 3];
-   if (value & 0x40)
-      return std::format("{}ANISOTROPIC", reduction);
-   const auto mode = [](uint32_t bit) { return bit ? "LINEAR" : "POINT"; };
-   return std::format("{}MIN_{}_MAG_{}_MIP_{}", reduction, mode((value >> 4) & 1), mode((value >> 2) & 1), mode(value & 1));
-}
 
 std::string GetId(const void* object)
 {
@@ -248,21 +221,6 @@ View DescribeView(ViewType* view, uint32_t slot)
    return described;
 }
 
-std::string DescribeBlend(const D3D11_RENDER_TARGET_BLEND_DESC& blend)
-{
-   if (!blend.BlendEnable)
-      return {};
-   return std::format("{} {} {} / alpha {} {} {}", GetEnumName(BLEND_NAMES, blend.SrcBlend), GetEnumName(BLEND_OP_NAMES, blend.BlendOp),
-      GetEnumName(BLEND_NAMES, blend.DestBlend), GetEnumName(BLEND_NAMES, blend.SrcBlendAlpha), GetEnumName(BLEND_OP_NAMES, blend.BlendOpAlpha),
-      GetEnumName(BLEND_NAMES, blend.DestBlendAlpha));
-}
-
-std::string DescribeStencilFace(const D3D11_DEPTH_STENCILOP_DESC& face)
-{
-   return std::format("{} {} {} {}", GetEnumName(COMPARISON_NAMES, face.StencilFunc), GetEnumName(STENCIL_OP_NAMES, face.StencilFailOp),
-      GetEnumName(STENCIL_OP_NAMES, face.StencilDepthFailOp), GetEnumName(STENCIL_OP_NAMES, face.StencilPassOp));
-}
-
 ComPtr<ID3D11DeviceChild> GetShader(ID3D11DeviceContext* context, ShaderStage stage)
 {
    ComPtr<ID3D11DeviceChild> shader;
@@ -387,8 +345,8 @@ void DescribeState(Recording& recording, ShaderStage stage, bool recorded)
          continue;
       D3D11_SAMPLER_DESC desc;
       sampler->GetDesc(&desc);
-      event.samplers.push_back({slot, GetFilterName(desc.Filter), uint32_t(desc.Filter), {uint32_t(desc.AddressU), uint32_t(desc.AddressV), uint32_t(desc.AddressW)},
-         std::format("{} {} {}", GetEnumName(ADDRESS_NAMES, desc.AddressU), GetEnumName(ADDRESS_NAMES, desc.AddressV), GetEnumName(ADDRESS_NAMES, desc.AddressW)),
+      event.samplers.push_back({slot, StateNames::Filter(desc.Filter), uint32_t(desc.Filter), {uint32_t(desc.AddressU), uint32_t(desc.AddressV), uint32_t(desc.AddressW)},
+         std::format("{} {} {}", StateNames::Address(desc.AddressU), StateNames::Address(desc.AddressV), StateNames::Address(desc.AddressW)),
          desc.MipLODBias});
    }
 
@@ -428,7 +386,7 @@ void DescribeState(Recording& recording, ShaderStage stage, bool recorded)
             continue;
          View& described = event.render_targets.emplace_back(DescribeView(view.Get(), slot));
          const D3D11_RENDER_TARGET_BLEND_DESC& target_blend = blend_desc.RenderTarget[blend_desc.IndependentBlendEnable ? slot : 0];
-         described.blend = DescribeBlend(target_blend);
+         described.blend = StateNames::DescribeBlend(target_blend);
          described.write_mask = target_blend.RenderTargetWriteMask;
       }
       if (depth_stencil)
@@ -454,19 +412,19 @@ void DescribeState(Recording& recording, ShaderStage stage, bool recorded)
       event.depth_stencil.state_bound = depth != nullptr;
       event.depth_stencil.depth_enable = depth_desc.DepthEnable;
       event.depth_stencil.depth_write = depth_desc.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ALL;
-      event.depth_stencil.depth_func = GetEnumName(COMPARISON_NAMES, depth_desc.DepthFunc);
+      event.depth_stencil.depth_func = StateNames::Comparison(depth_desc.DepthFunc);
       event.depth_stencil.stencil_enable = depth_desc.StencilEnable;
       event.depth_stencil.read_mask = depth_desc.StencilReadMask;
       event.depth_stencil.write_mask = depth_desc.StencilWriteMask;
-      event.depth_stencil.front = DescribeStencilFace(depth_desc.FrontFace);
-      event.depth_stencil.back = DescribeStencilFace(depth_desc.BackFace);
+      event.depth_stencil.front = StateNames::DescribeStencilFace(depth_desc.FrontFace);
+      event.depth_stencil.back = StateNames::DescribeStencilFace(depth_desc.BackFace);
 
       ComPtr<ID3D11RasterizerState> rasterizer;
       context->RSGetState(&rasterizer);
       D3D11_RASTERIZER_DESC rasterizer_desc = CD3D11_RASTERIZER_DESC(D3D11_DEFAULT);
       if (rasterizer)
          rasterizer->GetDesc(&rasterizer_desc);
-      event.rasterizer = {rasterizer != nullptr, GetEnumName(CULL_NAMES, rasterizer_desc.CullMode), GetEnumName(FILL_NAMES, rasterizer_desc.FillMode),
+      event.rasterizer = {rasterizer != nullptr, StateNames::Cull(rasterizer_desc.CullMode), StateNames::Fill(rasterizer_desc.FillMode),
          bool(rasterizer_desc.FrontCounterClockwise), rasterizer_desc.DepthBias, rasterizer_desc.SlopeScaledDepthBias, bool(rasterizer_desc.DepthClipEnable),
          bool(rasterizer_desc.ScissorEnable), bool(rasterizer_desc.MultisampleEnable)};
 

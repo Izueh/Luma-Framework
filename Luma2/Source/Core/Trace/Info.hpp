@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
+#include <vector>
 #include <string>
 #include <vector>
 
@@ -56,6 +58,41 @@ struct ValidationInfo
    uint64_t warnings = 0;
 };
 
+struct D3D12VariantsInfo
+{
+   uint32_t tracked = 0; // Game pipelines that can get a variant (their desc copied)
+   uint32_t ready = 0;
+   uint32_t pending = 0;
+   uint32_t failed = 0;
+};
+
+struct D3D12LibraryInfo
+{
+   uint32_t hits = 0;
+   uint32_t misses = 0;
+   uint32_t stored = 0;
+};
+
+struct D3D12Info
+{
+   uint32_t pipelines = 0; // The game's, alive
+   D3D12VariantsInfo variant_pipelines;
+   D3D12LibraryInfo luma_pipeline_library; // Luma/Cache/Pipelines/Library.bin
+   uint32_t extended_root_signatures = 0;
+   uint32_t unextended_root_signatures = 0;
+   uint64_t cbuffer_ring_bytes = 0; // Luma's cbuffers' upload memory
+   // Where Luma's cbuffers are: "space100", with the variants compiled as SM5.1
+   std::string register_model;
+   // Development builds: the descriptor heaps and resources trace knows
+   uint32_t descriptor_heaps = 0;
+   uint32_t resources = 0;
+   // Development builds, from the game's shaders' declarations: the register spaces they use (Luma's must not be one), and how
+   // many are bindless (SM6.6 heap indexing, or unbounded arrays) so trace can't list all they read
+   std::vector<uint32_t> game_register_spaces;
+   uint32_t heap_indexed_shaders = 0;
+   uint32_t unbounded_array_shaders = 0;
+};
+
 struct Status
 {
    bool ok = true;
@@ -77,6 +114,7 @@ struct Status
    ShadersInfo shaders;
    JobsInfo jobs;
    ValidationInfo validation;
+   std::optional<D3D12Info> d3d12; // Once a D3D12 device was created
    uint64_t virtual_used_mb = 0;
    uint64_t virtual_total_mb = 0;
    uint32_t system_memory_load_percent = 0;

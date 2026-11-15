@@ -2,12 +2,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <vector>
 
+#include "Common/Api.hpp"
 #include "Common/Math.hpp"
 #include "Frame/Frame.hpp"
 #include "Hooks/Functions.hpp"
@@ -92,8 +94,10 @@ uint64_t GetSettingsStamp();
 
 // The entries at the game's slots, which every Luma shader requests
 std::vector<Shaders::Request> GetRequests();
-// LUMA_SETTINGS_CB_INDEX, LUMA_DATA_CB_INDEX and LUMA_UI_DATA_CB_INDEX ("b13")
-std::vector<Shaders::Compiler::Define> GetDefines();
+// LUMA_SETTINGS_CB_INDEX, LUMA_DATA_CB_INDEX and LUMA_UI_DATA_CB_INDEX ("b13", "b13, space100" for D3D12)
+std::vector<Shaders::Compiler::Define> GetDefines(Api api = Api::D3D11);
+// LumaSettings 0, LumaData 1, other entries none: D3D12 binds them at Luma's root parameters, in this order
+std::optional<uint32_t> GetRootIndex(uint32_t entry);
 
 // The buffers' sizes, padded to 16 bytes (1.0's *Padded structs)
 constexpr uint32_t SETTINGS_SIZE = (sizeof(CB::LumaGlobalSettings) + 15) / 16 * 16;

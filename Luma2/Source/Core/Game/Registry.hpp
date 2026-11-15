@@ -16,6 +16,10 @@ const Panels& GetPanels();
 D3D11::DrawCallback FindDrawCallback(uint32_t hash);
 // Any draw event: OnShaderDraw, on_variant_draw or on_draw_or_dispatch
 bool HasDrawCallbacks();
+D3D12::DrawCallback FindD3D12DrawCallback(uint32_t hash);
+bool HasD3D12DrawCallbacks();
+// The native D3D12 functions the game's draw events need hooked
+Hooks::D3D12::Functions GetRequestedD3D12Functions();
 
 // The native functions the game's events and callbacks need hooked
 Hooks::D3D11::Functions GetRequestedFunctions();

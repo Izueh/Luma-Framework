@@ -5,12 +5,14 @@
 #include <initializer_list>
 #include <unordered_map>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <wrl/client.h>
 
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/Lifetime.hpp"
+#include "Resources/Bindings.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Shaders/Database.hpp"
 #include "Shaders/Files.hpp"
@@ -30,6 +32,7 @@ struct Declarations
    GameDeviceDataType device_data;
    bool options_set = false;
    std::unordered_map<uint32_t, D3D11::DrawCallback> draw_callbacks;
+   std::unordered_map<uint32_t, D3D12::DrawCallback> d3d12_draw_callbacks;
 };
 
 Declarations declarations;
@@ -114,6 +117,16 @@ void D3D11::OnShaderDraw(std::span<const uint32_t> hashes, DrawCallback callback
    }
 }
 
+void D3D12::OnShaderDraw(std::span<const uint32_t> hashes, DrawCallback callback)
+{
+   for (const uint32_t hash : hashes)
+   {
+      const auto [it, added] = declarations.d3d12_draw_callbacks.insert_or_assign(hash, callback);
+      if (!added)
+         Utils::Log::Warning("Game: a second D3D12 draw callback for 0x{:08X} replaces the first", hash);
+   }
+}
+
 void Shaders::SetDebugName(std::string_view name, std::span<const uint32_t> hashes)
 {
    Luma::Shaders::Database::Name(name, hashes);
@@ -139,6 +152,7 @@ void SetOptions(const Options& options)
    }
    declarations.options_set = true;
    Resources::LumaCBuffers::SetOptions(options.cbuffers);
+   Resources::Bindings::SetOptions(options.bindings);
    Draw::SetOptions(options.draw);
    declarations.device_data = options.device_data;
 }
@@ -153,8 +167,20 @@ void SetPanels(const Panels& panels)
    declarations.panels = panels;
 }
 
-GameDeviceData* GetGameDeviceData(IUnknown* device)
+namespace {
+IUnknown* GetUnknown(Device device)
 {
+   if (ID3D11Device* const* d3d11 = std::get_if<ID3D11Device*>(&device))
+      return *d3d11;
+   if (ID3D12Device* const* d3d12 = std::get_if<ID3D12Device*>(&device))
+      return *d3d12;
+   return nullptr;
+}
+} // namespace
+
+GameDeviceData* GetGameDeviceData(Device game_device)
+{
+   IUnknown* device = GetUnknown(game_device);
    if (!device)
       return nullptr;
    device = Hooks::DeviceProxy::Unwrap(device);
@@ -167,14 +193,14 @@ GameDeviceData* GetGameDeviceData(IUnknown* device)
    return nullptr;
 }
 
-Luma::Frame::Resolutions Frame::Get(IUnknown* device)
+Luma::Frame::Resolutions Frame::Get(Device device)
 {
-   return Luma::Frame::Get(device);
+   return Luma::Frame::Get(GetUnknown(device));
 }
 
-void Frame::SetRenderResolution(IUnknown* device, Math::uint2 size)
+void Frame::SetRenderResolution(Device device, Math::uint2 size)
 {
-   Luma::Frame::SetRenderResolution(device, size);
+   Luma::Frame::SetRenderResolution(GetUnknown(device), size);
 }
 
 namespace Registry {
@@ -213,6 +239,31 @@ bool HasDrawCallbacks()
 {
    const D3D11::Events& events = declarations.d3d11_events;
    return !declarations.draw_callbacks.empty() || events.on_draw_or_dispatch || events.on_variant_draw;
+}
+
+D3D12::DrawCallback FindD3D12DrawCallback(uint32_t hash)
+{
+   const auto it = declarations.d3d12_draw_callbacks.find(hash);
+   return it != declarations.d3d12_draw_callbacks.end() ? it->second : nullptr;
+}
+
+bool HasD3D12DrawCallbacks()
+{
+   const D3D12::Events& events = declarations.d3d12_events;
+   return !declarations.d3d12_draw_callbacks.empty() || events.on_draw_or_dispatch || events.on_variant_draw;
+}
+
+Hooks::D3D12::Functions GetRequestedD3D12Functions()
+{
+   using enum Hooks::D3D12::Function;
+   Hooks::D3D12::Functions functions;
+   if (HasD3D12DrawCallbacks())
+   {
+      // The calls, and the binds that tell which pipeline they run
+      for (const Hooks::D3D12::Function function : {Reset, ClearState, SetPipelineState, Draw, Dispatch, ExecuteIndirect, ExecuteBundle})
+         functions.set(size_t(function));
+   }
+   return functions;
 }
 
 Hooks::D3D11::Functions GetCallbackFunctions()
@@ -293,6 +344,7 @@ void Reset()
 {
    declarations = {};
    Resources::LumaCBuffers::SetOptions({});
+   Resources::Bindings::SetOptions({});
    Draw::SetOptions({});
 }
 

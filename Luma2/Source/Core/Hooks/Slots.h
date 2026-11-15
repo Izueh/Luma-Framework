@@ -105,6 +105,39 @@
    SLOT(ID3D11DeviceContext1, ClearView)                                \
    SLOT(ID3D12CommandQueue, ExecuteCommandLists)                        \
    SLOT(ID3D12DeviceChild, GetDevice)                                   \
+   SLOT(ID3D12Device, CreateGraphicsPipelineState)                      \
+   SLOT(ID3D12Device, CreateComputePipelineState)                       \
+   SLOT(ID3D12Device, CreateRootSignature)                              \
+   SLOT(ID3D12Device, CreateDescriptorHeap)                             \
+   SLOT(ID3D12Device, CreateConstantBufferView)                         \
+   SLOT(ID3D12Device, CreateShaderResourceView)                         \
+   SLOT(ID3D12Device, CreateUnorderedAccessView)                        \
+   SLOT(ID3D12Device, CreateRenderTargetView)                           \
+   SLOT(ID3D12Device, CreateDepthStencilView)                           \
+   SLOT(ID3D12Device, CreateSampler)                                    \
+   SLOT(ID3D12Device, CopyDescriptors)                                  \
+   SLOT(ID3D12Device, CopyDescriptorsSimple)                               SLOT(ID3D12Device, CreateCommittedResource)                             SLOT(ID3D12Device, CreatePlacedResource)                                SLOT(ID3D12Device, CreateReservedResource)                              SLOT(ID3D12Device4, CreateCommittedResource1)                           SLOT(ID3D12Device4, CreateReservedResource1)                            SLOT(ID3D12Device8, CreateCommittedResource2)                           SLOT(ID3D12Device8, CreatePlacedResource1)                              SLOT(ID3D12Device10, CreateCommittedResource3)                          SLOT(ID3D12Device10, CreatePlacedResource2)                             SLOT(ID3D12Device10, CreateReservedResource2)                        \
+   SLOT(ID3D12Device1, CreatePipelineLibrary)                           \
+   SLOT(ID3D12Device2, CreatePipelineState)                             \
+   SLOT(ID3D12Device5, CreateStateObject)                               \
+   SLOT(ID3D12Device7, AddToStateObject)                                \
+   SLOT(ID3D12Device14, CreateRootSignatureFromSubobjectInLibrary)      \
+   SLOT(ID3D12PipelineLibrary, LoadGraphicsPipeline)                    \
+   SLOT(ID3D12PipelineLibrary, LoadComputePipeline)                     \
+   SLOT(ID3D12PipelineLibrary1, LoadPipeline)                           \
+   SLOT(ID3D12GraphicsCommandList, Reset)                               \
+   SLOT(ID3D12GraphicsCommandList, ClearState)                          \
+   SLOT(ID3D12GraphicsCommandList4, SetPipelineState1)                  \
+   SLOT(ID3D12GraphicsCommandList6, DispatchMesh)                       \
+   SLOT(ID3D12GraphicsCommandList, SetPipelineState)                    \
+   SLOT(ID3D12GraphicsCommandList, SetGraphicsRootSignature)            \
+   SLOT(ID3D12GraphicsCommandList, SetComputeRootSignature)             \
+   SLOT(ID3D12GraphicsCommandList, OMSetRenderTargets)                     SLOT(ID3D12GraphicsCommandList, SetDescriptorHeaps)                     SLOT(ID3D12GraphicsCommandList, SetGraphicsRootDescriptorTable)         SLOT(ID3D12GraphicsCommandList, SetComputeRootDescriptorTable)          SLOT(ID3D12GraphicsCommandList, SetGraphicsRoot32BitConstant)           SLOT(ID3D12GraphicsCommandList, SetComputeRoot32BitConstant)            SLOT(ID3D12GraphicsCommandList, SetGraphicsRoot32BitConstants)          SLOT(ID3D12GraphicsCommandList, SetComputeRoot32BitConstants)           SLOT(ID3D12GraphicsCommandList, SetGraphicsRootConstantBufferView)      SLOT(ID3D12GraphicsCommandList, SetComputeRootConstantBufferView)       SLOT(ID3D12GraphicsCommandList, SetGraphicsRootShaderResourceView)      SLOT(ID3D12GraphicsCommandList, SetComputeRootShaderResourceView)       SLOT(ID3D12GraphicsCommandList, SetGraphicsRootUnorderedAccessView)     SLOT(ID3D12GraphicsCommandList, SetComputeRootUnorderedAccessView)      SLOT(ID3D12GraphicsCommandList, RSSetViewports)                         SLOT(ID3D12GraphicsCommandList, RSSetScissorRects)                      SLOT(ID3D12GraphicsCommandList, IASetPrimitiveTopology)                 SLOT(ID3D12GraphicsCommandList, OMSetBlendFactor)                       SLOT(ID3D12GraphicsCommandList, OMSetStencilRef)                     \
+   SLOT(ID3D12GraphicsCommandList, DrawInstanced)                       \
+   SLOT(ID3D12GraphicsCommandList, DrawIndexedInstanced)                \
+   SLOT(ID3D12GraphicsCommandList, Dispatch)                            \
+   SLOT(ID3D12GraphicsCommandList, ExecuteIndirect)                     \
+   SLOT(ID3D12GraphicsCommandList, ExecuteBundle)                       \
    SLOT(IDXGIFactory, CreateSwapChain)                                  \
    SLOT(IDXGIFactory2, CreateSwapChainForHwnd)                          \
    SLOT(IDXGISwapChain, GetDevice)                                      \
@@ -173,6 +206,8 @@
    INTERFACE(ID3D12GraphicsCommandList9)  \
    INTERFACE(ID3D12GraphicsCommandList10) \
    INTERFACE(ID3D12DescriptorHeap)        \
+   INTERFACE(ID3D12PipelineLibrary)       \
+   INTERFACE(ID3D12PipelineLibrary1)      \
    INTERFACE(ID3D12Fence)                 \
    INTERFACE(ID3D12Fence1)
 

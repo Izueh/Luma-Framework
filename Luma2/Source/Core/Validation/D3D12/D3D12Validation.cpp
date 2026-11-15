@@ -8,6 +8,8 @@
 #include <wrl/client.h>
 
 #include "Hooks/Scope.hpp"
+#include "Settings/Keys.hpp"
+#include "Settings/Registry.hpp"
 #include "Utils/Log.hpp"
 #include "System/Modules.hpp"
 #include "Validation/Validation.hpp"
@@ -34,7 +36,17 @@ std::atomic<bool> device_created = false;
 
 void EnableDebugLayer()
 {
-   if (device_created.exchange(true) || !DEBUG_LAYER)
+   if (device_created.exchange(true))
+      return;
+#if DEVELOPMENT
+   const bool gpu_validation = GPU_VALIDATION || Settings::Get(Settings::Core::GPU_VALIDATION);
+#else
+   const bool gpu_validation = GPU_VALIDATION;
+#endif
+   // GPU-based validation is part of the debug layer
+   const bool debug_layer = DEBUG_LAYER || gpu_validation;
+   SetD3D12Layers(false, false);
+   if (!debug_layer)
       return;
    // Inside the game's D3D12CreateDevice, so d3d12.dll is loaded
    const auto get_debug_interface =
@@ -46,14 +58,19 @@ void EnableDebugLayer()
       return;
    }
    debug->EnableDebugLayer();
-   if (GPU_VALIDATION)
+   bool gpu_validated = false;
+   if (gpu_validation)
    {
       if (ComPtr<ID3D12Debug1> debug1; SUCCEEDED(debug.As(&debug1)))
+      {
          debug1->SetEnableGPUBasedValidation(TRUE);
+         gpu_validated = true;
+      }
       else
          Utils::Log::Warning("D3D12: GPU-based validation isn't available");
    }
-   Utils::Log::Info("D3D12: debug layer turned on{}", GPU_VALIDATION ? ", with GPU-based validation" : "");
+   SetD3D12Layers(true, gpu_validated);
+   Utils::Log::Info("D3D12: debug layer turned on{}", gpu_validated ? ", with GPU-based validation" : "");
 }
 
 void WatchDeviceMessages(ID3D12Device* device)

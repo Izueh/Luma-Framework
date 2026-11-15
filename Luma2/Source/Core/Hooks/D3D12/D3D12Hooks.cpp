@@ -83,6 +83,10 @@ const std::array COMMAND_LIST_VERSIONS = {
 const std::array DESCRIPTOR_HEAP_VERSIONS = {
    Vtables::GetVersion<ID3D12DescriptorHeap>("ID3D12DescriptorHeap", LumaMethodCount_ID3D12DescriptorHeap),
 };
+const std::array PIPELINE_LIBRARY_VERSIONS = {
+   Vtables::GetVersion<ID3D12PipelineLibrary>("ID3D12PipelineLibrary", LumaMethodCount_ID3D12PipelineLibrary),
+   Vtables::GetVersion<ID3D12PipelineLibrary1>("ID3D12PipelineLibrary1", LumaMethodCount_ID3D12PipelineLibrary1),
+};
 const std::array FENCE_VERSIONS = {
    Vtables::GetVersion<ID3D12Fence>("ID3D12Fence", LumaMethodCount_ID3D12Fence),
    Vtables::GetVersion<ID3D12Fence1>("ID3D12Fence1", LumaMethodCount_ID3D12Fence1),
@@ -125,6 +129,13 @@ void ResolveVtables(ID3D12Device* device)
 
    ComPtr<ID3D12Fence> fence;
    SetVtable(Vtables::Interface::D3D12Fence, fence, FENCE_VERSIONS, device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+
+   // An empty library: what the game's pipeline library hooks need
+   if (ComPtr<ID3D12Device1> device1; SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device1))))
+   {
+      ComPtr<ID3D12PipelineLibrary> library;
+      SetVtable(Vtables::Interface::D3D12PipelineLibrary, library, PIPELINE_LIBRARY_VERSIONS, device1->CreatePipelineLibrary(nullptr, 0, IID_PPV_ARGS(&library)));
+   }
 
    InstallPending();
    LogSummary();
@@ -200,7 +211,7 @@ constexpr std::array<void*, sizeof...(Indices)> GetDeviceDetours(std::index_sequ
 }
 } // namespace
 
-void InstallD3D12()
+void InstallD3D12(const D3D12::Functions& functions)
 {
    // Devices from ID3D12DeviceFactory bypass this export, and aren't seen yet
    const std::array hooks = {
@@ -223,6 +234,9 @@ void InstallD3D12()
          reinterpret_cast<void*>(&ExecuteCommandLists), reinterpret_cast<void**>(&original_execute_command_lists)},
    };
    Declare(queue_hooks);
+
+   InstallD3D12Device(functions);
+   InstallD3D12CommandList(functions);
 }
 } // namespace Hooks
 } // namespace Luma

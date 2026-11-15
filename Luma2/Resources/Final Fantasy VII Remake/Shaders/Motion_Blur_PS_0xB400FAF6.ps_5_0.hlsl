@@ -39,6 +39,8 @@ static float4 SV_Target;
 
 struct SPIRV_Cross_Input
 {
+    // Unused, but keeps SV_Position in register 1 as the game's VS (0xB3E3D245) writes it; D3D12 rejects the pipeline otherwise.
+    float4 texcoord : TEXCOORD0;
     float4 gl_FragCoord : SV_Position;
 };
 
