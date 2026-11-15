@@ -17,9 +17,9 @@ inline ResolveVariant GetResolveVariant(const ShaderHashesList<OneShaderPerPipel
 {
    constexpr uint32_t kMainHash = 0x060ACA92;
    constexpr uint32_t kDepthOfFieldHash = 0x1ABE3340;
-   if (hashes.Contains(kMainHash, reshade::api::shader_stage::compute))
+   if (hashes.Contains(kMainHash, ShaderStages::Compute))
       return ResolveVariant::Main;
-   if (hashes.Contains(kDepthOfFieldHash, reshade::api::shader_stage::compute))
+   if (hashes.Contains(kDepthOfFieldHash, ShaderStages::Compute))
       return ResolveVariant::DepthOfField;
    return ResolveVariant::None;
 }

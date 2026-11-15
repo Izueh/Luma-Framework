@@ -62,7 +62,7 @@ inline void Diagnostics::OnDeferredResolve()
 {
    const uint64_t count = ++deferred_resolves;
    if (IsLogCount(count))
-      LogDiagnostic(reshade::log::level::warning, "the TAA resolve ran on a deferred context, so the game's TAA ran ({} times)", count);
+      LogDiagnostic(LogLevel::Warning, "the TAA resolve ran on a deferred context, so the game's TAA ran ({} times)", count);
 }
 
 // Counts the result, logs the first draw and the first unfit textures of a run, and tracks runs of fallbacks
@@ -173,13 +173,13 @@ inline std::string Diagnostics::DescribeTexture(ID3D11Resource* texture)
 inline void Diagnostics::LogFirstDraw(SRResult result, SR::Type type, const Camera& camera, RenderSize render_size)
 {
    const Jitter jitter = camera.GetJitter(render_size);
-   LogDiagnostic(reshade::log::level::info, "first SR draw ({}): ok {}, {}x{}, jitter ({:+.3f}, {:+.3f}) px, near plane {:.3f}, vertical FOV {:.3f} rad", SR::GetTypeName(type), result == SRResult::Drawn, render_size.width, render_size.height, jitter.x, jitter.y, camera.GetNearPlane(), camera.GetVerticalFov());
+   LogDiagnostic(LogLevel::Info, "first SR draw ({}): ok {}, {}x{}, jitter ({:+.3f}, {:+.3f}) px, near plane {:.3f}, vertical FOV {:.3f} rad", SR::GetTypeName(type), result == SRResult::Drawn, render_size.width, render_size.height, jitter.x, jitter.y, camera.GetNearPlane(), camera.GetVerticalFov());
 }
 
 // SR needs the color output (u2) at the render size, the history (u3) like it, and the output apart from the inputs
 inline void Diagnostics::LogUnfitTextures(const ResolveResources& resources, RenderSize render_size)
 {
-   LogDiagnostic(reshade::log::level::warning, "the resolve's textures don't fit SR at {}x{}: output (u2) {}, history (u3) {}, color {}, depth {}, MVs {}", render_size.width, render_size.height, DescribeTexture(resources.output.get()), DescribeTexture(resources.history.get()), DescribeTexture(resources.color.get()), DescribeTexture(resources.depth.get()), DescribeTexture(resources.mvs.get()));
+   LogDiagnostic(LogLevel::Warning, "the resolve's textures don't fit SR at {}x{}: output (u2) {}, history (u3) {}, color {}, depth {}, MVs {}", render_size.width, render_size.height, DescribeTexture(resources.output.get()), DescribeTexture(resources.history.get()), DescribeTexture(resources.color.get()), DescribeTexture(resources.depth.get()), DescribeTexture(resources.mvs.get()));
 }
 
 // A run of resolves where the game's TAA ran instead of SR is logged when it ends (a short one is a visible flicker), and while it lasts
@@ -208,7 +208,7 @@ inline void Diagnostics::TrackFallbacks(SRResult result, RenderSize render_size)
 // "state" is "in a row" for a run that ended, "so far" for one still going
 inline void Diagnostics::LogStreak(const char* state) const
 {
-   LogDiagnostic(reshade::log::level::warning, "{} for {} resolves {} at {}x{}", GetName(streak_result), streak_length, state, streak_render_size.width, streak_render_size.height);
+   LogDiagnostic(LogLevel::Warning, "{} for {} resolves {} at {}x{}", GetName(streak_result), streak_length, state, streak_render_size.width, streak_render_size.height);
 }
 
 // The last frame's main camera, as SR got it

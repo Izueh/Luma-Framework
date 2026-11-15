@@ -34,8 +34,8 @@ inline void DrawAbout()
                "\n\nBased on:"
                "\nMass Effect: Andromeda Luma mod (DristoforColumb)"
                "\n\nThird Party:"
-               "\nReShade"
                "\nImGui"
+               "\nSafetyHook"
                "\nAMD FidelityFX (FSR 3, FSR 4)"
                "\nIntel XeSS"
                "\nNVIDIA NGX (DLSS)",
