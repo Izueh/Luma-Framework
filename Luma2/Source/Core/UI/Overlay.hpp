@@ -22,6 +22,8 @@ void DetachFromSwapchain(const void* swapchain);
 void DetachFromDevice(const void* device);
 // From the window's thread
 void OnWindowMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+// The mouse's clicks and wheel from raw input ("usButtonFlags" and "usButtonData"), which the backend ignores
+void OnRawMouse(USHORT button_flags, USHORT button_data);
 
 bool IsOpen();
 void SetOpen(bool open);

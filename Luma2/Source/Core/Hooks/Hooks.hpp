@@ -38,6 +38,13 @@ struct Hook
    bool interchangeable = false;
 };
 
+// A hook on an export of a System32 dll. `original` receives the function that calls the original.
+template <typename Function, typename Detour>
+Hook ExportHook(const wchar_t* module, const char* name, Detour detour, Function& original)
+{
+   return Hook{ExportTarget{module, name}, reinterpret_cast<void*>(detour), reinterpret_cast<void**>(&original)};
+}
+
 struct Counts
 {
    uint32_t declared = 0;

@@ -2,8 +2,10 @@
 
 #include <array>
 #include <atomic>
+#include <iterator>
 #include <mutex>
 #include <optional>
+#include <utility>
 #include <variant>
 
 #include <imgui.h>
@@ -271,6 +273,46 @@ void OnWindowMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
    std::scoped_lock lock(mutex);
    if (attached)
       ImGui_ImplWin32_WndProcHandler(hwnd, message, wparam, lparam);
+}
+
+void OnRawMouse(USHORT button_flags, USHORT button_data)
+{
+   Hooks::Scope::Guard scope;
+   std::scoped_lock lock(mutex);
+   if (!attached || button_flags == 0)
+      return;
+
+   struct ButtonFlags
+   {
+      USHORT down;
+      USHORT up;
+   };
+
+   // In ImGui's order: left, right, middle, X1, X2
+   ButtonFlags buttons[] = {
+      {RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP},
+      {RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_UP},
+      {RI_MOUSE_MIDDLE_BUTTON_DOWN, RI_MOUSE_MIDDLE_BUTTON_UP},
+      {RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_4_UP},
+      {RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_BUTTON_5_UP},
+   };
+   // Raw input has the physical buttons: the legacy messages (the backend's) swap them for left-handed users
+   if (GetSystemMetrics(SM_SWAPBUTTON))
+      std::swap(buttons[0], buttons[1]);
+   ImGuiIO& io = ImGui::GetIO();
+   for (int i = 0; i < int(std::size(buttons)); i++)
+   {
+      if (button_flags & buttons[i].down)
+         io.AddMouseButtonEvent(i, true);
+      if (button_flags & buttons[i].up)
+         io.AddMouseButtonEvent(i, false);
+   }
+   // As the backend does for "WM_MOUSEWHEEL" and "WM_MOUSEHWHEEL"
+   const float wheel = float(SHORT(button_data)) / float(WHEEL_DELTA);
+   if (button_flags & RI_MOUSE_WHEEL)
+      io.AddMouseWheelEvent(0.f, wheel);
+   if (button_flags & RI_MOUSE_HWHEEL)
+      io.AddMouseWheelEvent(-wheel, 0.f);
 }
 
 bool IsOpen()
