@@ -19,6 +19,8 @@ void OnSwapchainDestroyed(const IDXGISwapChain* swapchain);
 void OnDeviceDestroyed(const void* device);
 // From the window's thread
 void OnWindowMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
+// The "usButtonFlags" and "usButtonData" of a raw input mouse message
+void OnRawMouse(USHORT button_flags, USHORT button_data);
 
 bool IsOpen();
 void SetOpen(bool open);

@@ -1,7 +1,6 @@
 #include "overlay/overlay.hpp"
 
 #include <Windows.h>
-#include <hidusage.h>
 
 #include <algorithm>
 #include <atomic>
@@ -162,71 +161,6 @@ void BuildFrame(const DXGI_SWAP_CHAIN_DESC& desc, ID3D11Device* device)
    }
    ImGui::Render();
 }
-
-// The game registered the mouse for raw input with "RIDEV_NOLEGACY" (e.g. Need for Speed 2016): its window gets no mouse
-// button or wheel messages, which is where ImGui's backend reads them
-bool IsMouseRawOnly()
-{
-   RAWINPUTDEVICE devices[16] = {};
-   UINT capacity = UINT(std::size(devices));
-   const UINT count = GetRegisteredRawInputDevices(devices, &capacity, sizeof(RAWINPUTDEVICE));
-   if (count == UINT(-1))
-      return false;
-   for (UINT i = 0; i < count; i++)
-   {
-      if (devices[i].usUsagePage == HID_USAGE_PAGE_GENERIC && devices[i].usUsage == HID_USAGE_GENERIC_MOUSE)
-         return (devices[i].dwFlags & RIDEV_NOLEGACY) == RIDEV_NOLEGACY;
-   }
-   return false;
-}
-
-// With the lock held. Clicks and wheel from raw input, as in ReShade's "input::handle_window_message()"
-void OnRawInput(WPARAM wparam, LPARAM lparam)
-{
-   // Input sink messages come while the window isn't in the foreground
-   if (GET_RAWINPUT_CODE_WPARAM(wparam) != RIM_INPUT)
-      return;
-   RAWINPUT input = {};
-   UINT size = sizeof(input);
-   if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT, &input, &size, sizeof(input.header)) == UINT(-1))
-      return;
-   // Otherwise the backend also gets them from the legacy messages, and each click would count twice
-   if (input.header.dwType != RIM_TYPEMOUSE || input.data.mouse.usButtonFlags == 0 || !IsMouseRawOnly())
-      return;
-
-   struct ButtonFlags
-   {
-      USHORT down;
-      USHORT up;
-   };
-
-   // In ImGui's order: left, right, middle, X1, X2
-   ButtonFlags buttons[] = {
-      {RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP},
-      {RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_UP},
-      {RI_MOUSE_MIDDLE_BUTTON_DOWN, RI_MOUSE_MIDDLE_BUTTON_UP},
-      {RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_4_UP},
-      {RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_BUTTON_5_UP},
-   };
-   // Raw input has the physical buttons: legacy messages (the backend's) swap them for left-handed users
-   if (GetSystemMetrics(SM_SWAPBUTTON))
-      std::swap(buttons[0], buttons[1]);
-   ImGuiIO& io = ImGui::GetIO();
-   const USHORT flags = input.data.mouse.usButtonFlags;
-   for (int i = 0; i < int(std::size(buttons)); i++)
-   {
-      if (flags & buttons[i].down)
-         io.AddMouseButtonEvent(i, true);
-      if (flags & buttons[i].up)
-         io.AddMouseButtonEvent(i, false);
-   }
-   // As the backend does for "WM_MOUSEWHEEL" and "WM_MOUSEHWHEEL"
-   const float wheel = float(SHORT(input.data.mouse.usButtonData)) / float(WHEEL_DELTA);
-   if (flags & RI_MOUSE_WHEEL)
-      io.AddMouseWheelEvent(0.f, wheel);
-   if (flags & RI_MOUSE_HWHEEL)
-      io.AddMouseWheelEvent(-wheel, 0.f);
-}
 } // namespace
 
 void SetDrawFunctions(DrawFunction main, DrawFunction always)
@@ -277,12 +211,49 @@ void OnWindowMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
    // ImGui's backend reads the key state (modifiers): Luma's own calls pass through the input hooks
    Hooks::Scope::Guard scope;
    std::scoped_lock lock(mutex);
-   if (!attached)
+   if (attached)
+      ImGui_ImplWin32_WndProcHandler(hwnd, message, wparam, lparam);
+}
+
+// The mouse's clicks and wheel from raw input, for games that registered it without legacy messages: the backend ignores "WM_INPUT"
+void OnRawMouse(USHORT button_flags, USHORT button_data)
+{
+   Hooks::Scope::Guard scope;
+   std::scoped_lock lock(mutex);
+   if (!attached || button_flags == 0)
       return;
-   ImGui_ImplWin32_WndProcHandler(hwnd, message, wparam, lparam);
-   // The backend ignores "WM_INPUT"
-   if (message == WM_INPUT)
-      OnRawInput(wparam, lparam);
+
+   struct ButtonFlags
+   {
+      USHORT down;
+      USHORT up;
+   };
+
+   // In ImGui's order: left, right, middle, X1, X2
+   ButtonFlags buttons[] = {
+      {RI_MOUSE_LEFT_BUTTON_DOWN, RI_MOUSE_LEFT_BUTTON_UP},
+      {RI_MOUSE_RIGHT_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_UP},
+      {RI_MOUSE_MIDDLE_BUTTON_DOWN, RI_MOUSE_MIDDLE_BUTTON_UP},
+      {RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_4_UP},
+      {RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_BUTTON_5_UP},
+   };
+   // Raw input has the physical buttons: legacy messages (the backend's) swap them for left-handed users
+   if (GetSystemMetrics(SM_SWAPBUTTON))
+      std::swap(buttons[0], buttons[1]);
+   ImGuiIO& io = ImGui::GetIO();
+   for (int i = 0; i < int(std::size(buttons)); i++)
+   {
+      if (button_flags & buttons[i].down)
+         io.AddMouseButtonEvent(i, true);
+      if (button_flags & buttons[i].up)
+         io.AddMouseButtonEvent(i, false);
+   }
+   // As the backend does for "WM_MOUSEWHEEL" and "WM_MOUSEHWHEEL"
+   const float wheel = float(SHORT(button_data)) / float(WHEEL_DELTA);
+   if (button_flags & RI_MOUSE_WHEEL)
+      io.AddMouseWheelEvent(0.f, wheel);
+   if (button_flags & RI_MOUSE_HWHEEL)
+      io.AddMouseWheelEvent(-wheel, 0.f);
 }
 
 bool IsOpen()
