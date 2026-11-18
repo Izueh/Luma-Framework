@@ -353,6 +353,7 @@ struct TraceView
    std::optional<uint32_t> write_mask;
    std::optional<std::string> blend;
    std::optional<uint32_t> space; // D3D12, a register space other than 0
+   std::optional<std::string> mirror; // Luma's mirror swapped in: its format and size
 };
 
 struct TraceDepthStencil
@@ -1448,6 +1449,7 @@ Replies::TraceView ToReply(const Capture::View& view)
       reply.debug_name = resource.debug_name;
    if (view.space != 0)
       reply.space = view.space;
+   reply.mirror = resource.mirror;
    return reply;
 }
 

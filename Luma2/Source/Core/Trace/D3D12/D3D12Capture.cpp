@@ -15,8 +15,10 @@
 #include <Windows.h>
 #include <wrl/client.h>
 
+#include "Resources/Bindings.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
 #include "Resources/Mirrors.hpp"
+#include "Resources/ResourceDatabase.hpp"
 #include "Utils/Format.hpp"
 #include "Hooks/Lifetime.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
@@ -546,6 +548,28 @@ void AddOutputState(Event& event, ID3D12GraphicsCommandList* list, ListState& st
 }
 
 // A game call: its shaders from the pipeline bound, its main stage's views
+// What Luma binds for a variant at the call, after the trace recorded the game's state: its cbuffers at its root parameters and its
+// textures in its table, in its space, described from the variant's requests
+void AddLumaBindings(Event& event, const Shaders::Variants::D3D12::Built* built)
+{
+   if (!built)
+      return;
+   const uint32_t space = Resources::Bindings::GetOptions().d3d12_space;
+   for (size_t stage = 0; stage < built->compiled.size(); stage++)
+   {
+      if (!built->compiled[stage])
+         continue;
+      for (const Shaders::Request& request : built->compiled[stage]->requests)
+      {
+         const Resources::Database::Entry& entry = Resources::Database::Get(request.entry);
+         if (entry.kind == Resources::Database::Kind::ConstantBuffer)
+            event.constant_buffers.push_back({.stage = ShaderStage(stage), .slot = request.slot, .id = entry.name, .size = entry.size, .space = space});
+         else if (entry.kind == Resources::Database::Kind::Texture)
+            event.shader_resources.push_back({.slot = request.slot, .resource = {.id = entry.name, .type = "Luma texture", .debug_name = entry.name}, .space = space});
+      }
+   }
+}
+
 Recording BeginGameCall(ID3D12GraphicsCommandList* list, EventType type, Shaders::StageSet stages)
 {
    Recording recording = {.event = {.type = type}, .list = list};
@@ -580,6 +604,7 @@ Recording BeginGameCall(ID3D12GraphicsCommandList* list, EventType type, Shaders
    AddViews(event, *state, compute, main_stage, main_shader);
    if (!compute)
       AddOutputState(event, list, *state, bound.tracked);
+   AddLumaBindings(event, bound.built);
    return recording;
 }
 

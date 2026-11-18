@@ -314,7 +314,7 @@ FormatVariant* GetFormatVariant(Core& core, const std::shared_ptr<const Built>& 
    if (!pipeline)
    {
       if (!std::exchange(core.format_logged, true))
-         Utils::Log::Info("D3D12: a pipeline draws into mirrors: its variant with their formats is made at the draw");
+         Utils::Log::Info("D3D12: the pipeline of {} draws into mirrors: its variant with their formats is made at the draw", DescribeStages(core, Key{}));
       pipeline = Create(core.device.Get(), core.desc->kind, native.Get(core.desc->kind));
       if (pipeline)
          PipelineLibrary::D3D12::Store(core.device.Get(), name, pipeline.Get());
