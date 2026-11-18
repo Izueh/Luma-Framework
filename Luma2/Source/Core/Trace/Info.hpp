@@ -34,6 +34,18 @@ struct CountsInfo
    uint32_t hooks_failed = 0;
 };
 
+struct HooksInfo
+{
+   uint32_t intact = 0;
+   uint32_t chained = 0;
+   uint32_t restored = 0;
+   uint32_t detoured_before = 0;
+   uint32_t neutralised = 0; // Left in another hooker's chain by an unload
+   std::vector<std::string> overlays;
+   std::string present_order; // "not hooked", "alone", "luma outermost", "overlay outermost"
+   std::string present_overlay;
+};
+
 struct ShadersInfo
 {
    bool loaded = true; // False after "Unload Shaders"
@@ -136,6 +148,7 @@ struct Status
    std::vector<SwapchainInfo> swapchains;
    bool overlay_open = false;
    CountsInfo counts;
+   HooksInfo hooks;
    ShadersInfo shaders;
    PatchesInfo patches;
    ResourcesInfo resources;

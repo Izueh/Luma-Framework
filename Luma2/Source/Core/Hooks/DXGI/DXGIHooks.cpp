@@ -1,9 +1,15 @@
 #include "Hooks/Hooks.hpp"
 
+#include <algorithm>
 #include <array>
+#include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <optional>
+#include <string>
 #include <vector>
+
+#include <intrin.h>
 
 #include <d3d11.h>
 #include <dxgi1_6.h>
@@ -11,10 +17,12 @@
 
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/DeviceProxy.hpp"
+#include "Hooks/ThirdPartyModules.hpp"
 #include "Hooks/Lifetime.hpp"
 #include "Hooks/Scope.hpp"
 #include "Hooks/Slots.h"
 #include "Hooks/DepthGuard.hpp"
+#include "Utils/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -351,12 +359,35 @@ bool IsGamePresent(const DepthGuard& guard, UINT flags)
    return guard.IsOutermost() && !(flags & DXGI_PRESENT_TEST) && !Scope::IsActive();
 }
 
+// The overlay whose code called Luma's Present last: its hook is above Luma's (or it presents itself). Never held with another lock.
+std::mutex present_caller_mutex;
+std::string present_caller;
+// Its dll's base, so a frame that finds the same overlay again takes no lock
+std::atomic<uintptr_t> present_caller_base = 0;
+
+// One relaxed load while no overlay is loaded
+void NoteCaller(const void* return_address)
+{
+   const uintptr_t base = ThirdPartyModules::FindBase(return_address);
+   if (!base || base == present_caller_base.load(std::memory_order_relaxed))
+      return;
+   std::string overlay = ThirdPartyModules::Find(return_address);
+   if (overlay.empty())
+      return;
+   std::scoped_lock lock(present_caller_mutex);
+   if (present_caller != overlay)
+      Utils::Log::Info("DXGI: {} calls Present before Luma's handling, its drawing goes into the game's image", overlay);
+   present_caller = std::move(overlay);
+   present_caller_base = base;
+}
+
 HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags)
 {
    DepthGuard guard(present_depth);
    const bool is_game = IsGamePresent(guard, flags);
    if (is_game)
    {
+      NoteCaller(_ReturnAddress());
       Scope::Guard scope;
       ObserveImmediateContext(swapchain);
       Handlers::PrePresent(swapchain);
@@ -376,6 +407,7 @@ HRESULT STDMETHODCALLTYPE Present1(IDXGISwapChain1* swapchain, UINT sync_interva
    const bool is_game = IsGamePresent(guard, flags);
    if (is_game)
    {
+      NoteCaller(_ReturnAddress());
       Scope::Guard scope;
       ObserveImmediateContext(swapchain);
       Handlers::PrePresent(swapchain);
@@ -497,6 +529,36 @@ void InstallDXGI(const D3D11::Functions& functions)
          reinterpret_cast<void*>(&Present1), reinterpret_cast<void**>(&original_present1)});
    }
    Declare(hooks);
+}
+
+PresentChain GetPresentChain()
+{
+   const std::array states = {GetChainState(reinterpret_cast<const void*>(&Present)), GetChainState(reinterpret_cast<const void*>(&Present1))};
+   if (!states[0] && !states[1])
+      return {};
+   const std::vector<std::string> loaded = ThirdPartyModules::GetLoaded();
+   {
+      std::scoped_lock lock(present_caller_mutex);
+      // The overlay may have unloaded since
+      if (!present_caller.empty() && !std::ranges::contains(loaded, present_caller))
+      {
+         present_caller.clear();
+         present_caller_base = 0;
+      }
+      if (!present_caller.empty())
+         return {PresentOrder::OverlayOutermost, present_caller};
+   }
+   for (const std::optional<ChainState>& state : states)
+   {
+      if (state && state->chain == Chain::Chained)
+         return {PresentOrder::OverlayOutermost, state->chained_by};
+   }
+   for (const std::optional<ChainState>& state : states)
+   {
+      if (state && !state->detoured_by.empty())
+         return {PresentOrder::LumaOutermost, state->detoured_by};
+   }
+   return {PresentOrder::Alone, {}};
 }
 
 void OnSwapchainCreated(IDXGISwapChain* swapchain, IUnknown* creator, const DXGI_SWAP_CHAIN_DESC* requested)

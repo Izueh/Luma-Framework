@@ -23,6 +23,8 @@ IUnknown* Unwrap(IUnknown* object);
 bool IsProxy(const void* object);
 
 uint32_t GetCount();
+// Frees the thunks on unload. A live proxy pins the dll: its methods are Luma's code, called until the game releases the device
+void FreeThunks();
 } // namespace DeviceProxy
 } // namespace Hooks
 } // namespace Luma

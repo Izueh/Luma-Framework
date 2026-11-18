@@ -6,7 +6,7 @@ namespace Luma {
 namespace Loader {
 // Runs `initialize` once d3d11.dll is loaded (now, if it already is), under the loader lock
 void Attach(HMODULE module, void (*initialize)());
-// Not on process exit
+// Not on process exit. Bypasses and unhooks without waiting (Hooks::UninstallAll).
 void Detach();
 } // namespace Loader
 } // namespace Luma

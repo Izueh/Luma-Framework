@@ -6,6 +6,7 @@
 #include <winternl.h>
 
 #include "Startup.hpp"
+#include "Hooks/ThirdPartyModules.hpp"
 #include "Hooks/Hooks.hpp"
 #include "Utils/Log.hpp"
 #include "System/Modules.hpp"
@@ -26,6 +27,7 @@ struct LdrDllNotificationData
 };
 
 constexpr ULONG LDR_DLL_NOTIFICATION_REASON_LOADED = 1;
+constexpr ULONG LDR_DLL_NOTIFICATION_REASON_UNLOADED = 2;
 using LdrDllNotificationFunction = VOID(CALLBACK*)(ULONG reason, const LdrDllNotificationData* data, PVOID context);
 using LdrRegisterDllNotificationFunction = NTSTATUS(NTAPI*)(ULONG flags, LdrDllNotificationFunction callback, PVOID context, PVOID* cookie);
 using LdrUnregisterDllNotificationFunction = NTSTATUS(NTAPI*)(PVOID cookie);
@@ -53,13 +55,31 @@ void OnGraphicsModule(std::wstring_view name, void* base, bool was_already_loade
 VOID CALLBACK OnDllNotification(ULONG reason, const LdrDllNotificationData* data, PVOID context)
 {
    (void)context;
-   if (reason != LDR_DLL_NOTIFICATION_REASON_LOADED || !data || !data->base_dll_name)
+   if (!data || !data->base_dll_name)
+      return;
+   if (reason == LDR_DLL_NOTIFICATION_REASON_UNLOADED)
+   {
+      Hooks::ThirdPartyModules::OnModuleUnloaded(data->dll_base);
+      return;
+   }
+   if (reason != LDR_DLL_NOTIFICATION_REASON_LOADED)
       return;
    const std::wstring_view name(data->base_dll_name->Buffer, data->base_dll_name->Length / sizeof(wchar_t));
+   Hooks::ThirdPartyModules::OnModuleLoaded(name, data->dll_base, data->size_of_image);
    if (IsGraphicsModule(name))
       OnGraphicsModule(name, data->dll_base, false);
    if (Startup::IsInitialized())
       Hooks::OnModuleLoaded(name);
+}
+
+void UnregisterNotification()
+{
+   if (!notification_cookie)
+      return;
+   HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+   if (const auto unregister_notification = reinterpret_cast<LdrUnregisterDllNotificationFunction>(GetProcAddress(ntdll, "LdrUnregisterDllNotification")))
+      unregister_notification(notification_cookie);
+   notification_cookie = nullptr;
 }
 } // namespace
 
@@ -72,7 +92,10 @@ void Attach(HMODULE module)
    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
    const auto register_notification = reinterpret_cast<LdrRegisterDllNotificationFunction>(GetProcAddress(ntdll, "LdrRegisterDllNotification"));
    if (!register_notification || register_notification(0, &OnDllNotification, nullptr, &notification_cookie) < 0)
+   {
+      notification_cookie = nullptr;
       Utils::Log::Error("Core: LdrRegisterDllNotification failed, only modules already loaded will be detected");
+   }
 
    // Loaded before Luma (d3d11 and d3d12 import dxgi)
    for (std::wstring_view name : GRAPHICS_MODULES)
@@ -89,14 +112,8 @@ void Detach(bool is_process_terminating)
       Utils::Log::Info("Process exiting");
       return;
    }
-   if (notification_cookie)
-   {
-      HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-      if (const auto unregister_notification = reinterpret_cast<LdrUnregisterDllNotificationFunction>(GetProcAddress(ntdll, "LdrUnregisterDllNotification")))
-         unregister_notification(notification_cookie);
-      notification_cookie = nullptr;
-   }
-   Startup::Shutdown();
+   UnregisterNotification();
+   Startup::Unload();
 }
 } // namespace Loader
 } // namespace System

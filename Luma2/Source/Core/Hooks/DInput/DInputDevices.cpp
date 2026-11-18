@@ -5,18 +5,17 @@
 #include <unordered_map>
 #include <utility>
 
-#include <safetyhook.hpp>
-
-#include "Utils/Log.hpp"
+#include "Hooks/Hooks.hpp"
 
 namespace Luma {
 namespace Hooks {
 namespace Input {
 namespace DInput {
 namespace {
-// Never held while calling into DirectInput or the hooks' originals
+// Never held while calling into DirectInput, the hooks' originals or Hooks::Declare
 std::shared_mutex mutex;
-std::unordered_map<void*, safetyhook::InlineHook> hooks;
+// The original of each hooked method, where Hooks::Declare writes it: a map's values don't move
+std::unordered_map<void*, void*> originals;
 std::unordered_map<const void*, DeviceKind> device_kinds;
 
 void* GetMethod(const void* object, size_t index)
@@ -44,25 +43,23 @@ DeviceKind GetDeviceKind(const void* device)
 void HookMethod(const void* object, size_t index, void* detour, const char* name)
 {
    void* const target = GetMethod(object, index);
-   std::unique_lock lock(mutex);
-   if (hooks.contains(target))
-      return;
-   if (auto hook = safetyhook::InlineHook::create(target, detour))
+   void** original;
    {
-      hooks.emplace(target, std::move(*hook));
-      Utils::Log::Info("Hooks: {} at {}", name, target);
+      std::unique_lock lock(mutex);
+      if (originals.contains(target))
+         return;
+      original = &originals[target];
    }
-   else
-   {
-      Utils::Log::Error("Hooks: {} failed", name);
-   }
+   // Through the hook manager, so it's verified and unhooked like the others
+   const Hook hook = {AddressTarget{target, name}, detour, original};
+   Declare({&hook, 1});
 }
 
 void* GetOriginalMethod(const void* object, size_t index)
 {
    std::shared_lock lock(mutex);
-   const auto it = hooks.find(GetMethod(object, index));
-   return it != hooks.end() ? it->second.original<void*>() : nullptr;
+   const auto it = originals.find(GetMethod(object, index));
+   return it != originals.end() ? it->second : nullptr;
 }
 } // namespace DInput
 } // namespace Input

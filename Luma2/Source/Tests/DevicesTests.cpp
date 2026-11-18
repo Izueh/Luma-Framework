@@ -990,3 +990,54 @@ TEST_CASE("Validation: the debug layers' messages of the game's devices are read
    }
    Validation::Reset();
 }
+
+// The bypass Luma sets before it unhooks: every detour of the device, swapchain, present and resize path passes the game's call
+// through, so no handler and no game event runs (Hooks::Scope::IsActive)
+TEST_CASE("Hooks: bypassed, the game's devices, swapchains and presents reach no handler and no game event")
+{
+   InstallHooks();
+   GameCallbacks game;
+   HiddenWindow window;
+   const uint32_t proxies = Hooks::DeviceProxy::GetCount();
+   const size_t swapchains = Trace::GetStatus().swapchains.size();
+   Hooks::Scope::SetBypass(true);
+   {
+      const DXGI_SWAP_CHAIN_DESC desc = GetWindowedDesc(window.hwnd);
+      ComPtr<IDXGISwapChain> swapchain;
+      ComPtr<ID3D11Device> device;
+      ComPtr<ID3D11DeviceContext> immediate_context;
+      REQUIRE(SUCCEEDED(D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, GetD3D11Flags(), nullptr, 0, D3D11_SDK_VERSION, &desc, &swapchain,
+         &device, nullptr, &immediate_context)));
+      CHECK_FALSE(Hooks::DeviceProxy::IsProxy(device.Get()));
+      ComPtr<ID3D11Device> from_swapchain;
+      REQUIRE(SUCCEEDED(swapchain->GetDevice(IID_PPV_ARGS(&from_swapchain))));
+      CHECK_FALSE(Hooks::DeviceProxy::IsProxy(from_swapchain.Get()));
+      swapchain->Present(0, 0);
+      REQUIRE(SUCCEEDED(swapchain->ResizeBuffers(0, 400, 200, DXGI_FORMAT_UNKNOWN, 0)));
+      swapchain->Present(0, 0);
+      CHECK(UI::GetSwapchain() == nullptr);
+
+      // A factory's swapchain, and D3D12's device and submissions
+      ComPtr<IDXGIFactory2> factory;
+      REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+      ComPtr<IDXGIAdapter> adapter;
+      ComPtr<IDXGIFactory4> factory4;
+      REQUIRE(SUCCEEDED(factory.As(&factory4)));
+      REQUIRE(SUCCEEDED(factory4->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
+      ComPtr<ID3D12Device> d3d12_device;
+      REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&d3d12_device))));
+      CHECK_FALSE(Hooks::DeviceProxy::IsProxy(d3d12_device.Get()));
+      const D3D12_COMMAND_QUEUE_DESC queue_desc = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT};
+      ComPtr<ID3D12CommandQueue> queue;
+      REQUIRE(SUCCEEDED(d3d12_device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue))));
+      queue->ExecuteCommandLists(0, nullptr);
+   }
+   Hooks::Scope::SetBypass(false);
+   CHECK(created_calls == 0);
+   CHECK(destroyed_calls == 0);
+   CHECK(swapchain_created_calls == 0);
+   CHECK(swapchain_resized_calls == 0);
+   CHECK(present_calls == 0);
+   CHECK(Hooks::DeviceProxy::GetCount() == proxies);
+   CHECK(Trace::GetStatus().swapchains.size() == swapchains);
+}

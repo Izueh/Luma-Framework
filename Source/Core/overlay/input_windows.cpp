@@ -29,6 +29,7 @@
 
 #include "overlay/export_hook.hpp"
 #include "overlay/input.hpp"
+#include "hooks/scope.hpp"
 #include "overlay/input_hooks.hpp"
 #include "utils/log.hpp"
 
@@ -360,6 +361,9 @@ LRESULT CALLBACK handle_windows_hook(int nCode, WPARAM wParam, LPARAM lParam)
 
 HHOOK WINAPI HookSetWindowsHookExA(int idHook, HOOKPROC lpfn, HINSTANCE hmod, DWORD dwThreadId)
 {
+	// Unhooking: a wrapper would keep Windows calling into Luma's code
+	if (Luma::Hooks::Scope::IsBypassed())
+		return original_set_windows_hook_ex_a(idHook, lpfn, hmod, dwThreadId);
 	HOOKPROC orig_hook_proc = lpfn;
 	const UINT64 thread_lookup_key = dwThreadId | (static_cast<UINT64>(idHook) << 32);
 
@@ -400,6 +404,9 @@ HHOOK WINAPI HookSetWindowsHookExA(int idHook, HOOKPROC lpfn, HINSTANCE hmod, DW
 }
 HHOOK WINAPI HookSetWindowsHookExW(int idHook, HOOKPROC lpfn, HINSTANCE hmod, DWORD dwThreadId)
 {
+	// Unhooking: a wrapper would keep Windows calling into Luma's code
+	if (Luma::Hooks::Scope::IsBypassed())
+		return original_set_windows_hook_ex_w(idHook, lpfn, hmod, dwThreadId);
 	HOOKPROC orig_hook_proc = lpfn;
 	const UINT64 thread_lookup_key = dwThreadId | (static_cast<UINT64>(idHook) << 32);
 

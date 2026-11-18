@@ -50,11 +50,21 @@ InterfaceVersion GetVersion(std::string_view name, uint32_t method_count)
 
 // Records the object's methods the first time, with the `versions` (oldest first, the first one names it in the log) the object supports.
 // The methods are copied: a vtable can be heap memory owned by its object (D3D11 contexts), freed with it.
-// False if its methods differ from the recorded ones, which hooks may not cover.
+// False if its methods differ from the recorded ones (the hooks may not cover them). A third-party patch isn't a difference.
 bool Set(Interface interface_type, IUnknown* object, std::span<const InterfaceVersion> versions);
 
-// Whether the object's methods are the recorded ones. False if nothing is recorded.
+// False if nothing is recorded
 bool Matches(Interface interface_type, IUnknown* object);
+
+enum class Method : uint8_t
+{
+   Same,
+   Variant, // Another implementation in the API's own dlls (another runtime, the debug layer): hooks on the recorded one don't see it
+   ThirdParty, // Patched into the vtable from another dll (an overlay), which calls the recorded one
+};
+
+// Takes the loader lock
+Method ClassifyMethod(const void* recorded, const void* observed);
 
 // The recorded methods (as many as the highest supported version has), null until set
 void* const* Get(Interface interface_type);

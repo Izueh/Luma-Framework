@@ -8,8 +8,10 @@
 
 #include "Draw/Draw.hpp"
 #include "Game/Registry.hpp"
+#include "Hooks/ThirdPartyModules.hpp"
 #include "Hooks/Hooks.hpp"
 #include "Hooks/InputHooks.hpp"
+#include "Hooks/Scope.hpp"
 #include "Luma.hpp"
 #include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
@@ -132,9 +134,11 @@ void Initialize()
 {
    if (initialized.exchange(true))
       return;
+   System::Modules::Pin();
    System::Paths::Initialize();
    Utils::Log::Open(System::Paths::GetLog());
    Utils::Log::Info("Luma2 initializing in {}", Utils::Strings::ToUtf8(System::Modules::GetPath(nullptr)));
+   Hooks::ThirdPartyModules::ScanLoadedModules();
 
    // Core's settings first: the game's Init changes their defaults (Settings::SetDefault) and adds its own
    Settings::Register(SETTINGS, Settings::Kind::Luma);
@@ -214,14 +218,15 @@ bool IsInitialized()
    return initialized;
 }
 
-void Shutdown()
+void Unload()
 {
-   Trace::Mcp::Stop();
-   Hooks::UninstallAll();
+   // Initialize pins Luma's dll: only a Luma that never initialized gets here, with just the creation exports hooked
+   Hooks::Scope::SetBypass(true);
+   if (Hooks::UninstallAll(false).NeedsModule())
+      Utils::Log::Error("Core: too late to keep Luma's dll loaded");
    Utils::Log::Info("Luma2 unloaded");
    Utils::Log::Close();
 }
-
 } // namespace Startup
 
 BOOL DllMain(HMODULE module, DWORD reason, LPVOID reserved)

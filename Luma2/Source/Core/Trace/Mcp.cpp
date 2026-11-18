@@ -24,6 +24,7 @@
 #include <Windows.h>
 #include <sddl.h>
 
+#include "Hooks/Hooks.hpp"
 #include "Settings/Registry.hpp"
 #include "Trace/Info.hpp"
 #include "Utils/Json.hpp"
@@ -1850,7 +1851,11 @@ Request ParseRequest(std::string_view text)
 std::string Answer(const Request& request)
 {
    if (request.tool == "status")
+   {
+      // What's at each hooked target now
+      Hooks::Verify();
       return Utils::Json::Write(GetStatusReply(request));
+   }
    if (request.tool == "get_settings")
       return RunOnRenderThread([request] { return GetSettings(request); }, GetTimeout(request));
    if (request.tool == "set_setting")

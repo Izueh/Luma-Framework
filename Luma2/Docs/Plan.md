@@ -779,12 +779,19 @@ Built on part C's answers; the shapes below are the starting point.
 **Build:**
 * Release UI pass: every FF7R setting in the registry with categories, tooltips and defaults as in 1.0. Warnings as toasts. About and credits.
 * Packaging: `Scripts/package.ps1` and the CI workflow build and package the Luma2 FF7R.
-* `Compat::ReShade` as `Guidelines.md` section 14: chain-load, foreign work recognised by calling module, and the choice of which buffer ReShade's effects run on. No ReShade headers.
+* `Compat::ReShade` as `Guidelines.md` section 14 and `plans/hook-manager-hardening.md` Phase 4 (deferred by the owner): Luma loads ReShade after its own export hooks are in (needs export stubs in place of the linker forwarders), third-party work recognised by calling module (`Hooks::ThirdPartyModules`), and the choice of which buffer ReShade's effects run on. No ReShade headers.
+* Overlays (Steam, RTSS, Discord, NVIDIA): the Phase 0 test matrix of `plans/hook-manager-hardening.md` (the owner's session), then the Present order policy of its Phase 3.3 with Step 5's `GetBuffer`.
 * RenderDoc: a capture of FF7R on each API with the mod active. Fix only what's a real Luma bug.
 * OptiScale: FF7R built with another `LumaDllName` next to OptiScale's `dxgi.dll`. Document the working arrangement, or that there isn't one.
 * Detached UI: enable ImGui multi-viewport in Development and try it in FF7R on both APIs.
 
 **Verify (once):** each bullet above, once. ReShade with one effect on and Luma's HDR output correct underneath it.
+
+**Notes (hook manager hardening, `plans/hook-manager-hardening.md` Phases 0 to 3, done before this step, not verified in a game):**
+* Luma initializes in the loader notification, as 1.0 does. `System::Modules::FindExport` never loads a dll, so the hook manager is safe under the loader lock.
+* Every hook is in `Hooks::Declare` (DirectInput's methods through `AddressTarget`). Chains are logged at install and read again by `Hooks::Verify` (first present, every minute in Development, Info tab, `luma_status` `hooks`). `Hooks::GetPresentChain` says where an overlay's `Present` runs relative to Luma's; Step 5's `GetBuffer` is where the Phase 3.3 policy goes.
+* Unload: bypass (`Scope::SetBypass`) and proof-based unhook (`Hooks::UninstallAll`) for a Luma that never initialized; an initialized Luma pins its dll and never unloads. Both versions' hook managers are the same code again.
+* Not built: ReShade (Phase 4), the `LoadLibrary` hooks of Phase 2.3 (no data asks for them), the Present order policy (needs the overlay test matrix).
 
 ---
 

@@ -18,7 +18,7 @@
 #include "Utils/Log.hpp"
 
 namespace Luma {
-// The game's DllMain calls it. Only registers a loader notification: Luma initializes when d3d11.dll or d3d12.dll loads, still
+// The game's DllMain calls it. Only registers a loader notification: Luma initializes when a graphics dll loads, still
 // under the loader lock (no dll loads, no waiting on other threads).
 BOOL DllMain(HMODULE module, DWORD reason, LPVOID reserved);
 

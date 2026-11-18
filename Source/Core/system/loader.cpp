@@ -5,7 +5,9 @@
 
 #include <winternl.h>
 
+#include "hooks/third_party_modules.hpp"
 #include "hooks/hooks.hpp"
+#include "hooks/scope.hpp"
 #include "utils/log.hpp"
 #include "utils/modules.hpp"
 #include "utils/strings.hpp"
@@ -23,6 +25,7 @@ struct LdrDllNotificationData
    ULONG size_of_image;
 };
 constexpr ULONG LDR_DLL_NOTIFICATION_REASON_LOADED = 1;
+constexpr ULONG LDR_DLL_NOTIFICATION_REASON_UNLOADED = 2;
 using LdrDllNotificationFunction = VOID(CALLBACK*)(ULONG reason, const LdrDllNotificationData* data, PVOID context);
 using LdrRegisterDllNotificationFunction = NTSTATUS(NTAPI*)(ULONG flags, LdrDllNotificationFunction callback, PVOID context, PVOID* cookie);
 using LdrUnregisterDllNotificationFunction = NTSTATUS(NTAPI*)(PVOID cookie);
@@ -44,9 +47,17 @@ void OnGraphicsModule(void* base, bool was_already_loaded)
 VOID CALLBACK OnDllNotification(ULONG reason, const LdrDllNotificationData* data, PVOID context)
 {
    (void)context;
-   if (reason != LDR_DLL_NOTIFICATION_REASON_LOADED || !data || !data->base_dll_name)
+   if (!data || !data->base_dll_name)
+      return;
+   if (reason == LDR_DLL_NOTIFICATION_REASON_UNLOADED)
+   {
+      Hooks::ThirdPartyModules::OnModuleUnloaded(data->dll_base);
+      return;
+   }
+   if (reason != LDR_DLL_NOTIFICATION_REASON_LOADED)
       return;
    const std::wstring_view name(data->base_dll_name->Buffer, data->base_dll_name->Length / sizeof(wchar_t));
+   Hooks::ThirdPartyModules::OnModuleLoaded(name, data->dll_base, data->size_of_image);
    if (Utils::Strings::EqualsIgnoreCase(name, GRAPHICS_MODULE))
       OnGraphicsModule(data->dll_base, false);
    if (initialized)
@@ -64,6 +75,8 @@ void Attach(HMODULE module, void (*initialize)())
    if (!register_notification || register_notification(0, &OnDllNotification, nullptr, &notification_cookie) < 0)
       Utils::Log::Error("Loader: LdrRegisterDllNotification failed, only an already loaded d3d11.dll will be detected");
 
+   // The tools loaded before Luma: only their names are read here
+   Hooks::ThirdPartyModules::ScanLoadedModules();
    if (HMODULE graphics_module = Utils::Modules::FindSystemModule(GRAPHICS_MODULE))
       OnGraphicsModule(graphics_module, true);
 }
@@ -77,7 +90,12 @@ void Detach()
          unregister_notification(notification_cookie);
       notification_cookie = nullptr;
    }
-   Hooks::UninstallAll();
+   // Under the loader lock: threads inside a detour are waited for a few milliseconds at most, and what can't be released is left
+   // valid outside Luma's dll where possible (Hooks::UninstallAll)
+   Hooks::Scope::SetBypass(true);
+   const Hooks::UninstallReport report = Hooks::UninstallAll(false);
+   if (report.NeedsModule())
+      Utils::Log::Error("Loader: unloaded while {} hooks stay in another hooker's chain{}", report.kept, report.code_in_use ? " and a thread is in Luma's code" : "");
 }
 } // namespace Loader
 } // namespace Luma

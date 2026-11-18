@@ -17,6 +17,7 @@
 
 #include "Common/Api.hpp"
 #include "Game/Registry.hpp"
+#include "Hooks/Hooks.hpp"
 #include "Hooks/Scope.hpp"
 #include "Settings/Registry.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
@@ -336,6 +337,7 @@ std::optional<DXGI_COLOR_SPACE_TYPE> GetColorSpace(IDXGISwapChain* swapchain)
 void PrePresent(IDXGISwapChain* swapchain)
 {
    Trace::RecordPresent();
+   Hooks::VerifyOnPresent();
 #if DEVELOPMENT
    // A capture is one frame, present to present: what's drawn next (the game's present callback, the overlay) isn't in it. D3D12's
    // contents were copied at the calls; its events reached the frame when their lists were executed.

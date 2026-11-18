@@ -13044,6 +13044,9 @@ BOOL APIENTRY CoreMain(HMODULE h_module, DWORD fdw_reason, LPVOID lpv_reserved)
    }
    case DLL_PROCESS_DETACH:
    {
+      // First: a detour still reached (a thread inside one, a hook left in another tool's chain) only calls its original from now
+      // on, never "game" below once it's deleted
+      Luma::Hooks::Scope::SetBypass(true);
 #if DEVELOPMENT
       Mcp::Shutdown();
       if (game_window_original_proc && game_window != NULL && IsWindow(game_window))

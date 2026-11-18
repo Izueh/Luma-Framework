@@ -183,11 +183,12 @@ void OnFactoryCreated(HRESULT result, void** factory_pointer)
       InstallPending();
 }
 
+// Luma's own calls too (inside a scope), never while bypassed
 HRESULT WINAPI CreateFactory(REFIID riid, void** factory)
 {
    Utils::DepthGuard guard(create_depth);
    const HRESULT result = original_create_factory(riid, factory);
-   if (guard.IsOutermost())
+   if (guard.IsOutermost() && !Scope::IsBypassed())
       OnFactoryCreated(result, factory);
    return result;
 }
@@ -196,7 +197,7 @@ HRESULT WINAPI CreateFactory1(REFIID riid, void** factory)
 {
    Utils::DepthGuard guard(create_depth);
    const HRESULT result = original_create_factory1(riid, factory);
-   if (guard.IsOutermost())
+   if (guard.IsOutermost() && !Scope::IsBypassed())
       OnFactoryCreated(result, factory);
    return result;
 }
@@ -205,7 +206,7 @@ HRESULT WINAPI CreateFactory2(UINT flags, REFIID riid, void** factory)
 {
    Utils::DepthGuard guard(create_depth);
    const HRESULT result = original_create_factory2(flags, riid, factory);
-   if (guard.IsOutermost())
+   if (guard.IsOutermost() && !Scope::IsBypassed())
       OnFactoryCreated(result, factory);
    return result;
 }
@@ -380,6 +381,7 @@ HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval,
    if (is_game)
    {
       Scope::Guard scope;
+      VerifyOnPresent();
       ObserveImmediateContext(swapchain);
       Callbacks::PrePresent(swapchain);
    }
@@ -399,6 +401,7 @@ HRESULT STDMETHODCALLTYPE Present1(IDXGISwapChain1* swapchain, UINT sync_interva
    if (is_game)
    {
       Scope::Guard scope;
+      VerifyOnPresent();
       ObserveImmediateContext(swapchain);
       Callbacks::PrePresent(swapchain);
    }

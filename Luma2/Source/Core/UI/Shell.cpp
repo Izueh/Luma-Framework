@@ -16,6 +16,7 @@
 #include "Shaders/Defines.hpp"
 #include "System/Jobs.hpp"
 #include "Shaders/Shaders.hpp"
+#include "Hooks/Hooks.hpp"
 #include "Trace/Info.hpp"
 #include "UI/Icons.hpp"
 #include "UI/Input.hpp"
@@ -233,6 +234,13 @@ void DrawLinks(const Game::Info& info)
 
 void DrawInfo(const Trace::Status& status)
 {
+   // What's at each hooked target, read again while this is shown
+   static uint64_t last_verify = 0;
+   if (const uint64_t now = GetTickCount64(); now - last_verify > 1000)
+   {
+      last_verify = now;
+      Hooks::Verify();
+   }
    CallPanel(Game::Registry::GetPanels().info);
    if (Widgets::Section("Status"))
    {
@@ -242,6 +250,15 @@ void DrawInfo(const Trace::Status& status)
       row("Frames", std::to_string(status.frame_count));
       row("Devices", std::to_string(status.counts.proxies));
       row("Hooks", std::format("{} installed of {} declared, {} failed", status.counts.hooks_installed, status.counts.hooks_declared, status.counts.hooks_failed));
+      row("Hook chains", std::format("{} first, {} under another hooker, {} on top of one, {} unhooked by someone else", status.hooks.intact, status.hooks.chained, status.hooks.detoured_before, status.hooks.restored));
+      row("Present", status.hooks.present_overlay.empty() ? status.hooks.present_order : std::format("{} ({})", status.hooks.present_order, status.hooks.present_overlay));
+      if (!status.hooks.overlays.empty())
+      {
+         std::string overlays;
+         for (const std::string& overlay : status.hooks.overlays)
+            overlays += (overlays.empty() ? "" : ", ") + overlay;
+         row("Overlays", overlays);
+      }
       for (const Trace::SwapchainInfo& swapchain : status.swapchains)
          row("Swapchain", std::format("{} {}x{}, format {}, {} buffers", swapchain.api, swapchain.width, swapchain.height, swapchain.format, swapchain.buffers));
       row("Validation", status.validation.debug_layer ? std::format("{} errors, {} warnings, {} corruptions", status.validation.errors, status.validation.warnings, status.validation.corruptions) : std::string("off"));

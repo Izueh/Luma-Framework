@@ -14,6 +14,7 @@
 #include <dxgi1_6.h>
 
 #include "hooks/scope.hpp"
+#include "utils/modules.hpp"
 #include "utils/log.hpp"
 
 namespace Luma {
@@ -37,6 +38,7 @@ struct Facet
    IUnknown* real;
    Device* owner;
 };
+
 static_assert(offsetof(Facet, real) == sizeof(void*));
 
 struct Device
@@ -57,10 +59,18 @@ struct Registry
    uint32_t devices = 0;
 };
 
-// Leaked: the game may release devices after static destructors ran
+// Leaked at process exit: the game may release devices after static destructors ran. FreeThunks deletes it (a real unload).
+std::atomic<Registry*> registry_pointer = nullptr;
+
 Registry& GetRegistry()
 {
-   static Registry* registry = new Registry();
+   Registry* registry = registry_pointer.load(std::memory_order_acquire);
+   if (registry)
+      return *registry;
+   auto* created = new Registry();
+   if (registry_pointer.compare_exchange_strong(registry, created))
+      return *created;
+   delete created;
    return *registry;
 }
 
@@ -132,26 +142,29 @@ void WriteThunk(uint8_t* thunk, uint32_t offset)
    std::memcpy(thunk, code, sizeof(code));
 }
 
+std::array<void*, SLOT_COUNT> vtable = {};
+// Made with the first proxy (with the registry's lock held), freed by FreeThunks
+std::atomic<uint8_t*> thunks = nullptr;
+
 void* const* GetVtable()
 {
-   static void* const* vtable = [] {
-      auto* page = static_cast<uint8_t*>(VirtualAlloc(nullptr, SLOT_COUNT * THUNK_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
-      static std::array<void*, SLOT_COUNT> table = {};
-      table[0] = reinterpret_cast<void*>(&QueryInterface);
-      table[1] = reinterpret_cast<void*>(&AddRef);
-      table[2] = reinterpret_cast<void*>(&Release);
-      for (size_t slot = 3; slot < SLOT_COUNT; slot++)
-      {
-         uint8_t* thunk = page + slot * THUNK_SIZE;
-         WriteThunk(thunk, uint32_t(slot * sizeof(void*)));
-         table[slot] = thunk;
-      }
-      DWORD old_protection;
-      VirtualProtect(page, SLOT_COUNT * THUNK_SIZE, PAGE_EXECUTE_READ, &old_protection);
-      FlushInstructionCache(GetCurrentProcess(), page, SLOT_COUNT * THUNK_SIZE);
-      return table.data();
-   }();
-   return vtable;
+   if (thunks.load(std::memory_order_acquire))
+      return vtable.data();
+   auto* page = static_cast<uint8_t*>(VirtualAlloc(nullptr, SLOT_COUNT * THUNK_SIZE, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+   vtable[0] = reinterpret_cast<void*>(&QueryInterface);
+   vtable[1] = reinterpret_cast<void*>(&AddRef);
+   vtable[2] = reinterpret_cast<void*>(&Release);
+   for (size_t slot = 3; slot < SLOT_COUNT; slot++)
+   {
+      uint8_t* thunk = page + slot * THUNK_SIZE;
+      WriteThunk(thunk, uint32_t(slot * sizeof(void*)));
+      vtable[slot] = thunk;
+   }
+   DWORD old_protection;
+   VirtualProtect(page, SLOT_COUNT * THUNK_SIZE, PAGE_EXECUTE_READ, &old_protection);
+   FlushInstructionCache(GetCurrentProcess(), page, SLOT_COUNT * THUNK_SIZE);
+   thunks.store(page, std::memory_order_release);
+   return vtable.data();
 }
 
 // With the registry locked. Null for interfaces proxies don't cover.
@@ -269,6 +282,9 @@ bool Wrap(void** object, REFIID riid, IUnknown* device, ReleasedCallback on_rele
          device->AddRef(); // The proxy's own reference
          created = true;
       }
+      // The game can release its device after Luma unloads, and the proxy's methods are Luma's code
+      if (created)
+         Utils::Modules::Pin();
       facet = GetFacetLocked(registry, *proxy, returned, riid);
       proxy->references++;
    }
@@ -303,7 +319,7 @@ IUnknown* Unwrap(IUnknown* object)
 
 bool IsProxy(const void* object)
 {
-   return object && *static_cast<void* const* const*>(object) == GetVtable();
+   return object && thunks.load(std::memory_order_acquire) && *static_cast<void* const* const*>(object) == vtable.data();
 }
 
 uint32_t GetCount()
@@ -311,6 +327,20 @@ uint32_t GetCount()
    Registry& registry = GetRegistry();
    std::scoped_lock lock(registry.mutex);
    return registry.devices;
+}
+
+void FreeThunks()
+{
+   {
+      Registry& registry = GetRegistry();
+      std::scoped_lock lifetime_lock(registry.lifetime_mutex);
+      std::scoped_lock lock(registry.mutex);
+      if (registry.devices != 0)
+         return;
+      if (uint8_t* page = thunks.exchange(nullptr))
+         VirtualFree(page, 0, MEM_RELEASE);
+   }
+   delete registry_pointer.exchange(nullptr);
 }
 } // namespace DeviceProxy
 } // namespace Hooks

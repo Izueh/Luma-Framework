@@ -21,6 +21,7 @@
 #include "Shaders/D3D12/D3D12Variants.hpp"
 #include "Hooks/Hooks.hpp"
 #include "Hooks/DeviceProxy.hpp"
+#include "Hooks/ThirdPartyModules.hpp"
 #include "Shaders/Database.hpp"
 #include "Shaders/Patching.hpp"
 #include "System/Jobs.hpp"
@@ -101,6 +102,17 @@ Status GetStatus()
    status.overlay_open = UI::IsOpen();
    const Hooks::Counts hooks = Hooks::GetCounts();
    status.counts = {Hooks::DeviceProxy::GetCount(), uint32_t(status.swapchains.size()), hooks.declared, hooks.installed, hooks.failed};
+   const Hooks::Verification verification = Hooks::GetLastVerification();
+   const Hooks::PresentChain present = Hooks::GetPresentChain();
+   constexpr std::string_view PRESENT_ORDERS[] = {"not hooked", "alone", "luma outermost", "overlay outermost"};
+   status.hooks = {.intact = verification.intact,
+      .chained = verification.chained,
+      .restored = verification.restored,
+      .detoured_before = verification.detoured_before,
+      .neutralised = hooks.neutralised,
+      .overlays = Hooks::ThirdPartyModules::GetLoaded(),
+      .present_order = std::string(PRESENT_ORDERS[size_t(present.order)]),
+      .present_overlay = present.overlay};
 
    status.shaders.loaded = Shaders::Variants::IsLoaded();
    for (const Shaders::Database::Shader* shader : Shaders::Database::GetShaders())
