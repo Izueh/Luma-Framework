@@ -48,6 +48,7 @@ constexpr std::array DEVELOPMENT_SETTINGS = {
       .label = "Custom Sampler LOD Bias",
       .tooltip = "Replaces the LOD bias offset super resolution sets (1.0's custom_texture_mip_lod_bias_offset)",
       .category = "Resources",
+      .visibility = Settings::Visibility::Development,
       .default_value = false,
    },
    Settings::Setting{
@@ -55,6 +56,7 @@ constexpr std::array DEVELOPMENT_SETTINGS = {
       .label = "Sampler LOD Bias Offset",
       .tooltip = "Added to the upgraded samplers' LOD bias while Custom Sampler LOD Bias is on. Negative sharpens.",
       .category = "Resources",
+      .visibility = Settings::Visibility::Development,
       .default_value = 0.f,
       .range = Settings::Range{-4.f, 4.f},
       .format = "%.2f",
