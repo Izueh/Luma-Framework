@@ -75,24 +75,8 @@ std::string GetId(const void* object)
    return std::format("0x{:X}", reinterpret_cast<uintptr_t>(object));
 }
 
-Resource DescribeResource(ID3D11Resource* resource);
-
-// A mirror is bound in place of the game's texture: described as the game's, with the mirror's format and size
-std::optional<Resource> DescribeMirrored(ID3D11Resource* resource)
+Resource DescribeOwn(ID3D11Resource* resource)
 {
-   ID3D11Resource* original = Resources::Mirrors::D3D11::GetOriginal(resource);
-   if (!original)
-      return std::nullopt;
-   Resource described = DescribeResource(original);
-   const Resource mirror = DescribeResource(resource);
-   described.mirror = std::format("{} {}x{}", Utils::Format::GetName(mirror.format), mirror.size[0], mirror.size[1]);
-   return described;
-}
-
-Resource DescribeResource(ID3D11Resource* resource)
-{
-   if (std::optional<Resource> mirrored = DescribeMirrored(resource))
-      return std::move(*mirrored);
    Resource described = {.id = GetId(resource)};
    D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
    resource->GetType(&dimension);
@@ -139,6 +123,18 @@ Resource DescribeResource(ID3D11Resource* resource)
    UINT size = sizeof(name) - 1;
    if (SUCCEEDED(resource->GetPrivateData(DEBUG_OBJECT_NAME, &size, name)))
       described.debug_name.assign(name, strnlen(name, size));
+   return described;
+}
+
+// A mirror is bound in place of the game's texture: described as the game's, with the mirror's format and size
+Resource DescribeResource(ID3D11Resource* resource)
+{
+   ID3D11Resource* original = Resources::Mirrors::D3D11::GetOriginal(resource);
+   if (!original)
+      return DescribeOwn(resource);
+   Resource described = DescribeOwn(original);
+   const Resource mirror = DescribeOwn(resource);
+   described.mirror = std::format("{} {}x{}", Utils::Format::GetName(mirror.format), mirror.size[0], mirror.size[1]);
    return described;
 }
 
