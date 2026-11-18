@@ -21,6 +21,8 @@
 #include <dxp/sm5/Recipe.hpp>
 #endif
 
+#include "Resources/Bindings.hpp"
+#include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
@@ -57,6 +59,8 @@ struct IndexEntry
 };
 
 namespace {
+// The env variable a recipe takes Luma's space from (DXP's docs/sm51_upgrade.md)
+constexpr std::string_view LUMA_SPACE = "LUMA_SPACE";
 // Written in Init, read without a lock after
 Options options;
 // Decided by Register
@@ -143,6 +147,8 @@ struct Recipe
    Settings::Visibility visibility = Settings::Visibility::Development;
    bool default_enabled = true;
    std::vector<Env> env;
+   // The recipe's LUMA_SPACE, typed by its default: the host's value, not a setting (Luma's space on D3D12, 0 on D3D11)
+   std::optional<dxp::PrimitiveValue> luma_space;
    // Replaced by a reload. Lock order: `recipes_mutex` guards these three.
    std::shared_ptr<const dxp::sm5::Recipe> parsed;
    uint64_t content = 0; // FNV-1a of the file: a changed recipe misses the cache
@@ -337,8 +343,14 @@ void RegisterSettings(Recipe& recipe)
    const dxp::MetaValue* env_meta = meta ? meta->Find("env") : nullptr;
    std::vector<std::pair<std::string, dxp::PrimitiveValue>> env(recipe.parsed->GetEnv().begin(), recipe.parsed->GetEnv().end());
    std::ranges::sort(env, {}, &std::pair<std::string, dxp::PrimitiveValue>::first);
+   recipe.luma_space.reset();
    for (auto& [name, value] : env)
    {
+      if (name == LUMA_SPACE)
+      {
+         recipe.luma_space = value;
+         continue;
+      }
       Recipe::Env& variable = recipe.env.emplace_back();
       variable.name = name;
       variable.label = name;
@@ -386,6 +398,15 @@ Chain MakeChain()
          const dxp::PrimitiveValue value = FromSetting(Settings::GetValue(variable.key).value_or(ToSetting(variable.default_value)), variable.default_value);
          link.options.SetEnv(variable.name, value);
          link.key += std::format(";{}={}", variable.name, ToText(value));
+      }
+      // D3D12 gets the recipe's additions in Luma's space (SM5.1 with `upgrade_to_sm51: auto`), D3D11 keeps SM5.0 in space 0. In the
+      // key, so the two APIs never share a cache entry.
+      if (recipe.luma_space)
+      {
+         const int32_t space = GetApi() == Api::D3D12 ? int32_t(Resources::Bindings::GetOptions().d3d12_space) : 0;
+         const dxp::PrimitiveValue value = FromSetting(Settings::Value(space), *recipe.luma_space);
+         link.options.SetEnv(std::string(LUMA_SPACE), value);
+         link.key += std::format(";{}={}", LUMA_SPACE, ToText(value));
       }
    }
    return chain;
@@ -562,6 +583,29 @@ struct Job
    std::vector<Outcome> outcomes;
 };
 
+// D3D12 binds Luma's cbuffers at their root slots and its textures through its table, all in its space: a binding elsewhere can't be
+// read. An empty string when it's where D3D12 has it.
+std::string CheckD3D12Register(const BindingInfo& binding, uint32_t entry)
+{
+   const uint32_t space = Resources::Bindings::GetOptions().d3d12_space;
+   if (binding.kind == "cbuffer")
+   {
+      const std::optional<uint32_t> root_index = Resources::LumaCBuffers::GetRootIndex(entry);
+      const Resources::LumaCBuffers::Options& cbuffers = Resources::LumaCBuffers::GetOptions();
+      const uint32_t slot = root_index == 0 ? cbuffers.settings_slot : cbuffers.data_slot;
+      if (root_index && binding.slot == slot && binding.space == space)
+         return {};
+      return std::format("cbuffer \"{}\" is at b{} space{}, D3D12 binds it at b{} space{} (the recipe's `space: LUMA_SPACE`)\n", binding.handle, binding.slot,
+         binding.space, slot, space);
+   }
+   const uint32_t first = Resources::Bindings::D3D12_FIRST_TEXTURE_REGISTER;
+   const uint32_t last = first + Resources::Bindings::D3D12_TEXTURE_REGISTERS - 1;
+   if (binding.space == space && binding.slot >= first && binding.slot <= last)
+      return {};
+   return std::format("texture \"{}\" is at t{} space{}, D3D12 reads Luma's textures at t{} to t{} space{} (`space: LUMA_SPACE` and `reverse_bind`)\n",
+      binding.handle, binding.slot, binding.space, first, last, space);
+}
+
 // The requests of a patch's bindings, by Resources::Database name. False, with `info.error`, when one can't be had.
 bool ResolveBindings(PatchInfo& info, std::vector<Request>& requests, bool d3d12)
 {
@@ -577,14 +621,16 @@ bool ResolveBindings(PatchInfo& info, std::vector<Request>& requests, bool d3d12
          usable = false;
          continue;
       }
+      if (d3d12)
+      {
+         if (const std::string error = CheckD3D12Register(binding, *entry); !error.empty())
+         {
+            info.error += error;
+            usable = false;
+            continue;
+         }
+      }
       requests.push_back({*entry, binding.slot});
-   }
-   // DXP puts what it adds in space 0 of SM5.0, which the game's root signature doesn't describe and Luma's space can't be named in
-   if (usable && d3d12 && !requests.empty())
-   {
-      LUMA_UNIMPLEMENTED("Shaders::Patching bindings on D3D12 (DXP's upgrade to SM5.1)");
-      info.error += "Adds bindings, which D3D12 can't take until DXP upgrades patches to SM5.1\n";
-      usable = false;
    }
    return usable;
 }

@@ -162,6 +162,7 @@ bool ReadLayout(std::span<const uint8_t> blob, RootLayout& layout)
    }
    return true;
 }
+
 // Fills a DescCopy: pointed-to data moved into its storage, pointer fields noted so the content hash leaves them out
 class Copier
 {
@@ -722,7 +723,7 @@ std::optional<GraphicsState> GetGraphicsState(const DescCopy& desc)
    return state;
 }
 
-const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter)
+const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table)
 {
    // The driver returns the same object for the same blob
    if (const RootLayout* existing = FindRootLayout(root_signature))
@@ -732,6 +733,7 @@ const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSi
       return nullptr;
    layout->blob.assign(blob.begin(), blob.end());
    layout->luma_parameter = luma_parameter;
+   layout->luma_table = luma_parameter != UINT32_MAX && luma_table;
    if (!ReadLayout(blob, *layout))
    {
       Utils::Log::Warning("D3D12: root signature {} ({} bytes) couldn't be read", static_cast<void*>(root_signature), blob.size());

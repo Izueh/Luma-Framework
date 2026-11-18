@@ -34,12 +34,17 @@ void PostCreatePipelineLibrary(size_t blob_size, HRESULT result);
 Shaders::RootSignatures::D3D12::Extended PreCreateRootSignature(std::span<const uint8_t> blob);
 // The device refused the extended signature: the game's own is created
 void PostExtendedRootSignatureRefused(HRESULT result);
-// `luma_parameter` is UINT32_MAX for the game's own signature
-void PostCreateRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter);
+// `luma_parameter` is UINT32_MAX for the game's own signature; `luma_table` says Luma's texture table follows its cbuffers
+void PostCreateRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table);
 void PostCreateRootSignatureFromLibrary();
 // CreateStateObject and AddToStateObject
 void PostCreateStateObject();
-void PostCreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& desc, ID3D12DescriptorHeap* heap);
+// The desc with Luma's tail, none to create the game's (Resources::HeapTail::D3D12)
+std::optional<D3D12_DESCRIPTOR_HEAP_DESC> PreCreateDescriptorHeap(const D3D12_DESCRIPTOR_HEAP_DESC& desc);
+// `desc` is the game's; `with_tail` when the heap was created from PreCreateDescriptorHeap's
+void PostCreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& desc, ID3D12DescriptorHeap* heap, bool with_tail);
+// ID3D12DescriptorHeap::GetDesc, for any heap: the size the game asked for, none for a heap without Luma's tail
+std::optional<uint32_t> GetGameHeapSize(ID3D12DescriptorHeap* heap);
 // Every kind of view and samplers, with what was written
 void PostCreateView(D3D12_CPU_DESCRIPTOR_HANDLE destination, const Resources::Descriptors::D3D12::Descriptor& descriptor);
 // Per pair of destination and source ranges of CopyDescriptors (split where either range ends), and CopyDescriptorsSimple
@@ -56,8 +61,9 @@ void PreSetStateObject(ID3D12GraphicsCommandList* list);
 void PreSetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12RootSignature* root_signature);
 void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
    const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil);
+// The heaps Luma's table is read from
+void PreSetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12DescriptorHeap* const* heaps);
 // What trace reads a call's state from (Development builds hook them)
-void PreSetDescriptorHeaps(ID3D12GraphicsCommandList* list);
 void PreSetRootTable(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_DESCRIPTOR_HANDLE table);
 void PreSetRootDescriptor(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_VIRTUAL_ADDRESS address);
 void PreSetRootConstants(ID3D12GraphicsCommandList* list, bool compute, UINT index, UINT count, const void* values, UINT offset);

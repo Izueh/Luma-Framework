@@ -123,19 +123,23 @@ HRESULT STDMETHODCALLTYPE CreateRootSignature(ID3D12Device* device, UINT node_ma
    const std::span game_blob(static_cast<const uint8_t*>(blob), length);
    const Shaders::RootSignatures::D3D12::Extended extended = Detours::Report(&Handlers::PreCreateRootSignature, game_blob);
    uint32_t luma_parameter = UINT32_MAX;
+   bool luma_table = false;
    HRESULT result = E_FAIL;
    if (!extended.blob.empty())
    {
       result = original<&CreateRootSignature>(device, node_mask, extended.blob.data(), extended.blob.size(), riid, root_signature);
       if (SUCCEEDED(result))
+      {
          luma_parameter = extended.luma_parameter;
+         luma_table = extended.table;
+      }
       else
          Detours::Report(&Handlers::PostExtendedRootSignatureRefused, result);
    }
    if (FAILED(result))
       result = original<&CreateRootSignature>(device, node_mask, blob, length, riid, root_signature);
    if (const ComPtr<ID3D12RootSignature> created = GetCreated<ID3D12RootSignature>(result, root_signature))
-      Detours::Report(&Handlers::PostCreateRootSignature, game_blob, created.Get(), luma_parameter);
+      Detours::Report(&Handlers::PostCreateRootSignature, game_blob, created.Get(), luma_parameter, luma_table);
    return result;
 }
 
@@ -167,14 +171,33 @@ HRESULT STDMETHODCALLTYPE AddToStateObject(ID3D12Device7* device, const D3D12_ST
    return result;
 }
 
+// Shader-visible heaps get Luma's tail (Resources::HeapTail::D3D12), which GetDesc hides
 HRESULT STDMETHODCALLTYPE CreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC* desc, REFIID riid, void** heap)
 {
    DepthGuard guard(device_depth);
-   const HRESULT result = original<&CreateDescriptorHeap>(device, desc, riid, heap);
    if (!Detours::IsGameCall(guard) || !desc)
-      return result;
+      return original<&CreateDescriptorHeap>(device, desc, riid, heap);
+   const std::optional<D3D12_DESCRIPTOR_HEAP_DESC> extended = Detours::Report(&Handlers::PreCreateDescriptorHeap, *desc);
+   HRESULT result = E_FAIL;
+   if (extended)
+      result = original<&CreateDescriptorHeap>(device, &*extended, riid, heap);
+   const bool with_tail = SUCCEEDED(result);
+   if (!with_tail)
+      result = original<&CreateDescriptorHeap>(device, desc, riid, heap);
    if (const ComPtr<ID3D12DescriptorHeap> created = GetCreated<ID3D12DescriptorHeap>(result, heap))
-      Detours::Report(&Handlers::PostCreateDescriptorHeap, device, *desc, created.Get());
+      Detours::Report(&Handlers::PostCreateDescriptorHeap, device, *desc, created.Get(), with_tail);
+   return result;
+}
+
+// D3D12's C ABI: the desc is returned through a pointer after `this`
+D3D12_DESCRIPTOR_HEAP_DESC* STDMETHODCALLTYPE GetDescriptorHeapDesc(ID3D12DescriptorHeap* heap, D3D12_DESCRIPTOR_HEAP_DESC* desc)
+{
+   D3D12_DESCRIPTOR_HEAP_DESC* result = original<&GetDescriptorHeapDesc>(heap, desc);
+   if (result)
+   {
+      if (const std::optional<uint32_t> game_size = Handlers::GetGameHeapSize(heap))
+         result->NumDescriptors = *game_size;
+   }
    return result;
 }
 
@@ -390,7 +413,10 @@ void InstallD3D12Device(const D3D12::Functions& functions)
                                        MethodHook<&CreateStateObject>(Interface::D3D12Device, LumaSlot_ID3D12Device5_CreateStateObject, "ID3D12Device5::CreateStateObject", __uuidof(ID3D12Device5)),
                                        MethodHook<&AddToStateObject>(Interface::D3D12Device, LumaSlot_ID3D12Device7_AddToStateObject, "ID3D12Device7::AddToStateObject", __uuidof(ID3D12Device7)),
                                     });
-   add(Function::CreateDescriptorHeap, {MethodHook<&CreateDescriptorHeap>(Interface::D3D12Device, LumaSlot_ID3D12Device_CreateDescriptorHeap, "ID3D12Device::CreateDescriptorHeap")});
+   add(Function::CreateDescriptorHeap, {
+                                          MethodHook<&CreateDescriptorHeap>(Interface::D3D12Device, LumaSlot_ID3D12Device_CreateDescriptorHeap, "ID3D12Device::CreateDescriptorHeap"),
+                                          MethodHook<&GetDescriptorHeapDesc>(Interface::D3D12DescriptorHeap, LumaSlot_ID3D12DescriptorHeap_GetDesc, "ID3D12DescriptorHeap::GetDesc"),
+                                       });
    add(Function::CreateView, {
                                 MethodHook<&CreateConstantBufferView>(Interface::D3D12Device, LumaSlot_ID3D12Device_CreateConstantBufferView, "ID3D12Device::CreateConstantBufferView"),
                                 MethodHook<&CreateShaderResourceView>(Interface::D3D12Device, LumaSlot_ID3D12Device_CreateShaderResourceView, "ID3D12Device::CreateShaderResourceView"),

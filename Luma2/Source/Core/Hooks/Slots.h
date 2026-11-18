@@ -109,6 +109,7 @@
    SLOT(ID3D12Device, CreateComputePipelineState)                       \
    SLOT(ID3D12Device, CreateRootSignature)                              \
    SLOT(ID3D12Device, CreateDescriptorHeap)                             \
+   SLOT(ID3D12DescriptorHeap, GetDesc)                                  \
    SLOT(ID3D12Device, CreateConstantBufferView)                         \
    SLOT(ID3D12Device, CreateShaderResourceView)                         \
    SLOT(ID3D12Device, CreateUnorderedAccessView)                        \

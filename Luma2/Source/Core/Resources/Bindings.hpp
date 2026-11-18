@@ -15,6 +15,11 @@ struct Options
    uint32_t d3d12_space = 100;
 };
 
+// D3D12: Luma's textures in a patch are read from a table in Luma's space covering its top registers, where DXP's `reverse_bind`
+// puts what a recipe adds (t127 down). A patch binding a texture at another register isn't used on D3D12.
+inline constexpr uint32_t D3D12_TEXTURE_REGISTERS = 16;
+inline constexpr uint32_t D3D12_FIRST_TEXTURE_REGISTER = 128 - D3D12_TEXTURE_REGISTERS;
+
 // Init only (Game::SetOptions)
 void SetOptions(const Options& options);
 const Options& GetOptions();

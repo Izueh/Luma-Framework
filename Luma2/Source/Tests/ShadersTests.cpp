@@ -27,6 +27,7 @@
 #include "Shaders/Compiler.hpp"
 #include "Shaders/Container.hpp"
 #include "Shaders/D3D12/D3D12RootSignatures.hpp"
+#include "Resources/Bindings.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Shaders/Database.hpp"
@@ -186,34 +187,38 @@ TEST_CASE("Shaders: a replacement that moves an input to another register doesn'
    CHECK(differences[0] == "input SV_POSITION0 is in register 0, the original's in 1");
    // Keeping the unused input fixes it, whatever the case of the semantic
    CHECK(Compare(ShaderStage::Pixel, original,
-      CompileSignature("float4 main(float4 t : texcoord0, float4 p : SV_POSITION) : SV_Target { return p.x; }", "ps_5_1")).empty());
+      CompileSignature("float4 main(float4 t : texcoord0, float4 p : SV_POSITION) : SV_Target { return p.x; }", "ps_5_1"))
+         .empty());
    // Front facing comes from the rasterizer, not the vertex shader
    CHECK(Compare(ShaderStage::Pixel, original,
-      CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position, bool f : SV_IsFrontFace) : SV_Target { return f ? p.x : 0; }", "ps_5_1")).empty());
+      CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position, bool f : SV_IsFrontFace) : SV_Target { return f ? p.x : 0; }", "ps_5_1"))
+         .empty());
    CHECK(Compare(ShaderStage::Pixel, original,
-      CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position, float4 c : COLOR0) : SV_Target { return p.x + c; }", "ps_5_1")) ==
+            CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position, float4 c : COLOR0) : SV_Target { return p.x + c; }", "ps_5_1")) ==
       std::vector<std::string>{"input COLOR0 isn't one of the original's"});
    // A replacement may declare more components than the original, as long as it reads only the original's
    const Shaders::Container::Signature narrow =
       CompileSignature("float4 main(float2 t : TEXCOORD0, float4 p : SV_Position) : SV_Target { return t.x + p.x; }", "ps_5_0");
    CHECK(Compare(ShaderStage::Pixel, narrow,
-      CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position) : SV_Target { return t.y + p.x; }", "ps_5_1")).empty());
+      CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position) : SV_Target { return t.y + p.x; }", "ps_5_1"))
+         .empty());
    CHECK(Compare(ShaderStage::Pixel, narrow,
-      CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position) : SV_Target { return t.z + p.x; }", "ps_5_1")) ==
+            CompileSignature("float4 main(float4 t : TEXCOORD0, float4 p : SV_Position) : SV_Target { return t.z + p.x; }", "ps_5_1")) ==
       std::vector<std::string>{"input TEXCOORD0 reads .z, the original declares .xy"});
    // Another render target
    CHECK(Compare(ShaderStage::Pixel, original,
-      CompileSignature("void main(float4 t : TEXCOORD0, float4 p : SV_Position, out float4 a : SV_Target0, out float4 b : SV_Target1) { a = p.x; b = 0; }", "ps_5_1")) ==
+            CompileSignature("void main(float4 t : TEXCOORD0, float4 p : SV_Position, out float4 a : SV_Target0, out float4 b : SV_Target1) { a = p.x; b = 0; }", "ps_5_1")) ==
       std::vector<std::string>{"output SV_TARGET1 isn't written by the original"});
 
    // Vertex shader outputs: what the next stage reads must stay where it was
    const Shaders::Container::Signature vertex = CompileSignature(
       "void main(float4 v0 : ATTRIBUTE0, out float4 o0 : TEXCOORD0, out float4 o1 : SV_Position) { o0 = v0; o1 = v0; }", "vs_5_0");
    CHECK(Compare(ShaderStage::Vertex, vertex,
-      CompileSignature("void main(float4 v0 : ATTRIBUTE0, float2 v1 : ATTRIBUTE1, out float4 o0 : TEXCOORD0, out float4 o1 : SV_Position) { o0 = v0 + v1.x; o1 = v0; }", "vs_5_1")) ==
+            CompileSignature("void main(float4 v0 : ATTRIBUTE0, float2 v1 : ATTRIBUTE1, out float4 o0 : TEXCOORD0, out float4 o1 : SV_Position) { o0 = v0 + v1.x; o1 = v0; }", "vs_5_1")) ==
       std::vector<std::string>{"input ATTRIBUTE1 isn't one of the original's"});
    CHECK(Compare(ShaderStage::Vertex, vertex,
-      CompileSignature("void main(float4 v0 : ATTRIBUTE0, out float4 o1 : SV_Position, out float4 o0 : TEXCOORD0) { o0 = v0; o1 = v0; }", "vs_5_1")).size() == 2);
+            CompileSignature("void main(float4 v0 : ATTRIBUTE0, out float4 o1 : SV_Position, out float4 o0 : TEXCOORD0) { o0 = v0; o1 = v0; }", "vs_5_1"))
+            .size() == 2);
 }
 
 TEST_CASE("Shaders: the registers and spaces a shader declares, without reflection")
@@ -254,8 +259,7 @@ TEST_CASE("Shaders: the registers and spaces a shader declares, without reflecti
 
    // SM6 (DXIL): PSV0's resource list, SFI0's heap indexing flag
    std::vector<uint8_t> psv;
-   const auto put = [](std::vector<uint8_t>& bytes, uint32_t value)
-   {
+   const auto put = [](std::vector<uint8_t>& bytes, uint32_t value) {
       const auto* data = reinterpret_cast<const uint8_t*>(&value);
       bytes.insert(bytes.end(), data, data + 4);
    };
@@ -301,8 +305,7 @@ TEST_CASE("Shaders: a D3D12 root signature using anything in Luma's space isn't 
    const auto serialize = reinterpret_cast<PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE>(
       GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12SerializeVersionedRootSignature"));
    REQUIRE(serialize);
-   const auto make = [&](uint32_t range_space, uint32_t sampler_space)
-   {
+   const auto make = [&](uint32_t range_space, uint32_t sampler_space) {
       const D3D12_DESCRIPTOR_RANGE1 range = {D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0, range_space, D3D12_DESCRIPTOR_RANGE_FLAG_NONE, 0};
       D3D12_ROOT_PARAMETER1 parameter = {};
       parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
@@ -322,6 +325,58 @@ TEST_CASE("Shaders: a D3D12 root signature using anything in Luma's space isn't 
    CHECK_FALSE(Shaders::RootSignatures::D3D12::Extend(make(1, 0)).blob.empty());
    CHECK(Shaders::RootSignatures::D3D12::Extend(make(100, 0)).blob.empty());
    CHECK(Shaders::RootSignatures::D3D12::Extend(make(0, 100)).blob.empty());
+}
+
+TEST_CASE("Shaders: an extended D3D12 root signature has Luma's cbuffers, then its texture table when there's room")
+{
+   REQUIRE(LoadLibraryW(L"d3d12.dll"));
+   const auto serialize = reinterpret_cast<PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE>(
+      GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12SerializeVersionedRootSignature"));
+   const auto deserializer = reinterpret_cast<PFN_D3D12_CREATE_VERSIONED_ROOT_SIGNATURE_DESERIALIZER>(
+      GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12CreateVersionedRootSignatureDeserializer"));
+   REQUIRE(serialize);
+   REQUIRE(deserializer);
+   // `constants` DWORDs of root constants, at version 1.0 or 1.1
+   const auto make = [&](uint32_t constants, D3D_ROOT_SIGNATURE_VERSION version) {
+      D3D12_VERSIONED_ROOT_SIGNATURE_DESC desc = {.Version = version};
+      D3D12_ROOT_PARAMETER parameter = {};
+      parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+      parameter.Constants = {0, 0, constants};
+      D3D12_ROOT_PARAMETER1 parameter1 = {};
+      parameter1.ParameterType = D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS;
+      parameter1.Constants = {0, 0, constants};
+      if (version == D3D_ROOT_SIGNATURE_VERSION_1_0)
+         desc.Desc_1_0 = {1, &parameter, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+      else
+         desc.Desc_1_1 = {1, &parameter1, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+      Microsoft::WRL::ComPtr<ID3DBlob> blob;
+      REQUIRE(SUCCEEDED(serialize(&desc, &blob, nullptr)));
+      return std::vector<uint8_t>(GetBytes(blob.Get()).begin(), GetBytes(blob.Get()).end());
+   };
+   for (const D3D_ROOT_SIGNATURE_VERSION version : {D3D_ROOT_SIGNATURE_VERSION_1_0, D3D_ROOT_SIGNATURE_VERSION_1_1})
+   {
+      const Shaders::RootSignatures::D3D12::Extended extended = Shaders::RootSignatures::D3D12::Extend(make(8, version));
+      REQUIRE_FALSE(extended.blob.empty());
+      CHECK(extended.luma_parameter == 1);
+      CHECK(extended.table);
+      Microsoft::WRL::ComPtr<ID3D12VersionedRootSignatureDeserializer> reader;
+      REQUIRE(SUCCEEDED(deserializer(extended.blob.data(), extended.blob.size(), IID_PPV_ARGS(&reader))));
+      const D3D12_VERSIONED_ROOT_SIGNATURE_DESC* read = nullptr;
+      REQUIRE(SUCCEEDED(reader->GetRootSignatureDescAtVersion(D3D_ROOT_SIGNATURE_VERSION_1_1, &read)));
+      REQUIRE(read->Desc_1_1.NumParameters == 4);
+      const D3D12_ROOT_PARAMETER1& table = read->Desc_1_1.pParameters[1 + Shaders::RootSignatures::D3D12::LUMA_TABLE_PARAMETER];
+      REQUIRE(table.ParameterType == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE);
+      REQUIRE(table.DescriptorTable.NumDescriptorRanges == 1);
+      const D3D12_DESCRIPTOR_RANGE1& range = table.DescriptorTable.pDescriptorRanges[0];
+      CHECK(range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SRV);
+      CHECK(range.BaseShaderRegister == Resources::Bindings::D3D12_FIRST_TEXTURE_REGISTER);
+      CHECK(range.NumDescriptors == Resources::Bindings::D3D12_TEXTURE_REGISTERS);
+      CHECK(range.RegisterSpace == Resources::Bindings::GetOptions().d3d12_space);
+   }
+   // 60 DWORDs leave room for the two root CBVs only
+   const Shaders::RootSignatures::D3D12::Extended full = Shaders::RootSignatures::D3D12::Extend(make(60, D3D_ROOT_SIGNATURE_VERSION_1_1));
+   CHECK_FALSE(full.blob.empty());
+   CHECK_FALSE(full.table);
 }
 
 TEST_CASE("Shaders: a Luma file's declaration lines are its programs")

@@ -32,6 +32,9 @@ struct Built
    bool compute = false;
    // The Resources::Database entries its shaders request, once each
    std::vector<uint32_t> entries;
+   // Its layout of Luma's texture table (Resources::Database::D3D12::RegisterTable), UINT32_MAX when it reads no texture
+   uint32_t table = UINT32_MAX;
+   bool textures = false; // Reads Luma's textures: it can't run without its table
    IUnknown* object = nullptr; // The variant pipeline, to compare only
 };
 
@@ -55,6 +58,7 @@ struct BoundPipeline
    const Database::D3D12::Pipeline* tracked = nullptr; // Null for one Luma didn't see created
    const Built* built = nullptr; // Null when the game's pipeline runs
 };
+
 BoundPipeline GetBoundPipeline(ID3D12GraphicsCommandList* list);
 // Binds the game's pipeline in place of the variant until the game binds another (a draw event's UseOriginal)
 void UseOriginal(ID3D12GraphicsCommandList* list);

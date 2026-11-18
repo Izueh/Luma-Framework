@@ -17,6 +17,9 @@
 #include "Hooks/Lifetime.hpp"
 #include "Hooks/Scope.hpp"
 #include "Luma.hpp"
+#include "Resources/Bindings.hpp"
+#include "Resources/D3D12/D3D12ResourceDatabase.hpp"
+#include "Resources/ResourceDatabase.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
 #include "Shaders/Patching.hpp"
 #include "System/Jobs.hpp"
@@ -41,6 +44,7 @@ struct Core
    ComPtr<ID3D12RootSignature> root_signature; // The desc names it
    ComPtr<ID3D12Device> device;
    bool compute = false;
+   bool luma_table = false; // Its signature has Luma's texture table
    // What binds take: the variant pipeline (lists hold it until they've executed) and what it was made from
    Hooks::Lifetime::D3D12::Object object;
    std::atomic<std::shared_ptr<const Built>> built;
@@ -85,7 +89,13 @@ bool Same(const Key& a, const Key& b)
    return true;
 }
 
-// Per stage, the variant a bind takes: the forced one (trace), else the highest-priority one that compiled. Null for the game's.
+bool ReadsTextures(const CompiledShader& compiled)
+{
+   return std::ranges::any_of(compiled.requests, [](const Request& request) { return Resources::Database::Get(request.entry).kind == Resources::Database::Kind::Texture; });
+}
+
+// Per stage, the variant a bind takes: the forced one (trace), else the highest-priority one that compiled. Null for the game's. One
+// that reads Luma's textures can't run with a signature that has no table for them.
 Key Choose(const Core& core, std::array<Source, 6>& sources)
 {
    Key key;
@@ -103,6 +113,8 @@ Key Choose(const Core& core, std::array<Source, 6>& sources)
       for (const Variant& variant : GetVariants(shader->hash))
       {
          if (!variant.compiled || (forced != Choice::Auto && GetChoice(variant.source) != forced))
+            continue;
+         if (!core.luma_table && ReadsTextures(*variant.compiled))
             continue;
          key[i] = variant.compiled;
          sources[i] = variant.source;
@@ -224,6 +236,23 @@ void Publish(const std::shared_ptr<Core>& core, Key key, const std::array<Source
                   made->entries.push_back(request.entry);
             }
          }
+         // Luma's textures by register of its table: one layout for the pipeline's stages
+         Resources::Database::D3D12::TableLayout layout;
+         layout.fill(UINT32_MAX);
+         bool textures = false;
+         for (const auto& compiled : key)
+         {
+            for (const Request& request : compiled ? compiled->requests : std::vector<Request>())
+            {
+               if (Resources::Database::Get(request.entry).kind != Resources::Database::Kind::Texture)
+                  continue;
+               layout[request.slot - Resources::Bindings::D3D12_FIRST_TEXTURE_REGISTER] = request.entry;
+               textures = true;
+            }
+         }
+         made->textures = textures;
+         if (textures)
+            made->table = Resources::Database::D3D12::RegisterTable(layout);
          made->compiled = std::move(key);
          built = std::move(made);
          if (core->failed)
@@ -318,6 +347,7 @@ void AttachVariants(ID3D12PipelineState* pipeline, const Database::D3D12::Pipeli
    core->desc = tracked.desc;
    core->root_signature = tracked.root_signature;
    core->compute = tracked.shaders[size_t(ShaderStage::Compute)] != nullptr;
+   core->luma_table = tracked.root_layout->luma_table;
    for (size_t i = 0; i < tracked.shaders.size(); i++)
       core->shaders[i] = tracked.shaders[i];
    if (FAILED(pipeline->GetDevice(IID_PPV_ARGS(&core->device))) || !Hooks::Lifetime::SetState<Holder>(pipeline, core))

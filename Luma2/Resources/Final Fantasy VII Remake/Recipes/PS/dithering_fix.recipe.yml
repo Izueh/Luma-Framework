@@ -1,4 +1,8 @@
 version: 1
+# D3D12: Luma sets LUMA_SPACE to its register space, and the patched shader becomes SM5.1 to name it. D3D11 keeps SM5.0.
+upgrade_to_sm51: auto
+env:
+  LUMA_SPACE: 0
 # What Luma shows for it (DXP reports `meta` without reading it)
 meta:
   name: Dithering Fix (Experimental)
@@ -112,6 +116,7 @@ steps:
       - handle: fast_noise
         reverse_bind: true
         dimension: texture2darray
+        space: LUMA_SPACE
 
   # Step 3: Patch the LD instruction to use the new fast_noise binding
   - kind: apply_rule

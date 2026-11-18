@@ -1,1 +1,3 @@
 DirectXTex may2026 (https://github.com/microsoft/DirectXTex/tree/may2026/DDSTextureLoader), unmodified
+
+DDSTextureLoader12.cpp builds against Shim/d3dx12.h (the two helpers it uses) instead of the DirectX-Headers package.

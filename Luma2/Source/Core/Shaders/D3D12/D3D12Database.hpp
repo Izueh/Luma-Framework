@@ -54,6 +54,7 @@ struct RootLayout
    std::atomic<uint32_t> pipelines = 0; // Alive, created with it
    // The first of Luma's root parameters (Shaders::RootSignatures::D3D12), UINT32_MAX for a signature that wasn't extended
    uint32_t luma_parameter = UINT32_MAX;
+   bool luma_table = false; // Luma's texture table follows its cbuffers (Shaders::RootSignatures::D3D12::LUMA_TABLE_PARAMETER)
 };
 
 enum class PipelineKind : uint8_t
@@ -107,6 +108,7 @@ struct SubobjectLayout
    size_t value_offset = 0;
    size_t size = 0;
 };
+
 std::optional<SubobjectLayout> GetSubobjectLayout(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type);
 
 PipelineDesc Describe(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc);
@@ -115,7 +117,7 @@ PipelineDesc Describe(const D3D12_PIPELINE_STATE_STREAM_DESC& desc);
 
 // Any thread: `root_signature` was created from the game's `blob`, extended with Luma's parameters from `luma_parameter` on
 // (UINT32_MAX when it wasn't). Null if the blob couldn't be read.
-const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter);
+const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table);
 const RootLayout* FindRootLayout(ID3D12RootSignature* root_signature);
 
 // Any thread: a deep copy of a native desc of `kind` (D3D12_GRAPHICS_PIPELINE_STATE_DESC, D3D12_COMPUTE_PIPELINE_STATE_DESC or
@@ -134,6 +136,7 @@ struct GraphicsState
    D3D12_PRIMITIVE_TOPOLOGY_TYPE topology = D3D12_PRIMITIVE_TOPOLOGY_TYPE_UNDEFINED;
    UINT sample_count = 1;
 };
+
 // None for a compute pipeline
 std::optional<GraphicsState> GetGraphicsState(const DescCopy& desc);
 

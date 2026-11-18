@@ -62,5 +62,11 @@
       <ObjectFileName>$(IntDir)DirectXTex\</ObjectFileName>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
+    <!-- D3D12's takes its one d3dx12.h helper from a shim -->
+    <ClCompile Include="$(Luma2ExternalDir)DirectXTex\DDSTextureLoader12.cpp">
+      <ObjectFileName>$(IntDir)DirectXTex\</ObjectFileName>
+      <AdditionalIncludeDirectories>$(Luma2ExternalDir)DirectXTex\Shim;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
   </ItemGroup>
 </Project>

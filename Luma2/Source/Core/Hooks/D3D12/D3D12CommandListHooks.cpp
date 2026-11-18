@@ -72,7 +72,7 @@ void STDMETHODCALLTYPE OMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT 
 void STDMETHODCALLTYPE SetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12DescriptorHeap* const* heaps)
 {
    if (!Scope::IsActive())
-      Detours::Report(&Handlers::PreSetDescriptorHeaps, list);
+      Detours::Report(&Handlers::PreSetDescriptorHeaps, list, count, heaps);
    original<&SetDescriptorHeaps>(list, count, heaps);
 }
 

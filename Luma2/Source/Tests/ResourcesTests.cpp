@@ -1,17 +1,22 @@
 #include <doctest/doctest.h>
 
 #include <array>
+#include <optional>
 #include <cstring>
 #include <vector>
 
 #include <d3d11.h>
+#include <d3d12.h>
+#include <dxgi1_4.h>
 #include <wrl/client.h>
 
 #include "Frame/Frame.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
+#include "Resources/D3D12/D3D12HeapTail.hpp"
 #include "Resources/Mirrors.hpp"
 #include "Resources/Samplers.hpp"
 #include "Resources/Upgrade.hpp"
+#include "Trace/D3D11/D3D11Capture.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -226,6 +231,10 @@ TEST_CASE("Mirrors D3D11: a matching texture gets a mirror, its views mirrored o
    ComPtr<ID3D11Resource> bound_resource;
    bound[0]->GetResource(&bound_resource);
    CHECK(bound_resource.Get() == mirror);
+#if DEVELOPMENT
+   // Trace describes a mirror as the game's texture (it recursed into the mirror until the stack ran out)
+   Trace::Capture::D3D11::AddWrite(context.Get(), "Mirror", mirror);
+#endif
 
    // CPU data reaches the mirror in its format
    const uint32_t one = 0x3C0u | (0x3C0u << 11) | (0x1E0u << 22);
@@ -264,4 +273,55 @@ TEST_CASE("Mirrors D3D11: a matching texture gets a mirror, its views mirrored o
    CHECK(Resources::Mirrors::GetStats().mirrors == before.mirrors);
    CHECK(Resources::Mirrors::GetStats().views == before.views);
    CHECK(Resources::Mirrors::GetStats().bytes == before.bytes);
+}
+
+TEST_CASE("Heap tail D3D12: shader-visible heaps get Luma's descriptors after the game's, written once per key")
+{
+   using namespace Resources::HeapTail::D3D12;
+   ComPtr<IDXGIFactory4> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   ComPtr<IDXGIAdapter> adapter;
+   REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
+   ComPtr<ID3D12Device> device;
+   REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
+
+   const D3D12_DESCRIPTOR_HEAP_DESC game_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 16, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
+   const std::optional<D3D12_DESCRIPTOR_HEAP_DESC> extended = Extend(game_desc);
+   REQUIRE(extended);
+   CHECK(extended->NumDescriptors == 16 + TAIL_SIZE);
+   // CPU-only heaps and samplers don't get one, nor a heap the tail would take past the device's limit
+   CHECK_FALSE(Extend({D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 16, D3D12_DESCRIPTOR_HEAP_FLAG_NONE}));
+   CHECK_FALSE(Extend({D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 16, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE}));
+   CHECK_FALSE(Extend({D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1000000, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE}));
+
+   ComPtr<ID3D12DescriptorHeap> heap;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&*extended, IID_PPV_ARGS(&heap))));
+   const Stats before = GetStats();
+   Track(device.Get(), heap.Get(), game_desc);
+   CHECK(GetStats().heaps == before.heaps + 1);
+   CHECK(GetGameSize(heap.Get()) == 16u);
+
+   const UINT increment = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+   int writes = 0;
+   D3D12_CPU_DESCRIPTOR_HANDLE written = {};
+   const auto write = [&](D3D12_CPU_DESCRIPTOR_HANDLE start, uint32_t) {
+      writes++;
+      written = start;
+   };
+   const D3D12_GPU_DESCRIPTOR_HANDLE first = GetRange(heap.Get(), 32, 16, 1, write);
+   CHECK(first.ptr == heap->GetGPUDescriptorHandleForHeapStart().ptr + UINT64(increment) * (16 + 32));
+   CHECK(written.ptr == heap->GetCPUDescriptorHandleForHeapStart().ptr + SIZE_T(increment) * (16 + 32));
+   CHECK(GetRange(heap.Get(), 32, 16, 1, write).ptr == first.ptr);
+   CHECK(writes == 1);
+   GetRange(heap.Get(), 48, 16, 2, write);
+   CHECK(writes == 2);
+   // Past the tail, or a heap without one: none
+   CHECK(GetRange(heap.Get(), TAIL_SIZE - 8, 16, 3, write).ptr == 0);
+   ComPtr<ID3D12DescriptorHeap> plain;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&game_desc, IID_PPV_ARGS(&plain))));
+   CHECK_FALSE(GetGameSize(plain.Get()));
+   CHECK(GetRange(plain.Get(), 0, 16, 1, write).ptr == 0);
+
+   heap.Reset();
+   CHECK(GetStats().heaps == before.heaps);
 }

@@ -4,6 +4,7 @@
 #include <cstring>
 #include <format>
 #include <mutex>
+#include <type_traits>
 #include <unordered_map>
 
 #include <d3d12.h>
@@ -28,6 +29,7 @@ namespace D3D12 {
 namespace {
 constexpr uint32_t MAX_SIZE = 64; // DWORDs
 constexpr uint32_t LUMA_SIZE = LUMA_PARAMETER_COUNT * 2; // Root descriptors are 2 DWORDs
+constexpr uint32_t LUMA_TABLE_SIZE = 1; // A table is 1 DWORD
 
 template <typename T>
 T GetExport(const char* name)
@@ -56,8 +58,7 @@ bool Covers(uint32_t base, uint32_t count, uint32_t slot)
 template <typename Parameter>
 bool UsesLumaRegisters(const Parameter& parameter, uint32_t space, uint32_t settings_slot, uint32_t data_slot)
 {
-   const auto conflicts = [&](bool cbuffer, uint32_t register_space, uint32_t base, uint32_t count)
-   {
+   const auto conflicts = [&](bool cbuffer, uint32_t register_space, uint32_t base, uint32_t count) {
       if (register_space != space)
          return false;
       return space != 0 || (cbuffer && (Covers(base, count, settings_slot) || Covers(base, count, data_slot)));
@@ -90,9 +91,36 @@ Parameter MakeConstantBuffer(uint32_t slot, uint32_t space)
    return parameter;
 }
 
+// Luma's texture table: one SRV range in its space. Its descriptors are written once per heap and never change; the ones no patch
+// reads are null views (version 1.1's volatile flag keeps validation quiet about them either way).
+template <typename Parameter, typename Range>
+Parameter MakeTable(const Range& range)
+{
+   Parameter parameter = {};
+   parameter.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+   parameter.DescriptorTable.NumDescriptorRanges = 1;
+   parameter.DescriptorTable.pDescriptorRanges = &range;
+   parameter.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+   return parameter;
+}
+
+template <typename Range>
+Range MakeTextureRange(uint32_t space)
+{
+   Range range = {};
+   range.RangeType = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+   range.NumDescriptors = Resources::Bindings::D3D12_TEXTURE_REGISTERS;
+   range.BaseShaderRegister = Resources::Bindings::D3D12_FIRST_TEXTURE_REGISTER;
+   range.RegisterSpace = space;
+   range.OffsetInDescriptorsFromTableStart = 0;
+   if constexpr (requires { range.Flags; })
+      range.Flags = D3D12_DESCRIPTOR_RANGE_FLAG_DESCRIPTORS_VOLATILE;
+   return range;
+}
+
 // `desc` is the game's at its version (D3D12_ROOT_SIGNATURE_DESC, DESC1 or DESC2), with the parameter type of that version
 template <typename Desc, typename Parameter>
-Extended Append(const Desc& desc, D3D_ROOT_SIGNATURE_VERSION version, Desc D3D12_VERSIONED_ROOT_SIGNATURE_DESC::*member)
+Extended Append(const Desc& desc, D3D_ROOT_SIGNATURE_VERSION version, Desc D3D12_VERSIONED_ROOT_SIGNATURE_DESC::* member)
 {
    const Resources::LumaCBuffers::Options& options = Resources::LumaCBuffers::GetOptions();
    const uint32_t space = Resources::Bindings::GetOptions().d3d12_space;
@@ -123,10 +151,19 @@ Extended Append(const Desc& desc, D3D_ROOT_SIGNATURE_VERSION version, Desc D3D12
       return {};
    }
 
+   // In space 0 the table's registers could be the game's
+   const bool table = space != 0 && size + LUMA_SIZE + LUMA_TABLE_SIZE <= MAX_SIZE;
+   if (!table && space != 0)
+      Utils::Log::Warning("D3D12: a root signature of {} DWORDs has no room for Luma's texture table: patches that add textures fall back with its pipelines", size);
+
    std::vector<Parameter> parameters(desc.pParameters, desc.pParameters + desc.NumParameters);
    const uint32_t luma_parameter = uint32_t(parameters.size());
    parameters.push_back(MakeConstantBuffer<Parameter>(options.settings_slot, space));
    parameters.push_back(MakeConstantBuffer<Parameter>(options.data_slot, space));
+   using Range = std::remove_cvref_t<decltype(*Parameter{}.DescriptorTable.pDescriptorRanges)>;
+   const Range texture_range = MakeTextureRange<Range>(space);
+   if (table)
+      parameters.push_back(MakeTable<Parameter>(texture_range));
    Desc extended_desc = desc;
    extended_desc.NumParameters = UINT(parameters.size());
    extended_desc.pParameters = parameters.data();
@@ -142,8 +179,9 @@ Extended Append(const Desc& desc, D3D_ROOT_SIGNATURE_VERSION version, Desc D3D12
       return {};
    }
    const auto* bytes = static_cast<const uint8_t*>(blob->GetBufferPointer());
-   return {{bytes, bytes + blob->GetBufferSize()}, luma_parameter};
+   return {{bytes, bytes + blob->GetBufferSize()}, luma_parameter, table};
 }
+
 // Signatures Luma created for pipelines that brought theirs, in the device's private data. They hold the device: released with
 // ReleaseDeviceObjects when the game releases it.
 struct Created
@@ -176,7 +214,7 @@ ID3D12RootSignature* GetForBlob(ID3D12Device* device, std::span<const uint8_t> b
          return nullptr;
       }
    }
-   Database::D3D12::TrackRootSignature(blob, root_signature.Get(), extended.luma_parameter);
+   Database::D3D12::TrackRootSignature(blob, root_signature.Get(), extended.luma_parameter, extended.table);
    return created->by_blob.emplace(key, std::move(root_signature)).first->second.Get();
 }
 

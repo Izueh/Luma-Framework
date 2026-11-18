@@ -8,6 +8,7 @@
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
 #include "Hooks/DeviceProxy.hpp"
+#include "Resources/D3D12/D3D12HeapTail.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
@@ -42,11 +43,16 @@ Shaders::Database::D3D12::PipelineDesc Describe(PipelineKind kind, const void* d
    }
 }
 
-// Before a draw, dispatch or indirect execution: the variant bound requests its resources
+// Before a draw, dispatch or indirect execution: the variant bound requests its resources. One it can't have (Luma's textures
+// with a heap without a tail) runs the game's pipeline for the call, as D3D11's UseOriginal.
 void BindVariantRequests(ID3D12GraphicsCommandList* list)
 {
    if (const Shaders::Variants::D3D12::Built* bound = Shaders::Variants::D3D12::GetBound(list))
-      Resources::Database::D3D12::BindRequested(list, bound->compute, bound->entries);
+   {
+      if ((bound->textures && bound->table == Resources::Database::D3D12::NO_TABLE) ||
+         !Resources::Database::D3D12::BindRequested(list, bound->compute, bound->entries, {}, bound->table))
+         Shaders::Variants::D3D12::UseOriginal(list);
+   }
 }
 
 #if DEVELOPMENT
@@ -204,11 +210,11 @@ void PostExtendedRootSignatureRefused(HRESULT result)
    Utils::Log::Error("D3D12: the device refused an extended root signature (0x{:08X}), the game's is used and its pipelines get no variants", uint32_t(result));
 }
 
-void PostCreateRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter)
+void PostCreateRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table)
 {
    if (!Shaders::IsNeeded())
       return;
-   [[maybe_unused]] const Shaders::Database::D3D12::RootLayout* layout = Shaders::Database::D3D12::TrackRootSignature(blob, root_signature, luma_parameter);
+   [[maybe_unused]] const Shaders::Database::D3D12::RootLayout* layout = Shaders::Database::D3D12::TrackRootSignature(blob, root_signature, luma_parameter, luma_table);
 #if DEVELOPMENT
    if (layout)
       Trace::Stats::D3D12::RecordRootSignature(*layout);
@@ -225,9 +231,18 @@ void PostCreateStateObject()
    LUMA_UNIMPLEMENTED("Variants of state objects (DXIL, the first SM6 game)");
 }
 
-// Descriptors are tracked for trace in this step (Development); the mirrors (Step 4) add their need
-void PostCreateDescriptorHeap([[maybe_unused]] ID3D12Device* device, [[maybe_unused]] const D3D12_DESCRIPTOR_HEAP_DESC& desc, [[maybe_unused]] ID3D12DescriptorHeap* heap)
+std::optional<D3D12_DESCRIPTOR_HEAP_DESC> PreCreateDescriptorHeap(const D3D12_DESCRIPTOR_HEAP_DESC& desc)
 {
+   if (!Shaders::IsNeeded())
+      return std::nullopt;
+   return Resources::HeapTail::D3D12::Extend(desc);
+}
+
+// Descriptors are tracked for trace (Development)
+void PostCreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& desc, ID3D12DescriptorHeap* heap, bool with_tail)
+{
+   if (with_tail)
+      Resources::HeapTail::D3D12::Track(device, heap, desc);
 #if DEVELOPMENT
    Resources::Descriptors::D3D12::TrackHeap(device, heap, desc);
    Trace::Stats::D3D12::RecordHeap(desc, heap);
@@ -311,8 +326,16 @@ void PreOMSetRenderTargets([[maybe_unused]] ID3D12GraphicsCommandList* list, [[m
 #endif
 }
 
-// Descriptor tables are read through the heaps' GPU ranges: the heaps bound need no record of their own
-void PreSetDescriptorHeaps(ID3D12GraphicsCommandList*) {}
+std::optional<uint32_t> GetGameHeapSize(ID3D12DescriptorHeap* heap)
+{
+   return Resources::HeapTail::D3D12::GetGameSize(heap);
+}
+
+// Trace reads descriptor tables through the heaps' GPU ranges; Luma's table is in the bound heap's tail
+void PreSetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12DescriptorHeap* const* heaps)
+{
+   Resources::Database::D3D12::SetDescriptorHeaps(list, count, heaps);
+}
 
 void PreSetRootTable([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] bool compute, [[maybe_unused]] UINT index, [[maybe_unused]] D3D12_GPU_DESCRIPTOR_HANDLE table)
 {

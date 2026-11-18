@@ -327,8 +327,8 @@ Hooks::D3D12::Functions GetD3D12Functions()
          CreatePipelineState, CreateRootSignature, CreateStateObject,
          // The variants swapped in, and what resets a list
          Reset, ClearState, SetPipelineState,
-         // Luma's cbuffers at Luma's root parameters
-         SetRootSignature, Draw, Dispatch, ExecuteIndirect, ExecuteBundle})
+         // Luma's cbuffers at Luma's root parameters, its textures in the heaps' tails
+         SetRootSignature, Draw, Dispatch, ExecuteIndirect, ExecuteBundle, CreateDescriptorHeap, SetDescriptorHeaps})
       functions.set(size_t(function));
    return functions;
 }
