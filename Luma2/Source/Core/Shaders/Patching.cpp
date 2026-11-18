@@ -248,6 +248,8 @@ void Parse(Recipe& recipe)
       recipe.parsed.reset();
       return;
    }
+   // Before DXP runs: a crash inside it (it can't report one) then names the recipe
+   Utils::Log::Info("Shaders: parsing recipe {}", recipe.identity);
    auto parsed = dxp::sm5::Recipe::ParseFromText(*text, recipe.identity);
    if (!parsed)
    {

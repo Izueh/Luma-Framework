@@ -446,6 +446,7 @@ Suggestions for enforcement, to be adopted in Step 0:
 * x64 first. Win32 is added with the first 32-bit game (`Plan.md` Step 9).
 * Shared settings live in `Props/`. A game project is a short file importing them.
 * New third-party code goes under `Luma2/External`. Existing submodules are used from `Source/External`.
+* **A header-only library that a prebuilt dependency also carries is renamed for Luma.** Luma's glaze is compiled as `luma_glz` (`glz=luma_glz` in `Luma2.Common.props`): DXP's `dxpatcher.lib` has its own glaze, another version, and two versions under the same names share whichever copy of each inline function the linker keeps (Debug builds crashed parsing a recipe). Code keeps writing `glz::`. Luma's glaze is pinned to v9.1.0 (the submodule), and DXP is moving to the same version: once a DXP release carrying 9.1.0 is in, the rename can go (the clash needs two versions under one name).
 
 ## 17. Deviations from 1.0
 

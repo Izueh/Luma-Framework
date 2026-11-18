@@ -53,6 +53,11 @@
       <!-- /Zc:preprocessor is required by glaze -->
       <AdditionalOptions>/utf-8 /Zc:preprocessor %(AdditionalOptions)</AdditionalOptions>
       <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;NOMINMAX;UNICODE;_UNICODE;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <!-- Luma's glaze in a namespace of its own. DXP's prebuilt dxpatcher.lib carries another glaze version (7.9.1 for DXP 0.10.0,
+           this one is 9.1.0) under the same names: with both called "glz", the linker keeps one copy of each shared inline function
+           for both, and in Debug builds DXP's YAML reader destroyed its glz::context with the layout of Luma's (a crash parsing the
+           first recipe). Keep it while any library linked into Luma brings its own glaze. -->
+      <PreprocessorDefinitions>glz=luma_glz;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'=='Development-Debug' or '$(Configuration)'=='Development-Release'">DEVELOPMENT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <!-- Development builds read shaders and textures from the repository in place, when it's there (System/Paths.cpp) -->
       <PreprocessorDefinitions Condition="'$(Configuration)'=='Development-Debug' or '$(Configuration)'=='Development-Release'">LUMA_RESOURCES_DIR=LR"($(Luma2Root)Resources\)";%(PreprocessorDefinitions)</PreprocessorDefinitions>

@@ -7,6 +7,8 @@
 
 #include <dxgiformat.h>
 
+#include <glaze/core/context.hpp>
+
 #include "Utils/Format.hpp"
 #include "Utils/Hash.hpp"
 #include "Utils/Json.hpp"
@@ -199,4 +201,20 @@ TEST_CASE("Modules: exports are read from the export table like the loader resol
    REQUIRE(dxgi);
    CHECK(Luma::System::Modules::FindExport(dxgi, MAKEINTRESOURCEA(11)) == reinterpret_cast<void*>(GetProcAddress(dxgi, MAKEINTRESOURCEA(11))));
    CHECK_FALSE(Luma::System::Modules::FindExport(dxgi, MAKEINTRESOURCEA(60000)));
+}
+
+// Luma2.Common.props renames Luma's glaze namespace: DXP's library carries another glaze version, and under one name the linker mixed their glz::context
+namespace Luma::Tests {
+// Not in an anonymous namespace: glaze can't reflect types with internal linkage
+struct GlazeNamed
+{
+   int first_field = 1;
+};
+} // namespace Luma::Tests
+
+TEST_CASE("Utils: Luma's glaze has a namespace of its own, apart from a library's")
+{
+   CHECK(std::string_view(typeid(glz::context).name()).find("luma_glz::") != std::string_view::npos);
+   // Reflection still names members (glaze finds them through its namespace's name in __FUNCSIG__)
+   CHECK(Utils::Json::Write(Tests::GlazeNamed{}).find("first_field") != std::string::npos);
 }
