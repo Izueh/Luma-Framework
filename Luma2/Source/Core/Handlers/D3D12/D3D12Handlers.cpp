@@ -1,6 +1,8 @@
 #include "Handlers/D3D12/D3D12Handlers.hpp"
 
+#include <array>
 #include <optional>
+#include <span>
 #include <type_traits>
 
 #include "Frame/Frame.hpp"
@@ -9,6 +11,10 @@
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
+#include "Resources/D3D12/D3D12Mirrors.hpp"
+#include "Resources/Mirrors.hpp"
+#include "Resources/Samplers.hpp"
+#include "Resources/Upgrade.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
@@ -96,7 +102,12 @@ bool RunCall(ID3D12GraphicsCommandList* list, const Call& call)
    constexpr bool skipped = false;
 #endif
    if (result == Game::DrawResult::None && !skipped)
+   {
       BindVariantRequests(list);
+      // Last: what's bound now is what draws
+      if constexpr (!dispatch)
+         Shaders::Variants::D3D12::BindFormatVariant(list);
+   }
    bool handled = result != Game::DrawResult::None || skipped;
 #if DEVELOPMENT
    // Last: the call as it ran is what's read
@@ -144,6 +155,7 @@ void OnDeviceDestroyed(ID3D12Device* device)
    ForgetSwapchains(device);
    // Luma's objects hold the device
    Resources::Database::D3D12::ReleaseDeviceObjects(device);
+   Resources::Mirrors::D3D12::ReleaseDeviceObjects(device);
    Shaders::RootSignatures::D3D12::ReleaseDeviceObjects(device);
    Shaders::PipelineLibrary::D3D12::ReleaseDeviceObjects(device);
    Validation::D3D12::StopWatchingDevice(device);
@@ -243,30 +255,63 @@ void PostCreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_
 {
    if (with_tail)
       Resources::HeapTail::D3D12::Track(device, heap, desc);
+   if (Resources::Mirrors::IsNeeded() || Resources::Samplers::IsNeeded())
+      Resources::Mirrors::D3D12::TrackHeap(device, heap, desc);
 #if DEVELOPMENT
    Resources::Descriptors::D3D12::TrackHeap(device, heap, desc);
    Trace::Stats::D3D12::RecordHeap(desc, heap);
 #endif
 }
 
-void PostCreateView([[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE destination, [[maybe_unused]] const Resources::Descriptors::D3D12::Descriptor& descriptor)
+void PostCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, const Resources::Descriptors::D3D12::Descriptor& descriptor)
 {
+   using Kind = Resources::Descriptors::D3D12::Kind;
+   using ViewKind = Resources::Mirrors::D3D12::ViewKind;
+   if (descriptor.kind == Kind::Sampler)
+   {
+      if (Resources::Samplers::IsNeeded() && descriptor.has_desc)
+         Resources::Mirrors::D3D12::OnCreateSampler(device, destination, descriptor.desc.sampler, Resources::Samplers::IsSwapping());
+   }
+   else if (Resources::Mirrors::IsNeeded())
+   {
+      ViewKind kind = ViewKind::ConstantBuffer;
+      switch (descriptor.kind)
+      {
+      case Kind::ShaderResource: kind = ViewKind::ShaderResource; break;
+      case Kind::UnorderedAccess: kind = ViewKind::UnorderedAccess; break;
+      case Kind::RenderTarget: kind = ViewKind::RenderTarget; break;
+      case Kind::DepthStencil: kind = ViewKind::DepthStencil; break;
+      default: break;
+      }
+      Resources::Mirrors::D3D12::OnCreateView(device, destination, kind, descriptor.resource, descriptor.has_desc ? &descriptor.desc : nullptr,
+         Resources::Mirrors::IsSwapping());
+   }
 #if DEVELOPMENT
    Resources::Descriptors::D3D12::Write(destination, descriptor);
    Trace::Stats::D3D12::RecordViewWrite(destination);
 #endif
 }
 
-void PostCopyDescriptors([[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE destination, [[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE source, [[maybe_unused]] UINT count)
+void PostCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type)
 {
+   if (Resources::Mirrors::IsNeeded() || Resources::Samplers::IsNeeded())
+      Resources::Mirrors::D3D12::OnCopyDescriptors(device, destination, source, count, type, Resources::Mirrors::IsSwapping(), Resources::Samplers::IsSwapping());
 #if DEVELOPMENT
    Resources::Descriptors::D3D12::Copy(destination, source, count);
    Trace::Stats::D3D12::RecordCopy(destination, count);
 #endif
 }
 
-void PostCreateResource([[maybe_unused]] ID3D12Resource* resource)
+void PostCreateResource(ID3D12Device* device, ID3D12Resource* resource, std::optional<D3D12_RESOURCE_STATES> state, const D3D12_CLEAR_VALUE* clear, bool reserved)
 {
+   // Reserved resources aren't mirrored (Plan.md, Step 4). Enhanced barrier layouts would need the mirror's barriers in that model too.
+   if (Resources::Mirrors::IsNeeded() && !reserved)
+   {
+      if (state)
+         Resources::Mirrors::D3D12::CreateMirror(device, resource, *state, clear);
+      else
+         LUMA_UNIMPLEMENTED("Mirrors of D3D12 resources created with an enhanced barrier layout");
+   }
 #if DEVELOPMENT
    Resources::Descriptors::D3D12::TrackResource(resource);
 #endif
@@ -274,6 +319,9 @@ void PostCreateResource([[maybe_unused]] ID3D12Resource* resource)
 
 void PreReset(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline)
 {
+   // No targets bound any more
+   if (Resources::Mirrors::IsNeeded())
+      Shaders::Variants::D3D12::SetTargetFormats(list, {});
    // What the list recorded before is the queues' to release now, and it starts with nothing of Luma's
    Hooks::Lifetime::D3D12::ForgetReferences(list);
    Resources::Database::D3D12::ForgetList(list);
@@ -288,6 +336,8 @@ void PreReset(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline)
 
 void PreClearState(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline)
 {
+   if (Resources::Mirrors::IsNeeded())
+      Shaders::Variants::D3D12::SetTargetFormats(list, {});
    Resources::Database::D3D12::ForgetList(list);
    Shaders::Variants::D3D12::SwapInVariant(list, pipeline);
 #if DEVELOPMENT
@@ -317,13 +367,21 @@ void PreSetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12Ro
 #endif
 }
 
-void PreOMSetRenderTargets([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] UINT count, [[maybe_unused]] const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets,
-   [[maybe_unused]] BOOL single_range, [[maybe_unused]] const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil)
+void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE*& render_targets, BOOL& single_range,
+   const D3D12_CPU_DESCRIPTOR_HANDLE*& depth_stencil)
 {
 #if DEVELOPMENT
+   // The game's targets
    Trace::Capture::D3D12::OnSetRenderTargets(list, count, render_targets, single_range, depth_stencil);
    Trace::Stats::D3D12::RecordBind(list, Trace::Stats::D3D12::Bind::RenderTargets);
 #endif
+   if (Resources::Mirrors::IsNeeded())
+   {
+      std::array<DXGI_FORMAT, 8> formats = {};
+      if (Resources::Mirrors::IsSwapping())
+         Resources::Mirrors::D3D12::SwapRenderTargets(count, render_targets, single_range, depth_stencil, formats);
+      Shaders::Variants::D3D12::SetTargetFormats(list, formats);
+   }
 }
 
 std::optional<uint32_t> GetGameHeapSize(ID3D12DescriptorHeap* heap)
@@ -395,11 +453,12 @@ void PreSetStencilRef([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_
 #endif
 }
 
-void PreResourceBarrier([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] UINT count, [[maybe_unused]] const D3D12_RESOURCE_BARRIER* barriers)
+std::span<const D3D12_RESOURCE_BARRIER> PreResourceBarrier([[maybe_unused]] ID3D12GraphicsCommandList* list, std::span<const D3D12_RESOURCE_BARRIER> barriers)
 {
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnResourceBarrier(list, count, barriers);
+   Trace::Capture::D3D12::OnResourceBarrier(list, UINT(barriers.size()), barriers.data());
 #endif
+   return Resources::Mirrors::IsNeeded() ? Resources::Mirrors::D3D12::AddMirrorBarriers(barriers) : barriers;
 }
 
 bool PreCopyResource([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] ID3D12Resource*& destination, [[maybe_unused]] ID3D12Resource*& source)
@@ -408,6 +467,8 @@ bool PreCopyResource([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_u
    if (Trace::Capture::IsCapturing())
       Trace::Capture::D3D12::AddCopy(list, "CopyResource", destination, source, {});
 #endif
+   if (Resources::Mirrors::IsSwapping())
+      Resources::Mirrors::D3D12::SwapCopy(destination, source);
    return false;
 }
 
@@ -430,6 +491,9 @@ bool PreCopyTextureRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[ma
       Trace::Capture::D3D12::AddCopy(list, "CopyTextureRegion", destination.pResource, source.pResource, copy);
    }
 #endif
+   // A footprint side is a buffer: it's never mirrored, so a mirrored texture on the other side keeps the game's (counted)
+   if (Resources::Mirrors::IsSwapping())
+      Resources::Mirrors::D3D12::SwapCopy(destination.pResource, source.pResource);
    return false;
 }
 
@@ -454,6 +518,16 @@ bool PreResolveSubresource([[maybe_unused]] ID3D12GraphicsCommandList* list, [[m
       Trace::Capture::D3D12::AddCopy(list, "ResolveSubresource", destination, source,
          {.kind = Trace::Capture::CopyKind::Resolve, .source_subresource = source_subresource, .destination_subresource = destination_subresource, .resolve_format = uint32_t(format)});
 #endif
+   ID3D12Resource* const game_source = source;
+   if (Resources::Mirrors::IsSwapping())
+      Resources::Mirrors::D3D12::SwapCopy(destination, source);
+   if (source != game_source)
+   {
+      const D3D12_RESOURCE_DESC desc = source->GetDesc();
+      const DXGI_FORMAT mapped = Resources::Upgrade::GetBestViewFormat(format, Resources::Upgrade::ViewKind::ShaderResource, game_source->GetDesc().Format, desc.Format);
+      if (mapped != DXGI_FORMAT_UNKNOWN)
+         format = mapped;
+   }
    return false;
 }
 
@@ -464,6 +538,8 @@ bool PreClearRenderTargetView([[maybe_unused]] ID3D12GraphicsCommandList* list, 
    if (Trace::Capture::IsCapturing())
       Trace::Capture::D3D12::AddClear(list, "ClearRenderTargetView", view, {color[0], color[1], color[2], color[3]});
 #endif
+   if (Resources::Mirrors::IsSwapping())
+      Resources::Mirrors::D3D12::SwapHandle(view);
    return false;
 }
 
@@ -475,6 +551,8 @@ bool PreClearDepthStencilView([[maybe_unused]] ID3D12GraphicsCommandList* list, 
       Trace::Capture::D3D12::AddClear(list, "ClearDepthStencilView", view,
          {(flags & D3D12_CLEAR_FLAG_DEPTH) ? depth : 0.f, (flags & D3D12_CLEAR_FLAG_STENCIL) ? float(stencil) : 0.f, 0.f, 0.f});
 #endif
+   if (Resources::Mirrors::IsSwapping())
+      Resources::Mirrors::D3D12::SwapHandle(view);
    return false;
 }
 
@@ -490,6 +568,8 @@ bool PreClearUnorderedAccessView([[maybe_unused]] ID3D12GraphicsCommandList* lis
       Trace::Capture::D3D12::AddClear(list, values.float_values ? "ClearUnorderedAccessViewFloat" : "ClearUnorderedAccessViewUint", resource, cleared);
    }
 #endif
+   if (Resources::Mirrors::IsSwapping())
+      Resources::Mirrors::D3D12::OnClearUnorderedAccess(resource);
    return false;
 }
 

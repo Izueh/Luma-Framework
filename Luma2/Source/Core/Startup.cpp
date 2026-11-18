@@ -83,6 +83,7 @@ int32_t GetDefaultWorkerThreads()
 Hooks::D3D12::Functions GetCoreD3D12Functions()
 {
    Hooks::D3D12::Functions functions = Shaders::GetD3D12Functions();
+   functions |= Resources::Mirrors::GetD3D12Functions();
    functions |= Game::Registry::GetRequestedD3D12Functions();
 #if DEVELOPMENT
    functions |= Trace::Capture::GetD3D12Functions();

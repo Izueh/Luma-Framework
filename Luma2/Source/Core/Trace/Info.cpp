@@ -12,6 +12,8 @@
 #include "Common/Api.hpp"
 #include "Game/Registry.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
+#include "Resources/D3D12/D3D12HeapTail.hpp"
+#include "Resources/D3D12/D3D12Mirrors.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Resources/Bindings.hpp"
 #include "Resources/Mirrors.hpp"
@@ -150,7 +152,16 @@ Status GetStatus()
       d3d12.variant_pipelines = {variants.pipelines, variants.ready, variants.pending, variants.failed};
       const Shaders::PipelineLibrary::D3D12::Stats library = Shaders::PipelineLibrary::D3D12::GetStats();
       d3d12.luma_pipeline_library = {library.hits, library.misses, library.stored};
-      d3d12.cbuffer_ring_bytes = Resources::Database::D3D12::GetStats().ring_bytes;
+      const Resources::Database::D3D12::Stats resources = Resources::Database::D3D12::GetStats();
+      d3d12.cbuffer_ring_bytes = resources.ring_bytes;
+      d3d12.luma_textures = resources.textures;
+      d3d12.texture_tables = resources.tables;
+      const Resources::HeapTail::D3D12::Stats tails = Resources::HeapTail::D3D12::GetStats();
+      d3d12.heap_tails = tails.heaps;
+      d3d12.heaps_without_tail = tails.refused;
+      const Resources::Mirrors::D3D12::Stats mirrored = Resources::Mirrors::D3D12::GetStats();
+      d3d12.mirrors = {mirrored.descriptors, mirrored.samplers, mirrored.swapped_copies, mirrored.direct_writes, variants.format_variants, mirrored.unhandled_copies,
+         mirrored.unhandled_clears, mirrored.layout_resources, mirrored.aliasing_barriers};
       d3d12.register_model = std::format("space{}", Resources::Bindings::GetOptions().d3d12_space);
 #if DEVELOPMENT
       const Resources::Descriptors::D3D12::Stats descriptors = Resources::Descriptors::D3D12::GetStats();

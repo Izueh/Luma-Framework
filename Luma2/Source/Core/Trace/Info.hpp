@@ -110,6 +110,20 @@ struct D3D12LibraryInfo
    uint32_t stored = 0;
 };
 
+// Resources::Mirrors::D3D12's counters (Plan.md Step 4 part C's questions among them)
+struct D3D12MirrorsInfo
+{
+   uint32_t descriptors = 0; // Game CPU handles holding a mirrored view or sampler
+   uint32_t samplers = 0;
+   uint32_t swapped_copies = 0; // Since the start
+   uint32_t direct_writes = 0; // Views of mirrors written straight into shader-visible heaps
+   uint32_t format_variants = 0;
+   uint32_t unhandled_copies = 0; // Between a mirror and a texture without one: the game's textures copied
+   uint32_t unhandled_clears = 0; // UAV clears of mirrored textures
+   uint32_t layout_resources = 0;
+   uint32_t aliasing_barriers = 0;
+};
+
 struct D3D12Info
 {
    uint32_t pipelines = 0; // The game's, alive
@@ -118,6 +132,11 @@ struct D3D12Info
    uint32_t extended_root_signatures = 0;
    uint32_t unextended_root_signatures = 0;
    uint64_t cbuffer_ring_bytes = 0; // Luma's cbuffers' upload memory
+   uint32_t heap_tails = 0; // Shader-visible heaps with Luma's descriptors at their end
+   uint32_t heaps_without_tail = 0;
+   uint32_t luma_textures = 0;
+   uint32_t texture_tables = 0; // Layouts of Luma's texture table
+   D3D12MirrorsInfo mirrors;
    // Where Luma's cbuffers are: "space100", with the variants compiled as SM5.1
    std::string register_model;
    // Development builds: the descriptor heaps and resources trace knows

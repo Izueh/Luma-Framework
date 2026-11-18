@@ -46,11 +46,12 @@ void PostCreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_
 // ID3D12DescriptorHeap::GetDesc, for any heap: the size the game asked for, none for a heap without Luma's tail
 std::optional<uint32_t> GetGameHeapSize(ID3D12DescriptorHeap* heap);
 // Every kind of view and samplers, with what was written
-void PostCreateView(D3D12_CPU_DESCRIPTOR_HANDLE destination, const Resources::Descriptors::D3D12::Descriptor& descriptor);
+void PostCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, const Resources::Descriptors::D3D12::Descriptor& descriptor);
 // Per pair of destination and source ranges of CopyDescriptors (split where either range ends), and CopyDescriptorsSimple
-void PostCopyDescriptors(D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count);
-// Committed, placed and reserved resources
-void PostCreateResource(ID3D12Resource* resource);
+void PostCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count,
+   D3D12_DESCRIPTOR_HEAP_TYPE type);
+// Committed, placed and reserved resources: `state` is the initial one, none for a creation with an enhanced barrier layout
+void PostCreateResource(ID3D12Device* device, ID3D12Resource* resource, std::optional<D3D12_RESOURCE_STATES> state, const D3D12_CLEAR_VALUE* clear, bool reserved);
 
 // Command lists. A pipeline argument can be replaced by its variant.
 void PreReset(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline);
@@ -59,8 +60,9 @@ void PreSetPipelineState(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& 
 // SetPipelineState1
 void PreSetStateObject(ID3D12GraphicsCommandList* list);
 void PreSetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12RootSignature* root_signature);
-void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
-   const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil);
+// The handles can be replaced (mirrors' render targets)
+void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE*& render_targets, BOOL& single_range,
+   const D3D12_CPU_DESCRIPTOR_HANDLE*& depth_stencil);
 // The heaps Luma's table is read from
 void PreSetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12DescriptorHeap* const* heaps);
 // What trace reads a call's state from (Development builds hook them)
@@ -74,7 +76,8 @@ void PreSetBlendFactor(ID3D12GraphicsCommandList* list, const FLOAT factor[4]);
 void PreSetStencilRef(ID3D12GraphicsCommandList* list, UINT stencil_ref);
 // DrawInstanced, DrawIndexedInstanced, DispatchMesh, and Dispatch: true when the game's call doesn't run (a draw event or the
 // trace skipped or replaced it)
-void PreResourceBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers);
+// The barriers to issue: the game's, with the mirrors' appended
+std::span<const D3D12_RESOURCE_BARRIER> PreResourceBarrier(ID3D12GraphicsCommandList* list, std::span<const D3D12_RESOURCE_BARRIER> barriers);
 
 // Copies and clears: true skips the call. The locations are copies of the game's, which can be edited.
 bool PreCopyResource(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, ID3D12Resource*& source);

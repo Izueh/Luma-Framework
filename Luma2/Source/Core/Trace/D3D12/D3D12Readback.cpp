@@ -11,6 +11,8 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
+#include "Resources/D3D12/D3D12Mirrors.hpp"
+#include "Resources/Mirrors.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
 #include "Shaders/Database.hpp"
 #include "Trace/D3D12/D3D12Capture.hpp"
@@ -36,6 +38,7 @@ struct Copy
    uint32_t mip = 0;
    DXGI_FORMAT view_format = DXGI_FORMAT_UNKNOWN;
    std::string resource;
+   bool mirrored = false; // Read from Luma's mirror of `resource`
    // Compared only: the list the copy was recorded on, then the queue that executed it
    const void* list = nullptr;
    ComPtr<ID3D12CommandQueue> queue;
@@ -139,7 +142,8 @@ Result Read(const Copy& copy)
       .row_pitch = first.RowPitch,
       .rows = copy.rows.front(),
       .block_compressed = IsBlockCompressed(desc.Format),
-      .resource = copy.resource};
+      .resource = copy.resource,
+      .mirrored = copy.mirrored};
    void* mapped = nullptr;
    if (FAILED(copy.buffer->Map(0, nullptr, &mapped)))
       return {.error = "the readback buffer couldn't be mapped"};
@@ -217,14 +221,24 @@ bool ReadAfterCall(const Game::D3D12::Call& call, Shaders::StageSet stages, bool
       Finish({.error = "the list didn't transition the resource before the call, so its state isn't known (a render target or UAV is)"});
       return true;
    }
+   // A mirrored texture is read from its mirror while the mirrors are swapped in (it's what the call wrote), unless the game's is asked
+   // for. The mirror is in the original's state: it gets every barrier the original does.
+   ID3D12Resource* mirror = !target->original && Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D12::GetMirror(view->resource) : nullptr;
    std::string error;
-   std::optional<Copy> copy = RecordCopy(call.list, view->resource, *view->state, target->mip, &error);
+   std::optional<Copy> copy = RecordCopy(call.list, mirror ? mirror : view->resource, *view->state, target->mip, &error);
    if (!copy)
    {
       Finish({.error = error.empty() ? "the copy couldn't be recorded" : error});
       return true;
    }
    copy->view_format = target->view == ViewKind::Depth || target->view == ViewKind::Stencil ? GetDepthReadFormat(view->format, target->view == ViewKind::Stencil) : view->format;
+   if (mirror)
+   {
+      // The game's view format names the game's texture: the mirror's own is how its data reads
+      copy->view_format = DXGI_FORMAT_UNKNOWN;
+      copy->resource = GetId(view->resource);
+      copy->mirrored = true;
+   }
    std::scoped_lock lock(mutex);
    pending = std::move(copy);
    return true;

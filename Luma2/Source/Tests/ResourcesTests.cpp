@@ -2,6 +2,7 @@
 
 #include <array>
 #include <optional>
+#include <span>
 #include <cstring>
 #include <vector>
 
@@ -13,6 +14,7 @@
 #include "Frame/Frame.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
+#include "Resources/D3D12/D3D12Mirrors.hpp"
 #include "Resources/Mirrors.hpp"
 #include "Resources/Samplers.hpp"
 #include "Resources/Upgrade.hpp"
@@ -324,4 +326,116 @@ TEST_CASE("Heap tail D3D12: shader-visible heaps get Luma's descriptors after th
 
    heap.Reset();
    CHECK(GetStats().heaps == before.heaps);
+}
+
+TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at render target binds and copies into shader-visible heaps")
+{
+   namespace Mirrors12 = Resources::Mirrors::D3D12;
+   ComPtr<IDXGIFactory4> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   ComPtr<IDXGIAdapter> adapter;
+   REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
+   ComPtr<ID3D12Device> device;
+   REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
+   Frame::CreateDeviceState(device.Get());
+   Frame::SetOutputResolution(device.Get(), {64, 36});
+   RulesFixture rules;
+   const Resources::Mirrors::Stats before = Resources::Mirrors::GetStats();
+
+   const D3D12_HEAP_PROPERTIES heap = {D3D12_HEAP_TYPE_DEFAULT};
+   const D3D12_RESOURCE_DESC desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 32, 18, 1, 1, DXGI_FORMAT_R11G11B10_FLOAT, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+      D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
+   const D3D12_CLEAR_VALUE clear = {DXGI_FORMAT_R11G11B10_FLOAT, {0.f, 0.f, 0.f, 1.f}};
+   ComPtr<ID3D12Resource> texture;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_RENDER_TARGET, &clear, IID_PPV_ARGS(&texture))));
+   Mirrors12::CreateMirror(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, &clear);
+   ID3D12Resource* mirror = Mirrors12::GetMirror(texture.Get());
+   REQUIRE(mirror);
+   CHECK(Mirrors12::GetOriginal(mirror) == texture.Get());
+   CHECK(mirror->GetDesc().Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   CHECK(Resources::Mirrors::GetStats().mirrors == before.mirrors + 1);
+
+   // Barriers on the game's texture are given to the mirror
+   D3D12_RESOURCE_BARRIER barrier = {D3D12_RESOURCE_BARRIER_TYPE_TRANSITION};
+   barrier.Transition = {texture.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE};
+   const std::span<const D3D12_RESOURCE_BARRIER> barriers = Mirrors12::AddMirrorBarriers(std::span(&barrier, 1));
+   REQUIRE(barriers.size() == 2);
+   CHECK(barriers[0].Transition.pResource == texture.Get());
+   CHECK(barriers[1].Transition.pResource == mirror);
+
+   // A render target view of it: the bind gets the mirror's, with its format
+   const D3D12_DESCRIPTOR_HEAP_DESC rtv_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2};
+   ComPtr<ID3D12DescriptorHeap> rtv_heap;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&rtv_desc, IID_PPV_ARGS(&rtv_heap))));
+   Mirrors12::TrackHeap(device.Get(), rtv_heap.Get(), rtv_desc);
+   const D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+   const D3D12_RENDER_TARGET_VIEW_DESC view = {DXGI_FORMAT_R11G11B10_FLOAT, D3D12_RTV_DIMENSION_TEXTURE2D};
+   device->CreateRenderTargetView(texture.Get(), &view, rtv);
+   Mirrors12::OnCreateView(device.Get(), rtv, Mirrors12::ViewKind::RenderTarget, texture.Get(), &view, true);
+   const D3D12_CPU_DESCRIPTOR_HANDLE* targets = &rtv;
+   BOOL single_range = TRUE;
+   const D3D12_CPU_DESCRIPTOR_HANDLE* depth = nullptr;
+   std::array<DXGI_FORMAT, 8> formats;
+   Mirrors12::SwapRenderTargets(1, targets, single_range, depth, formats);
+   CHECK(targets[0].ptr != rtv.ptr);
+   CHECK_FALSE(single_range);
+   CHECK(formats[0] == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   CHECK(formats[1] == DXGI_FORMAT_UNKNOWN);
+   D3D12_CPU_DESCRIPTOR_HANDLE cleared = rtv;
+   CHECK(Mirrors12::SwapHandle(cleared));
+   CHECK(cleared.ptr == targets[0].ptr);
+   // The game writes another view there: the handle is the game's again
+   const D3D12_RESOURCE_DESC plain_desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 32, 18, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+      D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
+   ComPtr<ID3D12Resource> plain;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &plain_desc, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, IID_PPV_ARGS(&plain))));
+   Mirrors12::CreateMirror(device.Get(), plain.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr);
+   CHECK_FALSE(Mirrors12::GetMirror(plain.Get()));
+   const D3D12_CPU_DESCRIPTOR_HANDLE other = {rtv.ptr + device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV)};
+   device->CreateRenderTargetView(plain.Get(), nullptr, other);
+   Mirrors12::OnCreateView(device.Get(), other, Mirrors12::ViewKind::RenderTarget, plain.Get(), nullptr, true);
+   cleared = other;
+   CHECK_FALSE(Mirrors12::SwapHandle(cleared));
+
+   // A shader resource view in a CPU heap, copied into a shader-visible one: the copy is followed by the mirror's view
+   const D3D12_DESCRIPTOR_HEAP_DESC cpu_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4};
+   const D3D12_DESCRIPTOR_HEAP_DESC gpu_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
+   ComPtr<ID3D12DescriptorHeap> cpu_heap;
+   ComPtr<ID3D12DescriptorHeap> gpu_heap;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&cpu_desc, IID_PPV_ARGS(&cpu_heap))));
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&gpu_desc, IID_PPV_ARGS(&gpu_heap))));
+   Mirrors12::TrackHeap(device.Get(), cpu_heap.Get(), cpu_desc);
+   Mirrors12::TrackHeap(device.Get(), gpu_heap.Get(), gpu_desc);
+   const D3D12_CPU_DESCRIPTOR_HANDLE srv = cpu_heap->GetCPUDescriptorHandleForHeapStart();
+   device->CreateShaderResourceView(texture.Get(), nullptr, srv);
+   Mirrors12::OnCreateView(device.Get(), srv, Mirrors12::ViewKind::ShaderResource, texture.Get(), nullptr, true);
+   const uint32_t swapped = Mirrors12::GetStats().swapped_copies;
+   device->CopyDescriptorsSimple(1, gpu_heap->GetCPUDescriptorHandleForHeapStart(), srv, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+   Mirrors12::OnCopyDescriptors(device.Get(), gpu_heap->GetCPUDescriptorHandleForHeapStart(), srv, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true, true);
+   CHECK(Mirrors12::GetStats().swapped_copies == swapped + 1);
+   // A copy between CPU heaps carries the mirror along
+   const D3D12_CPU_DESCRIPTOR_HANDLE staged = {srv.ptr + 2 * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)};
+   device->CopyDescriptorsSimple(1, staged, srv, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+   const uint32_t descriptors = Mirrors12::GetStats().descriptors;
+   Mirrors12::OnCopyDescriptors(device.Get(), staged, srv, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true, true);
+   CHECK(Mirrors12::GetStats().descriptors == descriptors + 1);
+
+   // Copies between the game's mirrored textures run on the mirrors
+   ComPtr<ID3D12Resource> second;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&second))));
+   Mirrors12::CreateMirror(device.Get(), second.Get(), D3D12_RESOURCE_STATE_COPY_DEST, nullptr);
+   ID3D12Resource* copy_destination = second.Get();
+   ID3D12Resource* copy_source = texture.Get();
+   Mirrors12::SwapCopy(copy_destination, copy_source);
+   CHECK(copy_destination == Mirrors12::GetMirror(second.Get()));
+   CHECK(copy_source == mirror);
+
+   // The mirrors and their handles go with the game's objects
+   cpu_heap.Reset();
+   rtv_heap.Reset();
+   texture.Reset();
+   second.Reset();
+   CHECK(Resources::Mirrors::GetStats().mirrors == before.mirrors);
+   CHECK(Resources::Mirrors::GetStats().views == before.views);
+   Mirrors12::ReleaseDeviceObjects(device.Get());
 }

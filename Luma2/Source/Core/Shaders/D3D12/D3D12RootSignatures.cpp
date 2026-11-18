@@ -14,6 +14,7 @@
 #include "Hooks/Scope.hpp"
 #include "Resources/Bindings.hpp"
 #include "Resources/LumaCBuffers.hpp"
+#include "Resources/Samplers.hpp"
 #include "Shaders/Container.hpp"
 #include "Utils/Hash.hpp"
 #include "System/Modules.hpp"
@@ -131,9 +132,16 @@ Extended Append(const Desc& desc, D3D_ROOT_SIGNATURE_VERSION version, Desc D3D12
       size += GetSize(desc.pParameters[i]);
       conflict |= UsesLumaRegisters(desc.pParameters[i], space, options.settings_slot, options.data_slot);
    }
-   // Static samplers cost nothing, but take registers
+   // Static samplers cost nothing, but take registers. Sampler upgrades can't reach them: a signature's samplers are fixed at its
+   // creation (a mirror signature per offset would be the way).
+   bool anisotropic = false;
    for (UINT i = 0; i < desc.NumStaticSamplers; i++)
+   {
       conflict |= space != 0 && desc.pStaticSamplers[i].RegisterSpace == space;
+      anisotropic |= D3D12_DECODE_IS_ANISOTROPIC_FILTER(desc.pStaticSamplers[i].Filter);
+   }
+   if (anisotropic && Resources::Samplers::IsNeeded())
+      LUMA_UNIMPLEMENTED("Sampler upgrades of anisotropic static samplers in D3D12 root signatures");
    if (conflict)
    {
       // 1.0 asserts when a game shader reads a slot Luma binds its own to. The mod picks another space (Game::Options::bindings).

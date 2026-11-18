@@ -65,12 +65,19 @@ void UseOriginal(ID3D12GraphicsCommandList* list);
 // Presenting thread, at a D3D12 present: pipelines whose choice changed (a publication, a forced choice) are made again
 void UpdateVariants();
 
+// Format variants (Resources::Mirrors::D3D12): the list's render targets are mirrors in `formats` (UNKNOWN for the game's own)
+void SetTargetFormats(ID3D12GraphicsCommandList* list, const std::array<DXGI_FORMAT, 8>& formats);
+// Before a draw: a graphics pipeline drawing into mirrors is swapped for its variant with their formats, made on the spot the first
+// time (logged once per pipeline) and kept with the pipeline. Nothing when the targets or the pipeline haven't changed since.
+void BindFormatVariant(ID3D12GraphicsCommandList* list);
+
 struct Stats
 {
    uint32_t pipelines = 0; // With a desc copy
    uint32_t ready = 0;
    uint32_t pending = 0;
    uint32_t failed = 0;
+   uint32_t format_variants = 0; // Made, alive
 };
 
 // Any thread

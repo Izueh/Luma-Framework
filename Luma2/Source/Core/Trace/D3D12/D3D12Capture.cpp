@@ -15,6 +15,9 @@
 #include <Windows.h>
 #include <wrl/client.h>
 
+#include "Resources/D3D12/D3D12Mirrors.hpp"
+#include "Resources/Mirrors.hpp"
+#include "Utils/Format.hpp"
 #include "Hooks/Lifetime.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
@@ -145,6 +148,12 @@ Resource DescribeResource(ID3D12Resource* resource, uint64_t expected_id)
    }
    described.format = desc.Format;
    described.debug_name = GetDebugName(resource);
+   // What the call read or wrote while the mirrors are swapped in
+   if (ID3D12Resource* mirror = Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D12::GetMirror(resource) : nullptr)
+   {
+      const D3D12_RESOURCE_DESC mirror_desc = mirror->GetDesc();
+      described.mirror = std::format("{} {}x{}", Utils::Format::GetName(mirror_desc.Format), uint32_t(mirror_desc.Width), mirror_desc.Height);
+   }
    return described;
 }
 

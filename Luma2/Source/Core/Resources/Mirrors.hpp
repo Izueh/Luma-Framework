@@ -21,6 +21,8 @@ bool IsNeeded();
 // either way, so switching back needs no catch-up.
 bool IsSwapping();
 Hooks::D3D11::Functions GetD3D11Functions();
+// D3D12's mirrors and sampler mirrors (Resources::Mirrors::D3D12 has both)
+Hooks::D3D12::Functions GetD3D12Functions();
 
 struct Stats
 {

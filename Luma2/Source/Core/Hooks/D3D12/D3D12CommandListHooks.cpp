@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <initializer_list>
+#include <span>
 #include <vector>
 
 #include <d3d12.h>
@@ -65,7 +66,7 @@ void STDMETHODCALLTYPE OMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT 
    const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil)
 {
    if (!Scope::IsActive())
-      Detours::Report(&Handlers::PreOMSetRenderTargets, list, count, render_targets, single_range, depth_stencil);
+      Detours::Report(&Handlers::PreOMSetRenderTargets, list, count, std::ref(render_targets), std::ref(single_range), std::ref(depth_stencil));
    original<&OMSetRenderTargets>(list, count, render_targets, single_range, depth_stencil);
 }
 
@@ -198,9 +199,10 @@ void STDMETHODCALLTYPE ExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12Grap
 
 void STDMETHODCALLTYPE ResourceBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers)
 {
+   std::span<const D3D12_RESOURCE_BARRIER> final_barriers(barriers, barriers ? count : 0);
    if (!Scope::IsActive())
-      Detours::Report(&Handlers::PreResourceBarrier, list, count, barriers);
-   original<&ResourceBarrier>(list, count, barriers);
+      final_barriers = Detours::Report(&Handlers::PreResourceBarrier, list, final_barriers);
+   original<&ResourceBarrier>(list, UINT(final_barriers.size()), final_barriers.empty() ? barriers : final_barriers.data());
 }
 
 // Copies and clears: the handlers may change the resources and handles (Luma's mirrors) or skip the call
