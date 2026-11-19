@@ -194,11 +194,14 @@ std::vector<Shaders::Compiler::Define> GetDefines(Api api)
    ASSERT_ONCE_MSG(settings_slot < SLOT_COUNT && data_slot < SLOT_COUNT && settings_slot != data_slot, "The Luma cbuffer slots must be two different ones of 0 to 13");
    // 1.0 gives the UI cbuffer (unused yet) a free slot too: the compiler fails on two cbuffers with the same one
    const uint32_t ui_slot = FindFreeSlot(SLOT_COUNT / 2 - 2, {settings_slot, data_slot});
+   // Display composition's own (Display::Composition), below the others
+   const uint32_t composition_slot = FindFreeSlot(SLOT_COUNT / 2 - 3, {settings_slot, data_slot, ui_slot});
    const std::string space = api == Api::D3D12 ? std::format(", space{}", Bindings::GetOptions().d3d12_space) : std::string();
    return {
       {"LUMA_SETTINGS_CB_INDEX", std::format("b{}{}", settings_slot, space)},
       {"LUMA_DATA_CB_INDEX", std::format("b{}{}", data_slot, space)},
       {"LUMA_UI_DATA_CB_INDEX", std::format("b{}{}", ui_slot, space)},
+      {"LUMA_COMPOSITION_CB_INDEX", std::format("b{}{}", composition_slot, space)},
    };
 }
 

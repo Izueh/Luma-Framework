@@ -152,13 +152,19 @@
    SLOT(IDXGIFactory2, CreateSwapChainForHwnd)                          \
    SLOT(IDXGISwapChain, GetDevice)                                      \
    SLOT(IDXGISwapChain, GetDesc)                                        \
+   SLOT(IDXGISwapChain, GetBuffer)                                      \
    SLOT(IDXGISwapChain, Present)                                        \
    SLOT(IDXGISwapChain, SetFullscreenState)                             \
+   SLOT(IDXGISwapChain, GetFullscreenState)                             \
    SLOT(IDXGISwapChain, ResizeBuffers)                                  \
    SLOT(IDXGISwapChain1, GetDesc1)                                      \
    SLOT(IDXGISwapChain1, Present1)                                      \
    SLOT(IDXGISwapChain3, SetColorSpace1)                                \
-   SLOT(IDXGISwapChain3, ResizeBuffers1)
+   SLOT(IDXGISwapChain3, CheckColorSpaceSupport)                        \
+   SLOT(IDXGISwapChain3, GetCurrentBackBufferIndex)                     \
+   SLOT(IDXGISwapChain3, ResizeBuffers1)                                \
+   SLOT(IDXGISwapChain4, SetHDRMetaData)                                \
+   SLOT(IDXGIOutput6, GetDesc1)
 
 // The interface versions whose vtables Luma records (see "LUMA_INTERFACE_VERSION")
 #define LUMA_VTABLE_INTERFACES(INTERFACE) \
@@ -175,6 +181,13 @@
    INTERFACE(IDXGISwapChain2)             \
    INTERFACE(IDXGISwapChain3)             \
    INTERFACE(IDXGISwapChain4)             \
+   INTERFACE(IDXGIOutput)                 \
+   INTERFACE(IDXGIOutput1)                \
+   INTERFACE(IDXGIOutput2)                \
+   INTERFACE(IDXGIOutput3)                \
+   INTERFACE(IDXGIOutput4)                \
+   INTERFACE(IDXGIOutput5)                \
+   INTERFACE(IDXGIOutput6)                \
    INTERFACE(ID3D11Device)                \
    INTERFACE(ID3D11Device1)               \
    INTERFACE(ID3D11Device2)               \

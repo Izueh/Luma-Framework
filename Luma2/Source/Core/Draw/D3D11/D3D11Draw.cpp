@@ -332,7 +332,7 @@ void ForgetBoundState(Context* context)
 
 bool DrawFullscreen(Context* context, const FullscreenPass& pass)
 {
-   if (!IsEnabled() || !pass.target)
+   if ((!IsEnabled() && !pass.while_off) || !pass.target)
       return false;
    ComPtr<ID3D11Device> device;
    context->GetDevice(&device);
@@ -362,8 +362,8 @@ bool DrawFullscreen(Context* context, const FullscreenPass& pass)
    Shaders::D3D11::Bind(context, ShaderStage::Vertex, vertex_shader->object.Get());
    Shaders::D3D11::Bind(context, ShaderStage::Pixel, pixel_shader->object.Get());
    // What Luma's shaders read (its cbuffers), where they declared them
-   Resources::Database::D3D11::BindRequested(context, ShaderStage::Vertex, *vertex_shader->compiled, pass.custom);
-   Resources::Database::D3D11::BindRequested(context, ShaderStage::Pixel, *pixel_shader->compiled, pass.custom);
+   Resources::Database::D3D11::BindRequested(context, ShaderStage::Vertex, *vertex_shader->compiled, pass.custom, pass.while_off);
+   Resources::Database::D3D11::BindRequested(context, ShaderStage::Pixel, *pixel_shader->compiled, pass.custom, pass.while_off);
 #if DEVELOPMENT
    std::optional<Trace::Capture::D3D11::Recording> recording;
    if (Trace::Capture::IsCapturing())

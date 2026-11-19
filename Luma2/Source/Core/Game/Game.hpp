@@ -22,6 +22,7 @@
 #include "Resources/Textures.hpp"
 #include "Resources/Upgrade.hpp"
 #include "Settings/Keys.hpp"
+#include "Swapchain/Swapchain.hpp"
 #include "Settings/Registry.hpp"
 #include "Shaders/Defines.hpp"
 #include "Shaders/Patching.hpp"
@@ -104,6 +105,8 @@ struct Options
    Luma::Resources::Samplers::Options samplers;
    // The game's own bytecode patches (recipes are files in the Recipes folder)
    Luma::Shaders::Patching::Options patching;
+   // How Luma presents: Mirror (the game draws to Luma's buffers) or in place (1.0's), the HDR output mode, borderless
+   Luma::Swapchain::Options swapchain;
    GameDeviceDataType device_data;
 };
 
@@ -135,6 +138,12 @@ void MarkLumaSettingsDirty();
 
 // Null for a device Luma doesn't know. Any thread, the device or the game's proxy of it.
 GameDeviceData* GetGameDeviceData(Device device);
+
+// What the game's image is: its own HDR option (1.0's DisplayMode switch in FF7R's output pass). Any thread, applied at the next present:
+// LumaSettings' display mode and white levels follow (SDR at 80 nits), the output mode doesn't.
+namespace Display {
+void SetHdr(bool hdr);
+} // namespace Display
 
 // The device's resolutions (Luma::Frame). Any thread, the device or the game's proxy of it.
 namespace Frame {

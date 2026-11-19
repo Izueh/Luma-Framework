@@ -65,6 +65,36 @@ struct ResourcesInfo
    float lod_bias_offset = 0.f;
 };
 
+// Swapchain and Display: what the game asked for and what Luma presents, of the swapchain presented last
+struct OutputInfo
+{
+   std::string mode; // "Mirror", "InPlace"
+   std::string output_mode; // "SDR", "HDR10", "scRGB"
+   std::string color_space; // The real swapchain's
+   std::string game_color_space; // What the game set, kept as what its image is in; empty if it never did
+   uint32_t game_format = 0; // DXGI_FORMAT
+   uint32_t real_format = 0;
+   uint32_t game_width = 0;
+   uint32_t game_height = 0;
+   uint32_t real_width = 0;
+   uint32_t real_height = 0;
+   uint32_t game_buffers = 0;
+   uint32_t real_buffers = 0;
+   bool flip_model = false;
+   bool tearing = false;
+   bool borderless = false;
+   bool game_fullscreen = false;
+   bool composed = false; // The last present ran display composition
+   bool hdr_supported = false;
+   bool hdr_enabled = false; // Windows HDR on the display the window is on
+   float peak_nits = 0.f;
+   float sdr_white_nits = 0.f;
+   uint32_t display_mode = 0; // LumaSettings: 0 SDR, 1 HDR, 2 SDR on HDR
+   float peak_white_nits = 0.f;
+   float game_paper_white_nits = 0.f;
+   float ui_paper_white_nits = 0.f;
+};
+
 // Shaders::Patching: recipes and the game's bytecode patches
 struct PatchesInfo
 {
@@ -171,6 +201,7 @@ struct Status
    ShadersInfo shaders;
    PatchesInfo patches;
    ResourcesInfo resources;
+   std::optional<OutputInfo> output; // Once a swapchain presented through Luma
    JobsInfo jobs;
    ValidationInfo validation;
    std::optional<D3D12Info> d3d12; // Once a D3D12 device was created

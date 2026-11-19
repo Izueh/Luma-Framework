@@ -22,6 +22,10 @@
 #include "Resources/Textures.hpp"
 #include "Shaders/Patching.hpp"
 #include "Shaders/Shaders.hpp"
+#include "Display/Composition.hpp"
+#include "Display/Levels.hpp"
+#include "Display/DXGI/DXGISpoofing.hpp"
+#include "Swapchain/Swapchain.hpp"
 #include "System/Jobs.hpp"
 #include "System/Loader.hpp"
 #include "System/Paths.hpp"
@@ -147,12 +151,16 @@ void Initialize()
    Shaders::Register();
    Resources::Mirrors::Register();
    Resources::Samplers::Register();
+   Swapchain::Register();
+   Display::Levels::Register();
+   Display::Spoofing::DXGI::Register();
    Validation::Register();
    Game::Init();
    Game::Registry::LogDeclarations();
    System::Paths::ResolveRoots();
    // Named from the shader files the game's name finds
    Resources::LumaCBuffers::Register();
+   Display::Composition::Register();
    // After Core's cbuffers, whose names a file can't take
    Resources::Textures::Register();
    // The recipes' settings, before the saved values load

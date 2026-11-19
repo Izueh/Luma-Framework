@@ -1,5 +1,7 @@
 #include "Trace/D3D11/D3D11Readback.hpp"
 
+#include "Swapchain/DXGI/DXGISwapchain.hpp"
+
 #if DEVELOPMENT
 #include <array>
 #include <format>
@@ -353,8 +355,10 @@ void ReadBack(IDXGISwapChain* swapchain, ID3D11Device* device)
    device->GetImmediateContext(&context);
    if (target->view == ViewKind::Swapchain)
    {
+      // The game's image: its own buffer where Luma composes into the real one
       ComPtr<ID3D11Texture2D> back_buffer;
-      if (FAILED(swapchain->GetBuffer(0, IID_PPV_ARGS(&back_buffer))))
+      const ComPtr<IUnknown> game_buffer = Swapchain::DXGI::GetGameBuffer(swapchain);
+      if (game_buffer ? FAILED(game_buffer.As(&back_buffer)) : FAILED(swapchain->GetBuffer(0, IID_PPV_ARGS(&back_buffer))))
          return Finish({.error = "the swapchain has no back buffer"});
       Result result = ReadTexture(context.Get(), back_buffer.Get(), DXGI_FORMAT_UNKNOWN, target->mip);
       if (result.texture)

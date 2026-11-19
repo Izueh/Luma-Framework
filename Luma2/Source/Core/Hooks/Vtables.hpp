@@ -15,6 +15,7 @@ enum class Interface : uint8_t
 {
    DXGIFactory,
    DXGISwapChain,
+   DXGIOutput,
    D3D11Device,
    D3D11ImmediateContext,
    D3D11DeferredContext,

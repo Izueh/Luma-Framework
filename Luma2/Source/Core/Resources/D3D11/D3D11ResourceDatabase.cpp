@@ -218,9 +218,9 @@ bool HasRequested(ID3D11DeviceContext* context, const Shaders::CompiledShader& c
    });
 }
 
-bool BindRequested(ID3D11DeviceContext* context, ShaderStage stage, const Shaders::CompiledShader& compiled, const CustomData& custom)
+bool BindRequested(ID3D11DeviceContext* context, ShaderStage stage, const Shaders::CompiledShader& compiled, const CustomData& custom, bool while_off)
 {
-   if (compiled.requests.empty() || !IsEnabled())
+   if (compiled.requests.empty() || (!IsEnabled() && !while_off))
       return false;
    Context* state = Hooks::Lifetime::GetOrCreateStateCached<Context>(context);
    const Store* store = state ? GetStore(context, *state) : nullptr;

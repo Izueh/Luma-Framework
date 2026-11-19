@@ -10,11 +10,14 @@ struct IUnknown;
 // resize, a game's SR or TAA path the render one (Game::Frame). Read from any thread.
 namespace Luma {
 namespace Frame {
+// Never conflated (Guidelines.md section 12): output and swapchain are equal unless Luma presents at another size
 struct Resolutions
 {
-   Math::uint2 output = {1, 1}; // The swapchain's (1.0's output_resolution)
+   Math::uint2 output = {1, 1}; // The back buffer the game asked for (1.0's output_resolution), what upscaling targets
    Math::uint2 render = {1, 1}; // What the game renders the scene at, the output until something sets it
    Math::uint2 previous_render = {1, 1}; // The render resolution before the last change
+   Math::uint2 swapchain = {1, 1}; // The real buffers Luma presents
+   Math::uint2 display = {1, 1}; // The mode of the monitor the window is on
 };
 
 // A device's resolutions
@@ -28,8 +31,11 @@ Resolutions Get(IUnknown* device);
 // a device Luma doesn't know, valid while the device is. Read gives the defaults for null.
 const DeviceState* Find(IUnknown* device);
 Resolutions Read(const DeviceState* state);
-// The swapchain's size: render and previous render follow it (until SR changes them, Step 7)
+// The game's back buffer size: render and previous render follow it (until SR changes them, Step 7), and the swapchain's until
+// SetSwapchainResolution says otherwise
 void SetOutputResolution(IUnknown* device, Math::uint2 size);
+// The real buffers' and the monitor's, after the output's
+void SetSwapchainResolution(IUnknown* device, Math::uint2 swapchain, Math::uint2 display);
 void SetRenderResolution(IUnknown* device, Math::uint2 size);
 // Any thread: changes after every change of any device's resolutions (part of LumaSettings' stamp)
 uint64_t GetGeneration();

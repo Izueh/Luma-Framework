@@ -765,7 +765,7 @@ void main(
     color.z = saturate(r0.y ? r0.x : r0.w);
   }
 
-#if DEVELOPMENT && EARLY_DISPLAY_ENCODING //scRGB OUTPUT
+#if EARLY_DISPLAY_ENCODING // Linear (scRGB) out in every build: Luma's display composition encodes for the output mode
     color = PQ_to_Linear(color);
     color *= (HDR10_MaxWhiteNits / sRGB_WhiteLevelNits);
     color = BT2020_To_BT709(color);

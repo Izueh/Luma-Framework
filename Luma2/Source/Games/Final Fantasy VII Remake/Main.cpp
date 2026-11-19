@@ -113,6 +113,20 @@ void OnPresent()
    cb_luma_global_settings.GameSettings.custom_random = static_cast<float>(random_generator() + (std::mt19937::min)()) / random_range;
 }
 
+// 1.0's OnDraw_OutputPass: the game's own HDR option picks its HDR or SDR output pass, and LumaSettings' display mode follows it (Core
+// applies it at the next present). 1.0 also turned Windows HDR on here and marked post processing done (Step 7's frame markers).
+Luma::Game::DrawResult OnDrawOutputHdr()
+{
+   Luma::Game::Display::SetHdr(true);
+   return Luma::Game::DrawResult::None;
+}
+
+Luma::Game::DrawResult OnDrawOutputSdr()
+{
+   Luma::Game::Display::SetHdr(false);
+   return Luma::Game::DrawResult::None;
+}
+
 // The game runs on D3D11 or D3D12 (its -d3d11 and -dx12 switches): the same code from each API's events
 namespace D3D11Events {
 void OnInitSwapchain(IDXGISwapChain*, ID3D11Device* device, bool)
@@ -137,9 +151,29 @@ Luma::Game::DrawResult OnDrawSSAOTemporal(const Luma::Game::D3D11::Call& call)
    }
    return Luma::Game::DrawResult::None;
 }
+
+Luma::Game::DrawResult OnDrawOutputHdr(const Luma::Game::D3D11::Call&)
+{
+   return ::OnDrawOutputHdr();
+}
+
+Luma::Game::DrawResult OnDrawOutputSdr(const Luma::Game::D3D11::Call&)
+{
+   return ::OnDrawOutputSdr();
+}
 } // namespace D3D11Events
 
 namespace D3D12Events {
+Luma::Game::DrawResult OnDrawOutputHdr(const Luma::Game::D3D12::Call&)
+{
+   return ::OnDrawOutputHdr();
+}
+
+Luma::Game::DrawResult OnDrawOutputSdr(const Luma::Game::D3D12::Call&)
+{
+   return ::OnDrawOutputSdr();
+}
+
 // The queue's device: the one the game data and resolutions are kept on
 void OnInitSwapchain(IDXGISwapChain*, ID3D12CommandQueue* queue, bool)
 {
@@ -376,6 +410,8 @@ void Luma::Game::Init()
       // 1.0's UseLumaFastNoise: the FAST noise texture, which SSAO Temporal and the Dithering Fix recipe read
       .textures = {.load = true},
       .samplers = {.upgrade = true},
+      // 1.0's Publishing build presented HDR10 (Development scRGB)
+      .swapchain = {.mode = Luma::Swapchain::Mode::Mirror, .hdr_output = Luma::Swapchain::OutputMode::Hdr10},
       .device_data = GameDeviceDataType::Of<GameDeviceData>(),
    });
    // Texture upgrades (8 bit unorm and 11 bit float etc to 16 bit float). 1.0 also listed the 8 bit RGBA and BGRA formats, under
@@ -398,9 +434,13 @@ void Luma::Game::Init()
       .on_present = &D3D12Events::OnPresent,
    });
    D3D11::OnShaderDraw(SHADER_HASHES_SSAO_TEMPORAL, &D3D11Events::OnDrawSSAOTemporal);
-   // 1.0's other draw callbacks wait for their steps: TAA (has_drawn_taa, then SR: Step 7), Output HDR and SDR (the display mode
-   // switch: Step 5; the two pass UI split is ENABLE_FRAMEGEN, never on in 1.0), DoF and Motion Blur (the SR sampler: Step 7). SSAO
-   // Temporal's noise on D3D12 waits for Luma's views there (Step 5).
+   D3D11::OnShaderDraw(SHADER_HASHES_OUTPUT_HDR, &D3D11Events::OnDrawOutputHdr);
+   D3D11::OnShaderDraw(SHADER_HASHES_OUTPUT_SDR, &D3D11Events::OnDrawOutputSdr);
+   D3D12::OnShaderDraw(SHADER_HASHES_OUTPUT_HDR, &D3D12Events::OnDrawOutputHdr);
+   D3D12::OnShaderDraw(SHADER_HASHES_OUTPUT_SDR, &D3D12Events::OnDrawOutputSdr);
+   // 1.0's other draw callbacks wait for their steps: TAA (has_drawn_taa, then SR: Step 7), the output pass's has_drawn_taa gate and
+   // post processing marker (Step 7; the two pass UI split is ENABLE_FRAMEGEN, never on in 1.0), DoF and Motion Blur (the SR sampler:
+   // Step 7). SSAO Temporal's noise on D3D12 waits for Luma's views in passes there.
 }
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved)

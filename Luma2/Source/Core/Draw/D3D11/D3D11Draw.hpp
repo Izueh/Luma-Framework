@@ -96,9 +96,12 @@ struct FullscreenPass
    // Without alpha the blend factor's alpha is 0 (1.0)
    bool alpha = true;
    Resources::Database::CustomData custom;
+   // Drawn while Luma is off too: display composition, the only writer of the real back buffer
+   bool while_off = false;
 };
 
-// Inside a Luma scope. False, drawing nothing, while Luma is off, a shader isn't compiled or the target isn't a 2D texture's.
+// Inside a Luma scope. False, drawing nothing, while Luma is off (but `while_off`), a shader isn't compiled or the target isn't a 2D
+// texture's.
 bool DrawFullscreen(ID3D11DeviceContext* context, const FullscreenPass& pass);
 // `source` into the whole of `target`, at the same size (point, "Luma_Copy_VS/PS") or another one with the same aspect
 // (bilinear, "Luma_Scale_VS/PS")

@@ -17,6 +17,7 @@
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Resources/Bindings.hpp"
 #include "Resources/Mirrors.hpp"
+#include "Resources/LumaCBuffers.hpp"
 #include "Resources/Samplers.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
@@ -28,6 +29,7 @@
 #include "Shaders/Patching.hpp"
 #include "System/Jobs.hpp"
 #include "Shaders/Shaders.hpp"
+#include "Swapchain/DXGI/DXGISwapchain.hpp"
 #include "Shaders/Variants.hpp"
 #include "System/Paths.hpp"
 #include "UI/Overlay.hpp"
@@ -137,6 +139,38 @@ Status GetStatus()
       .mirror_mb = mirrors.bytes >> 20,
       .views = mirrors.views,
       .lod_bias_offset = Resources::Samplers::GetLodBiasOffset()};
+   if (const Swapchain::DXGI::Status output = Swapchain::DXGI::GetStatus(); output.known)
+   {
+      const CB::LumaGlobalSettings& settings = Resources::LumaCBuffers::cb_luma_global_settings;
+      status.output = OutputInfo{
+         .mode = output.mode,
+         .output_mode = output.output_mode,
+         .color_space = std::string(Swapchain::DXGI::GetName(output.color_space)),
+         .game_color_space = output.game_color_space ? std::string(Swapchain::DXGI::GetName(*output.game_color_space)) : std::string(),
+         .game_format = uint32_t(output.game_format),
+         .real_format = uint32_t(output.real_format),
+         .game_width = output.game_width,
+         .game_height = output.game_height,
+         .real_width = output.real_width,
+         .real_height = output.real_height,
+         .game_buffers = output.game_buffers,
+         .real_buffers = output.real_buffers,
+         .flip_model = output.flip_model,
+         .tearing = output.tearing,
+         .borderless = output.borderless,
+         .game_fullscreen = output.game_fullscreen,
+         .composed = output.composed,
+         .hdr_supported = output.hdr_supported,
+         .hdr_enabled = output.hdr_enabled,
+         .peak_nits = output.peak_nits,
+         .sdr_white_nits = output.sdr_white_nits,
+         // Written on the presenting thread: a torn read only mixes two frames' values
+         .display_mode = settings.DisplayMode,
+         .peak_white_nits = settings.PeakWhiteNits,
+         .game_paper_white_nits = settings.GamePaperWhiteNits,
+         .ui_paper_white_nits = settings.UIPaperWhiteNits,
+      };
+   }
    const System::Jobs::Status jobs = System::Jobs::GetStatus();
    status.shaders.job = jobs.name;
    status.jobs = {jobs.threads, jobs.running, jobs.queued};

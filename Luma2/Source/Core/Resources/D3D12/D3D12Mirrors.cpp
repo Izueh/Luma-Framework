@@ -234,7 +234,7 @@ Upgrade::TextureDesc Describe(const D3D12_RESOURCE_DESC& desc, bool gpu_only)
 Upgrade::FrameState GetFrameState(ID3D12Device* device)
 {
    const Frame::Resolutions resolutions = Frame::Read(Frame::Find(device));
-   return {.render = resolutions.render, .output = resolutions.output, .display = {uint32_t(GetSystemMetrics(SM_CXSCREEN)), uint32_t(GetSystemMetrics(SM_CYSCREEN))}};
+   return {.render = resolutions.render, .output = resolutions.output, .display = resolutions.display};
 }
 
 void LogFailure(std::string_view what, HRESULT result)

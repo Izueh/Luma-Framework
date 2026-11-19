@@ -125,6 +125,9 @@
 #ifndef LUMA_UI_DATA_CB_INDEX
 #define LUMA_UI_DATA_CB_INDEX b11
 #endif
+#ifndef LUMA_COMPOSITION_CB_INDEX
+#define LUMA_COMPOSITION_CB_INDEX b10
+#endif
 
 /////////////////////////////////////////
 // Rendering features toggles (development)

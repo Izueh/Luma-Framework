@@ -104,7 +104,7 @@ Upgrade::TextureDesc Describe(const Desc& desc)
 Upgrade::FrameState GetFrameState(ID3D11Device* device)
 {
    const Frame::Resolutions resolutions = Frame::Read(Frame::Find(device));
-   return {.render = resolutions.render, .output = resolutions.output, .display = {uint32_t(GetSystemMetrics(SM_CXSCREEN)), uint32_t(GetSystemMetrics(SM_CYSCREEN))}};
+   return {.render = resolutions.render, .output = resolutions.output, .display = resolutions.display};
 }
 
 uint32_t MipSize(uint32_t size, uint32_t level)

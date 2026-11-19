@@ -44,6 +44,12 @@ using ResizeBuffersFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapch
 using ResizeBuffers1Function = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags,
    const UINT* node_masks, IUnknown* const* present_queues);
 using SetColorSpace1Function = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space);
+using GetBufferFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer);
+using GetCurrentBackBufferIndexFunction = UINT(STDMETHODCALLTYPE*)(IDXGISwapChain3* swapchain);
+using GetFullscreenStateFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapchain, BOOL* fullscreen, IDXGIOutput** output);
+using CheckColorSpaceSupportFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space, UINT* support);
+using GetOutputDesc1Function = HRESULT(STDMETHODCALLTYPE*)(IDXGIOutput6* output, DXGI_OUTPUT_DESC1* desc);
+using SetHDRMetaDataFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain4* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, void* metadata);
 
 CreateDXGIFactoryFunction original_create_factory = nullptr;
 CreateDXGIFactoryFunction original_create_factory1 = nullptr;
@@ -59,6 +65,12 @@ SetFullscreenStateFunction original_set_fullscreen_state = nullptr;
 ResizeBuffersFunction original_resize_buffers = nullptr;
 ResizeBuffers1Function original_resize_buffers1 = nullptr;
 SetColorSpace1Function original_set_color_space1 = nullptr;
+GetBufferFunction original_get_buffer = nullptr;
+GetCurrentBackBufferIndexFunction original_get_current_back_buffer_index = nullptr;
+GetFullscreenStateFunction original_get_fullscreen_state = nullptr;
+SetHDRMetaDataFunction original_set_hdr_metadata = nullptr;
+CheckColorSpaceSupportFunction original_check_color_space_support = nullptr;
+GetOutputDesc1Function original_get_output_desc1 = nullptr;
 
 // These forward to each other inside DXGI, and overlays hooking them may call back into Luma's: only the outermost call
 // is the game's
@@ -76,6 +88,15 @@ const std::array FACTORY_VERSIONS = {
    Vtables::GetVersion<IDXGIFactory5>("IDXGIFactory5", LumaMethodCount_IDXGIFactory5),
    Vtables::GetVersion<IDXGIFactory6>("IDXGIFactory6", LumaMethodCount_IDXGIFactory6),
    Vtables::GetVersion<IDXGIFactory7>("IDXGIFactory7", LumaMethodCount_IDXGIFactory7),
+};
+const std::array OUTPUT_VERSIONS = {
+   Vtables::GetVersion<IDXGIOutput>("IDXGIOutput", LumaMethodCount_IDXGIOutput),
+   Vtables::GetVersion<IDXGIOutput1>("IDXGIOutput1", LumaMethodCount_IDXGIOutput1),
+   Vtables::GetVersion<IDXGIOutput2>("IDXGIOutput2", LumaMethodCount_IDXGIOutput2),
+   Vtables::GetVersion<IDXGIOutput3>("IDXGIOutput3", LumaMethodCount_IDXGIOutput3),
+   Vtables::GetVersion<IDXGIOutput4>("IDXGIOutput4", LumaMethodCount_IDXGIOutput4),
+   Vtables::GetVersion<IDXGIOutput5>("IDXGIOutput5", LumaMethodCount_IDXGIOutput5),
+   Vtables::GetVersion<IDXGIOutput6>("IDXGIOutput6", LumaMethodCount_IDXGIOutput6),
 };
 const std::array SWAPCHAIN_VERSIONS = {
    Vtables::GetVersion<IDXGISwapChain>("IDXGISwapChain", LumaMethodCount_IDXGISwapChain),
@@ -165,7 +186,16 @@ void OnFactoryCreated(HRESULT result, void** factory_pointer)
       return;
    const bool is_first = !Vtables::Get(Vtables::Interface::DXGIFactory);
    Vtables::Set(Vtables::Interface::DXGIFactory, factory.Get(), FACTORY_VERSIONS);
-   if (is_first)
+   // An output's, which the display spoofing hooks: games ask about the display before they create a swapchain
+   bool is_first_output = false;
+   ComPtr<IDXGIAdapter> adapter;
+   ComPtr<IDXGIOutput> output;
+   if (!Vtables::Get(Vtables::Interface::DXGIOutput) && SUCCEEDED(factory->EnumAdapters(0, &adapter)) && SUCCEEDED(adapter->EnumOutputs(0, &output)))
+   {
+      Vtables::Set(Vtables::Interface::DXGIOutput, output.Get(), OUTPUT_VERSIONS);
+      is_first_output = true;
+   }
+   if (is_first || is_first_output)
       InstallPending();
 }
 
@@ -390,10 +420,10 @@ HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval,
       NoteCaller(_ReturnAddress());
       Scope::Guard scope;
       ObserveImmediateContext(swapchain);
-      Handlers::PrePresent(swapchain);
+      Handlers::PrePresent(swapchain, sync_interval, flags);
    }
    const HRESULT result = CallRuntime(original_present, swapchain, sync_interval, flags);
-   if (is_game)
+   if (is_game && SUCCEEDED(result))
    {
       Scope::Guard scope;
       Handlers::PostPresent(swapchain);
@@ -405,15 +435,19 @@ HRESULT STDMETHODCALLTYPE Present1(IDXGISwapChain1* swapchain, UINT sync_interva
 {
    DepthGuard guard(present_depth);
    const bool is_game = IsGamePresent(guard, flags);
+   // Composition writes the whole buffer: the game's dirty rects and scroll don't describe it
+   const DXGI_PRESENT_PARAMETERS whole = {};
    if (is_game)
    {
       NoteCaller(_ReturnAddress());
       Scope::Guard scope;
       ObserveImmediateContext(swapchain);
-      Handlers::PrePresent(swapchain);
+      Handlers::PrePresent(swapchain, sync_interval, flags);
+      if (Handlers::ComposesWholeBuffer(swapchain))
+         parameters = &whole;
    }
    const HRESULT result = CallRuntime(original_present1, swapchain, sync_interval, flags, parameters);
-   if (is_game)
+   if (is_game && SUCCEEDED(result))
    {
       Scope::Guard scope;
       Handlers::PostPresent(swapchain);
@@ -446,10 +480,10 @@ HRESULT STDMETHODCALLTYPE ResizeBuffers(IDXGISwapChain* swapchain, UINT count, U
    const HRESULT result = CallRuntime(original_resize_buffers, swapchain, count, width, height, format, flags);
    if (is_game && FAILED(result) && previous_game_desc)
       SetGameDesc(swapchain, *previous_game_desc);
-   if (is_game && SUCCEEDED(result))
+   if (is_game)
    {
       Scope::Guard scope;
-      Handlers::PostResizeBuffers(swapchain, count, width, height, format, flags);
+      Handlers::PostResizeBuffers(swapchain, count, width, height, format, flags, SUCCEEDED(result));
    }
    return result;
 }
@@ -469,17 +503,24 @@ HRESULT STDMETHODCALLTYPE ResizeBuffers1(IDXGISwapChain3* swapchain, UINT count,
    const HRESULT result = CallRuntime(original_resize_buffers1, swapchain, count, width, height, format, flags, node_masks, present_queues);
    if (is_game && FAILED(result) && previous_game_desc)
       SetGameDesc(swapchain, *previous_game_desc);
-   if (is_game && SUCCEEDED(result))
+   if (is_game)
    {
       Scope::Guard scope;
-      Handlers::PostResizeBuffers(swapchain, count, width, height, format, flags);
+      Handlers::PostResizeBuffers(swapchain, count, width, height, format, flags, SUCCEEDED(result));
    }
    return result;
 }
 
-// Recorded for what Luma draws on the swapchain (the overlay): DXGI can't be asked for it
+// Recorded for what Luma draws on the swapchain (the overlay): DXGI can't be asked for it. Where Luma sets the real one, the game's is
+// kept as what its image is in.
 HRESULT STDMETHODCALLTYPE SetColorSpace1(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
 {
+   if (!Scope::IsActive())
+   {
+      Scope::Guard scope;
+      if (Handlers::PreSetColorSpace(swapchain, color_space))
+         return S_OK;
+   }
    const HRESULT result = original_set_color_space1(swapchain, color_space);
    if (SUCCEEDED(result))
    {
@@ -487,6 +528,76 @@ HRESULT STDMETHODCALLTYPE SetColorSpace1(IDXGISwapChain3* swapchain, DXGI_COLOR_
       Handlers::PostSetColorSpace(swapchain, color_space);
    }
    return result;
+}
+
+// Where Luma owns the real buffers, the game's are Luma's textures; inside Luma's scope (composition, the overlay) they're the real ones
+HRESULT STDMETHODCALLTYPE GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer)
+{
+   if (!Scope::IsActive())
+   {
+      Scope::Guard scope;
+      if (const std::optional<HRESULT> result = Handlers::GetBuffer(swapchain, index, riid, buffer))
+         return *result;
+   }
+   return original_get_buffer(swapchain, index, riid, buffer);
+}
+
+UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex(IDXGISwapChain3* swapchain)
+{
+   if (!Scope::IsActive())
+   {
+      Scope::Guard scope;
+      if (const std::optional<UINT> index = Handlers::GetCurrentBackBufferIndex(swapchain))
+         return *index;
+   }
+   return original_get_current_back_buffer_index(swapchain);
+}
+
+// Borderless: the game is told the fullscreen state it asked for
+HRESULT STDMETHODCALLTYPE GetFullscreenState(IDXGISwapChain* swapchain, BOOL* fullscreen, IDXGIOutput** output)
+{
+   const HRESULT result = original_get_fullscreen_state(swapchain, fullscreen, output);
+   if (SUCCEEDED(result) && fullscreen && !Scope::IsActive())
+   {
+      Scope::Guard scope;
+      if (const std::optional<BOOL> game_fullscreen = Handlers::GetFullscreenState(swapchain))
+         *fullscreen = *game_fullscreen;
+   }
+   return result;
+}
+
+// What the game is told about the display (Display::Spoofing). Luma's own queries, inside its scope, get the real answer.
+HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space, UINT* support)
+{
+   const HRESULT result = original_check_color_space_support(swapchain, color_space, support);
+   if (SUCCEEDED(result) && support && !Scope::IsActive())
+   {
+      Scope::Guard scope;
+      Handlers::PostCheckColorSpaceSupport(swapchain, color_space, *support);
+   }
+   return result;
+}
+
+HRESULT STDMETHODCALLTYPE GetOutputDesc1(IDXGIOutput6* output, DXGI_OUTPUT_DESC1* desc)
+{
+   const HRESULT result = original_get_output_desc1(output, desc);
+   if (SUCCEEDED(result) && desc && !Scope::IsActive())
+   {
+      Scope::Guard scope;
+      Handlers::PostGetOutputDesc1(output, *desc);
+   }
+   return result;
+}
+
+HRESULT STDMETHODCALLTYPE SetHDRMetaData(IDXGISwapChain4* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, void* metadata)
+{
+   if (!Scope::IsActive())
+   {
+      Scope::Guard scope;
+      if (Handlers::PreSetHdrMetadata(swapchain, type, size, metadata))
+         return S_OK;
+   }
+   return original_set_hdr_metadata(swapchain, type, size, metadata);
 }
 } // namespace
 
@@ -508,6 +619,22 @@ void InstallDXGI(const D3D11::Functions& functions)
          reinterpret_cast<void*>(&GetDesc1), reinterpret_cast<void**>(&original_get_desc1)},
       Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain3_SetColorSpace1, "IDXGISwapChain3::SetColorSpace1", __uuidof(IDXGISwapChain3)},
          reinterpret_cast<void*>(&SetColorSpace1), reinterpret_cast<void**>(&original_set_color_space1)},
+      // Swapchain: the game's own back buffers, the color space and HDR metadata Luma sets, the fullscreen state it asked for
+      Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_GetBuffer, "IDXGISwapChain::GetBuffer"},
+         reinterpret_cast<void*>(&GetBuffer), reinterpret_cast<void**>(&original_get_buffer)},
+      Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain3_GetCurrentBackBufferIndex, "IDXGISwapChain3::GetCurrentBackBufferIndex",
+              __uuidof(IDXGISwapChain3)},
+         reinterpret_cast<void*>(&GetCurrentBackBufferIndex), reinterpret_cast<void**>(&original_get_current_back_buffer_index)},
+      Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_GetFullscreenState, "IDXGISwapChain::GetFullscreenState"},
+         reinterpret_cast<void*>(&GetFullscreenState), reinterpret_cast<void**>(&original_get_fullscreen_state)},
+      Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain4_SetHDRMetaData, "IDXGISwapChain4::SetHDRMetaData", __uuidof(IDXGISwapChain4)},
+         reinterpret_cast<void*>(&SetHDRMetaData), reinterpret_cast<void**>(&original_set_hdr_metadata)},
+      // Display spoofing
+      Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain3_CheckColorSpaceSupport, "IDXGISwapChain3::CheckColorSpaceSupport",
+              __uuidof(IDXGISwapChain3)},
+         reinterpret_cast<void*>(&CheckColorSpaceSupport), reinterpret_cast<void**>(&original_check_color_space_support)},
+      Hook{VtableTarget{Vtables::Interface::DXGIOutput, LumaSlot_IDXGIOutput6_GetDesc1, "IDXGIOutput6::GetDesc1", __uuidof(IDXGIOutput6)},
+         reinterpret_cast<void*>(&GetOutputDesc1), reinterpret_cast<void**>(&original_get_output_desc1)},
    };
    if (functions.test(size_t(D3D11::Function::SetFullscreenState)))
    {

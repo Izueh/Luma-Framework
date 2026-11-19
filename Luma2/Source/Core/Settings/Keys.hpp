@@ -21,6 +21,37 @@ inline constexpr Id<float> OVERLAY_FONT_SIZE = {"Luma.Overlay.FontSize"};
 inline constexpr Id<float> OVERLAY_OPACITY = {"Luma.Overlay.Opacity"};
 // The overlay's white on an HDR swapchain, in nits
 inline constexpr Id<float> OVERLAY_HDR_PAPER_WHITE = {"Luma.Overlay.HdrPaperWhite"};
+// What the real swapchain presents (Swapchain::OutputMode, Auto first): applied at the next present
+inline constexpr Id<Settings::EnumIndex> OUTPUT_MODE = {"Luma.Display.OutputMode"};
+// LumaSettings' white levels in HDR, in nits (1.0's ScenePeakWhite, ScenePaperWhite, UIPaperWhite): a peak of 0 is the display's
+inline constexpr Id<float> PEAK_WHITE = {"Luma.Display.PeakWhite"};
+inline constexpr Id<float> PAPER_WHITE = {"Luma.Display.PaperWhite"};
+inline constexpr Id<float> UI_PAPER_WHITE = {"Luma.Display.UIPaperWhite"};
+// Test builds: 1.0's "SDR in HDR" display mode
+inline constexpr Id<bool> SDR_ON_HDR = {"Luma.Display.SdrOnHdr"};
+// Test builds: display composition's stages, each on its own (Display::Composition::Stage, in its order)
+inline constexpr std::array<Id<bool>, 6> COMPOSITION_STAGES = {{
+   {"Luma.Composition.Decode"},
+   {"Luma.Composition.UI"},
+   {"Luma.Composition.GammaCorrection"},
+   {"Luma.Composition.GamutMapping"},
+   {"Luma.Composition.Scale"},
+   {"Luma.Composition.DevelopmentViews"},
+}};
+// Test builds: the game is told the display is in HDR (Display::Spoofing), a game's default
+inline constexpr Id<bool> REPORT_HDR = {"Luma.Display.ReportHdr"};
+// HDR10 metadata (the display's peak) on an HDR10 swapchain
+inline constexpr Id<bool> HDR_METADATA = {"Luma.Display.HdrMetadata"};
+// Test builds: Swapchain::Mode (the game's choice first), from the game's next swapchain
+inline constexpr Id<Settings::EnumIndex> SWAPCHAIN_MODE = {"Luma.Swapchain.Mode"};
+// Test builds: the real swapchain uses the flip model (HDR needs it), from the game's next swapchain
+inline constexpr Id<bool> SWAPCHAIN_FLIP_MODEL = {"Luma.Swapchain.FlipModel"};
+// Test builds: tearing allowed (VRR, uncapped frame rates in a window), from the game's next swapchain
+inline constexpr Id<bool> SWAPCHAIN_TEARING = {"Luma.Swapchain.Tearing"};
+// Test builds: exclusive fullscreen replaced by a borderless window (the game's choice first)
+inline constexpr Id<Settings::EnumIndex> SWAPCHAIN_FULLSCREEN = {"Luma.Swapchain.Fullscreen"};
+// Development builds: the real swapchain's size over the game's (composition scales), from the game's next swapchain or resize
+inline constexpr Id<float> SWAPCHAIN_SCALE = {"Luma.Development.SwapchainScale"};
 // The most background jobs (System::Jobs) that run at once
 inline constexpr Id<int32_t> WORKER_THREADS = {"Luma.Advanced.WorkerThreads"};
 // Luma's mirrors of the game's textures swapped in (Resources::Mirrors), Development

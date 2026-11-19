@@ -1,5 +1,7 @@
 #include "Trace/D3D12/D3D12Readback.hpp"
 
+#include "Swapchain/DXGI/DXGISwapchain.hpp"
+
 #if DEVELOPMENT
 #include <algorithm>
 #include <format>
@@ -174,7 +176,12 @@ Result ReadBackBuffer(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue, uint
 {
    ComPtr<IDXGISwapChain3> swapchain3;
    ComPtr<ID3D12Resource> back_buffer;
-   if (FAILED(swapchain->QueryInterface(IID_PPV_ARGS(&swapchain3))) || FAILED(swapchain3->GetBuffer(swapchain3->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&back_buffer))))
+   // The game's image: its own buffer where Luma composes into the real one (in the common state, as a back buffer's present one)
+   if (const ComPtr<IUnknown> game_buffer = Swapchain::DXGI::GetGameBuffer(swapchain))
+      game_buffer.As(&back_buffer);
+   else if (FAILED(swapchain->QueryInterface(IID_PPV_ARGS(&swapchain3))) || FAILED(swapchain3->GetBuffer(swapchain3->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&back_buffer))))
+      return {.error = "the swapchain has no back buffer"};
+   if (!back_buffer)
       return {.error = "the swapchain has no back buffer"};
    ComPtr<ID3D12Device> device;
    ComPtr<ID3D12CommandAllocator> allocator;

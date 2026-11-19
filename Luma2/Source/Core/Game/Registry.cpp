@@ -10,6 +10,7 @@
 
 #include <wrl/client.h>
 
+#include "Display/Levels.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/Lifetime.hpp"
 #include "Resources/Bindings.hpp"
@@ -161,7 +162,13 @@ void SetOptions(const Options& options)
    Luma::Shaders::Patching::SetOptions(options.patching);
    Luma::Resources::Samplers::SetOptions(options.samplers);
    Draw::SetOptions(options.draw);
+   Luma::Swapchain::SetOptions(options.swapchain);
    declarations.device_data = options.device_data;
+}
+
+void Display::SetHdr(bool hdr)
+{
+   Luma::Display::Levels::SetGameHdr(hdr);
 }
 
 void Resources::SetUpgrades(const Luma::Resources::Upgrade::Rules& rules)

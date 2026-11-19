@@ -17,7 +17,7 @@ struct DeviceState
    mutable std::mutex mutex;
    Resolutions resolutions;
 
-   explicit DeviceState(Math::uint2 size) : resolutions{size, size, size} {}
+   explicit DeviceState(Math::uint2 size) : resolutions{size, size, size, size, size} {}
 };
 
 namespace {
@@ -55,7 +55,7 @@ Resolutions Read(const DeviceState* state)
    if (!state)
    {
       const Math::uint2 size = GetScreenSize();
-      return {size, size, size};
+      return {size, size, size, size, size};
    }
    std::scoped_lock lock(state->mutex);
    return state->resolutions;
@@ -67,7 +67,20 @@ void SetOutputResolution(IUnknown* device, Math::uint2 size)
    {
       {
          std::scoped_lock lock(state->mutex);
-         state->resolutions = {size, size, size};
+         state->resolutions = {size, size, size, size, state->resolutions.display};
+      }
+      generation.fetch_add(1, std::memory_order_release);
+   }
+}
+
+void SetSwapchainResolution(IUnknown* device, Math::uint2 swapchain, Math::uint2 display)
+{
+   if (DeviceState* state = FindMutable(device))
+   {
+      {
+         std::scoped_lock lock(state->mutex);
+         state->resolutions.swapchain = swapchain;
+         state->resolutions.display = display;
       }
       generation.fetch_add(1, std::memory_order_release);
    }

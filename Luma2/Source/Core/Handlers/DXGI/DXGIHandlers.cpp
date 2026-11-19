@@ -22,6 +22,9 @@
 #include "Settings/Registry.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
 #include "Resources/LumaCBuffers.hpp"
+#include "Swapchain/DXGI/DXGISwapchain.hpp"
+#include "Display/Levels.hpp"
+#include "Display/DXGI/DXGISpoofing.hpp"
 #include "Frame/Frame.hpp"
 #include "Shaders/Patching.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
@@ -191,32 +194,35 @@ void ReportInitSwapchain(IDXGISwapChain* swapchain, const Presenter& presenter, 
 
 void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc)
 {
-   const bool d3d11 = IsD3D11(creator);
-   if (!HasCreateSwapchainEvent(d3d11))
-      return;
-   Game::SwapchainDesc reported = {desc.BufferDesc.Format, desc.BufferCount, desc.Flags, desc.SwapEffect, desc.SampleDesc.Count, desc.Windowed != FALSE};
-   ReportCreateSwapchain(d3d11, reported);
-   desc.BufferDesc.Format = reported.format;
-   desc.BufferCount = reported.buffer_count;
-   desc.Flags = reported.flags;
-   desc.SwapEffect = reported.swap_effect;
-   desc.SampleDesc.Count = reported.sample_count;
-   desc.Windowed = reported.windowed;
+   // The game's event first, then Luma's changes on what it made of the desc (1.0's order)
+   if (const bool d3d11 = IsD3D11(creator); HasCreateSwapchainEvent(d3d11))
+   {
+      Game::SwapchainDesc reported = {desc.BufferDesc.Format, desc.BufferCount, desc.Flags, desc.SwapEffect, desc.SampleDesc.Count, desc.Windowed != FALSE};
+      ReportCreateSwapchain(d3d11, reported);
+      desc.BufferDesc.Format = reported.format;
+      desc.BufferCount = reported.buffer_count;
+      desc.Flags = reported.flags;
+      desc.SwapEffect = reported.swap_effect;
+      desc.SampleDesc.Count = reported.sample_count;
+      desc.Windowed = reported.windowed;
+   }
+   Swapchain::DXGI::PrepareCreation(desc);
 }
 
-void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND)
+void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND hwnd)
 {
-   const bool d3d11 = IsD3D11(creator);
-   if (!HasCreateSwapchainEvent(d3d11))
-      return;
-   Game::SwapchainDesc reported = {desc.Format, desc.BufferCount, desc.Flags, desc.SwapEffect, desc.SampleDesc.Count, fullscreen_desc.Windowed != FALSE};
-   ReportCreateSwapchain(d3d11, reported);
-   desc.Format = reported.format;
-   desc.BufferCount = reported.buffer_count;
-   desc.Flags = reported.flags;
-   desc.SwapEffect = reported.swap_effect;
-   desc.SampleDesc.Count = reported.sample_count;
-   fullscreen_desc.Windowed = reported.windowed;
+   if (const bool d3d11 = IsD3D11(creator); HasCreateSwapchainEvent(d3d11))
+   {
+      Game::SwapchainDesc reported = {desc.Format, desc.BufferCount, desc.Flags, desc.SwapEffect, desc.SampleDesc.Count, fullscreen_desc.Windowed != FALSE};
+      ReportCreateSwapchain(d3d11, reported);
+      desc.Format = reported.format;
+      desc.BufferCount = reported.buffer_count;
+      desc.Flags = reported.flags;
+      desc.SwapEffect = reported.swap_effect;
+      desc.SampleDesc.Count = reported.sample_count;
+      fullscreen_desc.Windowed = reported.windowed;
+   }
+   Swapchain::DXGI::PrepareCreation(desc, fullscreen_desc, hwnd);
 }
 
 void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
@@ -247,6 +253,8 @@ void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
    const DXGI_SWAP_CHAIN_DESC desc = Describe(swapchain, *presenter, "created");
    // Before the game's callbacks, which read it
    Frame::SetOutputResolution(static_cast<IUnknown*>(const_cast<void*>(device)), {desc.BufferDesc.Width, desc.BufferDesc.Height});
+   // Its state and the game's buffers (whose upgrade rules match the output resolution), before anything asks for them
+   Swapchain::DXGI::OnCreated(swapchain, *presenter);
    LogOverlays();
    UI::AttachOverlay(swapchain, *presenter, device);
    ReportInitSwapchain(swapchain, *presenter, false);
@@ -263,33 +271,40 @@ void OnSwapChainDestroyed(const IDXGISwapChain* swapchain)
    Utils::Log::Info("DXGI: swapchain {} destroyed", static_cast<const void*>(swapchain));
 }
 
-void PreResizeBuffers(IDXGISwapChain* swapchain, UINT& count, UINT, UINT, DXGI_FORMAT& format, UINT& flags, const UINT*, IUnknown* const*)
+void PreResizeBuffers(IDXGISwapChain* swapchain, UINT& count, UINT& width, UINT& height, DXGI_FORMAT& format, UINT& flags, const UINT*, IUnknown* const*)
 {
    const std::optional<Presenter> presenter = FindPresenter(swapchain);
    if (!presenter)
       return;
-   const bool d3d11 = std::holds_alternative<ID3D11Device*>(*presenter);
-   if (!HasCreateSwapchainEvent(d3d11))
-      return;
-   // What the game kept (zero, unknown) is reported as the swapchain's current value, and stays kept unless the game changed it
-   DXGI_SWAP_CHAIN_DESC current = {};
-   swapchain->GetDesc(&current);
-   const DXGI_FORMAT resolved_format = format == DXGI_FORMAT_UNKNOWN ? current.BufferDesc.Format : format;
-   const UINT resolved_count = count == 0 ? current.BufferCount : count;
-   Game::SwapchainDesc reported = {resolved_format, resolved_count, flags, current.SwapEffect, current.SampleDesc.Count, current.Windowed != FALSE, true};
-   ReportCreateSwapchain(d3d11, reported);
-   if (reported.format != resolved_format)
-      format = reported.format;
-   if (reported.buffer_count != resolved_count)
-      count = reported.buffer_count;
-   flags = reported.flags;
+   if (const bool d3d11 = std::holds_alternative<ID3D11Device*>(*presenter); HasCreateSwapchainEvent(d3d11))
+   {
+      // What the game kept (zero, unknown) is reported as the swapchain's current value, and stays kept unless the game changed it
+      DXGI_SWAP_CHAIN_DESC current = {};
+      swapchain->GetDesc(&current);
+      const DXGI_FORMAT resolved_format = format == DXGI_FORMAT_UNKNOWN ? current.BufferDesc.Format : format;
+      const UINT resolved_count = count == 0 ? current.BufferCount : count;
+      Game::SwapchainDesc reported = {resolved_format, resolved_count, flags, current.SwapEffect, current.SampleDesc.Count, current.Windowed != FALSE, true};
+      ReportCreateSwapchain(d3d11, reported);
+      if (reported.format != resolved_format)
+         format = reported.format;
+      if (reported.buffer_count != resolved_count)
+         count = reported.buffer_count;
+      flags = reported.flags;
+   }
+   // After the game's event: what it asked for becomes its buffers, the real ones Luma's
+   Swapchain::DXGI::PrepareResize(swapchain, count, width, height, format, flags);
 }
 
-void PostResizeBuffers(IDXGISwapChain* swapchain, UINT, UINT, UINT, DXGI_FORMAT, UINT)
+void PostResizeBuffers(IDXGISwapChain* swapchain, UINT, UINT, UINT, DXGI_FORMAT, UINT, bool succeeded)
 {
    const std::optional<Presenter> presenter = FindPresenter(swapchain);
    if (!presenter)
       return;
+   if (!succeeded)
+   {
+      Swapchain::DXGI::OnResized(swapchain, false);
+      return;
+   }
    const DXGI_SWAP_CHAIN_DESC desc = Describe(swapchain, *presenter, "resized");
    // A color space set for another format no longer describes the buffers: forgotten until the game sets one again
    DXGI_FORMAT color_space_format = DXGI_FORMAT_UNKNOWN;
@@ -301,6 +316,8 @@ void PostResizeBuffers(IDXGISwapChain* swapchain, UINT, UINT, UINT, DXGI_FORMAT,
       Utils::Log::Info("DXGI: swapchain {} color space forgotten, its format changed", static_cast<void*>(swapchain));
    }
    Frame::SetOutputResolution(FindDevice(swapchain), {desc.BufferDesc.Width, desc.BufferDesc.Height});
+   // The game's buffers again, and the real color space (Luma's, set after the check above)
+   Swapchain::DXGI::OnResized(swapchain, true);
    LogOverlays();
    ReportInitSwapchain(swapchain, *presenter, true);
 }
@@ -308,8 +325,44 @@ void PostResizeBuffers(IDXGISwapChain* swapchain, UINT, UINT, UINT, DXGI_FORMAT,
 bool PreSetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutput* output)
 {
    (void)output;
-   Utils::Log::Info("DXGI: swapchain {} {} fullscreen", static_cast<void*>(swapchain), fullscreen ? "enters" : "leaves");
-   return false;
+   const bool borderless = Swapchain::DXGI::SetFullscreenState(swapchain, fullscreen);
+   Utils::Log::Info("DXGI: swapchain {} {} fullscreen{}", static_cast<void*>(swapchain), fullscreen ? "enters" : "leaves", borderless ? " (borderless)" : "");
+   return borderless;
+}
+
+std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer)
+{
+   return Swapchain::DXGI::GetBuffer(swapchain, index, riid, buffer);
+}
+
+std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain)
+{
+   return Swapchain::DXGI::GetCurrentBackBufferIndex(swapchain);
+}
+
+std::optional<BOOL> GetFullscreenState(IDXGISwapChain* swapchain)
+{
+   return Swapchain::DXGI::GetFullscreenState(swapchain);
+}
+
+bool PreSetColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
+{
+   return Swapchain::DXGI::SetColorSpace(swapchain, color_space);
+}
+
+void PostCheckColorSpaceSupport(IDXGISwapChain*, DXGI_COLOR_SPACE_TYPE color_space, UINT& support)
+{
+   Display::Spoofing::DXGI::OnColorSpaceSupport(color_space, support);
+}
+
+void PostGetOutputDesc1(IDXGIOutput6*, DXGI_OUTPUT_DESC1& desc)
+{
+   Display::Spoofing::DXGI::OnOutputDesc(desc);
+}
+
+bool PreSetHdrMetadata(IDXGISwapChain* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, const void* metadata)
+{
+   return Swapchain::DXGI::SetHdrMetadata(swapchain, type, size, metadata);
 }
 
 void PostSetColorSpace(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
@@ -334,8 +387,9 @@ std::optional<DXGI_COLOR_SPACE_TYPE> GetColorSpace(IDXGISwapChain* swapchain)
    return color_space;
 }
 
-void PrePresent(IDXGISwapChain* swapchain)
+void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags)
 {
+   flags = Swapchain::DXGI::GetPresentFlags(swapchain, sync_interval, flags);
    Trace::RecordPresent();
    Hooks::VerifyOnPresent();
 #if DEVELOPMENT
@@ -391,6 +445,10 @@ void PrePresent(IDXGISwapChain* swapchain)
 #endif
       }
    }
+   // A switch of the game's own HDR option this frame, then the game's image into the real buffer, once the game's frame is done (its
+   // on_present included)
+   Display::Levels::Update();
+   Swapchain::DXGI::Compose(swapchain);
    // Last, on top of everything the game and Luma drew
    UI::DrawOverlay(swapchain);
    // After the game's on_present and the overlay, as 1.0: what they changed (its settings object, the dev sliders) uploads from
@@ -400,8 +458,16 @@ void PrePresent(IDXGISwapChain* swapchain)
    Validation::D3D12::ReadMessages();
 }
 
+bool ComposesWholeBuffer(IDXGISwapChain* swapchain)
+{
+   return Swapchain::DXGI::ComposesWholeBuffer(swapchain);
+}
+
 // The game's part of a present is on_present, inside Core's handling
-void PostPresent(IDXGISwapChain*) {}
+void PostPresent(IDXGISwapChain* swapchain)
+{
+   Swapchain::DXGI::OnPresented(swapchain);
+}
 
 void ForgetSwapchains(const void* device)
 {

@@ -95,6 +95,17 @@ namespace CB
 
     CB::LumaGameData GameData;
   };
+
+  // Display composition's own values ("LumaComposition", Luma_DisplayComposition.hlsl), written by c++ before each composition
+  struct LumaCompositionData
+  {
+    // How the real back buffer is written: 0 linear scRGB (1 is 80 nits), 1 PQ BT.2020 (HDR10), 2 sRGB (SDR)
+    uint OutputEncoding;
+    // Each composition stage that is switched on, a bit each (Display::Composition::Stage)
+    uint Stages;
+    // The game's image size over the real buffer's: 1 when they match
+    float2 SourceScale;
+  };
 }
 
 #endif // SRC_CBUFFERS_HLSL

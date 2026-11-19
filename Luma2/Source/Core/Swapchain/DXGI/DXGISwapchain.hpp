@@ -1,0 +1,97 @@
+#pragma once
+
+#include <optional>
+#include <string>
+#include <string_view>
+
+#include <dxgi1_6.h>
+#include <wrl/client.h>
+
+#include "Common/Api.hpp"
+#include "Swapchain/Swapchain.hpp"
+
+// The swapchain on DXGI, for D3D11 and D3D12. Everything here runs inside Luma's scope (the handlers'), except where it says it
+// answers the game.
+//
+// A swapchain created while the hooks run gets a state in its private data: what the game asked for, what Luma made of it, and in
+// Mirror mode the game's back buffers. A swapchain without one (made inside Luma's scope) is left alone.
+namespace Luma {
+namespace Swapchain {
+namespace DXGI {
+// What the game's back buffers are (as it asked, after its own on_create_swapchain)
+struct BufferDesc
+{
+   UINT width = 0;
+   UINT height = 0;
+   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+   UINT count = 1;
+   UINT sample_count = 1;
+   DXGI_USAGE usage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+   UINT flags = 0; // The game's swapchain flags (DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE)
+};
+
+// Creation: the game's request rewritten for Luma (flip model, the output mode's format, tearing, windowed), remembered on this thread
+// for OnCreated. The game's on_create_swapchain already ran.
+void PrepareCreation(DXGI_SWAP_CHAIN_DESC& desc);
+void PrepareCreation(DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND window);
+// After the creation succeeded: its state, the game's buffers, color space and HDR metadata
+void OnCreated(IDXGISwapChain* swapchain, const Presenter& presenter);
+// The game's resize rewritten (its values resolved: a zero count or unknown format already are the previous ones)
+void PrepareResize(IDXGISwapChain* swapchain, UINT& count, UINT& width, UINT& height, DXGI_FORMAT& format, UINT& flags);
+void OnResized(IDXGISwapChain* swapchain, bool succeeded);
+
+// Answers to the game (outside Luma's scope). Empty or false: the call goes to DXGI.
+std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer);
+std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain);
+// The game's color space is what its image is in: kept, not applied (Luma sets the real one)
+bool SetColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space);
+bool SetHdrMetadata(IDXGISwapChain* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, const void* metadata);
+// True skips the call (borderless in place of exclusive fullscreen)
+bool SetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen);
+std::optional<BOOL> GetFullscreenState(IDXGISwapChain* swapchain);
+
+// Present: tearing where the real swapchain allows it and the game doesn't wait for V-Sync
+UINT GetPresentFlags(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags);
+// Mirror: composition writes the whole buffer, so the game's dirty rects and scrolling don't apply
+bool ComposesWholeBuffer(IDXGISwapChain* swapchain);
+// Before the real present: the output mode the user and the display want, then composition
+void Compose(IDXGISwapChain* swapchain);
+// After the real present: the game's next buffer
+void OnPresented(IDXGISwapChain* swapchain);
+
+// The game's current back buffer (Mirror), null for a swapchain whose buffers are the real ones
+Microsoft::WRL::ComPtr<IUnknown> GetGameBuffer(IDXGISwapChain* swapchain);
+
+// What luma_status and the Info tab show, of the swapchain presented last
+struct Status
+{
+   bool known = false;
+   std::string mode;
+   std::string output_mode;
+   DXGI_FORMAT game_format = DXGI_FORMAT_UNKNOWN;
+   DXGI_FORMAT real_format = DXGI_FORMAT_UNKNOWN;
+   DXGI_COLOR_SPACE_TYPE color_space = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+   std::optional<DXGI_COLOR_SPACE_TYPE> game_color_space;
+   UINT game_width = 0;
+   UINT game_height = 0;
+   UINT real_width = 0;
+   UINT real_height = 0;
+   UINT game_buffers = 0;
+   UINT real_buffers = 0;
+   bool flip_model = false;
+   bool tearing = false;
+   bool borderless = false;
+   bool game_fullscreen = false;
+   bool composed = false; // The last present ran composition
+   bool hdr_supported = false;
+   bool hdr_enabled = false;
+   float peak_nits = 0.f;
+   float sdr_white_nits = 0.f;
+};
+
+Status GetStatus();
+// "HDR10 (G2084 P2020)", for logs and status
+std::string_view GetName(DXGI_COLOR_SPACE_TYPE color_space);
+} // namespace DXGI
+} // namespace Swapchain
+} // namespace Luma
