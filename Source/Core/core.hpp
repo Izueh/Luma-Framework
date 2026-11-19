@@ -174,6 +174,7 @@
 #include "hooks/callbacks.hpp"
 #include "hooks/hooks.hpp"
 #include "hooks/scope.hpp"
+#include "hooks/swapchain_proxy.hpp"
 #include "overlay/overlay.hpp"
 #include "overlay/input_hooks.hpp"
 #include "system/loader.hpp"
@@ -2904,7 +2905,7 @@ namespace
 
          if (desc.present_mode == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL || desc.present_mode == DXGI_SWAP_EFFECT_FLIP_DISCARD) // DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING requires flip model
          {
-             desc.present_flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING; // Games will still need to call "Present()" with "DXGI_PRESENT_ALLOW_TEARING" for this to do anything (ReShade will automatically do it if this flag is set)
+             desc.present_flags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING; // Games will still need to call "Present()" with "DXGI_PRESENT_ALLOW_TEARING" for this to do anything (the Present hook adds the present flag for windowed swapchains with no vsync)
          }
 
          if (prevent_fullscreen_state) // Not sure this helps but it doesn't seem to hurt
@@ -3182,7 +3183,7 @@ namespace
          }
          if (set_color_space)
          {
-            hr = native_swapchain3->SetColorSpace1(color_space);
+            hr = Luma::Hooks::SwapchainProxy::SetColorSpace1(native_swapchain3, color_space);
             ASSERT_ONCE(SUCCEEDED(hr));
             if (SUCCEEDED(hr))
             {

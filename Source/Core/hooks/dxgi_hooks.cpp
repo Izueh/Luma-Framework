@@ -1,11 +1,15 @@
 #include "hooks/hooks.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
+
+#include <Windows.h>
 
 #include <d3d11.h>
 #include <dxgi1_6.h>
@@ -16,7 +20,12 @@
 #include "hooks/lifetime.hpp"
 #include "hooks/scope.hpp"
 #include "hooks/slots.h"
+#include "hooks/swapchain_proxy.hpp"
+#include "hooks/third_party_modules.hpp"
+#include "hooks/vtables.hpp"
 #include "utils/depth_guard.hpp"
+#include "utils/log.hpp"
+#include "utils/modules.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -34,6 +43,7 @@ using GetDesc1Function = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1* swapchain,
 using PresentFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags);
 using Present1Function = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters);
 using SetFullscreenStateFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutput* output);
+using GetFullscreenStateFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapchain, BOOL* fullscreen, IDXGIOutput** output);
 using ResizeBuffersFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags);
 using ResizeBuffers1Function = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain3* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags,
    const UINT* node_masks, IUnknown* const* present_queues);
@@ -49,6 +59,7 @@ GetDesc1Function original_get_desc1 = nullptr;
 PresentFunction original_present = nullptr;
 Present1Function original_present1 = nullptr;
 SetFullscreenStateFunction original_set_fullscreen_state = nullptr;
+GetFullscreenStateFunction original_get_fullscreen_state = nullptr;
 ResizeBuffersFunction original_resize_buffers = nullptr;
 ResizeBuffers1Function original_resize_buffers1 = nullptr;
 
@@ -103,6 +114,12 @@ GameDescs& GetGameDescs()
    return *descs;
 }
 
+// The game's calls (forwarded by its proxy, or on a swapchain without one) see the game's desc, anyone else the real swapchain
+bool IsGameView(IDXGISwapChain* swapchain)
+{
+   return SwapchainProxy::IsForwarding() || !SwapchainProxy::HasProxy(swapchain);
+}
+
 void SetGameDesc(const void* swapchain, const GameSwapchainDesc& desc)
 {
    GameDescs& descs = GetGameDescs();
@@ -118,11 +135,65 @@ std::optional<GameSwapchainDesc> GetGameDesc(const void* swapchain)
    return it != descs.by_swapchain.end() ? std::optional(it->second) : std::nullopt;
 }
 
+struct PresentState
+{
+   std::mutex mutex;
+   std::unordered_set<const void*> still_drawing; // The last present returned DXGI_ERROR_WAS_STILL_DRAWING
+   std::unordered_map<const void*, BOOL> blocked_fullscreen; // What the game asked for in a SetFullscreenState we didn't apply
+};
+
+PresentState& GetPresentState()
+{
+   static PresentState* state = new PresentState();
+   return *state;
+}
+
 void ForgetGameDesc(const void* swapchain)
 {
-   GameDescs& descs = GetGameDescs();
-   std::scoped_lock lock(descs.mutex);
-   descs.by_swapchain.erase(swapchain);
+   {
+      GameDescs& descs = GetGameDescs();
+      std::scoped_lock lock(descs.mutex);
+      descs.by_swapchain.erase(swapchain);
+   }
+   PresentState& state = GetPresentState();
+   std::scoped_lock lock(state.mutex);
+   state.still_drawing.erase(swapchain);
+   state.blocked_fullscreen.erase(swapchain);
+}
+
+bool WasStillDrawing(const void* swapchain)
+{
+   PresentState& state = GetPresentState();
+   std::scoped_lock lock(state.mutex);
+   return state.still_drawing.contains(swapchain);
+}
+
+void SetStillDrawing(const void* swapchain, bool still_drawing)
+{
+   PresentState& state = GetPresentState();
+   std::scoped_lock lock(state.mutex);
+   if (still_drawing)
+      state.still_drawing.insert(swapchain);
+   else
+      state.still_drawing.erase(swapchain);
+}
+
+void SetBlockedFullscreen(const void* swapchain, std::optional<BOOL> fullscreen)
+{
+   PresentState& state = GetPresentState();
+   std::scoped_lock lock(state.mutex);
+   if (fullscreen)
+      state.blocked_fullscreen[swapchain] = *fullscreen;
+   else
+      state.blocked_fullscreen.erase(swapchain);
+}
+
+std::optional<BOOL> GetBlockedFullscreen(const void* swapchain)
+{
+   PresentState& state = GetPresentState();
+   std::scoped_lock lock(state.mutex);
+   const auto it = state.blocked_fullscreen.find(swapchain);
+   return it != state.blocked_fullscreen.end() ? std::optional(it->second) : std::nullopt;
 }
 
 // Resolves a game resize the way DXGI would against what the game asked for before (zero keeps the buffer count, unknown the format), and records it.
@@ -243,6 +314,29 @@ void ReportSwapchain(HRESULT result, IDXGISwapChain* swapchain, IUnknown* creato
    Callbacks::PostCreateSwapChain(base.Get(), device.Get());
 }
 
+// Overlays create swapchains of their own (Steam does to find DXGI's methods), which the game never holds
+bool IsCreatedByGame()
+{
+   std::array<void*, 48> frames = {};
+   const USHORT count = CaptureStackBackTrace(1, ULONG(frames.size()), frames.data(), nullptr);
+   HMODULE self = nullptr;
+   GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCWSTR>(&IsCreatedByGame), &self);
+   for (USHORT i = 0; i < count; i++)
+   {
+      HMODULE module = nullptr;
+      if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCWSTR>(frames[i]), &module))
+         continue;
+      if (module != self && !Utils::Modules::IsSystemModule(module) && !ThirdPartyModules::FindBase(frames[i]))
+         return true;
+   }
+   return false;
+}
+
+bool ShouldWrap()
+{
+   return IsCreatedByGame();
+}
+
 // D3D11 games pass their device's proxy, which DXGI must not see
 HRESULT STDMETHODCALLTYPE CreateSwapChain(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** swapchain)
 {
@@ -260,7 +354,11 @@ HRESULT STDMETHODCALLTYPE CreateSwapChain(IDXGIFactory* factory, IUnknown* devic
    }
    const HRESULT result = original_create_swapchain(factory, device, desc, swapchain);
    if (guard.IsOutermost())
+   {
       ReportSwapchain(result, swapchain ? *swapchain : nullptr, device, requested);
+      if (SUCCEEDED(result) && requested && ShouldWrap())
+         SwapchainProxy::Wrap(swapchain);
+   }
    return result;
 }
 
@@ -288,7 +386,11 @@ HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IDXGIFactory2* factory, IUnknow
    }
    const HRESULT result = original_create_swapchain_for_hwnd(factory, device, hwnd, desc, fullscreen_desc, output, swapchain);
    if (guard.IsOutermost())
+   {
       ReportSwapchain(result, swapchain ? *swapchain : nullptr, device, requested);
+      if (SUCCEEDED(result) && requested && ShouldWrap())
+         SwapchainProxy::Wrap(swapchain);
+   }
    return result;
 }
 
@@ -296,7 +398,7 @@ HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IDXGIFactory2* factory, IUnknow
 HRESULT STDMETHODCALLTYPE GetDesc(IDXGISwapChain* swapchain, DXGI_SWAP_CHAIN_DESC* desc)
 {
    const HRESULT result = original_get_desc(swapchain, desc);
-   if (SUCCEEDED(result) && desc && !Scope::IsActive())
+   if (SUCCEEDED(result) && desc && !Scope::IsActive() && IsGameView(swapchain))
    {
       if (const std::optional<GameSwapchainDesc> game_desc = GetGameDesc(swapchain))
       {
@@ -315,7 +417,7 @@ HRESULT STDMETHODCALLTYPE GetDesc(IDXGISwapChain* swapchain, DXGI_SWAP_CHAIN_DES
 HRESULT STDMETHODCALLTYPE GetDesc1(IDXGISwapChain1* swapchain, DXGI_SWAP_CHAIN_DESC1* desc)
 {
    const HRESULT result = original_get_desc1(swapchain, desc);
-   if (SUCCEEDED(result) && desc && !Scope::IsActive())
+   if (SUCCEEDED(result) && desc && !Scope::IsActive() && IsGameView(swapchain))
    {
       if (const std::optional<GameSwapchainDesc> game_desc = GetGameDesc(swapchain))
       {
@@ -368,49 +470,39 @@ HRESULT CallRuntime(Function function, Args... args)
    return function(args...);
 }
 
-// DXGI_PRESENT_TEST only checks whether the swapchain could present
-bool IsGamePresent(const Utils::DepthGuard& guard, UINT flags)
+// A proxied swapchain's present is handled by its proxy (PresentForGame)
+bool IsGamePresent(const Utils::DepthGuard& guard, UINT flags, IDXGISwapChain* swapchain)
 {
-   return guard.IsOutermost() && !(flags & DXGI_PRESENT_TEST) && !Scope::IsActive();
+   return guard.IsOutermost() && !(flags & DXGI_PRESENT_TEST) && !Scope::IsActive() && !SwapchainProxy::HasProxy(swapchain);
 }
 
+// Windowed swapchains created with tearing allowed present with it when not waiting for the vertical blank (as ReShade)
+void AddTearingFlag(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags)
+{
+   if (sync_interval != 0 || (flags & (DXGI_PRESENT_TEST | DXGI_PRESENT_ALLOW_TEARING)))
+      return;
+   Scope::Guard scope;
+   DXGI_SWAP_CHAIN_DESC desc = {};
+   if (SUCCEEDED(swapchain->GetDesc(&desc)) && desc.Windowed && (desc.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING))
+      flags |= DXGI_PRESENT_ALLOW_TEARING;
+}
+
+// Swapchains without a proxy (D3D11CreateDeviceAndSwapChain)
 HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags)
 {
    Utils::DepthGuard guard(present_depth);
-   const bool is_game = IsGamePresent(guard, flags);
-   if (is_game)
-   {
-      Scope::Guard scope;
-      VerifyOnPresent();
-      ObserveImmediateContext(swapchain);
-      Callbacks::PrePresent(swapchain);
-   }
+   const DXGI::Prologue prologue = IsGamePresent(guard, flags, swapchain) ? DXGI::PresentPrologue(swapchain, sync_interval, flags) : DXGI::Prologue{};
    const HRESULT result = CallRuntime(original_present, swapchain, sync_interval, flags);
-   if (is_game)
-   {
-      Scope::Guard scope;
-      Callbacks::PostPresent(swapchain);
-   }
+   DXGI::PresentEpilogue(swapchain, prologue, result);
    return result;
 }
 
 HRESULT STDMETHODCALLTYPE Present1(IDXGISwapChain1* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters)
 {
    Utils::DepthGuard guard(present_depth);
-   const bool is_game = IsGamePresent(guard, flags);
-   if (is_game)
-   {
-      Scope::Guard scope;
-      VerifyOnPresent();
-      ObserveImmediateContext(swapchain);
-      Callbacks::PrePresent(swapchain);
-   }
+   const DXGI::Prologue prologue = IsGamePresent(guard, flags, swapchain) ? DXGI::PresentPrologue(swapchain, sync_interval, flags) : DXGI::Prologue{};
    const HRESULT result = CallRuntime(original_present1, swapchain, sync_interval, flags, parameters);
-   if (is_game)
-   {
-      Scope::Guard scope;
-      Callbacks::PostPresent(swapchain);
-   }
+   DXGI::PresentEpilogue(swapchain, prologue, result);
    return result;
 }
 
@@ -420,9 +512,34 @@ HRESULT STDMETHODCALLTYPE SetFullscreenState(IDXGISwapChain* swapchain, BOOL ful
    {
       Scope::Guard scope;
       if (Callbacks::PreSetFullscreenState(swapchain, fullscreen, output))
+      {
+         // The game reads back what it asked for (as ReShade)
+         SetBlockedFullscreen(swapchain, fullscreen != FALSE);
          return S_OK;
+      }
+      SetBlockedFullscreen(swapchain, std::nullopt);
    }
    return CallRuntime(original_set_fullscreen_state, swapchain, fullscreen, output);
+}
+
+HRESULT STDMETHODCALLTYPE GetFullscreenState(IDXGISwapChain* swapchain, BOOL* fullscreen, IDXGIOutput** output)
+{
+   const HRESULT result = original_get_fullscreen_state(swapchain, fullscreen, output);
+   if (SUCCEEDED(result) && fullscreen && !Scope::IsActive() && IsGameView(swapchain))
+   {
+      if (const std::optional<BOOL> requested = GetBlockedFullscreen(swapchain))
+         *fullscreen = *requested;
+   }
+   return result;
+}
+
+// A refused resize leaves the swapchain as it was: set up again for it (as ReShade)
+void OnResizeRefused(IDXGISwapChain* swapchain)
+{
+   Scope::Guard scope;
+   DXGI_SWAP_CHAIN_DESC desc = {};
+   if (SUCCEEDED(swapchain->GetDesc(&desc)))
+      Callbacks::PostResizeBuffers(swapchain, desc.BufferCount, desc.BufferDesc.Width, desc.BufferDesc.Height, desc.BufferDesc.Format, desc.Flags);
 }
 
 HRESULT STDMETHODCALLTYPE ResizeBuffers(IDXGISwapChain* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags)
@@ -439,6 +556,8 @@ HRESULT STDMETHODCALLTYPE ResizeBuffers(IDXGISwapChain* swapchain, UINT count, U
    const HRESULT result = CallRuntime(original_resize_buffers, swapchain, count, width, height, format, flags);
    if (is_game && FAILED(result) && previous_game_desc)
       SetGameDesc(swapchain, *previous_game_desc);
+   if (is_game && result == DXGI_ERROR_INVALID_CALL)
+      OnResizeRefused(swapchain);
    if (is_game && SUCCEEDED(result))
    {
       Scope::Guard scope;
@@ -462,6 +581,8 @@ HRESULT STDMETHODCALLTYPE ResizeBuffers1(IDXGISwapChain3* swapchain, UINT count,
    const HRESULT result = CallRuntime(original_resize_buffers1, swapchain, count, width, height, format, flags, node_masks, present_queues);
    if (is_game && FAILED(result) && previous_game_desc)
       SetGameDesc(swapchain, *previous_game_desc);
+   if (is_game && result == DXGI_ERROR_INVALID_CALL)
+      OnResizeRefused(swapchain);
    if (is_game && SUCCEEDED(result))
    {
       Scope::Guard scope;
@@ -470,6 +591,54 @@ HRESULT STDMETHODCALLTYPE ResizeBuffers1(IDXGISwapChain3* swapchain, UINT count,
    return result;
 }
 } // namespace
+
+namespace DXGI {
+Prologue PresentPrologue(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags)
+{
+   if ((flags & DXGI_PRESENT_TEST) || Scope::IsActive())
+      return {};
+   AddTearingFlag(swapchain, sync_interval, flags);
+   // The game presents the same frame again after a DXGI_PRESENT_DO_NOT_WAIT present that was still drawing (as ReShade)
+   if (WasStillDrawing(swapchain))
+      return {true, false};
+   Scope::Guard scope;
+   VerifyOnPresent();
+   ObserveImmediateContext(swapchain);
+   Callbacks::PrePresent(swapchain);
+   return {true, true};
+}
+
+void PresentEpilogue(IDXGISwapChain* swapchain, const Prologue& prologue, HRESULT result)
+{
+   if (prologue.is_game)
+      SetStillDrawing(swapchain, result == DXGI_ERROR_WAS_STILL_DRAWING);
+   if (prologue.ran)
+   {
+      Scope::Guard scope;
+      Callbacks::PostPresent(swapchain);
+   }
+}
+
+HRESULT PresentForGame(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters, bool present1,
+   std::optional<Prologue> prologue)
+{
+   Utils::DepthGuard guard(present_depth);
+   // The proxy's outer Present usually ran it already
+   const Prologue done = prologue ? *prologue : (guard.IsOutermost() ? PresentPrologue(swapchain, sync_interval, flags) : Prologue{});
+   HRESULT result = E_FAIL;
+   {
+      // Through the vtable, so other tools' hooks run now, on the final image
+      Scope::Guard scope;
+      ComPtr<IDXGISwapChain1> swapchain1;
+      if (present1 && SUCCEEDED(swapchain->QueryInterface(IID_PPV_ARGS(&swapchain1))))
+         result = swapchain1->Present1(sync_interval, flags, parameters);
+      else
+         result = swapchain->Present(sync_interval, flags);
+   }
+   PresentEpilogue(swapchain, done, result);
+   return result;
+}
+} // namespace DXGI
 
 void InstallDXGI(const D3D11::Functions& functions)
 {
@@ -492,6 +661,8 @@ void InstallDXGI(const D3D11::Functions& functions)
    {
       hooks.push_back(Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_SetFullscreenState, "IDXGISwapChain::SetFullscreenState"},
          reinterpret_cast<void*>(&SetFullscreenState), reinterpret_cast<void**>(&original_set_fullscreen_state)});
+      hooks.push_back(Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_GetFullscreenState, "IDXGISwapChain::GetFullscreenState"},
+         reinterpret_cast<void*>(&GetFullscreenState), reinterpret_cast<void**>(&original_get_fullscreen_state)});
    }
    if (functions.test(size_t(D3D11::Function::ResizeBuffers)))
    {

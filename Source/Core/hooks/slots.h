@@ -109,6 +109,7 @@
    SLOT(IDXGISwapChain, GetDesc)                                          \
    SLOT(IDXGISwapChain, Present)                                          \
    SLOT(IDXGISwapChain, SetFullscreenState)                               \
+   SLOT(IDXGISwapChain, GetFullscreenState)                               \
    SLOT(IDXGISwapChain, ResizeBuffers)                                    \
    SLOT(IDXGISwapChain1, GetDesc1)                                        \
    SLOT(IDXGISwapChain1, Present1)                                        \

@@ -635,6 +635,7 @@
     <ClCompile Include="hooks\d3d11_device_hooks.cpp" />
     <ClCompile Include="hooks\d3d11_context_hooks.cpp" />
     <ClCompile Include="hooks\dxgi_hooks.cpp" />
+    <ClCompile Include="hooks\swapchain_proxy.cpp" />
     <ClCompile Include="hooks\slots.c" />
     <ClCompile Include="utils\log.cpp" />
     <ClCompile Include="utils\modules.cpp" />
