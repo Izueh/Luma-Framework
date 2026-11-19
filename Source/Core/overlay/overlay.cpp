@@ -16,6 +16,7 @@
 
 #include "hooks/scope.hpp"
 #include "overlay/d3d11_renderer.hpp"
+#include "overlay/encoding.hpp"
 #include "overlay/input.hpp"
 #include "overlay/input_hooks.hpp"
 #include "utils/config.hpp"
@@ -51,6 +52,22 @@ constexpr float MIN_FONT_SIZE = 8.f;
 constexpr float MAX_FONT_SIZE = 48.f;
 float font_size = 0.f;
 
+constexpr const char* PAPER_WHITE_CONFIG = "HDRBrightness";
+constexpr float MIN_PAPER_WHITE = 20.f;
+constexpr float MAX_PAPER_WHITE = 500.f;
+float paper_white = 203.f; // Nits
+
+// The color space recorded on the swapchain (Special K's convention, as ReShade)
+std::optional<DXGI_COLOR_SPACE_TYPE> GetColorSpace(IDXGISwapChain* swapchain)
+{
+   constexpr GUID SKID_SwapChainColorSpace = {0x18b57e4, 0x1493, 0x4953, {0xad, 0xf2, 0xde, 0x6d, 0x99, 0xcc, 0x5, 0xe5}};
+   DXGI_COLOR_SPACE_TYPE color_space = {};
+   UINT size = sizeof(color_space);
+   if (SUCCEEDED(swapchain->GetPrivateData(SKID_SwapChainColorSpace, &size, &color_space)) && size == sizeof(color_space))
+      return color_space;
+   return std::nullopt;
+}
+
 // With the lock held
 bool Attach(IDXGISwapChain* swapchain, ID3D11Device* device)
 {
@@ -68,6 +85,9 @@ bool Attach(IDXGISwapChain* swapchain, ID3D11Device* device)
    float saved_font_size = 0.f;
    if (Config::Get(CONFIG_SECTION, FONT_SIZE_CONFIG, saved_font_size))
       font_size = std::clamp(saved_font_size, MIN_FONT_SIZE, MAX_FONT_SIZE);
+   float saved_paper_white = 0.f;
+   if (Config::Get(CONFIG_SECTION, PAPER_WHITE_CONFIG, saved_paper_white))
+      paper_white = std::clamp(saved_paper_white, MIN_PAPER_WHITE, MAX_PAPER_WHITE);
    ImGui_ImplWin32_Init(desc.OutputWindow);
 
    attached = Attachment{desc.OutputWindow, swapchain, device};
@@ -131,6 +151,15 @@ void DrawOverlaySettings()
       Config::SetValue(CONFIG_SECTION, FONT_SIZE_CONFIG, double(font_size));
       Config::Save();
    }
+
+   ImGui::SliderFloat("HDR brightness", &paper_white, MIN_PAPER_WHITE, MAX_PAPER_WHITE, "%.0f nits", ImGuiSliderFlags_AlwaysClamp);
+   if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Brightness of the overlay's white on an HDR swapchain (scRGB or HDR10)");
+   if (ImGui::IsItemDeactivatedAfterEdit())
+   {
+      Config::SetValue(CONFIG_SECTION, PAPER_WHITE_CONFIG, double(paper_white));
+      Config::Save();
+   }
 }
 
 void BuildFrame(const DXGI_SWAP_CHAIN_DESC& desc, ID3D11Device* device)
@@ -188,7 +217,8 @@ void OnPresent(IDXGISwapChain* swapchain)
    if (FAILED(swapchain->GetDesc(&desc)) || !D3D11::NewFrame(attached->device))
       return;
    BuildFrame(desc, attached->device);
-   D3D11::Render(attached->device, swapchain, ImGui::GetDrawData());
+   const Encoding::Output output{Encoding::GetKind(desc.BufferDesc.Format, GetColorSpace(swapchain)), paper_white};
+   D3D11::Render(attached->device, swapchain, ImGui::GetDrawData(), output);
 }
 
 void OnSwapchainDestroyed(const IDXGISwapChain* swapchain)
