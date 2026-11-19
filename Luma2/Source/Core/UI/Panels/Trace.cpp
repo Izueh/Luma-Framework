@@ -305,27 +305,42 @@ std::string FormatFloat(float value)
    return std::format("{:.7g}", value);
 }
 
-// Typed fields when a layout is known, else float4 rows; `reading` highlights what changed while tracked
-void DrawContents(uint32_t hash, uint32_t slot, std::span<const std::byte> contents, const Trace::Track::Reading* reading)
+// A cbuffer's table, made once for the contents shown: D3D12 binds ranges of thousands of constants, and formatting them at every
+// frame stalls the game while the section is open
+struct ContentsTable
 {
-   const Trace::Cbuffers::Description description = Trace::Cbuffers::Describe(hash, slot, contents);
-   const float max_height = ImGui::GetTextLineHeightWithSpacing() * 18.f;
-   if (description.source != "raw")
+   const std::byte* data = nullptr;
+   size_t size = 0;
+   uint32_t hash = 0;
+   uint32_t slot = 0;
+   uint64_t reading_frame = 0; // A tracked reading's: it changes every frame, the table with it
+   std::string caption;
+   bool typed = false;
+   std::vector<TableRow> rows;
+};
+
+constexpr uint64_t TRACKED_REFRESH_FRAMES = 10;
+
+// One per stage shown at once
+std::array<ContentsTable, 6> contents_tables;
+
+void BuildContents(ContentsTable& table, std::span<const std::byte> contents, const Trace::Track::Reading* reading)
+{
+   table.rows.clear();
+   const Trace::Cbuffers::Description description = Trace::Cbuffers::Describe(table.hash, table.slot, contents);
+   table.typed = description.source != "raw";
+   if (table.typed)
    {
-      Widgets::TextDim(std::format("\"{}\", layout from the {}", description.name, description.source == "reflection" ? "shader's reflection" : "replacement's reflection"));
-      constexpr std::array<TableColumn, 4> COLUMNS = {{{"Offset", 52.f}, {"Name", 0.f, false}, {"Type", 80.f}, {"Value", 0.f}}};
-      std::vector<TableRow> rows;
+      table.caption = std::format("\"{}\", layout from the {}", description.name, description.source == "reflection" ? "shader's reflection" : "replacement's reflection");
       for (const Trace::Cbuffers::Field& field : description.fields)
       {
          const bool changed = ChangedRecently(reading, field.offset, field.size);
-         rows.push_back({{std::format("{}", field.offset)}, {field.name}, {field.type}, {field.value, changed ? Tone::Warning : Tone::Info, changed ? "Changed in the last second" : ""}});
+         table.rows.push_back({{std::format("{}", field.offset)}, {field.name}, {field.type}, {field.value, changed ? Tone::Warning : Tone::Info, changed ? "Changed in the last second" : ""}});
       }
-      Widgets::DataTable("Fields", COLUMNS, rows, max_height);
       return;
    }
-   Widgets::TextDim("No layout (stripped, not replaced): float4 rows, hover a value for it as an integer");
-   constexpr std::array<TableColumn, 5> COLUMNS = {{{"Register", 64.f}, {"x", 0.f}, {"y", 0.f}, {"z", 0.f}, {"w", 0.f}}};
-   std::vector<TableRow> rows;
+   table.caption = "No layout (stripped, not replaced): float4 rows, hover a value for it as an integer";
+   std::vector<TableRow>& rows = table.rows;
    for (uint32_t offset = 0; offset < contents.size(); offset += 16)
    {
       TableRow& row = rows.emplace_back();
@@ -344,7 +359,35 @@ void DrawContents(uint32_t hash, uint32_t slot, std::span<const std::byte> conte
          row.push_back({FormatFloat(std::bit_cast<float>(word)), changed ? Tone::Warning : Tone::Info, std::format("int {}, uint {}, 0x{:08X}{}", int32_t(word), word, word, changed ? ", changed in the last second" : "")});
       }
    }
-   Widgets::DataTable("Rows", COLUMNS, rows, max_height);
+}
+
+// Typed fields when a layout is known, else float4 rows; `reading` highlights what changed while tracked
+void DrawContents(ShaderStage stage, uint32_t hash, uint32_t slot, std::span<const std::byte> contents, const Trace::Track::Reading* reading)
+{
+   ContentsTable& table = contents_tables[size_t(stage)];
+   const uint64_t reading_frame = reading ? reading->frame : 0;
+   // A tracked reading is a new copy every frame: its table is made again a few times a second, which the highlights (a second) allow
+   const bool stale_reading = reading ? (table.reading_frame == 0 || reading_frame < table.reading_frame || reading_frame - table.reading_frame >= TRACKED_REFRESH_FRAMES)
+                                      : (table.data != contents.data() || table.reading_frame != 0);
+   if (stale_reading || table.size != contents.size() || table.hash != hash || table.slot != slot)
+   {
+      table.data = contents.data();
+      table.size = contents.size();
+      table.hash = hash;
+      table.slot = slot;
+      table.reading_frame = reading_frame;
+      BuildContents(table, contents, reading);
+   }
+   const float max_height = ImGui::GetTextLineHeightWithSpacing() * 18.f;
+   Widgets::TextDim(table.caption);
+   if (table.typed)
+   {
+      constexpr std::array<TableColumn, 4> COLUMNS = {{{"Offset", 52.f}, {"Name", 0.f, false}, {"Type", 80.f}, {"Value", 0.f}}};
+      Widgets::DataTable("Fields", COLUMNS, table.rows, max_height);
+      return;
+   }
+   constexpr std::array<TableColumn, 5> COLUMNS = {{{"Register", 64.f}, {"x", 0.f}, {"y", 0.f}, {"z", 0.f}, {"w", 0.f}}};
+   Widgets::DataTable("Rows", COLUMNS, table.rows, max_height);
 }
 
 // 1.0's constant buffer tracking: this slot of this shader, read again every frame
@@ -417,7 +460,7 @@ void DrawConstantBuffers(const Event& event, size_t index)
                              reading->buffer != buffer.id ? std::format(", now buffer {}", reading->buffer) : std::string(),
                              reading->deferred ? " (copied on a deferred context, read after its command list executed)" : ""),
                reading->stale ? Tone::Warning : Tone::Success);
-            DrawContents(shader.hash, buffer.slot, reading->contents, &*reading);
+            DrawContents(shader.stage, shader.hash, buffer.slot, reading->contents, &*reading);
          }
       }
       else if (buffer.contents.empty())
@@ -428,7 +471,7 @@ void DrawConstantBuffers(const Event& event, size_t index)
       }
       else
       {
-         DrawContents(shader.hash, buffer.slot, GetBoundContents(buffer), nullptr);
+         DrawContents(shader.stage, shader.hash, buffer.slot, GetBoundContents(buffer), nullptr);
       }
       ImGui::Spacing();
       ImGui::PopID();
@@ -677,6 +720,12 @@ void DrawTrace()
       requested = true;
    }
    ImGui::SameLine();
+   if (frame && Widgets::Button(std::format("{} Clear", Icons::DELETE_), Widgets::ButtonKind::Secondary, "Forgets the capture and its memory (1.0's \"Clear Capture\")"))
+   {
+      Trace::Capture::ClearLast();
+      requested = false;
+   }
+   ImGui::SameLine();
    const std::shared_ptr<const Trace::Capture::Frame> last = Trace::Capture::GetLast();
    if (requested && last != frame)
       requested = false;
@@ -690,6 +739,8 @@ void DrawTrace()
    {
       frame = last;
       selected = SIZE_MAX;
+      // The tables point into the old capture
+      contents_tables = {};
       Rebuild();
    }
    DrawTracked();

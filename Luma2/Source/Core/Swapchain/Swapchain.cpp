@@ -62,6 +62,15 @@ constexpr std::array SETTINGS = {
       .default_value = true,
    },
    Settings::Setting{
+      .key = Settings::Core::SWAPCHAIN_WRAP.key,
+      .label = "Wrap",
+      .tooltip = "The game gets a wrapper of the swapchain (as ReShade's): Luma composes before any overlay's Present runs, and only the game "
+                 "sees its own back buffers. Off, the game holds the real swapchain.\nFrom the game's next swapchain, usually a restart",
+      .category = "Swapchain",
+      .visibility = Settings::Visibility::Test,
+      .default_value = true,
+   },
+   Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_FULLSCREEN.key,
       .label = "Fullscreen",
       .tooltip = "Borderless - exclusive fullscreen becomes a borderless window covering the display\nExclusive - the game's exclusive "
@@ -99,8 +108,8 @@ const Options& GetOptions()
 void Register()
 {
    // The Development one is a Development kind: in that section of the view and the file
-   Settings::Register(std::span(SETTINGS).first(5), Settings::Kind::Luma);
-   Settings::Register(std::span(SETTINGS).subspan(5), Settings::Kind::Development);
+   Settings::Register(std::span(SETTINGS).first(6), Settings::Kind::Luma);
+   Settings::Register(std::span(SETTINGS).subspan(6), Settings::Kind::Development);
 }
 
 Mode GetMode()
@@ -116,6 +125,11 @@ Mode GetMode()
 bool UsesFlipModel()
 {
    return Settings::Get(Settings::Core::SWAPCHAIN_FLIP_MODEL);
+}
+
+bool Wraps()
+{
+   return Settings::Get(Settings::Core::SWAPCHAIN_WRAP);
 }
 
 bool AllowsTearing()

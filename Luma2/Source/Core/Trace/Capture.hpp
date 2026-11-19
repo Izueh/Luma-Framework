@@ -259,6 +259,8 @@ void SetContents(const Added& event, size_t constant_buffer, std::vector<std::by
 
 // Any thread: the last finished capture, null before the first
 std::shared_ptr<const Frame> GetLast();
+// Any thread: forgets the last capture (its memory goes once the panel and MCP let go of it, 1.0's "Clear Capture")
+void ClearLast();
 } // namespace Capture
 } // namespace Trace
 } // namespace Luma

@@ -41,8 +41,18 @@ void PrepareResize(IDXGISwapChain* swapchain, UINT& count, UINT& width, UINT& he
 void OnResized(IDXGISwapChain* swapchain, bool succeeded);
 
 // Answers to the game (outside Luma's scope). Empty or false: the call goes to DXGI.
-std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer);
-std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain);
+// `third_party`: an overlay's code asks (Hooks::ThirdPartyModules). Overlays always see the real buffers and index: one that caches the
+// buffers and picks one by the index each frame needs both from the same swapchain.
+std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer, bool third_party);
+std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain, bool third_party);
+// An overlay's code asked for a buffer or the index on the presenting thread (from the proxy: one that hooked the swapchain the game holds,
+// as Steam does; without it, one whose Present runs before Luma's): it's about to draw, so Luma composes now (once a frame) and the overlay
+// draws on the final image, in the real color space. The present after doesn't compose again. (Binds and submissions aren't a sign: an
+// overlay hooking them above Luma makes the game's look like its own.)
+void ComposeForOverlay(IDXGISwapChain* swapchain);
+// After creation: the game gets a proxy of this swapchain (Luma owns it, Swapchain::Wraps). Overlays then present after Luma by
+// construction, and the early composition above is never needed.
+bool Wraps(IDXGISwapChain* swapchain);
 // The game's color space is what its image is in: kept, not applied (Luma sets the real one)
 bool SetColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space);
 bool SetHdrMetadata(IDXGISwapChain* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, const void* metadata);
@@ -83,6 +93,7 @@ struct Status
    bool borderless = false;
    bool game_fullscreen = false;
    bool composed = false; // The last present ran composition
+   bool wrapped = false; // The game holds a proxy
    bool hdr_supported = false;
    bool hdr_enabled = false;
    float peak_nits = 0.f;

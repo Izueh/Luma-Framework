@@ -17,6 +17,8 @@
 
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/DeviceProxy.hpp"
+#include "System/Modules.hpp"
+#include "Hooks/DXGI/DXGISwapchainProxy.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
 #include "Hooks/Lifetime.hpp"
 #include "Hooks/Scope.hpp"
@@ -118,6 +120,13 @@ struct GameSwapchainDesc
    DXGI_ALPHA_MODE alpha_mode = DXGI_ALPHA_MODE_UNSPECIFIED;
    BOOL stereo = FALSE;
 };
+
+// A call is the game's when its proxy forwards it, or on a swapchain the game holds itself (no proxy). Anyone else calling a proxied
+// swapchain's real object (an overlay, a capture tool) sees the real swapchain.
+bool IsGameView(IDXGISwapChain* swapchain)
+{
+   return SwapchainProxy::IsForwarding() || !SwapchainProxy::HasProxy(swapchain);
+}
 
 void SetGameDesc(IDXGISwapChain* swapchain, const GameSwapchainDesc& desc)
 {
@@ -257,6 +266,34 @@ void ReportSwapchain(HRESULT result, IDXGISwapChain* swapchain, IUnknown* creato
    Handlers::PostCreateSwapChain(base.Get(), creator);
 }
 
+// Code of the game's (or its engine's) is on the stack. A swapchain an overlay creates for itself (to find DXGI's methods) has only the
+// overlay's, the system's and Luma's: the return address alone can't tell, an overlay hooking the creation above Luma is the caller of the
+// game's creation too (Steam).
+bool IsCreatedByGame()
+{
+   std::array<void*, 48> frames = {};
+   const USHORT count = CaptureStackBackTrace(1, ULONG(frames.size()), frames.data(), nullptr);
+   const HMODULE self = System::Modules::GetSelf();
+   for (USHORT i = 0; i < count; i++)
+   {
+      HMODULE module = nullptr;
+      if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCWSTR>(frames[i]), &module))
+         continue;
+      if (module != self && !System::Modules::IsSystemModule(module) && !ThirdPartyModules::FindBase(frames[i]))
+         return true;
+   }
+   return false;
+}
+
+// The game gets a proxy of a swapchain Luma owns (SwapchainProxy), unless an overlay created it
+bool ShouldWrap(IDXGISwapChain* swapchain)
+{
+   if (!IsCreatedByGame())
+      return false;
+   Scope::Guard scope;
+   return Handlers::ShouldWrapSwapChain(swapchain);
+}
+
 // D3D11 games pass their device's proxy, which DXGI must not see (D3D12 games pass a queue, never proxied)
 HRESULT STDMETHODCALLTYPE CreateSwapChain(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** swapchain)
 {
@@ -274,7 +311,11 @@ HRESULT STDMETHODCALLTYPE CreateSwapChain(IDXGIFactory* factory, IUnknown* devic
    }
    const HRESULT result = original_create_swapchain(factory, device, desc, swapchain);
    if (guard.IsOutermost())
+   {
       ReportSwapchain(result, swapchain ? *swapchain : nullptr, device, requested);
+      if (SUCCEEDED(result) && requested && ShouldWrap(*swapchain))
+         SwapchainProxy::Wrap(swapchain);
+   }
    return result;
 }
 
@@ -302,7 +343,11 @@ HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IDXGIFactory2* factory, IUnknow
    }
    const HRESULT result = original_create_swapchain_for_hwnd(factory, device, hwnd, desc, fullscreen_desc, output, swapchain);
    if (guard.IsOutermost())
+   {
       ReportSwapchain(result, swapchain ? *swapchain : nullptr, device, requested);
+      if (SUCCEEDED(result) && requested && ShouldWrap(*swapchain))
+         SwapchainProxy::Wrap(swapchain);
+   }
    return result;
 }
 
@@ -310,7 +355,7 @@ HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IDXGIFactory2* factory, IUnknow
 HRESULT STDMETHODCALLTYPE GetDesc(IDXGISwapChain* swapchain, DXGI_SWAP_CHAIN_DESC* desc)
 {
    const HRESULT result = original_get_desc(swapchain, desc);
-   if (SUCCEEDED(result) && desc && !Scope::IsActive())
+   if (SUCCEEDED(result) && desc && !Scope::IsActive() && IsGameView(swapchain))
    {
       if (const std::optional<GameSwapchainDesc> game_desc = GetGameDesc(swapchain))
       {
@@ -329,7 +374,7 @@ HRESULT STDMETHODCALLTYPE GetDesc(IDXGISwapChain* swapchain, DXGI_SWAP_CHAIN_DES
 HRESULT STDMETHODCALLTYPE GetDesc1(IDXGISwapChain1* swapchain, DXGI_SWAP_CHAIN_DESC1* desc)
 {
    const HRESULT result = original_get_desc1(swapchain, desc);
-   if (SUCCEEDED(result) && desc && !Scope::IsActive())
+   if (SUCCEEDED(result) && desc && !Scope::IsActive() && IsGameView(swapchain))
    {
       if (const std::optional<GameSwapchainDesc> game_desc = GetGameDesc(swapchain))
       {
@@ -383,10 +428,11 @@ HRESULT CallRuntime(Function function, Args... args)
    return function(args...);
 }
 
-// DXGI_PRESENT_TEST only checks whether the swapchain could present
-bool IsGamePresent(const DepthGuard& guard, UINT flags)
+// DXGI_PRESENT_TEST only checks whether the swapchain could present. A proxied swapchain's is handled by its proxy (PresentForGame): one
+// reaching the real object from outside Luma's scope is another tool's.
+bool IsGamePresent(const DepthGuard& guard, UINT flags, IDXGISwapChain* swapchain)
 {
-   return guard.IsOutermost() && !(flags & DXGI_PRESENT_TEST) && !Scope::IsActive();
+   return guard.IsOutermost() && !(flags & DXGI_PRESENT_TEST) && !Scope::IsActive() && !SwapchainProxy::HasProxy(swapchain);
 }
 
 // The overlay whose code called Luma's Present last: its hook is above Luma's (or it presents itself). Never held with another lock.
@@ -414,7 +460,7 @@ void NoteCaller(const void* return_address)
 HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags)
 {
    DepthGuard guard(present_depth);
-   const bool is_game = IsGamePresent(guard, flags);
+   const bool is_game = IsGamePresent(guard, flags, swapchain);
    if (is_game)
    {
       NoteCaller(_ReturnAddress());
@@ -434,7 +480,7 @@ HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval,
 HRESULT STDMETHODCALLTYPE Present1(IDXGISwapChain1* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters)
 {
    DepthGuard guard(present_depth);
-   const bool is_game = IsGamePresent(guard, flags);
+   const bool is_game = IsGamePresent(guard, flags, swapchain);
    // Composition writes the whole buffer: the game's dirty rects and scroll don't describe it
    const DXGI_PRESENT_PARAMETERS whole = {};
    if (is_game)
@@ -457,7 +503,7 @@ HRESULT STDMETHODCALLTYPE Present1(IDXGISwapChain1* swapchain, UINT sync_interva
 
 HRESULT STDMETHODCALLTYPE SetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutput* output)
 {
-   if (!Scope::IsActive())
+   if (!Scope::IsActive() && IsGameView(swapchain))
    {
       Scope::Guard scope;
       if (Handlers::PreSetFullscreenState(swapchain, fullscreen, output))
@@ -469,7 +515,7 @@ HRESULT STDMETHODCALLTYPE SetFullscreenState(IDXGISwapChain* swapchain, BOOL ful
 HRESULT STDMETHODCALLTYPE ResizeBuffers(IDXGISwapChain* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags)
 {
    DepthGuard guard(resize_depth);
-   const bool is_game = guard.IsOutermost() && !Scope::IsActive();
+   const bool is_game = guard.IsOutermost() && !Scope::IsActive() && IsGameView(swapchain);
    std::optional<GameSwapchainDesc> previous_game_desc;
    if (is_game)
    {
@@ -492,7 +538,7 @@ HRESULT STDMETHODCALLTYPE ResizeBuffers1(IDXGISwapChain3* swapchain, UINT count,
    const UINT* node_masks, IUnknown* const* present_queues)
 {
    DepthGuard guard(resize_depth);
-   const bool is_game = guard.IsOutermost() && !Scope::IsActive();
+   const bool is_game = guard.IsOutermost() && !Scope::IsActive() && IsGameView(swapchain);
    std::optional<GameSwapchainDesc> previous_game_desc;
    if (is_game)
    {
@@ -515,7 +561,7 @@ HRESULT STDMETHODCALLTYPE ResizeBuffers1(IDXGISwapChain3* swapchain, UINT count,
 // kept as what its image is in.
 HRESULT STDMETHODCALLTYPE SetColorSpace1(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
 {
-   if (!Scope::IsActive())
+   if (!Scope::IsActive() && IsGameView(swapchain))
    {
       Scope::Guard scope;
       if (Handlers::PreSetColorSpace(swapchain, color_space))
@@ -533,10 +579,11 @@ HRESULT STDMETHODCALLTYPE SetColorSpace1(IDXGISwapChain3* swapchain, DXGI_COLOR_
 // Where Luma owns the real buffers, the game's are Luma's textures; inside Luma's scope (composition, the overlay) they're the real ones
 HRESULT STDMETHODCALLTYPE GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer)
 {
-   if (!Scope::IsActive())
+   if (!Scope::IsActive() && IsGameView(swapchain))
    {
+      const bool third_party = ThirdPartyModules::FindBase(_ReturnAddress()) != 0;
       Scope::Guard scope;
-      if (const std::optional<HRESULT> result = Handlers::GetBuffer(swapchain, index, riid, buffer))
+      if (const std::optional<HRESULT> result = Handlers::GetBuffer(swapchain, index, riid, buffer, third_party))
          return *result;
    }
    return original_get_buffer(swapchain, index, riid, buffer);
@@ -544,10 +591,11 @@ HRESULT STDMETHODCALLTYPE GetBuffer(IDXGISwapChain* swapchain, UINT index, REFII
 
 UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex(IDXGISwapChain3* swapchain)
 {
-   if (!Scope::IsActive())
+   if (!Scope::IsActive() && IsGameView(swapchain))
    {
+      const bool third_party = ThirdPartyModules::FindBase(_ReturnAddress()) != 0;
       Scope::Guard scope;
-      if (const std::optional<UINT> index = Handlers::GetCurrentBackBufferIndex(swapchain))
+      if (const std::optional<UINT> index = Handlers::GetCurrentBackBufferIndex(swapchain, third_party))
          return *index;
    }
    return original_get_current_back_buffer_index(swapchain);
@@ -557,7 +605,7 @@ UINT STDMETHODCALLTYPE GetCurrentBackBufferIndex(IDXGISwapChain3* swapchain)
 HRESULT STDMETHODCALLTYPE GetFullscreenState(IDXGISwapChain* swapchain, BOOL* fullscreen, IDXGIOutput** output)
 {
    const HRESULT result = original_get_fullscreen_state(swapchain, fullscreen, output);
-   if (SUCCEEDED(result) && fullscreen && !Scope::IsActive())
+   if (SUCCEEDED(result) && fullscreen && !Scope::IsActive() && IsGameView(swapchain))
    {
       Scope::Guard scope;
       if (const std::optional<BOOL> game_fullscreen = Handlers::GetFullscreenState(swapchain))
@@ -570,7 +618,7 @@ HRESULT STDMETHODCALLTYPE GetFullscreenState(IDXGISwapChain* swapchain, BOOL* fu
 HRESULT STDMETHODCALLTYPE CheckColorSpaceSupport(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space, UINT* support)
 {
    const HRESULT result = original_check_color_space_support(swapchain, color_space, support);
-   if (SUCCEEDED(result) && support && !Scope::IsActive())
+   if (SUCCEEDED(result) && support && !Scope::IsActive() && IsGameView(swapchain))
    {
       Scope::Guard scope;
       Handlers::PostCheckColorSpaceSupport(swapchain, color_space, *support);
@@ -591,7 +639,7 @@ HRESULT STDMETHODCALLTYPE GetOutputDesc1(IDXGIOutput6* output, DXGI_OUTPUT_DESC1
 
 HRESULT STDMETHODCALLTYPE SetHDRMetaData(IDXGISwapChain4* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, void* metadata)
 {
-   if (!Scope::IsActive())
+   if (!Scope::IsActive() && IsGameView(swapchain))
    {
       Scope::Guard scope;
       if (Handlers::PreSetHdrMetadata(swapchain, type, size, metadata))
@@ -600,6 +648,48 @@ HRESULT STDMETHODCALLTYPE SetHDRMetaData(IDXGISwapChain4* swapchain, DXGI_HDR_ME
    return original_set_hdr_metadata(swapchain, type, size, metadata);
 }
 } // namespace
+
+namespace DXGI {
+void OnOverlayBufferRequest(IDXGISwapChain* swapchain)
+{
+   if (Scope::IsActive())
+      return;
+   Scope::Guard scope;
+   Handlers::OnOverlayBufferRequest(swapchain);
+}
+
+HRESULT PresentForGame(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters, bool present1)
+{
+   DepthGuard guard(present_depth);
+   const bool is_game = guard.IsOutermost() && !(flags & DXGI_PRESENT_TEST) && !Scope::IsActive();
+   // Composition writes the whole buffer: the game's dirty rects and scroll don't describe it
+   const DXGI_PRESENT_PARAMETERS whole = {};
+   if (is_game)
+   {
+      Scope::Guard scope;
+      ObserveImmediateContext(swapchain);
+      Handlers::PrePresent(swapchain, sync_interval, flags);
+      if (present1 && Handlers::ComposesWholeBuffer(swapchain))
+         parameters = &whole;
+   }
+   HRESULT result = E_FAIL;
+   {
+      // Through the vtable: every hook another tool put in DXGI's Present runs now, on the final image; Luma's lets it through
+      Scope::Guard scope;
+      ComPtr<IDXGISwapChain1> swapchain1;
+      if (present1 && SUCCEEDED(swapchain->QueryInterface(IID_PPV_ARGS(&swapchain1))))
+         result = swapchain1->Present1(sync_interval, flags, parameters ? parameters : &whole);
+      else
+         result = swapchain->Present(sync_interval, flags);
+   }
+   if (is_game && SUCCEEDED(result))
+   {
+      Scope::Guard scope;
+      Handlers::PostPresent(swapchain);
+   }
+   return result;
+}
+} // namespace DXGI
 
 void InstallDXGI(const D3D11::Functions& functions)
 {

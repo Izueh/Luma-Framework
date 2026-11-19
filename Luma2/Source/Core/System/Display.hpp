@@ -30,6 +30,9 @@ struct Info
 // The display `window` is on (its biggest part), the primary for none. `output` (the swapchain's containing one, optional) gives the
 // luminance and is the fallback for the HDR state on Windows before 11 24H2.
 Info Query(HWND window, IDXGIOutput* output = nullptr);
+// Any display's configuration changed since the last call (Windows' HDR switch, a mode, a monitor): DXGI's own sign (a factory that
+// isn't current), cheap enough for every present, where the queries above aren't. The first call is true.
+bool HasChanged();
 // Turns Windows HDR on or off for the display the window is on. True if it now is as asked.
 bool SetHdrEnabled(HWND window, bool enabled);
 } // namespace Display

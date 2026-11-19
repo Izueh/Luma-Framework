@@ -85,6 +85,7 @@ struct OutputInfo
    bool borderless = false;
    bool game_fullscreen = false;
    bool composed = false; // The last present ran display composition
+   bool wrapped = false; // The game holds a proxy of the swapchain
    bool hdr_supported = false;
    bool hdr_enabled = false; // Windows HDR on the display the window is on
    float peak_nits = 0.f;

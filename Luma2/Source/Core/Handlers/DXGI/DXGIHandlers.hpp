@@ -9,6 +9,10 @@ namespace Luma {
 namespace Handlers {
 void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc);
 void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND hwnd);
+// An overlay asked the game's proxy for a buffer or the index: it gets the real ones, composed first on the presenting thread
+void OnOverlayBufferRequest(IDXGISwapChain* swapchain);
+// After PostCreateSwapChain: the game gets a proxy of it (Hooks::SwapchainProxy)
+bool ShouldWrapSwapChain(IDXGISwapChain* swapchain);
 // Reporting a swapchain twice is harmless
 void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator);
 void OnSwapChainDestroyed(const IDXGISwapChain* swapchain);
@@ -20,8 +24,9 @@ void PostResizeBuffers(IDXGISwapChain* swapchain, UINT count, UINT width, UINT h
 // True skips the call
 bool PreSetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutput* output);
 // The game's calls Luma answers itself (Swapchain::DXGI): empty or false lets them through
-std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer);
-std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain);
+// `third_party`: the caller is an overlay's code
+std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer, bool third_party);
+std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain, bool third_party);
 std::optional<BOOL> GetFullscreenState(IDXGISwapChain* swapchain);
 bool PreSetColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space);
 bool PreSetHdrMetadata(IDXGISwapChain* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, const void* metadata);

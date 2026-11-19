@@ -46,6 +46,8 @@ void Register();
 Mode GetMode();
 bool UsesFlipModel();
 bool AllowsTearing();
+// The game gets a proxy of the swapchain (Luma.Swapchain.Wrap, Test builds): Luma presents before every other tool's Present hook
+bool Wraps();
 // Read at every fullscreen change
 bool IsBorderless();
 bool SetsHdrMetadata();

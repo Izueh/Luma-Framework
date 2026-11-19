@@ -1,6 +1,7 @@
 #include "Swapchain/DXGI/DXGISwapchain.hpp"
 
 #include <algorithm>
+#include <utility>
 #include <mutex>
 #include <variant>
 #include <vector>
@@ -67,17 +68,18 @@ struct State
    std::optional<DXGI_COLOR_SPACE_TYPE> game_color_space;
    DXGI_COLOR_SPACE_TYPE color_space = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
    System::Display::Info display;
-   uint32_t presents_since_query = 0;
    D3D11::Composition d3d11;
    Display::Composition::D3D12::RendererPtr d3d12;
    bool composed = false;
    bool switch_failed_logged = false;
    // Windows HDR was turned on for the user's HDR choice: once per choice
    bool hdr_requested = false;
+   // The thread presenting, and a composition an overlay's request ran ahead of this frame's present
+   DWORD present_thread = 0;
+   bool composed_early = false;
+   // The game holds a proxy: overlays present after Luma
+   bool wrapped = false;
 };
-
-// The display is asked again this often, for Windows' HDR switch: a few seconds
-constexpr uint32_t PRESENTS_PER_QUERY = 300;
 
 std::mutex status_mutex;
 Status status;
@@ -283,10 +285,11 @@ void ReleaseRealBuffers(State& state)
 
 void RefreshDisplay(IDXGISwapChain* swapchain, State& state, bool force)
 {
+   // Asked again only when something changed: the queries take long enough to hitch a frame
    const HMONITOR monitor = MonitorFromWindow(state.window, MONITOR_DEFAULTTONEAREST);
-   if (!force && monitor == state.display.monitor && ++state.presents_since_query < PRESENTS_PER_QUERY)
+   const bool changed = System::Display::HasChanged();
+   if (!force && !changed && monitor == state.display.monitor)
       return;
-   state.presents_since_query = 0;
    ComPtr<IDXGIOutput> output;
    swapchain->GetContainingOutput(&output);
    const System::Display::Info display = System::Display::Query(state.window, output.Get());
@@ -346,6 +349,7 @@ void UpdateStatus(IDXGISwapChain* swapchain, const State& state)
       .borderless = IsBorderless(),
       .game_fullscreen = state.game_fullscreen,
       .composed = state.composed,
+      .wrapped = state.wrapped,
       .hdr_supported = state.display.hdr_supported,
       .hdr_enabled = state.display.hdr_enabled,
       .peak_nits = state.display.peak_nits,
@@ -476,11 +480,25 @@ void OnResized(IDXGISwapChain* swapchain, bool succeeded)
    UpdateStatus(swapchain, *state);
 }
 
-std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer)
+void ComposeForOverlay(IDXGISwapChain* swapchain)
+{
+   State* state = Find(swapchain);
+   if (!state || state->mode != Mode::Mirror || state->composed_early || GetCurrentThreadId() != state->present_thread)
+      return;
+   Compose(swapchain);
+   state->composed_early = true;
+}
+
+std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer, bool third_party)
 {
    State* state = Find(swapchain);
    if (!state || state->mode != Mode::Mirror)
       return std::nullopt;
+   if (third_party)
+   {
+      ComposeForOverlay(swapchain);
+      return std::nullopt;
+   }
    std::scoped_lock lock(state->mutex);
    if (state->buffers.empty())
       return std::nullopt;
@@ -494,11 +512,16 @@ std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID r
    return state->buffers[index]->QueryInterface(riid, buffer);
 }
 
-std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain)
+std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain, bool third_party)
 {
    State* state = Find(swapchain);
    if (!state || state->mode != Mode::Mirror)
       return std::nullopt;
+   if (third_party)
+   {
+      ComposeForOverlay(swapchain);
+      return std::nullopt;
+   }
    std::scoped_lock lock(state->mutex);
    return state->index;
 }
@@ -567,6 +590,10 @@ void Compose(IDXGISwapChain* swapchain)
    State* state = Find(swapchain);
    if (!state)
       return;
+   // An overlay's request composed this frame already (its own drawing is on the real buffer now)
+   if (std::exchange(state->composed_early, false))
+      return;
+   state->present_thread = GetCurrentThreadId();
    RefreshDisplay(swapchain, *state, false);
    const bool requests_hdr = RequestsHdr();
    if (requests_hdr && !state->hdr_requested && state->display.hdr_supported && !state->display.hdr_enabled)
@@ -628,6 +655,16 @@ ComPtr<IUnknown> GetGameBuffer(IDXGISwapChain* swapchain)
    if (state->buffers.empty())
       return nullptr;
    return state->buffers[IsD3D11(*state) ? 0 : state->index % state->buffers.size()];
+}
+
+bool Wraps(IDXGISwapChain* swapchain)
+{
+   State* state = Find(swapchain);
+   if (!state || !Swapchain::Wraps())
+      return false;
+   state->wrapped = true;
+   Utils::Log::Info("Swapchain: the game gets a proxy of {}", static_cast<void*>(swapchain));
+   return true;
 }
 
 Status GetStatus()

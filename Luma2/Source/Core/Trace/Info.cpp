@@ -160,6 +160,7 @@ Status GetStatus()
          .borderless = output.borderless,
          .game_fullscreen = output.game_fullscreen,
          .composed = output.composed,
+         .wrapped = output.wrapped,
          .hdr_supported = output.hdr_supported,
          .hdr_enabled = output.hdr_enabled,
          .peak_nits = output.peak_nits,

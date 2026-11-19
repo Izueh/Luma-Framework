@@ -493,6 +493,7 @@ void AddStageHooks(std::vector<Hook>& hooks, const D3D11::Functions& functions, 
    if (wants(Function::VSSetSamplers))
       AddContextHook<&StageSetSamplers<Stage, V>>(hooks, vtable, Traits::SetSamplersSlot(), BASE, Traits::NAMES[4]);
 }
+
 // The context hooks on the methods recorded for `vtable`. Instance 0 is the immediate context's, 1 the deferred one's, the others the variants'.
 template <size_t V>
 void DeclareContextHooks(const D3D11::Functions& functions, const ContextVtable& vtable)

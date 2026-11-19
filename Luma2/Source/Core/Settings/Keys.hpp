@@ -48,6 +48,8 @@ inline constexpr Id<Settings::EnumIndex> SWAPCHAIN_MODE = {"Luma.Swapchain.Mode"
 inline constexpr Id<bool> SWAPCHAIN_FLIP_MODEL = {"Luma.Swapchain.FlipModel"};
 // Test builds: tearing allowed (VRR, uncapped frame rates in a window), from the game's next swapchain
 inline constexpr Id<bool> SWAPCHAIN_TEARING = {"Luma.Swapchain.Tearing"};
+// Test builds: the game gets a proxy of the swapchain (Hooks::SwapchainProxy), from the game's next swapchain
+inline constexpr Id<bool> SWAPCHAIN_WRAP = {"Luma.Swapchain.Wrap"};
 // Test builds: exclusive fullscreen replaced by a borderless window (the game's choice first)
 inline constexpr Id<Settings::EnumIndex> SWAPCHAIN_FULLSCREEN = {"Luma.Swapchain.Fullscreen"};
 // Development builds: the real swapchain's size over the game's (composition scales), from the game's next swapchain or resize

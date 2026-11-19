@@ -173,6 +173,12 @@ std::shared_ptr<const Frame> GetLast()
    std::scoped_lock lock(mutex);
    return last;
 }
+
+void ClearLast()
+{
+   std::scoped_lock lock(mutex);
+   last.reset();
+}
 } // namespace Capture
 } // namespace Trace
 } // namespace Luma

@@ -260,6 +260,16 @@ void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
    ReportInitSwapchain(swapchain, *presenter, false);
 }
 
+void OnOverlayBufferRequest(IDXGISwapChain* swapchain)
+{
+   Swapchain::DXGI::ComposeForOverlay(swapchain);
+}
+
+bool ShouldWrapSwapChain(IDXGISwapChain* swapchain)
+{
+   return Swapchain::DXGI::Wraps(swapchain);
+}
+
 void OnSwapChainDestroyed(const IDXGISwapChain* swapchain)
 {
    UI::DetachFromSwapchain(swapchain);
@@ -330,14 +340,14 @@ bool PreSetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutp
    return borderless;
 }
 
-std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer)
+std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer, bool third_party)
 {
-   return Swapchain::DXGI::GetBuffer(swapchain, index, riid, buffer);
+   return Swapchain::DXGI::GetBuffer(swapchain, index, riid, buffer, third_party);
 }
 
-std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain)
+std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain, bool third_party)
 {
-   return Swapchain::DXGI::GetCurrentBackBufferIndex(swapchain);
+   return Swapchain::DXGI::GetCurrentBackBufferIndex(swapchain, third_party);
 }
 
 std::optional<BOOL> GetFullscreenState(IDXGISwapChain* swapchain)

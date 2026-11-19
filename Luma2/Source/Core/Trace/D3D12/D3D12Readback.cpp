@@ -183,6 +183,9 @@ Result ReadBackBuffer(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue, uint
       return {.error = "the swapchain has no back buffer"};
    if (!back_buffer)
       return {.error = "the swapchain has no back buffer"};
+   // What the game drew is in its buffer's mirror while mirrors are swapped in (in the same state)
+   if (ID3D12Resource* mirror = Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D12::GetMirror(back_buffer.Get()) : nullptr)
+      back_buffer = mirror;
    ComPtr<ID3D12Device> device;
    ComPtr<ID3D12CommandAllocator> allocator;
    ComPtr<ID3D12GraphicsCommandList> list;

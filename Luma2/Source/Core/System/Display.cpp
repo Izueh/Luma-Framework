@@ -6,6 +6,8 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
+#include "System/Modules.hpp"
+
 using Microsoft::WRL::ComPtr;
 
 namespace Luma {
@@ -102,6 +104,20 @@ Info Query(HWND window, IDXGIOutput* output)
       info.max_full_frame_nits = desc.MaxFullFrameLuminance > 0.f ? desc.MaxFullFrameLuminance : info.peak_nits;
    }
    return info;
+}
+
+bool HasChanged()
+{
+   // Luma's own factory, from the system's dxgi.dll: the game's may be a proxy's
+   static ComPtr<IDXGIFactory1> factory;
+   if (factory && factory->IsCurrent())
+      return false;
+   using CreateFactory = HRESULT(WINAPI*)(REFIID, void**);
+   static const auto create = reinterpret_cast<CreateFactory>(Modules::FindExport(Modules::FindSystemModule(L"dxgi.dll"), "CreateDXGIFactory1"));
+   factory.Reset();
+   if (create)
+      create(IID_PPV_ARGS(&factory));
+   return true;
 }
 
 bool SetHdrEnabled(HWND window, bool enabled)
