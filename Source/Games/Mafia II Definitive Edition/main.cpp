@@ -25,7 +25,7 @@ namespace
 
 struct GameDeviceDataMafiaIIDE final : public GameDeviceData
 {
-   com_ptr<ID3D11Resource> video;
+   ComPtr<ID3D11Resource> video;
 
    int pending_draws_to_black_bars = 0;
 
@@ -103,7 +103,7 @@ public:
          if (!game_device_data.has_booted && !game_device_data.has_drawn_anything)
          {
             SwapchainData& swapchain_data = *GetSwapchainData(*device_data.swapchains.begin()); // Game only ever has 1 swapchain, so this is safe
-            com_ptr<ID3D11RenderTargetView> display_composition_rtv;
+            ComPtr<ID3D11RenderTargetView> display_composition_rtv;
             {
                const std::shared_lock lock_swapchain(swapchain_data.mutex);
                display_composition_rtv = swapchain_data.display_composition_rtvs.empty() ? nullptr : swapchain_data.display_composition_rtvs[0]; // Always 1 swapchain buffer in DX11, this will never change as it'd break the design of games that rely on it
@@ -121,8 +121,8 @@ public:
       // This only runs some frames
       if (original_shader_hashes.Contains(shader_hashes_DecodeVideo))
       {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
 
          uint4 size;
          DXGI_FORMAT format;
@@ -132,7 +132,7 @@ public:
          if (rtv.get() && (size.x == uint(device_data.output_resolution.x + 0.5f) || size.y == uint(device_data.output_resolution.y + 0.5f)))
          {
             game_device_data.video = nullptr;
-            rtv->GetResource(&game_device_data.video);
+            rtv->GetResource(game_device_data.video.put());
          
             if (is_custom_pass)
             {
@@ -146,17 +146,17 @@ public:
       // we simply skip the draw call and copy the fullscreen (swapchain sized) video on it, or inform the shader it's a fullscreen video.
       else if (game_device_data.video && original_shader_hashes.Contains(shader_hashes_UI_Video) && test_index != 13)
       {
-         com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->PSGetShaderResources(8, 1, &srv);
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(8, 1, srv.put());
          if (srv.get())
          {
-            com_ptr<ID3D11Resource> sr;
-            srv->GetResource(&sr);
+            ComPtr<ID3D11Resource> sr;
+            srv->GetResource(sr.put());
 
             if (sr == game_device_data.video)
             {
-               com_ptr<ID3D11RenderTargetView> rtv;
-               native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+               ComPtr<ID3D11RenderTargetView> rtv;
+               native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
                
                uint4 size;
                DXGI_FORMAT format;
@@ -164,8 +164,8 @@ public:
 
                if (rtv.get() && (size.x == uint(device_data.output_resolution.x + 0.5f) || size.y == uint(device_data.output_resolution.y + 0.5f)))
                {
-                  com_ptr<ID3D11Resource> rt;
-                  rtv->GetResource(&rt);
+                  ComPtr<ID3D11Resource> rt;
+                  rtv->GetResource(rt.put());
 
                   // The UI shader had the ability to do some filtering on videos, so make sure we preserve it just in case
                   if (is_custom_pass && test_index != 12)

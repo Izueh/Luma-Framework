@@ -442,8 +442,8 @@ public:
       if (!is_alpha_tested_shader)
          return;
 
-      com_ptr<ID3D11PixelShader> patched_shader;
-      native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, &patched_shader);
+      ComPtr<ID3D11PixelShader> patched_shader;
+      native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, patched_shader.put());
 
       game_device_data.modified_atoc_pixel_shaders[hash] = patched_shader.get();
    }

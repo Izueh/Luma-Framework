@@ -148,8 +148,8 @@ struct GameDeviceDataBioshockSeries final : public GameDeviceData
    bool drew_aa = false;
 
    // BS/BS2/Infinite fog
-   com_ptr<ID3D11Texture2D> scene_texture;
-   com_ptr<ID3D11ShaderResourceView> scene_texture_srv;
+   ComPtr<ID3D11Texture2D> scene_texture;
+   ComPtr<ID3D11ShaderResourceView> scene_texture_srv;
 
    ComPtr<ID3D11ShaderResourceView> srv_depth;
    ComPtr<ID3D11Buffer> cb_bloom;
@@ -672,13 +672,13 @@ public:
       // TODO: skip this if fog correction is at 0%, and branch in the shader to not read the background. Also, disable the blend, so it's cheaper to run.
       if (is_custom_pass && !game_device_data.drew_tonemap && original_shader_hashes.Contains(shader_hashes_Fog))
       {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
 
          if (rtv)
          {
-            com_ptr<ID3D11Resource> rtr;
-            rtv->GetResource(&rtr);
+            ComPtr<ID3D11Resource> rtr;
+            rtv->GetResource(rtr.put());
 
             uint4 size_a, size_b;
             DXGI_FORMAT format_a, format_b;
@@ -690,7 +690,7 @@ public:
                game_device_data.scene_texture_srv = nullptr;
                if (game_device_data.scene_texture)
                {
-                  HRESULT hr = native_device->CreateShaderResourceView(game_device_data.scene_texture.get(), nullptr, &game_device_data.scene_texture_srv);
+                  HRESULT hr = native_device->CreateShaderResourceView(game_device_data.scene_texture.get(), nullptr, game_device_data.scene_texture_srv.put());
                   ASSERT_ONCE(SUCCEEDED(hr));
                }
             }
@@ -750,14 +750,14 @@ public:
          if (g_smaa_enable)
          {
             // SRV0 should be the scene in linear color space.
-            com_ptr<ID3D11ShaderResourceView> srv;
-            native_device_context->PSGetShaderResources(0, 1, &srv);
+            ComPtr<ID3D11ShaderResourceView> srv;
+            native_device_context->PSGetShaderResources(0, 1, srv.put());
 
             // Get the scene resource and texture description from SRV.
-            com_ptr<ID3D11Resource> resource;
-            srv->GetResource(&resource);
-            com_ptr<ID3D11Texture2D> tex;
-            resource->QueryInterface(&tex);
+            ComPtr<ID3D11Resource> resource;
+            srv->GetResource(resource.put());
+            ComPtr<ID3D11Texture2D> tex;
+            resource->QueryInterface(tex.put());
             D3D11_TEXTURE2D_DESC tex_desc;
             tex->GetDesc(&tex_desc);
 
@@ -769,17 +769,17 @@ public:
             // Create UAs and views.
             tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
             tex.reset();
-            native_device->CreateTexture2D(&tex_desc, nullptr, &tex);
-            com_ptr<ID3D11UnorderedAccessView> uav_linear_to_gamma;
-            native_device->CreateUnorderedAccessView(tex.get(), nullptr, &uav_linear_to_gamma);
-            com_ptr<ID3D11ShaderResourceView> srv_linear_to_gamma;
-            native_device->CreateShaderResourceView(tex.get(), nullptr, &srv_linear_to_gamma);
+            native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+            ComPtr<ID3D11UnorderedAccessView> uav_linear_to_gamma;
+            native_device->CreateUnorderedAccessView(tex.get(), nullptr, uav_linear_to_gamma.put());
+            ComPtr<ID3D11ShaderResourceView> srv_linear_to_gamma;
+            native_device->CreateShaderResourceView(tex.get(), nullptr, srv_linear_to_gamma.put());
             tex.reset();
-            native_device->CreateTexture2D(&tex_desc, nullptr, &tex);
-            com_ptr<ID3D11UnorderedAccessView> uav_copy;
-            native_device->CreateUnorderedAccessView(tex.get(), nullptr, &uav_copy);
-            com_ptr<ID3D11ShaderResourceView> srv_copy;
-            native_device->CreateShaderResourceView(tex.get(), nullptr, &srv_copy);
+            native_device->CreateTexture2D(&tex_desc, nullptr, tex.put());
+            ComPtr<ID3D11UnorderedAccessView> uav_copy;
+            native_device->CreateUnorderedAccessView(tex.get(), nullptr, uav_copy.put());
+            ComPtr<ID3D11ShaderResourceView> srv_copy;
+            native_device->CreateShaderResourceView(tex.get(), nullptr, srv_copy.put());
 
             // Bindings.
             static constexpr ID3D11ShaderResourceView* srv_null = nullptr;
@@ -802,8 +802,8 @@ public:
             native_device_context->PSSetShaderResources(0, srvs.size(), srvs.data());
 
             // Create RTV to the scenes's resource.
-            com_ptr<ID3D11RenderTargetView> rtv;
-            native_device->CreateRenderTargetView(resource.get(), nullptr, &rtv);
+            ComPtr<ID3D11RenderTargetView> rtv;
+            native_device->CreateRenderTargetView(resource.get(), nullptr, rtv.put());
 
             DrawSMAA(native_device, native_device_context, device_data, rtv.get(), srv_copy.get(), srv_linear_to_gamma.get(), game_device_data.srv_depth.get());
          }

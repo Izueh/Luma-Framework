@@ -28,14 +28,14 @@ public:
          native_device_context->RSGetViewports(&viewports_num, &viewports[0]);
          if (viewports_num == 1 && viewports[0].Width == device_data.output_resolution.x && viewports[0].Height == device_data.output_resolution.y)
          {
-            com_ptr<ID3D11RenderTargetView> rtvs[2];
-            com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-            native_device_context->OMGetRenderTargets(2, &rtvs[0], &depth_stencil_view);
+            ComPtr<ID3D11RenderTargetView> rtvs[2];
+            ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+            native_device_context->OMGetRenderTargets(2, PutArray(rtvs), depth_stencil_view.put());
             // Make sure we only have 1 rtv (the first one would be invalid, which is the problem here)
             if (rtvs[0] == nullptr && rtvs[1] == nullptr && !device_data.swapchains.empty())
             {
                SwapchainData& swapchain_data = *GetSwapchainData(*device_data.swapchains.begin()); // Game only ever has 1 swapchain, so this is safe
-               com_ptr<ID3D11RenderTargetView> display_composition_rtv;
+               ComPtr<ID3D11RenderTargetView> display_composition_rtv;
                {
                   const std::shared_lock lock_swapchain(swapchain_data.mutex);
                   display_composition_rtv = swapchain_data.display_composition_rtvs.empty() ? nullptr : swapchain_data.display_composition_rtvs[0]; // Always 1 swapchain buffer in DX11, this will never change as it'd break the design of games that rely on it

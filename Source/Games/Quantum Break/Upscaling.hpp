@@ -49,8 +49,8 @@ namespace QuantumBreakUpscaling
    {
 #if ENABLE_SR
       // Per-frame clip/device depth from the pre-linearization input, and geometry velocity.
-      com_ptr<ID3D11Resource> sr_clip_depth;
-      com_ptr<ID3D11Resource> sr_motion_vectors;
+      ComPtr<ID3D11Resource> sr_clip_depth;
+      ComPtr<ID3D11Resource> sr_motion_vectors;
 #if DEVELOPMENT || TEST
       NativeInputUsage native_input_usage;
       NativeInputSnapshot debug_inputs;
@@ -62,10 +62,10 @@ namespace QuantumBreakUpscaling
       bool debug_prev_used_cached_clip_depth = false;
 #endif
       // Gamma-to-linear conversion scratch and SR output view.
-      com_ptr<ID3D11Texture2D> sr_linear_input_color;
-      com_ptr<ID3D11ShaderResourceView> sr_linear_input_color_srv;
-      com_ptr<ID3D11RenderTargetView> sr_linear_input_color_rtv;
-      com_ptr<ID3D11ShaderResourceView> sr_output_color_srv;
+      ComPtr<ID3D11Texture2D> sr_linear_input_color;
+      ComPtr<ID3D11ShaderResourceView> sr_linear_input_color_srv;
+      ComPtr<ID3D11RenderTargetView> sr_linear_input_color_rtv;
+      ComPtr<ID3D11ShaderResourceView> sr_output_color_srv;
 
       // Texture shape history controls SR resets; width/height changes are included.
       bool has_previous_source_desc = false;

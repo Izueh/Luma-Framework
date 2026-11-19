@@ -282,8 +282,8 @@ struct Borderlands2GameDeviceData final : public GameDeviceData
    std::atomic<bool> sr_active = false;
    // The upscaler's output goes back into the scene (and its copy, see "mv_scene_copy") without its alpha (the encoded view depth the
    // post passes read), drawn from this view of it
-   com_ptr<ID3D11BlendState> sr_rgb_blend_state;
-   com_ptr<ID3D11ShaderResourceView> sr_output_srv;
+   ComPtr<ID3D11BlendState> sr_rgb_blend_state;
+   ComPtr<ID3D11ShaderResourceView> sr_output_srv;
    // Set when None is picked (in the overlay, after present latched "sr_active"); the upscaler's resources go at the next present
    std::atomic<bool> release_sr_resources = false;
 
@@ -294,7 +294,7 @@ struct Borderlands2GameDeviceData final : public GameDeviceData
    template <typename T>
    struct PatchedShader
    {
-      com_ptr<T> shader;
+      ComPtr<T> shader;
       UINT read_size = 0;
       UINT translation_offset = 0;
       bool camera_relative_vertices = false;
@@ -304,23 +304,23 @@ struct Borderlands2GameDeviceData final : public GameDeviceData
    // The alpha blended draws' pixel shaders with the mask target, by blend (see "ClassifyBoundBlend", index - 1)
    std::unordered_map<uint32_t, PatchedShader<ID3D11PixelShader>> mv_reactive_pixel_shaders[2];
    // The motion vector target (sized like the scene; every blend state writes it unblended, see "OnCreateBlendState")
-   com_ptr<ID3D11Texture2D> mv_texture;
-   com_ptr<ID3D11RenderTargetView> mv_rtv;
-   com_ptr<ID3D11UnorderedAccessView> mv_uav; // Null without typed UAV loads of its format (then no upscaler)
-   com_ptr<ID3D11ShaderResourceView> mv_srv;
+   ComPtr<ID3D11Texture2D> mv_texture;
+   ComPtr<ID3D11RenderTargetView> mv_rtv;
+   ComPtr<ID3D11UnorderedAccessView> mv_uav; // Null without typed UAV loads of its format (then no upscaler)
+   ComPtr<ID3D11ShaderResourceView> mv_srv;
    // The upscaler's depth, built from the scene's alpha by the fill (the game's depth has no shader resource view)
-   com_ptr<ID3D11Texture2D> mv_device_depth;
-   com_ptr<ID3D11UnorderedAccessView> mv_device_depth_uav;
+   ComPtr<ID3D11Texture2D> mv_device_depth;
+   ComPtr<ID3D11UnorderedAccessView> mv_device_depth_uav;
    // FSR's reactive and transparency & composition masks (written by the fill from "mv_reactive_target")
-   com_ptr<ID3D11Texture2D> mv_reactive;
-   com_ptr<ID3D11UnorderedAccessView> mv_reactive_uav;
-   com_ptr<ID3D11Texture2D> mv_transparency;
-   com_ptr<ID3D11UnorderedAccessView> mv_transparency_uav;
+   ComPtr<ID3D11Texture2D> mv_reactive;
+   ComPtr<ID3D11UnorderedAccessView> mv_reactive_uav;
+   ComPtr<ID3D11Texture2D> mv_transparency;
+   ComPtr<ID3D11UnorderedAccessView> mv_transparency_uav;
    // What the alpha blended draws wrote (x reactive, y transparency & composition; max blended, see "OnCreateBlendState"), read by the
    // fill. Created when FSR first runs with the masks, gone "kReactiveMasksIdleFrames" after the fill last wrote them (address space).
-   com_ptr<ID3D11Texture2D> mv_reactive_target;
-   com_ptr<ID3D11RenderTargetView> mv_reactive_target_rtv;
-   com_ptr<ID3D11ShaderResourceView> mv_reactive_target_srv;
+   ComPtr<ID3D11Texture2D> mv_reactive_target;
+   ComPtr<ID3D11RenderTargetView> mv_reactive_target_rtv;
+   ComPtr<ID3D11ShaderResourceView> mv_reactive_target_srv;
    uint32_t sr_reactive_frame = 0;
    // A frame opens at its first mesh draw into output sized depth (the jitter is chosen there), starts at its first motion vector
    // draw (the target is cleared) and ends at the first post pass ("kScenePostHashes"), once per present.
@@ -336,20 +336,20 @@ struct Borderlands2GameDeviceData final : public GameDeviceData
    // The upscalers' near and far (game units): the last camera's with a usable projection, Core's defaults until one is seen
    float sr_near_plane = SR::SuperResolutionImpl::DrawData{}.near_plane;
    float sr_far_plane = SR::SuperResolutionImpl::DrawData{}.far_plane;
-   com_ptr<ID3D11Resource> mv_depth; // The scene depth (the depth view's resource)
+   ComPtr<ID3D11Resource> mv_depth; // The scene depth (the depth view's resource)
    // The fp16 scene the motion vector draws write, and the game's view of it
-   com_ptr<ID3D11Resource> mv_scene_color;
-   com_ptr<ID3D11RenderTargetView> mv_scene_rtv;
-   com_ptr<ID3D11ShaderResourceView> mv_scene_srv; // The fill's view of it, kept while the scene is the same resource
+   ComPtr<ID3D11Resource> mv_scene_color;
+   ComPtr<ID3D11RenderTargetView> mv_scene_rtv;
+   ComPtr<ID3D11ShaderResourceView> mv_scene_srv; // The fill's view of it, kept while the scene is the same resource
    // The copy of the scene the first post pass reads (UE3 resolves the scene surface into a texture), null if it reads none. The
    // upscaler's output goes into both: post passes draw onto the scene and resolve it again (light shafts, measured).
-   com_ptr<ID3D11Resource> mv_scene_copy;
-   com_ptr<ID3D11Buffer> mv_fill_buffer;
+   ComPtr<ID3D11Resource> mv_scene_copy;
+   ComPtr<ID3D11Buffer> mv_fill_buffer;
    // The projection jitter (pixels, +y down), chosen when the scene opens; its NDC offset is at VS "MotionVectorPatches::JITTER_SLOT"
    // of every mesh draw depth tested against the scene
    std::array<float, 2> mv_jitter = {};
    std::array<float, 2> mv_jitter_ndc = {}; // The same offset in NDC (y up), as the jitter buffer holds it
-   com_ptr<ID3D11Buffer> mv_jitter_buffer;
+   ComPtr<ID3D11Buffer> mv_jitter_buffer;
    // Per-draw lookups kept for the next draw and reset when the scene opens: the jitter path's last depth view and whether it's the scene
    // depth, the motion vector path's last accepted targets, the last blend state's opacity, and the last vertex and pixel shaders'
    // patched versions (owned by the maps above, never erased)
@@ -874,17 +874,17 @@ class Borderlands2 final : public Game
             }
          }
       }
-      com_ptr<T> shader;
+      ComPtr<T> shader;
       if (!patched.empty())
       {
          HRESULT hr;
          if constexpr (vertex)
          {
-            hr = native_device->CreateVertexShader(patched.data(), patched.size(), nullptr, &shader);
+            hr = native_device->CreateVertexShader(patched.data(), patched.size(), nullptr, shader.put());
          }
          else
          {
-            hr = native_device->CreatePixelShader(patched.data(), patched.size(), nullptr, &shader);
+            hr = native_device->CreatePixelShader(patched.data(), patched.size(), nullptr, shader.put());
          }
          if (FAILED(hr))
          {
@@ -926,7 +926,7 @@ class Borderlands2 final : public Game
          return;
       gd.mv_scene_open = true;
       gd.mv_depth.reset();
-      dsv->GetResource(&gd.mv_depth);
+      dsv->GetResource(gd.mv_depth.put());
       gd.mv_scene_color.reset();
       gd.mv_scene_rtv.reset();
       gd.jitter_dsv = nullptr;
@@ -1002,7 +1002,7 @@ class Borderlands2 final : public Game
    // adding the motion vector target ("TARGET_SLOT", past the game's) and the previous frame's vc4 ("PREVIOUS_SLOTS"). False if it
    // can't (the draw then goes to "DrawWithJitter").
    static bool DrawWithMotionVectors(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data,
-      const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, const std::function<void()>& draw, const com_ptr<ID3D11RenderTargetView> (&rtvs)[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT], ID3D11DepthStencilView* dsv)
+      const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, const std::function<void()>& draw, const ComPtr<ID3D11RenderTargetView> (&rtvs)[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT], ID3D11DepthStencilView* dsv)
    {
       auto& gd = GetGameDeviceData(device_data);
       // The scene target alone, plus the motion vector and mask targets the last patched draws left bound
@@ -1023,17 +1023,17 @@ class Borderlands2 final : public Game
       // Known targets: checked, and the motion vector target built for them
       if (rtvs[0] != gd.mv_scene_rtv || dsv != gd.mv_accepted_dsv)
       {
-         com_ptr<ID3D11Resource> depth;
-         dsv->GetResource(&depth);
-         com_ptr<ID3D11Resource> color;
-         rtvs[0]->GetResource(&color);
+         ComPtr<ID3D11Resource> depth;
+         dsv->GetResource(depth.put());
+         ComPtr<ID3D11Resource> color;
+         rtvs[0]->GetResource(color.put());
          if (depth != gd.mv_depth || !color || (gd.mv_scene_color && color != gd.mv_scene_color))
             return MV_REJECT(REJECT_OTHER_DEPTH_COLOR);
          D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
          rtvs[0]->GetDesc(&rtv_desc);
-         com_ptr<ID3D11Texture2D> color_texture;
+         ComPtr<ID3D11Texture2D> color_texture;
          D3D11_TEXTURE2D_DESC color_desc = {};
-         if (SUCCEEDED(color->QueryInterface(&color_texture)))
+         if (SUCCEEDED(color->QueryInterface(color_texture.put())))
          {
             color_texture->GetDesc(&color_desc);
          }
@@ -1059,7 +1059,7 @@ class Borderlands2 final : public Game
             D3D11_FEATURE_DATA_FORMAT_SUPPORT2 support = {format};
             const bool typed_uav_load = SUCCEEDED(native_device->CheckFeatureSupport(D3D11_FEATURE_FORMAT_SUPPORT2, &support, sizeof(support))) && (support.OutFormatSupport2 & D3D11_FORMAT_SUPPORT2_UAV_TYPED_LOAD) != 0;
             desc = CD3D11_TEXTURE2D_DESC(format, size.x, size.y, 1, 1, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE | (typed_uav_load ? D3D11_BIND_UNORDERED_ACCESS : 0u));
-            if (FAILED(SRBridge::CreateSharableTexture(native_device, desc, &gd.mv_texture)) || FAILED(native_device->CreateRenderTargetView(gd.mv_texture.get(), nullptr, &gd.mv_rtv)))
+            if (FAILED(SRBridge::CreateSharableTexture(native_device, desc, gd.mv_texture.put())) || FAILED(native_device->CreateRenderTargetView(gd.mv_texture.get(), nullptr, gd.mv_rtv.put())))
             {
                gd.mv_texture.reset();
                gd.mv_rtv.reset();
@@ -1067,12 +1067,12 @@ class Borderlands2 final : public Game
             }
             if (typed_uav_load)
             {
-               native_device->CreateUnorderedAccessView(gd.mv_texture.get(), nullptr, &gd.mv_uav);
+               native_device->CreateUnorderedAccessView(gd.mv_texture.get(), nullptr, gd.mv_uav.put());
             }
             const CD3D11_TEXTURE2D_DESC depth_desc(DXGI_FORMAT_R32_FLOAT, size.x, size.y, 1, 1, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS);
-            if (SUCCEEDED(SRBridge::CreateSharableTexture(native_device, depth_desc, &gd.mv_device_depth)))
+            if (SUCCEEDED(SRBridge::CreateSharableTexture(native_device, depth_desc, gd.mv_device_depth.put())))
             {
-               native_device->CreateUnorderedAccessView(gd.mv_device_depth.get(), nullptr, &gd.mv_device_depth_uav);
+               native_device->CreateUnorderedAccessView(gd.mv_device_depth.get(), nullptr, gd.mv_device_depth_uav.put());
             }
             gd.mv_frame_ended = true;
          }
@@ -1104,9 +1104,9 @@ class Borderlands2 final : public Game
             gd.mv_texture->GetDesc(&mv_desc);
             const CD3D11_TEXTURE2D_DESC reactive_desc(DXGI_FORMAT_R8G8_UNORM, mv_desc.Width, mv_desc.Height, 1, 1, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
             const std::unique_lock lock(gd.mv_mutex);
-            if (SUCCEEDED(native_device->CreateTexture2D(&reactive_desc, nullptr, &gd.mv_reactive_target)) && SUCCEEDED(native_device->CreateRenderTargetView(gd.mv_reactive_target.get(), nullptr, &gd.mv_reactive_target_rtv)))
+            if (SUCCEEDED(native_device->CreateTexture2D(&reactive_desc, nullptr, gd.mv_reactive_target.put())) && SUCCEEDED(native_device->CreateRenderTargetView(gd.mv_reactive_target.get(), nullptr, gd.mv_reactive_target_rtv.put())))
             {
-               native_device->CreateShaderResourceView(gd.mv_reactive_target.get(), nullptr, &gd.mv_reactive_target_srv);
+               native_device->CreateShaderResourceView(gd.mv_reactive_target.get(), nullptr, gd.mv_reactive_target_srv.put());
             }
             gd.sr_reactive_frame = cb_luma_global_settings.FrameIndex;
          }
@@ -1251,7 +1251,7 @@ class Borderlands2 final : public Game
    // translucents. Every draw depth tested against the scene takes the same jitter, or jittered and unjittered depths of the same
    // surface fail each other's test. False if it can't (the draw runs untouched).
    static bool DrawWithJitter(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data,
-      const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, const std::function<void()>& draw, const com_ptr<ID3D11RenderTargetView> (&rtvs)[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT], ID3D11DepthStencilView* dsv)
+      const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, const std::function<void()>& draw, const ComPtr<ID3D11RenderTargetView> (&rtvs)[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT], ID3D11DepthStencilView* dsv)
    {
       auto& gd = GetGameDeviceData(device_data);
       if (!gd.mv_scene_open || gd.mv_jitter == std::array<float, 2>{} || !gd.mv_jitter_buffer)
@@ -1261,8 +1261,8 @@ class Borderlands2 final : public Game
          return false;
       if (dsv != gd.jitter_dsv)
       {
-         com_ptr<ID3D11Resource> depth;
-         dsv->GetResource(&depth);
+         ComPtr<ID3D11Resource> depth;
+         dsv->GetResource(depth.put());
          gd.jitter_dsv = dsv;
          gd.jitter_dsv_scene = depth == gd.mv_depth;
       }
@@ -1330,8 +1330,8 @@ class Borderlands2 final : public Game
       auto* const copy_ps = FindShader(device_data.native_pixel_shaders, CompileTimeStringHash("Copy PS"));
       if (!gd.mv_texture || !gd.mv_camera || !gd.mv_device_depth || !gd.mv_scene_color || !gd.mv_scene_rtv || !copy_vs || !copy_ps)
          return false;
-      com_ptr<ID3D11Texture2D> scene;
-      if (FAILED(gd.mv_scene_color->QueryInterface(&scene)))
+      ComPtr<ID3D11Texture2D> scene;
+      if (FAILED(gd.mv_scene_color->QueryInterface(scene.put())))
          return false;
       D3D11_TEXTURE2D_DESC scene_desc;
       scene->GetDesc(&scene_desc);
@@ -1352,9 +1352,9 @@ class Borderlands2 final : public Game
          device_data.sr_output_color.reset();
          gd.sr_output_srv.reset();
          output_desc = CD3D11_TEXTURE2D_DESC(DXGI_FORMAT_R16G16B16A16_FLOAT, scene_desc.Width, scene_desc.Height, 1, 1, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS);
-         if (SUCCEEDED(SRBridge::CreateSharableTexture(native_device, output_desc, &device_data.sr_output_color)))
+         if (SUCCEEDED(SRBridge::CreateSharableTexture(native_device, output_desc, device_data.sr_output_color.put())))
          {
-            native_device->CreateShaderResourceView(device_data.sr_output_color.get(), nullptr, &gd.sr_output_srv);
+            native_device->CreateShaderResourceView(device_data.sr_output_color.get(), nullptr, gd.sr_output_srv.put());
          }
       }
       if (!device_data.sr_output_color || !gd.sr_output_srv)
@@ -1367,7 +1367,7 @@ class Borderlands2 final : public Game
       {
          D3D11_BLEND_DESC blend_desc = CD3D11_BLEND_DESC(D3D11_DEFAULT);
          blend_desc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE;
-         native_device->CreateBlendState(&blend_desc, &gd.sr_rgb_blend_state);
+         native_device->CreateBlendState(&blend_desc, gd.sr_rgb_blend_state.put());
          if (!gd.sr_rgb_blend_state)
             return false;
       }
@@ -1378,7 +1378,7 @@ class Borderlands2 final : public Game
       {
          const CD3D11_TEXTURE2D_DESC exposure_desc(DXGI_FORMAT_R32_FLOAT, 1, 1, 1, 1, D3D11_BIND_SHADER_RESOURCE, D3D11_USAGE_IMMUTABLE);
          const D3D11_SUBRESOURCE_DATA exposure_data = {.pSysMem = &device_data.sr_exposure_texture_value, .SysMemPitch = sizeof(float)};
-         native_device->CreateTexture2D(&exposure_desc, &exposure_data, &device_data.sr_exposure);
+         native_device->CreateTexture2D(&exposure_desc, &exposure_data, device_data.sr_exposure.put());
       }
 
       // FSR needs the camera (vc4's view projection multiplies row vectors)
@@ -1465,8 +1465,8 @@ class Borderlands2 final : public Game
       auto* const fill_shader = FindShader(device_data.native_compute_shaders, kMotionVectorFillName);
       if (gd.mv_scene_srv)
       {
-         com_ptr<ID3D11Resource> srv_resource;
-         gd.mv_scene_srv->GetResource(&srv_resource);
+         ComPtr<ID3D11Resource> srv_resource;
+         gd.mv_scene_srv->GetResource(srv_resource.put());
          if (srv_resource != gd.mv_scene_color)
          {
             gd.mv_scene_srv.reset();
@@ -1489,20 +1489,20 @@ class Borderlands2 final : public Game
             gd.mv_transparency.reset();
             gd.mv_transparency_uav.reset();
             desc = CD3D11_TEXTURE2D_DESC(DXGI_FORMAT_R8_UNORM, uint32_t(device_data.output_resolution.x), uint32_t(device_data.output_resolution.y), 1, 1, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS);
-            if (SUCCEEDED(SRBridge::CreateSharableTexture(native_device, desc, &gd.mv_reactive)))
+            if (SUCCEEDED(SRBridge::CreateSharableTexture(native_device, desc, gd.mv_reactive.put())))
             {
-               native_device->CreateUnorderedAccessView(gd.mv_reactive.get(), nullptr, &gd.mv_reactive_uav);
+               native_device->CreateUnorderedAccessView(gd.mv_reactive.get(), nullptr, gd.mv_reactive_uav.put());
             }
-            if (SUCCEEDED(SRBridge::CreateSharableTexture(native_device, desc, &gd.mv_transparency)))
+            if (SUCCEEDED(SRBridge::CreateSharableTexture(native_device, desc, gd.mv_transparency.put())))
             {
-               native_device->CreateUnorderedAccessView(gd.mv_transparency.get(), nullptr, &gd.mv_transparency_uav);
+               native_device->CreateUnorderedAccessView(gd.mv_transparency.get(), nullptr, gd.mv_transparency_uav.put());
             }
          }
       }
       const bool write_reactive = reactive && gd.mv_reactive_uav && gd.mv_transparency_uav;
       bool mv_filled = false; // The fill wrote this frame's motion vectors
       if (std::exchange(gd.mv_fill_pending, false) && fill_shader && gd.mv_camera && gd.mv_scene_color &&
-          (gd.mv_scene_srv || SUCCEEDED(native_device->CreateShaderResourceView(gd.mv_scene_color.get(), nullptr, &gd.mv_scene_srv))))
+          (gd.mv_scene_srv || SUCCEEDED(native_device->CreateShaderResourceView(gd.mv_scene_color.get(), nullptr, gd.mv_scene_srv.put()))))
       {
          // Current clip space to the previous frame's: previous * inverse(current) for column vectors (vc4 holds the row vector matrix,
          // transposed here), the previous one moved to this frame's PreViewTranslation, in double
@@ -2339,14 +2339,14 @@ public:
                gd.mv_scene_copy.reset();
                if (gd.mv_scene_color)
                {
-                  com_ptr<ID3D11ShaderResourceView> srvs[8];
-                  native_device_context->PSGetShaderResources(0, 8, &srvs[0]);
+                  ComPtr<ID3D11ShaderResourceView> srvs[8];
+                  native_device_context->PSGetShaderResources(0, 8, PutArray(srvs));
                   for (int slot = 0; slot < 8 && !gd.mv_scene_copy; slot++)
                   {
-                     com_ptr<ID3D11Resource> resource;
+                     ComPtr<ID3D11Resource> resource;
                      if (srvs[slot])
                      {
-                        srvs[slot]->GetResource(&resource);
+                        srvs[slot]->GetResource(resource.put());
                      }
                      if (!resource || resource == gd.mv_scene_color || !AreResourcesEqual(resource.get(), gd.mv_scene_color.get()))
                         continue;
@@ -2358,9 +2358,9 @@ public:
          }
          else if (!gd.mv_scene_done && !is_custom_pass && original_draw_dispatch_func && *original_draw_dispatch_func && (stages & ShaderStages::Vertex) == ShaderStages::Vertex)
          {
-            com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-            com_ptr<ID3D11DepthStencilView> dsv;
-            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+            ComPtr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+            ComPtr<ID3D11DepthStencilView> dsv;
+            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(rtvs), dsv.put());
             if (!gd.mv_scene_open && dsv)
             {
                OpenScene(native_device, native_device_context, cmd_list_data, device_data, original_shader_hashes.vertex_shaders[0], dsv.get());

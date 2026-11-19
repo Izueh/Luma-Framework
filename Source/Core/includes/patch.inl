@@ -1688,7 +1688,7 @@ namespace Patch
             if (cached_pipeline->custom_pipeline_data.patch_data) // (There used to be a check for ReShade's tagged handles here, shader pointers never have the low bit set)
             {
                // Keep clone ownership with its reports so old command lists can switch variants after reload.
-               cached_pipeline->custom_pipeline_data.patch_data->native_pipeline_clone.reset(clone.handle);
+               cached_pipeline->custom_pipeline_data.patch_data->native_pipeline_clone = clone.handle;
             }
 #endif
             device_data.pipeline_cache_by_pipeline_clone_handle[clone.handle] = cached_pipeline;

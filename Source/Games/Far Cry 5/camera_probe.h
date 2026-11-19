@@ -10,7 +10,7 @@ namespace FC5
       static inline std::mutex bindings_mutex;
       std::unordered_set<ID3D11Buffer*> sampled;
       std::vector<CameraJitter> candidates;
-      com_ptr<ID3D11Buffer> staging;
+      ComPtr<ID3D11Buffer> staging;
       PerfCounter readback_cpu;
       PerfCounter detection_cpu;
       std::filesystem::file_time_type request_time{};
@@ -22,8 +22,8 @@ namespace FC5
          const auto hash = Shader::BinToHash(static_cast<const uint8_t*>(code), code_size);
          { std::lock_guard lock(bindings_mutex); if (bindings.contains(hash)) return; }
          Binding result;
-         com_ptr<ID3D11ShaderReflection> reflection;
-         if (SUCCEEDED(Shader::d3d_reflect(code, code_size, IID_PPV_ARGS(&reflection))))
+         ComPtr<ID3D11ShaderReflection> reflection;
+         if (SUCCEEDED(Shader::d3d_reflect(code, code_size, IID_PPV_ARGS(reflection.put()))))
          {
             D3D11_SHADER_INPUT_BIND_DESC resource{};
             const char* name = "CViewportShaderParameterProvider";
@@ -68,16 +68,16 @@ namespace FC5
          // Reject non-camera shaders before querying context interfaces/bindings.
          // Same predicate as the live filter below; discovery still sees all CBs.
          if (!log && (pixel || !(binding.used & 4))) return;
-         com_ptr<ID3D11DeviceContext1> ctx1;
-         com_ptr<ID3D11Buffer> cb;
+         ComPtr<ID3D11DeviceContext1> ctx1;
+         ComPtr<ID3D11Buffer> cb;
          UINT first = 0, count = 4096;
-         if (SUCCEEDED(ctx->QueryInterface(&ctx1)))
+         if (SUCCEEDED(ctx->QueryInterface(ctx1.put())))
          {
-            if (pixel) ctx1->PSGetConstantBuffers1(binding.slot, 1, &cb, &first, &count);
-            else ctx1->VSGetConstantBuffers1(binding.slot, 1, &cb, &first, &count);
+            if (pixel) ctx1->PSGetConstantBuffers1(binding.slot, 1, cb.put(), &first, &count);
+            else ctx1->VSGetConstantBuffers1(binding.slot, 1, cb.put(), &first, &count);
          }
-         else if (pixel) ctx->PSGetConstantBuffers(binding.slot, 1, &cb);
-         else ctx->VSGetConstantBuffers(binding.slot, 1, &cb);
+         else if (pixel) ctx->PSGetConstantBuffers(binding.slot, 1, cb.put());
+         else ctx->VSGetConstantBuffers(binding.slot, 1, cb.put());
          if (!cb || sampled.contains(cb.get())) return;
          if (!log)
          {
@@ -106,7 +106,7 @@ namespace FC5
          {
             D3D11_BUFFER_DESC s{};
             s.ByteWidth = bytes; s.Usage = D3D11_USAGE_STAGING; s.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-            if (FAILED(device->CreateBuffer(&s, nullptr, &staging))) return;
+            if (FAILED(device->CreateBuffer(&s, nullptr, staging.put()))) return;
          }
          D3D11_BOX box{ UINT(offset), 0, 0, UINT(offset + bytes), 1, 1 };
          const auto readback_start = PerfCounter::Clock::now();

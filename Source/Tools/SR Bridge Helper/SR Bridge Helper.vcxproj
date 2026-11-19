@@ -60,10 +60,8 @@
       <SDLCheck>true</SDLCheck>
       <LanguageStandard>stdcpplatest</LanguageStandard>
       <MultiProcessorCompilation>true</MultiProcessorCompilation>
-      <!-- RESHADE_API_LIBRARY_EXPORT + BUILTIN_ADDON (its header-only "reshade::log"): Core's ReShade log goes to main.cpp's "ReShadeLogMessage" (there is no ReShade module to find).
-           PREFER_OVERLAY_MESSAGE_ASSERTS: Core's asserts don't open a message box, which would stall the game on its fence (no window shows it) -->
-      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;_WINDOWS;_CRT_SECURE_NO_WARNINGS;RESHADE_API_LIBRARY_EXPORT;BUILTIN_ADDON;PREFER_OVERLAY_MESSAGE_ASSERTS=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>..\..\External\reshade;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <!-- PREFER_OVERLAY_MESSAGE_ASSERTS: Core's asserts don't open a message box, which would stall the game on its fence (no window shows it) -->
+      <PreprocessorDefinitions>WIN32_LEAN_AND_MEAN;_WINDOWS;_CRT_SECURE_NO_WARNINGS;PREFER_OVERLAY_MESSAGE_ASSERTS=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <UseStandardPreprocessor>true</UseStandardPreprocessor>
       <AdditionalOptions>%(AdditionalOptions) /utf-8</AdditionalOptions>
       <RuntimeLibrary Condition="'$(Configuration)'=='Development-Debug'">MultiThreadedDebugDLL</RuntimeLibrary>

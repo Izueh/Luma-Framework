@@ -56,8 +56,8 @@ static bool DetectUIPhase(DeviceData& device_data, ID3D11DeviceContext* ctx, con
       return false;
 
    // --- Blend state check (any alpha blending) ---
-   com_ptr<ID3D11BlendState> blend_state;
-   ctx->OMGetBlendState(&blend_state, nullptr, nullptr);
+   ComPtr<ID3D11BlendState> blend_state;
+   ctx->OMGetBlendState(blend_state.put(), nullptr, nullptr);
    if (!blend_state)
       return false;
 
@@ -67,8 +67,8 @@ static bool DetectUIPhase(DeviceData& device_data, ID3D11DeviceContext* ctx, con
       return false;
 
    // --- Sampler check (bilinear) ---
-   com_ptr<ID3D11SamplerState> sampler_state;
-   ctx->PSGetSamplers(0, 1, &sampler_state);
+   ComPtr<ID3D11SamplerState> sampler_state;
+   ctx->PSGetSamplers(0, 1, sampler_state.put());
    if (!sampler_state)
       return false;
    D3D11_SAMPLER_DESC sd;
@@ -77,8 +77,8 @@ static bool DetectUIPhase(DeviceData& device_data, ID3D11DeviceContext* ctx, con
       return false;
 
    // --- Depth disabled ---
-   com_ptr<ID3D11DepthStencilState> depth_stencil_state;
-   ctx->OMGetDepthStencilState(&depth_stencil_state, nullptr);
+   ComPtr<ID3D11DepthStencilState> depth_stencil_state;
+   ctx->OMGetDepthStencilState(depth_stencil_state.put(), nullptr);
    if (!depth_stencil_state)
       return false;
    D3D11_DEPTH_STENCIL_DESC dsd;
@@ -90,8 +90,8 @@ static bool DetectUIPhase(DeviceData& device_data, ID3D11DeviceContext* ctx, con
    // The last case covers the pause-game UI path where the game copies a previous
    // scene frame (already at output resolution and in the upgraded RGBA16F format)
    // as the background before drawing UI on top.
-   com_ptr<ID3D11ShaderResourceView> srv;
-   ctx->PSGetShaderResources(0, 1, &srv);
+   ComPtr<ID3D11ShaderResourceView> srv;
+   ctx->PSGetShaderResources(0, 1, srv.put());
    if (srv.get())
    {
       D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
@@ -100,10 +100,10 @@ static bool DetectUIPhase(DeviceData& device_data, ID3D11DeviceContext* ctx, con
       bool srv_matches = false;
       if (fmt == DXGI_FORMAT_R16G16B16A16_FLOAT)
       {
-         com_ptr<ID3D11Resource> srv_resource;
-         srv->GetResource(&srv_resource);
-         com_ptr<ID3D11Texture2D> srv_texture;
-         srv_resource->QueryInterface(&srv_texture);
+         ComPtr<ID3D11Resource> srv_resource;
+         srv->GetResource(srv_resource.put());
+         ComPtr<ID3D11Texture2D> srv_texture;
+         srv_resource->QueryInterface(srv_texture.put());
 
          if (srv_texture)
          {
@@ -123,17 +123,17 @@ static bool DetectUIPhase(DeviceData& device_data, ID3D11DeviceContext* ctx, con
 
    ui_scale.ui_phase_seen_this_frame = true;
 
-   com_ptr<ID3D11RenderTargetView> ui_rtv;
-   ctx->OMGetRenderTargets(1, &ui_rtv, nullptr);
+   ComPtr<ID3D11RenderTargetView> ui_rtv;
+   ctx->OMGetRenderTargets(1, ui_rtv.put(), nullptr);
    if (!ui_rtv)
    {
       return true;
    }
 
-   com_ptr<ID3D11Resource> ui_rtv_resource;
-   ui_rtv->GetResource(&ui_rtv_resource);
-   com_ptr<ID3D11Texture2D> ui_rtv_texture;
-   ui_rtv_resource->QueryInterface(&ui_rtv_texture);
+   ComPtr<ID3D11Resource> ui_rtv_resource;
+   ui_rtv->GetResource(ui_rtv_resource.put());
+   ComPtr<ID3D11Texture2D> ui_rtv_texture;
+   ui_rtv_resource->QueryInterface(ui_rtv_texture.put());
    if (!ui_rtv_texture)
    {
       return true;
@@ -171,8 +171,8 @@ static void RedirectUIDrawToScaledTarget(
    if (!ui_scale.ui_scaled_needed)
       return;
 
-   com_ptr<ID3D11RenderTargetView> current_rtv;
-   ctx->OMGetRenderTargets(1, &current_rtv, nullptr);
+   ComPtr<ID3D11RenderTargetView> current_rtv;
+   ctx->OMGetRenderTargets(1, current_rtv.put(), nullptr);
    const bool is_detected_ui_rtv = AreViewsOfSameResource(ui_scale.original_ui_rtv.get(), current_rtv.get());
 
    // --- Render target redirect ---
@@ -206,8 +206,8 @@ static void RedirectUIDrawToScaledTarget(
    // --- SRV redirect (slots 0–3) ---
    {
       static constexpr UINT kMaxSRVCheck = 4;
-      com_ptr<ID3D11ShaderResourceView> srvs[kMaxSRVCheck];
-      ctx->PSGetShaderResources(0, kMaxSRVCheck, reinterpret_cast<ID3D11ShaderResourceView**>(&srvs[0]));
+      ComPtr<ID3D11ShaderResourceView> srvs[kMaxSRVCheck];
+      ctx->PSGetShaderResources(0, kMaxSRVCheck, reinterpret_cast<ID3D11ShaderResourceView**>(srvs[0].put()));
       for (UINT i = 0; i < kMaxSRVCheck; ++i)
       {
          if (!srvs[i])

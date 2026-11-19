@@ -18,9 +18,9 @@ namespace
 
 struct GameDeviceDataTrine5 final : public GameDeviceData
 {
-   com_ptr<ID3D11Texture2D> upgraded_post_process_texture;
-   com_ptr<ID3D11ShaderResourceView> upgraded_post_process_srv;
-   com_ptr<ID3D11RenderTargetView> upgraded_post_process_rtv;
+   ComPtr<ID3D11Texture2D> upgraded_post_process_texture;
+   ComPtr<ID3D11ShaderResourceView> upgraded_post_process_srv;
+   ComPtr<ID3D11RenderTargetView> upgraded_post_process_rtv;
    bool drew_tonemap = false;
    bool drew_sharpen = false;
 #if DEVELOPMENT
@@ -213,13 +213,13 @@ public:
          {
             // We manually upgrade the R10G10B10A2 texture that is used as tonemapper output and sharpening input (after which the game uses the swapchain as RT).
             // If we upgrade all R10G10B10A2 the game can crash.
-            com_ptr<ID3D11RenderTargetView> rtv;
-            native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+            ComPtr<ID3D11RenderTargetView> rtv;
+            native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
             ASSERT_ONCE(rtv);
             if (rtv && is_custom_pass && test_index != 17)
             {
-               com_ptr<ID3D11Resource> target_resource;
-               rtv->GetResource(&target_resource);
+               ComPtr<ID3D11Resource> target_resource;
+               rtv->GetResource(target_resource.put());
                if (!AreResourcesEqual(game_device_data_prev.upgraded_post_process_texture.get(), target_resource.get(), false))
                {
                   game_device_data.upgraded_post_process_texture = nullptr;
@@ -228,8 +228,8 @@ public:
 
                   game_device_data.upgraded_post_process_texture = CloneTexture<ID3D11Texture2D>(native_device, target_resource.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, 0, 0, false, false, nullptr);
                   ASSERT_ONCE(game_device_data.upgraded_post_process_texture);
-                  native_device->CreateShaderResourceView(game_device_data.upgraded_post_process_texture.get(), nullptr, &game_device_data.upgraded_post_process_srv);
-                  native_device->CreateRenderTargetView(game_device_data.upgraded_post_process_texture.get(), nullptr, &game_device_data.upgraded_post_process_rtv);
+                  native_device->CreateShaderResourceView(game_device_data.upgraded_post_process_texture.get(), nullptr, game_device_data.upgraded_post_process_srv.put());
+                  native_device->CreateRenderTargetView(game_device_data.upgraded_post_process_texture.get(), nullptr, game_device_data.upgraded_post_process_rtv.put());
                }
             }
             else if (test_index == 17)
@@ -253,7 +253,7 @@ public:
             IDXGISwapChain* native_swapchain = *device_data.swapchains.begin();
             SwapchainData& swapchain_data = *GetSwapchainData(native_swapchain);
 #if 0
-            com_ptr<IDXGISwapChain3> native_swapchain3;
+            ComPtr<IDXGISwapChain3> native_swapchain3;
             // The cast pointer is actually the same, we are just making sure the type is right.
             HRESULT hr = native_swapchain->QueryInterface(&native_swapchain3);
             ASSERT_ONCE(SUCCEEDED(hr));
@@ -261,8 +261,8 @@ public:
 #else // Always 0 in DX11
             UINT back_buffer_index = 0;
 #endif
-            com_ptr<ID3D11Texture2D> back_buffer;
-            native_swapchain->GetBuffer(back_buffer_index, IID_PPV_ARGS(&back_buffer));
+            ComPtr<ID3D11Texture2D> back_buffer;
+            native_swapchain->GetBuffer(back_buffer_index, IID_PPV_ARGS(back_buffer.put()));
 
             // Ignore sharpening for now, write to the swapchain directly
             ID3D11RenderTargetView* const display_composition_rtv_const = swapchain_data.display_composition_rtvs[back_buffer_index].get();
@@ -297,19 +297,19 @@ public:
 #if DEVELOPMENT
          if (game_device_data.skip_sharpen)
          {
-            com_ptr<ID3D11ShaderResourceView> srv;
-            native_device_context->CSGetShaderResources(0, 1, &srv);
-            com_ptr<ID3D11UnorderedAccessView> uav;
-            native_device_context->CSGetUnorderedAccessViews(0, 1, &uav);
-            com_ptr<ID3D11Resource> source_resource;
+            ComPtr<ID3D11ShaderResourceView> srv;
+            native_device_context->CSGetShaderResources(0, 1, srv.put());
+            ComPtr<ID3D11UnorderedAccessView> uav;
+            native_device_context->CSGetUnorderedAccessViews(0, 1, uav.put());
+            ComPtr<ID3D11Resource> source_resource;
             if (srv)
             {
-               srv->GetResource(&source_resource);
+               srv->GetResource(source_resource.put());
             }
-            com_ptr<ID3D11Resource> target_resource;
+            ComPtr<ID3D11Resource> target_resource;
             if (uav)
             {
-               uav->GetResource(&target_resource);
+               uav->GetResource(target_resource.put());
             }
             if (target_resource && source_resource)
             {

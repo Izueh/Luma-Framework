@@ -213,7 +213,7 @@ public:
          // Just say we already upgraded the cbuffers so they won't be set again by the parent function, we don't need them in this shader, we just need to clamp its result.
          updated_cbuffers = true;
 #else // Previous design
-         com_ptr<ID3D11Buffer> constant_buffers;
+         ComPtr<ID3D11Buffer> constant_buffers;
          native_device_context->PSGetConstantBuffers(luma_data_cbuffer_index, 1, &constant_buffers);
          native_device_context->PSSetConstantBuffers(4, 1, &constant_buffers); // Hardcoded in shader
 #endif
@@ -222,10 +222,10 @@ public:
 
       if ((stages & ShaderStages::Pixel) == ShaderStages::Pixel)
       {
-         com_ptr<ID3D11BlendState> blend_state;
+         ComPtr<ID3D11BlendState> blend_state;
          FLOAT blend_factor[4] = {1.f, 1.f, 1.f, 1.f};
          UINT blend_sample_mask;
-         native_device_context->OMGetBlendState(&blend_state, blend_factor, &blend_sample_mask);
+         native_device_context->OMGetBlendState(blend_state.put(), blend_factor, &blend_sample_mask);
          if (blend_state)
          {
             D3D11_BLEND_DESC blend_desc;
@@ -241,9 +241,9 @@ public:
                   (*original_draw_dispatch_func)();
                }
 
-               com_ptr<ID3D11RenderTargetView> rtv;
-               com_ptr<ID3D11DepthStencilView> dsv;
-               native_device_context->OMGetRenderTargets(1, &rtv, &dsv);
+               ComPtr<ID3D11RenderTargetView> rtv;
+               ComPtr<ID3D11DepthStencilView> dsv;
+               native_device_context->OMGetRenderTargets(1, rtv.put(), dsv.put());
 
                if (rtv.get() && test_index != 14)
                {
@@ -251,12 +251,12 @@ public:
                   draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
 
 #if DEVELOPMENT || TEST // Make sure unexpected shaders types around bound (unlikely, given this also had a DX9 mode)
-                  com_ptr<ID3D11HullShader> hs;
-                  com_ptr<ID3D11DomainShader> ds;
-                  com_ptr<ID3D11GeometryShader> gs;
-                  native_device_context->HSGetShader(&hs, nullptr, nullptr);
-                  native_device_context->DSGetShader(&ds, nullptr, nullptr);
-                  native_device_context->GSGetShader(&gs, nullptr, nullptr);
+                  ComPtr<ID3D11HullShader> hs;
+                  ComPtr<ID3D11DomainShader> ds;
+                  ComPtr<ID3D11GeometryShader> gs;
+                  native_device_context->HSGetShader(hs.put(), nullptr, nullptr);
+                  native_device_context->DSGetShader(ds.put(), nullptr, nullptr);
+                  native_device_context->GSGetShader(gs.put(), nullptr, nullptr);
                   ASSERT_ONCE(hs == nullptr && ds == nullptr && gs == nullptr);
 #endif
 

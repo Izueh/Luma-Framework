@@ -169,6 +169,14 @@ namespace Math
       }
       return crc ^ 0xffffffff;
    }
+   // Same CRC32 (polynomial 0xEDB88320) over raw bytes, e.g. shader bytecode
+   constexpr uint32_t bytes_crc32(const uint8_t* data, size_t size)
+   {
+      uint32_t crc = 0xffffffff;
+      for (; size != 0; --size, ++data)
+         crc = (crc >> 8) ^ crc_table[(crc ^ *data) & 0xff];
+      return crc ^ 0xffffffff;
+   }
 
    // "fnv1a_32" constexpr hash (can be evaluated at compile time for literals)
    constexpr uint32_t CompileTimeStringHash(std::string_view s)

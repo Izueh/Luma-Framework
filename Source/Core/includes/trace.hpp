@@ -82,7 +82,7 @@ struct TraceDrawCallData
 #endif
 
    // The original command list (can be useful to have later)
-   com_ptr<ID3D11DeviceContext> command_list = nullptr;
+   ComPtr<ID3D11DeviceContext> command_list = nullptr;
    // The thread this call was made on (usually 1:1 with deferred (async) command lists)
    std::thread::id thread_id = {};
 
@@ -367,8 +367,8 @@ namespace Trace
    bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view_index, ID3D11DeviceContext* native_device_context, DeviceData& device_data, bool is_dispatch);
    bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view_index, CommandListData& cmd_list_data, bool is_dispatch = false);
    // Reads a constant buffer back (immediate contexts only) or copies it to read it later ("CopyBuffer()"), for the constant buffer tracking
-   bool MapBufferData(com_ptr<ID3D11Buffer>& cb, ID3D11DeviceContext* native_device_context, std::vector<float>& buffer_data, UINT byte_width);
-   bool CopyBuffer(com_ptr<ID3D11Buffer> cb, ID3D11DeviceContext* native_device_context, std::vector<float>& buffer_data, com_ptr<ID3D11Buffer>& cb_copy);
+   bool MapBufferData(ComPtr<ID3D11Buffer>& cb, ID3D11DeviceContext* native_device_context, std::vector<float>& buffer_data, UINT byte_width);
+   bool CopyBuffer(ComPtr<ID3D11Buffer> cb, ID3D11DeviceContext* native_device_context, std::vector<float>& buffer_data, ComPtr<ID3D11Buffer>& cb_copy);
 
    // Records a draw (or dispatch) the mod issued itself (a Luma pass) like a game draw: the views, cbuffers, samplers and render state bound for it,
    // and its arguments. Call it right after the "Draw()" or "Dispatch()", before unbinding or restoring anything: the debug draw (and MCP

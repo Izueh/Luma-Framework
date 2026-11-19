@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <deps/stb/stb_image.h>
+#include "../../External/stb/stb_image.h"
 
 #include "com_ptr.h"
 #include "math.h"

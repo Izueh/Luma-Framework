@@ -41,20 +41,20 @@ namespace FC5
       TestControl test_control;
       uint32_t image_wait = 0;
       bool capture_image = false;
-      com_ptr<ID3D11Resource> pending_native_capture;
+      ComPtr<ID3D11Resource> pending_native_capture;
       uint32_t scaling_frames = 0;
       bool scaling_frame = false;
-      com_ptr<ID3D11Resource> depth, encoded_motion;
-      com_ptr<ID3D11Buffer> staging_cb;
-      com_ptr<ID3D11Texture2D> motion, resolve, input_color, input_depth;
-      com_ptr<ID3D11UnorderedAccessView> motion_uav, input_color_uav;
-      com_ptr<ID3D11ShaderResourceView> resolve_srv;
-      com_ptr<ID3D11Buffer> resolve_cb;
+      ComPtr<ID3D11Resource> depth, encoded_motion;
+      ComPtr<ID3D11Buffer> staging_cb;
+      ComPtr<ID3D11Texture2D> motion, resolve, input_color, input_depth;
+      ComPtr<ID3D11UnorderedAccessView> motion_uav, input_color_uav;
+      ComPtr<ID3D11ShaderResourceView> resolve_srv;
+      ComPtr<ID3D11Buffer> resolve_cb;
       DXGI_FORMAT depth_view_format = DXGI_FORMAT_UNKNOWN;
       uint2 size = { 0, 0 };
       uint2 output_size = { 0, 0 };
       bool upscale = false, evaluated_this_frame = false;
-      com_ptr<ID3D11Resource> pending_taa_target;
+      ComPtr<ID3D11Resource> pending_taa_target;
       uint64_t routed = 0;
       DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
       OutputEncoding output_encoding = OutputEncoding::SDR;
@@ -92,8 +92,8 @@ namespace FC5
 
    bool Describe(ID3D11Resource* resource, D3D11_TEXTURE2D_DESC& desc)
    {
-      com_ptr<ID3D11Texture2D> texture;
-      if (!resource || FAILED(resource->QueryInterface(&texture))) return false;
+      ComPtr<ID3D11Texture2D> texture;
+      if (!resource || FAILED(resource->QueryInterface(texture.put()))) return false;
       texture->GetDesc(&desc);
       return true;
    }
@@ -111,12 +111,12 @@ namespace FC5
    void ReadTemporalCB(ID3D11Device* device, ID3D11DeviceContext* ctx, Device& fc)
    {
       fc.jitter_valid = false;
-      com_ptr<ID3D11Buffer> cb;
-      com_ptr<ID3D11DeviceContext1> ctx1;
+      ComPtr<ID3D11Buffer> cb;
+      ComPtr<ID3D11DeviceContext1> ctx1;
       UINT first = 0, count = 4096;
-      if (SUCCEEDED(ctx->QueryInterface(&ctx1)))
-         ctx1->CSGetConstantBuffers1(0, 1, &cb, &first, &count);
-      else ctx->CSGetConstantBuffers(0, 1, &cb);
+      if (SUCCEEDED(ctx->QueryInterface(ctx1.put())))
+         ctx1->CSGetConstantBuffers1(0, 1, cb.put(), &first, &count);
+      else ctx->CSGetConstantBuffers(0, 1, cb.put());
       if (!cb) return;
       D3D11_BUFFER_DESC desc{};
       cb->GetDesc(&desc);
@@ -127,7 +127,7 @@ namespace FC5
          D3D11_BUFFER_DESC staging{};
          staging.ByteWidth = 176; staging.Usage = D3D11_USAGE_STAGING;
          staging.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-         if (FAILED(device->CreateBuffer(&staging, nullptr, &fc.staging_cb))) return;
+         if (FAILED(device->CreateBuffer(&staging, nullptr, fc.staging_cb.put()))) return;
       }
       D3D11_BOX box{ UINT(offset), 0, 0, UINT(offset + 176), 1, 1 };
       ctx->CopySubresourceRegion(fc.staging_cb.get(), 0, 0, 0, 0, cb.get(), 0, &box);
@@ -155,26 +155,26 @@ namespace FC5
       std::snprintf(line, sizeof(line), "[FC5 scaling] frame=%llu PS=%08X output=%ux%u viewport=(%.0f,%.0f,%.0f,%.0f) count=%u",
          fc.frame, hash, output_width, output_height, viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height, count);
       Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, line);
-      com_ptr<ID3D11ShaderResourceView> srvs[5]; ctx->PSGetShaderResources(0, 5, &srvs[0]);
+      ComPtr<ID3D11ShaderResourceView> srvs[5]; ctx->PSGetShaderResources(0, 5, PutArray(srvs));
       for (UINT i = 0; i < 5; ++i) if (srvs[i])
       {
-         com_ptr<ID3D11Resource> resource; srvs[i]->GetResource(&resource);
+         ComPtr<ID3D11Resource> resource; srvs[i]->GetResource(resource.put());
          D3D11_SHADER_RESOURCE_VIEW_DESC v{}; srvs[i]->GetDesc(&v);
          std::snprintf(line, sizeof(line), "PS%08X.t%u.view%u", hash, i, v.Format);
          LogTexture(line, resource.get(), fc.frame);
       }
-      com_ptr<ID3D11RenderTargetView> rtvs[8]; ctx->OMGetRenderTargets(8, &rtvs[0], nullptr);
+      ComPtr<ID3D11RenderTargetView> rtvs[8]; ctx->OMGetRenderTargets(8, PutArray(rtvs), nullptr);
       for (UINT i = 0; i < 8; ++i) if (rtvs[i])
       {
-         com_ptr<ID3D11Resource> resource; rtvs[i]->GetResource(&resource);
+         ComPtr<ID3D11Resource> resource; rtvs[i]->GetResource(resource.put());
          D3D11_RENDER_TARGET_VIEW_DESC v{}; rtvs[i]->GetDesc(&v);
          std::snprintf(line, sizeof(line), "PS%08X.rtv%u.view%u", hash, i, v.Format);
          LogTexture(line, resource.get(), fc.frame);
       }
-      com_ptr<ID3D11Buffer> cb; com_ptr<ID3D11DeviceContext1> ctx1;
+      ComPtr<ID3D11Buffer> cb; ComPtr<ID3D11DeviceContext1> ctx1;
       UINT first = 0, constants = 4096;
-      if (SUCCEEDED(ctx->QueryInterface(&ctx1))) ctx1->PSGetConstantBuffers1(0, 1, &cb, &first, &constants);
-      else ctx->PSGetConstantBuffers(0, 1, &cb);
+      if (SUCCEEDED(ctx->QueryInterface(ctx1.put()))) ctx1->PSGetConstantBuffers1(0, 1, cb.put(), &first, &constants);
+      else ctx->PSGetConstantBuffers(0, 1, cb.put());
       if (!cb) return;
       D3D11_BUFFER_DESC bd{}; cb->GetDesc(&bd);
       const uint64_t offset = uint64_t(first)*16;
@@ -182,7 +182,7 @@ namespace FC5
       if (!fc.staging_cb)
       {
          D3D11_BUFFER_DESC s{}; s.ByteWidth=176; s.Usage=D3D11_USAGE_STAGING; s.CPUAccessFlags=D3D11_CPU_ACCESS_READ;
-         if (FAILED(device->CreateBuffer(&s, nullptr, &fc.staging_cb))) return;
+         if (FAILED(device->CreateBuffer(&s, nullptr, fc.staging_cb.put()))) return;
       }
       D3D11_BOX box{UINT(offset),0,0,UINT(offset+176),1,1};
       ctx->CopySubresourceRegion(fc.staging_cb.get(),0,0,0,0,cb.get(),0,&box);
@@ -202,29 +202,29 @@ namespace FC5
       if (fc.motion && fc.motion_uav && fc.resolve && fc.size.x == color.Width &&
          fc.size.y == color.Height && fc.format == working_format && fc.output_size.x == ow && fc.output_size.y == oh) return true;
       // Transactional allocation: never treat partial creation as a valid cache.
-      com_ptr<ID3D11Texture2D> motion, resolve, input_color, input_depth;
-      com_ptr<ID3D11UnorderedAccessView> motion_uav, input_color_uav;
-      com_ptr<ID3D11ShaderResourceView> resolve_srv;
+      ComPtr<ID3D11Texture2D> motion, resolve, input_color, input_depth;
+      ComPtr<ID3D11UnorderedAccessView> motion_uav, input_color_uav;
+      ComPtr<ID3D11ShaderResourceView> resolve_srv;
       D3D11_TEXTURE2D_DESC desc{};
       desc.Width = color.Width; desc.Height = color.Height;
       desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
       desc.Format = DXGI_FORMAT_R16G16_FLOAT; desc.Usage = D3D11_USAGE_DEFAULT;
       desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
-      if (FAILED(device->CreateTexture2D(&desc, nullptr, &motion)) ||
-         FAILED(device->CreateUnorderedAccessView(motion.get(), nullptr, &motion_uav))) return false;
+      if (FAILED(device->CreateTexture2D(&desc, nullptr, motion.put())) ||
+         FAILED(device->CreateUnorderedAccessView(motion.get(), nullptr, motion_uav.put()))) return false;
       desc.Format = working_format;
       desc.Width = ow; desc.Height = oh;
-      if (FAILED(device->CreateTexture2D(&desc, nullptr, &resolve)) ||
-         FAILED(device->CreateShaderResourceView(resolve.get(), nullptr, &resolve_srv))) return false;
+      if (FAILED(device->CreateTexture2D(&desc, nullptr, resolve.put())) ||
+         FAILED(device->CreateShaderResourceView(resolve.get(), nullptr, resolve_srv.put()))) return false;
       desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
       if (working_format == DXGI_FORMAT_R16G16B16A16_FLOAT) desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
       desc.Width = color.Width; desc.Height = color.Height;
-      if (FAILED(device->CreateTexture2D(&desc, nullptr, &input_color))) return false;
+      if (FAILED(device->CreateTexture2D(&desc, nullptr, input_color.put()))) return false;
       if (working_format == DXGI_FORMAT_R16G16B16A16_FLOAT &&
-         FAILED(device->CreateUnorderedAccessView(input_color.get(), nullptr, &input_color_uav))) return false;
+         FAILED(device->CreateUnorderedAccessView(input_color.get(), nullptr, input_color_uav.put()))) return false;
       desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
       desc.Format = DXGI_FORMAT_R32_FLOAT;
-      if (FAILED(device->CreateTexture2D(&desc, nullptr, &input_depth))) return false;
+      if (FAILED(device->CreateTexture2D(&desc, nullptr, input_depth.put()))) return false;
       fc.motion = std::move(motion); fc.motion_uav = std::move(motion_uav);
       fc.resolve = std::move(resolve); fc.size = { desc.Width, desc.Height }; fc.format = working_format;
       fc.input_color = std::move(input_color); fc.input_depth = std::move(input_depth);
@@ -248,7 +248,7 @@ namespace FC5
          D3D11_BUFFER_DESC desc{};
          desc.ByteWidth = sizeof(float4); desc.Usage = D3D11_USAGE_DEFAULT;
          desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-         if (FAILED(device->CreateBuffer(&desc, nullptr, &fc.resolve_cb))) return false;
+         if (FAILED(device->CreateBuffer(&desc, nullptr, fc.resolve_cb.put()))) return false;
       }
       const float4 constants = { float(width), float(height),
          std::clamp(configured_rcas_sharpness, 0.f, 1.f), 1.f };
@@ -340,8 +340,8 @@ public:
    void PostCreateDevice(ID3D11Device* device) override
    {
       FC5::UploadProbe::OnInitDevice(device);
-      com_ptr<ID3D11DeviceContext> immediate_context;
-      device->GetImmediateContext(&immediate_context);
+      ComPtr<ID3D11DeviceContext> immediate_context;
+      device->GetImmediateContext(immediate_context.put());
       FC5::UploadProbe::OnInitContext(device, immediate_context.get());
    }
    void OnDeviceDestroyed(ID3D11Device* device) override
@@ -445,10 +445,10 @@ public:
       {
          // Original TAA has already executed. Read only its exact same-frame
          // output at the verified consumer; no Release original-draw callback.
-         com_ptr<ID3D11ShaderResourceView> srv;
-         com_ptr<ID3D11Resource> source;
-         ctx->PSGetShaderResources(0, 1, &srv);
-         if (srv) srv->GetResource(&source);
+         ComPtr<ID3D11ShaderResourceView> srv;
+         ComPtr<ID3D11Resource> source;
+         ctx->PSGetShaderResources(0, 1, srv.put());
+         if (srv) srv->GetResource(source.put());
          if (!fc.enable_dlss && fc.capture_image && source.get() == fc.pending_native_capture.get())
          {
             SaveProbe(device, ctx, fc, source.get(), "native-taa");
@@ -460,11 +460,11 @@ public:
       {
          // Verified route: TAA RTV becomes sharpening t0; sharpening RTV is full resolution.
          // Native TAA still runs, so every rejected handoff retains a complete native image.
-         com_ptr<ID3D11ShaderResourceView> srv; ctx->PSGetShaderResources(0, 1, &srv);
-         com_ptr<ID3D11RenderTargetView> rtvs[8]; ctx->OMGetRenderTargets(8, &rtvs[0], nullptr);
-         com_ptr<ID3D11Resource> source, target;
-         if (srv) srv->GetResource(&source);
-         if (rtvs[0]) rtvs[0]->GetResource(&target);
+         ComPtr<ID3D11ShaderResourceView> srv; ctx->PSGetShaderResources(0, 1, srv.put());
+         ComPtr<ID3D11RenderTargetView> rtvs[8]; ctx->OMGetRenderTargets(8, PutArray(rtvs), nullptr);
+         ComPtr<ID3D11Resource> source, target;
+         if (srv) srv->GetResource(source.put());
+         if (rtvs[0]) rtvs[0]->GetResource(target.put());
          D3D11_TEXTURE2D_DESC s{}, t{};
          D3D11_SHADER_RESOURCE_VIEW_DESC sv{};
          D3D11_RENDER_TARGET_VIEW_DESC tv{};
@@ -531,13 +531,13 @@ public:
          ++fc.cs_count;
          if (fc.capture_samples && !fc.probe_frame) { fc.probe_frame = true; --fc.capture_samples; }
          fc.depth.reset(); fc.encoded_motion.reset(); fc.jitter_valid = false;
-         com_ptr<ID3D11ShaderResourceView> srv;
-         com_ptr<ID3D11UnorderedAccessView> uav;
-         ctx->CSGetShaderResources(0, 1, &srv); ctx->CSGetUnorderedAccessViews(0, 1, &uav);
-         if (srv) srv->GetResource(&fc.depth);
+         ComPtr<ID3D11ShaderResourceView> srv;
+         ComPtr<ID3D11UnorderedAccessView> uav;
+         ctx->CSGetShaderResources(0, 1, srv.put()); ctx->CSGetUnorderedAccessViews(0, 1, uav.put());
+         if (srv) srv->GetResource(fc.depth.put());
          fc.depth_view_format = DXGI_FORMAT_UNKNOWN;
          if (srv) { D3D11_SHADER_RESOURCE_VIEW_DESC view{}; srv->GetDesc(&view); fc.depth_view_format = view.Format; }
-         if (uav) uav->GetResource(&fc.encoded_motion);
+         if (uav) uav->GetResource(fc.encoded_motion.put());
          if (fc.probe_frame) FC5::ReadTemporalCB(device, ctx, fc);
          if (fc.probe_frame)
          {
@@ -550,14 +550,14 @@ public:
       {
          ++fc.taa_count;
          if (fc.capture_samples && !fc.probe_frame) { fc.probe_frame = true; --fc.capture_samples; }
-         com_ptr<ID3D11ShaderResourceView> srvs[3];
-         ctx->PSGetShaderResources(0, 3, &srvs[0]);
-         com_ptr<ID3D11Resource> color, motion, target;
-         if (srvs[0]) srvs[0]->GetResource(&motion);
-         if (srvs[2]) srvs[2]->GetResource(&color);
-         com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-         ctx->OMGetRenderTargets(ARRAYSIZE(rtvs), &rtvs[0], nullptr);
-         if (rtvs[0]) rtvs[0]->GetResource(&target);
+         ComPtr<ID3D11ShaderResourceView> srvs[3];
+         ctx->PSGetShaderResources(0, 3, PutArray(srvs));
+         ComPtr<ID3D11Resource> color, motion, target;
+         if (srvs[0]) srvs[0]->GetResource(motion.put());
+         if (srvs[2]) srvs[2]->GetResource(color.put());
+         ComPtr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+         ctx->OMGetRenderTargets(ARRAYSIZE(rtvs), PutArray(rtvs), nullptr);
+         if (rtvs[0]) rtvs[0]->GetResource(target.put());
          if (fc.probe_frame)
          {
             FC5::LogTexture("taa-color", color.get(), fc.frame);
@@ -756,7 +756,7 @@ public:
       if (fc.pending_taa_target) fc.status = "DLSS output not handed off; native frame retained";
       if (FC5::gpu_timing)
       {
-         com_ptr<ID3D11DeviceContext> context; device->GetImmediateContext(&context);
+         ComPtr<ID3D11DeviceContext> context; device->GetImmediateContext(context.put());
          fc.gpu.Poll(context.get());
          if (fc.frame % 300 == 0 && fc.gpu.samples)
          {

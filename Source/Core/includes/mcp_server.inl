@@ -330,15 +330,15 @@ namespace Mcp
       }
 
       // "texture" is the game's code: call it without "s_mutex_dev_values"
-      com_ptr<ID3D11Resource> GetTexture(DevTextureGetter texture, DeviceData& device_data)
+      ComPtr<ID3D11Resource> GetTexture(DevTextureGetter texture, DeviceData& device_data)
       {
-         com_ptr<ID3D11Resource> resource;
+         ComPtr<ID3D11Resource> resource;
          ID3D11DeviceChild* child = texture(device_data);
-         if (child && FAILED(child->QueryInterface(&resource)))
+         if (child && FAILED(child->QueryInterface(resource.put())))
          {
-            com_ptr<ID3D11View> view;
-            if (SUCCEEDED(child->QueryInterface(&view)))
-               view->GetResource(&resource);
+            ComPtr<ID3D11View> view;
+            if (SUCCEEDED(child->QueryInterface(view.put())))
+               view->GetResource(resource.put());
          }
          return resource;
       }
@@ -820,10 +820,10 @@ namespace Mcp
 
       // A CPU readable copy of the texture's description (single sampled, no bindings), plus the texture's layout
       template <typename T>
-      HRESULT CreateStagingCopy(ID3D11Device* native_device, ID3D11Resource* source, TextureLayout* layout, com_ptr<ID3D11Resource>* staging)
+      HRESULT CreateStagingCopy(ID3D11Device* native_device, ID3D11Resource* source, TextureLayout* layout, ComPtr<ID3D11Resource>* staging)
       {
-         com_ptr<T> texture;
-         source->QueryInterface(&texture);
+         ComPtr<T> texture;
+         source->QueryInterface(texture.put());
          D3D11_RESOURCE_DESC<T> desc;
          texture->GetDesc(&desc);
          layout->width = desc.Width;
@@ -837,19 +837,19 @@ namespace Mcp
          {
             layout->height = desc.Height;
             layout->depth = desc.Depth;
-            return native_device->CreateTexture3D(&desc, nullptr, reinterpret_cast<ID3D11Texture3D**>(&*staging));
+            return native_device->CreateTexture3D(&desc, nullptr, reinterpret_cast<ID3D11Texture3D**>(staging->put()));
          }
          else if constexpr (std::is_same_v<T, ID3D11Texture2D>)
          {
             layout->height = desc.Height;
             layout->slices = desc.ArraySize;
             desc.SampleDesc = {1, 0};
-            return native_device->CreateTexture2D(&desc, nullptr, reinterpret_cast<ID3D11Texture2D**>(&*staging));
+            return native_device->CreateTexture2D(&desc, nullptr, reinterpret_cast<ID3D11Texture2D**>(staging->put()));
          }
          else
          {
             layout->slices = desc.ArraySize;
-            return native_device->CreateTexture1D(&desc, nullptr, reinterpret_cast<ID3D11Texture1D**>(&*staging));
+            return native_device->CreateTexture1D(&desc, nullptr, reinterpret_cast<ID3D11Texture1D**>(staging->put()));
          }
       }
 
@@ -858,17 +858,17 @@ namespace Mcp
       // "view_format" is how to interpret the data, the resource format if unknown.
       bool ReadTexture(ID3D11DeviceContext* native_device_context, ID3D11Resource* source, DXGI_FORMAT view_format, uint32_t mip, std::filesystem::path path, Job* job, std::string* error)
       {
-         com_ptr<ID3D11Device> native_device;
-         native_device_context->GetDevice(&native_device);
+         ComPtr<ID3D11Device> native_device;
+         native_device_context->GetDevice(native_device.put());
          D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
          source->GetType(&dimension);
 
-         com_ptr<ID3D11Resource> copy_source(source);
+         ComPtr<ID3D11Resource> copy_source(source);
          UINT samples = 1;
          if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D)
          {
-            com_ptr<ID3D11Texture2D> texture;
-            source->QueryInterface(&texture);
+            ComPtr<ID3D11Texture2D> texture;
+            source->QueryInterface(texture.put());
             D3D11_TEXTURE2D_DESC desc;
             texture->GetDesc(&desc);
             samples = desc.SampleDesc.Count;
@@ -876,7 +876,7 @@ namespace Mcp
             {
                // Staging textures can't be multisampled, resolve every slice first
                const DXGI_FORMAT resolve_format = view_format != DXGI_FORMAT_UNKNOWN ? view_format : desc.Format;
-               com_ptr<ID3D11Texture2D> resolved = IsTypelessFormat(resolve_format) ? nullptr : CloneTexture<ID3D11Texture2D>(native_device.get(), source, resolve_format, D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_UNORDERED_ACCESS, false, false, native_device_context, -1, 1);
+               ComPtr<ID3D11Texture2D> resolved = IsTypelessFormat(resolve_format) ? nullptr : CloneTexture<ID3D11Texture2D>(native_device.get(), source, resolve_format, D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_DEPTH_STENCIL | D3D11_BIND_UNORDERED_ACCESS, false, false, native_device_context, -1, 1);
                if (!resolved)
                {
                   *error = std::format("The multisampled {} texture can't be resolved for readback", GetFormatNameSafe(resolve_format));
@@ -885,11 +885,11 @@ namespace Mcp
                for (UINT slice = 0; slice < desc.ArraySize; slice++)
                   native_device_context->ResolveSubresource(resolved.get(), slice, source, slice, resolve_format);
                copy_source = nullptr;
-               resolved->QueryInterface(&copy_source);
+               resolved->QueryInterface(copy_source.put());
             }
          }
          TextureLayout layout;
-         com_ptr<ID3D11Resource> staging;
+         ComPtr<ID3D11Resource> staging;
          HRESULT hr = E_FAIL;
          if (dimension == D3D11_RESOURCE_DIMENSION_TEXTURE2D)
             hr = CreateStagingCopy<ID3D11Texture2D>(native_device.get(), copy_source.get(), &layout, std::addressof(staging));
@@ -958,7 +958,7 @@ namespace Mcp
 
       struct SrCapture
       {
-         std::vector<std::pair<const char*, com_ptr<ID3D11Resource>>> textures; // GPU copies, read back at present
+         std::vector<std::pair<const char*, ComPtr<ID3D11Resource>>> textures; // GPU copies, read back at present
          bool draw_succeeded;
       };
       std::atomic<bool> sr_capture_armed = false;
@@ -1003,11 +1003,11 @@ namespace Mcp
          {
             ID3D11Resource* const resources[] = {draw_data.source_color, draw_data.motion_vectors, draw_data.depth_buffer, draw_data.exposure, draw_data.bias_mask, draw_data.transparency_alpha, draw_data.output_color};
             const bool capture = sr_capture_armed.load() && sr_capture_armed.exchange(false);
-            com_ptr<ID3D11Device> native_device;
+            ComPtr<ID3D11Device> native_device;
             SrCapture captured;
             if (capture)
             {
-               command_list->GetDevice(&native_device);
+               command_list->GetDevice(native_device.put());
                for (size_t i = 0; i < std::size(resources) - 1; i++) // Inputs before the upscaler runs
                   if (resources[i])
                      captured.textures.emplace_back(sr_resource_names[i], CloneResource(native_device.get(), command_list, resources[i]));
@@ -1453,7 +1453,7 @@ namespace Mcp
                   }
                   texture = dev_value->texture;
                }
-               const com_ptr<ID3D11Resource> resource = GetTexture(texture, device_data);
+               const ComPtr<ID3D11Resource> resource = GetTexture(texture, device_data);
                if (!resource)
                {
                   job->error = name + " is not allocated (its feature is off, or hasn't run yet)";
@@ -1613,7 +1613,7 @@ namespace Mcp
          for (const auto& [name, texture] : textures)
          {
             w.BeginObject().Field("name", name).Field("kind", "texture");
-            const com_ptr<ID3D11Resource> resource = GetTexture(texture, device_data);
+            const ComPtr<ID3D11Resource> resource = GetTexture(texture, device_data);
             w.Field("allocated", bool(resource));
             if (resource)
             {

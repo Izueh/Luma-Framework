@@ -20,8 +20,8 @@ namespace
 
 struct GameDeviceDataHeavyRain final : public GameDeviceData
 {
-   com_ptr<ID3D11Resource> scene_color_resource;
-   com_ptr<ID3D11RenderTargetView> scene_color_rtv;
+   ComPtr<ID3D11Resource> scene_color_resource;
+   ComPtr<ID3D11RenderTargetView> scene_color_rtv;
    SanitizeNaNsData sanitize_nans_data;
 
 #if DEVELOPMENT || TEST
@@ -235,8 +235,8 @@ public:
       auto& game_device_data = GetGameDeviceData(device_data);
 
 #if DEVELOPMENT || TEST
-      com_ptr<ID3D11DeviceContext> immediate_context;
-      native_device->GetImmediateContext(&immediate_context);
+      ComPtr<ID3D11DeviceContext> immediate_context;
+      native_device->GetImmediateContext(immediate_context.put());
       if (immediate_context.get() != native_device_context)
       {
          game_device_data.drew_scene = true;
@@ -253,12 +253,12 @@ public:
          compute_state_stack.Cache(native_device_context, device_data.uav_max_count);
 
          // Manually create the RTV for the resource
-         com_ptr<ID3D11Resource> resource;
-         com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->PSGetShaderResources(0, 1, &srv);
+         ComPtr<ID3D11Resource> resource;
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0, 1, srv.put());
          if (srv.get())
          {
-            srv->GetResource(&resource);
+            srv->GetResource(resource.put());
          }
          if (resource.get() != game_device_data.scene_color_resource.get())
          {
@@ -266,7 +266,7 @@ public:
             game_device_data.scene_color_rtv.reset();
             if (game_device_data.scene_color_resource)
             {
-               native_device->CreateRenderTargetView(game_device_data.scene_color_resource.get(), nullptr, &game_device_data.scene_color_rtv);
+               native_device->CreateRenderTargetView(game_device_data.scene_color_resource.get(), nullptr, game_device_data.scene_color_rtv.put());
             }
          }
 
@@ -287,16 +287,16 @@ public:
          // The final tonemapper is always drawn on the main command list, and the menu uses this shader so it's initialized from the beginning.
          if (cmd_list_data.is_primary)
          {
-            com_ptr<ID3D11RenderTargetView> rtv;
-            native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+            ComPtr<ID3D11RenderTargetView> rtv;
+            native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
             if (rtv)
             {
-               com_ptr<ID3D11Resource> rt_resource;
-               rtv->GetResource(&rt_resource);
+               ComPtr<ID3D11Resource> rt_resource;
+               rtv->GetResource(rt_resource.put());
                if (rt_resource)
                {
-                  com_ptr<ID3D11Texture2D> rt;
-                  HRESULT hr = rt_resource->QueryInterface(&rt);
+                  ComPtr<ID3D11Texture2D> rt;
+                  HRESULT hr = rt_resource->QueryInterface(rt.put());
                   if (SUCCEEDED(hr) && rt)
                   {
                      D3D11_TEXTURE2D_DESC rt_desc;

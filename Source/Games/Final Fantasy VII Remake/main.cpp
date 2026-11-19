@@ -325,18 +325,18 @@ struct GameDeviceDataFF7Remake final : public GameDeviceData
 {
 #if ENABLE_SR
    // SR
-   com_ptr<ID3D11Texture2D> sr_motion_vectors;
-   com_ptr<ID3D11ShaderResourceView> sr_motion_vectors_srv; // NEW: SRV for Motion Vectors
-   com_ptr<ID3D11Resource> sr_source_color;
-   com_ptr<ID3D11Resource> depth_buffer;
-   com_ptr<ID3D11RenderTargetView> sr_motion_vectors_rtv;
+   ComPtr<ID3D11Texture2D> sr_motion_vectors;
+   ComPtr<ID3D11ShaderResourceView> sr_motion_vectors_srv; // NEW: SRV for Motion Vectors
+   ComPtr<ID3D11Resource> sr_source_color;
+   ComPtr<ID3D11Resource> depth_buffer;
+   ComPtr<ID3D11RenderTargetView> sr_motion_vectors_rtv;
    std::unique_ptr<SR::SettingsData> sr_settings_data;
    std::unique_ptr<SR::SuperResolutionImpl::DrawData> sr_draw_data;
 #endif // ENABLE_SR
 
    // NEW: Bloom History Resources
-   com_ptr<ID3D11Texture2D> prev_bloom_texture;
-   com_ptr<ID3D11ShaderResourceView> prev_bloom_srv;
+   ComPtr<ID3D11Texture2D> prev_bloom_texture;
+   ComPtr<ID3D11ShaderResourceView> prev_bloom_srv;
    bool first_bloom_frame = true;
    std::atomic<bool> camera_cut = false;
    std::atomic<bool> has_drawn_title = false;
@@ -352,9 +352,9 @@ struct GameDeviceDataFF7Remake final : public GameDeviceData
 
    // Output HDR two-pass split: intermediate hudless render target (R10G10B10A2_UNORM, PQ-encoded)
 #if ENABLE_FRAMEGEN
-   com_ptr<ID3D11Texture2D> output_hdr_hudless_texture;
-   com_ptr<ID3D11ShaderResourceView> output_hdr_hudless_srv;
-   com_ptr<ID3D11RenderTargetView> output_hdr_hudless_rtv;
+   ComPtr<ID3D11Texture2D> output_hdr_hudless_texture;
+   ComPtr<ID3D11ShaderResourceView> output_hdr_hudless_srv;
+   ComPtr<ID3D11RenderTargetView> output_hdr_hudless_rtv;
    UINT output_hdr_hudless_width = 0;
    UINT output_hdr_hudless_height = 0;
 
@@ -368,9 +368,9 @@ struct GameDeviceDataFF7Remake final : public GameDeviceData
    }
 
    // Output SDR two-pass split: intermediate hudless render target (R10G10B10A2_UNORM, linear)
-   com_ptr<ID3D11Texture2D> output_sdr_hudless_texture;
-   com_ptr<ID3D11ShaderResourceView> output_sdr_hudless_srv;
-   com_ptr<ID3D11RenderTargetView> output_sdr_hudless_rtv;
+   ComPtr<ID3D11Texture2D> output_sdr_hudless_texture;
+   ComPtr<ID3D11ShaderResourceView> output_sdr_hudless_srv;
+   ComPtr<ID3D11RenderTargetView> output_sdr_hudless_rtv;
    UINT output_sdr_hudless_width = 0;
    UINT output_sdr_hudless_height = 0;
 
@@ -878,19 +878,19 @@ public:
       }
 
       // Only resize the main output-sized target. Bloom/exposure mip targets have independent dimensions.
-      com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-      com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-      native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
+      ComPtr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+      ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+      native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(render_target_views), depth_stencil_view.put());
       if (render_target_views[0].get() == nullptr)
       {
          return false;
       }
 
-      com_ptr<ID3D11Resource> render_target_resource;
-      render_target_views[0]->GetResource(&render_target_resource);
+      ComPtr<ID3D11Resource> render_target_resource;
+      render_target_views[0]->GetResource(render_target_resource.put());
 
-      com_ptr<ID3D11Texture2D> render_target_texture;
-      HRESULT hr = render_target_resource->QueryInterface(&render_target_texture);
+      ComPtr<ID3D11Texture2D> render_target_texture;
+      HRESULT hr = render_target_resource->QueryInterface(render_target_texture.put());
       ASSERT_ONCE(SUCCEEDED(hr));
       if (render_target_texture.get() == nullptr)
       {
@@ -1086,8 +1086,8 @@ public:
          }
 
          // Get the game's current RTV to determine dimensions and to restore later
-         com_ptr<ID3D11RenderTargetView> original_rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-         com_ptr<ID3D11DepthStencilView> original_dsv;
+         ComPtr<ID3D11RenderTargetView> original_rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+         ComPtr<ID3D11DepthStencilView> original_dsv;
          native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &original_rtvs[0], &original_dsv);
 
          if (!original_rtvs[0].get())
@@ -1096,9 +1096,9 @@ public:
          }
 
          // Get render target dimensions
-         com_ptr<ID3D11Resource> rtv_resource;
+         ComPtr<ID3D11Resource> rtv_resource;
          original_rtvs[0]->GetResource(&rtv_resource);
-         com_ptr<ID3D11Texture2D> rtv_texture;
+         ComPtr<ID3D11Texture2D> rtv_texture;
          rtv_resource->QueryInterface(&rtv_texture);
          D3D11_TEXTURE2D_DESC rtv_desc;
          rtv_texture->GetDesc(&rtv_desc);
@@ -1141,8 +1141,8 @@ public:
          }
 
          // Cache GPU state
-         com_ptr<ID3D11VertexShader> prev_vs;
-         com_ptr<ID3D11PixelShader> prev_ps;
+         ComPtr<ID3D11VertexShader> prev_vs;
+         ComPtr<ID3D11PixelShader> prev_ps;
          native_device_context->VSGetShader(&prev_vs, nullptr, nullptr);
          native_device_context->PSGetShader(&prev_ps, nullptr, nullptr);
          D3D11_PRIMITIVE_TOPOLOGY prev_topology;
@@ -1199,7 +1199,7 @@ public:
          native_device_context->IASetPrimitiveTopology(prev_topology);
 
          // Restore original SRV on t1 (so we don't leave the intermediate bound)
-         com_ptr<ID3D11ShaderResourceView> original_color_srv;
+         ComPtr<ID3D11ShaderResourceView> original_color_srv;
          // We don't have the original t1 cached, but it's no longer needed since post-processing is done.
          // Just unbind to be safe.
          ID3D11ShaderResourceView* null_srv = nullptr;
@@ -1235,8 +1235,8 @@ public:
          }
 
          // Get the game's current RTV to determine dimensions and to restore later
-         com_ptr<ID3D11RenderTargetView> original_rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-         com_ptr<ID3D11DepthStencilView> original_dsv;
+         ComPtr<ID3D11RenderTargetView> original_rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+         ComPtr<ID3D11DepthStencilView> original_dsv;
          native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &original_rtvs[0], &original_dsv);
 
          if (!original_rtvs[0].get())
@@ -1245,9 +1245,9 @@ public:
          }
 
          // Get render target dimensions
-         com_ptr<ID3D11Resource> rtv_resource;
+         ComPtr<ID3D11Resource> rtv_resource;
          original_rtvs[0]->GetResource(&rtv_resource);
-         com_ptr<ID3D11Texture2D> rtv_texture;
+         ComPtr<ID3D11Texture2D> rtv_texture;
          rtv_resource->QueryInterface(&rtv_texture);
          D3D11_TEXTURE2D_DESC rtv_desc;
          rtv_texture->GetDesc(&rtv_desc);
@@ -1290,8 +1290,8 @@ public:
          }
 
          // Cache GPU state
-         com_ptr<ID3D11VertexShader> prev_vs;
-         com_ptr<ID3D11PixelShader> prev_ps;
+         ComPtr<ID3D11VertexShader> prev_vs;
+         ComPtr<ID3D11PixelShader> prev_ps;
          native_device_context->VSGetShader(&prev_vs, nullptr, nullptr);
          native_device_context->PSGetShader(&prev_ps, nullptr, nullptr);
          D3D11_PRIMITIVE_TOPOLOGY prev_topology;
@@ -1379,12 +1379,12 @@ public:
          // 2 current color source
          // 3 previous color source (previous frame)
          // 4 motion vectors
-         com_ptr<ID3D11ShaderResourceView> ps_shader_resources[5];
-         native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), &ps_shader_resources[0]);
+         ComPtr<ID3D11ShaderResourceView> ps_shader_resources[5];
+         native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), PutArray(ps_shader_resources));
 
-         com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
+         ComPtr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
+         ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(render_target_views), depth_stencil_view.put());
          const bool dlss_inputs_valid = ps_shader_resources[0].get() != nullptr && ps_shader_resources[1].get() != nullptr && ps_shader_resources[2].get() != nullptr && ps_shader_resources[4].get() != nullptr && render_target_views[0].get() != nullptr;
          ASSERT_ONCE(dlss_inputs_valid);
 
@@ -1393,10 +1393,10 @@ public:
             auto* sr_instance_data = device_data.GetSRInstanceData();
             ASSERT_ONCE(sr_instance_data);
 
-            com_ptr<ID3D11Resource> output_color_resource;
-            render_target_views[0]->GetResource(&output_color_resource);
-            com_ptr<ID3D11Texture2D> output_color;
-            HRESULT hr = output_color_resource->QueryInterface(&output_color);
+            ComPtr<ID3D11Resource> output_color_resource;
+            render_target_views[0]->GetResource(output_color_resource.put());
+            ComPtr<ID3D11Texture2D> output_color;
+            HRESULT hr = output_color_resource->QueryInterface(output_color.put());
             ASSERT_ONCE(SUCCEEDED(hr));
 
             D3D11_TEXTURE2D_DESC taa_output_texture_desc;
@@ -1474,7 +1474,7 @@ public:
                if (!device_data.sr_output_color.get() || dlss_output_changed)
                {
                   device_data.sr_output_color = nullptr; // Make sure we discard the previous one
-                  hr = native_device->CreateTexture2D(&dlss_output_texture_desc, nullptr, &device_data.sr_output_color);
+                  hr = native_device->CreateTexture2D(&dlss_output_texture_desc, nullptr, device_data.sr_output_color.put());
                   ASSERT_ONCE(SUCCEEDED(hr));
                }
                // Texture creation failed, we can't proceed with DLSS
@@ -1492,11 +1492,11 @@ public:
             if (!skip_dlss)
             {
                game_device_data.sr_source_color = nullptr;
-               ps_shader_resources[2]->GetResource(&game_device_data.sr_source_color);
+               ps_shader_resources[2]->GetResource(game_device_data.sr_source_color.put());
                game_device_data.depth_buffer = nullptr;
-               ps_shader_resources[1]->GetResource(&game_device_data.depth_buffer);
-               com_ptr<ID3D11Resource> object_velocity;
-               ps_shader_resources[4]->GetResource(&object_velocity);
+               ps_shader_resources[1]->GetResource(game_device_data.depth_buffer.put());
+               ComPtr<ID3D11Resource> object_velocity;
+               ps_shader_resources[4]->GetResource(object_velocity.put());
 
                // TODO: add exposure texture support (it's possibly calculated just earlier in the auto exposure steps, but they could be after DLSS too, depends on UE), either way auto exposure is ok
                DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack;
@@ -1508,8 +1508,8 @@ public:
                {
                   if (!AreResourcesEqual(object_velocity.get(), game_device_data.sr_motion_vectors.get(), false /*check_format*/))
                   {
-                     com_ptr<ID3D11Texture2D> object_velocity_texture;
-                     hr = object_velocity->QueryInterface(&object_velocity_texture);
+                     ComPtr<ID3D11Texture2D> object_velocity_texture;
+                     hr = object_velocity->QueryInterface(object_velocity_texture.put());
                      ASSERT_ONCE(SUCCEEDED(hr));
                      D3D11_TEXTURE2D_DESC object_velocity_texture_desc;
                      object_velocity_texture->GetDesc(&object_velocity_texture_desc);
@@ -1525,26 +1525,26 @@ public:
                      // FIX: Add SHADER_RESOURCE bind flag so we can read MVs in Bloom pass
                      object_velocity_texture_desc.BindFlags |= D3D11_BIND_SHADER_RESOURCE;
 
-                     hr = native_device->CreateTexture2D(&object_velocity_texture_desc, nullptr, &game_device_data.sr_motion_vectors);
+                     hr = native_device->CreateTexture2D(&object_velocity_texture_desc, nullptr, game_device_data.sr_motion_vectors.put());
                      ASSERT_ONCE(SUCCEEDED(hr));
 
                      game_device_data.sr_motion_vectors_rtv = nullptr; // Make sure we discard the previous one
                      game_device_data.sr_motion_vectors_srv = nullptr; // Reset SRV
                      if (SUCCEEDED(hr))
                      {
-                        hr = native_device->CreateRenderTargetView(game_device_data.sr_motion_vectors.get(), nullptr, &game_device_data.sr_motion_vectors_rtv);
+                        hr = native_device->CreateRenderTargetView(game_device_data.sr_motion_vectors.get(), nullptr, game_device_data.sr_motion_vectors_rtv.put());
                         ASSERT_ONCE(SUCCEEDED(hr));
 
                         // Create SRV for MVs
-                        hr = native_device->CreateShaderResourceView(game_device_data.sr_motion_vectors.get(), nullptr, &game_device_data.sr_motion_vectors_srv);
+                        hr = native_device->CreateShaderResourceView(game_device_data.sr_motion_vectors.get(), nullptr, game_device_data.sr_motion_vectors_srv.put());
                         ASSERT_ONCE(SUCCEEDED(hr));
                      }
                   }
 
-                  com_ptr<ID3D11VertexShader> prev_shader_vx;
-                  com_ptr<ID3D11PixelShader> prev_shader_px;
-                  native_device_context->VSGetShader(&prev_shader_vx, nullptr, nullptr);
-                  native_device_context->PSGetShader(&prev_shader_px, nullptr, nullptr);
+                  ComPtr<ID3D11VertexShader> prev_shader_vx;
+                  ComPtr<ID3D11PixelShader> prev_shader_px;
+                  native_device_context->VSGetShader(prev_shader_vx.put(), nullptr, nullptr);
+                  native_device_context->PSGetShader(prev_shader_px.put(), nullptr, nullptr);
                   D3D11_PRIMITIVE_TOPOLOGY primitive_topology;
                   native_device_context->IAGetPrimitiveTopology(&primitive_topology);
 
@@ -1843,7 +1843,7 @@ public:
                {
                   D3D11_SAMPLER_DESC native_desc;
                   native_sampler->GetDesc(&native_desc);
-                  com_ptr<ID3D11SamplerState> custom_sampler = CreateCustomSampler(device_data, native_device, native_desc);
+                  ComPtr<ID3D11SamplerState> custom_sampler = CreateCustomSampler(device_data, native_device, native_desc);
                   const std::unique_lock unique_lock_samplers(s_mutex_samplers);
                   samplers_handle.second[new_texture_mip_lod_bias_offset] = custom_sampler;
                }

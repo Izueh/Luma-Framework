@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-#include <source/com_ptr.hpp>
+#include "../../Core/includes/com_ptr.h"
 
 // The game's draws redone with patched shaders (the motion vector ones, "motion_vector_patch.h"): swapping the shaders in and out, and
 // uploading the extra constants they read.
@@ -27,17 +27,17 @@ namespace PatchedDraws
    struct BoundShader
    {
       T* patched = nullptr;
-      com_ptr<T> game;
+      ComPtr<T> game;
    };
 
    template <typename T>
-   com_ptr<T> GetBoundShader(ID3D11DeviceContext* native_device_context)
+   ComPtr<T> GetBoundShader(ID3D11DeviceContext* native_device_context)
    {
-      com_ptr<T> shader;
+      ComPtr<T> shader;
       if constexpr (std::is_same_v<T, ID3D11VertexShader>)
-         native_device_context->VSGetShader(&shader, nullptr, nullptr);
+         native_device_context->VSGetShader(shader.put(), nullptr, nullptr);
       else
-         native_device_context->PSGetShader(&shader, nullptr, nullptr);
+         native_device_context->PSGetShader(shader.put(), nullptr, nullptr);
       return shader;
    }
 
@@ -55,7 +55,7 @@ namespace PatchedDraws
    template <typename T>
    void BindPatchedShader(ID3D11DeviceContext* native_device_context, T* patched, BoundShader<T>* bound)
    {
-      com_ptr<T> current = GetBoundShader<T>(native_device_context);
+      ComPtr<T> current = GetBoundShader<T>(native_device_context);
       if (current.get() == patched)
          return;
       bound->game = std::move(current);
@@ -77,7 +77,7 @@ namespace PatchedDraws
 
    // A dynamic constant buffer holding "data", (re)created at its size; "copy_size" (non zero): only that much of it is written, the
    // buffer only grows (uploads of varying size to one slot)
-   inline bool WriteDynamicConstants(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, com_ptr<ID3D11Buffer>* buffer, const void* data, UINT size, UINT copy_size = 0)
+   inline bool WriteDynamicConstants(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, ComPtr<ID3D11Buffer>* buffer, const void* data, UINT size, UINT copy_size = 0)
    {
       D3D11_BUFFER_DESC desc = {};
       if (*buffer)
@@ -87,7 +87,7 @@ namespace PatchedDraws
       {
          buffer->reset();
          desc = {size, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE};
-         native_device->CreateBuffer(&desc, nullptr, &(*buffer));
+         native_device->CreateBuffer(&desc, nullptr, buffer->put());
       }
       D3D11_MAPPED_SUBRESOURCE mapped;
       if (!*buffer || FAILED(native_device_context->Map(buffer->get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
@@ -102,13 +102,13 @@ namespace PatchedDraws
    struct PreviousConstants
    {
       static constexpr UINT ring_size = 4 << 20;
-      com_ptr<ID3D11Buffer> ring;
+      ComPtr<ID3D11Buffer> ring;
       // The immediate context (not referenced: it lives as long as the device). Only its binds use the ring: a deferred one would get
       // its constant buffers bound on this one, and must DISCARD its first Map of a buffer in each command list.
       ID3D11DeviceContext1* ring_context = nullptr;
       UINT ring_offset = 0;
       bool checked = false;
-      std::vector<com_ptr<ID3D11Buffer>> buffers; // Without the ring, one per slot
+      std::vector<ComPtr<ID3D11Buffer>> buffers; // Without the ring, one per slot
 
       // Binds each "slots" pair's previous slot: its upload, or where there is none (null), its current buffer (zero motion).
       // "log_tag" names the game in the log line saying which of the two ways it uses. "read_sizes" (optional, 0 = all): the bytes of
@@ -119,11 +119,11 @@ namespace PatchedDraws
          if (native_device_context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE && !std::exchange(checked, true))
          {
             D3D11_FEATURE_DATA_D3D11_OPTIONS options = {};
-            com_ptr<ID3D11DeviceContext1> context1;
+            ComPtr<ID3D11DeviceContext1> context1;
             const D3D11_BUFFER_DESC desc = {ring_size, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE};
             if (SUCCEEDED(native_device->CheckFeatureSupport(D3D11_FEATURE_D3D11_OPTIONS, &options, sizeof(options))) && options.ConstantBufferOffsetting &&
-                options.MapNoOverwriteOnDynamicConstantBuffer && SUCCEEDED(native_device_context->QueryInterface(&context1)) &&
-                SUCCEEDED(native_device->CreateBuffer(&desc, nullptr, &ring)))
+                options.MapNoOverwriteOnDynamicConstantBuffer && SUCCEEDED(native_device_context->QueryInterface(context1.put())) &&
+                SUCCEEDED(native_device->CreateBuffer(&desc, nullptr, ring.put())))
             {
                ring_context = context1.get();
                ring_offset = ring_size; // The first write discards
@@ -426,8 +426,8 @@ namespace PatchedDraws
       {
          if (tracked)
             return object;
-         com_ptr<T> queried;
-         query(&queried);
+         ComPtr<T> queried;
+         query(queried.put());
          return queried.get();
       }
 

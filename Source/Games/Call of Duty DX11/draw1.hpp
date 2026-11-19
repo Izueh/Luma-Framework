@@ -28,8 +28,8 @@ namespace DrawDav
       {
          state = std::make_unique<State>();
 
-         com_ptr<ID3D11DeviceContext1> device_context_1;
-         HRESULT hr = device_context->QueryInterface(&device_context_1);
+         ComPtr<ID3D11DeviceContext1> device_context_1;
+         HRESULT hr = device_context->QueryInterface(device_context_1.put());
 #if 0 // This happens in some games
          if (SUCCEEDED(hr) && device_context_1)
          {
@@ -40,7 +40,7 @@ namespace DrawDav
          state->uav_num = device_max_uav_num;
          if constexpr (Mode == DrawStateStackType::SimpleGraphics || Mode == DrawStateStackType::FullGraphics)
          {
-            device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &state->render_target_views[0], &state->depth_stencil_view); // TODO: optimize away for the "OMGetRenderTargetsAndUnorderedAccessViews" call case? We could just get all the RTVs and UAVs from slot 0 and then find the first valid UAV
+            device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(state->render_target_views), state->depth_stencil_view.put()); // TODO: optimize away for the "OMGetRenderTargetsAndUnorderedAccessViews" call case? We could just get all the RTVs and UAVs from slot 0 and then find the first valid UAV
             if constexpr (Mode == DrawStateStackType::FullGraphics)
             {
                for (size_t i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++)
@@ -55,7 +55,7 @@ namespace DrawDav
                state->depth_stencil_view.reset();
                device_context->OMGetRenderTargetsAndUnorderedAccessViews(state->valid_render_target_views_bound, &state->render_target_views[0], &state->depth_stencil_view, state->valid_render_target_views_bound, state->uav_num - state->valid_render_target_views_bound, &state->unordered_access_views[0]);
             }
-            device_context->OMGetBlendState(&state->blend_state, state->blend_factor, &state->blend_sample_mask);
+            device_context->OMGetBlendState(state->blend_state.put(), state->blend_factor, &state->blend_sample_mask);
             device_context->IAGetPrimitiveTopology(&state->primitive_topology);
             device_context->RSGetScissorRects(&state->scissor_rects_num, nullptr); // This will get the number of scissor rects used
             device_context->RSGetScissorRects(&state->scissor_rects_num, &state->scissor_rects[0]);
@@ -64,26 +64,26 @@ namespace DrawDav
             // device_context->PSGetShaderResources(0, srv_num, &state->shader_resource_views[0]);
             if (device_context_1)
             {
-               device_context_1->PSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &state->constant_buffers[0], state->constant_buffers_first_constant, state->constant_buffers_num_constant);
-               device_context_1->VSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &state->vs_constant_buffers[0], state->vs_constant_buffers_first_constant, state->vs_constant_buffers_num_constant);
+               device_context_1->PSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(state->constant_buffers), state->constant_buffers_first_constant, state->constant_buffers_num_constant);
+               device_context_1->VSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(state->vs_constant_buffers), state->vs_constant_buffers_first_constant, state->vs_constant_buffers_num_constant);
             }
             else
             {
-               device_context->PSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &state->constant_buffers[0]);
-               device_context->VSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &state->vs_constant_buffers[0]);
+               device_context->PSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(state->constant_buffers));
+               device_context->VSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(state->vs_constant_buffers));
             }
-            device_context->OMGetDepthStencilState(&state->depth_stencil_state, &state->stencil_ref);
+            device_context->OMGetDepthStencilState(state->depth_stencil_state.put(), &state->stencil_ref);
 #if ENABLE_SHADER_CLASS_INSTANCES
             device_context->VSGetShader(&state->vs, &state->vs_instances[0], &state->vs_instances_count);
             device_context->PSGetShader(&state->ps, &state->ps_instances[0], &state->ps_instances_count);
             ASSERT_ONCE(state->vs_instances_count == 0 && state->ps_instances_count == 0); // Make sure they are never used
 #else
-            device_context->VSGetShader(&state->vs, nullptr, 0);
-            device_context->PSGetShader(&state->ps, nullptr, 0);
+            device_context->VSGetShader(state->vs.put(), nullptr, 0);
+            device_context->PSGetShader(state->ps.put(), nullptr, 0);
 #endif
-            device_context->PSGetSamplers(0, samplers_num, &state->samplers_state[0]);
-            device_context->IAGetInputLayout(&state->input_layout);
-            device_context->RSGetState(&state->rasterizer_state);
+            device_context->PSGetSamplers(0, samplers_num, PutArray(state->samplers_state));
+            device_context->IAGetInputLayout(state->input_layout.put());
+            device_context->RSGetState(state->rasterizer_state.put());
 
 #if 0 // These are not needed until proven otherwise, we don't change, nor rely on these states
             ID3D11Buffer* VSConstantBuffer;
@@ -124,8 +124,8 @@ namespace DrawDav
       {
          if (!state) return;
 
-         com_ptr<ID3D11DeviceContext1> device_context_1;
-         HRESULT hr = device_context->QueryInterface(&device_context_1);
+         ComPtr<ID3D11DeviceContext1> device_context_1;
+         HRESULT hr = device_context->QueryInterface(device_context_1.put());
 
          if constexpr (Mode == DrawStateStackType::SimpleGraphics || Mode == DrawStateStackType::FullGraphics)
          {
@@ -253,7 +253,7 @@ namespace DrawDav
 
          void Clone(ID3D11DeviceContext* device_context, const std::vector<ID3D11Buffer*>& luma_cbuffers)
          {
-            com_ptr<ID3D11Device> device;
+            ComPtr<ID3D11Device> device;
             device_context->GetDevice(&device);
 
             depth_stencil_view = CloneResourceAndView(device.get(), device_context, depth_stencil_view.get());
@@ -282,42 +282,42 @@ namespace DrawDav
             // Similarly, samplers etc aren't cached as it's barely needed, only stuff that is "live" data is cloned.
          }
 
-         com_ptr<ID3D11BlendState> blend_state;
+         ComPtr<ID3D11BlendState> blend_state;
          FLOAT blend_factor[4] = {1.f, 1.f, 1.f, 1.f};
          UINT blend_sample_mask;
-         com_ptr<ID3D11VertexShader> vs;
-         com_ptr<ID3D11PixelShader> ps;
-         com_ptr<ID3D11ComputeShader> cs;
+         ComPtr<ID3D11VertexShader> vs;
+         ComPtr<ID3D11PixelShader> ps;
+         ComPtr<ID3D11ComputeShader> cs;
 #if ENABLE_SHADER_CLASS_INSTANCES
          UINT vs_instances_count = max_shader_class_instances;
          UINT ps_instances_count = max_shader_class_instances;
          UINT cs_instances_count = max_shader_class_instances;
-         com_ptr<ID3D11ClassInstance> vs_instances[max_shader_class_instances];
-         com_ptr<ID3D11ClassInstance> ps_instances[max_shader_class_instances];
-         com_ptr<ID3D11ClassInstance> cs_instances[max_shader_class_instances];
+         ComPtr<ID3D11ClassInstance> vs_instances[max_shader_class_instances];
+         ComPtr<ID3D11ClassInstance> ps_instances[max_shader_class_instances];
+         ComPtr<ID3D11ClassInstance> cs_instances[max_shader_class_instances];
 #endif
          D3D11_PRIMITIVE_TOPOLOGY primitive_topology;
 
          // TODO: move some of these to the heap, stack is too big
-         com_ptr<ID3D11DepthStencilState> depth_stencil_state;
+         ComPtr<ID3D11DepthStencilState> depth_stencil_state;
          UINT stencil_ref;
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-         com_ptr<ID3D11SamplerState> samplers_state[samplers_num];
-         com_ptr<ID3D11ShaderResourceView> shader_resource_views[srv_num];
-         com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-         com_ptr<ID3D11UnorderedAccessView> unordered_access_views[D3D11_1_UAV_SLOT_COUNT];
-         com_ptr<ID3D11Buffer> constant_buffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+         ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+         ComPtr<ID3D11SamplerState> samplers_state[samplers_num];
+         ComPtr<ID3D11ShaderResourceView> shader_resource_views[srv_num];
+         ComPtr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+         ComPtr<ID3D11UnorderedAccessView> unordered_access_views[D3D11_1_UAV_SLOT_COUNT];
+         ComPtr<ID3D11Buffer> constant_buffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
          UINT constant_buffers_first_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
          UINT constant_buffers_num_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
-         com_ptr<ID3D11Buffer> vs_constant_buffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+         ComPtr<ID3D11Buffer> vs_constant_buffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
          UINT vs_constant_buffers_first_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
          UINT vs_constant_buffers_num_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
          D3D11_RECT scissor_rects[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
          UINT scissor_rects_num = 0;
          D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
          UINT viewports_num = 1;
-         com_ptr<ID3D11InputLayout> input_layout;
-         com_ptr<ID3D11RasterizerState> rasterizer_state;
+         ComPtr<ID3D11InputLayout> input_layout;
+         ComPtr<ID3D11RasterizerState> rasterizer_state;
          UINT valid_render_target_views_bound = 0; // Includes null ones as well if bound between valid RTVs
          UINT uav_num = D3D11_1_UAV_SLOT_COUNT;
       };

@@ -269,8 +269,8 @@ namespace Probe
          return "(null)";
       }
 
-      com_ptr<ID3D11Texture2D> texture_2d;
-      if (SUCCEEDED(resource->QueryInterface(&texture_2d)) && texture_2d.get())
+      ComPtr<ID3D11Texture2D> texture_2d;
+      if (SUCCEEDED(resource->QueryInterface(texture_2d.put())) && texture_2d.get())
       {
          D3D11_TEXTURE2D_DESC desc = {};
          texture_2d->GetDesc(&desc);
@@ -486,8 +486,8 @@ static bool IsUsableMainDepth(ID3D11Resource* resource, float min_width, float m
    {
       return false;
    }
-   com_ptr<ID3D11Texture2D> texture;
-   if (FAILED(resource->QueryInterface(&texture)) || !texture)
+   ComPtr<ID3D11Texture2D> texture;
+   if (FAILED(resource->QueryInterface(texture.put())) || !texture)
    {
       return false;
    }
@@ -533,12 +533,12 @@ struct MafiaDefinitiveEditionGameDeviceData final : public GameDeviceData
    // The scene depth, captured from the position fill pass. Only a target that passes
    // IsUsableMainDepth is ever stored, and a rejected candidate never overwrites a good one, so
    // this always holds the last *valid* main depth (the game reuses the same texture every frame).
-   com_ptr<ID3D11Resource> main_depth;
+   ComPtr<ID3D11Resource> main_depth;
    int main_depth_rejected = 0; // how often a depth target was seen and rejected (shadow atlas)
    int main_depth_logged = 0;
-   com_ptr<ID3D11Texture2D> dlss_output_color; // UAV enabled copy of the AA target if needed
+   ComPtr<ID3D11Texture2D> dlss_output_color; // UAV enabled copy of the AA target if needed
    // The live resolve bindings, retained for the input diagnostics below.
-   com_ptr<ID3D11ShaderResourceView> aa_srv[8];
+   ComPtr<ID3D11ShaderResourceView> aa_srv[8];
    // The resolves bind t0 = current HDR colour, t1 = history, t2 = UV space motion vectors.
    // RenoDX can hot-swap both colour and history to FP16; format alone cannot identify a role.
    // R32 inputs are still rejected, including the unsupported menu binding seen in early probes.
@@ -632,7 +632,7 @@ struct MafiaDefinitiveEditionGameDeviceData final : public GameDeviceData
    };
    PostPassLog s_post[kPostMaxHashes];
    int s_post_count = 0;
-   com_ptr<ID3D11Buffer> cb_post_staging[kPostSlots];
+   ComPtr<ID3D11Buffer> cb_post_staging[kPostSlots];
    uint32_t cb_post_staging_size[kPostSlots] = {};
    int s_post_cb_arm = 0;       // nonzero while the panel button's window is open
    int s_post_cb_arm_frame = 0; // the frame it was granted on, the window is counted in frames
@@ -647,10 +647,10 @@ struct MafiaDefinitiveEditionGameDeviceData final : public GameDeviceData
    // cb0[2].x its gamma exponent, cb1[4]/cb1[5] the Uncharted2 parameters, and t4 is a 1x1 texture
    // that holds the exposure and the white point, i.e. exactly what an HDR replacement needs.
    int s_tm_dump_state = 0; // 0 idle, 1 dumped
-   com_ptr<ID3D11Buffer> cb_tm_staging[2];
+   ComPtr<ID3D11Buffer> cb_tm_staging[2];
    uint32_t cb_tm_staging_size[2] = {};
-   com_ptr<ID3D11Texture2D> tex_tm_staging;
-   com_ptr<ID3D11Texture2D> tex_tm_1x1;
+   ComPtr<ID3D11Texture2D> tex_tm_staging;
+   ComPtr<ID3D11Texture2D> tex_tm_1x1;
    // --- Dev probe: rewrite the tonemapper's own constants on the way to the draw ---------------
    // Why this is enough to test the whole HDR premise, with no new shader at all. The tonemapper
    // takes exactly two switches that matter (see the disassembly in docs/disasm-916B1D65.txt):
@@ -665,7 +665,7 @@ struct MafiaDefinitiveEditionGameDeviceData final : public GameDeviceData
    // returns E_FAIL instead of crashing if the buffer turns out to be immutable.
    int tm_probe_mode = 0; // 0 off, 1 linear out, 2 linear + operator -2, 3 linear + operator -3
    int tm_probe_logged = 0;
-   com_ptr<ID3D11Buffer> cb_tm_patch; // our own writable copy, bound in place of the game's
+   ComPtr<ID3D11Buffer> cb_tm_patch; // our own writable copy, bound in place of the game's
    uint32_t cb_tm_patch_size = 0;
    // What the tonemapper was actually asked to do last frame, for the panel readout. Without this
    // the panel cannot answer "is the HDR path on", which is the one question that matters here.
@@ -682,7 +682,7 @@ struct MafiaDefinitiveEditionGameDeviceData final : public GameDeviceData
    // resolve's t2 IS the motion vector. Wrapped in DEVELOPMENT so it cannot get re-enabled by
    // accident in a release build.
    long long mv_sniff_next = 0;
-   com_ptr<ID3D11Resource> mv_sniffed[4];
+   ComPtr<ID3D11Resource> mv_sniffed[4];
    int mv_sniffed_count = 0;
    int mv_sniff_logged = 0;
 #endif
@@ -690,10 +690,10 @@ struct MafiaDefinitiveEditionGameDeviceData final : public GameDeviceData
    // crashed this game, so no code path does one any more. The MV encoding was instead confirmed
    // from the disassembly: the resolve does "add r1.xyzw, r0.xyxy, v1.xyxy" on t2.
    // ---- RCAS sharpening on the SR output ----
-   com_ptr<ID3D11Buffer> cb_sharpen;         // (w, h, sharpness, 0)
-   com_ptr<ID3D11Texture2D> tex_sharpen_src; // copy of the SR result (RCAS cannot read/write one target)
-   com_ptr<ID3D11ShaderResourceView> tex_sharpen_srv;
-   com_ptr<ID3D11RenderTargetView> tex_sharpen_rtv;
+   ComPtr<ID3D11Buffer> cb_sharpen;         // (w, h, sharpness, 0)
+   ComPtr<ID3D11Texture2D> tex_sharpen_src; // copy of the SR result (RCAS cannot read/write one target)
+   ComPtr<ID3D11ShaderResourceView> tex_sharpen_srv;
+   ComPtr<ID3D11RenderTargetView> tex_sharpen_rtv;
    uint32_t sharpen_w = 0, sharpen_h = 0;
    float sharpen_amount_cached = -1.f;
    // RCAS on top of the SR output, like Mafia III's mod does. It used to be a load bearing part of
@@ -712,7 +712,7 @@ struct MafiaDefinitiveEditionGameDeviceData final : public GameDeviceData
    // Staging copy of that pass' constant buffer, read once per draw of the pass so the authored
    // strength can be multiplied without ever compounding our own previous output. Same pattern (and
    // same reason) as the resolve's jitter readback further down.
-   com_ptr<ID3D11Buffer> cb_game_sharpen_staging;
+   ComPtr<ID3D11Buffer> cb_game_sharpen_staging;
    uint32_t cb_game_sharpen_staging_size = 0;
    int game_sharpen_logged = 0;
    // Last value the game authored, and whether writing ours back ever failed. Both are only there so
@@ -720,10 +720,10 @@ struct MafiaDefinitiveEditionGameDeviceData final : public GameDeviceData
    // authored strength turns out to be a very small 0.0196, so "x2" is barely a difference).
    float game_sharpen_authored = -1.f;
    int game_sharpen_write_failed = 0;
-   com_ptr<ID3D11RenderTargetView> cached_output_rtv;
+   ComPtr<ID3D11RenderTargetView> cached_output_rtv;
    void* cached_output_ptr = nullptr;
    // Staging copy of the resolve's PS constant buffer, used to read the per frame jitter.
-   com_ptr<ID3D11Buffer> cb_staging;
+   ComPtr<ID3D11Buffer> cb_staging;
    uint32_t cb_staging_size = 0;
    // Per frame TAA jitter, read from the resolve's pixel shader constant buffer slot 0, floats
    // 32 and 33. Located by diffing dumps across frames: they are the only values changing every
@@ -914,7 +914,7 @@ public:
       {
          return;
       }
-      com_ptr<ID3D11Buffer> cb = cbs[0];
+      ComPtr<ID3D11Buffer> cb = cbs[0];
 
       D3D11_BUFFER_DESC src = {};
       cb->GetDesc(&src);
@@ -933,7 +933,7 @@ public:
          st.Usage = D3D11_USAGE_STAGING;
          st.BindFlags = 0;
          st.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-         if (SUCCEEDED(native_device->CreateBuffer(&st, nullptr, &gd.cb_game_sharpen_staging)))
+         if (SUCCEEDED(native_device->CreateBuffer(&st, nullptr, gd.cb_game_sharpen_staging.put())))
          {
             gd.cb_game_sharpen_staging_size = src.ByteWidth;
          }
@@ -990,8 +990,8 @@ public:
          return;
       }
 
-      com_ptr<ID3D11Texture2D> out_tex;
-      if (FAILED(output_color->QueryInterface(&out_tex)) || !out_tex)
+      ComPtr<ID3D11Texture2D> out_tex;
+      if (FAILED(output_color->QueryInterface(out_tex.put())) || !out_tex)
       {
          return;
       }
@@ -1032,7 +1032,7 @@ public:
          td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
          td.CPUAccessFlags = 0;
          td.MiscFlags = 0;
-         if (SUCCEEDED(native_device->CreateTexture2D(&td, nullptr, &gd.tex_sharpen_src)) && gd.tex_sharpen_src && SUCCEEDED(native_device->CreateShaderResourceView(gd.tex_sharpen_src.get(), nullptr, &gd.tex_sharpen_srv)) && SUCCEEDED(native_device->CreateRenderTargetView(gd.tex_sharpen_src.get(), nullptr, &gd.tex_sharpen_rtv)))
+         if (SUCCEEDED(native_device->CreateTexture2D(&td, nullptr, gd.tex_sharpen_src.put())) && gd.tex_sharpen_src && SUCCEEDED(native_device->CreateShaderResourceView(gd.tex_sharpen_src.get(), nullptr, gd.tex_sharpen_srv.put())) && SUCCEEDED(native_device->CreateRenderTargetView(gd.tex_sharpen_src.get(), nullptr, gd.tex_sharpen_rtv.put())))
          {
             gd.sharpen_w = w;
             gd.sharpen_h = h;
@@ -1050,7 +1050,7 @@ public:
          D3D11_SUBRESOURCE_DATA sd = {};
          sd.pSysMem = params;
          gd.cb_sharpen = nullptr;
-         if (SUCCEEDED(native_device->CreateBuffer(&bd, &sd, &gd.cb_sharpen)))
+         if (SUCCEEDED(native_device->CreateBuffer(&bd, &sd, gd.cb_sharpen.put())))
          {
             gd.sharpen_amount_cached = gd.sharpen_amount;
          }
@@ -1060,7 +1060,7 @@ public:
       if (gd.cached_output_ptr != output_color || !gd.cached_output_rtv)
       {
          gd.cached_output_rtv = nullptr;
-         if (FAILED(native_device->CreateRenderTargetView(output_color, nullptr, &gd.cached_output_rtv)))
+         if (FAILED(native_device->CreateRenderTargetView(output_color, nullptr, gd.cached_output_rtv.put())))
          {
             gd.cached_output_ptr = nullptr;
             return;
@@ -1146,8 +1146,8 @@ public:
          for (int q = 0; q < 2; ++q)
          {
             if (!r0[q]) continue;
-            com_ptr<ID3D11Resource> rr;
-            r0[q]->GetResource(&rr);
+            ComPtr<ID3D11Resource> rr;
+            r0[q]->GetResource(rr.put());
             std::string d = Probe::Describe(rr.get());
             snprintf(slot.rtv + strlen(slot.rtv), sizeof(slot.rtv) - strlen(slot.rtv), " RTV%d=%s", q, d.c_str());
             r0[q]->Release();
@@ -1180,8 +1180,8 @@ public:
             for (int q = 0; q < 2; ++q)
             {
                if (!trtv[q]) continue;
-               com_ptr<ID3D11Resource> rr;
-               trtv[q]->GetResource(&rr);
+               ComPtr<ID3D11Resource> rr;
+               trtv[q]->GetResource(rr.put());
                const std::string tdesc = Probe::Describe(rr.get());
                snprintf(tslot.rtv + strlen(tslot.rtv), sizeof(tslot.rtv) - strlen(tslot.rtv), " RTV%d=%s", q, tdesc.c_str());
                trtv[q]->Release();
@@ -1219,7 +1219,7 @@ public:
                   sd.Usage = D3D11_USAGE_STAGING;
                   sd.BindFlags = 0;
                   sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-                  if (SUCCEEDED(native_device->CreateBuffer(&sd, nullptr, &game_device_data.cb_tm_staging[0])))
+                  if (SUCCEEDED(native_device->CreateBuffer(&sd, nullptr, PutArray(game_device_data.cb_tm_staging))))
                   {
                      game_device_data.cb_tm_staging_size[0] = bd.ByteWidth;
                   }
@@ -1232,7 +1232,7 @@ public:
                   pd.Usage = D3D11_USAGE_DEFAULT;
                   pd.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
                   pd.CPUAccessFlags = 0;
-                  if (SUCCEEDED(native_device->CreateBuffer(&pd, nullptr, &game_device_data.cb_tm_patch)))
+                  if (SUCCEEDED(native_device->CreateBuffer(&pd, nullptr, game_device_data.cb_tm_patch.put())))
                   {
                      game_device_data.cb_tm_patch_size = bd.ByteWidth;
                   }
@@ -1298,7 +1298,7 @@ public:
          native_device_context->PSGetConstantBuffers(0, 2, pcbs);
          for (int slot = 0; slot < 2; slot++)
          {
-            com_ptr<ID3D11Buffer> pcb = pcbs[slot];
+            ComPtr<ID3D11Buffer> pcb = pcbs[slot];
             if (!pcb) continue;
             D3D11_BUFFER_DESC bd = {};
             pcb->GetDesc(&bd);
@@ -1315,7 +1315,7 @@ public:
                sd.Usage = D3D11_USAGE_STAGING;
                sd.BindFlags = 0;
                sd.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-               if (SUCCEEDED(native_device->CreateBuffer(&sd, nullptr, &game_device_data.cb_tm_staging[slot])))
+               if (SUCCEEDED(native_device->CreateBuffer(&sd, nullptr, game_device_data.cb_tm_staging[slot].put())))
                {
                   game_device_data.cb_tm_staging_size[slot] = bd.ByteWidth;
                }
@@ -1341,13 +1341,13 @@ public:
             ID3D11ShaderResourceView* srv = nullptr;
             native_device_context->PSGetShaderResources(t, 1, &srv);
             if (!srv) continue;
-            com_ptr<ID3D11Resource> res;
-            srv->GetResource(&res);
+            ComPtr<ID3D11Resource> res;
+            srv->GetResource(res.put());
             srv->Release();
             if (!res) continue;
-            com_ptr<ID3D11Texture2D> tex2d;
-            com_ptr<ID3D11Texture3D> tex3d;
-            if (SUCCEEDED(res->QueryInterface(&tex2d)) && tex2d)
+            ComPtr<ID3D11Texture2D> tex2d;
+            ComPtr<ID3D11Texture3D> tex3d;
+            if (SUCCEEDED(res->QueryInterface(tex2d.put())) && tex2d)
             {
                D3D11_TEXTURE2D_DESC d = {};
                tex2d->GetDesc(&d);
@@ -1357,7 +1357,7 @@ public:
                   game_device_data.tex_tm_1x1 = tex2d;
                }
             }
-            else if (SUCCEEDED(res->QueryInterface(&tex3d)) && tex3d)
+            else if (SUCCEEDED(res->QueryInterface(tex3d.put())) && tex3d)
             {
                D3D11_TEXTURE3D_DESC d = {};
                tex3d->GetDesc(&d);
@@ -1384,7 +1384,7 @@ public:
             sd.ArraySize = 1;
             sd.SampleDesc.Count = 1;
             sd.SampleDesc.Quality = 0;
-            if (SUCCEEDED(native_device->CreateTexture2D(&sd, nullptr, &game_device_data.tex_tm_staging)))
+            if (SUCCEEDED(native_device->CreateTexture2D(&sd, nullptr, game_device_data.tex_tm_staging.put())))
             {
                native_device_context->CopyResource(game_device_data.tex_tm_staging.get(), game_device_data.tex_tm_1x1.get());
                D3D11_MAPPED_SUBRESOURCE pm = {};
@@ -1554,7 +1554,7 @@ public:
                   native_device_context->PSGetConstantBuffers(0, kPostSlots, pcbs);
                   for (int slot = 0; slot < kPostSlots; slot++)
                   {
-                     com_ptr<ID3D11Buffer> pcb = pcbs[slot];
+                     ComPtr<ID3D11Buffer> pcb = pcbs[slot];
                      if (!pcb) continue;
                      D3D11_BUFFER_DESC pdesc = {};
                      pcb->GetDesc(&pdesc);
@@ -1567,7 +1567,7 @@ public:
                         pst.Usage = D3D11_USAGE_STAGING;
                         pst.BindFlags = 0;
                         pst.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-                        if (SUCCEEDED(native_device->CreateBuffer(&pst, nullptr, &game_device_data.cb_post_staging[slot])))
+                        if (SUCCEEDED(native_device->CreateBuffer(&pst, nullptr, game_device_data.cb_post_staging[slot].put())))
                         {
                            game_device_data.cb_post_staging_size[slot] = pdesc.ByteWidth;
                         }
@@ -1602,10 +1602,10 @@ public:
          for (UINT k = 0; k < 8; ++k)
          {
             if (!sniff_srvs[k]) continue;
-            com_ptr<ID3D11Resource> res;
-            sniff_srvs[k]->GetResource(&res);
-            com_ptr<ID3D11Texture2D> tex;
-            if (res && SUCCEEDED(res->QueryInterface(&tex)) && tex)
+            ComPtr<ID3D11Resource> res;
+            sniff_srvs[k]->GetResource(res.put());
+            ComPtr<ID3D11Texture2D> tex;
+            if (res && SUCCEEDED(res->QueryInterface(tex.put())) && tex)
             {
                D3D11_TEXTURE2D_DESC d = {};
                tex->GetDesc(&d);
@@ -1656,8 +1656,8 @@ public:
          native_device_context->OMGetRenderTargets(0, nullptr, &dsv);
          if (dsv != nullptr)
          {
-            com_ptr<ID3D11Resource> candidate;
-            dsv->GetResource(&candidate);
+            ComPtr<ID3D11Resource> candidate;
+            dsv->GetResource(candidate.put());
             dsv->Release();
 
             const float min_width = device_data.render_resolution.x > 0.f ? device_data.render_resolution.x * 0.9f : 1600.f;
@@ -1849,8 +1849,8 @@ public:
          std::string extra_target = "(no RTV)";
          if (extra_rtv != nullptr)
          {
-            com_ptr<ID3D11Resource> extra_resource;
-            extra_rtv->GetResource(&extra_resource);
+            ComPtr<ID3D11Resource> extra_resource;
+            extra_rtv->GetResource(extra_resource.put());
             extra_target = Probe::Describe(extra_resource.get());
             extra_rtv->Release();
          }
@@ -1892,10 +1892,10 @@ public:
          return DrawOrDispatchOverrideType::None;
       }
 
-      com_ptr<ID3D11ShaderResourceView> srvs[8];
-      native_device_context->PSGetShaderResources(0, ARRAYSIZE(srvs), &srvs[0]);
-      com_ptr<ID3D11RenderTargetView> rtv;
-      native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+      ComPtr<ID3D11ShaderResourceView> srvs[8];
+      native_device_context->PSGetShaderResources(0, ARRAYSIZE(srvs), PutArray(srvs));
+      ComPtr<ID3D11RenderTargetView> rtv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
       for (UINT i = 0; i < ARRAYSIZE(srvs); ++i)
          game_device_data.aa_srv[i] = srvs[i];
 
@@ -1907,9 +1907,9 @@ public:
       const int mv_slot = game_device_data.aa_auto_slots ? 2 : game_device_data.aa_mv_slot;
       const UINT render_width = static_cast<UINT>(device_data.render_resolution.x + 0.5f);
       const UINT render_height = static_cast<UINT>(device_data.render_resolution.y + 0.5f);
-      com_ptr<ID3D11Resource> source_color;
-      com_ptr<ID3D11Resource> motion_vectors;
-      com_ptr<ID3D11Resource> output_color;
+      ComPtr<ID3D11Resource> source_color;
+      ComPtr<ID3D11Resource> motion_vectors;
+      ComPtr<ID3D11Resource> output_color;
       const bool source_is_valid = slot >= 0 && slot < static_cast<int>(ARRAYSIZE(srvs)) && MafiaDE::ReadResolveInput(srvs[slot].get(), render_width, render_height, false, source_color);
       const bool motion_is_valid = mv_slot >= 0 && mv_slot < static_cast<int>(ARRAYSIZE(srvs)) && MafiaDE::ReadResolveInput(srvs[mv_slot].get(), render_width, render_height, true, motion_vectors);
       if (!source_is_valid || !motion_is_valid || source_color == motion_vectors)
@@ -1922,11 +1922,11 @@ public:
                source_color == motion_vectors, game_device_data.input_rejections));
             for (UINT i = 0; i < 3; ++i)
             {
-               com_ptr<ID3D11Resource> resource;
+               ComPtr<ID3D11Resource> resource;
                D3D11_SHADER_RESOURCE_VIEW_DESC view_desc = {};
                if (srvs[i])
                {
-                  srvs[i]->GetResource(&resource);
+                  srvs[i]->GetResource(resource.put());
                   srvs[i]->GetDesc(&view_desc);
                }
                Probe::Line(std::format("  t{} view=0x{:X} resource=0x{:X} view_format={} {}", i,
@@ -1936,10 +1936,10 @@ public:
          }
          return DrawOrDispatchOverrideType::None;
       }
-      if (rtv) rtv->GetResource(&output_color);
+      if (rtv) rtv->GetResource(output_color.put());
 
-      com_ptr<ID3D11Texture2D> output_texture;
-      if (!source_color || !output_color || FAILED(output_color->QueryInterface(&output_texture)) || !output_texture)
+      ComPtr<ID3D11Texture2D> output_texture;
+      if (!source_color || !output_color || FAILED(output_color->QueryInterface(output_texture.put())) || !output_texture)
       {
          return DrawOrDispatchOverrideType::None;
       }
@@ -1985,14 +1985,14 @@ public:
 
       // DLSS wants a UAV on the output. This game's AA target already has D3D11_BIND_UAV
       // (observed bind flags 0xA8), so normally we can use it directly.
-      com_ptr<ID3D11Resource> dlss_output = output_color;
+      ComPtr<ID3D11Resource> dlss_output = output_color;
       const bool output_has_uav = (output_desc.BindFlags & D3D11_BIND_UNORDERED_ACCESS) != 0;
       if (!output_has_uav)
       {
          D3D11_TEXTURE2D_DESC desc = output_desc;
          desc.BindFlags |= D3D11_BIND_UNORDERED_ACCESS;
          game_device_data.dlss_output_color = nullptr;
-         if (FAILED(native_device->CreateTexture2D(&desc, nullptr, &game_device_data.dlss_output_color)) || !game_device_data.dlss_output_color)
+         if (FAILED(native_device->CreateTexture2D(&desc, nullptr, game_device_data.dlss_output_color.put())) || !game_device_data.dlss_output_color)
          {
             return DrawOrDispatchOverrideType::None;
          }
@@ -2037,7 +2037,7 @@ public:
                   st.Usage = D3D11_USAGE_STAGING;
                   st.BindFlags = 0;
                   st.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-                  if (SUCCEEDED(native_device->CreateBuffer(&st, nullptr, &game_device_data.cb_staging)))
+                  if (SUCCEEDED(native_device->CreateBuffer(&st, nullptr, game_device_data.cb_staging.put())))
                   {
                      game_device_data.cb_staging_size = src.ByteWidth;
                   }
@@ -2087,8 +2087,8 @@ public:
          for (UINT i = 0; i < ARRAYSIZE(game_device_data.aa_srv); ++i)
          {
             if (!game_device_data.aa_srv[i]) continue;
-            com_ptr<ID3D11Resource> res;
-            game_device_data.aa_srv[i]->GetResource(&res);
+            ComPtr<ID3D11Resource> res;
+            game_device_data.aa_srv[i]->GetResource(res.put());
             D3D11_SHADER_RESOURCE_VIEW_DESC view_desc = {};
             game_device_data.aa_srv[i]->GetDesc(&view_desc);
             srv_lines += std::format("\n    SRV[{}] view=0x{:X} resource=0x{:X} view_format={} {}", i,

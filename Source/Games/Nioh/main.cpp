@@ -22,11 +22,11 @@ namespace
    int final_post_process_copy_draws = 0;
    constexpr size_t max_final_post_process_copy_draws = 3; // Probably wouldn't need more than 2 ever
 
-   com_ptr<ID3D11DepthStencilView> main_dsv;
-   com_ptr<ID3D11RenderTargetView> post_process_rtvs[max_final_post_process_copy_draws];
-   com_ptr<ID3D11RenderTargetView> upgraded_post_process_rtvs[max_final_post_process_copy_draws];
-   com_ptr<ID3D11ShaderResourceView> upgraded_post_process_srvs[max_final_post_process_copy_draws];
-   com_ptr<ID3D11Texture2D> upgraded_post_process_textures_2d[max_final_post_process_copy_draws];
+   ComPtr<ID3D11DepthStencilView> main_dsv;
+   ComPtr<ID3D11RenderTargetView> post_process_rtvs[max_final_post_process_copy_draws];
+   ComPtr<ID3D11RenderTargetView> upgraded_post_process_rtvs[max_final_post_process_copy_draws];
+   ComPtr<ID3D11ShaderResourceView> upgraded_post_process_srvs[max_final_post_process_copy_draws];
+   ComPtr<ID3D11Texture2D> upgraded_post_process_textures_2d[max_final_post_process_copy_draws];
 
    bool upgrade_materials_samplers = true;
 }
@@ -71,8 +71,8 @@ public:
          // 2D fullscreen videos are always played as draw call (after their texture is copied 
          if (original_shader_hashes.Contains(shader_hashes_Copy))
          {
-            com_ptr<ID3D11ShaderResourceView> srv;
-            native_device_context->PSGetShaderResources(0, 1, &srv);
+            ComPtr<ID3D11ShaderResourceView> srv;
+            native_device_context->PSGetShaderResources(0, 1, srv.put());
             uint4 size;
             DXGI_FORMAT format;
             GetResourceInfo(srv.get(), size, format);
@@ -113,8 +113,8 @@ public:
          ignore_upgraded_samplers = true;
 
          // Revert currently applied upgrades because "shader_hashes_EndMaterialsDrawing" use samplers that might need to not be anisotropic
-         com_ptr<ID3D11SamplerState> samplers[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
-         native_device_context->PSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, &samplers[0]);
+         ComPtr<ID3D11SamplerState> samplers[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
+         native_device_context->PSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, PutArray(samplers));
 
          std::shared_lock shared_lock_samplers(s_mutex_samplers);
          for (uint32_t i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
@@ -141,9 +141,9 @@ public:
       // The sky always draws if the scene drew (seems so, excluding during some video playbacks menus etc)
       if (original_shader_hashes.Contains(shader_hashes_Sky))
       {
-         com_ptr<ID3D11RenderTargetView> rtv;
+         ComPtr<ID3D11RenderTargetView> rtv;
          main_dsv = nullptr;
-         native_device_context->OMGetRenderTargets(1, &rtv, &main_dsv);
+         native_device_context->OMGetRenderTargets(1, rtv.put(), main_dsv.put());
       }
 
       // In UW, at least at high resolutions, the game wouldn't go beyond 4k 16:9, and thus the final post process would lose half of the quality
@@ -151,9 +151,9 @@ public:
       {
          has_drawn_post_process = true;
 
-         com_ptr<ID3D11RenderTargetView> rtv;
-         com_ptr<ID3D11DepthStencilView> dsv;
-         native_device_context->OMGetRenderTargets(1, &rtv, &dsv);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         ComPtr<ID3D11DepthStencilView> dsv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), dsv.put());
 
          uint4 size;
          DXGI_FORMAT format;
@@ -167,12 +167,12 @@ public:
             native_device_context->RSGetViewports(&viewports_num, &viewports[0]);
             if (viewports_num == 1)
             {
-               com_ptr<ID3D11Resource> post_process_resource;
-               rtv->GetResource(&post_process_resource);
+               ComPtr<ID3D11Resource> post_process_resource;
+               rtv->GetResource(post_process_resource.put());
                if (post_process_resource)
                {
-                  com_ptr<ID3D11Texture2D> post_process_texture_2d;
-                  post_process_resource->QueryInterface(&post_process_texture_2d);
+                  ComPtr<ID3D11Texture2D> post_process_texture_2d;
+                  post_process_resource->QueryInterface(post_process_texture_2d.put());
                   if (post_process_texture_2d)
                   {
                      // Re-use the original descs for a full match
@@ -195,9 +195,9 @@ public:
                      upgraded_post_process_textures_2d[final_post_process_copy_draws] = nullptr;
                      upgraded_post_process_rtvs[final_post_process_copy_draws] = nullptr;
                      upgraded_post_process_srvs[final_post_process_copy_draws] = nullptr;
-                     native_device->CreateTexture2D(&texture_2d_desc, nullptr, &upgraded_post_process_textures_2d[final_post_process_copy_draws]); // This is never read back as an SRV so it should be fine
-                     native_device->CreateRenderTargetView(upgraded_post_process_textures_2d[final_post_process_copy_draws].get(), &rtv_desc, &upgraded_post_process_rtvs[final_post_process_copy_draws]);
-                     native_device->CreateShaderResourceView(upgraded_post_process_textures_2d[final_post_process_copy_draws].get(), &srv_desc, &upgraded_post_process_srvs[final_post_process_copy_draws]);
+                     native_device->CreateTexture2D(&texture_2d_desc, nullptr, upgraded_post_process_textures_2d[final_post_process_copy_draws].put()); // This is never read back as an SRV so it should be fine
+                     native_device->CreateRenderTargetView(upgraded_post_process_textures_2d[final_post_process_copy_draws].get(), &rtv_desc, upgraded_post_process_rtvs[final_post_process_copy_draws].put());
+                     native_device->CreateShaderResourceView(upgraded_post_process_textures_2d[final_post_process_copy_draws].get(), &srv_desc, upgraded_post_process_srvs[final_post_process_copy_draws].put());
 
                      post_process_rtvs[final_post_process_copy_draws] = rtv;
                   }
@@ -250,9 +250,9 @@ public:
       // TODO: some of the UI that is mapped to the world is stretched in UW (it seems like the issues is in the vertices, so we can't fix it by detecting data in the shaders, everything is the same as the other 2D UI shaders)
       else if (has_drawn_post_process && upgraded_post_process_rtvs[final_post_process_copy_draws-1])
       {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         com_ptr<ID3D11DepthStencilView> dsv;
-         native_device_context->OMGetRenderTargets(1, &rtv, &dsv);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         ComPtr<ID3D11DepthStencilView> dsv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), dsv.put());
          if (rtv && (rtv == post_process_rtvs[final_post_process_copy_draws-1] || rtv == upgraded_post_process_rtvs[final_post_process_copy_draws-1]))
          {
             D3D11_VIEWPORT viewport;
@@ -294,8 +294,8 @@ public:
             i = is_ui ? 0 : (final_post_process_copy_draws-1);
          if (has_drawn_post_process && upgraded_post_process_srvs[i])
          {
-            com_ptr<ID3D11ShaderResourceView> ui_srv;
-            native_device_context->PSGetShaderResources(0, 1, &ui_srv);
+            ComPtr<ID3D11ShaderResourceView> ui_srv;
+            native_device_context->PSGetShaderResources(0, 1, ui_srv.put());
 
             // The UI re-uses the same shader for a lot of stuff, make sure the texture matches the original one!
             if (!is_ui || AreViewsOfSameResource(ui_srv.get(), post_process_rtvs[i].get()))

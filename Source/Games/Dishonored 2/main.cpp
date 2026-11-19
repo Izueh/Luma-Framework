@@ -99,9 +99,9 @@ struct GameDeviceDataDishonored2 final : public GameDeviceData
    std::atomic<void*> sr_deferred_command_list = nullptr;
    std::atomic<void*> sr_remainder_command_list = nullptr;
    ComPtr<ID3D11CommandList> sr_partial_command_list;
-   com_ptr<ID3D11Resource> sr_source_color;
-   com_ptr<ID3D11Resource> sr_motion_vectors;
-   //com_ptr<ID3D11Texture2D> sr_output_color_2; //TODOFT: delete this and related code
+   ComPtr<ID3D11Resource> sr_source_color;
+   ComPtr<ID3D11Resource> sr_motion_vectors;
+   //ComPtr<ID3D11Texture2D> sr_output_color_2; //TODOFT: delete this and related code
 
    // We are getting these from the game's TAA.
    ComPtr<ID3D11Buffer> cb_taa_b1;
@@ -109,7 +109,7 @@ struct GameDeviceDataDishonored2 final : public GameDeviceData
    ComPtr<ID3D11ShaderResourceView> srv_ro_postfx_luminance_buffautoexposure;
 
    // Game state
-   com_ptr<ID3D11Resource> depth_buffer;
+   ComPtr<ID3D11Resource> depth_buffer;
 
    std::atomic<bool> has_drawn_scene = false; // This is set early in the frame, as soon as we detect that the 3D scene is rendering (it won't be made true only when it finished rendering)
    std::atomic<void*> final_post_process_command_list = nullptr;
@@ -371,7 +371,7 @@ public:
                   {
                      D3D11_SAMPLER_DESC native_desc;
                      native_sampler->GetDesc(&native_desc);
-                     com_ptr<ID3D11SamplerState> custom_sampler = CreateCustomSampler(device_data, native_device, native_desc);
+                     ComPtr<ID3D11SamplerState> custom_sampler = CreateCustomSampler(device_data, native_device, native_desc);
                      const std::unique_lock unique_lock_samplers(s_mutex_samplers);
                      samplers_handle.second[new_texture_mip_lod_bias_offset] = custom_sampler;
                   }
@@ -423,19 +423,19 @@ public:
          game_device_data.has_drawn_scene = true;
          //game_device_data.has_drawn_post_process = true; //TODOFT: already done later?
 
-         com_ptr<ID3D11ShaderResourceView> depth_srv;
-         native_device_context->CSGetShaderResources(0, 1, &depth_srv);
+         ComPtr<ID3D11ShaderResourceView> depth_srv;
+         native_device_context->CSGetShaderResources(0, 1, depth_srv.put());
 
-         com_ptr<ID3D11UnorderedAccessView> depth_uav;
-         native_device_context->CSGetUnorderedAccessViews(3, 1, &depth_uav);
+         ComPtr<ID3D11UnorderedAccessView> depth_uav;
+         native_device_context->CSGetUnorderedAccessViews(3, 1, depth_uav.put());
 
          game_device_data.depth_buffer = nullptr;
          if (depth_srv)
          {
-            depth_srv->GetResource(&game_device_data.depth_buffer);
+            depth_srv->GetResource(game_device_data.depth_buffer.put());
 
-            com_ptr<ID3D11Texture2D> depth_2d;
-            HRESULT hr = game_device_data.depth_buffer->QueryInterface(&depth_2d);
+            ComPtr<ID3D11Texture2D> depth_2d;
+            HRESULT hr = game_device_data.depth_buffer->QueryInterface(depth_2d.put());
             ASSERT_ONCE(SUCCEEDED(hr));
             depth_2d->GetDesc(&depth_desc);
          }
@@ -445,12 +445,12 @@ public:
       {
          game_device_data.has_drawn_scene = true;
 
-         com_ptr<ID3D11ShaderResourceView> depth_opaque_srv;
+         ComPtr<ID3D11ShaderResourceView> depth_opaque_srv;
          native_device_context->CSGetShaderResources(1, 1, &depth_opaque_srv);
-         com_ptr<ID3D11ShaderResourceView> depth_alpha_srv;
+         ComPtr<ID3D11ShaderResourceView> depth_alpha_srv;
          native_device_context->CSGetShaderResources(0, 1, &depth_alpha_srv);
 
-         com_ptr<ID3D11UnorderedAccessView> depth_uav;
+         ComPtr<ID3D11UnorderedAccessView> depth_uav;
          native_device_context->CSGetUnorderedAccessViews(0, 1, &depth_uav); // float4
 
          game_device_data.depth_buffer = nullptr;
@@ -458,7 +458,7 @@ public:
          {
             depth_opaque_srv->GetResource(&game_device_data.depth_buffer);
 
-            com_ptr<ID3D11Texture2D> depth_2d;
+            ComPtr<ID3D11Texture2D> depth_2d;
             HRESULT hr = game_device_data.depth_buffer->QueryInterface(&depth_2d);
             ASSERT_ONCE(SUCCEEDED(hr));
             depth_2d->GetDesc(&depth_desc);
@@ -581,7 +581,7 @@ public:
       {
          // Not thread safe?
          device_data.cb_per_view_global_buffer = nullptr;
-         native_device_context->CSGetConstantBuffers(1, 1, &device_data.cb_per_view_global_buffer);
+         native_device_context->CSGetConstantBuffers(1, 1, device_data.cb_per_view_global_buffer.put());
          device_data.taa_detected = true;
       }
 
@@ -596,13 +596,13 @@ public:
          // TODO: Clean up all this, I think game will always use deferred rendering, so most of this is not needed.
          assert(native_device_context->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED);
 
-         com_ptr<ID3D11ShaderResourceView> srvs[2]; // TODO: rename
+         ComPtr<ID3D11ShaderResourceView> srvs[2]; // TODO: rename
          // 1 motion vectors
          // 2 color source (pre TAA, jittered)
          native_device_context->CSGetShaderResources(1, ARRAYSIZE(srvs), reinterpret_cast<ID3D11ShaderResourceView**>(srvs));
 
-         com_ptr<ID3D11UnorderedAccessView> uav;
-         native_device_context->CSGetUnorderedAccessViews(1, 1, &uav);
+         ComPtr<ID3D11UnorderedAccessView> uav;
+         native_device_context->CSGetUnorderedAccessViews(1, 1, uav.put());
 
          const bool dlss_inputs_valid = srvs[0].get() != nullptr && srvs[1].get() != nullptr && uav.get() != nullptr; // We don't check for "device_data.depth_buffer" here yet as this can happen before in a deferred context
          ASSERT_ONCE(dlss_inputs_valid);
@@ -611,10 +611,10 @@ public:
             auto* sr_instance_data = device_data.GetSRInstanceData();
             ASSERT_ONCE(sr_instance_data);
 
-            com_ptr<ID3D11Resource> output_color_resource;
-            uav->GetResource(&output_color_resource);
-            com_ptr<ID3D11Texture2D> output_color;
-            HRESULT hr = output_color_resource->QueryInterface(&output_color);
+            ComPtr<ID3D11Resource> output_color_resource;
+            uav->GetResource(output_color_resource.put());
+            ComPtr<ID3D11Texture2D> output_color;
+            HRESULT hr = output_color_resource->QueryInterface(output_color.put());
             ASSERT_ONCE(SUCCEEDED(hr));
 
             D3D11_TEXTURE2D_DESC taa_output_texture_desc;
@@ -671,7 +671,7 @@ public:
                if (!device_data.sr_output_color.get() || dlss_output_changed)
                {
                   device_data.sr_output_color = nullptr; // Make sure we discard the previous one
-                  hr = native_device->CreateTexture2D(&taa_output_texture_desc, nullptr, &device_data.sr_output_color);
+                  hr = native_device->CreateTexture2D(&taa_output_texture_desc, nullptr, device_data.sr_output_color.put());
                   ASSERT_ONCE(SUCCEEDED(hr));
                }
                if (!device_data.sr_output_color.get())
@@ -689,17 +689,17 @@ public:
             {
                game_device_data.sr_source_color = nullptr;
                game_device_data.sr_motion_vectors = nullptr;
-               srvs[1]->GetResource(&game_device_data.sr_source_color);
-               srvs[0]->GetResource(&game_device_data.sr_motion_vectors);
+               srvs[1]->GetResource(game_device_data.sr_source_color.put());
+               srvs[0]->GetResource(game_device_data.sr_motion_vectors.put());
 
                // TODO
-               com_ptr<ID3D11Texture2D> source_color_2d;
-               HRESULT hr = game_device_data.sr_source_color->QueryInterface(&source_color_2d);
+               ComPtr<ID3D11Texture2D> source_color_2d;
+               HRESULT hr = game_device_data.sr_source_color->QueryInterface(source_color_2d.put());
                ASSERT_ONCE(SUCCEEDED(hr));
                D3D11_TEXTURE2D_DESC source_color_2d_desc;
                source_color_2d->GetDesc(&source_color_2d_desc);
-               com_ptr<ID3D11Texture2D> motion_vectors_2d;
-               hr = game_device_data.sr_motion_vectors->QueryInterface(&motion_vectors_2d);
+               ComPtr<ID3D11Texture2D> motion_vectors_2d;
+               hr = game_device_data.sr_motion_vectors->QueryInterface(motion_vectors_2d.put());
                ASSERT_ONCE(SUCCEEDED(hr));
                D3D11_TEXTURE2D_DESC motion_vectors_2d_desc;
                motion_vectors_2d->GetDesc(&motion_vectors_2d_desc);
@@ -740,7 +740,7 @@ public:
                   exposure_texture_data.SysMemSlicePitch = sizeof(float);
 
                   device_data.sr_exposure = nullptr; // Make sure we discard the previous one
-                  hr = native_device->CreateTexture2D(&exposure_texture_desc, &exposure_texture_data, &device_data.sr_exposure);
+                  hr = native_device->CreateTexture2D(&exposure_texture_desc, &exposure_texture_data, device_data.sr_exposure.put());
                   assert(SUCCEEDED(hr));
                }
 

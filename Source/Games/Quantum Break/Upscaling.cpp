@@ -56,8 +56,8 @@ namespace QuantumBreakUpscaling
       bool TryGetTextureDesc(ID3D11Resource* resource, D3D11_TEXTURE2D_DESC& desc)
       {
          if (resource == nullptr) return false;
-         com_ptr<ID3D11Texture2D> texture;
-         if (FAILED(resource->QueryInterface(&texture)) || texture.get() == nullptr) return false;
+         ComPtr<ID3D11Texture2D> texture;
+         if (FAILED(resource->QueryInterface(texture.put())) || texture.get() == nullptr) return false;
          texture->GetDesc(&desc);
          return true;
       }
@@ -163,8 +163,8 @@ namespace QuantumBreakUpscaling
    {
 #if ENABLE_SR
       if (!custom_shaders_enabled || context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return false;
-      com_ptr<ID3D11PixelShader> bound;
-      context->PSGetShader(&bound, nullptr, nullptr);
+      ComPtr<ID3D11PixelShader> bound;
+      context->PSGetShader(bound.put(), nullptr, nullptr);
       // Per-context clone handles can outlive unload/reload. Read the live cache using its existing lock,
       // after the D3D getter; release the lock before bound's COM reference or any other device call.
       const std::shared_lock lock(s_mutex_generic);
@@ -273,14 +273,14 @@ namespace QuantumBreakUpscaling
       }
       // Read pre-linearized clip/device depth from PS SRV0, never the linear-depth RTV.
       // Keep the largest input per frame; downscaled linearization passes cannot replace it.
-      com_ptr<ID3D11ShaderResourceView> clip_depth_srv;
-      native_device_context->PSGetShaderResources(0, 1, &clip_depth_srv);
+      ComPtr<ID3D11ShaderResourceView> clip_depth_srv;
+      native_device_context->PSGetShaderResources(0, 1, clip_depth_srv.put());
       if (clip_depth_srv.get() == nullptr)
       {
          return;
       }
-      com_ptr<ID3D11Resource> clip_depth_resource;
-      clip_depth_srv->GetResource(&clip_depth_resource);
+      ComPtr<ID3D11Resource> clip_depth_resource;
+      clip_depth_srv->GetResource(clip_depth_resource.put());
       D3D11_TEXTURE2D_DESC clip_depth_desc = {};
       if (!TryGetTextureDesc(clip_depth_resource.get(), clip_depth_desc) || clip_depth_desc.Width == 0u || clip_depth_desc.Height == 0u)
       {
@@ -307,12 +307,12 @@ namespace QuantumBreakUpscaling
       {
          return;
       }
-      com_ptr<ID3D11ShaderResourceView> motion_vectors_srv;
-      native_device_context->CSGetShaderResources(0, 1, &motion_vectors_srv);
+      ComPtr<ID3D11ShaderResourceView> motion_vectors_srv;
+      native_device_context->CSGetShaderResources(0, 1, motion_vectors_srv.put());
       if (motion_vectors_srv.get() != nullptr)
       {
          data.sr_motion_vectors = nullptr;
-         motion_vectors_srv->GetResource(&data.sr_motion_vectors);
+         motion_vectors_srv->GetResource(data.sr_motion_vectors.put());
          NativeHooks::RecordMotion(reinterpret_cast<uintptr_t>(data.sr_motion_vectors.get()));
       }
 #else
@@ -355,7 +355,7 @@ namespace QuantumBreakUpscaling
          if (device_data.sr_output_color.get() == nullptr || output_changed)
          {
             device_data.sr_output_color = nullptr;
-            if (FAILED(native_device->CreateTexture2D(&sr_output_desc, nullptr, &device_data.sr_output_color)) ||
+            if (FAILED(native_device->CreateTexture2D(&sr_output_desc, nullptr, device_data.sr_output_color.put())) ||
                 device_data.sr_output_color.get() == nullptr)
             {
                return false;
@@ -365,7 +365,7 @@ namespace QuantumBreakUpscaling
          if (data.sr_output_color_srv.get() == nullptr || output_changed || recreated_output_texture)
          {
             data.sr_output_color_srv = nullptr;
-            if (FAILED(native_device->CreateShaderResourceView(device_data.sr_output_color.get(), nullptr, &data.sr_output_color_srv)) ||
+            if (FAILED(native_device->CreateShaderResourceView(device_data.sr_output_color.get(), nullptr, data.sr_output_color_srv.put())) ||
                 data.sr_output_color_srv.get() == nullptr)
             {
                return false;
@@ -398,8 +398,8 @@ namespace QuantumBreakUpscaling
          }
       }
 
-      bool SetupConversionTexture(ID3D11Device* native_device, D3D11_TEXTURE2D_DESC desc, com_ptr<ID3D11Texture2D>& texture,
-         com_ptr<ID3D11ShaderResourceView>& srv, com_ptr<ID3D11RenderTargetView>& rtv)
+      bool SetupConversionTexture(ID3D11Device* native_device, D3D11_TEXTURE2D_DESC desc, ComPtr<ID3D11Texture2D>& texture,
+         ComPtr<ID3D11ShaderResourceView>& srv, ComPtr<ID3D11RenderTargetView>& rtv)
       {
          desc.Format = ResolveColorViewFormat(desc.Format);
          if (desc.Width == 0u || desc.Height == 0u || desc.Format == DXGI_FORMAT_UNKNOWN)
@@ -424,19 +424,19 @@ namespace QuantumBreakUpscaling
             texture = nullptr;
             srv = nullptr;
             rtv = nullptr;
-            if (FAILED(native_device->CreateTexture2D(&desc, nullptr, &texture)) || texture.get() == nullptr)
+            if (FAILED(native_device->CreateTexture2D(&desc, nullptr, texture.put())) || texture.get() == nullptr)
             {
                return false;
             }
          }
          if (srv.get() == nullptr &&
-             (FAILED(native_device->CreateShaderResourceView(texture.get(), nullptr, &srv)) || srv.get() == nullptr))
+             (FAILED(native_device->CreateShaderResourceView(texture.get(), nullptr, srv.put())) || srv.get() == nullptr))
          {
             // A missing view leaves this conversion resource unavailable.
             return false;
          }
          if (rtv.get() == nullptr &&
-             (FAILED(native_device->CreateRenderTargetView(texture.get(), nullptr, &rtv)) || rtv.get() == nullptr))
+             (FAILED(native_device->CreateRenderTargetView(texture.get(), nullptr, rtv.put())) || rtv.get() == nullptr))
          {
             // Do not draw the conversion pass without a valid target.
             return false;
@@ -485,23 +485,23 @@ namespace QuantumBreakUpscaling
       if (!result.requested || native_device_context->GetType() != D3D11_DEVICE_CONTEXT_IMMEDIATE) return result;
 
       // UI/menu resolves can use this shader without the scene color/depth/output SR needs.
-      com_ptr<ID3D11ShaderResourceView> ps_shader_resources[3];
-      com_ptr<ID3D11RenderTargetView> render_target_view;
+      ComPtr<ID3D11ShaderResourceView> ps_shader_resources[3];
+      ComPtr<ID3D11RenderTargetView> render_target_view;
       native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), reinterpret_cast<ID3D11ShaderResourceView**>(ps_shader_resources));
-      native_device_context->OMGetRenderTargets(1, &render_target_view, nullptr);
+      native_device_context->OMGetRenderTargets(1, render_target_view.put(), nullptr);
       if (ps_shader_resources[0].get() == nullptr || ps_shader_resources[2].get() == nullptr || render_target_view.get() == nullptr) return result;
 
       // Check metadata even when the replacement is absent; the known unsafe draw guard remains.
-      com_ptr<ID3D11Buffer> temporal_constant_buffers[2];
+      ComPtr<ID3D11Buffer> temporal_constant_buffers[2];
       native_device_context->PSGetConstantBuffers(0, ARRAYSIZE(temporal_constant_buffers), reinterpret_cast<ID3D11Buffer**>(temporal_constant_buffers));
       const bool frame_binding = ValidCBufferBinding(temporal_constant_buffers[0].get(), frame_constants_min_size);
       const bool temporal_binding = ValidCBufferBinding(temporal_constant_buffers[1].get(), ssaa_constants_min_size);
 
-      com_ptr<ID3D11Resource> source_color_resource;
-      com_ptr<ID3D11Resource> output_resource;
-      com_ptr<ID3D11Resource> temporal_resolve_depth_resource;
-      com_ptr<ID3D11Resource> sr_depth_resource;
-      com_ptr<ID3D11Resource> motion_vectors_resource;
+      ComPtr<ID3D11Resource> source_color_resource;
+      ComPtr<ID3D11Resource> output_resource;
+      ComPtr<ID3D11Resource> temporal_resolve_depth_resource;
+      ComPtr<ID3D11Resource> sr_depth_resource;
+      ComPtr<ID3D11Resource> motion_vectors_resource;
       D3D11_TEXTURE2D_DESC source_desc = {};
       D3D11_TEXTURE2D_DESC temporal_resolve_depth_desc = {};
       D3D11_TEXTURE2D_DESC depth_desc = {};
@@ -512,9 +512,9 @@ namespace QuantumBreakUpscaling
       auto native_reason = NativeInputFallback::TemporalShaderUnavailable;
       if (temporal_replacement_active)
       {
-         ps_shader_resources[2]->GetResource(&source_color_resource);
-         render_target_view->GetResource(&output_resource);
-         ps_shader_resources[0]->GetResource(&temporal_resolve_depth_resource);
+         ps_shader_resources[2]->GetResource(source_color_resource.put());
+         render_target_view->GetResource(output_resource.put());
+         ps_shader_resources[0]->GetResource(temporal_resolve_depth_resource.put());
          motion_vectors_resource = data.sr_motion_vectors;
          native_reason = NativeInputFallback::ResourceLayoutMismatch;
          if (TryGetTextureDesc(source_color_resource.get(), source_desc) && TryGetTextureDesc(output_resource.get(), output_desc) &&

@@ -43,10 +43,10 @@ namespace FC5::BorderlessHDR
       DXGI_SWAP_CHAIN_DESC desc{};
       if (FAILED(native->GetDesc(&desc))) return;
       HRESULT result = E_NOINTERFACE;
-      com_ptr<IDXGISwapChain3> chain3;
+      ComPtr<IDXGISwapChain3> chain3;
       if (desc.BufferDesc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT &&
           (desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD || desc.SwapEffect == DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL) &&
-          SUCCEEDED(native->QueryInterface(IID_PPV_ARGS(&chain3))))
+          SUCCEEDED(native->QueryInterface(IID_PPV_ARGS(chain3.put()))))
       {
          UINT support = 0;
          result = chain3->CheckColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, &support);

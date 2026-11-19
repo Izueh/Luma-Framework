@@ -1,13 +1,13 @@
 #pragma once
 
 #include <d3d11.h>
-#include "../../External/reshade/source/com_ptr.hpp"
+#include "../../Core/includes/com_ptr.h"
 
 namespace MafiaDE
 {
    // NGX takes a resource, not a view, so the view must expose that resource's full mip 0.
    inline bool ReadResolveInput(ID3D11ShaderResourceView* view, UINT width, UINT height,
-      bool motion_vectors, com_ptr<ID3D11Resource>& resource)
+      bool motion_vectors, ComPtr<ID3D11Resource>& resource)
    {
       resource = nullptr;
       if (view == nullptr || width == 0 || height == 0) return false;
@@ -16,10 +16,10 @@ namespace MafiaDE
       view->GetDesc(&view_desc);
       if (view_desc.ViewDimension != D3D11_SRV_DIMENSION_TEXTURE2D || view_desc.Texture2D.MostDetailedMip != 0) return false;
 
-      com_ptr<ID3D11Resource> candidate;
-      view->GetResource(&candidate);
-      com_ptr<ID3D11Texture2D> texture;
-      if (FAILED(candidate->QueryInterface(&texture))) return false;
+      ComPtr<ID3D11Resource> candidate;
+      view->GetResource(candidate.put());
+      ComPtr<ID3D11Texture2D> texture;
+      if (FAILED(candidate->QueryInterface(texture.put()))) return false;
       D3D11_TEXTURE2D_DESC desc = {};
       texture->GetDesc(&desc);
       if (desc.Width != width || desc.Height != height || desc.MipLevels != 1 || desc.ArraySize != 1 || desc.SampleDesc.Count != 1) return false;

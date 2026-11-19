@@ -146,8 +146,8 @@ namespace UI
                      ASSERT_ONCE_MSG(draw_call_data.command_list, "The code below will probably crash if the command list isn't valid, remember to always assign it when adding a new element to the list");
                      if (draw_call_data.command_list)
                      {
-                        com_ptr<ID3D11DeviceContext> native_device_context;
-                        HRESULT hr = draw_call_data.command_list->QueryInterface(&native_device_context);
+                        ComPtr<ID3D11DeviceContext> native_device_context;
+                        HRESULT hr = draw_call_data.command_list->QueryInterface(native_device_context.put());
                         ASSERT_ONCE(SUCCEEDED(hr) && native_device_context); // Just to make sure it accidentally wasn't saved as a "ID3D11CommandList", given ReShade's design that mixes them up
                      }
 
@@ -542,8 +542,8 @@ namespace UI
                            IDXGISwapChain* swapchain = *device_data.swapchains.begin();
                            IDXGISwapChain* native_swapchain = swapchain;
                            UINT back_buffer_index = 0; // Always 0 in DX11
-                           com_ptr<ID3D11Texture2D> back_buffer;
-                           native_swapchain->GetBuffer(back_buffer_index, IID_PPV_ARGS(&back_buffer));
+                           ComPtr<ID3D11Texture2D> back_buffer;
+                           native_swapchain->GetBuffer(back_buffer_index, IID_PPV_ARGS(back_buffer.put()));
 
                            std::string backbuffer_hash = std::to_string(std::hash<void*>{}(back_buffer.get()));
                            if (Trace::highlighted_resource == backbuffer_hash)

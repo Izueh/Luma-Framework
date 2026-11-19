@@ -48,18 +48,18 @@ namespace
 
 struct GameDeviceDataINSIDE final : public GameDeviceData
 {
-   com_ptr<ID3D11RenderTargetView> lighting_buffer_rtv; // Taken from the game
-   com_ptr<ID3D11Texture2D> lighting_buffer_texture; // Luma clone
-   com_ptr<ID3D11ShaderResourceView> lighting_buffer_srv; // Luma created
+   ComPtr<ID3D11RenderTargetView> lighting_buffer_rtv; // Taken from the game
+   ComPtr<ID3D11Texture2D> lighting_buffer_texture; // Luma clone
+   ComPtr<ID3D11ShaderResourceView> lighting_buffer_srv; // Luma created
    UINT lighting_buffer_width = 0;
    UINT lighting_buffer_height = 0;
 
-   com_ptr<ID3D11RenderTargetView> scene_color_rtv;
+   ComPtr<ID3D11RenderTargetView> scene_color_rtv;
 
    SanitizeNaNsData sanitize_nans_data;
 
 #if 0
-   com_ptr<ID3D11BlendState> custom_blend_state;
+   ComPtr<ID3D11BlendState> custom_blend_state;
 #endif
 
    bool is_drawing_materials = false;
@@ -547,8 +547,8 @@ public:
 
       if (original_shader_hashes.Contains(shader_hashes_LightingBuffer))
       {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
          if (rtv.get())
          {
             if (game_device_data.lighting_buffer_rtv != rtv)
@@ -573,19 +573,19 @@ public:
          {
             if (!game_device_data.lighting_buffer_srv.get())
             {
-               com_ptr<ID3D11Resource> resource;
-               game_device_data.lighting_buffer_rtv->GetResource(&resource);
+               ComPtr<ID3D11Resource> resource;
+               game_device_data.lighting_buffer_rtv->GetResource(resource.put());
                if (resource)
                {
                   game_device_data.lighting_buffer_texture = CloneTexture<ID3D11Texture2D>(native_device, resource.get(), DXGI_FORMAT_UNKNOWN, D3D11_BIND_SHADER_RESOURCE, D3D11_BIND_RENDER_TARGET, false, false, native_device_context);
 
                   if (game_device_data.lighting_buffer_texture)
                   {
-                     HRESULT hr = native_device->CreateShaderResourceView(game_device_data.lighting_buffer_texture.get(), nullptr, &game_device_data.lighting_buffer_srv);
+                     HRESULT hr = native_device->CreateShaderResourceView(game_device_data.lighting_buffer_texture.get(), nullptr, game_device_data.lighting_buffer_srv.put());
                      ASSERT_ONCE(SUCCEEDED(hr));
 
-                     com_ptr<ID3D11Texture2D> texture_2d;
-                     resource->QueryInterface(&texture_2d);
+                     ComPtr<ID3D11Texture2D> texture_2d;
+                     resource->QueryInterface(texture_2d.put());
                      if (texture_2d)
                      {
                         D3D11_TEXTURE2D_DESC texture_2d_desc;
@@ -602,8 +602,8 @@ public:
                DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack; // Use full mode because setting the RTV here might unbind the same resource being bound as SRV
                draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
 
-               com_ptr<ID3D11Resource> rtv_resource;
-               game_device_data.lighting_buffer_rtv->GetResource(&rtv_resource);
+               ComPtr<ID3D11Resource> rtv_resource;
+               game_device_data.lighting_buffer_rtv->GetResource(rtv_resource.put());
                native_device_context->CopyResource(game_device_data.lighting_buffer_texture.get(), rtv_resource.get());
 
                // Note: this is possibly not needed anymore given we patch some shaders that draw on the lighting buffer to avoid nans (we could patch even more).
@@ -661,8 +661,8 @@ public:
       {
          if (original_shader_hashes.Contains(shader_hashes_Materials))
          {
-            com_ptr<ID3D11RenderTargetView> rtv;
-            native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+            ComPtr<ID3D11RenderTargetView> rtv;
+            native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
             if (rtv.get())
             {
                ASSERT_ONCE(!game_device_data.scene_color_rtv.get() || game_device_data.scene_color_rtv == rtv); // We don't expect this to change within the materials rendering
@@ -671,7 +671,7 @@ public:
          }
 
 #if 0 // This doesn't work won't prevent NaNs in the dest texture from persisting, there's no blend mode to force the source to override the dest value without having the dest spread/keep its nans // TODO: delete
-         com_ptr<ID3D11BlendState> blend_state;
+         ComPtr<ID3D11BlendState> blend_state;
          FLOAT blend_factor[4] = { 1.f, 1.f, 1.f, 1.f };
          UINT blend_sample_mask;
          native_device_context->OMGetBlendState(&blend_state, blend_factor, &blend_sample_mask);
@@ -695,7 +695,7 @@ public:
                {
                   ASSERT_ONCE(!blend_desc.IndependentBlendEnable || !blend_desc.RenderTarget[1].BlendEnable);
 
-                  com_ptr<ID3D11RenderTargetView> rtvs[2];
+                  ComPtr<ID3D11RenderTargetView> rtvs[2];
                   native_device_context->OMGetRenderTargets(2, &rtvs[0], nullptr);
                   ASSERT_ONCE(!rtvs[1]);
 
@@ -735,15 +735,15 @@ public:
       // Update the game's render resolution and texture upgrade aspect ratio filter based on the final swapchain shader, which converts from the render resolution to the output one
       if (original_shader_hashes.Contains(shader_hashes_SwapchainCopy))
       {
-         com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->PSGetShaderResources(0, 1, &srv);
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0, 1, srv.put());
          if (srv.get())
          {
-            com_ptr<ID3D11Resource> resource;
-            srv->GetResource(&resource);
+            ComPtr<ID3D11Resource> resource;
+            srv->GetResource(resource.put());
 
-            com_ptr<ID3D11Texture2D> texture_2d;
-            HRESULT hr = resource->QueryInterface(&texture_2d);
+            ComPtr<ID3D11Texture2D> texture_2d;
+            HRESULT hr = resource->QueryInterface(texture_2d.put());
             if (SUCCEEDED(hr) && texture_2d)
             {
                D3D11_TEXTURE2D_DESC texture_2d_desc;

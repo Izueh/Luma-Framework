@@ -345,15 +345,15 @@ namespace ShaderHashesLists
 // namespace UISeparation //TODO: del, compeltely broken
 // {
 //    //UI transparency TODO: use ComPtr
-//    com_ptr<ID3D11Texture2D> UIOutputTexOrig = nullptr; 
+//    ComPtr<ID3D11Texture2D> UIOutputTexOrig = nullptr; 
 //    
-//    com_ptr<ID3D11Texture2D> UIOutputTex = nullptr;
+//    ComPtr<ID3D11Texture2D> UIOutputTex = nullptr;
 //    D3D11_TEXTURE2D_DESC UIOutputTexDesc;
 //    
-//    com_ptr<ID3D11RenderTargetView> UIOutputRtv = nullptr;
+//    ComPtr<ID3D11RenderTargetView> UIOutputRtv = nullptr;
 //    D3D11_RENDER_TARGET_VIEW_DESC UIOutputRtvDesc;
 //    
-//    com_ptr<ID3D11ShaderResourceView> UIOutputSrv = nullptr;
+//    ComPtr<ID3D11ShaderResourceView> UIOutputSrv = nullptr;
 //    D3D11_RENDER_TARGET_VIEW_DESC UIOutputSrvDesc;
 //    
 //    bool IsFinalCopyToken = false;
@@ -6034,8 +6034,8 @@ namespace RenderTracker // partial
    bool OnClearRenderTargetViewMegaMix(ID3D11RenderTargetView* rtv)
    {
       {
-         com_ptr<ID3D11Resource> rtv_resource;
-         rtv->GetResource(&rtv_resource);
+         ComPtr<ID3D11Resource> rtv_resource;
+         rtv->GetResource(rtv_resource.put());
          last_cleared_rtv_handle = rtv_resource.get(); // The view keeps it alive
       }
       const ID3D11Resource* res = last_cleared_rtv_handle;
@@ -6513,17 +6513,17 @@ public:
          // if (cb_luma_global_settings.GameSettings.UITransparency < 1.f && UISeparation::UIOutputTex.get() == nullptr)
          // {
          //    //shader res 0
-         //    com_ptr<ID3D11ShaderResourceView> srv;
+         //    ComPtr<ID3D11ShaderResourceView> srv;
          //    native_device_context->PSGetShaderResources(0, 1, &srv);
          //    ASSERT(srv.get() != nullptr);
          //
          //    //get resource
-         //    com_ptr<ID3D11Resource> srv_res;
+         //    ComPtr<ID3D11Resource> srv_res;
          //    srv->GetResource(&srv_res);
          //    ASSERT(srv_res.get() != nullptr);
          //    
          //    //get tex
-         //    com_ptr<ID3D11Texture2D> srv_tex;
+         //    ComPtr<ID3D11Texture2D> srv_tex;
          //    auto hr0 = srv_res->QueryInterface(&srv_tex);
          //    ASSERT(SUCCEEDED(hr0));
          //    UISeparation::UIOutputTexOrig = srv_tex; //save for later

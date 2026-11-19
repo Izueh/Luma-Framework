@@ -114,18 +114,18 @@ struct GameDeviceDataUnrealEngine final : public GameDeviceData
 {
 #if ENABLE_SR
    // SR
-   com_ptr<ID3D11Texture2D> sr_motion_vectors;
-   com_ptr<ID3D11Resource> sr_source_color;
-   com_ptr<ID3D11Resource> depth_buffer;
-   com_ptr<ID3D11RenderTargetView> sr_motion_vectors_rtv;
-   com_ptr<ID3D11UnorderedAccessView> sr_motion_vectors_uav;
+   ComPtr<ID3D11Texture2D> sr_motion_vectors;
+   ComPtr<ID3D11Resource> sr_source_color;
+   ComPtr<ID3D11Resource> depth_buffer;
+   ComPtr<ID3D11RenderTargetView> sr_motion_vectors_rtv;
+   ComPtr<ID3D11UnorderedAccessView> sr_motion_vectors_uav;
    std::unique_ptr<SR::SettingsData> sr_settings_data;
    std::unique_ptr<SR::SuperResolutionImpl::DrawData> sr_draw_data;
    std::atomic<bool> found_per_view_globals = false;
    std::atomic<bool> camera_cut = false;
    // What SR drew this frame, re-used by other TAA passes of the same view (same source color)
-   com_ptr<ID3D11Resource> sr_drawn_source;
-   com_ptr<ID3D11Texture2D> sr_drawn_output; // The TAA output or "sr_output_color"
+   ComPtr<ID3D11Resource> sr_drawn_source;
+   ComPtr<ID3D11Texture2D> sr_drawn_output; // The TAA output or "sr_output_color"
    uint2 sr_drawn_size = {};
 #endif // ENABLE_SR
    float4 render_resolution = {0.0f, 0.0f, 0.0f, 0.0f};
@@ -138,9 +138,9 @@ struct GameDeviceDataUnrealEngine final : public GameDeviceData
    Matrix44F clip_to_prev_clip_matrix;
 
    // HDR
-   com_ptr<ID3D11Resource> tonemap_lut_texture; // 2D or 3D
-   com_ptr<ID3D11ShaderResourceView> tonemap_lut_texture_srv;
-   com_ptr<ID3D11UnorderedAccessView> tonemap_lut_texture_uav;
+   ComPtr<ID3D11Resource> tonemap_lut_texture; // 2D or 3D
+   ComPtr<ID3D11ShaderResourceView> tonemap_lut_texture_srv;
+   ComPtr<ID3D11UnorderedAccessView> tonemap_lut_texture_uav;
    bool tonemap_lut_texture_is_3d = true;
 };
 
@@ -177,13 +177,13 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
       // Compute shader TAA: there's no viewport. If the output is bigger than the render resolution, but has the same size as the (pooled) source color texture, it's a 1:1 pass in a bigger texture, not an upscale.
       if (taa_shader_info.source_texture_register < 0 || render_size.x == 0 || render_size.y == 0 || render_size.x > output_size.x || render_size.y > output_size.y || render_size == output_size)
          return output_size;
-      com_ptr<ID3D11ShaderResourceView> source_color_srv;
-      native_device_context->CSGetShaderResources(taa_shader_info.source_texture_register, 1, &source_color_srv);
-      com_ptr<ID3D11Resource> source_color;
+      ComPtr<ID3D11ShaderResourceView> source_color_srv;
+      native_device_context->CSGetShaderResources(taa_shader_info.source_texture_register, 1, source_color_srv.put());
+      ComPtr<ID3D11Resource> source_color;
       if (source_color_srv)
-         source_color_srv->GetResource(&source_color);
-      com_ptr<ID3D11Texture2D> source_color_texture;
-      if (!source_color || FAILED(source_color->QueryInterface(&source_color_texture)))
+         source_color_srv->GetResource(source_color.put());
+      ComPtr<ID3D11Texture2D> source_color_texture;
+      if (!source_color || FAILED(source_color->QueryInterface(source_color_texture.put())))
          return output_size;
       D3D11_TEXTURE2D_DESC source_color_desc;
       source_color_texture->GetDesc(&source_color_desc);
@@ -204,25 +204,25 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
    static void DecodeMotionVectorsPS(ID3D11DeviceContext* native_device_context, DeviceData& device_data, TAAShaderInfo& taa_shader_info)
    {
       auto& game_device_data = GetGameDeviceData(device_data);
-      com_ptr<ID3D11ShaderResourceView> depth_texture_srv;
-      com_ptr<ID3D11ShaderResourceView> mv_texture_srv;
-      com_ptr<ID3D11Buffer> global_cbuffer;
+      ComPtr<ID3D11ShaderResourceView> depth_texture_srv;
+      ComPtr<ID3D11ShaderResourceView> mv_texture_srv;
+      ComPtr<ID3D11Buffer> global_cbuffer;
 
       if (taa_shader_info.depth_texture_register != 0)
       {
-         native_device_context->PSGetShaderResources(taa_shader_info.depth_texture_register, 1, &depth_texture_srv);
+         native_device_context->PSGetShaderResources(taa_shader_info.depth_texture_register, 1, depth_texture_srv.put());
          ID3D11ShaderResourceView* const depth_srv = depth_texture_srv.get();
          native_device_context->PSSetShaderResources(0, 1, &depth_srv);
       }
       if (taa_shader_info.velocity_texture_register != 1)
       {
-         native_device_context->PSGetShaderResources(taa_shader_info.velocity_texture_register, 1, &mv_texture_srv);
+         native_device_context->PSGetShaderResources(taa_shader_info.velocity_texture_register, 1, mv_texture_srv.put());
          ID3D11ShaderResourceView* const motion_vector_srv = mv_texture_srv.get();
          native_device_context->PSSetShaderResources(1, 1, &motion_vector_srv);
       }
       if (taa_shader_info.global_buffer_register_index != 1)
       {
-         native_device_context->PSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, &global_cbuffer);
+         native_device_context->PSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, global_cbuffer.put());
          ID3D11Buffer* const cb1 = global_cbuffer.get();
          native_device_context->PSSetConstantBuffers(1, 1, &cb1);
       }
@@ -243,7 +243,7 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
    {
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      com_ptr<ID3D11Buffer> global_cbuffer;
+      ComPtr<ID3D11Buffer> global_cbuffer;
 
       if (taa_shader_info.depth_texture_register != 0)
       {
@@ -259,7 +259,7 @@ class UnrealEngine final : public Game // ### Rename this to your game's name ##
       }
       if (taa_shader_info.global_buffer_register_index != 1)
       {
-         context->CSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, &global_cbuffer);
+         context->CSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, global_cbuffer.put());
          ID3D11Buffer* const cb1 = global_cbuffer.get();
          context->CSSetConstantBuffers(1, 1, &cb1);
       }
@@ -617,11 +617,11 @@ public:
       // This usually happens after every other post process and TAA, just before UI, and directly writes on the swapchain.
       if (enable_hdr && original_shader_hashes.Contains(shader_hashes_tonemap_candidates) && test_index != 15 && custom_shaders_enabled)
       {
-         com_ptr<ID3D11ShaderResourceView> shader_resources[8]; // Should always be enough
+         ComPtr<ID3D11ShaderResourceView> shader_resources[8]; // Should always be enough
          if (is_compute_shader)                                 // Can be either compute or pixel shader
-            native_device_context->CSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
+            native_device_context->CSGetShaderResources(0, ARRAYSIZE(shader_resources), PutArray(shader_resources));
          else
-            native_device_context->PSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
+            native_device_context->PSGetShaderResources(0, ARRAYSIZE(shader_resources), PutArray(shader_resources));
 
          // Never indirect upgrade textures until the first time we incur in this, otherwise we'd risk doing indirect upgrades before the first tonemapper call, which would be unintended
          enable_chain_indirect_texture_format_upgrades = ChainTextureFormatUpgradesType::DirectAndIndirectDependencies;
@@ -633,26 +633,26 @@ public:
          {
             if (shader_resources[i] == nullptr)
                continue; // TODO: break instead? Could it be? Fair optimization
-            com_ptr<ID3D11Resource> resource;
-            shader_resources[i]->GetResource(&resource);
+            ComPtr<ID3D11Resource> resource;
+            shader_resources[i]->GetResource(resource.put());
             if (resource == nullptr)
                continue;
             D3D11_RESOURCE_DIMENSION res_type;
             resource->GetType(&res_type);
             if (res_type == D3D11_RESOURCE_DIMENSION_TEXTURE2D)
             {
-               com_ptr<ID3D11Texture2D> texture2d = (ID3D11Texture2D*)resource.get();
+               ComPtr<ID3D11Texture2D> texture2d = (ID3D11Texture2D*)resource.get();
                D3D11_TEXTURE2D_DESC desc;
                texture2d->GetDesc(&desc);
                if (desc.Width == (32 * 32) && desc.Height == 32)
                {
                   if (!game_device_data.tonemap_lut_texture || game_device_data.tonemap_lut_texture_is_3d)
                   {
-                     game_device_data.tonemap_lut_texture = (com_ptr<ID3D11Resource>&&)CloneTexture<ID3D11Texture2D>(native_device, texture2d.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_UNORDERED_ACCESS, D3D11_BIND_RENDER_TARGET, false, false, native_device_context);
+                     game_device_data.tonemap_lut_texture = (ComPtr<ID3D11Resource>&&)CloneTexture<ID3D11Texture2D>(native_device, texture2d.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_UNORDERED_ACCESS, D3D11_BIND_RENDER_TARGET, false, false, native_device_context);
                      game_device_data.tonemap_lut_texture_srv.reset();
                      game_device_data.tonemap_lut_texture_uav.reset();
-                     native_device->CreateShaderResourceView(game_device_data.tonemap_lut_texture.get(), nullptr, &game_device_data.tonemap_lut_texture_srv);
-                     native_device->CreateUnorderedAccessView(game_device_data.tonemap_lut_texture.get(), nullptr, &game_device_data.tonemap_lut_texture_uav);
+                     native_device->CreateShaderResourceView(game_device_data.tonemap_lut_texture.get(), nullptr, game_device_data.tonemap_lut_texture_srv.put());
+                     native_device->CreateUnorderedAccessView(game_device_data.tonemap_lut_texture.get(), nullptr, game_device_data.tonemap_lut_texture_uav.put());
                      game_device_data.tonemap_lut_texture_is_3d = false;
                      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("UE4: Found 2D Tonemapping LUT. Shader Hash: 0x{:08X}", shader_hash).c_str());
                   }
@@ -662,18 +662,18 @@ public:
             }
             else if (res_type == D3D11_RESOURCE_DIMENSION_TEXTURE3D)
             {
-               com_ptr<ID3D11Texture3D> texture3d = (ID3D11Texture3D*)resource.get();
+               ComPtr<ID3D11Texture3D> texture3d = (ID3D11Texture3D*)resource.get();
                D3D11_TEXTURE3D_DESC desc;
                texture3d->GetDesc(&desc);
                if (desc.Width == 32 && desc.Height == 32 && desc.Depth == 32)
                {
                   if (!game_device_data.tonemap_lut_texture || !game_device_data.tonemap_lut_texture_is_3d)
                   {
-                     game_device_data.tonemap_lut_texture = (com_ptr<ID3D11Resource>&&)CloneTexture<ID3D11Texture3D>(native_device, texture3d.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_UNORDERED_ACCESS, D3D11_BIND_RENDER_TARGET, false, false, native_device_context);
+                     game_device_data.tonemap_lut_texture = (ComPtr<ID3D11Resource>&&)CloneTexture<ID3D11Texture3D>(native_device, texture3d.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_UNORDERED_ACCESS, D3D11_BIND_RENDER_TARGET, false, false, native_device_context);
                      game_device_data.tonemap_lut_texture_srv.reset();
                      game_device_data.tonemap_lut_texture_uav.reset();
-                     native_device->CreateShaderResourceView(game_device_data.tonemap_lut_texture.get(), nullptr, &game_device_data.tonemap_lut_texture_srv);
-                     native_device->CreateUnorderedAccessView(game_device_data.tonemap_lut_texture.get(), nullptr, &game_device_data.tonemap_lut_texture_uav);
+                     native_device->CreateShaderResourceView(game_device_data.tonemap_lut_texture.get(), nullptr, game_device_data.tonemap_lut_texture_srv.put());
+                     native_device->CreateUnorderedAccessView(game_device_data.tonemap_lut_texture.get(), nullptr, game_device_data.tonemap_lut_texture_uav.put());
                      game_device_data.tonemap_lut_texture_is_3d = true;
                      Luma::Utils::Log::Write(Luma::Utils::Log::Level::Info, std::format("UE4: Found 3D Tonemapping LUT. Shader Hash: 0x{:08X}", shader_hash).c_str());
                   }
@@ -760,11 +760,11 @@ public:
       {
          // verify it's really TAA by checking the SRV signatures, there should be 2 color textures, a depth texture(R32G8X24 or other depth stencil formats) and a velocity texture(unorm RG)
          // we can also check the sampler states, there should be point and linear filtering samplers (we can do this later)
-         com_ptr<ID3D11ShaderResourceView> shader_resources[16];
+         ComPtr<ID3D11ShaderResourceView> shader_resources[16];
          if (is_compute_shader)
-            native_device_context->CSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
+            native_device_context->CSGetShaderResources(0, ARRAYSIZE(shader_resources), PutArray(shader_resources));
          else
-            native_device_context->PSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
+            native_device_context->PSGetShaderResources(0, ARRAYSIZE(shader_resources), PutArray(shader_resources));
          size_t color_texture_count = 0;
          size_t depth_texture_count = 0;
          size_t velocity_texture_count = 0;
@@ -772,15 +772,15 @@ public:
          {
             if (shader_resources[i] == nullptr)
                continue;
-            com_ptr<ID3D11Resource> resource;
-            shader_resources[i]->GetResource(&resource);
+            ComPtr<ID3D11Resource> resource;
+            shader_resources[i]->GetResource(resource.put());
             if (resource == nullptr)
                continue;
             D3D11_RESOURCE_DIMENSION res_type;
             resource->GetType(&res_type);
             if (res_type != D3D11_RESOURCE_DIMENSION_TEXTURE2D)
                continue;
-            com_ptr<ID3D11Texture2D> texture2d = (ID3D11Texture2D*)resource.get();
+            ComPtr<ID3D11Texture2D> texture2d = (ID3D11Texture2D*)resource.get();
             D3D11_TEXTURE2D_DESC desc;
             texture2d->GetDesc(&desc);
             // check format
@@ -841,33 +841,33 @@ public:
       // if we already drew SR this frame, copy dlss output to shader output (some games run different quality settings in the same frame?)
       if (is_taa && device_data.has_drawn_sr)
       {
-         com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-         com_ptr<ID3D11UnorderedAccessView> unordered_access_views[D3D11_PS_CS_UAV_REGISTER_COUNT];
+         ComPtr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
+         ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+         ComPtr<ID3D11UnorderedAccessView> unordered_access_views[D3D11_PS_CS_UAV_REGISTER_COUNT];
          if (is_compute_shader)
-            native_device_context->CSGetUnorderedAccessViews(0, ARRAYSIZE(unordered_access_views), &unordered_access_views[0]);
+            native_device_context->CSGetUnorderedAccessViews(0, ARRAYSIZE(unordered_access_views), PutArray(unordered_access_views));
          else
-            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
+            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(render_target_views), depth_stencil_view.put());
 
-         com_ptr<ID3D11ShaderResourceView> source_color_srv;
+         ComPtr<ID3D11ShaderResourceView> source_color_srv;
          if (is_compute_shader)
-            native_device_context->CSGetShaderResources(taa_shader_info.source_texture_register, 1, &source_color_srv);
+            native_device_context->CSGetShaderResources(taa_shader_info.source_texture_register, 1, source_color_srv.put());
          else
-            native_device_context->PSGetShaderResources(taa_shader_info.source_texture_register, 1, &source_color_srv);
-         com_ptr<ID3D11Resource> source_color;
+            native_device_context->PSGetShaderResources(taa_shader_info.source_texture_register, 1, source_color_srv.put());
+         ComPtr<ID3D11Resource> source_color;
          if (source_color_srv)
-            source_color_srv->GetResource(&source_color);
+            source_color_srv->GetResource(source_color.put());
 
-         com_ptr<ID3D11Resource> output_color_resource;
+         ComPtr<ID3D11Resource> output_color_resource;
 
          if (is_compute_shader && unordered_access_views[0])
-            unordered_access_views[0]->GetResource(&output_color_resource);
+            unordered_access_views[0]->GetResource(output_color_resource.put());
          else if (!is_compute_shader && render_target_views[0])
-            render_target_views[0]->GetResource(&output_color_resource);
+            render_target_views[0]->GetResource(output_color_resource.put());
 
-         com_ptr<ID3D11Texture2D> output_color;
+         ComPtr<ID3D11Texture2D> output_color;
          if (output_color_resource)
-            output_color_resource->QueryInterface(&output_color);
+            output_color_resource->QueryInterface(output_color.put());
          // Only TAA passes of the same view can re-use the SR output, any other one runs natively
          if (!output_color.get() || !game_device_data.sr_drawn_output.get() || source_color.get() != game_device_data.sr_drawn_source.get())
             return DrawOrDispatchOverrideType::None;
@@ -889,30 +889,30 @@ public:
             device_data.force_reset_sr = true;
             return DrawOrDispatchOverrideType::None;
          }
-         com_ptr<ID3D11ShaderResourceView> shader_resources[16];
+         ComPtr<ID3D11ShaderResourceView> shader_resources[16];
 
          if (is_compute_shader)
-            native_device_context->CSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
+            native_device_context->CSGetShaderResources(0, ARRAYSIZE(shader_resources), PutArray(shader_resources));
          else
-            native_device_context->PSGetShaderResources(0, ARRAYSIZE(shader_resources), &shader_resources[0]);
+            native_device_context->PSGetShaderResources(0, ARRAYSIZE(shader_resources), PutArray(shader_resources));
 
-         com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-         com_ptr<ID3D11UnorderedAccessView> unordered_access_views[D3D11_PS_CS_UAV_REGISTER_COUNT];
+         ComPtr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
+         ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+         ComPtr<ID3D11UnorderedAccessView> unordered_access_views[D3D11_PS_CS_UAV_REGISTER_COUNT];
          if (is_compute_shader)
-            native_device_context->CSGetUnorderedAccessViews(0, ARRAYSIZE(unordered_access_views), &unordered_access_views[0]);
+            native_device_context->CSGetUnorderedAccessViews(0, ARRAYSIZE(unordered_access_views), PutArray(unordered_access_views));
          else
-            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
+            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(render_target_views), depth_stencil_view.put());
          if (global_cb_info.size == 0)
          {
             // The first time we run TAA, we can get the global cbuffer size now
             // we can then use this to detect the cbuffer in the CPU during OnMapBufferRegion and OnUnmapBufferRegion hooks
             // Buffers are seemengly pooled and cycled in UE so we can't just match them by pointers
-            com_ptr<ID3D11Buffer> global_cbuffer;
+            ComPtr<ID3D11Buffer> global_cbuffer;
             if (is_compute_shader)
-               native_device_context->CSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, &global_cbuffer);
+               native_device_context->CSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, global_cbuffer.put());
             else
-               native_device_context->PSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, &global_cbuffer);
+               native_device_context->PSGetConstantBuffers(taa_shader_info.global_buffer_register_index, 1, global_cbuffer.put());
             ASSERT_ONCE(global_cbuffer != nullptr);
             D3D11_BUFFER_DESC global_cbuffer_desc;
             global_cbuffer->GetDesc(&global_cbuffer_desc);
@@ -930,13 +930,13 @@ public:
             auto* sr_instance_data = device_data.GetSRInstanceData();
             ASSERT_ONCE(sr_instance_data);
 
-            com_ptr<ID3D11Resource> output_color_resource;
+            ComPtr<ID3D11Resource> output_color_resource;
             if (is_compute_shader)
-               unordered_access_views[0]->GetResource(&output_color_resource);
+               unordered_access_views[0]->GetResource(output_color_resource.put());
             else
-               render_target_views[0]->GetResource(&output_color_resource);
-            com_ptr<ID3D11Texture2D> output_color;
-            HRESULT hr = output_color_resource->QueryInterface(&output_color);
+               render_target_views[0]->GetResource(output_color_resource.put());
+            ComPtr<ID3D11Texture2D> output_color;
+            HRESULT hr = output_color_resource->QueryInterface(output_color.put());
             ASSERT_ONCE(SUCCEEDED(hr));
 
             D3D11_TEXTURE2D_DESC taa_output_texture_desc;
@@ -1002,7 +1002,7 @@ public:
                if (!device_data.sr_output_color.get() || dlss_output_changed)
                {
                   device_data.sr_output_color = nullptr; // Make sure we discard the previous one
-                  hr = native_device->CreateTexture2D(&dlss_output_texture_desc, nullptr, &device_data.sr_output_color);
+                  hr = native_device->CreateTexture2D(&dlss_output_texture_desc, nullptr, device_data.sr_output_color.put());
                   ASSERT_ONCE(SUCCEEDED(hr));
                }
                // Texture creation failed, we can't proceed with DLSS
@@ -1019,17 +1019,17 @@ public:
             if (!skip_dlss)
             {
                game_device_data.sr_source_color = nullptr;
-               shader_resources[taa_shader_info.source_texture_register]->GetResource(&game_device_data.sr_source_color);
+               shader_resources[taa_shader_info.source_texture_register]->GetResource(game_device_data.sr_source_color.put());
                game_device_data.depth_buffer = nullptr;
-               shader_resources[taa_shader_info.depth_texture_register]->GetResource(&game_device_data.depth_buffer);
-               com_ptr<ID3D11Resource> object_velocity;
-               shader_resources[taa_shader_info.velocity_texture_register]->GetResource(&object_velocity);
+               shader_resources[taa_shader_info.depth_texture_register]->GetResource(game_device_data.depth_buffer.put());
+               ComPtr<ID3D11Resource> object_velocity;
+               shader_resources[taa_shader_info.velocity_texture_register]->GetResource(object_velocity.put());
 
                {
                   if (!AreResourcesEqual(object_velocity.get(), game_device_data.sr_motion_vectors.get(), false /*check_format*/))
                   {
-                     com_ptr<ID3D11Texture2D> object_velocity_texture;
-                     hr = object_velocity->QueryInterface(&object_velocity_texture);
+                     ComPtr<ID3D11Texture2D> object_velocity_texture;
+                     hr = object_velocity->QueryInterface(object_velocity_texture.put());
                      ASSERT_ONCE(SUCCEEDED(hr));
                      D3D11_TEXTURE2D_DESC object_velocity_texture_desc;
                      object_velocity_texture->GetDesc(&object_velocity_texture_desc);
@@ -1045,11 +1045,11 @@ public:
                         object_velocity_texture_desc.BindFlags &= ~D3D11_BIND_RENDER_TARGET;
                         game_device_data.sr_motion_vectors_uav = nullptr; // Make sure we discard the previous one
                         game_device_data.sr_motion_vectors = nullptr;     // Make sure we discard the previous one
-                        hr = native_device->CreateTexture2D(&object_velocity_texture_desc, nullptr, &game_device_data.sr_motion_vectors);
+                        hr = native_device->CreateTexture2D(&object_velocity_texture_desc, nullptr, game_device_data.sr_motion_vectors.put());
                         ASSERT_ONCE(SUCCEEDED(hr));
                         if (SUCCEEDED(hr))
                         {
-                           hr = native_device->CreateUnorderedAccessView(game_device_data.sr_motion_vectors.get(), nullptr, &game_device_data.sr_motion_vectors_uav);
+                           hr = native_device->CreateUnorderedAccessView(game_device_data.sr_motion_vectors.get(), nullptr, game_device_data.sr_motion_vectors_uav.put());
                            ASSERT_ONCE(SUCCEEDED(hr));
                         }
                      }
@@ -1057,11 +1057,11 @@ public:
                      {
                         game_device_data.sr_motion_vectors_rtv = nullptr; // Make sure we discard the previous one
                         game_device_data.sr_motion_vectors = nullptr;     // Make sure we discard the previous one
-                        hr = native_device->CreateTexture2D(&object_velocity_texture_desc, nullptr, &game_device_data.sr_motion_vectors);
+                        hr = native_device->CreateTexture2D(&object_velocity_texture_desc, nullptr, game_device_data.sr_motion_vectors.put());
                         ASSERT_ONCE(SUCCEEDED(hr));
                         if (SUCCEEDED(hr))
                         {
-                           hr = native_device->CreateRenderTargetView(game_device_data.sr_motion_vectors.get(), nullptr, &game_device_data.sr_motion_vectors_rtv);
+                           hr = native_device->CreateRenderTargetView(game_device_data.sr_motion_vectors.get(), nullptr, game_device_data.sr_motion_vectors_rtv.put());
                            ASSERT_ONCE(SUCCEEDED(hr));
                         }
                      }

@@ -33,11 +33,11 @@ namespace Globals
    struct Buffer
    {
       D3D11_TEXTURE2D_DESC desc;
-      com_ptr<ID3D11Texture2D> tex;
-      com_ptr<ID3D11Resource> res;
-      com_ptr<ID3D11ShaderResourceView> srv;
-      com_ptr<ID3D11RenderTargetView> rtv;
-      com_ptr<ID3D11UnorderedAccessView> uav;
+      ComPtr<ID3D11Texture2D> tex;
+      ComPtr<ID3D11Resource> res;
+      ComPtr<ID3D11ShaderResourceView> srv;
+      ComPtr<ID3D11RenderTargetView> rtv;
+      ComPtr<ID3D11UnorderedAccessView> uav;
 
       uint2 GetDimensions() const
       {
@@ -56,19 +56,19 @@ namespace Globals
 
       void CreateWithCurrentDesc(ID3D11Device* device)
       {
-         auto hr0 = device->CreateTexture2D(&desc, nullptr, &tex);
+         auto hr0 = device->CreateTexture2D(&desc, nullptr, tex.put());
          if (DEVELOPMENT)
             ASSERT_ONCE(SUCCEEDED(hr0));
 
-         auto hr1 = tex->QueryInterface(&res);
+         auto hr1 = tex->QueryInterface(res.put());
          if (DEVELOPMENT)
             ASSERT_ONCE(SUCCEEDED(hr1));
 
-         auto hr2 = device->CreateRenderTargetView(tex.get(), nullptr, &rtv);
+         auto hr2 = device->CreateRenderTargetView(tex.get(), nullptr, rtv.put());
          if (DEVELOPMENT)
             ASSERT_ONCE(SUCCEEDED(hr2));
 
-         auto hr3 = device->CreateShaderResourceView(tex.get(), nullptr, &srv);
+         auto hr3 = device->CreateShaderResourceView(tex.get(), nullptr, srv.put());
          if (DEVELOPMENT)
             ASSERT_ONCE(SUCCEEDED(hr3));
       }
@@ -1578,7 +1578,7 @@ namespace CODs // partial
          {
             ID3D11RenderTargetView* p = nullptr;
             native_device_context->OMGetRenderTargets(1, &p, nullptr); // get
-            rtvstate_buffers.rtv.reset(p);                             // take
+            rtvstate_buffers.rtv.attach(p);                             // take
          }
          [[unlikely]] if (!rtvstate_buffers.rtv)
             return false;
@@ -1587,7 +1587,7 @@ namespace CODs // partial
          {
             ID3D11Resource* p = nullptr;
             rtvstate_buffers.rtv->GetResource(&p); // get
-            rtvstate_buffers.res.reset(p);         // take
+            rtvstate_buffers.res.attach(p);         // take
          }
 
          // O(n) check if one of back_buffers
@@ -1643,8 +1643,8 @@ namespace CODs // partial
 
                if (found == i)
                {
-                  rtvstate_buffers.rtv.reset(rtvs[i]); // take
-                  rtvstate_buffers.res.reset(res);     // take
+                  rtvstate_buffers.rtv.attach(rtvs[i]); // take
+                  rtvstate_buffers.res.attach(res);     // take
                   continue;
                }
 
@@ -1730,11 +1730,11 @@ namespace CODs // partial
             {
                ID3D11RenderTargetView* p = nullptr;
                native_device_context->OMGetRenderTargets(1, &p, nullptr); // get
-               SR::Buffers::depth.rtv.reset(p);                           // take
+               SR::Buffers::depth.rtv.attach(p);                           // take
 
                ID3D11Resource* p2 = nullptr;
                SR::Buffers::depth.rtv->GetResource(&p2); // get
-               SR::Buffers::depth.res.reset(p2);         // take
+               SR::Buffers::depth.res.attach(p2);         // take
             }
 
             return DrawOrDispatchOverrideType::None;
@@ -1752,11 +1752,11 @@ namespace CODs // partial
                {
                   ID3D11ShaderResourceView* p = nullptr;
                   native_device_context->PSGetShaderResources(2, 1, &p); // get
-                  SR::Buffers::depth.srv.reset(p);                       // take
+                  SR::Buffers::depth.srv.attach(p);                       // take
 
                   ID3D11Resource* p2 = nullptr;
                   SR::Buffers::depth.srv->GetResource(&p2); // get
-                  SR::Buffers::depth.res.reset(p2);         // take
+                  SR::Buffers::depth.res.attach(p2);         // take
                }
             }
 
@@ -1867,19 +1867,19 @@ namespace CODs // partial
                // SR::Buffers::color_in.srv = dss.state->shader_resource_views[i];
                ID3D11ShaderResourceView* p = nullptr;
                native_device_context->PSGetShaderResources(2, 1, &p);
-               SR::Buffers::color_in.srv.reset(p);
+               SR::Buffers::color_in.srv.attach(p);
                if (DEVELOPMENT)
                   ASSERT(SR::Buffers::color_in.srv != nullptr); // impossible
 
                ID3D11Resource* p2 = nullptr;
                SR::Buffers::color_in.srv->GetResource(&p2);
-               SR::Buffers::color_in.res.reset(p2);
+               SR::Buffers::color_in.res.attach(p2);
 
                ID3D11Texture2D* p3 = nullptr;
                auto hr = SR::Buffers::color_in.res->QueryInterface(&p3);
                if (DEVELOPMENT)
                   ASSERT_ONCE(SUCCEEDED(hr));
-               SR::Buffers::color_in.tex.reset(p3);
+               SR::Buffers::color_in.tex.attach(p3);
 
                SR::Buffers::color_in.tex->GetDesc(&SR::Buffers::color_in.desc);
 
@@ -1891,13 +1891,13 @@ namespace CODs // partial
                // SR::Buffers::motionvectors.srv = dss.state->shader_resource_views[i];
                ID3D11ShaderResourceView* p = nullptr;
                native_device_context->PSGetShaderResources(7, 1, &p);
-               SR::Buffers::motionvectors.srv.reset(p);
+               SR::Buffers::motionvectors.srv.attach(p);
                if (DEVELOPMENT)
                   ASSERT(SR::Buffers::motionvectors.srv != nullptr); // impossible
 
                ID3D11Resource* p2 = nullptr;
                SR::Buffers::motionvectors.srv->GetResource(&p2);
-               SR::Buffers::motionvectors.res.reset(p2);
+               SR::Buffers::motionvectors.res.attach(p2);
             }
 
             // color_out dirty?
@@ -2034,13 +2034,13 @@ namespace CODs // partial
             {
                ID3D11ShaderResourceView* p1 = nullptr;
                native_device_context->PSGetShaderResources(4, 1, &p1);
-               SR::Buffers::color_in.srv.reset(p1);
+               SR::Buffers::color_in.srv.attach(p1);
                if (DEVELOPMENT)
                   ASSERT(SR::Buffers::color_in.srv != nullptr); // impossible
 
                ID3D11Resource* p2 = nullptr;
                SR::Buffers::color_in.srv->GetResource(&p2);
-               SR::Buffers::color_in.res.reset(p2);
+               SR::Buffers::color_in.res.attach(p2);
             }
 
             // TODO: reduce copy paste!
@@ -2215,11 +2215,11 @@ namespace CODs // partial
             {
                ID3D11RenderTargetView* p = nullptr;
                native_device_context->OMGetRenderTargets(1, &p, nullptr); // get
-               SR::Buffers::depth.rtv.reset(p);                           // take
+               SR::Buffers::depth.rtv.attach(p);                           // take
 
                ID3D11Resource* p2 = nullptr;
                SR::Buffers::depth.rtv->GetResource(&p2); // get
-               SR::Buffers::depth.res.reset(p2);         // take
+               SR::Buffers::depth.res.attach(p2);         // take
             }
 
             return DrawOrDispatchOverrideType::None;
@@ -2237,11 +2237,11 @@ namespace CODs // partial
                {
                   ID3D11ShaderResourceView* p = nullptr;
                   native_device_context->PSGetShaderResources(2, 1, &p); // get
-                  SR::Buffers::depth.srv.reset(p);                       // take
+                  SR::Buffers::depth.srv.attach(p);                       // take
 
                   ID3D11Resource* p2 = nullptr;
                   SR::Buffers::depth.srv->GetResource(&p2); // get
-                  SR::Buffers::depth.res.reset(p2);         // take
+                  SR::Buffers::depth.res.attach(p2);         // take
                }
             }
 
@@ -2354,19 +2354,19 @@ namespace CODs // partial
                // SR::Buffers::color_in.srv = dss.state->shader_resource_views[i];
                ID3D11ShaderResourceView* p = nullptr;
                native_device_context->PSGetShaderResources(2, 1, &p);
-               SR::Buffers::color_in.srv.reset(p);
+               SR::Buffers::color_in.srv.attach(p);
                if (DEVELOPMENT)
                   ASSERT(SR::Buffers::color_in.srv != nullptr); // impossible
 
                ID3D11Resource* p2 = nullptr;
                SR::Buffers::color_in.srv->GetResource(&p2);
-               SR::Buffers::color_in.res.reset(p2);
+               SR::Buffers::color_in.res.attach(p2);
 
                ID3D11Texture2D* p3 = nullptr;
                auto hr = SR::Buffers::color_in.res->QueryInterface(&p3);
                if (DEVELOPMENT)
                   ASSERT_ONCE(SUCCEEDED(hr));
-               SR::Buffers::color_in.tex.reset(p3);
+               SR::Buffers::color_in.tex.attach(p3);
 
                SR::Buffers::color_in.tex->GetDesc(&SR::Buffers::color_in.desc);
 
@@ -2378,13 +2378,13 @@ namespace CODs // partial
                // SR::Buffers::motionvectors.srv = dss.state->shader_resource_views[i];
                ID3D11ShaderResourceView* p = nullptr;
                native_device_context->PSGetShaderResources(7, 1, &p);
-               SR::Buffers::motionvectors.srv.reset(p);
+               SR::Buffers::motionvectors.srv.attach(p);
                if (DEVELOPMENT)
                   ASSERT(SR::Buffers::motionvectors.srv != nullptr); // impossible
 
                ID3D11Resource* p2 = nullptr;
                SR::Buffers::motionvectors.srv->GetResource(&p2);
-               SR::Buffers::motionvectors.res.reset(p2);
+               SR::Buffers::motionvectors.res.attach(p2);
             }
 
             // color_out dirty?
@@ -2521,13 +2521,13 @@ namespace CODs // partial
             {
                ID3D11ShaderResourceView* p1 = nullptr;
                native_device_context->PSGetShaderResources(4, 1, &p1);
-               SR::Buffers::color_in.srv.reset(p1);
+               SR::Buffers::color_in.srv.attach(p1);
                if (DEVELOPMENT)
                   ASSERT(SR::Buffers::color_in.srv != nullptr); // impossible
 
                ID3D11Resource* p2 = nullptr;
                SR::Buffers::color_in.srv->GetResource(&p2);
-               SR::Buffers::color_in.res.reset(p2);
+               SR::Buffers::color_in.res.attach(p2);
             }
 
             // TODO: reduce copy paste!
@@ -2699,11 +2699,11 @@ namespace CODs // partial
             {
                ID3D11RenderTargetView* p = nullptr;
                native_device_context->OMGetRenderTargets(1, &p, nullptr); // get
-               SR::Buffers::depth.rtv.reset(p);                           // take
+               SR::Buffers::depth.rtv.attach(p);                           // take
 
                ID3D11Resource* p2 = nullptr;
                SR::Buffers::depth.rtv->GetResource(&p2); // get
-               SR::Buffers::depth.res.reset(p2);         // take
+               SR::Buffers::depth.res.attach(p2);         // take
             }
 
             return DrawOrDispatchOverrideType::None;
@@ -2721,11 +2721,11 @@ namespace CODs // partial
                {
                   ID3D11ShaderResourceView* p = nullptr;
                   native_device_context->PSGetShaderResources(2, 1, &p); // get
-                  SR::Buffers::depth.srv.reset(p);                       // take
+                  SR::Buffers::depth.srv.attach(p);                       // take
 
                   ID3D11Resource* p2 = nullptr;
                   SR::Buffers::depth.srv->GetResource(&p2); // get
-                  SR::Buffers::depth.res.reset(p2);         // take
+                  SR::Buffers::depth.res.attach(p2);         // take
                }
             }
 
@@ -2840,19 +2840,19 @@ namespace CODs // partial
                // SR::Buffers::color_in.srv = dss.state->shader_resource_views[i];
                ID3D11ShaderResourceView* p = nullptr;
                native_device_context->PSGetShaderResources(2, 1, &p);
-               SR::Buffers::color_in.srv.reset(p);
+               SR::Buffers::color_in.srv.attach(p);
                if (DEVELOPMENT)
                   ASSERT(SR::Buffers::color_in.srv != nullptr); // impossible
 
                ID3D11Resource* p2 = nullptr;
                SR::Buffers::color_in.srv->GetResource(&p2);
-               SR::Buffers::color_in.res.reset(p2);
+               SR::Buffers::color_in.res.attach(p2);
 
                ID3D11Texture2D* p3 = nullptr;
                auto hr = SR::Buffers::color_in.res->QueryInterface(&p3);
                if (DEVELOPMENT)
                   ASSERT_ONCE(SUCCEEDED(hr));
-               SR::Buffers::color_in.tex.reset(p3);
+               SR::Buffers::color_in.tex.attach(p3);
 
                SR::Buffers::color_in.tex->GetDesc(&SR::Buffers::color_in.desc);
 
@@ -2864,13 +2864,13 @@ namespace CODs // partial
                // SR::Buffers::motionvectors.srv = dss.state->shader_resource_views[i];
                ID3D11ShaderResourceView* p = nullptr;
                native_device_context->PSGetShaderResources(7, 1, &p);
-               SR::Buffers::motionvectors.srv.reset(p);
+               SR::Buffers::motionvectors.srv.attach(p);
                if (DEVELOPMENT)
                   ASSERT(SR::Buffers::motionvectors.srv != nullptr); // impossible
 
                ID3D11Resource* p2 = nullptr;
                SR::Buffers::motionvectors.srv->GetResource(&p2);
-               SR::Buffers::motionvectors.res.reset(p2);
+               SR::Buffers::motionvectors.res.attach(p2);
             }
 
             // color_out dirty?
@@ -3007,13 +3007,13 @@ namespace CODs // partial
             {
                ID3D11ShaderResourceView* p1 = nullptr;
                native_device_context->PSGetShaderResources(4, 1, &p1);
-               SR::Buffers::color_in.srv.reset(p1);
+               SR::Buffers::color_in.srv.attach(p1);
                if (DEVELOPMENT)
                   ASSERT(SR::Buffers::color_in.srv != nullptr); // impossible
 
                ID3D11Resource* p2 = nullptr;
                SR::Buffers::color_in.srv->GetResource(&p2);
-               SR::Buffers::color_in.res.reset(p2);
+               SR::Buffers::color_in.res.attach(p2);
             }
 
             // TODO: reduce copy paste!

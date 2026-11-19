@@ -6,8 +6,7 @@
 #define ENABLE_SMAA 1
 
 #include "..\..\Core\core.hpp"
-// Compiled into this project (see the .vcxproj), for "InstallCameraHooks"
-#include "..\..\External\reshade\deps\minhook\include\MinHook.h"
+#include <safetyhook.hpp>
 // SMAA's area texture without the U-shape smoothing (see Luma_SMAA_impl.hlsl and "DrawSMAAInPlaceOfFXAA")
 #include "SMAA_AreaTex_SharpU.h"
 
@@ -87,9 +86,9 @@ namespace
       D3D11_TEXTURE2D_DESC desc = {};
       if (view)
       {
-         com_ptr<ID3D11Resource> resource;
-         view->GetResource(&resource);
-         if (com_ptr<ID3D11Texture2D> texture; SUCCEEDED(resource->QueryInterface(&texture)))
+         ComPtr<ID3D11Resource> resource;
+         view->GetResource(resource.put());
+         if (ComPtr<ID3D11Texture2D> texture; SUCCEEDED(resource->QueryInterface(texture.put())))
          {
             texture->GetDesc(&desc);
          }
@@ -154,7 +153,9 @@ namespace
    }
 
    bool game_patches_applied = false;
-   bool minhook_initialized = false; // By "InstallCameraHooks", for the uninitialization at unload
+   // By "InstallCameraHooks", removed at unload
+   safetyhook::InlineHook camera_build_hook;
+   safetyhook::InlineHook camera_counter_increment_hook;
 
    // TAA jitter pattern (int, .data, static 1): 0 none, 1 D3D 2x MSAA, 2 4x, 3 8x (switch at 0x14089B886, indexed by the camera's +0x59C counter).
    // The counter starts near -2^24, and the pattern index is taken with a signed modulo ("and reg, 0x8000000N" + sign fixup), so the index is 0 or
@@ -287,19 +288,26 @@ namespace
    void InstallCameraHooks()
    {
       uint8_t* camera_build = GetGameAddresses().camera_build;
-      if (!camera_build || MH_Initialize() != MH_OK)
+      if (!camera_build)
          return;
-      minhook_initialized = true;
-      if (MH_CreateHook(camera_build, reinterpret_cast<void*>(&CameraBuildDetour), reinterpret_cast<void**>(&camera_build_original)) == MH_OK)
+      // Created disabled, so the original is known before the detour can run
+      if (auto created = safetyhook::InlineHook::create(camera_build, reinterpret_cast<void*>(&CameraBuildDetour), safetyhook::InlineHook::StartDisabled))
       {
-         MH_EnableHook(camera_build);
+         camera_build_hook = std::move(*created);
+         camera_build_original = camera_build_hook.original<CameraBuildFunc>();
+         (void)camera_build_hook.enable();
       }
 #if DEVELOPMENT
       uint8_t* camera_counter_increment = GetGameAddresses().camera_counter_increment;
       constexpr uint8_t camera_counter_increment_prologue[] = {0xFF, 0x81, 0x9C, 0x05, 0x00, 0x00}; // inc dword ptr [rcx+0x59C]
-      if (std::memcmp(camera_counter_increment, camera_counter_increment_prologue, sizeof(camera_counter_increment_prologue)) == 0 && MH_CreateHook(camera_counter_increment, reinterpret_cast<void*>(&CameraCounterIncrementDetour), reinterpret_cast<void**>(&camera_counter_increment_original)) == MH_OK)
+      if (std::memcmp(camera_counter_increment, camera_counter_increment_prologue, sizeof(camera_counter_increment_prologue)) == 0)
       {
-         MH_EnableHook(camera_counter_increment);
+         if (auto created = safetyhook::InlineHook::create(camera_counter_increment, reinterpret_cast<void*>(&CameraCounterIncrementDetour), safetyhook::InlineHook::StartDisabled))
+         {
+            camera_counter_increment_hook = std::move(*created);
+            camera_counter_increment_original = camera_counter_increment_hook.original<CameraCounterIncrementFunc>();
+            (void)camera_counter_increment_hook.enable();
+         }
       }
 #endif
    }
@@ -370,12 +378,12 @@ namespace
 
    // A 2D texture with a UAV and, if asked, an SRV (and the texture itself). The outputs are only written when everything was created.
    // com_ptr overloads "&" (it yields the raw out pointer), so callers pass the members with std::addressof.
-   bool CreateTextureWithViews(ID3D11Device* native_device, const D3D11_TEXTURE2D_DESC& desc, com_ptr<ID3D11UnorderedAccessView>* uav, com_ptr<ID3D11ShaderResourceView>* srv = nullptr, com_ptr<ID3D11Texture2D>* texture = nullptr)
+   bool CreateTextureWithViews(ID3D11Device* native_device, const D3D11_TEXTURE2D_DESC& desc, ComPtr<ID3D11UnorderedAccessView>* uav, ComPtr<ID3D11ShaderResourceView>* srv = nullptr, ComPtr<ID3D11Texture2D>* texture = nullptr)
    {
-      com_ptr<ID3D11Texture2D> new_texture;
-      com_ptr<ID3D11UnorderedAccessView> new_uav;
-      com_ptr<ID3D11ShaderResourceView> new_srv;
-      if (FAILED(native_device->CreateTexture2D(&desc, nullptr, &new_texture)) || FAILED(native_device->CreateUnorderedAccessView(new_texture.get(), nullptr, &new_uav)) || (srv && FAILED(native_device->CreateShaderResourceView(new_texture.get(), nullptr, &new_srv))))
+      ComPtr<ID3D11Texture2D> new_texture;
+      ComPtr<ID3D11UnorderedAccessView> new_uav;
+      ComPtr<ID3D11ShaderResourceView> new_srv;
+      if (FAILED(native_device->CreateTexture2D(&desc, nullptr, new_texture.put())) || FAILED(native_device->CreateUnorderedAccessView(new_texture.get(), nullptr, new_uav.put())) || (srv && FAILED(native_device->CreateShaderResourceView(new_texture.get(), nullptr, new_srv.put()))))
          return false;
       *uav = new_uav;
       if (srv)
@@ -447,8 +455,8 @@ namespace
 
       struct Queries
       {
-         com_ptr<ID3D11Query> disjoint;
-         com_ptr<ID3D11Query> timestamps[sr_gpu_step_count + 1];
+         ComPtr<ID3D11Query> disjoint;
+         ComPtr<ID3D11Query> timestamps[sr_gpu_step_count + 1];
          bool pending = false;
       };
       Queries queries[8];
@@ -572,11 +580,11 @@ namespace
             if (!free_queries.disjoint)
             {
                D3D11_QUERY_DESC desc = {D3D11_QUERY_TIMESTAMP_DISJOINT, 0};
-               bool created = SUCCEEDED(native_device->CreateQuery(&desc, &free_queries.disjoint));
+               bool created = SUCCEEDED(native_device->CreateQuery(&desc, free_queries.disjoint.put()));
                desc.Query = D3D11_QUERY_TIMESTAMP;
                for (auto& timestamp : free_queries.timestamps)
                {
-                  created = created && SUCCEEDED(native_device->CreateQuery(&desc, &timestamp));
+                  created = created && SUCCEEDED(native_device->CreateQuery(&desc, timestamp.put()));
                }
                if (!created)
                {
@@ -611,28 +619,28 @@ struct SaintsRowTheThirdRemasteredGameDeviceData final : public GameDeviceData
    // SMAA scratch at FXAA's size: the predication edge-ness (null if its creation failed)
    struct SMAAScratch
    {
-      com_ptr<ID3D11UnorderedAccessView> predication_uav;
-      com_ptr<ID3D11ShaderResourceView> predication_srv;
+      ComPtr<ID3D11UnorderedAccessView> predication_uav;
+      ComPtr<ID3D11ShaderResourceView> predication_srv;
       UINT width = 0;
       UINT height = 0;
       uint32_t last_frame = 0; // FrameIndex of SMAA's last run, for "idle_release_frames"
    } smaa_scratch;
    // This frame's scene depth, from the ambient pass (reset every present)
-   com_ptr<ID3D11ShaderResourceView> smaa_depth_srv;
+   ComPtr<ID3D11ShaderResourceView> smaa_depth_srv;
 
    // XeGTAO scratch at the SSAO texture's size
    struct GTAOScratch
    {
-      com_ptr<ID3D11UnorderedAccessView> depth_mip_uavs[5]; // R32F view space depth pyramid
-      com_ptr<ID3D11ShaderResourceView> depth_mips_srv;
-      com_ptr<ID3D11UnorderedAccessView> working_uavs[2]; // R8G8_UNORM AO + edges ping-pong
-      com_ptr<ID3D11ShaderResourceView> working_srvs[2];
+      ComPtr<ID3D11UnorderedAccessView> depth_mip_uavs[5]; // R32F view space depth pyramid
+      ComPtr<ID3D11ShaderResourceView> depth_mips_srv;
+      ComPtr<ID3D11UnorderedAccessView> working_uavs[2]; // R8G8_UNORM AO + edges ping-pong
+      ComPtr<ID3D11ShaderResourceView> working_srvs[2];
       UINT width = 0;
       UINT height = 0;
       uint32_t last_frame = 0; // FrameIndex of XeGTAO's last run, for "idle_release_frames"
    } gtao_scratch;
    // A UAV on the game's SSAO texture (it holds the resource, so its address can't be reused)
-   com_ptr<ID3D11UnorderedAccessView> gtao_ssao_uav;
+   ComPtr<ID3D11UnorderedAccessView> gtao_ssao_uav;
    bool ssao_chain_ran_this_frame = false; // the game's SSAO is on (any level but Off)
    bool gtao_tried_this_frame = false;
    bool gtao_succeeded = false;         // on the last try: the vanilla chain is skipped while true
@@ -640,13 +648,13 @@ struct SaintsRowTheThirdRemasteredGameDeviceData final : public GameDeviceData
 
 #if ENABLE_SR
    // SR inputs converted from the game's TAA ones
-   com_ptr<ID3D11Texture2D> sr_motion_vectors;
-   com_ptr<ID3D11UnorderedAccessView> sr_motion_vectors_uav;
-   com_ptr<ID3D11Texture2D> sr_depth;
-   com_ptr<ID3D11UnorderedAccessView> sr_depth_uav;
+   ComPtr<ID3D11Texture2D> sr_motion_vectors;
+   ComPtr<ID3D11UnorderedAccessView> sr_motion_vectors_uav;
+   ComPtr<ID3D11Texture2D> sr_depth;
+   ComPtr<ID3D11UnorderedAccessView> sr_depth_uav;
    uint32_t sr_inputs_last_frame = 0; // FrameIndex of the inputs' last use, for "idle_release_frames"
    // The last two TAA outputs SR drew into (so a game alternating two isn't "new" every frame), see "OUT-4" in "DrawSRInPlaceOfTAA"
-   com_ptr<ID3D11Resource> sr_outputs[2];
+   ComPtr<ID3D11Resource> sr_outputs[2];
 #if DEVELOPMENT
    SRTimings sr_timings;
 #endif
@@ -709,10 +717,10 @@ public:
    // a shader or the scratch is missing.
    bool DrawSMAAInPlaceOfFXAA(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, bool* updated_cbuffers)
    {
-      com_ptr<ID3D11RenderTargetView> rtv;
-      native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
-      com_ptr<ID3D11ShaderResourceView> color_srv;
-      native_device_context->PSGetShaderResources(0, 1, &color_srv);
+      ComPtr<ID3D11RenderTargetView> rtv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
+      ComPtr<ID3D11ShaderResourceView> color_srv;
+      native_device_context->PSGetShaderResources(0, 1, color_srv.put());
       if (!rtv || !color_srv)
          return false;
       // SMAA's metrics are the swapchain's (the Luma settings), so its input and target must match it
@@ -740,7 +748,7 @@ public:
 
       // Predication depth: the ambient pass' R24 scene depth at FXAA's size. Anything else falls back to plain ULTRA.
       const bool predication_available = g_smaa_predication && scratch.predication_uav && HasShaders(device_data.native_compute_shaders, smaa_predication_shader_hash);
-      com_ptr<ID3D11ShaderResourceView> depth_srv = (predication_available ? game_device_data.smaa_depth_srv : nullptr);
+      ComPtr<ID3D11ShaderResourceView> depth_srv = (predication_available ? game_device_data.smaa_depth_srv : nullptr);
       if (depth_srv)
       {
          D3D11_SHADER_RESOURCE_VIEW_DESC depth_srv_desc;
@@ -757,9 +765,9 @@ public:
          DrawStateStack<DrawStateStackType::Compute> compute_state;
          compute_state.Cache(native_device_context, device_data.uav_max_count);
          // Unbind the render targets: were the depth still bound as the DSV, D3D11 would silently null its SRV in the predication pass
-         com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-         com_ptr<ID3D11DepthStencilView> dsv;
-         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+         ComPtr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+         ComPtr<ID3D11DepthStencilView> dsv;
+         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(rtvs), dsv.put());
          native_device_context->OMSetRenderTargets(0, nullptr, nullptr);
 
          ID3D11UnorderedAccessView* const predication_uav = scratch.predication_uav.get();
@@ -787,7 +795,7 @@ public:
          }
          const D3D11_TEXTURE2D_DESC area_tex_desc = {.Width = AREATEX_WIDTH, .Height = AREATEX_HEIGHT, .MipLevels = 1, .ArraySize = 1, .Format = DXGI_FORMAT_R8G8_UNORM, .SampleDesc = {.Count = 1}, .Usage = D3D11_USAGE_IMMUTABLE, .BindFlags = D3D11_BIND_SHADER_RESOURCE};
          const D3D11_SUBRESOURCE_DATA area_tex_data = {.pSysMem = area_tex.data(), .SysMemPitch = AREATEX_PITCH};
-         if (com_ptr<ID3D11Texture2D> texture; SUCCEEDED(native_device->CreateTexture2D(&area_tex_desc, &area_tex_data, &texture)))
+         if (ComPtr<ID3D11Texture2D> texture; SUCCEEDED(native_device->CreateTexture2D(&area_tex_desc, &area_tex_data, texture.put())))
          {
             native_device->CreateShaderResourceView(texture.get(), nullptr, area_tex_srv.put());
          }
@@ -822,20 +830,20 @@ public:
       if (!HasXeGTAOShaders(device_data))
          return false;
 
-      com_ptr<ID3D11DeviceContext1> native_device_context1;
-      if (FAILED(native_device_context->QueryInterface(&native_device_context1)))
+      ComPtr<ID3D11DeviceContext1> native_device_context1;
+      if (FAILED(native_device_context->QueryInterface(native_device_context1.put())))
          return false;
-      com_ptr<ID3D11ShaderResourceView> srvs[3]; // depth, normals, SSAO
-      native_device_context->PSGetShaderResources(0, 3, &srvs[0]);
-      com_ptr<ID3D11Buffer> ambient_params;
+      ComPtr<ID3D11ShaderResourceView> srvs[3]; // depth, normals, SSAO
+      native_device_context->PSGetShaderResources(0, 3, PutArray(srvs));
+      ComPtr<ID3D11Buffer> ambient_params;
       UINT ambient_params_first = 0, ambient_params_count = 0;
-      native_device_context1->PSGetConstantBuffers1(ambient_params_cb_slot, 1, &ambient_params, &ambient_params_first, &ambient_params_count);
+      native_device_context1->PSGetConstantBuffers1(ambient_params_cb_slot, 1, ambient_params.put(), &ambient_params_first, &ambient_params_count);
       if (!srvs[0] || !srvs[1] || !srvs[2] || !ambient_params)
          return false;
       D3D11_SHADER_RESOURCE_VIEW_DESC depth_srv_desc;
       srvs[0]->GetDesc(&depth_srv_desc);
-      com_ptr<ID3D11Resource> ssao_texture;
-      srvs[2]->GetResource(&ssao_texture);
+      ComPtr<ID3D11Resource> ssao_texture;
+      srvs[2]->GetResource(ssao_texture.put());
       const uint2 depth_size = GetViewTextureSize(srvs[0].get());
       const uint2 normals_size = GetViewTextureSize(srvs[1].get());
       const uint2 ssao_size = GetViewTextureSize(srvs[2].get());
@@ -851,15 +859,15 @@ public:
          scratch = {};
          // MipLevels = XE_GTAO_DEPTH_MIP_LEVELS
          D3D11_TEXTURE2D_DESC desc = {.Width = width, .Height = height, .MipLevels = UINT(ARRAYSIZE(scratch.depth_mip_uavs)), .ArraySize = 1, .Format = DXGI_FORMAT_R32_FLOAT, .SampleDesc = {.Count = 1}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS};
-         com_ptr<ID3D11Texture2D> depth_mips_texture;
-         bool ok = SUCCEEDED(native_device->CreateTexture2D(&desc, nullptr, &depth_mips_texture)) && SUCCEEDED(native_device->CreateShaderResourceView(depth_mips_texture.get(), nullptr, &scratch.depth_mips_srv));
+         ComPtr<ID3D11Texture2D> depth_mips_texture;
+         bool ok = SUCCEEDED(native_device->CreateTexture2D(&desc, nullptr, depth_mips_texture.put())) && SUCCEEDED(native_device->CreateShaderResourceView(depth_mips_texture.get(), nullptr, scratch.depth_mips_srv.put()));
          D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
          uav_desc.Format = desc.Format;
          uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
          for (UINT mip = 0; ok && mip < desc.MipLevels; mip++)
          {
             uav_desc.Texture2D.MipSlice = mip;
-            ok = SUCCEEDED(native_device->CreateUnorderedAccessView(depth_mips_texture.get(), &uav_desc, &scratch.depth_mip_uavs[mip]));
+            ok = SUCCEEDED(native_device->CreateUnorderedAccessView(depth_mips_texture.get(), &uav_desc, scratch.depth_mip_uavs[mip].put()));
          }
          desc.MipLevels = 1;
          desc.Format = DXGI_FORMAT_R8G8_UNORM;
@@ -877,10 +885,10 @@ public:
       }
       scratch.last_frame = cb_luma_global_settings.FrameIndex; // In use, even if this run fails below
       // The vanilla final upsample writes the SSAO texture as a UAV, so it has the bind flag
-      com_ptr<ID3D11Resource> uav_texture;
+      ComPtr<ID3D11Resource> uav_texture;
       if (game_device_data.gtao_ssao_uav)
       {
-         game_device_data.gtao_ssao_uav->GetResource(&uav_texture);
+         game_device_data.gtao_ssao_uav->GetResource(uav_texture.put());
       }
       if (uav_texture != ssao_texture)
       {
@@ -888,7 +896,7 @@ public:
          D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc = {};
          uav_desc.Format = DXGI_FORMAT_R8_UNORM;
          uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
-         if (FAILED(native_device->CreateUnorderedAccessView(ssao_texture.get(), &uav_desc, &game_device_data.gtao_ssao_uav)))
+         if (FAILED(native_device->CreateUnorderedAccessView(ssao_texture.get(), &uav_desc, game_device_data.gtao_ssao_uav.put())))
             return false;
       }
 
@@ -952,18 +960,18 @@ public:
       if (!HasShaders(device_data.native_compute_shaders, sr_inputs_shader_hash))
          return DrawOrDispatchOverrideType::None;
 
-      com_ptr<ID3D11ShaderResourceView> srvs[4]; // t0 color, t1 depth, t3 motion vectors
-      native_device_context->CSGetShaderResources(0, ARRAYSIZE(srvs), &srvs[0]);
-      com_ptr<ID3D11UnorderedAccessView> output_uav;
-      native_device_context->CSGetUnorderedAccessViews(0, 1, &output_uav);
+      ComPtr<ID3D11ShaderResourceView> srvs[4]; // t0 color, t1 depth, t3 motion vectors
+      native_device_context->CSGetShaderResources(0, ARRAYSIZE(srvs), PutArray(srvs));
+      ComPtr<ID3D11UnorderedAccessView> output_uav;
+      native_device_context->CSGetUnorderedAccessViews(0, 1, output_uav.put());
       if (!srvs[0] || !srvs[1] || !srvs[3] || !output_uav)
          return DrawOrDispatchOverrideType::None;
-      com_ptr<ID3D11Resource> source_color;
-      srvs[0]->GetResource(&source_color);
-      com_ptr<ID3D11Resource> source_depth;
-      srvs[1]->GetResource(&source_depth);
-      com_ptr<ID3D11Resource> output_color;
-      output_uav->GetResource(&output_color);
+      ComPtr<ID3D11Resource> source_color;
+      srvs[0]->GetResource(source_color.put());
+      ComPtr<ID3D11Resource> source_depth;
+      srvs[1]->GetResource(source_depth.put());
+      ComPtr<ID3D11Resource> output_color;
+      output_uav->GetResource(output_color.put());
       const uint2 output_size = GetViewTextureSize(output_uav.get()); // 0x0 unless a 2D texture
 
       auto* sr_instance_data = device_data.GetSRInstanceData();
@@ -983,7 +991,7 @@ public:
          game_device_data.sr_depth = nullptr;
          game_device_data.sr_depth_uav = nullptr;
       }
-      const auto create_input = [&](DXGI_FORMAT format, com_ptr<ID3D11UnorderedAccessView>* uav, com_ptr<ID3D11Texture2D>* texture)
+      const auto create_input = [&](DXGI_FORMAT format, ComPtr<ID3D11UnorderedAccessView>* uav, ComPtr<ID3D11Texture2D>* texture)
       {
          const D3D11_TEXTURE2D_DESC desc = {.Width = output_size.x, .Height = output_size.y, .MipLevels = 1, .ArraySize = 1, .Format = format, .SampleDesc = {.Count = 1}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS};
          return CreateTextureWithViews(native_device, desc, uav, nullptr, texture);
@@ -1102,13 +1110,13 @@ public:
             game_device_data.smaa_depth_srv = nullptr;
             if (g_smaa_enable)
             {
-               native_device_context->PSGetShaderResources(0, 1, &game_device_data.smaa_depth_srv);
+               native_device_context->PSGetShaderResources(0, 1, game_device_data.smaa_depth_srv.put());
             }
          }
          else if (is_pixel_shader(video_hash))
          {
-            com_ptr<ID3D11RenderTargetView> rtv;
-            native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+            ComPtr<ID3D11RenderTargetView> rtv;
+            native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
             D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {};
             if (rtv)
             {
@@ -1276,8 +1284,8 @@ public:
             device_data.texture_mip_lod_bias_offset = bias;
             if (!ignore_upgraded_samplers)
             {
-               com_ptr<ID3D11DeviceContext> native_device_context;
-               native_device->GetImmediateContext(&native_device_context);
+               ComPtr<ID3D11DeviceContext> native_device_context;
+               native_device->GetImmediateContext(native_device_context.put());
                RebindUpgradedSamplers(native_device_context.get(), &device_data);
             }
          }
@@ -1562,10 +1570,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
          }
          SetJitterIndexFix(false);
       }
-      if (minhook_initialized)
-      {
-         MH_Uninitialize();
-      }
+      // The engine hooks would jump into the unloaded addon
+      camera_build_hook.reset();
+      camera_counter_increment_hook.reset();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

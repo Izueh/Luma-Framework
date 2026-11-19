@@ -2,7 +2,7 @@
 // This is not about building speed.
 
 #define STB_IMAGE_IMPLEMENTATION
-#include <deps/stb/stb_image.h>
+#include "../External/stb/stb_image.h"
 
 #include "utils/system.cpp"
 

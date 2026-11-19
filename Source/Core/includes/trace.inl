@@ -15,8 +15,8 @@ namespace Trace
          trace_draw_call_data.command_list = native_device_context;
 
          // Query D3D11.1 context once for the whole function (used to retrieve CB partial-binding offsets)
-         com_ptr<ID3D11DeviceContext1> device_context_1;
-         native_device_context->QueryInterface(&device_context_1);
+         ComPtr<ID3D11DeviceContext1> device_context_1;
+         native_device_context->QueryInterface(device_context_1.put());
 
          // In case we redirected resource views (indirect texture upgrades), force print back the original one here,
          // the upgraded one will be visible in the lists anyway
@@ -31,10 +31,10 @@ namespace Trace
          };
          auto FlagUpgradedResources = [&](auto* rv, TraceDrawCallData::DepthStateType depth_state = TraceDrawCallData::DepthStateType::Invalid, TraceDrawCallData::DepthStateType stencil_state = TraceDrawCallData::DepthStateType::Invalid)
          {
-            com_ptr<ID3D11Resource> resource;
+            ComPtr<ID3D11Resource> resource;
             if (rv)
             {
-               rv->GetResource(&resource);
+               rv->GetResource(resource.put());
 
                const bool upgraded = device_data.resource_upgrades.original_resources_to_mirrored_upgraded_resources.contains(resource.get()) || device_data.resource_upgrades.upgraded_resources.contains(resource.get()) || (/*swapchain_upgrade_type > SwapchainUpgradeType::None &&*/ device_data.back_buffers.contains(resource.get())); // TODO: expose "swapchain_upgrade_type" here or something like that
                const bool scaled = [&]() {
@@ -100,24 +100,24 @@ namespace Trace
             native_device_context->RSGetViewports(&trace_draw_call_data.viewport_count, nullptr);
             native_device_context->RSGetViewports(&trace_draw_call_data.viewport_count, trace_draw_call_data.viewports);
 
-            com_ptr<ID3D11RasterizerState> rasterizer_state;
-            native_device_context->RSGetState(&rasterizer_state);
+            ComPtr<ID3D11RasterizerState> rasterizer_state;
+            native_device_context->RSGetState(rasterizer_state.put());
             trace_draw_call_data.has_rasterizer_state = rasterizer_state.get() != nullptr;
             if (rasterizer_state)
             {
                rasterizer_state->GetDesc(&trace_draw_call_data.rasterizer_desc);
             }
 
-            com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-            com_ptr<ID3D11UnorderedAccessView> uavs[D3D11_1_UAV_SLOT_COUNT];
-            com_ptr<ID3D11DepthStencilView> dsv;
-            native_device_context->OMGetRenderTargetsAndUnorderedAccessViews(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv, 0, device_data.uav_max_count, &uavs[0]);
+            ComPtr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+            ComPtr<ID3D11UnorderedAccessView> uavs[D3D11_1_UAV_SLOT_COUNT];
+            ComPtr<ID3D11DepthStencilView> dsv;
+            native_device_context->OMGetRenderTargetsAndUnorderedAccessViews(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(rtvs), dsv.put(), 0, device_data.uav_max_count, PutArray(uavs));
             dsv = RedirectMirroredRVS(dsv.get());
          trace_draw_call_data.dsv = dsv.get();
 
-            com_ptr<ID3D11DepthStencilState> depth_stencil_state;
+            ComPtr<ID3D11DepthStencilState> depth_stencil_state;
             UINT stencil_ref;
-            native_device_context->OMGetDepthStencilState(&depth_stencil_state, &stencil_ref);
+            native_device_context->OMGetDepthStencilState(depth_stencil_state.put(), &stencil_ref);
             trace_draw_call_data.stencil_ref = stencil_ref;
             if (depth_stencil_state)
             {
@@ -195,8 +195,8 @@ namespace Trace
 
                   FlagUpgradedResources(dsv.get(), trace_draw_call_data.depth_state, trace_draw_call_data.stencil_state);
 
-                  com_ptr<ID3D11Resource> ds_resource;
-                  dsv->GetResource(&ds_resource);
+                  ComPtr<ID3D11Resource> ds_resource;
+                  dsv->GetResource(ds_resource.put());
                   uint4 ds_size = {};
                   GetResourceInfo(ds_resource.get(), ds_size, trace_draw_call_data.ds_format, nullptr, &trace_draw_call_data.ds_hash, &trace_draw_call_data.ds_debug_name);
 
@@ -205,12 +205,12 @@ namespace Trace
                }
             }
 
-            com_ptr<ID3D11BlendState> blend_state;
-            native_device_context->OMGetBlendState(&blend_state, trace_draw_call_data.blend_factor, nullptr);
+            ComPtr<ID3D11BlendState> blend_state;
+            native_device_context->OMGetBlendState(blend_state.put(), trace_draw_call_data.blend_factor, nullptr);
             if (blend_state)
             {
-               com_ptr<ID3D11BlendState1> blend_state_1;
-               blend_state->QueryInterface(&blend_state_1);
+               ComPtr<ID3D11BlendState1> blend_state_1;
+               blend_state->QueryInterface(blend_state_1.put());
                // We always cache the last one used by the pipeline, hopefully it didn't change between draw calls
                D3D11_BLEND_DESC1 blend_desc_1 = {};
                if (blend_state_1)
@@ -254,10 +254,10 @@ namespace Trace
                      ASSERT_ONCE(rtv_desc.Format != DXGI_FORMAT_UNKNOWN); // Unexpected?
                   }
                   trace_draw_call_data.rtv_format[i] = rtv_desc.Format;
-                  com_ptr<ID3D11Resource> rt_resource;
+                  ComPtr<ID3D11Resource> rt_resource;
                   if (rtvs[i])
                   {
-                     rtvs[i]->GetResource(&rt_resource);
+                     rtvs[i]->GetResource(rt_resource.put());
                      ASSERT_ONCE(rt_resource != nullptr); // Could happen
                   }
                   FlagUpgradedResources(rtvs[i].get());
@@ -299,8 +299,8 @@ namespace Trace
                }
             }
 
-            com_ptr<ID3D11ShaderResourceView> srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
-            native_device_context->PSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]);
+            ComPtr<ID3D11ShaderResourceView> srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
+            native_device_context->PSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, PutArray(srvs));
             for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT && i < TraceDrawCallData::srvs_size; i++)
             {
                srvs[i] = RedirectMirroredRVS(srvs[i].get());
@@ -321,13 +321,13 @@ namespace Trace
                }
             }
 
-            com_ptr<ID3D11Buffer> cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+            ComPtr<ID3D11Buffer> cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
             UINT cbs_first_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
             UINT cbs_num_constants[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
             if (device_context_1)
-               device_context_1->PSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0], cbs_first_constant, cbs_num_constants);
+               device_context_1->PSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(cbs), cbs_first_constant, cbs_num_constants);
             else
-               native_device_context->PSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0]);
+               native_device_context->PSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(cbs));
             for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; i++)
             {
                trace_draw_call_data.cb_buffers[i] = cbs[i].get();
@@ -340,8 +340,8 @@ namespace Trace
                }
             }
 
-            com_ptr<ID3D11SamplerState> sampler_states[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
-            native_device_context->PSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, &sampler_states[0]);
+            ComPtr<ID3D11SamplerState> sampler_states[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
+            native_device_context->PSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, PutArray(sampler_states));
             for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
             {
                trace_draw_call_data.sampler_states[i] = sampler_states[i].get();
@@ -360,8 +360,8 @@ namespace Trace
          }
          else if (stage == ShaderStages::Vertex)
          {
-            com_ptr<ID3D11ShaderResourceView> srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
-            native_device_context->VSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]);
+            ComPtr<ID3D11ShaderResourceView> srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
+            native_device_context->VSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, PutArray(srvs));
             for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT && i < TraceDrawCallData::srvs_size; i++)
             {
                srvs[i] = RedirectMirroredRVS(srvs[i].get());
@@ -384,10 +384,10 @@ namespace Trace
 
             trace_draw_call_data.draw_dispatch_data = draw_dispatch_data;
 
-            com_ptr<ID3D11Buffer> index_buffer;
-            native_device_context->IAGetIndexBuffer(&index_buffer, &trace_draw_call_data.index_buffer_format, &trace_draw_call_data.index_buffer_offset);
-            com_ptr<ID3D11InputLayout> input_layout;
-            native_device_context->IAGetInputLayout(&input_layout);
+            ComPtr<ID3D11Buffer> index_buffer;
+            native_device_context->IAGetIndexBuffer(index_buffer.put(), &trace_draw_call_data.index_buffer_format, &trace_draw_call_data.index_buffer_offset);
+            ComPtr<ID3D11InputLayout> input_layout;
+            native_device_context->IAGetInputLayout(input_layout.put());
 
             trace_draw_call_data.index_buffer_hash = std::to_string(std::hash<void*>{}(index_buffer.get()));
             trace_draw_call_data.input_layout_hash = std::to_string(std::hash<void*>{}(input_layout.get()));
@@ -398,22 +398,22 @@ namespace Trace
                const auto& input_elements_descs = device_data.input_layouts_descs.find(input_layout.get());
                for (size_t i = 0; i < input_elements_descs->second.size(); i++)
                {
-                  com_ptr<ID3D11Buffer> vertex_buffer;
+                  ComPtr<ID3D11Buffer> vertex_buffer;
                   trace_draw_call_data.input_layouts_formats.push_back(input_elements_descs->second.at(i).Format);
-                  native_device_context->IAGetVertexBuffers(input_elements_descs->second.at(i).InputSlot, 1, &vertex_buffer, nullptr, nullptr);
+                  native_device_context->IAGetVertexBuffers(input_elements_descs->second.at(i).InputSlot, 1, vertex_buffer.put(), nullptr, nullptr);
                   trace_draw_call_data.vertex_buffer_hashes.push_back(std::to_string(std::hash<void*>{}(vertex_buffer.get())));
                }
             }
 
             native_device_context->IAGetPrimitiveTopology(&trace_draw_call_data.primitive_topology);
 
-            com_ptr<ID3D11Buffer> cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+            ComPtr<ID3D11Buffer> cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
             UINT cbs_first_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
             UINT cbs_num_constants[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
             if (device_context_1)
-               device_context_1->VSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0], cbs_first_constant, cbs_num_constants);
+               device_context_1->VSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(cbs), cbs_first_constant, cbs_num_constants);
             else
-               native_device_context->VSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0]);
+               native_device_context->VSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(cbs));
             for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; i++)
             {
                trace_draw_call_data.cb_buffers[i] = cbs[i].get();
@@ -426,8 +426,8 @@ namespace Trace
                }
             }
 
-            com_ptr<ID3D11SamplerState> sampler_states[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
-            native_device_context->VSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, &sampler_states[0]);
+            ComPtr<ID3D11SamplerState> sampler_states[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
+            native_device_context->VSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, PutArray(sampler_states));
             for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
             {
                trace_draw_call_data.sampler_states[i] = sampler_states[i].get();
@@ -445,8 +445,8 @@ namespace Trace
          }
          else if (stage == ShaderStages::Compute)
          {
-            com_ptr<ID3D11ShaderResourceView> srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
-            native_device_context->CSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, &srvs[0]); // TODO: use the CSGetShaderResources1 version (all around) which also has the plane desc
+            ComPtr<ID3D11ShaderResourceView> srvs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT];
+            native_device_context->CSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, PutArray(srvs)); // TODO: use the CSGetShaderResources1 version (all around) which also has the plane desc
             for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT && i < TraceDrawCallData::srvs_size; i++)
             {
                srvs[i] = RedirectMirroredRVS(srvs[i].get());
@@ -467,8 +467,8 @@ namespace Trace
                }
             }
 
-            com_ptr<ID3D11UnorderedAccessView> uavs[D3D11_1_UAV_SLOT_COUNT];
-            native_device_context->CSGetUnorderedAccessViews(0, device_data.uav_max_count, &uavs[0]);
+            ComPtr<ID3D11UnorderedAccessView> uavs[D3D11_1_UAV_SLOT_COUNT];
+            native_device_context->CSGetUnorderedAccessViews(0, device_data.uav_max_count, PutArray(uavs));
             for (UINT i = 0; i < device_data.uav_max_count && i < TraceDrawCallData::uavs_size; i++)
             {
                uavs[i] = RedirectMirroredRVS(uavs[i].get());
@@ -491,13 +491,13 @@ namespace Trace
 
             trace_draw_call_data.draw_dispatch_data = draw_dispatch_data;
 
-            com_ptr<ID3D11Buffer> cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+            ComPtr<ID3D11Buffer> cbs[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
             UINT cbs_first_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
             UINT cbs_num_constants[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
             if (device_context_1)
-               device_context_1->CSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0], cbs_first_constant, cbs_num_constants);
+               device_context_1->CSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(cbs), cbs_first_constant, cbs_num_constants);
             else
-               native_device_context->CSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &cbs[0]);
+               native_device_context->CSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(cbs));
             for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; i++)
             {
                trace_draw_call_data.cb_buffers[i] = cbs[i].get();
@@ -510,8 +510,8 @@ namespace Trace
                }
             }
 
-            com_ptr<ID3D11SamplerState> sampler_states[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
-            native_device_context->CSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, &sampler_states[0]);
+            ComPtr<ID3D11SamplerState> sampler_states[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT];
+            native_device_context->CSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, PutArray(sampler_states));
             for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; i++)
             {
                trace_draw_call_data.sampler_states[i] = sampler_states[i].get();
@@ -553,8 +553,8 @@ namespace Trace
       // Luma passes don't have their command list's data at hand
       DeviceData* FindDeviceData(ID3D11DeviceContext* native_device_context)
       {
-         com_ptr<ID3D11Device> native_device;
-         native_device_context->GetDevice(&native_device);
+         ComPtr<ID3D11Device> native_device;
+         native_device_context->GetDevice(native_device.put());
          const std::shared_lock lock(s_mutex_device);
          const auto device_data = std::ranges::find(global_devices_data, native_device.get(), &DeviceData::native_device);
          return device_data != global_devices_data.end() ? *device_data : nullptr;
@@ -571,12 +571,12 @@ namespace Trace
          };
          if (stage == ShaderStages::Compute)
          {
-            com_ptr<ID3D11ComputeShader> shader;
-            native_device_context->CSGetShader(&shader, nullptr, nullptr);
+            ComPtr<ID3D11ComputeShader> shader;
+            native_device_context->CSGetShader(shader.put(), nullptr, nullptr);
             return shader ? find(device_data.native_compute_shaders, shader.get()) : 0;
          }
-         com_ptr<ID3D11PixelShader> shader;
-         native_device_context->PSGetShader(&shader, nullptr, nullptr);
+         ComPtr<ID3D11PixelShader> shader;
+         native_device_context->PSGetShader(shader.put(), nullptr, nullptr);
          return shader ? find(device_data.native_pixel_shaders, shader.get()) : 0;
       }
 
@@ -640,29 +640,29 @@ namespace Trace
       // Needs the pass's state still bound: copies the constant buffer the tracking selected, of "stage", and makes a copy of it in deferred contexts
       void TrackConstantBuffer(ID3D11DeviceContext* native_device_context, DeviceData& device_data, ShaderStages stage)
       {
-         com_ptr<ID3D11Buffer> cb;
+         ComPtr<ID3D11Buffer> cb;
          UINT cb_first = 0, cb_num = 0;
-         com_ptr<ID3D11DeviceContext1> native_device_context_1;
-         native_device_context->QueryInterface(&native_device_context_1);
+         ComPtr<ID3D11DeviceContext1> native_device_context_1;
+         native_device_context->QueryInterface(native_device_context_1.put());
          switch (stage)
          {
          case ShaderStages::Vertex:
             if (native_device_context_1)
-               native_device_context_1->VSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+               native_device_context_1->VSGetConstantBuffers1(track_buffer_index, 1, cb.put(), &cb_first, &cb_num);
             else
-               native_device_context->VSGetConstantBuffers(track_buffer_index, 1, &cb);
+               native_device_context->VSGetConstantBuffers(track_buffer_index, 1, cb.put());
             break;
          case ShaderStages::Pixel:
             if (native_device_context_1)
-               native_device_context_1->PSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+               native_device_context_1->PSGetConstantBuffers1(track_buffer_index, 1, cb.put(), &cb_first, &cb_num);
             else
-               native_device_context->PSGetConstantBuffers(track_buffer_index, 1, &cb);
+               native_device_context->PSGetConstantBuffers(track_buffer_index, 1, cb.put());
             break;
          case ShaderStages::Compute:
             if (native_device_context_1)
-               native_device_context_1->CSGetConstantBuffers1(track_buffer_index, 1, &cb, &cb_first, &cb_num);
+               native_device_context_1->CSGetConstantBuffers1(track_buffer_index, 1, cb.put(), &cb_first, &cb_num);
             else
-               native_device_context->CSGetConstantBuffers(track_buffer_index, 1, &cb);
+               native_device_context->CSGetConstantBuffers(track_buffer_index, 1, cb.put());
             break;
          default:
             return;
@@ -734,9 +734,9 @@ namespace Trace
          if (native_reflection.code != code.data())
          {
             native_reflection = {code.data()};
-            com_ptr<ID3D11ShaderReflection> shader_reflector;
+            ComPtr<ID3D11ShaderReflection> shader_reflector;
             D3D11_SHADER_DESC shader_desc;
-            if (SUCCEEDED(Shader::d3d_reflect(code.data(), code.size(), IID_ID3D11ShaderReflection, (void**)&shader_reflector)) && SUCCEEDED(shader_reflector->GetDesc(&shader_desc)))
+            if (SUCCEEDED(Shader::d3d_reflect(code.data(), code.size(), IID_ID3D11ShaderReflection, reinterpret_cast<void**>(shader_reflector.put()))) && SUCCEEDED(shader_reflector->GetDesc(&shader_desc)))
             {
                bool found_any_rtvs = false;
                bool found_any_other_bindings = false;
@@ -916,11 +916,11 @@ namespace Trace
       trace_draw_call_data.command_list = native_device_context;
       trace_draw_call_data.custom_name = name;
       // Re-use the RTV data for simplicity (this is hardcoded to be read by "TraceDrawCallData::TraceDrawCallType::Custom" in imgui)
-      if (com_ptr<ID3D11View> view; target && SUCCEEDED(target->QueryInterface(&view)))
+      if (ComPtr<ID3D11View> view; target && SUCCEEDED(target->QueryInterface(view.put())))
       {
          GetResourceInfo(view.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
       }
-      else if (com_ptr<ID3D11Resource> resource; target && SUCCEEDED(target->QueryInterface(&resource)))
+      else if (ComPtr<ID3D11Resource> resource; target && SUCCEEDED(target->QueryInterface(resource.put())))
       {
          GetResourceInfo(resource.get(), trace_draw_call_data.rt_size[0], trace_draw_call_data.rt_format[0], &trace_draw_call_data.rt_type_name[0], &trace_draw_call_data.rt_hash[0]);
       }
@@ -989,24 +989,24 @@ namespace Trace
 
    bool CopyDebugDrawTexture(DebugDrawMode debug_draw_mode, int32_t debug_draw_view_index, ID3D11DeviceContext* native_device_context, DeviceData& device_data, bool is_dispatch)
    {
-      com_ptr<ID3D11Device> native_device_ptr;
-      native_device_context->GetDevice(&native_device_ptr);
+      ComPtr<ID3D11Device> native_device_ptr;
+      native_device_context->GetDevice(native_device_ptr.put());
       ID3D11Device* native_device = native_device_ptr.get();
 
-      com_ptr<ID3D11Resource> texture_resource;
+      ComPtr<ID3D11Resource> texture_resource;
       DXGI_FORMAT forced_texture_format = DXGI_FORMAT_UNKNOWN;
       if (debug_draw_mode == DebugDrawMode::RenderTarget || debug_draw_mode == DebugDrawMode::Depth || debug_draw_mode == DebugDrawMode::Stencil)
       {
-         com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-         com_ptr<ID3D11DepthStencilView> dsv;
-         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+         ComPtr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+         ComPtr<ID3D11DepthStencilView> dsv;
+         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(rtvs), dsv.put());
 
          if (debug_draw_mode == DebugDrawMode::RenderTarget)
          {
-            com_ptr<ID3D11RenderTargetView> rtv = rtvs[debug_draw_view_index];
+            ComPtr<ID3D11RenderTargetView> rtv = rtvs[debug_draw_view_index];
             if (rtv)
             {
-               rtv->GetResource(&texture_resource);
+               rtv->GetResource(texture_resource.put());
                GetResourceInfo(texture_resource.get(), device_data.debug_draw_texture_size, device_data.debug_draw_texture_format); // Note: this isn't synchronized with the conditions that update "debug_draw_texture" below but it should work anyway
                D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
                rtv->GetDesc(&rtv_desc);
@@ -1016,7 +1016,7 @@ namespace Trace
          else if (dsv) // DebugDrawMode::Depth || DebugDrawMode::Stencil
          {
             bool true_depth_false_stencil = debug_draw_mode == DebugDrawMode::Depth;
-            dsv->GetResource(&texture_resource);
+            dsv->GetResource(texture_resource.put());
             GetResourceInfo(texture_resource.get(), device_data.debug_draw_texture_size, device_data.debug_draw_texture_format);
             D3D11_DEPTH_STENCIL_VIEW_DESC dsv_desc;
             dsv->GetDesc(&dsv_desc);
@@ -1051,24 +1051,24 @@ namespace Trace
       }
       else if (debug_draw_mode == DebugDrawMode::UnorderedAccessView)
       {
-         com_ptr<ID3D11UnorderedAccessView> unordered_access_view;
+         ComPtr<ID3D11UnorderedAccessView> unordered_access_view;
 
-         com_ptr<ID3D11UnorderedAccessView> uavs[D3D11_1_UAV_SLOT_COUNT];
+         ComPtr<ID3D11UnorderedAccessView> uavs[D3D11_1_UAV_SLOT_COUNT];
          // Not sure there's a difference between these two but probably the second one is just meant for pixel shader draw calls
          if (is_dispatch)
          {
-            native_device_context->CSGetUnorderedAccessViews(0, device_data.uav_max_count, &uavs[0]);
+            native_device_context->CSGetUnorderedAccessViews(0, device_data.uav_max_count, PutArray(uavs));
          }
          else
          {
-            native_device_context->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, device_data.uav_max_count, &uavs[0]);
+            native_device_context->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, device_data.uav_max_count, PutArray(uavs));
          }
 
          unordered_access_view = uavs[debug_draw_view_index];
 
          if (unordered_access_view)
          {
-            unordered_access_view->GetResource(&texture_resource);
+            unordered_access_view->GetResource(texture_resource.put());
             GetResourceInfo(texture_resource.get(), device_data.debug_draw_texture_size, device_data.debug_draw_texture_format);
             D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
             unordered_access_view->GetDesc(&uav_desc);
@@ -1077,19 +1077,19 @@ namespace Trace
       }
       else /*if (debug_draw_mode == DebugDrawMode::ShaderResource)*/
       {
-         com_ptr<ID3D11ShaderResourceView> shader_resource_view;
+         ComPtr<ID3D11ShaderResourceView> shader_resource_view;
          // Note: these might assert if you query an invalid index (there's no way of knowing it without tracking the previous sets)
          if (is_dispatch)
          {
-            native_device_context->CSGetShaderResources(debug_draw_view_index, 1, &shader_resource_view);
+            native_device_context->CSGetShaderResources(debug_draw_view_index, 1, shader_resource_view.put());
          }
          else
          {
-            native_device_context->PSGetShaderResources(debug_draw_view_index, 1, &shader_resource_view);
+            native_device_context->PSGetShaderResources(debug_draw_view_index, 1, shader_resource_view.put());
          }
          if (shader_resource_view)
          {
-            shader_resource_view->GetResource(&texture_resource);
+            shader_resource_view->GetResource(texture_resource.put());
             GetResourceInfo(texture_resource.get(), device_data.debug_draw_texture_size, device_data.debug_draw_texture_format);
             D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
             shader_resource_view->GetDesc(&srv_desc);
@@ -1102,12 +1102,12 @@ namespace Trace
       if (texture_resource)
       {
          // Note: it's possible to use "ID3D11Resource::GetType()" instead of this
-         com_ptr<ID3D11Texture2D> texture_2d;
-         texture_resource->QueryInterface(&texture_2d);
-         com_ptr<ID3D11Texture3D> texture_3d;
-         texture_resource->QueryInterface(&texture_3d);
-         com_ptr<ID3D11Texture1D> texture_1d;
-         texture_resource->QueryInterface(&texture_1d);
+         ComPtr<ID3D11Texture2D> texture_2d;
+         texture_resource->QueryInterface(texture_2d.put());
+         ComPtr<ID3D11Texture3D> texture_3d;
+         texture_resource->QueryInterface(texture_3d.put());
+         ComPtr<ID3D11Texture1D> texture_1d;
+         texture_resource->QueryInterface(texture_1d.put());
          // For now we re-create it every frame as we don't care for performance
          HRESULT hr = E_FAIL;
          if (texture_2d)
@@ -1124,7 +1124,7 @@ namespace Trace
             if (forced_texture_format != DXGI_FORMAT_UNKNOWN)
                texture_desc.Format = forced_texture_format;
             device_data.debug_draw_texture = nullptr;
-            hr = native_device->CreateTexture2D(&texture_desc, nullptr, reinterpret_cast<ID3D11Texture2D**>(&device_data.debug_draw_texture)); // TODO: figure out error, happens sometimes. And make thread safe!
+            hr = native_device->CreateTexture2D(&texture_desc, nullptr, reinterpret_cast<ID3D11Texture2D**>(device_data.debug_draw_texture.put())); // TODO: figure out error, happens sometimes. And make thread safe!
          }
          else if (texture_3d)
          {
@@ -1138,7 +1138,7 @@ namespace Trace
             if (forced_texture_format != DXGI_FORMAT_UNKNOWN)
                texture_desc.Format = forced_texture_format;
             device_data.debug_draw_texture = nullptr;
-            hr = native_device->CreateTexture3D(&texture_desc, nullptr, reinterpret_cast<ID3D11Texture3D**>(&device_data.debug_draw_texture));
+            hr = native_device->CreateTexture3D(&texture_desc, nullptr, reinterpret_cast<ID3D11Texture3D**>(device_data.debug_draw_texture.put()));
          }
          else if (texture_1d)
          {
@@ -1152,7 +1152,7 @@ namespace Trace
             if (forced_texture_format != DXGI_FORMAT_UNKNOWN)
                texture_desc.Format = forced_texture_format;
             device_data.debug_draw_texture = nullptr;
-            hr = native_device->CreateTexture1D(&texture_desc, nullptr, reinterpret_cast<ID3D11Texture1D**>(&device_data.debug_draw_texture));
+            hr = native_device->CreateTexture1D(&texture_desc, nullptr, reinterpret_cast<ID3D11Texture1D**>(device_data.debug_draw_texture.put()));
          }
          // Back it up as it gets immediately overwritten or re-used later
          if (SUCCEEDED(hr) && device_data.debug_draw_texture)
@@ -1173,7 +1173,7 @@ namespace Trace
       return CopyDebugDrawTexture(debug_draw_mode, debug_draw_view_index, cmd_list_data.native_device_context, *cmd_list_data.device_data, is_dispatch);
    }
 
-   bool MapBufferData(com_ptr<ID3D11Buffer>& cb, ID3D11DeviceContext* native_device_context, std::vector<float>& buffer_data, UINT byte_width)
+   bool MapBufferData(ComPtr<ID3D11Buffer>& cb, ID3D11DeviceContext* native_device_context, std::vector<float>& buffer_data, UINT byte_width)
    {
       D3D11_MAPPED_SUBRESOURCE mapped = {};
       // Map in DX11 here can only be done on non deferred contexts; it will stall the CPU until the GPU has the latest values (no need to flush the command list)
@@ -1198,7 +1198,7 @@ namespace Trace
       return true;
    }
 
-   bool CopyBuffer(com_ptr<ID3D11Buffer> cb, ID3D11DeviceContext* native_device_context, std::vector<float>& buffer_data, com_ptr<ID3D11Buffer>& cb_copy)
+   bool CopyBuffer(ComPtr<ID3D11Buffer> cb, ID3D11DeviceContext* native_device_context, std::vector<float>& buffer_data, ComPtr<ID3D11Buffer>& cb_copy)
    {
       // Always recreate it for now (we could skip doing so if the descs matched, but whatever)
       cb_copy.reset();
@@ -1221,9 +1221,9 @@ namespace Trace
          desc.MiscFlags = 0; // Some flags might be incompatible with staging
          desc.StructureByteStride = 0; // Must be zero for safety, as we cleared "D3D11_RESOURCE_MISC_BUFFER_STRUCTURED"
 
-         com_ptr<ID3D11Device> native_device;
-         native_device_context->GetDevice(&native_device);
-         HRESULT hr = native_device->CreateBuffer(&desc, nullptr, &cb_copy);
+         ComPtr<ID3D11Device> native_device;
+         native_device_context->GetDevice(native_device.put());
+         HRESULT hr = native_device->CreateBuffer(&desc, nullptr, cb_copy.put());
          if (FAILED(hr))
          {
             buffer_data.clear();

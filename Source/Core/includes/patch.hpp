@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include "com_ptr.h"
 #include <optional>
 #include <shared_mutex>
 #include <string>
@@ -151,7 +152,7 @@ namespace Patch
    struct ClonePatchData
    {
       // Keeps the clone alive with its reports, so command lists that bound it can still use it after a reload
-      com_ptr<ID3D11DeviceChild> native_pipeline_clone;
+      ComPtr<ID3D11DeviceChild> native_pipeline_clone;
       std::vector<std::shared_ptr<const RecipeResult>> recipe_results;
    };
 #endif
@@ -337,10 +338,10 @@ namespace Patch
    {
       D3D11_SHADER_VERSION_TYPE stage = SHADER_VERSION_TYPE_UNKNOWN;
       UINT slot = 0;
-      com_ptr<ID3D11ShaderResourceView> srv;
-      com_ptr<ID3D11Buffer> buffer;
-      com_ptr<ID3D11SamplerState> sampler;
-      com_ptr<ID3D11UnorderedAccessView> uav;
+      ComPtr<ID3D11ShaderResourceView> srv;
+      ComPtr<ID3D11Buffer> buffer;
+      ComPtr<ID3D11SamplerState> sampler;
+      ComPtr<ID3D11UnorderedAccessView> uav;
    };
    // Appends the resources the recipes of a clone's stage added: Luma's cbuffers or "managed_resources" entries named after
    // the recipe handles (games register theirs). Returns false if any is missing, the stage should then use its original shader.

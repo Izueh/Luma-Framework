@@ -1172,7 +1172,7 @@ public:
                {
                   D3D11_SAMPLER_DESC native_desc;
                   native_sampler->GetDesc(&native_desc);
-                  com_ptr<ID3D11SamplerState> custom_sampler = CreateCustomSampler(device_data, native_device, native_desc);
+                  ComPtr<ID3D11SamplerState> custom_sampler = CreateCustomSampler(device_data, native_device, native_desc);
                   const std::unique_lock unique_lock_samplers(s_mutex_samplers);
                   samplers_handle.second[new_texture_mip_lod_bias_offset] = custom_sampler;
                }

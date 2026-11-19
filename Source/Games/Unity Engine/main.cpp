@@ -70,7 +70,7 @@ namespace
 struct GameDeviceDataHollowKnightSilksong final : public GameDeviceData
 {
    bool video_playing = false;
-   com_ptr<ID3D11Resource> video_texture;
+   ComPtr<ID3D11Resource> video_texture;
 };
 
 class UnityEngine final : public Game
@@ -307,24 +307,24 @@ public:
 
          if (original_shader_hashes.Contains(shader_hashes_UI_VideoDecode))
          {
-            com_ptr<ID3D11RenderTargetView> rtv;
-            native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+            ComPtr<ID3D11RenderTargetView> rtv;
+            native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
             if (rtv.get())
             {
                game_device_data.video_texture = nullptr;
-               rtv->GetResource(&game_device_data.video_texture); // Note: we need to keep this in memory as the decoding shader only runs every x frames, hopefully it's not re-used for other purposes later but I doubt, it's of a specific size
+               rtv->GetResource(game_device_data.video_texture.put()); // Note: we need to keep this in memory as the decoding shader only runs every x frames, hopefully it's not re-used for other purposes later but I doubt, it's of a specific size
             }
             return DrawOrDispatchOverrideType::None;
          }
 
          if (is_custom_pass && original_shader_hashes.Contains(shader_hashes_UI_Sprite))
          {
-            com_ptr<ID3D11ShaderResourceView> srv;
-            native_device_context->PSGetShaderResources(0, 1, &srv);
+            ComPtr<ID3D11ShaderResourceView> srv;
+            native_device_context->PSGetShaderResources(0, 1, srv.put());
             if (srv.get())
             {
-               com_ptr<ID3D11Resource> resource;
-               srv->GetResource(&resource);
+               ComPtr<ID3D11Resource> resource;
+               srv->GetResource(resource.put());
 
                if (resource == game_device_data.video_texture)
                {

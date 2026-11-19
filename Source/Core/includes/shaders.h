@@ -534,15 +534,15 @@ namespace Shader
 
    uint32_t BinToHash(const uint8_t* bin, size_t size)
    {
-      return compute_crc32(reinterpret_cast<const uint8_t*>(bin), size);
+      return Math::bytes_crc32(reinterpret_cast<const uint8_t*>(bin), size);
    }
    uint32_t StrToHash(const std::string& str)
    {
-      return compute_crc32(reinterpret_cast<const uint8_t*>(str.data()), str.size());
+      return Math::bytes_crc32(reinterpret_cast<const uint8_t*>(str.data()), str.size());
    }
    uint32_t StrToHash(std::string_view str)
    {
-      return compute_crc32(reinterpret_cast<const uint8_t*>(str.data()), str.size());
+      return Math::bytes_crc32(reinterpret_cast<const uint8_t*>(str.data()), str.size());
    }
    uint64_t ShiftHash32ToHash64(uint32_t hash)
    {

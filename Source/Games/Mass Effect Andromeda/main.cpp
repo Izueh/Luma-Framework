@@ -926,15 +926,15 @@ namespace NvapiHdr
       {
          return NVAPI_OK;
       }
-      com_ptr<IDXGISwapChain> swapchain;
+      ComPtr<IDXGISwapChain> swapchain;
       {
          const std::shared_lock lock(native_swapchain_mutex);
          swapchain = native_swapchain;
       }
       // Before the swapchain exists, "OnInitSwapchain" applies it
       HRESULT hr = S_FALSE;
-      com_ptr<IDXGISwapChain3> swapchain3;
-      if (swapchain != nullptr && SUCCEEDED(swapchain->QueryInterface(&swapchain3)))
+      ComPtr<IDXGISwapChain3> swapchain3;
+      if (swapchain != nullptr && SUCCEEDED(swapchain->QueryInterface(swapchain3.put())))
       {
          hr = swapchain3->SetColorSpace1(ColorSpace(hdr));
       }
@@ -976,8 +976,8 @@ namespace NvapiHdr
          native_swapchain = native;
       }
       const int hdr = requested_hdr.load();
-      com_ptr<IDXGISwapChain3> native3;
-      if (hdr < 0 || FAILED(native->QueryInterface(&native3)))
+      ComPtr<IDXGISwapChain3> native3;
+      if (hdr < 0 || FAILED(native->QueryInterface(native3.put())))
       {
          return;
       }
@@ -1179,8 +1179,8 @@ public:
       if (device_data == nullptr || !device_data->game)
          return false;
       auto& gd = GetGameDeviceData(*device_data);
-      com_ptr<ID3D11Resource> source_buffer;
-      source->GetResource(&source_buffer);
+      ComPtr<ID3D11Resource> source_buffer;
+      source->GetResource(source_buffer.put());
       const auto* const twin = gd.FindOutputTwinRecord(source_buffer.get());
       if (!twin || !twin->uav)
          return false;
@@ -1205,15 +1205,15 @@ public:
       auto& gd = GetGameDeviceData(*device_data);
       if (gd.output_twins.empty())
          return false;
-      com_ptr<ID3D11Resource> engine;
-      engine_rtv->GetResource(&engine);
+      ComPtr<ID3D11Resource> engine;
+      engine_rtv->GetResource(engine.put());
       const auto* const twin = gd.FindOutputTwinRecord(engine.get());
       if (!twin || !twin->luma)
          return false;
       D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
       engine_rtv->GetDesc(&rtv_desc);
-      com_ptr<ID3D11Device> native_device;
-      native_device_context->GetDevice(&native_device);
+      ComPtr<ID3D11Device> native_device;
+      native_device_context->GetDevice(native_device.put());
       ComPtr<ID3D11RenderTargetView> twin_rtv;
       if (SUCCEEDED(native_device->CreateRenderTargetView(twin->luma.get(), &rtv_desc, twin_rtv.put())))
       {
@@ -1613,7 +1613,7 @@ private:
             .BindFlags = D3D11_BIND_SHADER_RESOURCE,
          };
          const D3D11_SUBRESOURCE_DATA area_tex_data = {.pSysMem = area_tex.data(), .SysMemPitch = AREATEX_PITCH};
-         if (com_ptr<ID3D11Texture2D> texture; SUCCEEDED(native_device->CreateTexture2D(&area_tex_desc, &area_tex_data, &texture)))
+         if (ComPtr<ID3D11Texture2D> texture; SUCCEEDED(native_device->CreateTexture2D(&area_tex_desc, &area_tex_data, texture.put())))
          {
             native_device->CreateShaderResourceView(texture.get(), nullptr, area_tex_srv.put());
          }
@@ -1638,9 +1638,9 @@ private:
    static DrawOrDispatchOverrideType DrawTonemapWithRCAS(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, [[maybe_unused]] CommandListData& cmd_list_data,
       DeviceData& device_data, MassEffectAndromedaGameDeviceData* gd, const std::function<void()>& original_draw)
    {
-      com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-      com_ptr<ID3D11DepthStencilView> dsv;
-      native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+      ComPtr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+      ComPtr<ID3D11DepthStencilView> dsv;
+      native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(rtvs), dsv.put());
       const uint2 size = (rtvs[0] ? GetViewTextureSize(rtvs[0].get()) : uint2{});
       if (size.x == 0 || size.y == 0 || !PrepareRCASInput(native_device, device_data, gd, size))
          return DrawOrDispatchOverrideType::None;
@@ -1766,8 +1766,8 @@ private:
    static ComPtr<ID3D11RenderTargetView> GetOutputTargetView(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, MassEffectAndromedaGameDeviceData* gd,
       ID3D11RenderTargetView* engine_rtv, uint2 size)
    {
-      com_ptr<ID3D11Resource> engine;
-      engine_rtv->GetResource(&engine);
+      ComPtr<ID3D11Resource> engine;
+      engine_rtv->GetResource(engine.put());
       D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
       engine_rtv->GetDesc(&rtv_desc);
       ID3D11Resource* luma = nullptr;
@@ -1799,16 +1799,16 @@ private:
    // The first "row_count" rows of a pass's b0: a window of the engine's dynamic ring, read through its CPU map pointer
    static bool ReadEngineConstants(ID3D11DeviceContext1* context1, MassEffectAndromedaGameDeviceData* gd, bool pixel, float (*rows)[4], UINT row_count)
    {
-      com_ptr<ID3D11Buffer> engine_cb;
+      ComPtr<ID3D11Buffer> engine_cb;
       UINT first_constant = 0;
       UINT num_constants = 0;
       if (pixel)
       {
-         context1->PSGetConstantBuffers1(0, 1, &engine_cb, &first_constant, &num_constants);
+         context1->PSGetConstantBuffers1(0, 1, engine_cb.put(), &first_constant, &num_constants);
       }
       else
       {
-         context1->CSGetConstantBuffers1(0, 1, &engine_cb, &first_constant, &num_constants);
+         context1->CSGetConstantBuffers1(0, 1, engine_cb.put(), &first_constant, &num_constants);
       }
       if (!engine_cb)
          return false;
@@ -1842,8 +1842,8 @@ private:
    static ID3D11ShaderResourceView* GetStretchedTwin(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data, MassEffectAndromedaGameDeviceData* gd,
       ID3D11ShaderResourceView* engine_srv, uint2 output_size)
    {
-      com_ptr<ID3D11Resource> resource;
-      engine_srv->GetResource(&resource);
+      ComPtr<ID3D11Resource> resource;
+      engine_srv->GetResource(resource.put());
       D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
       engine_srv->GetDesc(&srv_desc);
       UINT support = 0;
@@ -1885,10 +1885,10 @@ private:
       ID3D11DeviceContext1* const context1 = GetImmediateContext1(native_device_context, gd);
       if (!context1)
          return false;
-      com_ptr<ID3D11Buffer> engine_cb;
+      ComPtr<ID3D11Buffer> engine_cb;
       UINT first_constant = 0;
       UINT num_constants = 0;
-      context1->PSGetConstantBuffers1(0, 1, &engine_cb, &first_constant, &num_constants);
+      context1->PSGetConstantBuffers1(0, 1, engine_cb.put(), &first_constant, &num_constants);
       constexpr UINT row_count = 14; // The widest permutation's
       float rows[row_count][4] = {};
       if (!engine_cb || !ReadEngineConstants(context1, gd, true, rows, row_count))
@@ -1954,8 +1954,8 @@ private:
    static ID3D11DepthStencilView* GetOutputSizedDepthStencil(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data,
       MassEffectAndromedaGameDeviceData* gd, ID3D11DepthStencilView* engine_dsv, uint2 output_size)
    {
-      com_ptr<ID3D11Resource> engine;
-      engine_dsv->GetResource(&engine);
+      ComPtr<ID3D11Resource> engine;
+      engine_dsv->GetResource(engine.put());
       if (engine.get() == gd->output_depth_stencil_engine.get() && gd->output_depth_stencil_dsv)
          return gd->output_depth_stencil_dsv.get();
       auto* const scale_vs = FindShader(device_data.native_vertex_shaders, CompileTimeStringHash("Scale VS"));
@@ -2061,9 +2061,9 @@ private:
       const std::function<void()>& original_draw, uint2 size, UINT row_count = 0, const std::function<void(float (*rows)[4], const uint2* input_sizes)>& patch_constants = {})
    {
       ID3D11DeviceContext1* const context1 = GetImmediateContext1(native_device_context, gd);
-      com_ptr<ID3D11RenderTargetView> rtv;
-      com_ptr<ID3D11DepthStencilView> engine_dsv;
-      native_device_context->OMGetRenderTargets(1, &rtv, &engine_dsv);
+      ComPtr<ID3D11RenderTargetView> rtv;
+      ComPtr<ID3D11DepthStencilView> engine_dsv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), engine_dsv.put());
       float rows[kPostMaxRows][4] = {};
       // The Scale shaders stretch inputs and downscale results into the engine's targets: no chain without them
       if (!context1 || !FindShader(device_data.native_vertex_shaders, CompileTimeStringHash("Scale VS")) || !FindShader(device_data.native_pixel_shaders, CompileTimeStringHash("Scale PS")) || !rtv || row_count > kPostMaxRows || (row_count != 0 && !ReadEngineConstants(context1, gd, true, rows, row_count)) ||
@@ -2073,16 +2073,16 @@ private:
       const uint2 render_size = {uint32_t(device_data.render_resolution.x), uint32_t(device_data.render_resolution.y)};
       const uint2 output_size = GetViewTextureSize(gd->sr_output_srv.get());
       constexpr UINT input_count = kPostMaxInputs;
-      com_ptr<ID3D11ShaderResourceView> srvs[input_count];
-      native_device_context->PSGetShaderResources(0, input_count, &srvs[0]);
+      ComPtr<ID3D11ShaderResourceView> srvs[input_count];
+      native_device_context->PSGetShaderResources(0, input_count, PutArray(srvs));
       ID3D11ShaderResourceView* inputs[input_count] = {};
       uint2 input_sizes[input_count] = {};
       for (UINT i = 0; i < input_count; i++)
       {
          if (!srvs[i])
             continue;
-         com_ptr<ID3D11Resource> resource;
-         srvs[i]->GetResource(&resource);
+         ComPtr<ID3D11Resource> resource;
+         srvs[i]->GetResource(resource.put());
          ID3D11ShaderResourceView* input = gd->FindOutputTwin(resource.get());
          if (!input && GetViewTextureSize(srvs[i].get()) == render_size)
          {
@@ -2100,9 +2100,9 @@ private:
       ID3D11DepthStencilView* depth_stencil = nullptr;
       if (engine_dsv)
       {
-         com_ptr<ID3D11DepthStencilState> depth_stencil_state;
+         ComPtr<ID3D11DepthStencilState> depth_stencil_state;
          UINT stencil_ref = 0;
-         native_device_context->OMGetDepthStencilState(&depth_stencil_state, &stencil_ref);
+         native_device_context->OMGetDepthStencilState(depth_stencil_state.put(), &stencil_ref);
          D3D11_DEPTH_STENCIL_DESC depth_stencil_desc = {};
          if (depth_stencil_state)
          {
@@ -2179,12 +2179,12 @@ private:
       {
          // A column pass reduces x by its stride, a row pass y
          const bool columns = (hash == kMBTileColumnsFromMVHash || hash == kMBTileColumnsHash);
-         com_ptr<ID3D11ShaderResourceView> source_srv;
-         native_device_context->PSGetShaderResources(0, 1, &source_srv);
+         ComPtr<ID3D11ShaderResourceView> source_srv;
+         native_device_context->PSGetShaderResources(0, 1, source_srv.put());
          if (!source_srv)
             return false;
-         com_ptr<ID3D11Resource> source;
-         source_srv->GetResource(&source);
+         ComPtr<ID3D11Resource> source;
+         source_srv->GetResource(source.put());
          ID3D11ShaderResourceView* const source_twin = gd->FindOutputTwin(source.get());
          // The first stage's source is the motion vectors (stretched to the output size by the pass), the second's a twin
          const uint2 source_size = (source_twin ? GetViewTextureSize(source_twin) : output_size);
@@ -2242,12 +2242,12 @@ private:
       }
       case kMBTileNeighbourhoodHash:
       {
-         com_ptr<ID3D11ShaderResourceView> tiles_srv;
-         native_device_context->PSGetShaderResources(0, 1, &tiles_srv);
+         ComPtr<ID3D11ShaderResourceView> tiles_srv;
+         native_device_context->PSGetShaderResources(0, 1, tiles_srv.put());
          if (!tiles_srv)
             return false;
-         com_ptr<ID3D11Resource> tiles;
-         tiles_srv->GetResource(&tiles);
+         ComPtr<ID3D11Resource> tiles;
+         tiles_srv->GetResource(tiles.put());
          ID3D11ShaderResourceView* const tiles_twin = gd->FindOutputTwin(tiles.get());
          if (!tiles_twin)
             return false;
@@ -2264,8 +2264,8 @@ private:
       }
       case kMBVelocityHash:
       {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
          if (!rtv)
             return false;
          // The velocity buffer is at the size >> c1.x: the same shift at the output size
@@ -2280,8 +2280,8 @@ private:
       }
       default: // The gather
       {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
          if (!rtv)
             return false;
          drawn = DrawOutputSizedPostPass(native_device, native_device_context, device_data, gd, original_draw, output_size, 4, [&](float (*cb)[4], const uint2* input_sizes)
@@ -2309,8 +2309,8 @@ private:
    // UV: the engine's own bloom chain, the fallback when Luma's can't run (see "BuildOutputSizedBloom")
    static void DownscaleIntoEngineTarget(ID3D11DeviceContext* native_device_context, DeviceData& device_data, MassEffectAndromedaGameDeviceData* gd, ID3D11RenderTargetView* engine_rtv)
    {
-      com_ptr<ID3D11Resource> engine;
-      engine_rtv->GetResource(&engine);
+      ComPtr<ID3D11Resource> engine;
+      engine_rtv->GetResource(engine.put());
       auto* const twin = gd->FindOutputTwinRecord(engine.get());
       if (twin && DrawScaled(native_device_context, device_data, device_data.sampler_state_linear.get(), twin->srv.get(), engine_rtv, GetViewTextureSize(engine_rtv)))
       {
@@ -2328,14 +2328,14 @@ private:
              { return twin.luma && !twin.engine_current; }))
          return;
       constexpr UINT input_count = kPostMaxInputs;
-      com_ptr<ID3D11ShaderResourceView> srvs[input_count];
+      ComPtr<ID3D11ShaderResourceView> srvs[input_count];
       if (compute)
       {
-         native_device_context->CSGetShaderResources(0, input_count, &srvs[0]);
+         native_device_context->CSGetShaderResources(0, input_count, PutArray(srvs));
       }
       else
       {
-         native_device_context->PSGetShaderResources(0, input_count, &srvs[0]);
+         native_device_context->PSGetShaderResources(0, input_count, PutArray(srvs));
       }
       auto* const scale_vs = FindShader(device_data.native_vertex_shaders, CompileTimeStringHash("Scale VS"));
       auto* const scale_array_ps = FindShader(device_data.native_pixel_shaders, CompileTimeStringHash("MEA Scale Array PS"));
@@ -2347,8 +2347,8 @@ private:
       {
          if (!srv)
             continue;
-         com_ptr<ID3D11Resource> resource;
-         srv->GetResource(&resource);
+         ComPtr<ID3D11Resource> resource;
+         srv->GetResource(resource.put());
          auto* const twin = gd->FindOutputTwinRecord(resource.get());
          if (!twin || !twin->luma || twin->engine_current)
             continue;
@@ -2456,8 +2456,8 @@ private:
    static ID3D11ShaderResourceView* GetOutputSizedCoC(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data, MassEffectAndromedaGameDeviceData* gd,
       ID3D11ShaderResourceView* engine_coc, ID3D11ShaderResourceView* render_color, ID3D11ShaderResourceView* output_color, uint2 output_size, float ratio)
    {
-      com_ptr<ID3D11Resource> engine;
-      engine_coc->GetResource(&engine);
+      ComPtr<ID3D11Resource> engine;
+      engine_coc->GetResource(engine.put());
       if (ID3D11ShaderResourceView* const twin = gd->FindOutputTwin(engine.get()))
          return twin;
       auto* const scale_vs = FindShader(device_data.native_vertex_shaders, CompileTimeStringHash("Scale VS"));
@@ -2519,10 +2519,10 @@ private:
       {
          constexpr UINT srv_count = 12;
          constexpr UINT uav_count = 8;
-         com_ptr<ID3D11ShaderResourceView> srvs[srv_count];
-         native_device_context->CSGetShaderResources(0, srv_count, &srvs[0]);
-         com_ptr<ID3D11UnorderedAccessView> uavs[uav_count];
-         native_device_context->CSGetUnorderedAccessViews(0, uav_count, &uavs[0]);
+         ComPtr<ID3D11ShaderResourceView> srvs[srv_count];
+         native_device_context->CSGetShaderResources(0, srv_count, PutArray(srvs));
+         ComPtr<ID3D11UnorderedAccessView> uavs[uav_count];
+         native_device_context->CSGetUnorderedAccessViews(0, uav_count, PutArray(uavs));
          float rows[kPostMaxRows][4] = {};
          if (!ReadEngineConstants(context1, gd, false, rows, 6) || !EnsurePostConstants(native_device, gd))
             return false;
@@ -2532,8 +2532,8 @@ private:
          {
             if (!srvs[i])
                continue;
-            com_ptr<ID3D11Resource> resource;
-            srvs[i]->GetResource(&resource);
+            ComPtr<ID3D11Resource> resource;
+            srvs[i]->GetResource(resource.put());
             inputs[i] = gd->FindOutputTwin(resource.get());
             if (!inputs[i] && i == 9 && srvs[0] && inputs[0])
             {
@@ -2557,8 +2557,8 @@ private:
             outputs[i] = uavs[i].get(); // The sprite counters (u6) stay the engine's
             D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
             uavs[i]->GetDesc(&uav_desc);
-            com_ptr<ID3D11Resource> resource;
-            uavs[i]->GetResource(&resource);
+            ComPtr<ID3D11Resource> resource;
+            uavs[i]->GetResource(resource.put());
             if (uav_desc.ViewDimension == D3D11_UAV_DIMENSION_TEXTURE2D)
             {
                auto* const target = AcquireOutputTarget(native_device, native_device_context, gd, uav_desc.Format, output_size, {.unordered_access = true});
@@ -2626,14 +2626,14 @@ private:
       else if (hash == kDoFSpriteHash)
       {
          // The sprites (VS t3) of a bucket into a layer (out, out / 2, out / 4, or a slice of the far layers' array)
-         com_ptr<ID3D11ShaderResourceView> sprites_srv;
-         native_device_context->VSGetShaderResources(3, 1, &sprites_srv);
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11ShaderResourceView> sprites_srv;
+         native_device_context->VSGetShaderResources(3, 1, sprites_srv.put());
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
          if (!sprites_srv || !rtv)
             return false;
-         com_ptr<ID3D11Resource> sprites;
-         sprites_srv->GetResource(&sprites);
+         ComPtr<ID3D11Resource> sprites;
+         sprites_srv->GetResource(sprites.put());
          ID3D11ShaderResourceView* const sprites_twin = gd->FindOutputTwin(sprites.get());
          if (!sprites_twin)
             return false;
@@ -2654,28 +2654,28 @@ private:
       }
       else if (hash == kDoFLayerResampleHash)
       {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
          if (!rtv)
             return false;
          drawn = DrawOutputSizedPostPass(native_device, native_device_context, device_data, gd, original_draw, ScaleSize(GetViewTextureSize(rtv.get()), ratio));
       }
       else // The composite
       {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
          gd->dof_layers_open = false;
          if (!rtv)
             return false;
          // A permutation without the blur reads the CoC first here: guided by its color (t0) too
-         com_ptr<ID3D11ShaderResourceView> color_srv;
-         native_device_context->PSGetShaderResources(0, 1, &color_srv);
-         com_ptr<ID3D11ShaderResourceView> coc_srv;
-         native_device_context->PSGetShaderResources(9, 1, &coc_srv);
+         ComPtr<ID3D11ShaderResourceView> color_srv;
+         native_device_context->PSGetShaderResources(0, 1, color_srv.put());
+         ComPtr<ID3D11ShaderResourceView> coc_srv;
+         native_device_context->PSGetShaderResources(9, 1, coc_srv.put());
          if (color_srv && coc_srv)
          {
-            com_ptr<ID3D11Resource> color;
-            color_srv->GetResource(&color);
+            ComPtr<ID3D11Resource> color;
+            color_srv->GetResource(color.put());
             ID3D11ShaderResourceView* const color_twin = gd->FindOutputTwin(color.get());
             if (!color_twin || !GetOutputSizedCoC(native_device, native_device_context, device_data, gd, coc_srv.get(), color_srv.get(), color_twin, output_size, ratio))
                return false;
@@ -2685,19 +2685,19 @@ private:
 #if DEVELOPMENT
          if (drawn)
          {
-            com_ptr<ID3D11ShaderResourceView> debug_srvs[kPostMaxInputs];
-            native_device_context->PSGetShaderResources(0, kPostMaxInputs, &debug_srvs[0]);
+            ComPtr<ID3D11ShaderResourceView> debug_srvs[kPostMaxInputs];
+            native_device_context->PSGetShaderResources(0, kPostMaxInputs, PutArray(debug_srvs));
             for (UINT i = 0; i < kPostMaxInputs; i++)
             {
                gd->dof_debug_inputs[i].reset();
                if (!debug_srvs[i])
                   continue;
-               com_ptr<ID3D11Resource> resource;
-               debug_srvs[i]->GetResource(&resource);
+               ComPtr<ID3D11Resource> resource;
+               debug_srvs[i]->GetResource(resource.put());
                gd->dof_debug_inputs[i] = gd->FindOutputTwin(resource.get());
             }
-            com_ptr<ID3D11Resource> target;
-            rtv->GetResource(&target);
+            ComPtr<ID3D11Resource> target;
+            rtv->GetResource(target.put());
             gd->dof_debug_output = gd->FindOutputTwin(target.get());
          }
 #endif
@@ -2724,8 +2724,8 @@ private:
    static bool BuildOutputSizedBloom(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, [[maybe_unused]] CommandListData& cmd_list_data, DeviceData& device_data,
       MassEffectAndromedaGameDeviceData* gd)
    {
-      com_ptr<ID3D11ShaderResourceView> scene_srv;
-      native_device_context->CSGetShaderResources(0, 1, &scene_srv);
+      ComPtr<ID3D11ShaderResourceView> scene_srv;
+      native_device_context->CSGetShaderResources(0, 1, scene_srv.put());
       if (!scene_srv || !EnsurePostConstants(native_device, gd))
          return false;
       for (const auto& shader : gd->bloom_shaders)
@@ -2733,13 +2733,13 @@ private:
          if (!shader)
             return false; // Not dispatched by the engine yet
       }
-      com_ptr<ID3D11Resource> scene;
-      scene_srv->GetResource(&scene);
+      ComPtr<ID3D11Resource> scene;
+      scene_srv->GetResource(scene.put());
       ID3D11ShaderResourceView* const scene_twin = gd->FindOutputTwin(scene.get());
       if (!scene_twin)
          return false;
-      com_ptr<ID3D11Resource> twin;
-      scene_twin->GetResource(&twin);
+      ComPtr<ID3D11Resource> twin;
+      scene_twin->GetResource(twin.put());
       D3D11_TEXTURE2D_DESC twin_desc;
       static_cast<ID3D11Texture2D*>(twin.get())->GetDesc(&twin_desc);
       const uint2 output_size = {twin_desc.Width, twin_desc.Height};
@@ -2851,17 +2851,17 @@ private:
    static bool DrawOutputSizedBloomPass(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, [[maybe_unused]] CommandListData& cmd_list_data, DeviceData& device_data,
       MassEffectAndromedaGameDeviceData* gd, bool upsample, const std::function<void()>& original_draw)
    {
-      com_ptr<ID3D11ShaderResourceView> scene_srv;
-      native_device_context->PSGetShaderResources(0, 1, &scene_srv);
+      ComPtr<ID3D11ShaderResourceView> scene_srv;
+      native_device_context->PSGetShaderResources(0, 1, scene_srv.put());
       if (!scene_srv)
          return false;
-      com_ptr<ID3D11Resource> scene;
-      scene_srv->GetResource(&scene);
+      ComPtr<ID3D11Resource> scene;
+      scene_srv->GetResource(scene.put());
       if (scene.get() != gd->bloom_scene.get())
          return false;
 
-      com_ptr<ID3D11RenderTargetView> rtv;
-      native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+      ComPtr<ID3D11RenderTargetView> rtv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
       D3D11_TEXTURE2D_DESC scene_desc;
       static_cast<ID3D11Texture2D*>(scene.get())->GetDesc(&scene_desc);
       D3D11_TEXTURE2D_DESC pyramid_desc;
@@ -2895,8 +2895,8 @@ private:
          });
       if (drawn && upsample && mip == 1)
       {
-         com_ptr<ID3D11Resource> engine_target;
-         rtv->GetResource(&engine_target);
+         ComPtr<ID3D11Resource> engine_target;
+         rtv->GetResource(engine_target.put());
          ID3D11Buffer* const cb = gd->post_cb.get(); // Still the patched constants
          for (UINT output_mip = extra_mips; drawn && output_mip >= 1; output_mip--)
          {
@@ -2936,8 +2936,8 @@ private:
    static bool DrawOutputSizedScannerPass(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, [[maybe_unused]] CommandListData& cmd_list_data, DeviceData& device_data,
       MassEffectAndromedaGameDeviceData* gd, const std::function<void()>& original_draw)
    {
-      com_ptr<ID3D11RenderTargetView> rtv;
-      native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+      ComPtr<ID3D11RenderTargetView> rtv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
       const uint2 render_size = {uint32_t(device_data.render_resolution.x), uint32_t(device_data.render_resolution.y)};
       if (!rtv || !(GetViewTextureSize(rtv.get()) == render_size))
          return false;
@@ -2956,15 +2956,15 @@ private:
    static bool DrawOutputSizedBlurPass(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, [[maybe_unused]] CommandListData& cmd_list_data, DeviceData& device_data,
       MassEffectAndromedaGameDeviceData* gd, const PostBlurPass& blur, const std::function<void()>& original_draw)
    {
-      com_ptr<ID3D11RenderTargetView> rtv;
-      native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
-      com_ptr<ID3D11ShaderResourceView> input_srv;
-      native_device_context->PSGetShaderResources(0, 1, &input_srv);
+      ComPtr<ID3D11RenderTargetView> rtv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
+      ComPtr<ID3D11ShaderResourceView> input_srv;
+      native_device_context->PSGetShaderResources(0, 1, input_srv.put());
       const uint2 render_size = {uint32_t(device_data.render_resolution.x), uint32_t(device_data.render_resolution.y)};
       if (!rtv || !input_srv || !(GetViewTextureSize(rtv.get()) == render_size))
          return false;
-      com_ptr<ID3D11Resource> input;
-      input_srv->GetResource(&input);
+      ComPtr<ID3D11Resource> input;
+      input_srv->GetResource(input.put());
       if (!gd->FindOutputTwin(input.get()))
          return false;
       const uint2 output_size = GetViewTextureSize(gd->sr_output_srv.get());
@@ -2995,12 +2995,12 @@ private:
    static bool DrawIntoOutputTwin(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, [[maybe_unused]] CommandListData& cmd_list_data, DeviceData& device_data,
       MassEffectAndromedaGameDeviceData* gd, const std::function<void()>& original_draw)
    {
-      com_ptr<ID3D11RenderTargetView> rtv;
-      native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+      ComPtr<ID3D11RenderTargetView> rtv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
       if (!rtv)
          return false;
-      com_ptr<ID3D11Resource> target;
-      rtv->GetResource(&target);
+      ComPtr<ID3D11Resource> target;
+      rtv->GetResource(target.put());
       const auto* const twin = gd->FindOutputTwinRecord(target.get());
       if (!twin || !twin->luma || twin->engine_current)
          return false;
@@ -3021,15 +3021,15 @@ private:
    static bool DrawUpscaledTonemap(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, [[maybe_unused]] CommandListData& cmd_list_data, DeviceData& device_data,
       MassEffectAndromedaGameDeviceData* gd, const std::function<void()>& original_draw)
    {
-      com_ptr<ID3D11RenderTargetView> rtv;
-      native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
-      com_ptr<ID3D11ShaderResourceView> scene_srv;
-      native_device_context->PSGetShaderResources(0, 1, &scene_srv);
+      ComPtr<ID3D11RenderTargetView> rtv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
+      ComPtr<ID3D11ShaderResourceView> scene_srv;
+      native_device_context->PSGetShaderResources(0, 1, scene_srv.put());
       if (!rtv || !scene_srv)
          return false;
       rtv->GetResource(gd->tonemap_target.put());
-      com_ptr<ID3D11Resource> scene;
-      scene_srv->GetResource(&scene);
+      ComPtr<ID3D11Resource> scene;
+      scene_srv->GetResource(scene.put());
       D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
       rtv->GetDesc(&rtv_desc);
       const uint2 size = GetViewTextureSize(gd->sr_output_srv.get());
@@ -3050,14 +3050,14 @@ private:
       // The other inputs with a twin too: the bloom (t2 or t3 by permutation) once it ran at the output size (see
       // "DrawOutputSizedBloomPass")
       constexpr UINT input_count = 6;
-      com_ptr<ID3D11ShaderResourceView> srvs[input_count];
-      native_device_context->PSGetShaderResources(0, input_count, &srvs[0]);
+      ComPtr<ID3D11ShaderResourceView> srvs[input_count];
+      native_device_context->PSGetShaderResources(0, input_count, PutArray(srvs));
       for (UINT i = 1; i < input_count; i++)
       {
          if (!srvs[i])
             continue;
-         com_ptr<ID3D11Resource> resource;
-         srvs[i]->GetResource(&resource);
+         ComPtr<ID3D11Resource> resource;
+         srvs[i]->GetResource(resource.put());
          if (ID3D11ShaderResourceView* const twin = gd->FindOutputTwin(resource.get()))
          {
             native_device_context->PSSetShaderResources(i, 1, &twin);
@@ -3087,27 +3087,27 @@ private:
       MassEffectAndromedaGameDeviceData* gd, const std::function<void()>& original_draw)
    {
       constexpr UINT read_slots = 8;
-      com_ptr<ID3D11ShaderResourceView> srvs[read_slots];
-      native_device_context->PSGetShaderResources(0, read_slots, &srvs[0]);
+      ComPtr<ID3D11ShaderResourceView> srvs[read_slots];
+      native_device_context->PSGetShaderResources(0, read_slots, PutArray(srvs));
       int read_slot = -1;
       for (UINT i = 0; i < read_slots; i++)
       {
          if (!srvs[i])
             continue;
-         com_ptr<ID3D11Resource> resource;
-         srvs[i]->GetResource(&resource);
+         ComPtr<ID3D11Resource> resource;
+         srvs[i]->GetResource(resource.put());
          if (resource.get() == gd->tonemap_target.get())
          {
             read_slot = int(i);
             break;
          }
       }
-      com_ptr<ID3D11RenderTargetView> rtv;
-      native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
-      com_ptr<ID3D11Resource> written;
+      ComPtr<ID3D11RenderTargetView> rtv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
+      ComPtr<ID3D11Resource> written;
       if (rtv)
       {
-         rtv->GetResource(&written);
+         rtv->GetResource(written.put());
       }
       // Drawn natively, the target stays the engine's until it's read
       const bool writes = gd->tonemap_upscaled && written.get() == gd->tonemap_target.get();
@@ -3215,14 +3215,14 @@ private:
          DrawCustomPixelShader(native_device_context, device_data.default_depth_stencil_state.get(), device_data.default_blend_state.get(), sampler, scale_vs, scale_ps, source, target,
             target_size.x, target_size.y);
       };
-      com_ptr<ID3D11ShaderResourceView> srvs[3];
+      ComPtr<ID3D11ShaderResourceView> srvs[3];
       if (pass.pixel)
       {
-         native_device_context->PSGetShaderResources(0, 3, &srvs[0]);
+         native_device_context->PSGetShaderResources(0, 3, PutArray(srvs));
       }
       else
       {
-         native_device_context->CSGetShaderResources(0, 3, &srvs[0]);
+         native_device_context->CSGetShaderResources(0, 3, PutArray(srvs));
       }
 
       const AOMode mode = (first_pass ? AOMode(std::countr_zero(pass.first_of)) : gd->ao.mode);
@@ -3436,11 +3436,11 @@ private:
       std::memcpy(mapped.pData, rows, sizeof(rows));
       native_device_context->Unmap(gd->ao.cb.get(), 0);
 
-      com_ptr<ID3D11UnorderedAccessView> engine_target_uav;
+      ComPtr<ID3D11UnorderedAccessView> engine_target_uav;
       const bool last_pass = (pass.last_of & AOModeBit(mode)) != 0;
       if (last_pass)
       {
-         native_device_context->CSGetUnorderedAccessViews(0, 1, &engine_target_uav);
+         native_device_context->CSGetUnorderedAccessViews(0, 1, engine_target_uav.put());
          if (!engine_target_uav)
             return fail();
       }
@@ -3450,8 +3450,8 @@ private:
       {
          // The engine's pixel shader and sampler, drawn with Luma's full screen VS (the engine's takes pixel positions from a
          // vertex buffer made for its size). The VS reads the texel size from the same constants.
-         com_ptr<ID3D11PixelShader> engine_ps;
-         native_device_context->PSGetShader(&engine_ps, nullptr, nullptr);
+         ComPtr<ID3D11PixelShader> engine_ps;
+         native_device_context->PSGetShader(engine_ps.put(), nullptr, nullptr);
          DrawStateStack<DrawStateStackType::FullGraphics> pixel_state;
          pixel_state.Cache(native_device_context, device_data.uav_max_count);
          native_device_context->VSSetConstantBuffers(0, 1, &cb);
@@ -3481,8 +3481,8 @@ private:
       if (last_pass)
       {
          // Into the engine's AO target (RGBA8 for HBAO, R8 for SSAO), bilinear (a 2x2 average at 50%)
-         com_ptr<ID3D11Resource> engine_target;
-         engine_target_uav->GetResource(&engine_target);
+         ComPtr<ID3D11Resource> engine_target;
+         engine_target_uav->GetResource(engine_target.put());
          if (gd->ao.engine_target.get() != engine_target.get())
          {
             gd->ao.engine_target_rtv.reset();
@@ -3636,7 +3636,7 @@ private:
       {
          gd->sr_output_srv.reset();
          device_data.sr_output_color.reset();
-         CreateTexture(native_device, DXGI_FORMAT_R16G16B16A16_FLOAT, output_size, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, &device_data.sr_output_color,
+         CreateTexture(native_device, DXGI_FORMAT_R16G16B16A16_FLOAT, output_size, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, device_data.sr_output_color.put(),
             gd->sr_output_srv.put());
          gd->sr_output_recreated = true;
       }
@@ -3673,7 +3673,7 @@ private:
             .BindFlags = D3D11_BIND_SHADER_RESOURCE,
          };
          const D3D11_SUBRESOURCE_DATA exposure_data = {.pSysMem = &device_data.sr_exposure_texture_value, .SysMemPitch = sizeof(float)};
-         native_device->CreateTexture2D(&exposure_desc, &exposure_data, &device_data.sr_exposure);
+         native_device->CreateTexture2D(&exposure_desc, &exposure_data, device_data.sr_exposure.put());
       }
 
       // No bias mask: MEA has no usable reactivity source. Jitter is this frame's: the capture-miss case bailed above.
@@ -4019,19 +4019,19 @@ public:
       if (is_immediate && gd.post_fallback && !gd.output_twins.empty())
       {
          const bool compute = (stages & ShaderStages::Compute) != 0;
-         com_ptr<ID3D11ShaderResourceView> bucket_srv;
+         ComPtr<ID3D11ShaderResourceView> bucket_srv;
          if (compute && original_shader_hashes.compute_shaders[0] == kDoFSpriteBinHash)
          {
-            native_device_context->CSGetShaderResources(3, 1, &bucket_srv);
+            native_device_context->CSGetShaderResources(3, 1, bucket_srv.put());
          }
          else if (!compute && original_shader_hashes.pixel_shaders[0] == kDoFSpriteHash)
          {
-            native_device_context->VSGetShaderResources(3, 1, &bucket_srv);
+            native_device_context->VSGetShaderResources(3, 1, bucket_srv.put());
          }
          if (bucket_srv)
          {
-            com_ptr<ID3D11Resource> bucket;
-            bucket_srv->GetResource(&bucket);
+            ComPtr<ID3D11Resource> bucket;
+            bucket_srv->GetResource(bucket.put());
             if (gd.FindOutputTwinRecord(bucket.get()))
                return DrawOrDispatchOverrideType::Replaced;
          }

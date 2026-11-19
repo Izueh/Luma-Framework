@@ -41,16 +41,16 @@ namespace
    constexpr uint32_t FORCE_VANILLA_AUTO_EXPOSURE_TYPE_HASH = char_ptr_crc32("FORCE_VANILLA_AUTO_EXPOSURE_TYPE");
 
    // TODO: make game device data... and force reset them when swapchain res changes, though this game only ever creates a device once
-   com_ptr<ID3D11Texture2D> auto_exposure_mip_chain_texture;
-   com_ptr<ID3D11ShaderResourceView> auto_exposure_mip_chain_srv;
-   com_ptr<ID3D11ShaderResourceView> auto_exposure_mip_last_srv;
+   ComPtr<ID3D11Texture2D> auto_exposure_mip_chain_texture;
+   ComPtr<ID3D11ShaderResourceView> auto_exposure_mip_chain_srv;
+   ComPtr<ID3D11ShaderResourceView> auto_exposure_mip_last_srv;
 
-   com_ptr<ID3D11Resource> secondary_bloom_texture;
-   com_ptr<ID3D11ShaderResourceView> secondary_bloom_srv;
+   ComPtr<ID3D11Resource> secondary_bloom_texture;
+   ComPtr<ID3D11ShaderResourceView> secondary_bloom_srv;
 
-   com_ptr<ID3D11SamplerState> af_sampler;
+   ComPtr<ID3D11SamplerState> af_sampler;
 
-   com_ptr<ID3D11Resource> depth;
+   ComPtr<ID3D11Resource> depth;
 
    bool has_downscaled_bloom = false;
    bool has_drawn_taa = false;
@@ -232,7 +232,7 @@ public:
       exposure_texture_data.SysMemSlicePitch = 32;
       
       device_data.sr_exposure = nullptr; // Make sure we discard the previous one
-      HRESULT hr = native_device->CreateTexture2D(&exposure_texture_desc, &exposure_texture_data, &device_data.sr_exposure);
+      HRESULT hr = native_device->CreateTexture2D(&exposure_texture_desc, &exposure_texture_data, device_data.sr_exposure.put());
       assert(SUCCEEDED(hr));
    }
 
@@ -413,10 +413,10 @@ public:
          //SamplerState SamplerStateDiffuseAnisotropic_s : register(s5)
 
          // TODO: it'd probably be enough to do this once when this shader is bound, for performance reasons, but anyway we could skip second calls here
-         com_ptr<ID3D11SamplerState> sampler_states[2];
+         ComPtr<ID3D11SamplerState> sampler_states[2];
          if (!af_sampler)
          {
-            native_device_context->PSGetSamplers(5, 1, &sampler_states[0]);
+            native_device_context->PSGetSamplers(5, 1, PutArray(sampler_states));
             sampler_states[1] = sampler_states[0]; // Duplicate, so we can do a single set below
             af_sampler = sampler_states[0];        // Cache it aside!
          }
@@ -461,13 +461,13 @@ public:
       // Make sure the swapchain copy shader always and only targets the swapchain RT, otherwise we'd need to branch in it!
       else if (is_custom_pass && original_shader_hashes.Contains(shader_hashes_SwapchainCopy))
       {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
          bool is_rt_swapchain = false;
          if (rtv)
          {
-            com_ptr<ID3D11Resource> rt_resource;
-            rtv->GetResource(&rt_resource);
+            ComPtr<ID3D11Resource> rt_resource;
+            rtv->GetResource(rt_resource.put());
 
             const std::shared_lock lock(device_data.mutex);
             is_rt_swapchain = device_data.back_buffers.contains(rt_resource.get());
@@ -500,11 +500,11 @@ public:
             // The 6th bloom pass was done and allowed bloom to be "symmetrical" (like a small dot blooming to a circle) but somehow they forgot to use the last
             if (bloom_blur_passes == 6)
             {
-               com_ptr<ID3D11RenderTargetView> render_target_views[1];
-               native_device_context->OMGetRenderTargets(1, &render_target_views[0], nullptr);
-               com_ptr<ID3D11Resource> current_secondary_bloom_texture;
+               ComPtr<ID3D11RenderTargetView> render_target_views[1];
+               native_device_context->OMGetRenderTargets(1, PutArray(render_target_views), nullptr);
+               ComPtr<ID3D11Resource> current_secondary_bloom_texture;
                if (render_target_views[0])
-                  render_target_views[0]->GetResource(&current_secondary_bloom_texture);
+                  render_target_views[0]->GetResource(current_secondary_bloom_texture.put());
                if (current_secondary_bloom_texture != secondary_bloom_texture)
                {
                   secondary_bloom_texture = nullptr;
@@ -513,7 +513,7 @@ public:
                   if (current_secondary_bloom_texture)
                   {
                      secondary_bloom_texture = current_secondary_bloom_texture;
-                     HRESULT hr = native_device->CreateShaderResourceView(secondary_bloom_texture.get(), nullptr, &secondary_bloom_srv);
+                     HRESULT hr = native_device->CreateShaderResourceView(secondary_bloom_texture.get(), nullptr, secondary_bloom_srv.put());
                      ASSERT_ONCE(SUCCEEDED(hr));
                   }
                }
@@ -539,12 +539,12 @@ public:
       // TODO: fix occasional light flickers (from secondary or primary bloom) that happen at night, especially when DLSS is enabled?
       else if (is_custom_pass && (original_shader_hashes.Contains(shader_hashes_EarlyAutoExposure) || original_shader_hashes.Contains(shader_hashes_LateAutoExposure)) && GetShaderDefineCompiledNumericalValue(FORCE_VANILLA_AUTO_EXPOSURE_TYPE_HASH) <= 1 && test_index != 1)
       {
-         com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->PSGetShaderResources(0, 1, &srv);
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0, 1, srv.put());
          if (srv.get())
          {
-            com_ptr<ID3D11Resource> sr;
-            srv->GetResource(&sr);
+            ComPtr<ID3D11Resource> sr;
+            srv->GetResource(sr.put());
 
             uint4 size_a, size_b;
             DXGI_FORMAT format_a, format_b;
@@ -566,9 +566,9 @@ public:
                   srv->GetDesc(&srv_desc);
                   srv_desc.Texture2D.MipLevels = 1;
                   srv_desc.Texture2D.MostDetailedMip = mips - 1; // Only give access to the 1x1 resource
-                  HRESULT hr = native_device->CreateShaderResourceView(auto_exposure_mip_chain_texture.get(), &srv_desc, &auto_exposure_mip_last_srv);
+                  HRESULT hr = native_device->CreateShaderResourceView(auto_exposure_mip_chain_texture.get(), &srv_desc, auto_exposure_mip_last_srv.put());
                   ASSERT_ONCE(SUCCEEDED(hr));
-                  hr = native_device->CreateShaderResourceView(auto_exposure_mip_chain_texture.get(), nullptr, &auto_exposure_mip_chain_srv);
+                  hr = native_device->CreateShaderResourceView(auto_exposure_mip_chain_texture.get(), nullptr, auto_exposure_mip_chain_srv.put());
                   ASSERT_ONCE(SUCCEEDED(hr));
                }
             }
@@ -594,16 +594,16 @@ public:
          depth.reset();
 
 #if 0 // Depth is bound as SRV not as DSV
-         com_ptr<ID3D11RenderTargetView> render_target_views[1];
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
+         ComPtr<ID3D11RenderTargetView> render_target_views[1];
+         ComPtr<ID3D11DepthStencilView> depth_stencil_view;
          native_device_context->OMGetRenderTargets(1, &render_target_views[0], &depth_stencil_view);
          if (depth_stencil_view)
             depth_stencil_view->GetResource(&depth);
 #else
-         com_ptr<ID3D11ShaderResourceView> srv[1];
-         native_device_context->PSGetShaderResources(1, ARRAYSIZE(srv), &srv[0]);
+         ComPtr<ID3D11ShaderResourceView> srv[1];
+         native_device_context->PSGetShaderResources(1, ARRAYSIZE(srv), PutArray(srv));
          if (srv[0])
-            srv[0]->GetResource(&depth);
+            srv[0]->GetResource(depth.put());
 #endif
 
 #if DEVELOPMENT && READ_BACK_JITTERS // TODO: delete after testing it (it doesn't matter if it fails around pause)
@@ -645,12 +645,12 @@ public:
             // 0 Source Color (post SMAA, pre TAA)
             // 1 Previous Color (post SMAA, pre TAA)
             // 2 Raw Motion Vectors (directly in UV space)
-            com_ptr<ID3D11ShaderResourceView> ps_shader_resources[3];
-            native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), &ps_shader_resources[0]);
+            ComPtr<ID3D11ShaderResourceView> ps_shader_resources[3];
+            native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), PutArray(ps_shader_resources));
 
-            com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1
-            com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
+            ComPtr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1
+            ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(render_target_views), depth_stencil_view.put());
             const bool dlss_inputs_valid = ps_shader_resources[0].get() && ps_shader_resources[2].get() && render_target_views[0].get() && depth.get();
             ASSERT_ONCE(dlss_inputs_valid);
 
@@ -664,10 +664,10 @@ public:
                auto* sr_instance_data = device_data.GetSRInstanceData();
                ASSERT_ONCE(sr_instance_data);
 
-               com_ptr<ID3D11Resource> output_color_resource;
-               render_target_views[0]->GetResource(&output_color_resource);
-               com_ptr<ID3D11Texture2D> output_color;
-               HRESULT hr = output_color_resource->QueryInterface(&output_color);
+               ComPtr<ID3D11Resource> output_color_resource;
+               render_target_views[0]->GetResource(output_color_resource.put());
+               ComPtr<ID3D11Texture2D> output_color;
+               HRESULT hr = output_color_resource->QueryInterface(output_color.put());
                ASSERT_ONCE(SUCCEEDED(hr));
 
                D3D11_TEXTURE2D_DESC taa_output_texture_desc;
@@ -710,7 +710,7 @@ public:
                   if (!device_data.sr_output_color.get() || dlss_output_changed)
                   {
                      device_data.sr_output_color = nullptr; // Make sure we discard the previous one
-                     hr = native_device->CreateTexture2D(&dlss_output_texture_desc, nullptr, &device_data.sr_output_color);
+                     hr = native_device->CreateTexture2D(&dlss_output_texture_desc, nullptr, device_data.sr_output_color.put());
                      ASSERT_ONCE(SUCCEEDED(hr));
                   }
                   // Texture creation failed, we can't proceed with DLSS
@@ -727,10 +727,10 @@ public:
 
                if (!skip_dlss)
                {
-                  com_ptr<ID3D11Resource> sr_source_color;
-                  ps_shader_resources[0]->GetResource(&sr_source_color);
-                  com_ptr<ID3D11Resource> motion_vectors;
-                  ps_shader_resources[2]->GetResource(&motion_vectors);
+                  ComPtr<ID3D11Resource> sr_source_color;
+                  ps_shader_resources[0]->GetResource(sr_source_color.put());
+                  ComPtr<ID3D11Resource> motion_vectors;
+                  ps_shader_resources[2]->GetResource(motion_vectors.put());
 
                   ASSERT_ONCE(motion_vectors.get() && sr_source_color.get() && depth.get());
 

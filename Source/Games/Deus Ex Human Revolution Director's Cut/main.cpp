@@ -211,14 +211,14 @@ struct GameDeviceDataDeusExHumanRevolutionDC final : public GameDeviceData
    bool has_found_lighting_cbuffer = false;
    bool has_found_lighting_buffer = false;
    bool has_modulated_lighting = false;
-   com_ptr<ID3D11RenderTargetView> lighting_buffer_rtv;
+   ComPtr<ID3D11RenderTargetView> lighting_buffer_rtv;
    CustomPixelShaderPassData modulate_lighting_buffer_pass_data;
 
    // Most of the game's rendering and UI draws directly to this
-   com_ptr<ID3D11RenderTargetView> swapchain_rtv;
+   ComPtr<ID3D11RenderTargetView> swapchain_rtv;
 
-   com_ptr<ID3D11Resource> depth_buffer;
-   com_ptr<ID3D11ShaderResourceView> depth_buffer_srv;
+   ComPtr<ID3D11Resource> depth_buffer;
+   ComPtr<ID3D11ShaderResourceView> depth_buffer_srv;
 
    ComPtr<ID3D11Buffer> cb_ssao_scene_buffer;
 
@@ -230,9 +230,9 @@ struct GameDeviceDataDeusExHumanRevolutionDC final : public GameDeviceData
       }
    };
 #if 0
-   std::map<D3D11_BLEND_DESC, com_ptr<ID3D11BlendState>, BlendDescCompare> custom_blend_states;
+   std::map<D3D11_BLEND_DESC, ComPtr<ID3D11BlendState>, BlendDescCompare> custom_blend_states;
 #endif
-   std::map<D3D11_BLEND_DESC, com_ptr<ID3D11BlendState>, BlendDescCompare> disabled_blend_states;
+   std::map<D3D11_BLEND_DESC, ComPtr<ID3D11BlendState>, BlendDescCompare> disabled_blend_states;
 };
 
 class GameDeusExHumanRevolutionDC final : public Game
@@ -572,8 +572,8 @@ public:
       {
          if (allow_lighting_modulation && !game_device_data.has_found_lighting_buffer && original_shader_hashes.Contains(pixel_shader_hashes_Lighting))
          {
-            com_ptr<ID3D11RenderTargetView> lighting_buffer_rtv;
-            native_device_context->OMGetRenderTargets(1, &lighting_buffer_rtv, nullptr);
+            ComPtr<ID3D11RenderTargetView> lighting_buffer_rtv;
+            native_device_context->OMGetRenderTargets(1, lighting_buffer_rtv.put(), nullptr);
             game_device_data.lighting_buffer_rtv = lighting_buffer_rtv;
             game_device_data.has_found_lighting_buffer = true;
          }
@@ -590,15 +590,15 @@ public:
             game_device_data.has_drawn_supported_aa = true;
 
             game_device_data.swapchain_rtv.reset();
-            native_device_context->OMGetRenderTargets(1, &game_device_data.swapchain_rtv, nullptr);
+            native_device_context->OMGetRenderTargets(1, game_device_data.swapchain_rtv.put(), nullptr);
 
 #if DEVELOPMENT || TEST
             // Verify AA always draws on the swapchain, it seems to be the one pass that reliably does so!
             {
-               com_ptr<ID3D11Resource> rt_resource;
+               ComPtr<ID3D11Resource> rt_resource;
                if (game_device_data.swapchain_rtv)
                {
-                  game_device_data.swapchain_rtv->GetResource(&rt_resource);
+                  game_device_data.swapchain_rtv->GetResource(rt_resource.put());
                }
                ASSERT_ONCE(device_data.back_buffers.contains(rt_resource.get())); // Note: this might trigger for one frame after loading
             }
@@ -827,17 +827,17 @@ public:
          // and only do after SSAO has run, for performance, to avoid useless checks (there's the lighting buffer pass after, but we'd need to hash all its shaders to exclude it)
          else if (!device_data.has_drawn_main_post_processing && (!has_ssao || game_device_data.has_drawn_ssao) && !original_shader_hashes.Contains(pixel_shader_hashes_UI))
          {
-            com_ptr<ID3D11RenderTargetView> rtv;
-            com_ptr<ID3D11DepthStencilView> dsv;
-            native_device_context->OMGetRenderTargets(1, &rtv, &dsv);
+            ComPtr<ID3D11RenderTargetView> rtv;
+            ComPtr<ID3D11DepthStencilView> dsv;
+            native_device_context->OMGetRenderTargets(1, rtv.put(), dsv.put());
 
             // Same resource but different RTV
-            com_ptr<ID3D11Resource> r1;
+            ComPtr<ID3D11Resource> r1;
             if (game_device_data.swapchain_rtv)
-               game_device_data.swapchain_rtv->GetResource(&r1);
-            com_ptr<ID3D11Resource> r2;
+               game_device_data.swapchain_rtv->GetResource(r1.put());
+            ComPtr<ID3D11Resource> r2;
             if (rtv)
-               rtv->GetResource(&r2);
+               rtv->GetResource(r2.put());
 
             // After normal maps and lighting buffer, the game draws the materials final color
             if (r2 && r2 == r1)
@@ -848,9 +848,9 @@ public:
                   DrawStateStack<DrawStateStackType::FullGraphics> draw_state_stack; // Use full mode because setting the RTV here might unbind the same resource being bound as SRV
                   draw_state_stack.Cache(native_device_context, device_data.uav_max_count);
 
-                  com_ptr<ID3D11HullShader> hs;
+                  ComPtr<ID3D11HullShader> hs;
                   // This game has hull shaders, we need to restore that too, and temporarily disable it!
-                  native_device_context->HSGetShader(&hs, nullptr, nullptr);
+                  native_device_context->HSGetShader(hs.put(), nullptr, nullptr);
 
                   DrawCustomPixelShaderPass(native_device, native_device_context, game_device_data.lighting_buffer_rtv.get(), device_data, Math::CompileTimeStringHash("Modulate Lighting"), game_device_data.modulate_lighting_buffer_pass_data, "Modulate Lighting");
                   game_device_data.has_modulated_lighting = true;
@@ -862,15 +862,15 @@ public:
 
                if (dsv)
                {
-                  com_ptr<ID3D11Resource> depth_buffer;
-                  dsv->GetResource(&depth_buffer);
+                  ComPtr<ID3D11Resource> depth_buffer;
+                  dsv->GetResource(depth_buffer.put());
                   if (depth_buffer != game_device_data.depth_buffer)
                   {
                      game_device_data.depth_buffer.reset();
                      game_device_data.depth_buffer_srv.reset();
 
-                     com_ptr<ID3D11Texture2D> depth_buffer_texture_2d;
-                     depth_buffer->QueryInterface(&depth_buffer_texture_2d);
+                     ComPtr<ID3D11Texture2D> depth_buffer_texture_2d;
+                     depth_buffer->QueryInterface(depth_buffer_texture_2d.put());
                      D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
                      if (depth_buffer_texture_2d)
                      {
@@ -892,15 +892,15 @@ public:
                         srv_desc.Texture2D.MipLevels = 1;
 
                         game_device_data.depth_buffer = depth_buffer;
-                        native_device->CreateShaderResourceView(game_device_data.depth_buffer.get(), &srv_desc, &game_device_data.depth_buffer_srv);
+                        native_device->CreateShaderResourceView(game_device_data.depth_buffer.get(), &srv_desc, game_device_data.depth_buffer_srv.put());
                      }
                   }
                }
 
-               com_ptr<ID3D11BlendState> blend_state;
+               ComPtr<ID3D11BlendState> blend_state;
                FLOAT blend_factor[4] = { 1.f, 1.f, 1.f, 1.f };
                UINT blend_sample_mask;
-               native_device_context->OMGetBlendState(&blend_state, blend_factor, &blend_sample_mask);
+               native_device_context->OMGetBlendState(blend_state.put(), blend_factor, &blend_sample_mask);
                if (blend_state)
                {
                   D3D11_BLEND_DESC blend_desc;
@@ -928,7 +928,7 @@ public:
                         || blend_desc.RenderTarget[0].SrcBlendAlpha == D3D11_BLEND_BLEND_FACTOR
                         || blend_desc.RenderTarget[0].DestBlendAlpha == D3D11_BLEND_BLEND_FACTOR))
                   {
-                     com_ptr<ID3D11BlendState> custom_blend_state = blend_state;
+                     ComPtr<ID3D11BlendState> custom_blend_state = blend_state;
 
 #if 0 // This isn't necessary anymore given that now we clamp the blend factor to 0-1, which is what causes problems in the first place!
                      if (blend_desc.RenderTarget[0].DestBlend == D3D11_BLEND_BLEND_FACTOR)
@@ -972,14 +972,14 @@ public:
                   {
 #if DEVELOPMENT || TEST
                      // We only check blend for the first RT, so make sure that's all that is used!
-                     com_ptr<ID3D11RenderTargetView> rtvs[2];
-                     native_device_context->OMGetRenderTargets(2, &rtvs[0], nullptr);
+                     ComPtr<ID3D11RenderTargetView> rtvs[2];
+                     native_device_context->OMGetRenderTargets(2, PutArray(rtvs), nullptr);
                      ASSERT_ONCE(rtvs[1] == nullptr);
 #endif
 
                      if (IsRTBlendDisabled(blend_desc.RenderTarget[0]))
                      {
-                        com_ptr<ID3D11BlendState> disabled_blend_state;
+                        ComPtr<ID3D11BlendState> disabled_blend_state;
 
                         blend_desc.RenderTarget[0].BlendEnable = false; // Create a new one to retain the write mask
 
@@ -991,7 +991,7 @@ public:
                         }
                         else
                         {
-                           native_device->CreateBlendState(&blend_desc, &game_device_data.disabled_blend_states[blend_desc]);
+                           native_device->CreateBlendState(&blend_desc, game_device_data.disabled_blend_states[blend_desc].put());
                            disabled_blend_state = game_device_data.disabled_blend_states[blend_desc];
                         }
 
@@ -1433,8 +1433,8 @@ public:
       void* ptr = nullptr;
       if (game_device_data.lighting_buffer_rtv)
       {
-         com_ptr<ID3D11Resource> lighting_buffer;
-         game_device_data.lighting_buffer_rtv->GetResource(&lighting_buffer);
+         ComPtr<ID3D11Resource> lighting_buffer;
+         game_device_data.lighting_buffer_rtv->GetResource(lighting_buffer.put());
          ptr = lighting_buffer.get();
       }
       ImGui::NewLine();

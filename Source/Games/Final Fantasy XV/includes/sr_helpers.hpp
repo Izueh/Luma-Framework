@@ -62,7 +62,7 @@ static bool SetupSROutput(
    ID3D11Device* native_device,
    DeviceData& device_data,
    ID3D11RenderTargetView* output_rtv,
-   com_ptr<ID3D11Texture2D>& out_output_color,
+   ComPtr<ID3D11Texture2D>& out_output_color,
    D3D11_TEXTURE2D_DESC& out_texture_desc,
    bool& out_supports_uav,
    bool& out_output_changed)
@@ -78,7 +78,7 @@ static bool SetupSROutput(
    ComPtr<ID3D11Resource> output_color_resource;
    output_rtv->GetResource(output_color_resource.put());
 
-   HRESULT hr = output_color_resource->QueryInterface(&out_output_color);
+   HRESULT hr = output_color_resource->QueryInterface(out_output_color.put());
    if (FAILED(hr))
       return false;
 
@@ -115,7 +115,7 @@ static bool SetupSROutput(
       if (!device_data.sr_output_color.get() || out_output_changed)
       {
          device_data.sr_output_color = nullptr;
-         hr = native_device->CreateTexture2D(&dlss_output_desc, nullptr, &device_data.sr_output_color);
+         hr = native_device->CreateTexture2D(&dlss_output_desc, nullptr, device_data.sr_output_color.put());
          if (FAILED(hr))
             return false;
       }

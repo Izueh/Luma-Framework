@@ -15,14 +15,14 @@ struct GameDeviceDataGreedFall final : public GameDeviceData
    // SR
    std::atomic<bool> has_drawn_upscaling = false;
 
-   com_ptr<ID3D11Texture2D> scaled_motion_vectors;
-   com_ptr<ID3D11UnorderedAccessView> scaled_motion_vectors_uav;
-   com_ptr<ID3D11Texture2D> exposure;
-   com_ptr<ID3D11UnorderedAccessView> exposure_uav;
-   com_ptr<ID3D11Texture2D> resolve_texture;
-   com_ptr<ID3D11ShaderResourceView> resolve_texture_srv;
-   com_ptr<ID3D11Texture2D> merged_texture;
-   com_ptr<ID3D11UnorderedAccessView> merged_texture_uav;
+   ComPtr<ID3D11Texture2D> scaled_motion_vectors;
+   ComPtr<ID3D11UnorderedAccessView> scaled_motion_vectors_uav;
+   ComPtr<ID3D11Texture2D> exposure;
+   ComPtr<ID3D11UnorderedAccessView> exposure_uav;
+   ComPtr<ID3D11Texture2D> resolve_texture;
+   ComPtr<ID3D11ShaderResourceView> resolve_texture_srv;
+   ComPtr<ID3D11Texture2D> merged_texture;
+   ComPtr<ID3D11UnorderedAccessView> merged_texture_uav;
 
    float2 jitter = {0, 0};
    uint2 size = {0, 0};
@@ -68,22 +68,22 @@ public:
           !device_data.sr_suppressed &&
           original_shader_hashes.Contains(shader_hashes_TAA))
       {
-         com_ptr<ID3D11ShaderResourceView> vs_srv;
-         native_device_context->VSGetShaderResources(0, 1, &vs_srv);
+         ComPtr<ID3D11ShaderResourceView> vs_srv;
+         native_device_context->VSGetShaderResources(0, 1, vs_srv.put());
 
-         com_ptr<ID3D11ShaderResourceView> ps_srvs[3];
-         native_device_context->PSGetShaderResources(0, 3, &ps_srvs[0]);
+         ComPtr<ID3D11ShaderResourceView> ps_srvs[3];
+         native_device_context->PSGetShaderResources(0, 3, PutArray(ps_srvs));
 
-         com_ptr<ID3D11Resource> color_resource;
-         ps_srvs[0]->GetResource(&color_resource);
-         com_ptr<ID3D11Texture2D> color_texture;
-         color_resource->QueryInterface(&color_texture);
+         ComPtr<ID3D11Resource> color_resource;
+         ps_srvs[0]->GetResource(color_resource.put());
+         ComPtr<ID3D11Texture2D> color_texture;
+         color_resource->QueryInterface(color_texture.put());
 
          D3D11_TEXTURE2D_DESC texture_desc;
          color_texture->GetDesc(&texture_desc);
 
-         com_ptr<ID3D11Resource> depth_resource;
-         ps_srvs[1]->GetResource(&depth_resource);
+         ComPtr<ID3D11Resource> depth_resource;
+         ps_srvs[1]->GetResource(depth_resource.put());
 
          uint32_t width = texture_desc.Width;
          uint32_t height = texture_desc.Height;
@@ -110,7 +110,7 @@ public:
 
                native_device->CreateTexture2D(&motion_vector_desc,
                   nullptr,
-                  &game_device_data.scaled_motion_vectors);
+                  game_device_data.scaled_motion_vectors.put());
             }
             {
                D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
@@ -120,7 +120,7 @@ public:
 
                native_device->CreateUnorderedAccessView(game_device_data.scaled_motion_vectors.get(),
                   &uav_desc,
-                  &game_device_data.scaled_motion_vectors_uav);
+                  game_device_data.scaled_motion_vectors_uav.put());
             }
             {
                D3D11_TEXTURE2D_DESC exposure_desc;
@@ -138,7 +138,7 @@ public:
 
                native_device->CreateTexture2D(&exposure_desc,
                   nullptr,
-                  &game_device_data.exposure);
+                  game_device_data.exposure.put());
             }
             {
                D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
@@ -148,7 +148,7 @@ public:
 
                native_device->CreateUnorderedAccessView(game_device_data.exposure.get(),
                   &uav_desc,
-                  &game_device_data.exposure_uav);
+                  game_device_data.exposure_uav.put());
             }
 
             {
@@ -167,7 +167,7 @@ public:
 
                native_device->CreateTexture2D(&resolve_desc,
                   nullptr,
-                  &game_device_data.resolve_texture);
+                  game_device_data.resolve_texture.put());
             }
             {
                D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
@@ -178,7 +178,7 @@ public:
 
                native_device->CreateShaderResourceView(game_device_data.resolve_texture.get(),
                   &srv_desc,
-                  &game_device_data.resolve_texture_srv);
+                  game_device_data.resolve_texture_srv.put());
             }
             {
                D3D11_TEXTURE2D_DESC merged_desc;
@@ -196,7 +196,7 @@ public:
 
                native_device->CreateTexture2D(&merged_desc,
                   nullptr,
-                  &game_device_data.merged_texture);
+                  game_device_data.merged_texture.put());
             }
             {
                D3D11_UNORDERED_ACCESS_VIEW_DESC uav_desc;
@@ -206,7 +206,7 @@ public:
 
                native_device->CreateUnorderedAccessView(game_device_data.merged_texture.get(),
                   &uav_desc,
-                  &game_device_data.merged_texture_uav);
+                  game_device_data.merged_texture_uav.put());
             }
 
             game_device_data.size = {width, height};
@@ -253,10 +253,10 @@ public:
             device_data.force_reset_sr = false;
             game_device_data.has_drawn_upscaling = true;
          }
-         com_ptr<ID3D11RenderTargetView> render_target;
-         native_device_context->OMGetRenderTargets(1, &render_target, nullptr);
-         com_ptr<ID3D11Resource> render_target_resource;
-         render_target->GetResource(&render_target_resource);
+         ComPtr<ID3D11RenderTargetView> render_target;
+         native_device_context->OMGetRenderTargets(1, render_target.put(), nullptr);
+         ComPtr<ID3D11Resource> render_target_resource;
+         render_target->GetResource(render_target_resource.put());
          native_device_context->CopyResource(render_target_resource.get(), game_device_data.resolve_texture.get());
          return DrawOrDispatchOverrideType::Replaced;
       }

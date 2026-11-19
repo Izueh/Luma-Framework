@@ -918,10 +918,10 @@ struct GameDeviceDataBlueReflectionSecondLight final : public GameDeviceData
    ComPtr<ID3D11Buffer> modifiable_vertex_buffer;
    ComPtr<ID3D11Buffer> modifiable_inedx_buffer;
    
-   std::unordered_map<uint32_t, com_ptr<ID3D11VertexShader>> modified_vertex_shaders;
-   std::unordered_map<uint32_t, com_ptr<ID3D11PixelShader>> modified_pixel_shaders;
-   std::unordered_map<uint32_t, com_ptr<ID3D11VertexShader>> original_vertex_shaders;
-   std::unordered_map<uint32_t, com_ptr<ID3D11PixelShader>> original_pixel_shaders;
+   std::unordered_map<uint32_t, ComPtr<ID3D11VertexShader>> modified_vertex_shaders;
+   std::unordered_map<uint32_t, ComPtr<ID3D11PixelShader>> modified_pixel_shaders;
+   std::unordered_map<uint32_t, ComPtr<ID3D11VertexShader>> original_vertex_shaders;
+   std::unordered_map<uint32_t, ComPtr<ID3D11PixelShader>> original_pixel_shaders;
    
    float2 render_resolution;
    FramePhase frame_phase = FramePhase::NONE;
@@ -2483,8 +2483,8 @@ public:
 
       PatchVertexShader(shader_code);
 
-      com_ptr<ID3D11VertexShader> patched_shader;
-      native_device->CreateVertexShader(shader_code.data(), shader_code.size(), nullptr, &patched_shader);
+      ComPtr<ID3D11VertexShader> patched_shader;
+      native_device->CreateVertexShader(shader_code.data(), shader_code.size(), nullptr, patched_shader.put());
 
       game_device_data.modified_vertex_shaders[hash] = patched_shader;
    }
@@ -2504,8 +2504,8 @@ public:
       */
       PatchPixelShader(shader_code);
 
-      com_ptr<ID3D11PixelShader> patched_shader;
-      native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, &patched_shader);
+      ComPtr<ID3D11PixelShader> patched_shader;
+      native_device->CreatePixelShader(shader_code.data(), shader_code.size(), nullptr, patched_shader.put());
 
       game_device_data.modified_pixel_shaders[hash] = patched_shader;
    }

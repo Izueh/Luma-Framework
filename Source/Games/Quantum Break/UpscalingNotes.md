@@ -35,7 +35,7 @@ validate and pass the same owned depth/MV resources to the backend. Output dimen
 
 ## Native Camera And Units
 
-`NativeHooks.cpp` fingerprints the supported renderer layout before installing MinHook hooks.
+`NativeHooks.cpp` fingerprints the supported renderer layout before installing SafetyHook hooks.
 Samples exist only inside their owning scene/temporal calls. Eligibility requires the same
 thread, generation token, main view, accepted renderer scene, and observed depth/MV identities;
 main and temporal near/FOV must agree. Toggles/cleanup invalidate tokens. Never substitute
@@ -91,7 +91,7 @@ with atomic exchange so concurrent resets are not lost. Pause detection accounts
 
 **Keep `Upscaling.cpp` included exactly once by `main.cpp` and excluded from separate compilation.**
 Core has translation-unit-local state. `NativeHooks.cpp` compiles independently without Core.
-`UseLumaNGX` / `UseLumaFSR` control features; both off excludes native hooks and MinHook.
+`UseLumaNGX` / `UseLumaFSR` control features; both off excludes the native hooks.
 Install hooks outside `DllMain`, pin modules before activation, and retain trampolines until exit;
 detach only invalidates capture. Do not weaken these lifetimes or draw/state restoration ordering.
 

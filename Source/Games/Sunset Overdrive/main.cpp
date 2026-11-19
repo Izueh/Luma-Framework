@@ -10,8 +10,7 @@
 #define ENABLE_RCAS 1
 
 #include "..\..\Core\core.hpp"
-// Compiled into this project (see the .vcxproj), for "InstallEngineHooks"
-#include "..\..\External\reshade\deps\minhook\include\MinHook.h"
+#include <safetyhook.hpp>
 // SMAA's area texture without the U-shape smoothing (see "Luma_SMAA_impl.hlsl" and "DrawSMAAInPlaceOfBlend")
 #include "SMAA_AreaTex_SharpU.h"
 
@@ -145,6 +144,7 @@ namespace
 
    using JitterFunc = void (*)(uint8_t* view, float* jx, float* jy);
    JitterFunc jitter_original = nullptr;
+   safetyhook::InlineHook jitter_hook, frame_params_hook, save_entry_is_file_hook; // Removed at unload
    using FrameParamsFunc = void (*)(int64_t packet);
    FrameParamsFunc frame_params_original = nullptr;
    using SaveEntryFunc = bool (*)(const uint8_t* entry);
@@ -306,10 +306,10 @@ static void DrawSettingCheckbox(const char* label, const char* key, T* value, st
 // A texture with a view per bind flag
 struct TextureViews
 {
-   com_ptr<ID3D11Texture2D> texture;
-   com_ptr<ID3D11RenderTargetView> rtv;
-   com_ptr<ID3D11ShaderResourceView> srv;
-   com_ptr<ID3D11UnorderedAccessView> uav;
+   ComPtr<ID3D11Texture2D> texture;
+   ComPtr<ID3D11RenderTargetView> rtv;
+   ComPtr<ID3D11ShaderResourceView> srv;
+   ComPtr<ID3D11UnorderedAccessView> uav;
 };
 
 // Keeps "views" if they already have the size, format and bind flags, else recreates them, all or nothing (cleared on failure)
@@ -334,10 +334,10 @@ static bool EnsureTextureViews(ID3D11Device* native_device, uint2 size, DXGI_FOR
       .BindFlags = bind_flags,
    };
    TextureViews created;
-   if (FAILED(native_device->CreateTexture2D(&desc, nullptr, &created.texture)) ||
-       ((bind_flags & D3D11_BIND_RENDER_TARGET) != 0 && FAILED(native_device->CreateRenderTargetView(created.texture.get(), nullptr, &created.rtv))) ||
-       ((bind_flags & D3D11_BIND_SHADER_RESOURCE) != 0 && FAILED(native_device->CreateShaderResourceView(created.texture.get(), nullptr, &created.srv))) ||
-       ((bind_flags & D3D11_BIND_UNORDERED_ACCESS) != 0 && FAILED(native_device->CreateUnorderedAccessView(created.texture.get(), nullptr, &created.uav))))
+   if (FAILED(native_device->CreateTexture2D(&desc, nullptr, created.texture.put())) ||
+       ((bind_flags & D3D11_BIND_RENDER_TARGET) != 0 && FAILED(native_device->CreateRenderTargetView(created.texture.get(), nullptr, created.rtv.put()))) ||
+       ((bind_flags & D3D11_BIND_SHADER_RESOURCE) != 0 && FAILED(native_device->CreateShaderResourceView(created.texture.get(), nullptr, created.srv.put()))) ||
+       ((bind_flags & D3D11_BIND_UNORDERED_ACCESS) != 0 && FAILED(native_device->CreateUnorderedAccessView(created.texture.get(), nullptr, created.uav.put()))))
       return false;
    *views = created;
    return true;
@@ -350,8 +350,8 @@ struct SunsetOverdriveGameDeviceData final : public GameDeviceData
    // R16G16_FLOAT motion vectors at the velocity target's size, drawn by the velocity passes
    TextureViews motion_vectors;
    bool motion_vectors_drawn = false;           // This frame
-   com_ptr<ID3D11ShaderResourceView> depth_srv; // This frame's D32S8 scene depth (t0 of the camera velocity pass)
-   com_ptr<ID3D11Resource> exposure_downsample; // t5 of "CS_AverageLumAccum" when it last ran
+   ComPtr<ID3D11ShaderResourceView> depth_srv; // This frame's D32S8 scene depth (t0 of the camera velocity pass)
+   ComPtr<ID3D11Resource> exposure_downsample; // t5 of "CS_AverageLumAccum" when it last ran
    // The scene before SR at the exposure downsample's size, drawn as the game's "PS_Tex" (bilinear), for the bloom's opaque/alpha split
    TextureViews bloom_split_scene;
    bool bloom_split_scene_drawn = false; // This frame
@@ -360,7 +360,7 @@ struct SunsetOverdriveGameDeviceData final : public GameDeviceData
    TextureViews reactive_opaque_scene;
    bool reactive_opaque_scene_copied = false;
    TextureViews reactive_mask;
-   com_ptr<ID3D11ShaderResourceView> exposure_buffer_srv; // The tonemap's g_AdaptedLumBuffer (t7, [1] = exposure), the last time it ran
+   ComPtr<ID3D11ShaderResourceView> exposure_buffer_srv; // The tonemap's g_AdaptedLumBuffer (t7, [1] = exposure), the last time it ran
    TextureViews sr_exposure;                              // FSR's 1x1 exposure (see "Luma_SO_SRExposure.hlsl")
 
    // RCAS sharpens the tonemap's output into this, which the copy onto the swapchain then reads
@@ -443,9 +443,9 @@ public:
    static DrawOrDispatchOverrideType DrawVelocityWithMotionVectors(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, SunsetOverdriveGameDeviceData* game_device_data, std::function<void()>* original_draw_dispatch_func, bool camera_pass)
    {
       const UINT slot = (camera_pass ? 2 : 1);
-      com_ptr<ID3D11RenderTargetView> rtvs[2];
-      com_ptr<ID3D11DepthStencilView> dsv;
-      native_device_context->OMGetRenderTargets(slot, &rtvs[0], &dsv);
+      ComPtr<ID3D11RenderTargetView> rtvs[2];
+      ComPtr<ID3D11DepthStencilView> dsv;
+      native_device_context->OMGetRenderTargets(slot, PutArray(rtvs), dsv.put());
       ID3D11RenderTargetView* const velocity_rtv = rtvs[slot - 1].get();
       if (!velocity_rtv || !original_draw_dispatch_func || !*original_draw_dispatch_func)
          return DrawOrDispatchOverrideType::None;
@@ -516,8 +516,8 @@ public:
    // "shader_hash_OcclCoverDropouts")
    static void CopyReactiveOpaqueScene(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, ID3D11Resource* scene, SunsetOverdriveGameDeviceData* game_device_data)
    {
-      com_ptr<ID3D11Texture2D> scene_texture;
-      if (!game_device_data->motion_vectors_drawn || !scene || FAILED(scene->QueryInterface(&scene_texture)))
+      ComPtr<ID3D11Texture2D> scene_texture;
+      if (!game_device_data->motion_vectors_drawn || !scene || FAILED(scene->QueryInterface(scene_texture.put())))
          return;
       D3D11_TEXTURE2D_DESC scene_desc;
       scene_texture->GetDesc(&scene_desc);
@@ -536,12 +536,12 @@ public:
    {
       if (!scene_srv || !game_device_data->motion_vectors_drawn || !game_device_data->depth_srv)
          return;
-      com_ptr<ID3D11Resource> depth;
-      game_device_data->depth_srv->GetResource(&depth);
-      com_ptr<ID3D11Resource> scene_resource;
-      scene_srv->GetResource(&scene_resource);
-      com_ptr<ID3D11Texture2D> scene;
-      if (FAILED(scene_resource->QueryInterface(&scene)))
+      ComPtr<ID3D11Resource> depth;
+      game_device_data->depth_srv->GetResource(depth.put());
+      ComPtr<ID3D11Resource> scene_resource;
+      scene_srv->GetResource(scene_resource.put());
+      ComPtr<ID3D11Texture2D> scene;
+      if (FAILED(scene_resource->QueryInterface(scene.put())))
          return;
       D3D11_TEXTURE2D_DESC scene_desc;
       scene->GetDesc(&scene_desc);
@@ -565,7 +565,7 @@ public:
       {
          device_data->sr_output_color = nullptr;
          output_desc = {.Width = scene_desc.Width, .Height = scene_desc.Height, .MipLevels = 1, .ArraySize = 1, .Format = scene_desc.Format, .SampleDesc = {.Count = 1}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS};
-         if (FAILED(native_device->CreateTexture2D(&output_desc, nullptr, &device_data->sr_output_color)))
+         if (FAILED(native_device->CreateTexture2D(&output_desc, nullptr, device_data->sr_output_color.put())))
          {
             device_data->sr_suppressed = true; // Back to the anti-aliasing without SR until SR is picked again
             return;
@@ -644,7 +644,7 @@ public:
       const bool drawn = sr_implementation.Draw(sr_instance_data, native_device_context, draw_data);
       // The bloom's opaque/alpha split compares the scene with the jittered mid-forward copy. Fed SR's output, the anti-aliased edges
       // would leak into the alpha bloom and shimmer with the jitter, so those passes read the scene before SR, as in vanilla.
-      if (com_ptr<ID3D11Texture2D> exposure_downsample; drawn && split_bloom && game_device_data->exposure_downsample && SUCCEEDED(game_device_data->exposure_downsample->QueryInterface(&exposure_downsample)))
+      if (ComPtr<ID3D11Texture2D> exposure_downsample; drawn && split_bloom && game_device_data->exposure_downsample && SUCCEEDED(game_device_data->exposure_downsample->QueryInterface(exposure_downsample.put())))
       {
          D3D11_TEXTURE2D_DESC exposure_downsample_desc;
          exposure_downsample->GetDesc(&exposure_downsample_desc);
@@ -673,8 +673,8 @@ public:
    // Sharpens the tonemap's output (t6 of the copy onto the swapchain) with RCAS into a texture, which the copy then reads instead
    static void DrawRCASOnSwapchainCopy(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData* device_data, SunsetOverdriveGameDeviceData* game_device_data)
    {
-      com_ptr<ID3D11ShaderResourceView> source_srv;
-      native_device_context->PSGetShaderResources(6, 1, &source_srv);
+      ComPtr<ID3D11ShaderResourceView> source_srv;
+      native_device_context->PSGetShaderResources(6, 1, source_srv.put());
       if (!source_srv)
          return;
       D3D11_SHADER_RESOURCE_VIEW_DESC source_srv_desc;
@@ -699,10 +699,10 @@ public:
    // when an input or a shader is missing.
    static bool DrawSMAAInPlaceOfBlend(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData* cmd_list_data, DeviceData* device_data, SunsetOverdriveGameDeviceData* game_device_data)
    {
-      com_ptr<ID3D11RenderTargetView> rtv;
-      native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
-      com_ptr<ID3D11ShaderResourceView> color_srv;
-      native_device_context->PSGetShaderResources(5, 1, &color_srv);
+      ComPtr<ID3D11RenderTargetView> rtv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
+      ComPtr<ID3D11ShaderResourceView> color_srv;
+      native_device_context->PSGetShaderResources(5, 1, color_srv.put());
       if (!rtv || !color_srv)
          return false;
       const uint2 size = GetViewTextureSize(color_srv.get());
@@ -724,9 +724,9 @@ public:
       if (predication)
       {
          // Unbind the render targets: were the depth still bound as the DSV, D3D11 would silently null its SRV in the predication pass
-         com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-         com_ptr<ID3D11DepthStencilView> dsv;
-         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+         ComPtr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+         ComPtr<ID3D11DepthStencilView> dsv;
+         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(rtvs), dsv.put());
          native_device_context->OMSetRenderTargets(0, nullptr, nullptr);
          ID3D11ShaderResourceView* const raw_depth_srv = game_device_data->depth_srv.get();
          DispatchCompute(native_device_context, *device_data, predication_cs, game_device_data->smaa_predication.uav.get(), {&raw_depth_srv, 1}, uint2{(size.x + 7) / 8, (size.y + 7) / 8});
@@ -786,7 +786,7 @@ public:
             .BindFlags = D3D11_BIND_SHADER_RESOURCE,
          };
          const D3D11_SUBRESOURCE_DATA area_tex_data = {.pSysMem = area_tex.data(), .SysMemPitch = AREATEX_PITCH};
-         if (com_ptr<ID3D11Texture2D> texture; SUCCEEDED(native_device->CreateTexture2D(&area_tex_desc, &area_tex_data, &texture)))
+         if (ComPtr<ID3D11Texture2D> texture; SUCCEEDED(native_device->CreateTexture2D(&area_tex_desc, &area_tex_data, texture.put())))
          {
             native_device->CreateShaderResourceView(texture.get(), nullptr, area_tex_srv.put());
          }
@@ -802,10 +802,10 @@ public:
          std::swap(pixel_shaders.at("SMAA Blending Weight Calculation PS"_h), pixel_shaders.at(shader_hash_SmaaT2xWeights));
          std::swap(pixel_shaders.at("SMAA Neighborhood Blending PS"_h), pixel_shaders.at(shader_hash_SmaaT2xBlend));
       };
-      com_ptr<ID3D11ShaderResourceView> t3_original;
+      ComPtr<ID3D11ShaderResourceView> t3_original;
       if (t2x)
       {
-         native_device_context->PSGetShaderResources(3, 1, &t3_original);
+         native_device_context->PSGetShaderResources(3, 1, t3_original.put());
          ID3D11ShaderResourceView* const velocity_srv = game_device_data->motion_vectors.srv.get();
          native_device_context->PSSetShaderResources(3, 1, &velocity_srv);
          swap_t2x_shaders();
@@ -838,10 +838,10 @@ public:
    // draw. There t5 is a copy of the target with SMAA 1x, or with T2x the tonemap's output, which the game's resolve or copy carries on.
    static bool DrawColorInputCopy(ID3D11DeviceContext* native_device_context, const DeviceData& device_data)
    {
-      com_ptr<ID3D11RenderTargetView> rtv;
-      native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
-      com_ptr<ID3D11ShaderResourceView> srv;
-      native_device_context->PSGetShaderResources(5, 1, &srv);
+      ComPtr<ID3D11RenderTargetView> rtv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
+      ComPtr<ID3D11ShaderResourceView> srv;
+      native_device_context->PSGetShaderResources(5, 1, srv.put());
       const std::shared_lock lock_shader_objects(s_mutex_shader_objects);
       auto* const copy_vs = FindShader(device_data.native_vertex_shaders, shader_hash_CopyVS);
       auto* const copy_ps = FindShader(device_data.native_pixel_shaders, CompileTimeStringHash("Copy PS"));
@@ -861,11 +861,11 @@ public:
       if (original_shader_hashes.Contains(shader_hash_AverageLumAccum, ShaderStages::Compute))
       {
          game_device_data.exposure_downsample = nullptr;
-         com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->CSGetShaderResources(5, 1, &srv);
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->CSGetShaderResources(5, 1, srv.put());
          if (srv)
          {
-            srv->GetResource(&game_device_data.exposure_downsample);
+            srv->GetResource(game_device_data.exposure_downsample.put());
          }
          return DrawOrDispatchOverrideType::None;
       }
@@ -884,18 +884,18 @@ public:
       { return original_shader_hashes.Contains(hash, ShaderStages::Pixel); };
       const auto render_target_resource = [&]()
       {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
-         com_ptr<ID3D11Resource> resource;
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
+         ComPtr<ID3D11Resource> resource;
          if (rtv)
          {
-            rtv->GetResource(&resource);
+            rtv->GetResource(resource.put());
          }
          return resource;
       };
       const auto targets_back_buffer = [&]()
       {
-         const com_ptr<ID3D11Resource> resource = render_target_resource();
+         const ComPtr<ID3D11Resource> resource = render_target_resource();
          const std::shared_lock lock(device_data.mutex);
          return resource && device_data.back_buffers.contains(resource.get());
       };
@@ -903,7 +903,7 @@ public:
       if (is_pixel_shader(shader_hash_CameraVelocity))
       {
          game_device_data.depth_srv = nullptr;
-         native_device_context->PSGetShaderResources(0, 1, &game_device_data.depth_srv);
+         native_device_context->PSGetShaderResources(0, 1, game_device_data.depth_srv.put());
       }
       if (g_smaa_enable && is_pixel_shader(shader_hash_SmaaApplyBlend))
       {
@@ -927,7 +927,7 @@ public:
       if (is_tonemap)
       {
          game_device_data.exposure_buffer_srv = nullptr;
-         native_device_context->PSGetShaderResources(7, 1, &game_device_data.exposure_buffer_srv);
+         native_device_context->PSGetShaderResources(7, 1, game_device_data.exposure_buffer_srv.put());
       }
       if (game_device_data.sr_active && motion_vectors && !game_device_data.sr_tried && !device_data.sr_suppressed)
       {
@@ -956,12 +956,12 @@ public:
             }
             else if (needs_reactive_copy)
             {
-               com_ptr<ID3D11ShaderResourceView> scene_srv;
-               native_device_context->PSGetShaderResources(5, 1, &scene_srv);
-               com_ptr<ID3D11Resource> scene;
+               ComPtr<ID3D11ShaderResourceView> scene_srv;
+               native_device_context->PSGetShaderResources(5, 1, scene_srv.put());
+               ComPtr<ID3D11Resource> scene;
                if (scene_srv)
                {
-                  scene_srv->GetResource(&scene);
+                  scene_srv->GetResource(scene.put());
                }
                CopyReactiveOpaqueScene(native_device, native_device_context, scene.get(), &game_device_data);
             }
@@ -972,16 +972,16 @@ public:
          }
          if (scene_slot != 0)
          {
-            com_ptr<ID3D11ShaderResourceView> scene_srv;
-            native_device_context->PSGetShaderResources(scene_slot, 1, &scene_srv);
+            ComPtr<ID3D11ShaderResourceView> scene_srv;
+            native_device_context->PSGetShaderResources(scene_slot, 1, scene_srv.put());
             DrawSR(native_device, native_device_context, &cmd_list_data, &device_data, &game_device_data, scene_srv.get(), !is_tonemap);
          }
       }
       const bool is_bloom_split_pass = game_device_data.bloom_split_scene_drawn && (is_pixel_shader(shader_hash_BrightPassOpaque) || is_pixel_shader(shader_hash_BrightPassAlpha));
       if (is_bloom_split_pass && original_draw_dispatch_func && *original_draw_dispatch_func)
       {
-         com_ptr<ID3D11ShaderResourceView> scene_srv;
-         native_device_context->PSGetShaderResources(5, 1, &scene_srv);
+         ComPtr<ID3D11ShaderResourceView> scene_srv;
+         native_device_context->PSGetShaderResources(5, 1, scene_srv.put());
          if (GetViewTextureSize(scene_srv.get()) == GetViewTextureSize(game_device_data.bloom_split_scene.srv.get()))
          {
             ID3D11ShaderResourceView* const split_scene_srv = game_device_data.bloom_split_scene.srv.get();
@@ -1135,19 +1135,26 @@ public:
             .save_entry_is_file = save_entry_is_file,
          };
       };
-      if (const GameAddresses addresses = find_game_addresses(); addresses.jitter && MH_Initialize() == MH_OK)
+      if (const GameAddresses addresses = find_game_addresses(); addresses.jitter)
       {
          game_addresses = addresses;
-         const auto install = [](uint8_t* target, void* detour, void** original)
+         // Created disabled, so the original is known before the detour can run. A hook that doesn't activate leaves its original null.
+         const auto install = [](safetyhook::InlineHook& hook, uint8_t* target, void* detour, void** original)
          {
-            if (MH_CreateHook(target, detour, original) != MH_OK || MH_EnableHook(target) != MH_OK)
+            auto created = safetyhook::InlineHook::create(target, detour, safetyhook::InlineHook::StartDisabled);
+            if (created)
             {
-               *original = nullptr;
+               hook = std::move(*created);
+               *original = hook.original<void*>();
+               if (hook.enable())
+                  return;
+               hook.reset();
             }
+            *original = nullptr;
          };
-         install(addresses.jitter, reinterpret_cast<void*>(&JitterDetour), reinterpret_cast<void**>(&jitter_original));
-         install(addresses.frame_params, reinterpret_cast<void*>(&FrameParamsDetour), reinterpret_cast<void**>(&frame_params_original));
-         install(addresses.save_entry_is_file, reinterpret_cast<void*>(&SaveEntryIsFileDetour), reinterpret_cast<void**>(&save_entry_is_file_original));
+         install(jitter_hook, addresses.jitter, reinterpret_cast<void*>(&JitterDetour), reinterpret_cast<void**>(&jitter_original));
+         install(frame_params_hook, addresses.frame_params, reinterpret_cast<void*>(&FrameParamsDetour), reinterpret_cast<void**>(&frame_params_original));
+         install(save_entry_is_file_hook, addresses.save_entry_is_file, reinterpret_cast<void*>(&SaveEntryIsFileDetour), reinterpret_cast<void**>(&save_entry_is_file_original));
 
          // The object velocity pass skips far, small or slow objects (its per object score, 0x190AD20, fades them out for the motion
          // blur), so they have no motion vectors: zero the two distance terms of the score (mulss xmm1, 0.004 and mulss xmm0, 0.1
@@ -1239,8 +1246,8 @@ public:
          if (device_data.texture_mip_lod_bias_offset != bias)
          {
             device_data.texture_mip_lod_bias_offset = bias;
-            com_ptr<ID3D11DeviceContext> native_device_context;
-            native_device->GetImmediateContext(&native_device_context);
+            ComPtr<ID3D11DeviceContext> native_device_context;
+            native_device->GetImmediateContext(native_device_context.put());
             RebindUpgradedSamplers(native_device_context.get(), &device_data);
          }
       }
@@ -1465,7 +1472,9 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
    else if (ul_reason_for_call == DLL_PROCESS_DETACH)
    {
       // The engine hooks would jump into the unloaded addon
-      MH_Uninitialize();
+      jitter_hook.reset();
+      frame_params_hook.reset();
+      save_entry_is_file_hook.reset();
    }
 
    CoreMain(hModule, ul_reason_for_call, lpReserved);

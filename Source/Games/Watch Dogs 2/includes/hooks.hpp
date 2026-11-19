@@ -22,7 +22,7 @@ struct CTexture
    ID3D11Resource* m_nativeTexture;
    ID3D11ShaderResourceView* m_shaderResourceView;
    ID3D11UnorderedAccessView* m_uav;
-   com_ptr<ID3D11DepthStencilView> m_depthStencilViews[2][2];
+   ComPtr<ID3D11DepthStencilView> m_depthStencilViews[2][2];
    ID3D11RenderTargetView* m_renderTargetView;
    uintptr_t* m_aliases;
    unsigned int m_hideMipLevels;

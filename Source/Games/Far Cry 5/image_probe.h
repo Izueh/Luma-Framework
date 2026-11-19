@@ -6,15 +6,15 @@ namespace FC5
    inline bool SaveImage(ID3D11Device* device, ID3D11DeviceContext* ctx,
       ID3D11Resource* resource, const std::filesystem::path& path)
    {
-      com_ptr<ID3D11Texture2D> source, staging;
-      if (!resource || FAILED(resource->QueryInterface(&source))) return false;
+      ComPtr<ID3D11Texture2D> source, staging;
+      if (!resource || FAILED(resource->QueryInterface(source.put()))) return false;
       D3D11_TEXTURE2D_DESC d{}; source->GetDesc(&d);
       const bool hdr = d.Format == DXGI_FORMAT_R16G16B16A16_FLOAT || d.Format == DXGI_FORMAT_R16G16B16A16_TYPELESS;
       if (!IsSingleSurface(d) || (!hdr && !IsRGBA8View(d.Format, DXGI_FORMAT_R8G8B8A8_UNORM)) ||
          d.Width > 16384 || d.Height > 16384) return false;
       d.Usage = D3D11_USAGE_STAGING; d.BindFlags = d.MiscFlags = 0;
       d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-      if (FAILED(device->CreateTexture2D(&d, nullptr, &staging))) return false;
+      if (FAILED(device->CreateTexture2D(&d, nullptr, staging.put()))) return false;
       ctx->CopyResource(staging.get(), source.get());
       const size_t pixel_bytes = hdr ? 8 : 4;
       std::vector<uint8_t> pixels(size_t(d.Width) * d.Height * pixel_bytes);

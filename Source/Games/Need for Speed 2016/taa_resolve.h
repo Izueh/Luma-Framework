@@ -27,35 +27,35 @@ inline ResolveVariant GetResolveVariant(const ShaderHashesList<OneShaderPerPipel
 // The resolve's resources SR uses, as bound for its dispatch
 struct ResolveResources
 {
-   com_ptr<ID3D11Resource> depth;   // t0
-   com_ptr<ID3D11Resource> mvs;     // t1
-   com_ptr<ID3D11Resource> color;   // t3
-   com_ptr<ID3D11Resource> output;  // u2
-   com_ptr<ID3D11Resource> history; // u3
+   ComPtr<ID3D11Resource> depth;   // t0
+   ComPtr<ID3D11Resource> mvs;     // t1
+   ComPtr<ID3D11Resource> color;   // t3
+   ComPtr<ID3D11Resource> output;  // u2
+   ComPtr<ID3D11Resource> history; // u3
 };
 
 // The resource behind a view, or null for no view
-inline com_ptr<ID3D11Resource> GetViewResource(ID3D11View* view)
+inline ComPtr<ID3D11Resource> GetViewResource(ID3D11View* view)
 {
-   com_ptr<ID3D11Resource> resource;
+   ComPtr<ID3D11Resource> resource;
    if (view)
-      view->GetResource(&resource);
+      view->GetResource(resource.put());
    return resource;
 }
 
 // The resource bound to a compute shader resource view slot
-inline com_ptr<ID3D11Resource> GetComputeShaderResource(ID3D11DeviceContext* context, UINT slot)
+inline ComPtr<ID3D11Resource> GetComputeShaderResource(ID3D11DeviceContext* context, UINT slot)
 {
-   com_ptr<ID3D11ShaderResourceView> view;
-   context->CSGetShaderResources(slot, 1, &view);
+   ComPtr<ID3D11ShaderResourceView> view;
+   context->CSGetShaderResources(slot, 1, view.put());
    return GetViewResource(view.get());
 }
 
 // The resource bound to a compute unordered access view slot
-inline com_ptr<ID3D11Resource> GetComputeUnorderedAccessResource(ID3D11DeviceContext* context, UINT slot)
+inline ComPtr<ID3D11Resource> GetComputeUnorderedAccessResource(ID3D11DeviceContext* context, UINT slot)
 {
-   com_ptr<ID3D11UnorderedAccessView> view;
-   context->CSGetUnorderedAccessViews(slot, 1, &view);
+   ComPtr<ID3D11UnorderedAccessView> view;
+   context->CSGetUnorderedAccessViews(slot, 1, view.put());
    return GetViewResource(view.get());
 }
 

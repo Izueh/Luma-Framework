@@ -9,6 +9,7 @@
 #include <deque>
 #include <map>
 #include <memory>
+#include "com_ptr.h"
 #include <shared_mutex>
 #include <string>
 #include <thread>
@@ -201,7 +202,7 @@ struct CommandListData
    }
 
 #if ENABLE_AUTO_CBUFFER_RESTORATION
-   com_ptr<ID3D11Buffer> original_constant_buffers[(uint8_t)Shader::Stage::Count][D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+   ComPtr<ID3D11Buffer> original_constant_buffers[(uint8_t)Shader::Stage::Count][D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
    UINT original_constant_buffers_first_constant[(uint8_t)Shader::Stage::Count][D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
    UINT original_constant_buffers_num_constant[(uint8_t)Shader::Stage::Count][D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
 
@@ -243,8 +244,8 @@ struct CommandListData
             device_context->CSSetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, original_constant_buffers_const);
       };
 
-      com_ptr<ID3D11DeviceContext1> device_context_1;
-      device_context->QueryInterface(&device_context_1);
+      ComPtr<ID3D11DeviceContext1> device_context_1;
+      device_context->QueryInterface(device_context_1.put());
       const bool use_device_context_1 = device_context_1 != nullptr;
       for (uint8_t stage = 0; stage < (uint8_t)Shader::Stage::Count; stage++)
       {
@@ -329,20 +330,20 @@ struct DeviceData
    std::unordered_set<IDXGISwapChain*> swapchains;
    std::unordered_set<const ID3D11Resource*> back_buffers; // From all the swapchains (whether they are upgraded or not). Owned by the swapchains.
    ID3D11Device* native_device = nullptr; // Doesn't need mutex, always valid given it's a ptr to "itself"
-   com_ptr<ID3D11DeviceContext> primary_command_list; // The immediate/primary command list is always valid
+   ComPtr<ID3D11DeviceContext> primary_command_list; // The immediate/primary command list is always valid
    CommandListData* primary_command_list_data = nullptr; // The immediate/primary command list is always valid
    std::unique_ptr<CommandListData> primary_command_list_data_storage;
 
    UINT uav_max_count = D3D11_1_UAV_SLOT_COUNT; // DX11.1. Use "D3D11_PS_CS_UAV_REGISTER_COUNT" for DX11.
 
-   com_ptr<IDXGISwapChain3> GetMainNativeSwapchain() const
+   ComPtr<IDXGISwapChain3> GetMainNativeSwapchain() const
    {
       ASSERT_ONCE(swapchains.size() == 1);
       if (swapchains.empty()) return nullptr;
       IDXGISwapChain* native_swapchain = *swapchains.begin();
-      com_ptr<IDXGISwapChain3> native_swapchain3;
+      ComPtr<IDXGISwapChain3> native_swapchain3;
       // The cast pointer is actually the same, we are just making sure the type is right.
-      HRESULT hr = native_swapchain->QueryInterface(&native_swapchain3);
+      HRESULT hr = native_swapchain->QueryInterface(native_swapchain3.put());
       ASSERT_ONCE(SUCCEEDED(hr));
       return native_swapchain3;
    }
@@ -364,7 +365,7 @@ struct DeviceData
 
    // Custom samplers mapped to original ones by texture LOD bias
    // Not const: the game's sampler desc is read back to create the variants. Not owned (the destroy callback removes it).
-   std::unordered_map<ID3D11SamplerState*, std::unordered_map<float, com_ptr<ID3D11SamplerState>>> custom_sampler_by_original_sampler;
+   std::unordered_map<ID3D11SamplerState*, std::unordered_map<float, ComPtr<ID3D11SamplerState>>> custom_sampler_by_original_sampler;
 
 #if ENABLE_SR
    SR::Type sr_type = SR::Type::None; // If active, the SR tech enabled by the user and supported+initialized correctly on this device
@@ -379,62 +380,62 @@ struct DeviceData
    // Resources:
 
 #if ENABLE_SR
-   com_ptr<ID3D11Texture2D> sr_output_color;
-   com_ptr<ID3D11Texture2D> sr_exposure;
+   ComPtr<ID3D11Texture2D> sr_output_color;
+   ComPtr<ID3D11Texture2D> sr_exposure;
    float sr_exposure_texture_value = 1.f;
 #endif // ENABLE_SR
 
    // Native Shaders (from "native_shaders_definitions")
    bool created_native_shaders = false;
-   std::unordered_map<uint32_t, com_ptr<ID3D11VertexShader>> native_vertex_shaders;
+   std::unordered_map<uint32_t, ComPtr<ID3D11VertexShader>> native_vertex_shaders;
 #if GEOMETRY_SHADER_SUPPORT
-   std::unordered_map<uint32_t, com_ptr<ID3D11GeometryShader>> native_geometry_shaders;
+   std::unordered_map<uint32_t, ComPtr<ID3D11GeometryShader>> native_geometry_shaders;
 #endif
-   std::unordered_map<uint32_t, com_ptr<ID3D11PixelShader>> native_pixel_shaders;
-   std::unordered_map<uint32_t, com_ptr<ID3D11ComputeShader>> native_compute_shaders;
+   std::unordered_map<uint32_t, ComPtr<ID3D11PixelShader>> native_pixel_shaders;
+   std::unordered_map<uint32_t, ComPtr<ID3D11ComputeShader>> native_compute_shaders;
 
 #if DEVELOPMENT
    std::unordered_map<const ID3D11InputLayout*, std::vector<D3D11_INPUT_ELEMENT_DESC>> input_layouts_descs;
 #endif
 
    // Native Shaders Resources
-   com_ptr<ID3D11Texture2D> temp_copy_source_texture;
-   com_ptr<ID3D11Texture2D> temp_copy_target_texture;
-   com_ptr<ID3D11Texture2D> display_composition_texture; // Temporary copy texture of the swapchain that we use to draw back to the swapchain with a display composition shader (e.g. to change brightness, transfer function, gamut etc)
-   com_ptr<ID3D11ShaderResourceView> display_composition_srv;
+   ComPtr<ID3D11Texture2D> temp_copy_source_texture;
+   ComPtr<ID3D11Texture2D> temp_copy_target_texture;
+   ComPtr<ID3D11Texture2D> display_composition_texture; // Temporary copy texture of the swapchain that we use to draw back to the swapchain with a display composition shader (e.g. to change brightness, transfer function, gamut etc)
+   ComPtr<ID3D11ShaderResourceView> display_composition_srv;
 
    // CBuffers
-   com_ptr<ID3D11Buffer> luma_global_settings;
-   com_ptr<ID3D11Buffer> luma_instance_data;
-   com_ptr<ID3D11Buffer> luma_ui_data;
+   ComPtr<ID3D11Buffer> luma_global_settings;
+   ComPtr<ID3D11Buffer> luma_instance_data;
+   ComPtr<ID3D11Buffer> luma_ui_data;
    CB::LumaUIDataPadded cb_luma_ui_data = {};
    std::atomic<bool> cb_luma_global_settings_dirty = true;
 
    // UI
-   com_ptr<ID3D11Texture2D> ui_texture;
-   com_ptr<ID3D11RenderTargetView> ui_texture_rtv;
-   com_ptr<ID3D11ShaderResourceView> ui_texture_srv;
-   com_ptr<ID3D11RenderTargetView> ui_initial_original_rtv; // Leave nullptr to fall back on the current swapchain. This is an RTV but what matters is actually the resource behind it.
-   com_ptr<ID3D11RenderTargetView> ui_latest_original_rtv;
+   ComPtr<ID3D11Texture2D> ui_texture;
+   ComPtr<ID3D11RenderTargetView> ui_texture_rtv;
+   ComPtr<ID3D11ShaderResourceView> ui_texture_srv;
+   ComPtr<ID3D11RenderTargetView> ui_initial_original_rtv; // Leave nullptr to fall back on the current swapchain. This is an RTV but what matters is actually the resource behind it.
+   ComPtr<ID3D11RenderTargetView> ui_latest_original_rtv;
 
    // Misc
-   com_ptr<ID3D11SamplerState> sampler_state_linear;
-   com_ptr<ID3D11SamplerState> sampler_state_point;
-   com_ptr<ID3D11BlendState> default_blend_state; // No blend
-   com_ptr<ID3D11DepthStencilState> default_depth_stencil_state; // Depth/Stencil disabled
+   ComPtr<ID3D11SamplerState> sampler_state_linear;
+   ComPtr<ID3D11SamplerState> sampler_state_point;
+   ComPtr<ID3D11BlendState> default_blend_state; // No blend
+   ComPtr<ID3D11DepthStencilState> default_depth_stencil_state; // Depth/Stencil disabled
 #if DEVELOPMENT
-   com_ptr<ID3D11DepthStencilState> depth_test_false_write_true_stencil_false_state;
+   ComPtr<ID3D11DepthStencilState> depth_test_false_write_true_stencil_false_state;
 #endif
 
    // Pointer to the current DX buffer for the "global per view" cbuffer.
-   com_ptr<ID3D11Buffer> cb_per_view_global_buffer;
+   ComPtr<ID3D11Buffer> cb_per_view_global_buffer;
 #if DEVELOPMENT
    std::unordered_set<ID3D11Buffer*> cb_per_view_global_buffers;
 #endif
    void* cb_per_view_global_buffer_map_data = nullptr;
 #if DEVELOPMENT
    std::shared_ptr<void> debug_draw_frozen_draw_state_stack;
-   com_ptr<ID3D11Resource> debug_draw_texture;
+   ComPtr<ID3D11Resource> debug_draw_texture;
    DXGI_FORMAT debug_draw_texture_format = DXGI_FORMAT_UNKNOWN; // The view format, not the texture format
    uint4 debug_draw_texture_size = {}; // 3rd and 4th channels are Array/MS/Mips
 
@@ -443,7 +444,7 @@ struct DeviceData
       std::string hash; // Resource ptr hash
       bool data_valid = false;
       std::vector<float> data;
-      com_ptr<ID3D11Buffer> cb;
+      ComPtr<ID3D11Buffer> cb;
       
       UINT first_constant = 0; // D3D11.1: start offset in float4 units (0 if D3D11.0 or full-buffer bind)
       UINT num_constants = 0;  // D3D11.1: count in float4 units (0 if D3D11.0 info unavailable)
@@ -534,7 +535,7 @@ struct SwapchainData
 
    std::unordered_set<const ID3D11Resource*> back_buffers; // Owned by the swapchain
 
-   std::vector<com_ptr<ID3D11RenderTargetView>> display_composition_rtvs;
+   std::vector<ComPtr<ID3D11RenderTargetView>> display_composition_rtvs;
 
    // Whether the original SDR (vanilla) swapchain was linear space (e.g. sRGB formats)
     bool vanilla_was_linear_space = false;

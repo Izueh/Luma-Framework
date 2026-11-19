@@ -361,8 +361,8 @@ public:
          ComPtr<ID3D11RenderTargetView> rtv;
          native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
 
-         com_ptr<ID3D11DepthStencilState> depth_stencil_state;
-         native_device_context->OMGetDepthStencilState(&depth_stencil_state, nullptr);
+         ComPtr<ID3D11DepthStencilState> depth_stencil_state;
+         native_device_context->OMGetDepthStencilState(depth_stencil_state.put(), nullptr);
 
          if (depth_stencil_state && rtv)
          {
@@ -376,8 +376,8 @@ public:
             if (game_device_data.gtao_data.scene_resource == rtv_resource && depth_stencil_desc.DepthEnable && depth_stencil_desc.DepthWriteMask != D3D11_DEPTH_WRITE_MASK_ZERO)
             {
                // Wait until we have a mesh that draws with shadow maps to make sure we are a proper mesh, otherwise the fog data isn't in the CB
-               com_ptr<ID3D11ShaderResourceView> ps_srvs[7];
-               native_device_context->PSGetShaderResources(0, static_cast<UINT>(std::size(ps_srvs)), &ps_srvs[0]);
+               ComPtr<ID3D11ShaderResourceView> ps_srvs[7];
+               native_device_context->PSGetShaderResources(0, static_cast<UINT>(std::size(ps_srvs)), PutArray(ps_srvs));
                for (int i = 0; i < static_cast<int>(std::size(ps_srvs)); ++i)
                {
                   if (!ps_srvs[i])
@@ -721,9 +721,9 @@ public:
       {
          auto& game_device_data = GetGameDeviceData(device_data);
 
-         com_ptr<ID3D11RenderTargetView> rtv;
-         com_ptr<ID3D11DepthStencilView> dsv;
-         native_device_context->OMGetRenderTargets(1, &rtv, &dsv);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         ComPtr<ID3D11DepthStencilView> dsv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), dsv.put());
 
          // The ROV (UAV) view of the render target the UI draws on. Without it we fall back on the legacy fix.
          ID3D11UnorderedAccessView* ui_uav = nullptr;
@@ -790,8 +790,8 @@ public:
 
             // Make sure depth writes are not set, otherwise we could screw them up by writing on output anyway (ROV writes cannot be conditional).
             {
-               com_ptr<ID3D11DepthStencilState> depth_stencil_state;
-               native_device_context->OMGetDepthStencilState(&depth_stencil_state, nullptr);
+               ComPtr<ID3D11DepthStencilState> depth_stencil_state;
+               native_device_context->OMGetDepthStencilState(depth_stencil_state.put(), nullptr);
 
                D3D11_DEPTH_STENCIL_DESC depth_stencil_desc;
                depth_stencil_state->GetDesc(&depth_stencil_desc);
@@ -804,8 +804,8 @@ public:
             // Make sure there's only one RTV
             {
                // We only check blend for the first RT, so make sure that's all that is used!
-               com_ptr<ID3D11RenderTargetView> rtvs[2];
-               native_device_context->OMGetRenderTargets(2, &rtvs[0], nullptr);
+               ComPtr<ID3D11RenderTargetView> rtvs[2];
+               native_device_context->OMGetRenderTargets(2, PutArray(rtvs), nullptr);
                ASSERT_ONCE(rtvs[1] == nullptr);
             }
 #endif

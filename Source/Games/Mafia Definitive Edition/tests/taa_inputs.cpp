@@ -15,10 +15,10 @@ static void Check(bool passed, const char* name)
 
 int main()
 {
-   com_ptr<ID3D11Device> device;
-   com_ptr<ID3D11DeviceContext> context;
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
    Check(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
-            D3D11_SDK_VERSION, &device, nullptr, &context)),
+            D3D11_SDK_VERSION, device.put(), nullptr, context.put())),
       "create WARP device");
 
    // Small native resources exercise the production helper without a game or NGX dependency.
@@ -34,8 +34,8 @@ int main()
       desc.SampleDesc.Count = 1;
       desc.Usage = D3D11_USAGE_DEFAULT;
       desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-      com_ptr<ID3D11Texture2D> texture;
-      Check(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &texture)), "create texture");
+      ComPtr<ID3D11Texture2D> texture;
+      Check(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, texture.put())), "create texture");
       D3D11_SHADER_RESOURCE_VIEW_DESC view_desc = {};
       view_desc.Format = format;
       view_desc.ViewDimension = slices == 1 ? D3D11_SRV_DIMENSION_TEXTURE2D : D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
@@ -49,8 +49,8 @@ int main()
          view_desc.Texture2DArray.MipLevels = mips;
          view_desc.Texture2DArray.ArraySize = slices;
       }
-      com_ptr<ID3D11ShaderResourceView> view;
-      Check(SUCCEEDED(device->CreateShaderResourceView(texture.get(), &view_desc, &view)), "create SRV");
+      ComPtr<ID3D11ShaderResourceView> view;
+      Check(SUCCEEDED(device->CreateShaderResourceView(texture.get(), &view_desc, view.put())), "create SRV");
       return view;
    };
 
@@ -59,15 +59,15 @@ int main()
    {
       for (DXGI_FORMAT history_format : {DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R16G16B16A16_FLOAT})
       {
-         com_ptr<ID3D11ShaderResourceView> bound[] = {
+         ComPtr<ID3D11ShaderResourceView> bound[] = {
             make_view(colour_format), make_view(history_format), make_view(DXGI_FORMAT_R16G16B16A16_FLOAT)};
          ID3D11ShaderResourceView* bindings[] = {bound[0].get(), bound[1].get(), bound[2].get()};
          context->PSSetShaderResources(0, 3, bindings);
-         com_ptr<ID3D11ShaderResourceView> live[3];
-         context->PSGetShaderResources(0, 3, &live[0]);
-         com_ptr<ID3D11Resource> colour, motion, expected_colour, expected_motion;
-         bound[0]->GetResource(&expected_colour);
-         bound[2]->GetResource(&expected_motion);
+         ComPtr<ID3D11ShaderResourceView> live[3];
+         context->PSGetShaderResources(0, 3, PutArray(live));
+         ComPtr<ID3D11Resource> colour, motion, expected_colour, expected_motion;
+         bound[0]->GetResource(expected_colour.put());
+         bound[2]->GetResource(expected_motion.put());
          Check(MafiaDE::ReadResolveInput(live[0].get(), width, height, false, colour), "native/upgraded colour");
          Check(MafiaDE::ReadResolveInput(live[2].get(), width, height, true, motion), "native MV alongside FP16 history");
          Check(colour == expected_colour && motion == expected_motion && colour != motion, "preserve live resource identities");
@@ -75,7 +75,7 @@ int main()
       }
    }
 
-   com_ptr<ID3D11Resource> resource;
+   ComPtr<ID3D11Resource> resource;
    auto colour = make_view(DXGI_FORMAT_R11G11B10_FLOAT);
    auto r32 = make_view(DXGI_FORMAT_R32_FLOAT);
    auto array = make_view(DXGI_FORMAT_R16G16B16A16_FLOAT, 1, 2);
@@ -83,7 +83,7 @@ int main()
    auto check_rejected = [&](ID3D11ShaderResourceView* view, UINT test_width, UINT test_height, bool motion)
    {
       const auto refs = colour.ref_count();
-      colour->GetResource(&resource);
+      colour->GetResource(resource.put());
       Check(!MafiaDE::ReadResolveInput(view, test_width, test_height, motion, resource), "reject unsupported input");
       Check(!resource && colour.ref_count() == refs, "clear stale output without leaking SRV references");
       ++cases;

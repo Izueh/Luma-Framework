@@ -233,12 +233,12 @@ namespace
    bool IsRTSwapchain(ID3D11DeviceContext* native_device_context, const DeviceData& device_data)
    {
       bool is_rt_swapchain = false;
-      com_ptr<ID3D11RenderTargetView> render_target_view;
-      native_device_context->OMGetRenderTargets(1, &render_target_view, nullptr);
+      ComPtr<ID3D11RenderTargetView> render_target_view;
+      native_device_context->OMGetRenderTargets(1, render_target_view.put(), nullptr);
       if (render_target_view)
       {
-         com_ptr<ID3D11Resource> rt_resource;
-         render_target_view->GetResource(&rt_resource);
+         ComPtr<ID3D11Resource> rt_resource;
+         render_target_view->GetResource(rt_resource.put());
          is_rt_swapchain = device_data.back_buffers.contains(rt_resource.get()); // At least one of the two won't be nullptr
       }
       return is_rt_swapchain;
@@ -247,18 +247,18 @@ namespace
 
 struct GameDeviceDataMafiaIII final : public GameDeviceData
 {
-   com_ptr<ID3D11Resource> motion_vectors;
-   com_ptr<ID3D11Resource> depth;
+   ComPtr<ID3D11Resource> motion_vectors;
+   ComPtr<ID3D11Resource> depth;
 
-   com_ptr<ID3D11Resource> last_motion_vectors;
-   com_ptr<ID3D11RenderTargetView> last_motion_vectors_rtv;
+   ComPtr<ID3D11Resource> last_motion_vectors;
+   ComPtr<ID3D11RenderTargetView> last_motion_vectors_rtv;
 
-   com_ptr<ID3D11Texture3D> corrected_lut_texture_3d;
-   com_ptr<ID3D11ShaderResourceView> corrected_lut_srv;
-   com_ptr<ID3D11UnorderedAccessView> corrected_lut_uav;
+   ComPtr<ID3D11Texture3D> corrected_lut_texture_3d;
+   ComPtr<ID3D11ShaderResourceView> corrected_lut_srv;
+   ComPtr<ID3D11UnorderedAccessView> corrected_lut_uav;
 
    // The post tonemapping resource, being ping ponged between SRVs and RTVs
-   com_ptr<ID3D11Resource> post_processed_scene;
+   ComPtr<ID3D11Resource> post_processed_scene;
 
    DirectX::XMMATRIX prev_view_projection_mat;
    DirectX::XMMATRIX view_projection_mat;
@@ -371,28 +371,28 @@ public:
 
       if (original_shader_hashes.Contains(shader_hashes_Tonemap))
       {
-         com_ptr<ID3D11RenderTargetView> render_target_view[2];
-         native_device_context->OMGetRenderTargets(2, &render_target_view[0], nullptr);
+         ComPtr<ID3D11RenderTargetView> render_target_view[2];
+         native_device_context->OMGetRenderTargets(2, PutArray(render_target_view), nullptr);
          ASSERT_ONCE(render_target_view[1].get() == nullptr); // The second tonemapper param was actually used?
       }
 #endif
 
       if (original_shader_hashes.Contains(shader_hashes_EncodeMotionVectors))
       {
-         com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->PSGetShaderResources(4, 1, &srv);
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(4, 1, srv.put());
          ASSERT_ONCE(srv.get());
          if (srv.get())
          {
             game_device_data.motion_vectors = nullptr;
-            srv->GetResource(&game_device_data.motion_vectors);
+            srv->GetResource(game_device_data.motion_vectors.put());
             if (game_device_data.last_motion_vectors != game_device_data.motion_vectors)
             {
                game_device_data.last_motion_vectors = game_device_data.motion_vectors;
                game_device_data.last_motion_vectors_rtv = nullptr;
                if (game_device_data.last_motion_vectors)
                {
-                  native_device->CreateRenderTargetView(game_device_data.last_motion_vectors.get(), nullptr, &game_device_data.last_motion_vectors_rtv);
+                  native_device->CreateRenderTargetView(game_device_data.last_motion_vectors.get(), nullptr, game_device_data.last_motion_vectors_rtv.put());
                }
             }
          }
@@ -404,13 +404,13 @@ public:
       // Just because there's the rear view mirror rendering before the main scene etc, we allow it to run multiple times and take the last depth.
       if (original_shader_hashes.Contains(shader_hashes_LinearizeDepth))
       {
-         com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->PSGetShaderResources(0, 1, &srv);
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0, 1, srv.put());
          ASSERT_ONCE(srv.get());
          if (srv.get())
          {
             game_device_data.depth = nullptr;
-            srv->GetResource(&game_device_data.depth);
+            srv->GetResource(game_device_data.depth.put());
          }
          return DrawOrDispatchOverrideType::None;
       }
@@ -485,14 +485,14 @@ public:
          // 0 Raw Jitter Source Color (HDR/Linear)
          // 1 Previous TAA output (smooth)
          // 2 Encoded Motion Vectors (in a weird format, not usable by DLSS, but there's raw ones from previous passes)
-         com_ptr<ID3D11ShaderResourceView> ps_shader_resources[3];
-         native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), &ps_shader_resources[0]);
+         ComPtr<ID3D11ShaderResourceView> ps_shader_resources[3];
+         native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), PutArray(ps_shader_resources));
 
          ASSERT_ONCE(game_device_data.found_per_view_globals);
 
-         com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
+         ComPtr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT]; // There should only be 1 or 2
+         ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(render_target_views), depth_stencil_view.put());
          const bool dlss_inputs_valid = ps_shader_resources[0].get() != nullptr && render_target_views[0].get() != nullptr;
          ASSERT_ONCE(dlss_inputs_valid);
 
@@ -501,10 +501,10 @@ public:
             auto* sr_instance_data = device_data.GetSRInstanceData();
             ASSERT_ONCE(sr_instance_data);
 
-            com_ptr<ID3D11Resource> output_color_resource;
-            render_target_views[0]->GetResource(&output_color_resource);
-            com_ptr<ID3D11Texture2D> output_color;
-            HRESULT hr = output_color_resource->QueryInterface(&output_color);
+            ComPtr<ID3D11Resource> output_color_resource;
+            render_target_views[0]->GetResource(output_color_resource.put());
+            ComPtr<ID3D11Texture2D> output_color;
+            HRESULT hr = output_color_resource->QueryInterface(output_color.put());
             ASSERT_ONCE(SUCCEEDED(hr));
 
             D3D11_TEXTURE2D_DESC taa_output_texture_desc;
@@ -547,7 +547,7 @@ public:
                if (!device_data.sr_output_color.get() || dlss_output_changed)
                {
                   device_data.sr_output_color = nullptr; // Make sure we discard the previous one
-                  hr = native_device->CreateTexture2D(&dlss_output_texture_desc, nullptr, &device_data.sr_output_color);
+                  hr = native_device->CreateTexture2D(&dlss_output_texture_desc, nullptr, device_data.sr_output_color.put());
                   ASSERT_ONCE(SUCCEEDED(hr));
                }
                // Texture creation failed, we can't proceed with DLSS
@@ -564,10 +564,10 @@ public:
 
             if (!skip_dlss)
             {
-               com_ptr<ID3D11Resource> sr_source_color;
-               ps_shader_resources[0]->GetResource(&sr_source_color);
+               ComPtr<ID3D11Resource> sr_source_color;
+               ps_shader_resources[0]->GetResource(sr_source_color.put());
 #if 0
-               com_ptr<ID3D11Resource> depth_buffer;
+               ComPtr<ID3D11Resource> depth_buffer;
                if (depth_buffer == nullptr)
                {
                   depth_buffer = nullptr;
@@ -641,21 +641,21 @@ public:
       // There's probably faster ways of skipping it but this will do
       if (!allow_motion_blur && original_shader_hashes.Contains(shader_hashes_MotionBlur))
       {
-         com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->PSGetShaderResources(0, 1, &srv);
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0, 1, srv.put());
          ASSERT_ONCE(srv.get());
          if (srv.get())
          {
-            com_ptr<ID3D11Resource> sr;
-            srv->GetResource(&sr);
+            ComPtr<ID3D11Resource> sr;
+            srv->GetResource(sr.put());
 
-            com_ptr<ID3D11RenderTargetView> rtv;
-            native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+            ComPtr<ID3D11RenderTargetView> rtv;
+            native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
             ASSERT_ONCE(rtv.get());
             if (rtv.get())
             {
-               com_ptr<ID3D11Resource> rt;
-               rtv->GetResource(&rt);
+               ComPtr<ID3D11Resource> rt;
+               rtv->GetResource(rt.put());
 
                if (sr.get() && rt.get())
                {
@@ -691,12 +691,12 @@ public:
          {
             is_motion_blur = false;
 
-            com_ptr<ID3D11ShaderResourceView> srv;
-            native_device_context->PSGetShaderResources(0, 1, &srv);
+            ComPtr<ID3D11ShaderResourceView> srv;
+            native_device_context->PSGetShaderResources(0, 1, srv.put());
             if (srv.get())
             {
-               com_ptr<ID3D11Resource> sr;
-               srv->GetResource(&sr);
+               ComPtr<ID3D11Resource> sr;
+               srv->GetResource(sr.put());
 
                is_motion_blur = sr.get() && sr.get() == game_device_data.motion_vectors;
             }
@@ -726,18 +726,18 @@ public:
          bool is_rt_swapchain = false;
 
          // Re-apply the original shader in case this is a tonemap call for the separate rear view mirror rendering (optional). It targets UNORM textures and we definitely don't care for making these HDR (it's slow and ugly anyway)
-         com_ptr<ID3D11RenderTargetView> render_target_view;
-         native_device_context->OMGetRenderTargets(1, &render_target_view, nullptr);
+         ComPtr<ID3D11RenderTargetView> render_target_view;
+         native_device_context->OMGetRenderTargets(1, render_target_view.put(), nullptr);
          if (render_target_view)
          {
-            com_ptr<ID3D11Resource> rt_resource;
-            render_target_view->GetResource(&rt_resource);
+            ComPtr<ID3D11Resource> rt_resource;
+            render_target_view->GetResource(rt_resource.put());
             if (rt_resource.get())
             {
                is_rt_swapchain = device_data.back_buffers.contains(rt_resource.get());
 
-               com_ptr<ID3D11Texture2D> rt;
-               HRESULT hr = rt_resource->QueryInterface(&rt);
+               ComPtr<ID3D11Texture2D> rt;
+               HRESULT hr = rt_resource->QueryInterface(rt.put());
                if (SUCCEEDED(hr) && rt)
                {
                   D3D11_TEXTURE2D_DESC desc;
@@ -793,15 +793,15 @@ public:
          {
             bool lut_conversion_succeeded = false;
 
-            com_ptr<ID3D11ShaderResourceView> lut_srv;
-            native_device_context->PSGetShaderResources(9, 1, &lut_srv);
+            ComPtr<ID3D11ShaderResourceView> lut_srv;
+            native_device_context->PSGetShaderResources(9, 1, lut_srv.put());
             if (lut_srv.get())
             {
-               com_ptr<ID3D11Resource> lut_r;
-               lut_srv->GetResource(&lut_r);
+               ComPtr<ID3D11Resource> lut_r;
+               lut_srv->GetResource(lut_r.put());
 
-               com_ptr<ID3D11Texture3D> lut_texture_3d;
-               HRESULT hr = lut_r ? lut_r->QueryInterface(&lut_texture_3d) : E_FAIL;
+               ComPtr<ID3D11Texture3D> lut_texture_3d;
+               HRESULT hr = lut_r ? lut_r->QueryInterface(lut_texture_3d.put()) : E_FAIL;
                if (SUCCEEDED(hr) && lut_texture_3d)
                {
 #if DEVELOPMENT || TEST
@@ -820,9 +820,9 @@ public:
                      game_device_data.corrected_lut_texture_3d = CloneTexture<ID3D11Texture3D>(native_device, lut_texture_3d.get(), DXGI_FORMAT_R16G16B16A16_FLOAT, D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS, D3D11_BIND_RENDER_TARGET, false, false, native_device_context);
                      if (game_device_data.corrected_lut_texture_3d)
                      {
-                        hr = native_device->CreateShaderResourceView(game_device_data.corrected_lut_texture_3d.get(), nullptr, &game_device_data.corrected_lut_srv);
+                        hr = native_device->CreateShaderResourceView(game_device_data.corrected_lut_texture_3d.get(), nullptr, game_device_data.corrected_lut_srv.put());
                         ASSERT_ONCE(SUCCEEDED(hr));
-                        hr = native_device->CreateUnorderedAccessView(game_device_data.corrected_lut_texture_3d.get(), nullptr, &game_device_data.corrected_lut_uav);
+                        hr = native_device->CreateUnorderedAccessView(game_device_data.corrected_lut_texture_3d.get(), nullptr, game_device_data.corrected_lut_uav.put());
                         ASSERT_ONCE(SUCCEEDED(hr));
                      }
                   }
@@ -867,24 +867,24 @@ public:
       if (is_custom_pass && original_shader_hashes.Contains(shader_hashes_AA))
       {
          bool is_sr_post_processed_scene = false;
-         com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->PSGetShaderResources(0, 1, &srv); // It's always in slot 0
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0, 1, srv.put()); // It's always in slot 0
          if (srv)
          {
-            com_ptr<ID3D11Resource> sr;
-            srv->GetResource(&sr);
+            ComPtr<ID3D11Resource> sr;
+            srv->GetResource(sr.put());
             is_sr_post_processed_scene = game_device_data.post_processed_scene == sr;
          }
 
          bool is_rt_swapchain = false;
          bool is_rt_swapchain_or_back_buffer = is_rt_swapchain;
 
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
          if (rtv)
          {
-            com_ptr<ID3D11Resource> rt_resource;
-            rtv->GetResource(&rt_resource);
+            ComPtr<ID3D11Resource> rt_resource;
+            rtv->GetResource(rt_resource.put());
             is_rt_swapchain = device_data.back_buffers.contains(rt_resource.get());
             is_rt_swapchain_or_back_buffer = is_rt_swapchain;
             // Make sure it's linear otherwise, otherwise we might still need to correct the missing sRGB view mismatch
@@ -894,8 +894,8 @@ public:
                rtv->GetDesc(&rtv_desc);
                ASSERT_ONCE(rtv_desc.Format == DXGI_FORMAT_R11G11B10_FLOAT || rtv_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
 
-               com_ptr<ID3D11Texture2D> rt;
-               HRESULT hr = rt_resource->QueryInterface(&rt);
+               ComPtr<ID3D11Texture2D> rt;
+               HRESULT hr = rt_resource->QueryInterface(rt.put());
                ASSERT_ONCE(SUCCEEDED(hr));
 
                D3D11_TEXTURE2D_DESC rt_desc;
@@ -953,8 +953,8 @@ public:
       // Unless the user disabled UI through mods, the first fullscreen UI draw adds some unnecessary vignette at the edges of the screen
       if (!enable_vignette && !game_device_data.has_drawn_ui_vignette && device_data.has_drawn_main_post_processing && original_shader_hashes.Contains(shader_hashes_Vignette_UI))
       {
-         com_ptr<ID3D11DepthStencilState> depth_stencil_state;
-         native_device_context->OMGetDepthStencilState(&depth_stencil_state, nullptr);
+         ComPtr<ID3D11DepthStencilState> depth_stencil_state;
+         native_device_context->OMGetDepthStencilState(depth_stencil_state.put(), nullptr);
          D3D11_DEPTH_STENCIL_DESC depth_stencil_desc = {};
          if (depth_stencil_state)
          {
@@ -987,12 +987,12 @@ public:
          bool is_sr_post_processed_scene = false;
          bool is_srv_linear = false;
          bool is_rtv_linear = false;
-         com_ptr<ID3D11ShaderResourceView> srv;
-         native_device_context->PSGetShaderResources(0 ,1, &srv); // It's always in slot 0
+         ComPtr<ID3D11ShaderResourceView> srv;
+         native_device_context->PSGetShaderResources(0 ,1, srv.put()); // It's always in slot 0
          if (srv)
          {
-            com_ptr<ID3D11Resource> sr_resource;
-            srv->GetResource(&sr_resource);
+            ComPtr<ID3D11Resource> sr_resource;
+            srv->GetResource(sr_resource.put());
             is_sr_post_processed_scene = game_device_data.post_processed_scene == sr_resource;
 
             D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
@@ -1005,7 +1005,7 @@ public:
                is_srv_linear = true;
             }
 #if 0
-            com_ptr<ID3D11Texture2D> sr;
+            ComPtr<ID3D11Texture2D> sr;
             HRESULT hr = sr_resource->QueryInterface(&sr);
             ASSERT_ONCE(SUCCEEDED(hr));
             if (SUCCEEDED(hr))
@@ -1017,8 +1017,8 @@ public:
          }
 
          bool is_rt_swapchain = false;
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
          if (rtv)
          {
             D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
@@ -1026,8 +1026,8 @@ public:
             // Note: this works under the assumption we don't upgrade R8G8B8A8_UNORM/R8G8B8A8_TYPELESS to R16G16B16A16_FLOAT
             is_rtv_linear = rtv_desc.Format == DXGI_FORMAT_R11G11B10_FLOAT || rtv_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT || rtv_desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM_SRGB || rtv_desc.Format == DXGI_FORMAT_B8G8R8X8_UNORM_SRGB || rtv_desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 
-            com_ptr<ID3D11Resource> rt_resource;
-            rtv->GetResource(&rt_resource);
+            ComPtr<ID3D11Resource> rt_resource;
+            rtv->GetResource(rt_resource.put());
             is_rt_swapchain = device_data.back_buffers.contains(rt_resource.get());
             // Make sure it's linear otherwise, otherwise we might still need to correct the missing sRGB view mismatch
             bool is_rt_swapchain_or_back_buffer = is_rt_swapchain;
@@ -1035,8 +1035,8 @@ public:
             {
                ASSERT_ONCE(rtv_desc.Format == DXGI_FORMAT_R11G11B10_FLOAT || rtv_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
 
-               com_ptr<ID3D11Texture2D> rt;
-               HRESULT hr = rt_resource->QueryInterface(&rt);
+               ComPtr<ID3D11Texture2D> rt;
+               HRESULT hr = rt_resource->QueryInterface(rt.put());
                ASSERT_ONCE(SUCCEEDED(hr));
 
                D3D11_TEXTURE2D_DESC rt_desc;
@@ -1070,8 +1070,8 @@ public:
       // 2D would still be centered and cropped. Stretching it kinda works but then it's too stretched and hard to read.
       if (device_data.has_drawn_main_post_processing && original_shader_hashes.Contains(shader_hashes_3D_UI))
       {
-         com_ptr<ID3D11DepthStencilState> depth_stencil_state;
-         native_device_context->OMGetDepthStencilState(&depth_stencil_state, nullptr);
+         ComPtr<ID3D11DepthStencilState> depth_stencil_state;
+         native_device_context->OMGetDepthStencilState(depth_stencil_state.put(), nullptr);
          if (depth_stencil_state)
          {
             D3D11_DEPTH_STENCIL_DESC depth_stencil_desc;
@@ -1469,8 +1469,8 @@ public:
       DeviceData& device_data = *cmd_list_data->device_data;
       auto& game_device_data = GetGameDeviceData(device_data);
 
-      com_ptr<ID3D11Resource> target_resource_ref;
-      rtv->GetResource(&target_resource_ref);
+      ComPtr<ID3D11Resource> target_resource_ref;
+      rtv->GetResource(target_resource_ref.put());
       ID3D11Resource* target_resource = target_resource_ref.get();
       ASSERT_ONCE(game_device_data.last_motion_vectors.get() != target_resource || (color[0] == 0.f && color[1] == 0.f));
 
@@ -1797,9 +1797,9 @@ public:
 
                   CommandListData& cmd_list_data = *device_data.primary_command_list_data; // The game always uses the immediate device context (primary command list)
 
-                  com_ptr<ID3D11GeometryShader> gs;
-                  com_ptr<ID3D11ClassInstance> gs_i; // TODO: delete once we know it's nullptr (it seems to be)
-                  device_data.primary_command_list->GSGetShader(&gs, &gs_i, 0);
+                  ComPtr<ID3D11GeometryShader> gs;
+                  ComPtr<ID3D11ClassInstance> gs_i; // TODO: delete once we know it's nullptr (it seems to be)
+                  device_data.primary_command_list->GSGetShader(gs.put(), gs_i.put(), 0);
                   ASSERT_ONCE(gs_i.get() == nullptr);
 
                   device_data.primary_command_list->GSSetShader(nullptr, nullptr, 0);

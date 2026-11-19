@@ -15,22 +15,22 @@ struct GameDeviceDataPrey final : public GameDeviceData
 
 #if ENABLE_SR
    // SR
-   com_ptr<ID3D11Texture2D> sr_motion_vectors;
-   com_ptr<ID3D11RenderTargetView> sr_motion_vectors_rtv;
+   ComPtr<ID3D11Texture2D> sr_motion_vectors;
+   ComPtr<ID3D11RenderTargetView> sr_motion_vectors_rtv;
 #endif // ENABLE_SR
 
    // Exposure
-   com_ptr<ID3D11Buffer> exposure_buffer_gpu; // SR (doesn't need "ENABLE_SR)
-   com_ptr<ID3D11Buffer> exposure_buffers_cpu[2]; // SR (doesn't need "ENABLE_SR)
-   com_ptr<ID3D11RenderTargetView> exposure_buffer_rtv; // SR (doesn't need "ENABLE_SR)
+   ComPtr<ID3D11Buffer> exposure_buffer_gpu; // SR (doesn't need "ENABLE_SR)
+   ComPtr<ID3D11Buffer> exposure_buffers_cpu[2]; // SR (doesn't need "ENABLE_SR)
+   ComPtr<ID3D11RenderTargetView> exposure_buffer_rtv; // SR (doesn't need "ENABLE_SR)
    size_t exposure_buffers_cpu_index = 0;
 
    // GTAO
-   com_ptr<ID3D11Texture2D> gtao_edges_texture;
+   ComPtr<ID3D11Texture2D> gtao_edges_texture;
    UINT gtao_edges_texture_width = 0;
    UINT gtao_edges_texture_height = 0;
-   com_ptr<ID3D11RenderTargetView> gtao_edges_rtv;
-   com_ptr<ID3D11ShaderResourceView> gtao_edges_srv;
+   ComPtr<ID3D11RenderTargetView> gtao_edges_rtv;
+   ComPtr<ID3D11ShaderResourceView> gtao_edges_srv;
 
    void CleanGTAOResources()
    {
@@ -42,13 +42,13 @@ struct GameDeviceDataPrey final : public GameDeviceData
    }
 
    // SSR
-   com_ptr<ID3D11Texture2D> ssr_texture;
-   com_ptr<ID3D11ShaderResourceView> ssr_srv;
-   com_ptr<ID3D11Texture2D> ssr_diffuse_texture;
+   ComPtr<ID3D11Texture2D> ssr_texture;
+   ComPtr<ID3D11ShaderResourceView> ssr_srv;
+   ComPtr<ID3D11Texture2D> ssr_diffuse_texture;
    UINT ssr_diffuse_texture_width = 0;
    UINT ssr_diffuse_texture_height = 0;
-   com_ptr<ID3D11RenderTargetView> ssr_diffuse_rtv;
-   com_ptr<ID3D11ShaderResourceView> ssr_diffuse_srv;
+   ComPtr<ID3D11RenderTargetView> ssr_diffuse_rtv;
+   ComPtr<ID3D11ShaderResourceView> ssr_diffuse_srv;
 
    void CleanSSRResources()
    {
@@ -62,12 +62,12 @@ struct GameDeviceDataPrey final : public GameDeviceData
    }
 
    // Lens Distortion
-   com_ptr<ID3D11SamplerState> lens_distortion_sampler_state;
-   com_ptr<ID3D11Texture2D> lens_distortion_texture;
-   com_ptr<ID3D11ShaderResourceView> lens_distortion_srv;
-   com_ptr<ID3D11Resource> lens_distortion_rtvs_resources[2];
-   com_ptr<ID3D11RenderTargetView> lens_distortion_rtvs[2];
-   com_ptr<ID3D11ShaderResourceView> lens_distortion_srvs[2];
+   ComPtr<ID3D11SamplerState> lens_distortion_sampler_state;
+   ComPtr<ID3D11Texture2D> lens_distortion_texture;
+   ComPtr<ID3D11ShaderResourceView> lens_distortion_srv;
+   ComPtr<ID3D11Resource> lens_distortion_rtvs_resources[2];
+   ComPtr<ID3D11RenderTargetView> lens_distortion_rtvs[2];
+   ComPtr<ID3D11ShaderResourceView> lens_distortion_srvs[2];
    size_t lens_distortion_rtv_index = -1;
    bool lens_distortion_rtv_found = false;
    UINT lens_distortion_texture_width = 0;
@@ -295,7 +295,7 @@ public:
       sampler_desc.MaxAnisotropy = D3D11_REQ_MAXANISOTROPY;
       sampler_desc.MinLOD = 0;
       sampler_desc.MaxLOD = D3D11_FLOAT32_MAX;
-      HRESULT hr = native_device->CreateSamplerState(&sampler_desc, &game_device_data.lens_distortion_sampler_state);
+      HRESULT hr = native_device->CreateSamplerState(&sampler_desc, game_device_data.lens_distortion_sampler_state.put());
       assert(SUCCEEDED(hr));
    }
 
@@ -335,9 +335,9 @@ public:
          {
             uint2 ssr_diffuse_target_resolution = { (UINT)device_data.output_resolution.x, (UINT)device_data.output_resolution.y };
 
-            com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-            com_ptr<ID3D11DepthStencilView> dsv;
-            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+            ComPtr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+            ComPtr<ID3D11DepthStencilView> dsv;
+            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(rtvs), dsv.put());
 
             DXGI_FORMAT ssr_texture_format = DXGI_FORMAT_UNKNOWN;
 
@@ -345,13 +345,13 @@ public:
             bool ssr_texture_changed = false;
             if (rtvs[0])
             {
-               com_ptr<ID3D11Resource> render_target_resource;
-               rtvs[0]->GetResource(&render_target_resource);
+               ComPtr<ID3D11Resource> render_target_resource;
+               rtvs[0]->GetResource(render_target_resource.put());
                if (render_target_resource)
                {
                   ID3D11Texture2D* prev_ssr_texture = game_device_data.ssr_texture.get();
                   game_device_data.ssr_texture = nullptr;
-                  render_target_resource->QueryInterface(&game_device_data.ssr_texture);
+                  render_target_resource->QueryInterface(game_device_data.ssr_texture.put());
                   ssr_texture_changed = prev_ssr_texture != game_device_data.ssr_texture.get();
                   if (game_device_data.ssr_texture)
                   {
@@ -382,7 +382,7 @@ public:
                texture_desc.MiscFlags = 0;
 
                game_device_data.ssr_diffuse_texture = nullptr;
-               HRESULT hr = native_device->CreateTexture2D(&texture_desc, nullptr, &game_device_data.ssr_diffuse_texture);
+               HRESULT hr = native_device->CreateTexture2D(&texture_desc, nullptr, game_device_data.ssr_diffuse_texture.put());
                assert(SUCCEEDED(hr));
 
                D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
@@ -391,7 +391,7 @@ public:
                rtv_desc.Texture2D.MipSlice = 0;
 
                game_device_data.ssr_diffuse_rtv = nullptr;
-               hr = native_device->CreateRenderTargetView(game_device_data.ssr_diffuse_texture.get(), &rtv_desc, &game_device_data.ssr_diffuse_rtv);
+               hr = native_device->CreateRenderTargetView(game_device_data.ssr_diffuse_texture.get(), &rtv_desc, game_device_data.ssr_diffuse_rtv.put());
                assert(SUCCEEDED(hr));
 
                D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
@@ -401,7 +401,7 @@ public:
                srv_desc.Texture2D.MostDetailedMip = 0;
 
                game_device_data.ssr_diffuse_srv = nullptr;
-               hr = native_device->CreateShaderResourceView(game_device_data.ssr_diffuse_texture.get(), &srv_desc, &game_device_data.ssr_diffuse_srv);
+               hr = native_device->CreateShaderResourceView(game_device_data.ssr_diffuse_texture.get(), &srv_desc, game_device_data.ssr_diffuse_srv.put());
                assert(SUCCEEDED(hr));
 
                if (game_device_data.ssr_texture)
@@ -410,14 +410,14 @@ public:
 
                   game_device_data.ssr_srv = nullptr;
                   // Cache the main (first) SSR texture for later retrieval in the SSR blend shader, given it only had access to mip mapped versions of it
-                  hr = native_device->CreateShaderResourceView(game_device_data.ssr_texture.get(), &srv_desc, &game_device_data.ssr_srv);
+                  hr = native_device->CreateShaderResourceView(game_device_data.ssr_texture.get(), &srv_desc, game_device_data.ssr_srv.put());
                   assert(SUCCEEDED(hr));
                }
             }
 
             // Add a second render target to store how "diffuse" reflections need to be, based on the ray travel distance from the relfection point (and the specularity etc).
             // We need to cache and restore all the RTs as the game uses a push and pop mechanism that tracks them closely, so any changes in state can break them.
-            com_ptr<ID3D11RenderTargetView> rtv1 = rtvs[1];
+            ComPtr<ID3D11RenderTargetView> rtv1 = rtvs[1];
             rtvs[1] = game_device_data.ssr_diffuse_rtv.get();
             ID3D11RenderTargetView* const* rtvs_const = (ID3D11RenderTargetView**)std::addressof(rtvs[0]); // We can't use "com_ptr"'s "T **operator&()" as it asserts if the object isn't null, even if the reference would be const
             native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs_const, dsv.get());
@@ -495,7 +495,7 @@ public:
                exposure_buffer_data.SysMemSlicePitch = 0;
 
                game_device_data.exposure_buffer_gpu = nullptr;
-               HRESULT hr = native_device->CreateBuffer(&exposure_buffer_desc, &exposure_buffer_data, &game_device_data.exposure_buffer_gpu);
+               HRESULT hr = native_device->CreateBuffer(&exposure_buffer_desc, &exposure_buffer_data, game_device_data.exposure_buffer_gpu.put());
                ASSERT_ONCE(SUCCEEDED(hr));
 
                exposure_buffer_desc.Usage = D3D11_USAGE_STAGING;
@@ -504,10 +504,10 @@ public:
 
                // Create a "ring" buffer so we avoid avoid butchering the frame rate to map this texture immediately after a copy resource from the dynamic resource (shader memory writes will directly go into our mapped data, with a delay)
                game_device_data.exposure_buffers_cpu[0] = nullptr;
-               hr = native_device->CreateBuffer(&exposure_buffer_desc, &exposure_buffer_data, &game_device_data.exposure_buffers_cpu[0]);
+               hr = native_device->CreateBuffer(&exposure_buffer_desc, &exposure_buffer_data, PutArray(game_device_data.exposure_buffers_cpu));
                ASSERT_ONCE(SUCCEEDED(hr));
                game_device_data.exposure_buffers_cpu[1] = nullptr;
-               hr = native_device->CreateBuffer(&exposure_buffer_desc, &exposure_buffer_data, &game_device_data.exposure_buffers_cpu[1]);
+               hr = native_device->CreateBuffer(&exposure_buffer_desc, &exposure_buffer_data, game_device_data.exposure_buffers_cpu[1].put());
 
                D3D11_RENDER_TARGET_VIEW_DESC exposure_buffer_rtv_desc;
                exposure_buffer_rtv_desc.Format = DXGI_FORMAT::DXGI_FORMAT_R32_FLOAT; // NOTE: this would probably be fine as FP16 too
@@ -516,23 +516,23 @@ public:
                exposure_buffer_rtv_desc.Buffer.NumElements = 1;
 
                game_device_data.exposure_buffer_rtv = nullptr;
-               hr = native_device->CreateRenderTargetView(game_device_data.exposure_buffer_gpu.get(), &exposure_buffer_rtv_desc, &game_device_data.exposure_buffer_rtv);
+               hr = native_device->CreateRenderTargetView(game_device_data.exposure_buffer_gpu.get(), &exposure_buffer_rtv_desc, game_device_data.exposure_buffer_rtv.put());
                ASSERT_ONCE(SUCCEEDED(hr));
             }
 
 #if DEVELOPMENT || TEST
             // Make sure the exposure texture is 1x1 in size because we assumed so in code (we swapped its sampling with a load of texel 0)
             D3D11_TEXTURE2D_DESC ps_texture_2d_desc = {};
-            com_ptr<ID3D11ShaderResourceView> ps_srv;
-            native_device_context->PSGetShaderResources(1, 1, &ps_srv);
+            ComPtr<ID3D11ShaderResourceView> ps_srv;
+            native_device_context->PSGetShaderResources(1, 1, ps_srv.put());
             if (ps_srv)
             {
-               com_ptr<ID3D11Resource> ps_resource;
-               ps_srv->GetResource(&ps_resource);
+               ComPtr<ID3D11Resource> ps_resource;
+               ps_srv->GetResource(ps_resource.put());
                if (ps_resource)
                {
-                  com_ptr<ID3D11Texture2D> ps_texture_2d;
-                  ps_resource->QueryInterface(&ps_texture_2d);
+                  ComPtr<ID3D11Texture2D> ps_texture_2d;
+                  ps_resource->QueryInterface(ps_texture_2d.put());
                   if (ps_texture_2d)
                   {
                      ps_texture_2d->GetDesc(&ps_texture_2d_desc);
@@ -543,10 +543,10 @@ public:
 #endif
 
             // Cache original state
-            com_ptr<ID3D11RenderTargetView> rtv;
-            native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
-            com_ptr<ID3D11PixelShader> ps;
-            native_device_context->PSGetShader(&ps, nullptr, 0);
+            ComPtr<ID3D11RenderTargetView> rtv;
+            native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
+            ComPtr<ID3D11PixelShader> ps;
+            native_device_context->PSGetShader(ps.put(), nullptr, 0);
 
             bool has_sunshafts = original_shader_hashes.Contains(shader_hashes_HDRPostProcessHDRFinalScene_Sunshafts); // These shaders use a different cbuffer layout
             SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData, has_sunshafts);
@@ -635,9 +635,9 @@ public:
          {
             uint2 gtao_edges_target_resolution = { (UINT)device_data.output_resolution.x, (UINT)device_data.output_resolution.y }; // Note that the swapchain resolution can end up being changed with a delay? Or are we somehow missing resize events?
 
-            com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-            com_ptr<ID3D11DepthStencilView> dsv;
-            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+            ComPtr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+            ComPtr<ID3D11DepthStencilView> dsv;
+            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(rtvs), dsv.put());
 
             // This is an optional extra check we can make to properly determine the resolution of our edges texture.
             // Unless "r_ssdoHalfRes" has a value of 3, then the RT would always have the same resolution as the final swapchain output.
@@ -647,12 +647,12 @@ public:
 #if DEVELOPMENT
             if (rtvs[0])
             {
-               com_ptr<ID3D11Resource> render_target_resource;
-               rtvs[0]->GetResource(&render_target_resource);
+               ComPtr<ID3D11Resource> render_target_resource;
+               rtvs[0]->GetResource(render_target_resource.put());
                if (render_target_resource)
                {
-                  com_ptr<ID3D11Texture2D> render_target_texture_2d;
-                  render_target_resource->QueryInterface(&render_target_texture_2d);
+                  ComPtr<ID3D11Texture2D> render_target_texture_2d;
+                  render_target_resource->QueryInterface(render_target_texture_2d.put());
                   if (render_target_texture_2d)
                   {
                      D3D11_TEXTURE2D_DESC render_target_texture_2d_desc;
@@ -683,7 +683,7 @@ public:
                texture_desc.MiscFlags = 0;
 
                game_device_data.gtao_edges_texture = nullptr;
-               HRESULT hr = native_device->CreateTexture2D(&texture_desc, nullptr, &game_device_data.gtao_edges_texture);
+               HRESULT hr = native_device->CreateTexture2D(&texture_desc, nullptr, game_device_data.gtao_edges_texture.put());
                assert(SUCCEEDED(hr));
 
                D3D11_RENDER_TARGET_VIEW_DESC rtv_desc;
@@ -692,7 +692,7 @@ public:
                rtv_desc.Texture2D.MipSlice = 0;
 
                game_device_data.gtao_edges_rtv = nullptr;
-               hr = native_device->CreateRenderTargetView(game_device_data.gtao_edges_texture.get(), &rtv_desc, &game_device_data.gtao_edges_rtv);
+               hr = native_device->CreateRenderTargetView(game_device_data.gtao_edges_texture.get(), &rtv_desc, game_device_data.gtao_edges_rtv.put());
                assert(SUCCEEDED(hr));
 
                D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
@@ -702,13 +702,13 @@ public:
                srv_desc.Texture2D.MostDetailedMip = 0;
 
                game_device_data.gtao_edges_srv = nullptr;
-               hr = native_device->CreateShaderResourceView(game_device_data.gtao_edges_texture.get(), &srv_desc, &game_device_data.gtao_edges_srv);
+               hr = native_device->CreateShaderResourceView(game_device_data.gtao_edges_texture.get(), &srv_desc, game_device_data.gtao_edges_srv.put());
                assert(SUCCEEDED(hr));
             }
 
             // Add a second render target (the depth edges) as it's needed by GTAO.
             // We need to cache and restore all the RTs as the game uses a push and pop mechanism that tracks them closely, so any changes in state can break them.
-            com_ptr<ID3D11RenderTargetView> rtv1 = rtvs[1];
+            ComPtr<ID3D11RenderTargetView> rtv1 = rtvs[1];
             rtvs[1] = game_device_data.gtao_edges_rtv.get();
             ID3D11RenderTargetView* const* rtvs_const = (ID3D11RenderTargetView**)std::addressof(rtvs[0]);
             native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs_const, dsv.get());
@@ -747,27 +747,27 @@ public:
          // Do lens distortion just before the post AA composition, which draws film grain and other screen space effects
          if (is_custom_pass && cb_luma_global_settings.GameSettings.LensDistortion && device_data.native_pixel_shaders[CompileTimeStringHash("Perfect Perspective")].get())
          {
-            com_ptr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-            com_ptr<ID3D11DepthStencilView> dsv;
-            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &rtvs[0], &dsv);
+            ComPtr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+            ComPtr<ID3D11DepthStencilView> dsv;
+            native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(rtvs), dsv.put());
 
-            com_ptr<ID3D11ShaderResourceView> ps_srv;
-            native_device_context->PSGetShaderResources(0, 1, &ps_srv);
+            ComPtr<ID3D11ShaderResourceView> ps_srv;
+            native_device_context->PSGetShaderResources(0, 1, ps_srv.put());
 
-            com_ptr<ID3D11PixelShader> ps;
-            native_device_context->PSGetShader(&ps, nullptr, 0);
+            ComPtr<ID3D11PixelShader> ps;
+            native_device_context->PSGetShader(ps.put(), nullptr, 0);
 
             uint2 lens_distortion_resolution = { (UINT)device_data.output_resolution.x, (UINT)device_data.output_resolution.y };
             DXGI_FORMAT lens_distortion_format = DXGI_FORMAT_UNKNOWN;
 
-            com_ptr<ID3D11Resource> ps_srv_resource;
+            ComPtr<ID3D11Resource> ps_srv_resource;
             if (ps_srv)
             {
-               ps_srv->GetResource(&ps_srv_resource);
+               ps_srv->GetResource(ps_srv_resource.put());
                if (ps_srv_resource)
                {
-                  com_ptr<ID3D11Texture2D> ps_srv_texture_2d;
-                  ps_srv_resource->QueryInterface(&ps_srv_texture_2d);
+                  ComPtr<ID3D11Texture2D> ps_srv_texture_2d;
+                  ps_srv_resource->QueryInterface(ps_srv_texture_2d.put());
                   if (ps_srv_texture_2d)
                   {
                      D3D11_TEXTURE2D_DESC ps_srv_texture_2d_desc;
@@ -842,7 +842,7 @@ public:
                }
 
                game_device_data.lens_distortion_texture = nullptr;
-               HRESULT hr = native_device->CreateTexture2D(&texture_desc, nullptr, &game_device_data.lens_distortion_texture);
+               HRESULT hr = native_device->CreateTexture2D(&texture_desc, nullptr, game_device_data.lens_distortion_texture.put());
                assert(SUCCEEDED(hr));
 
                D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc;
@@ -852,7 +852,7 @@ public:
                srv_desc.Texture2D.MostDetailedMip = 0;
 
                game_device_data.lens_distortion_srv = nullptr;
-               hr = native_device->CreateShaderResourceView(game_device_data.lens_distortion_texture.get(), &srv_desc, &game_device_data.lens_distortion_srv);
+               hr = native_device->CreateShaderResourceView(game_device_data.lens_distortion_texture.get(), &srv_desc, game_device_data.lens_distortion_srv.put());
                assert(SUCCEEDED(hr));
             }
 
@@ -894,7 +894,7 @@ public:
                   rtv_desc.Texture2D.MipSlice = 0;
 
                   game_device_data.lens_distortion_rtvs[game_device_data.lens_distortion_rtv_index] = nullptr;
-                  HRESULT hr = native_device->CreateRenderTargetView(game_device_data.lens_distortion_rtvs_resources[game_device_data.lens_distortion_rtv_index].get(), &rtv_desc, &game_device_data.lens_distortion_rtvs[game_device_data.lens_distortion_rtv_index]);
+                  HRESULT hr = native_device->CreateRenderTargetView(game_device_data.lens_distortion_rtvs_resources[game_device_data.lens_distortion_rtv_index].get(), &rtv_desc, game_device_data.lens_distortion_rtvs[game_device_data.lens_distortion_rtv_index].put());
                   assert(SUCCEEDED(hr));
                }
 
@@ -947,7 +947,7 @@ public:
             size_t target_index = can_flip ? flipped_index : game_device_data.lens_distortion_rtv_index;
             ID3D11ShaderResourceView* const ps_srv_const = can_flip ? game_device_data.lens_distortion_srvs[game_device_data.lens_distortion_rtv_index].get() : ps_srv.get();
 
-            com_ptr<ID3D11RenderTargetView> rtv0 = rtvs[0];
+            ComPtr<ID3D11RenderTargetView> rtv0 = rtvs[0];
             rtvs[0] = game_device_data.lens_distortion_rtvs[target_index].get();
             ID3D11RenderTargetView* const* rtvs_const = (ID3D11RenderTargetView**)std::addressof(rtvs[0]);
             native_device_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, rtvs_const, dsv.get());
@@ -1033,21 +1033,21 @@ public:
       // This pass always runs before our lens distortion, so mark the lens distortion RTV as found here to avoid having to find it again later
       if (game_device_data.has_drawn_composed_gbuffers && cb_luma_global_settings.GameSettings.LensDistortion && original_shader_hashes.Contains(shader_hashes_PostAA) && device_data.cloned_pipeline_count != 0 && device_data.native_pixel_shaders[CompileTimeStringHash("Perfect Perspective")].get())
       {
-         com_ptr<ID3D11RenderTargetView> rtv;
-         native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+         ComPtr<ID3D11RenderTargetView> rtv;
+         native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
 
          ASSERT_ONCE(rtv.get());
          if (rtv.get())
          {
-            com_ptr<ID3D11ShaderResourceView> ps_srv;
-            native_device_context->PSGetShaderResources(1, 1, &ps_srv); // "PostAA_PreviousSceneTex" (not present in all AA methods)
-            com_ptr<ID3D11Resource> ps_srv_resource;
+            ComPtr<ID3D11ShaderResourceView> ps_srv;
+            native_device_context->PSGetShaderResources(1, 1, ps_srv.put()); // "PostAA_PreviousSceneTex" (not present in all AA methods)
+            ComPtr<ID3D11Resource> ps_srv_resource;
             if (ps_srv)
             {
-               ps_srv->GetResource(&ps_srv_resource);
+               ps_srv->GetResource(ps_srv_resource.put());
             }
-            com_ptr<ID3D11Resource> rtv_resource;
-            rtv->GetResource(&rtv_resource);
+            ComPtr<ID3D11Resource> rtv_resource;
+            rtv->GetResource(rtv_resource.put());
 
             bool reset = ps_srv_resource.get() == nullptr || (game_device_data.lens_distortion_rtvs_resources[0].get() != ps_srv_resource.get() && game_device_data.lens_distortion_rtvs_resources[1].get() != ps_srv_resource.get());
             // SMAA 1TX and 2TX ping pong two textures on read write. FXAA and no AA only use one (they only need one, but might still flip flop). LUMA DLSS also only uses one.
@@ -1116,7 +1116,7 @@ public:
          ASSERT_ONCE(sr_instance_data);
 
          ASSERT_ONCE(device_data.taa_detected); // Why did we get here without TAA enabled?
-         com_ptr<ID3D11ShaderResourceView> ps_shader_resources[17];
+         ComPtr<ID3D11ShaderResourceView> ps_shader_resources[17];
          // 0 current color source
          // 1 previous color source (post TAA)
          // 2 depth (0-1 being camera origin - far)
@@ -1124,9 +1124,9 @@ public:
          // 16 device depth (inverted depth, used by stencil)
          native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources), reinterpret_cast<ID3D11ShaderResourceView**>(ps_shader_resources));
 
-         com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-         com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &render_target_views[0], &depth_stencil_view);
+         ComPtr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+         ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+         native_device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(render_target_views), depth_stencil_view.put());
 
          const bool dlss_inputs_valid = ps_shader_resources[0].get() != nullptr && ps_shader_resources[16].get() != nullptr && ps_shader_resources[3].get() != nullptr && render_target_views[0] != nullptr;
          ASSERT_ONCE(dlss_inputs_valid);
@@ -1134,10 +1134,10 @@ public:
          {
             // TODO: add FSR 3 state reset? probably not needed!
 
-            com_ptr<ID3D11Resource> output_color_resource;
-            render_target_views[0]->GetResource(&output_color_resource);
-            com_ptr<ID3D11Texture2D> output_color;
-            HRESULT hr = output_color_resource->QueryInterface(&output_color);
+            ComPtr<ID3D11Resource> output_color_resource;
+            render_target_views[0]->GetResource(output_color_resource.put());
+            ComPtr<ID3D11Texture2D> output_color;
+            HRESULT hr = output_color_resource->QueryInterface(output_color.put());
             ASSERT_ONCE(SUCCEEDED(hr));
 
             D3D11_TEXTURE2D_DESC taa_output_texture_desc;
@@ -1153,8 +1153,8 @@ public:
             bool dlss_hdr = GetShaderDefineCompiledNumericalValue(POST_PROCESS_SPACE_TYPE_HASH) >= 1; // we are assuming the value was always a number and not empty
 
 #if TEST_SR
-            com_ptr<ID3D11VertexShader> vs;
-            com_ptr<ID3D11PixelShader> ps;
+            ComPtr<ID3D11VertexShader> vs;
+            ComPtr<ID3D11PixelShader> ps;
             native_device_context->VSGetShader(&vs, nullptr, 0);
             native_device_context->PSGetShader(&ps, nullptr, 0);
 #endif // TEST_SR
@@ -1185,20 +1185,20 @@ public:
             sr_implementations[device_data.sr_type]->UpdateSettings(sr_instance_data, native_device_context, settings_data);
 
 #if TEST_SR // Verify that DLSS/FSR never alter the pipeline state (it doesn't, not in the "SR::UpdateSettings()"
-            com_ptr<ID3D11ShaderResourceView> ps_shader_resources_post[ARRAYSIZE(ps_shader_resources)];
+            ComPtr<ID3D11ShaderResourceView> ps_shader_resources_post[ARRAYSIZE(ps_shader_resources)];
             native_device_context->PSGetShaderResources(0, ARRAYSIZE(ps_shader_resources_post), reinterpret_cast<ID3D11ShaderResourceView**>(ps_shader_resources_post));
             for (uint32_t i = 0; i < ARRAYSIZE(ps_shader_resources); i++)
             {
                ASSERT_ONCE(ps_shader_resources[i] == ps_shader_resources_post[i]);
             }
 
-            com_ptr<ID3D11RenderTargetView> render_target_view_post;
-            com_ptr<ID3D11DepthStencilView> depth_stencil_view_post;
+            ComPtr<ID3D11RenderTargetView> render_target_view_post;
+            ComPtr<ID3D11DepthStencilView> depth_stencil_view_post;
             native_device_context->OMGetRenderTargets(1, &render_target_view_post, &depth_stencil_view_post);
             ASSERT_ONCE(render_target_views[0] == render_target_view_post && depth_stencil_view == depth_stencil_view_post);
 
-            com_ptr<ID3D11VertexShader> vs_post;
-            com_ptr<ID3D11PixelShader> ps_post;
+            ComPtr<ID3D11VertexShader> vs_post;
+            ComPtr<ID3D11PixelShader> ps_post;
             native_device_context->VSGetShader(&vs_post, nullptr, 0);
             native_device_context->PSGetShader(&ps_post, nullptr, 0);
             ASSERT_ONCE(vs == vs_post && ps == ps_post);
@@ -1229,7 +1229,7 @@ public:
                if (!device_data.sr_output_color.get() || dlss_output_changed)
                {
                   device_data.sr_output_color = nullptr; // Make sure we discard the previous one
-                  hr = native_device->CreateTexture2D(&taa_output_texture_desc, nullptr, &device_data.sr_output_color);
+                  hr = native_device->CreateTexture2D(&taa_output_texture_desc, nullptr, device_data.sr_output_color.put());
                   ASSERT_ONCE(SUCCEEDED(hr));
                }
                if (!device_data.sr_output_color.get())
@@ -1245,14 +1245,14 @@ public:
 
             if (!skip_dlss)
             {
-               com_ptr<ID3D11Resource> source_color;
-               ps_shader_resources[0]->GetResource(&source_color);
-               com_ptr<ID3D11Resource> depth_buffer;
-               ps_shader_resources[16]->GetResource(&depth_buffer);
-               com_ptr<ID3D11Resource> object_velocity_buffer_temp;
-               ps_shader_resources[3]->GetResource(&object_velocity_buffer_temp);
-               com_ptr<ID3D11Texture2D> object_velocity_buffer;
-               hr = object_velocity_buffer_temp->QueryInterface(&object_velocity_buffer);
+               ComPtr<ID3D11Resource> source_color;
+               ps_shader_resources[0]->GetResource(source_color.put());
+               ComPtr<ID3D11Resource> depth_buffer;
+               ps_shader_resources[16]->GetResource(depth_buffer.put());
+               ComPtr<ID3D11Resource> object_velocity_buffer_temp;
+               ps_shader_resources[3]->GetResource(object_velocity_buffer_temp.put());
+               ComPtr<ID3D11Texture2D> object_velocity_buffer;
+               hr = object_velocity_buffer_temp->QueryInterface(object_velocity_buffer.put());
                ASSERT_ONCE(SUCCEEDED(hr));
 
                // Generate "fake" exposure texture
@@ -1291,7 +1291,7 @@ public:
                   exposure_texture_data.SysMemSlicePitch = 32;
 
                   device_data.sr_exposure = nullptr; // Make sure we discard the previous one
-                  hr = native_device->CreateTexture2D(&exposure_texture_desc, &exposure_texture_data, &device_data.sr_exposure);
+                  hr = native_device->CreateTexture2D(&exposure_texture_desc, &exposure_texture_data, device_data.sr_exposure.put());
                   assert(SUCCEEDED(hr));
                }
 
@@ -1325,7 +1325,7 @@ public:
                   if (!game_device_data.sr_motion_vectors.get() || dlss_motion_vectors_changed)
                   {
                      game_device_data.sr_motion_vectors = nullptr; // Make sure we discard the previous one
-                     hr = native_device->CreateTexture2D(&object_velocity_texture_desc, nullptr, &game_device_data.sr_motion_vectors);
+                     hr = native_device->CreateTexture2D(&object_velocity_texture_desc, nullptr, game_device_data.sr_motion_vectors.put());
                      ASSERT_ONCE(SUCCEEDED(hr));
 
                      D3D11_RENDER_TARGET_VIEW_DESC object_velocity_render_target_view_desc;
@@ -1335,7 +1335,7 @@ public:
                      object_velocity_render_target_view_desc.Texture2D.MipSlice = 0;
 
                      game_device_data.sr_motion_vectors_rtv = nullptr; // Make sure we discard the previous one
-                     native_device->CreateRenderTargetView(game_device_data.sr_motion_vectors.get(), &object_velocity_render_target_view_desc, &game_device_data.sr_motion_vectors_rtv);
+                     native_device->CreateRenderTargetView(game_device_data.sr_motion_vectors.get(), &object_velocity_render_target_view_desc, game_device_data.sr_motion_vectors_rtv.put());
                   }
 
                   SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
@@ -1894,7 +1894,7 @@ public:
                   {
                      D3D11_SAMPLER_DESC native_desc;
                      native_sampler->GetDesc(&native_desc);
-                     com_ptr<ID3D11SamplerState> custom_sampler = CreateCustomSampler(device_data, native_device, native_desc);
+                     ComPtr<ID3D11SamplerState> custom_sampler = CreateCustomSampler(device_data, native_device, native_desc);
                      const std::unique_lock unique_lock_samplers(s_mutex_samplers);
                      samplers_handle.second[new_texture_mip_lod_bias_offset] = custom_sampler;
                   }

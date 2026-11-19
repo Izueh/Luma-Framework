@@ -20,13 +20,6 @@
 using Microsoft::WRL::ComPtr;
 using namespace SRBridgeProtocol;
 
-// Core logs through ReShade, which isn't loaded here (the helper is built with RESHADE_API_LIBRARY_EXPORT and BUILTIN_ADDON): the log is stdout
-extern "C" __declspec(dllexport) void ReShadeLogMessage(void* module, int level, const char* message)
-{
-   printf("[Luma Upscaler] %s\n", message);
-   fflush(stdout);
-}
-
 // Only FSR 4's DXGI hooks need this here, and nothing in this process queries the display for real
 namespace Display
 {

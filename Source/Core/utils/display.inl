@@ -572,11 +572,11 @@ namespace Display
 
 		if (swapChain)
 		{
-			com_ptr<IDXGIOutput> output;
-			if (SUCCEEDED(swapChain->GetContainingOutput(&output)))
+			ComPtr<IDXGIOutput> output;
+			if (SUCCEEDED(swapChain->GetContainingOutput(output.put())))
 			{
-				com_ptr<IDXGIOutput6> output6;
-				if (SUCCEEDED(output->QueryInterface(&output6)))
+				ComPtr<IDXGIOutput6> output6;
+				if (SUCCEEDED(output->QueryInterface(output6.put())))
 				{
 					DXGI_OUTPUT_DESC1 desc1;
 					if (SUCCEEDED(output6->GetDesc1(&desc1)))
@@ -766,14 +766,14 @@ namespace Display
 		// We want the real display state, not the one the game sees
 		ScopedRealDisplayQuery real_display_query;
 
-		com_ptr<IDXGIOutput> output;
-		if (FAILED(swapChain->GetContainingOutput(&output)))
+		ComPtr<IDXGIOutput> output;
+		if (FAILED(swapChain->GetContainingOutput(output.put())))
 		{
 			return false;
 		}
 
-		com_ptr<IDXGIOutput6> output6;
-		if (FAILED(output->QueryInterface(&output6)))
+		ComPtr<IDXGIOutput6> output6;
+		if (FAILED(output->QueryInterface(output6.put())))
 		{
 			return false;
 		}

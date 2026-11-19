@@ -380,13 +380,13 @@ public:
       if (original_draw_dispatch_func != nullptr && *original_draw_dispatch_func)
       {
          // Post-draw callback path lets us bind the SR result and then execute QB's original resolve draw once.
-         com_ptr<ID3D11ShaderResourceView> original_ps_srv_2;
+         ComPtr<ID3D11ShaderResourceView> original_ps_srv_2;
          if (sr_result.succeeded)
          {
-            native_device_context->PSGetShaderResources(2, 1, &original_ps_srv_2);
+            native_device_context->PSGetShaderResources(2, 1, original_ps_srv_2.put());
          }
 
-         com_ptr<ID3D11Buffer> original_luma_cbuffers[2];
+         ComPtr<ID3D11Buffer> original_luma_cbuffers[2];
          if (is_custom_pass)
          {
             native_device_context->PSGetConstantBuffers(luma_data_cbuffer_index, ARRAYSIZE(original_luma_cbuffers), reinterpret_cast<ID3D11Buffer**>(original_luma_cbuffers));
@@ -542,7 +542,7 @@ public:
                   "\nReShade"
                   "\nImGui"
 #if ENABLE_SR
-                  "\nMinHook (native camera / jitter) - Copyright (c) 2009-2017 Tsuda Kageyu. Licensed under BSD-2-Clause."
+                  "\nSafetyHook (native camera / jitter) - Licensed under BSL-1.0."
 #endif
                   "\nLUT Scaling and Film Grain (from RenoDX) - Copyright (c) 2025 Carlos Lopez Jr. Licensed under MIT."
                   "");

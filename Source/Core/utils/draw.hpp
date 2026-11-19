@@ -5,6 +5,7 @@
 
 #include "../includes/callbacks.h"
 #include "../includes/math.h"
+#include "../includes/com_ptr.h"
 
 using Math::operator"" _h;
 
@@ -33,8 +34,8 @@ struct DrawStateStack
    {
       state = std::make_unique<State>();
 
-      com_ptr<ID3D11DeviceContext1> device_context_1;
-      HRESULT hr = device_context->QueryInterface(&device_context_1);
+      ComPtr<ID3D11DeviceContext1> device_context_1;
+      HRESULT hr = device_context->QueryInterface(device_context_1.put());
 #if 0 // This happens in some games
       if (SUCCEEDED(hr) && device_context_1)
       {
@@ -45,7 +46,7 @@ struct DrawStateStack
       state->uav_num = device_max_uav_num;
       if constexpr (Mode == DrawStateStackType::SimpleGraphics || Mode == DrawStateStackType::FullGraphics)
       {
-         device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, &state->render_target_views[0], &state->depth_stencil_view); // TODO: optimize away for the "OMGetRenderTargetsAndUnorderedAccessViews" call case? We could just get all the RTVs and UAVs from slot 0 and then find the first valid UAV
+         device_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, PutArray(state->render_target_views), state->depth_stencil_view.put()); // TODO: optimize away for the "OMGetRenderTargetsAndUnorderedAccessViews" call case? We could just get all the RTVs and UAVs from slot 0 and then find the first valid UAV
          if constexpr (Mode == DrawStateStackType::FullGraphics)
          {
             for (size_t i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; i++)
@@ -58,40 +59,40 @@ struct DrawStateStack
                }
             }
             state->depth_stencil_view.reset();
-            device_context->OMGetRenderTargetsAndUnorderedAccessViews(state->valid_render_target_views_bound, &state->render_target_views[0], &state->depth_stencil_view, state->valid_render_target_views_bound, state->uav_num - state->valid_render_target_views_bound, &state->unordered_access_views[0]);
+            device_context->OMGetRenderTargetsAndUnorderedAccessViews(state->valid_render_target_views_bound, PutArray(state->render_target_views), state->depth_stencil_view.put(), state->valid_render_target_views_bound, state->uav_num - state->valid_render_target_views_bound, PutArray(state->unordered_access_views));
 #if ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
-            device_context->IAGetVertexBuffers(0, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, &state->vertex_buffers[0], state->vertex_buffer_strides, state->vertex_buffer_offsets);
+            device_context->IAGetVertexBuffers(0, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, PutArray(state->vertex_buffers), state->vertex_buffer_strides, state->vertex_buffer_offsets);
 #endif // ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
          }
-         device_context->OMGetBlendState(&state->blend_state, state->blend_factor, &state->blend_sample_mask);
+         device_context->OMGetBlendState(state->blend_state.put(), state->blend_factor, &state->blend_sample_mask);
          device_context->IAGetPrimitiveTopology(&state->primitive_topology);
          device_context->RSGetScissorRects(&state->scissor_rects_num, nullptr); // This will get the number of scissor rects used
          device_context->RSGetScissorRects(&state->scissor_rects_num, &state->scissor_rects[0]);
          device_context->RSGetViewports(&state->viewports_num, nullptr); // This will get the number of viewports used
          device_context->RSGetViewports(&state->viewports_num, &state->viewports[0]);
-         device_context->PSGetShaderResources(0, srv_num, &state->shader_resource_views[0]);
+         device_context->PSGetShaderResources(0, srv_num, PutArray(state->shader_resource_views));
          if (device_context_1)
          {
-            device_context_1->PSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &state->constant_buffers[0], state->constant_buffers_first_constant, state->constant_buffers_num_constant);
-            device_context_1->VSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &state->vs_constant_buffers[0], state->vs_constant_buffers_first_constant, state->vs_constant_buffers_num_constant);
+            device_context_1->PSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(state->constant_buffers), state->constant_buffers_first_constant, state->constant_buffers_num_constant);
+            device_context_1->VSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(state->vs_constant_buffers), state->vs_constant_buffers_first_constant, state->vs_constant_buffers_num_constant);
          }
          else
          {
-            device_context->PSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &state->constant_buffers[0]);
-            device_context->VSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &state->vs_constant_buffers[0]);
+            device_context->PSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(state->constant_buffers));
+            device_context->VSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(state->vs_constant_buffers));
          }
-         device_context->OMGetDepthStencilState(&state->depth_stencil_state, &state->stencil_ref);
+         device_context->OMGetDepthStencilState(state->depth_stencil_state.put(), &state->stencil_ref);
 #if ENABLE_SHADER_CLASS_INSTANCES
-         device_context->VSGetShader(&state->vs, &state->vs_instances[0], &state->vs_instances_count);
-         device_context->PSGetShader(&state->ps, &state->ps_instances[0], &state->ps_instances_count);
+         device_context->VSGetShader(state->vs.put(), PutArray(state->vs_instances), &state->vs_instances_count);
+         device_context->PSGetShader(state->ps.put(), PutArray(state->ps_instances), &state->ps_instances_count);
          ASSERT_ONCE(state->vs_instances_count == 0 && state->ps_instances_count == 0); // Make sure they are never used
 #else
-         device_context->VSGetShader(&state->vs, nullptr, 0);
-         device_context->PSGetShader(&state->ps, nullptr, 0);
+         device_context->VSGetShader(state->vs.put(), nullptr, 0);
+         device_context->PSGetShader(state->ps.put(), nullptr, 0);
 #endif
-         device_context->PSGetSamplers(0, samplers_num, &state->samplers_state[0]);
-         device_context->IAGetInputLayout(&state->input_layout);
-         device_context->RSGetState(&state->rasterizer_state);
+         device_context->PSGetSamplers(0, samplers_num, PutArray(state->samplers_state));
+         device_context->IAGetInputLayout(state->input_layout.put());
+         device_context->RSGetState(state->rasterizer_state.put());
 
 #if 0 // These are not needed until proven otherwise, we don't change, nor rely on these states
          ID3D11Buffer* VSConstantBuffer;
@@ -107,23 +108,23 @@ struct DrawStateStack
       }
       else if constexpr (Mode == DrawStateStackType::Compute)
       {
-         device_context->CSGetShaderResources(0, srv_num, &state->shader_resource_views[0]);
+         device_context->CSGetShaderResources(0, srv_num, PutArray(state->shader_resource_views));
          if (device_context_1)
          {
-            device_context_1->CSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &state->constant_buffers[0], state->constant_buffers_first_constant, state->constant_buffers_num_constant);
+            device_context_1->CSGetConstantBuffers1(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(state->constant_buffers), state->constant_buffers_first_constant, state->constant_buffers_num_constant);
          }
          else
          {
-            device_context->CSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, &state->constant_buffers[0]);
+            device_context->CSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, PutArray(state->constant_buffers));
          }
-         device_context->CSGetUnorderedAccessViews(0, state->uav_num, &state->unordered_access_views[0]);
+         device_context->CSGetUnorderedAccessViews(0, state->uav_num, PutArray(state->unordered_access_views));
 #if ENABLE_SHADER_CLASS_INSTANCES
-         device_context->CSGetShader(&state->cs, &state->cs_instances[0], &state->cs_instances_count);
+         device_context->CSGetShader(state->cs.put(), PutArray(state->cs_instances), &state->cs_instances_count);
          ASSERT_ONCE(state->cs_instances_count == 0); // Make sure they are never used
 #else
-         device_context->CSGetShader(&state->cs, nullptr, 0);
+         device_context->CSGetShader(state->cs.put(), nullptr, 0);
 #endif
-         device_context->CSGetSamplers(0, samplers_num, &state->samplers_state[0]);
+         device_context->CSGetSamplers(0, samplers_num, PutArray(state->samplers_state));
       }
    }
 
@@ -132,8 +133,8 @@ struct DrawStateStack
    {
       if (!state) return;
 
-      com_ptr<ID3D11DeviceContext1> device_context_1;
-      HRESULT hr = device_context->QueryInterface(&device_context_1);
+      ComPtr<ID3D11DeviceContext1> device_context_1;
+      HRESULT hr = device_context->QueryInterface(device_context_1.put());
 
       if constexpr (Mode == DrawStateStackType::SimpleGraphics || Mode == DrawStateStackType::FullGraphics)
       {
@@ -268,8 +269,8 @@ struct DrawStateStack
 
       void Clone(ID3D11DeviceContext* device_context, const std::vector<ID3D11Buffer*>& luma_cbuffers)
       {
-         com_ptr<ID3D11Device> device;
-         device_context->GetDevice(&device);
+         ComPtr<ID3D11Device> device;
+         device_context->GetDevice(device.put());
 
          depth_stencil_view = CloneResourceAndView(device.get(), device_context, depth_stencil_view.get());
          for (UINT i = 0; i < srv_num; ++i)
@@ -297,47 +298,47 @@ struct DrawStateStack
          // Similarly, samplers etc aren't cached as it's barely needed, only stuff that is "live" data is cloned.
       }
 
-      com_ptr<ID3D11BlendState> blend_state;
+      ComPtr<ID3D11BlendState> blend_state;
       FLOAT blend_factor[4] = {1.f, 1.f, 1.f, 1.f};
       UINT blend_sample_mask;
-      com_ptr<ID3D11VertexShader> vs;
-      com_ptr<ID3D11PixelShader> ps;
-      com_ptr<ID3D11ComputeShader> cs;
+      ComPtr<ID3D11VertexShader> vs;
+      ComPtr<ID3D11PixelShader> ps;
+      ComPtr<ID3D11ComputeShader> cs;
 #if ENABLE_SHADER_CLASS_INSTANCES
       UINT vs_instances_count = max_shader_class_instances;
       UINT ps_instances_count = max_shader_class_instances;
       UINT cs_instances_count = max_shader_class_instances;
-      com_ptr<ID3D11ClassInstance> vs_instances[max_shader_class_instances];
-      com_ptr<ID3D11ClassInstance> ps_instances[max_shader_class_instances];
-      com_ptr<ID3D11ClassInstance> cs_instances[max_shader_class_instances];
+      ComPtr<ID3D11ClassInstance> vs_instances[max_shader_class_instances];
+      ComPtr<ID3D11ClassInstance> ps_instances[max_shader_class_instances];
+      ComPtr<ID3D11ClassInstance> cs_instances[max_shader_class_instances];
 #endif
       D3D11_PRIMITIVE_TOPOLOGY primitive_topology;
 
       // TODO: move some of these to the heap, stack is too big
-      com_ptr<ID3D11DepthStencilState> depth_stencil_state;
+      ComPtr<ID3D11DepthStencilState> depth_stencil_state;
       UINT stencil_ref;
-      com_ptr<ID3D11DepthStencilView> depth_stencil_view;
-      com_ptr<ID3D11SamplerState> samplers_state[samplers_num];
-      com_ptr<ID3D11ShaderResourceView> shader_resource_views[srv_num];
-      com_ptr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
-      com_ptr<ID3D11UnorderedAccessView> unordered_access_views[D3D11_1_UAV_SLOT_COUNT];
-      com_ptr<ID3D11Buffer> constant_buffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+      ComPtr<ID3D11DepthStencilView> depth_stencil_view;
+      ComPtr<ID3D11SamplerState> samplers_state[samplers_num];
+      ComPtr<ID3D11ShaderResourceView> shader_resource_views[srv_num];
+      ComPtr<ID3D11RenderTargetView> render_target_views[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+      ComPtr<ID3D11UnorderedAccessView> unordered_access_views[D3D11_1_UAV_SLOT_COUNT];
+      ComPtr<ID3D11Buffer> constant_buffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
       UINT constant_buffers_first_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
       UINT constant_buffers_num_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
-      com_ptr<ID3D11Buffer> vs_constant_buffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
+      ComPtr<ID3D11Buffer> vs_constant_buffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT];
       UINT vs_constant_buffers_first_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
       UINT vs_constant_buffers_num_constant[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
       D3D11_RECT scissor_rects[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
       UINT scissor_rects_num = 0;
       D3D11_VIEWPORT viewports[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
       UINT viewports_num = 1;
-      com_ptr<ID3D11InputLayout> input_layout;
+      ComPtr<ID3D11InputLayout> input_layout;
 #if ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
-      com_ptr<ID3D11Buffer> vertex_buffers[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
+      ComPtr<ID3D11Buffer> vertex_buffers[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT];
       UINT vertex_buffer_strides[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {};
       UINT vertex_buffer_offsets[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {};
 #endif // ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
-      com_ptr<ID3D11RasterizerState> rasterizer_state;
+      ComPtr<ID3D11RasterizerState> rasterizer_state;
       UINT valid_render_target_views_bound = 0; // Includes null ones as well if bound between valid RTVs
       UINT uav_num = D3D11_1_UAV_SLOT_COUNT;
    };
@@ -378,11 +379,11 @@ void DrawCustomPixelShader(ID3D11DeviceContext* device_context, ID3D11DepthStenc
    device_context->RSSetState(nullptr);
 
 #if DEVELOPMENT
-   com_ptr<ID3D11GeometryShader> gs;
-   device_context->GSGetShader(&gs, nullptr, 0);
+   ComPtr<ID3D11GeometryShader> gs;
+   device_context->GSGetShader(gs.put(), nullptr, 0);
    ASSERT_ONCE(!gs.get());
-   com_ptr<ID3D11HullShader> hs;
-   device_context->HSGetShader(&hs, nullptr, 0);
+   ComPtr<ID3D11HullShader> hs;
+   device_context->HSGetShader(hs.put(), nullptr, 0);
    ASSERT_ONCE(!hs.get());
 #endif
 
@@ -396,8 +397,8 @@ void SetViewportFullscreen(ID3D11DeviceContext* device_context, uint2 size = {})
 {
    if (size == uint2{})
    {
-      com_ptr<ID3D11RenderTargetView> render_target_view;
-      device_context->OMGetRenderTargets(1, &render_target_view, nullptr);
+      ComPtr<ID3D11RenderTargetView> render_target_view;
+      device_context->OMGetRenderTargets(1, render_target_view.put(), nullptr);
 
 #if DEVELOPMENT
       D3D11_RENDER_TARGET_VIEW_DESC render_target_view_desc;
@@ -406,12 +407,12 @@ void SetViewportFullscreen(ID3D11DeviceContext* device_context, uint2 size = {})
 #endif // DEVELOPMENT
 
       D3D11_TEXTURE2D_DESC render_target_texture_2d_desc;
-      com_ptr<ID3D11Resource> render_target_resource;
-      render_target_view->GetResource(&render_target_resource);
+      ComPtr<ID3D11Resource> render_target_resource;
+      render_target_view->GetResource(render_target_resource.put());
       if (render_target_resource)
       {
-         com_ptr<ID3D11Texture2D> render_target_texture_2d;
-         HRESULT hr = render_target_resource->QueryInterface(&render_target_texture_2d);
+         ComPtr<ID3D11Texture2D> render_target_texture_2d;
+         HRESULT hr = render_target_resource->QueryInterface(render_target_texture_2d.put());
          ASSERT_ONCE(SUCCEEDED(hr));
          if (render_target_texture_2d)
          {
@@ -433,8 +434,8 @@ void SetViewportFullscreen(ID3D11DeviceContext* device_context, uint2 size = {})
 
    // A render-resolution scissor clips a fullscreen viewport to the top-left subregion.
    // Keep scissor and viewport coverage in sync whenever this helper expands a target for SR.
-   com_ptr<ID3D11RasterizerState> state;
-   device_context->RSGetState(&state);
+   ComPtr<ID3D11RasterizerState> state;
+   device_context->RSGetState(state.put());
    if (state.get())
    {
       D3D11_RASTERIZER_DESC state_desc;
@@ -605,12 +606,12 @@ bool IsBlendInverted(const T& blend_desc, UINT render_targets = 1, bool check_al
 struct CustomPixelShaderPassData
 {
    // Only one of the two will be valid
-   com_ptr<ID3D11RenderTargetView> original_or_custom_rtv;
-   com_ptr<ID3D11View> original_rv;
+   ComPtr<ID3D11RenderTargetView> original_or_custom_rtv;
+   ComPtr<ID3D11View> original_rv;
 
    // Temp texture copy
-   com_ptr<ID3D11Texture2D> texture_2d;
-   com_ptr<ID3D11ShaderResourceView> srv;
+   ComPtr<ID3D11Texture2D> texture_2d;
+   ComPtr<ID3D11ShaderResourceView> srv;
    UINT width = 1;
    UINT height = 1;
 };
@@ -626,12 +627,12 @@ void DrawCustomPixelShaderPass(ID3D11Device* device, ID3D11DeviceContext* device
 
       if (resource_view)
       {
-         com_ptr<ID3D11Resource> resource;
-         resource_view->GetResource(&resource);
+         ComPtr<ID3D11Resource> resource;
+         resource_view->GetResource(resource.put());
          if (resource)
          {
-            com_ptr<ID3D11Texture2D> texture_2d;
-            resource->QueryInterface(&texture_2d);
+            ComPtr<ID3D11Texture2D> texture_2d;
+            resource->QueryInterface(texture_2d.put());
             if (texture_2d)
             {
                D3D11_TEXTURE2D_DESC texture_2d_desc;
@@ -644,22 +645,22 @@ void DrawCustomPixelShaderPass(ID3D11Device* device, ID3D11DeviceContext* device
 
                   data.original_rv = resource_view;
 
-                  com_ptr<ID3D11RenderTargetView> rtv;
-                  hr = resource_view->QueryInterface(&rtv);
+                  ComPtr<ID3D11RenderTargetView> rtv;
+                  hr = resource_view->QueryInterface(rtv.put());
                   if (rtv)
                   {
                      data.original_or_custom_rtv = rtv;
                   }
                   else
                   {
-                     hr = device->CreateRenderTargetView(texture_2d.get(), nullptr, &data.original_or_custom_rtv);
+                     hr = device->CreateRenderTargetView(texture_2d.get(), nullptr, data.original_or_custom_rtv.put());
                      ASSERT_ONCE(SUCCEEDED(hr));
                   }
 
                   data.width = texture_2d_desc.Width;
                   data.height = texture_2d_desc.Height;
 
-                  hr = device->CreateShaderResourceView(data.texture_2d.get(), nullptr, &data.srv);
+                  hr = device->CreateShaderResourceView(data.texture_2d.get(), nullptr, data.srv.put());
                   ASSERT_ONCE(SUCCEEDED(hr));
                }
             }
@@ -675,8 +676,8 @@ void DrawCustomPixelShaderPass(ID3D11Device* device, ID3D11DeviceContext* device
       if (vs == device_data.native_vertex_shaders.end() || !vs->second.get()
          || ps == device_data.native_pixel_shaders.end() || !ps->second.get()) return;
 
-      com_ptr<ID3D11Resource> resource;
-      data.original_or_custom_rtv->GetResource(&resource); // If we got here, it's valid
+      ComPtr<ID3D11Resource> resource;
+      data.original_or_custom_rtv->GetResource(resource.put()); // If we got here, it's valid
 
       device_context->CopySubresourceRegion(data.texture_2d.get(), 0, 0, 0, 0, resource.get(), 0, nullptr);
 
@@ -686,14 +687,14 @@ void DrawCustomPixelShaderPass(ID3D11Device* device, ID3D11DeviceContext* device
 
 struct SanitizeNaNsData
 {
-   com_ptr<ID3D11RenderTargetView> original_rtv;
+   ComPtr<ID3D11RenderTargetView> original_rtv;
 
    static constexpr SIZE_T max_levels = 15; // Matches "GetTextureMaxMipLevels(D3D11_REQ_TEXTURE1D_U_DIMENSION)"
 
    // Temp mipped texture copy
-   com_ptr<ID3D11Texture2D> texture_2d;
-   com_ptr<ID3D11ShaderResourceView> srv;
-   com_ptr<ID3D11UnorderedAccessView> uavs[max_levels] = {}; // Theoretically we don't need the first one.
+   ComPtr<ID3D11Texture2D> texture_2d;
+   ComPtr<ID3D11ShaderResourceView> srv;
+   ComPtr<ID3D11UnorderedAccessView> uavs[max_levels] = {}; // Theoretically we don't need the first one.
    UINT width = 1;
    UINT height = 1;
    UINT levels = 1; // >= 1 (includes base)
@@ -712,12 +713,12 @@ void SanitizeNaNs(ID3D11Device* device, ID3D11DeviceContext* device_context, ID3
 
       if (rtv)
       {
-         com_ptr<ID3D11Resource> resource;
-         rtv->GetResource(&resource);
+         ComPtr<ID3D11Resource> resource;
+         rtv->GetResource(resource.put());
          if (resource)
          {
-            com_ptr<ID3D11Texture2D> texture_2d;
-            resource->QueryInterface(&texture_2d);
+            ComPtr<ID3D11Texture2D> texture_2d;
+            resource->QueryInterface(texture_2d.put());
             if (texture_2d)
             {
                D3D11_TEXTURE2D_DESC texture_2d_desc;
@@ -748,7 +749,7 @@ void SanitizeNaNs(ID3D11Device* device, ID3D11DeviceContext* device_context, ID3
                      srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
                      srv_desc.Texture2D.MipLevels = data.smoothed ? -1 : 1; // Optionally all mips
                      srv_desc.Texture2D.MostDetailedMip = 0;
-                     hr = device->CreateShaderResourceView(data.texture_2d.get(), &srv_desc, &data.srv);
+                     hr = device->CreateShaderResourceView(data.texture_2d.get(), &srv_desc, data.srv.put());
                      ASSERT_ONCE(SUCCEEDED(hr));
 
                      if (data.smoothed)
@@ -768,7 +769,7 @@ void SanitizeNaNs(ID3D11Device* device, ID3D11DeviceContext* device_context, ID3
                            uav_desc.Format = texture_2d_desc.Format;
                            uav_desc.ViewDimension = D3D11_UAV_DIMENSION_TEXTURE2D;
                            uav_desc.Texture2D.MipSlice = i;
-                           hr = device->CreateUnorderedAccessView(data.texture_2d.get(), &uav_desc, &data.uavs[i]);
+                           hr = device->CreateUnorderedAccessView(data.texture_2d.get(), &uav_desc, data.uavs[i].put());
                            ASSERT_ONCE(SUCCEEDED(hr));
                         }
                      }
@@ -789,8 +790,8 @@ void SanitizeNaNs(ID3D11Device* device, ID3D11DeviceContext* device_context, ID3
          || vs == device_data.native_vertex_shaders.end() || !vs->second.get()
          || ps == device_data.native_pixel_shaders.end() || !ps->second.get()) return;
 
-      com_ptr<ID3D11Resource> resource;
-      data.original_rtv->GetResource(&resource); // If we got here, it's valid
+      ComPtr<ID3D11Resource> resource;
+      data.original_rtv->GetResource(resource.put()); // If we got here, it's valid
       // Copy the first mip from the current value
       device_context->CopySubresourceRegion(data.texture_2d.get(), 0, 0, 0, 0, resource.get(), 0, nullptr);
 

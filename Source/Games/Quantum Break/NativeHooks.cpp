@@ -1,8 +1,9 @@
 #include "NativeHooks.hpp"
 #include "NativeInputs.hpp"
 
-#include "../../External/reshade/deps/minhook/include/MinHook.h"
 #include "../../Core/utils/log.hpp"
+
+#include <safetyhook.hpp>
 
 #include <Windows.h> // IWYU pragma: keep -- Windows API umbrella header.
 #include <array>
@@ -352,36 +353,49 @@ namespace QuantumBreakUpscaling::NativeHooks
                 std::memcmp(base + 0x15353bu, projection_provider, sizeof(projection_provider)) == 0;
       }
 
-      // Failure before activation can remove hooks. Partial activation must retain trampolines.
-      bool CreatePair(void* const* targets, void* const* hooks, void** originals)
+      using InlineHook = safetyhook::InlineHook;
+      struct HookPair
       {
-         size_t created = 0u;
-         for (; created < 2u; ++created)
+         InlineHook hooks[2];
+      };
+      // The hooks stay until the process exits (the modules are pinned), so the holders are never destroyed: a destroyed hook puts the original
+      // code back, while a thread can still be inside its detour or trampoline.
+      HookPair* temporal_hooks = nullptr;
+      HookPair* scene_hooks = nullptr;
+      InlineHook* halton_hook = nullptr;
+
+      void RemovePair(HookPair& pair)
+      {
+         for (InlineHook& hook : pair.hooks)
          {
-            if (MH_CreateHook(targets[created], hooks[created], &originals[created]) != MH_OK)
-            {
-               break;
-            }
+            hook.reset();
          }
-         if (created == 2u) return true;
-         for (size_t i = 0u; i < created; ++i)
-         {
-            MH_RemoveHook(targets[i]);
-         }
-         return false;
       }
 
-      void RemovePair(void* const* targets)
+      // Created disabled, so the originals are known before any call can reach a detour.
+      // Failure before activation can remove hooks. Partial activation must retain trampolines.
+      bool CreatePair(HookPair& pair, void* const* targets, void* const* detours, void** originals)
       {
          for (size_t i = 0u; i < 2u; ++i)
          {
-            MH_RemoveHook(targets[i]);
+            auto created = InlineHook::create(targets[i], detours[i], InlineHook::StartDisabled);
+            if (!created)
+            {
+               RemovePair(pair);
+               return false;
+            }
+            pair.hooks[i] = std::move(*created);
+            originals[i] = pair.hooks[i].original<void*>();
          }
+         return true;
       }
 
-      bool QueuePair(void* const* targets)
+      // Both are attempted, a failure leaves the other one active with its trampoline.
+      bool EnablePair(HookPair& pair)
       {
-         return MH_QueueEnableHook(targets[0]) == MH_OK && MH_QueueEnableHook(targets[1]) == MH_OK;
+         const bool first = pair.hooks[0].enable().has_value();
+         const bool second = pair.hooks[1].enable().has_value();
+         return first && second;
       }
 
       void InstallTemporal(HMODULE module)
@@ -398,14 +412,8 @@ namespace QuantumBreakUpscaling::NativeHooks
          void* targets[] = {reinterpret_cast<void*>(base + 0x10bcb0u), reinterpret_cast<void*>(base + 0x10cd30u)};
          void* hooks[] = {reinterpret_cast<void*>(&CaptureResolve<0>), reinterpret_cast<void*>(&CaptureResolve<1>)};
          void* originals[2] = {};
-         const MH_STATUS initialized = MH_Initialize();
-         if (initialized != MH_OK && initialized != MH_ERROR_ALREADY_INITIALIZED)
-         {
-            temporal_status.store(Status::HookFailed, std::memory_order_release);
-            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native jitter: MinHook initialization failed; SR unavailable, game TAA retained.");
-            return;
-         }
-         if (!CreatePair(targets, hooks, originals))
+         temporal_hooks = new HookPair;
+         if (!CreatePair(*temporal_hooks, targets, hooks, originals))
          {
             temporal_status.store(Status::HookFailed, std::memory_order_release);
             Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native jitter: hook creation failed; SR unavailable, game TAA retained.");
@@ -418,19 +426,12 @@ namespace QuantumBreakUpscaling::NativeHooks
          if (!GetModuleHandleExW(pin_flags, reinterpret_cast<LPCWSTR>(&CaptureResolve<0>), &pinned) ||
              !GetModuleHandleExW(pin_flags, reinterpret_cast<LPCWSTR>(module), &pinned))
          {
-            RemovePair(targets);
+            RemovePair(*temporal_hooks);
             temporal_status.store(Status::HookFailed, std::memory_order_release);
             Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native jitter: module pinning failed; SR unavailable, game TAA retained.");
             return;
          }
-         if (!QueuePair(targets))
-         {
-            RemovePair(targets);
-            temporal_status.store(Status::HookFailed, std::memory_order_release);
-            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native jitter: queued enable failed; SR unavailable, game TAA retained.");
-            return;
-         }
-         if (MH_ApplyQueued() != MH_OK)
+         if (!EnablePair(*temporal_hooks))
          {
             temporal_status.store(Status::HookFailed, std::memory_order_release);
             Luma::Utils::Log::Write(
@@ -456,7 +457,8 @@ namespace QuantumBreakUpscaling::NativeHooks
          void* targets[] = {reinterpret_cast<void*>(base + 0xff980u), reinterpret_cast<void*>(base + 0x153500u)};
          void* hooks[] = {reinterpret_cast<void*>(&CaptureScene), reinterpret_cast<void*>(&CaptureViewUse)};
          void* originals[2] = {};
-         if (!CreatePair(targets, hooks, originals))
+         scene_hooks = new HookPair;
+         if (!CreatePair(*scene_hooks, targets, hooks, originals))
          {
             scene_status.store(Status::HookFailed, std::memory_order_release);
             Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native inputs: scene hook creation failed; SR unavailable, game TAA retained.");
@@ -465,14 +467,7 @@ namespace QuantumBreakUpscaling::NativeHooks
          original_scene = reinterpret_cast<SceneFunction>(originals[0]);
          original_view_use = reinterpret_cast<ViewUseFunction>(originals[1]);
          renderer_base = base; // Temporal hooks already pin the addon and renderer.
-         if (!QueuePair(targets))
-         {
-            RemovePair(targets);
-            scene_status.store(Status::HookFailed, std::memory_order_release);
-            Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB native inputs: scene queued enable failed; SR unavailable, game TAA retained.");
-            return;
-         }
-         if (MH_ApplyQueued() != MH_OK)
+         if (!EnablePair(*scene_hooks))
          {
             scene_status.store(Status::HookFailed, std::memory_order_release);
             Luma::Utils::Log::Write(
@@ -504,22 +499,17 @@ namespace QuantumBreakUpscaling::NativeHooks
             return;
          }
          void* target = reinterpret_cast<void*>(renderer_base + 0x152500u);
-         void* original = nullptr;
-         if (MH_CreateHook(target, reinterpret_cast<void*>(&CaptureJitterView), &original) != MH_OK)
+         auto created = InlineHook::create(target, reinterpret_cast<void*>(&CaptureJitterView), InlineHook::StartDisabled);
+         if (!created)
          {
             halton_status.store(Status::HookFailed, std::memory_order_release);
             Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB Halton: producer hook creation failed; native jitter retained.");
             return;
          }
-         original_jitter_view = reinterpret_cast<JitterViewFunction>(original);
+         halton_hook = new InlineHook(std::move(*created));
+         original_jitter_view = halton_hook->original<JitterViewFunction>();
          // Scene prerequisites already pinned both modules. Publish the trampoline before activation.
-         if (MH_QueueEnableHook(target) != MH_OK)
-         {
-            MH_RemoveHook(target);
-            halton_status.store(Status::HookFailed, std::memory_order_release);
-            return;
-         }
-         if (MH_ApplyQueued() != MH_OK)
+         if (!halton_hook->enable())
          {
             halton_status.store(Status::HookFailed, std::memory_order_release);
             Luma::Utils::Log::Write(Luma::Utils::Log::Level::Warning, "QB Halton: activation failed; pass-through trampoline retained until exit.");

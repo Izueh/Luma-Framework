@@ -2692,13 +2692,13 @@ public:
 
          //extract by copying buffer
          ID3D11Buffer* staging_cb = cb_buffer;
-         com_ptr<ID3D11Buffer> staging_cb_buf;
+         ComPtr<ID3D11Buffer> staging_cb_buf;
          cb_desc.Usage = D3D11_USAGE_STAGING;
          cb_desc.BindFlags = 0;
          cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
          cb_desc.MiscFlags = 0;
          cb_desc.StructureByteStride = 0;
-         HRESULT hr_staging = native_device->CreateBuffer(&cb_desc, nullptr, &staging_cb_buf);
+         HRESULT hr_staging = native_device->CreateBuffer(&cb_desc, nullptr, staging_cb_buf.put());
          if (SUCCEEDED(hr_staging))
          {
             native_device_context->CopyResource(staging_cb_buf.get(), cb_buffer);

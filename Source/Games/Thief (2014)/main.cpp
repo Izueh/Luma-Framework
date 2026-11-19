@@ -129,7 +129,7 @@ public:
          if (enable_ui_separation)
          {
             device_data.ui_initial_original_rtv = nullptr;
-            native_device_context->OMGetRenderTargets(1, &device_data.ui_initial_original_rtv, nullptr);
+            native_device_context->OMGetRenderTargets(1, device_data.ui_initial_original_rtv.put(), nullptr);
          }
       }
       else if (device_data.has_drawn_main_post_processing)
@@ -138,7 +138,7 @@ public:
          if (enable_ui_separation && original_shader_hashes.Contains(shader_hashes_UI_excluded))
          {
             device_data.ui_initial_original_rtv = nullptr;
-            native_device_context->OMGetRenderTargets(1, &device_data.ui_initial_original_rtv, nullptr);
+            native_device_context->OMGetRenderTargets(1, device_data.ui_initial_original_rtv.put(), nullptr);
          }
          if (remove_black_bars && original_shader_hashes.Contains(shader_hashes_BlackBars))
          {

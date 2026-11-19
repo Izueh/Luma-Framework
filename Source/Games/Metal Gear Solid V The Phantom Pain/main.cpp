@@ -56,14 +56,14 @@ namespace
 
    void LogNewFXAATarget(ID3D11DeviceContext* native_device_context)
    {
-      com_ptr<ID3D11RenderTargetView> rtv;
-      native_device_context->OMGetRenderTargets(1, &rtv, nullptr);
+      ComPtr<ID3D11RenderTargetView> rtv;
+      native_device_context->OMGetRenderTargets(1, rtv.put(), nullptr);
       if (!rtv)
          return;
-      com_ptr<ID3D11Resource> resource;
-      rtv->GetResource(&resource);
-      com_ptr<ID3D11Texture2D> texture;
-      if (FAILED(resource->QueryInterface(&texture)))
+      ComPtr<ID3D11Resource> resource;
+      rtv->GetResource(resource.put());
+      ComPtr<ID3D11Texture2D> texture;
+      if (FAILED(resource->QueryInterface(texture.put())))
          return;
       D3D11_TEXTURE2D_DESC texture_desc;
       texture->GetDesc(&texture_desc);
@@ -85,8 +85,8 @@ namespace
    // passes. The game gives no hint when it fails, so this repeats the check on the real context and logs the outcome.
    void LogWrapperCheck(ID3D11Device* native_device)
    {
-      com_ptr<ID3D11DeviceContext> context;
-      native_device->GetImmediateContext(&context);
+      ComPtr<ID3D11DeviceContext> context;
+      native_device->GetImmediateContext(context.put());
       void* const* const vtable = *reinterpret_cast<void* const* const*>(context.get());
       for (int entry = 3; entry < 100; entry++)
       {
@@ -558,8 +558,8 @@ namespace
          last_upload.buffer = nullptr; // Uploads aren't followed without SR, so this one could be stale
          return;
       }
-      com_ptr<ID3D11Buffer> bound;
-      native_device_context->VSGetConstantBuffers(2, 1, &bound);
+      ComPtr<ID3D11Buffer> bound;
+      native_device_context->VSGetConstantBuffers(2, 1, bound.put());
       if (bound.get() != last_upload.buffer)
          return;
       // A new version of the buffer for the draws recorded from here on (deferred contexts take write discard maps of dynamic buffers)
@@ -575,11 +575,11 @@ namespace
    // A split command list waiting for SR (split at the bloom reduction, or at FXAA), run when the rest of that command list executes
    struct SRJob
    {
-      com_ptr<ID3D11CommandList> partial_command_list; // Everything the deferred context recorded before the split
-      com_ptr<ID3D11ShaderResourceView> source_srv;    // The scene before bloom, or FXAA's input (a copy of the tonemapped image)
-      com_ptr<ID3D11RenderTargetView> target_rtv;      // The same scene, or FXAA's output (where the UI draws next)
-      com_ptr<ID3D11Texture2D> motion_vectors;         // The textures this frame's decode wrote (they're recreated on resolution changes)
-      com_ptr<ID3D11Texture2D> depth;
+      ComPtr<ID3D11CommandList> partial_command_list; // Everything the deferred context recorded before the split
+      ComPtr<ID3D11ShaderResourceView> source_srv;    // The scene before bloom, or FXAA's input (a copy of the tonemapped image)
+      ComPtr<ID3D11RenderTargetView> target_rtv;      // The same scene, or FXAA's output (where the UI draws next)
+      ComPtr<ID3D11Texture2D> motion_vectors;         // The textures this frame's decode wrote (they're recreated on resolution changes)
+      ComPtr<ID3D11Texture2D> depth;
       UINT width = 0;
       UINT height = 0;
       float jitter_x = 0.f;
@@ -601,24 +601,24 @@ struct GameDeviceDataMetalGearSolidV final : public GameDeviceData
 #if ENABLE_SR
    std::mutex textures_mutex;
    // SR's motion vectors (R16G16_FLOAT) and depth (R32_FLOAT), at render size, written by "Luma_MGSV_DecodeMotionVectors"
-   com_ptr<ID3D11Texture2D> motion_vectors;
-   com_ptr<ID3D11UnorderedAccessView> motion_vectors_uav;
-   com_ptr<ID3D11Texture2D> depth;
-   com_ptr<ID3D11UnorderedAccessView> depth_uav;
+   ComPtr<ID3D11Texture2D> motion_vectors;
+   ComPtr<ID3D11UnorderedAccessView> motion_vectors_uav;
+   ComPtr<ID3D11Texture2D> depth;
+   ComPtr<ID3D11UnorderedAccessView> depth_uav;
    // SR's input and output (which must be a UAV, FXAA's target isn't one). They're R8G8B8A8 because the FidelityFX DX11 backend has no
    // B8G8R8A8 formats (FXAA's input and target are): copied from FXAA's input and into its target with Luma's copy shaders
-   com_ptr<ID3D11Texture2D> sr_input;
-   com_ptr<ID3D11RenderTargetView> sr_input_rtv;
-   com_ptr<ID3D11Texture2D> sr_output;
-   com_ptr<ID3D11ShaderResourceView> sr_output_srv;
+   ComPtr<ID3D11Texture2D> sr_input;
+   ComPtr<ID3D11RenderTargetView> sr_input_rtv;
+   ComPtr<ID3D11Texture2D> sr_output;
+   ComPtr<ID3D11ShaderResourceView> sr_output_srv;
    // 1x1 R32_FLOAT holding 1: the input is already exposed (after the tonemap). FSR 4 rejects frames without an exposure texture when its
    // auto exposure is off, FSR 3 assumes the same 1 without one.
-   com_ptr<ID3D11Texture2D> sr_exposure;
+   ComPtr<ID3D11Texture2D> sr_exposure;
    // Before bloom, SR writes the scene back through this view of it (the game only reads the scene there)
-   com_ptr<ID3D11Texture2D> scene;
-   com_ptr<ID3D11RenderTargetView> scene_rtv;
+   ComPtr<ID3D11Texture2D> scene;
+   ComPtr<ID3D11RenderTargetView> scene_rtv;
    // Writes colour only, so SR keeps the scene's alpha before bloom (depth of field and motion blur read it)
-   com_ptr<ID3D11BlendState> color_only_blend_state;
+   ComPtr<ID3D11BlendState> color_only_blend_state;
    // SR drew since the last present (otherwise its history resets on the next SR frame)
    std::atomic<bool> sr_drawn = false;
    // The SR type at the last present: the safety net's verdict only holds for the type it saw fail
@@ -635,8 +635,8 @@ class MetalGearSolidV final : public Game
 
 #if ENABLE_SR
    // (Re)creates a render size texture (shader resource and unordered access, plus render target when its view is asked for), and the views asked for
-   static bool EnsureTexture(ID3D11Device* native_device, com_ptr<ID3D11Texture2D>& texture, com_ptr<ID3D11UnorderedAccessView>* uav, UINT width, UINT height, DXGI_FORMAT format,
-      com_ptr<ID3D11ShaderResourceView>* srv = nullptr, com_ptr<ID3D11RenderTargetView>* rtv = nullptr)
+   static bool EnsureTexture(ID3D11Device* native_device, ComPtr<ID3D11Texture2D>& texture, ComPtr<ID3D11UnorderedAccessView>* uav, UINT width, UINT height, DXGI_FORMAT format,
+      ComPtr<ID3D11ShaderResourceView>* srv = nullptr, ComPtr<ID3D11RenderTargetView>* rtv = nullptr)
    {
       D3D11_TEXTURE2D_DESC desc = {};
       if (texture)
@@ -663,11 +663,11 @@ class MetalGearSolidV final : public Game
       desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_UNORDERED_ACCESS;
       if (rtv)
          desc.BindFlags |= D3D11_BIND_RENDER_TARGET;
-      if (FAILED(native_device->CreateTexture2D(&desc, nullptr, &texture)))
+      if (FAILED(native_device->CreateTexture2D(&desc, nullptr, texture.put())))
          return false;
-      if ((uav && FAILED(native_device->CreateUnorderedAccessView(texture.get(), nullptr, &(*uav)))) ||
-          (srv && FAILED(native_device->CreateShaderResourceView(texture.get(), nullptr, &(*srv)))) ||
-          (rtv && FAILED(native_device->CreateRenderTargetView(texture.get(), nullptr, &(*rtv)))))
+      if ((uav && FAILED(native_device->CreateUnorderedAccessView(texture.get(), nullptr, uav->put()))) ||
+          (srv && FAILED(native_device->CreateShaderResourceView(texture.get(), nullptr, srv->put()))) ||
+          (rtv && FAILED(native_device->CreateRenderTargetView(texture.get(), nullptr, rtv->put()))))
       {
          texture.reset();
          return false;
@@ -678,15 +678,15 @@ class MetalGearSolidV final : public Game
    // Recorded in the game's own deferred command list, right before its velocity pass draws: its depth and object velocity are bound there
    static bool DecodeMotionVectors(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data)
    {
-      com_ptr<ID3D11ShaderResourceView> srvs[2]; // t2 depth, t3 object velocity (see the pass map)
-      native_device_context->PSGetShaderResources(2, 2, &srvs[0]);
+      ComPtr<ID3D11ShaderResourceView> srvs[2]; // t2 depth, t3 object velocity (see the pass map)
+      native_device_context->PSGetShaderResources(2, 2, PutArray(srvs));
       if (!srvs[0] || !srvs[1])
          return false;
 
       const UINT width = UINT(t_velocity_camera.data.RenderSize.x);
       const UINT height = UINT(t_velocity_camera.data.RenderSize.y);
       auto& game_device_data = GetGameDeviceData(device_data);
-      com_ptr<ID3D11UnorderedAccessView> uavs[2];
+      ComPtr<ID3D11UnorderedAccessView> uavs[2];
       {
          const std::lock_guard lock(game_device_data.textures_mutex);
          if (!EnsureTexture(native_device, game_device_data.motion_vectors, std::addressof(game_device_data.motion_vectors_uav), width, height, DXGI_FORMAT_R16G16_FLOAT) ||
@@ -696,7 +696,7 @@ class MetalGearSolidV final : public Game
          uavs[1] = game_device_data.depth_uav;
       }
 
-      com_ptr<ID3D11ComputeShader> shader;
+      ComPtr<ID3D11ComputeShader> shader;
       {
          const std::shared_lock lock(s_mutex_shader_objects);
          const auto it = device_data.native_compute_shaders.find(CompileTimeStringHash("MGSV Decode Motion Vectors"));
@@ -723,18 +723,18 @@ class MetalGearSolidV final : public Game
    // between this part and the rest)
    static bool SplitForSR(ID3D11DeviceContext* native_device_context, DeviceData& device_data)
    {
-      com_ptr<ID3D11ShaderResourceView> source_srv;
-      native_device_context->PSGetShaderResources(0, 1, &source_srv);
-      com_ptr<ID3D11RenderTargetView> target_rtv;
-      native_device_context->OMGetRenderTargets(1, &target_rtv, nullptr);
+      ComPtr<ID3D11ShaderResourceView> source_srv;
+      native_device_context->PSGetShaderResources(0, 1, source_srv.put());
+      ComPtr<ID3D11RenderTargetView> target_rtv;
+      native_device_context->OMGetRenderTargets(1, target_rtv.put(), nullptr);
       if (!source_srv || !target_rtv)
          return false;
 
       SRJob job;
-      com_ptr<ID3D11Resource> target;
-      target_rtv->GetResource(&target);
-      com_ptr<ID3D11Texture2D> target_texture;
-      if (FAILED(target->QueryInterface(&target_texture)))
+      ComPtr<ID3D11Resource> target;
+      target_rtv->GetResource(target.put());
+      ComPtr<ID3D11Texture2D> target_texture;
+      if (FAILED(target->QueryInterface(target_texture.put())))
          return false;
       D3D11_TEXTURE2D_DESC target_desc;
       target_texture->GetDesc(&target_desc);
@@ -749,7 +749,7 @@ class MetalGearSolidV final : public Game
          return false;
 
       // Closed before the job is registered: our own split must never pass for the end of the game's command list
-      if (FAILED(native_device_context->FinishCommandList(TRUE, &job.partial_command_list)))
+      if (FAILED(native_device_context->FinishCommandList(TRUE, job.partial_command_list.put())))
          return false;
       const std::lock_guard lock(g_sr_jobs_mutex);
       g_sr_jobs_by_context[native_device_context] = std::move(job);
@@ -785,14 +785,14 @@ class MetalGearSolidV final : public Game
          if (g_sr_jobs_by_context.contains(native_device_context))
             return false;
       }
-      com_ptr<ID3D11ShaderResourceView> scene_srv;
-      native_device_context->PSGetShaderResources(0, 1, &scene_srv);
+      ComPtr<ID3D11ShaderResourceView> scene_srv;
+      native_device_context->PSGetShaderResources(0, 1, scene_srv.put());
       if (!scene_srv)
          return false;
-      com_ptr<ID3D11Resource> resource;
-      scene_srv->GetResource(&resource);
-      com_ptr<ID3D11Texture2D> scene;
-      if (FAILED(resource->QueryInterface(&scene)))
+      ComPtr<ID3D11Resource> resource;
+      scene_srv->GetResource(resource.put());
+      ComPtr<ID3D11Texture2D> scene;
+      if (FAILED(resource->QueryInterface(scene.put())))
          return false;
       D3D11_TEXTURE2D_DESC desc;
       scene->GetDesc(&desc);
@@ -803,7 +803,7 @@ class MetalGearSolidV final : public Game
       if (desc.SampleDesc.Count != 1 || desc.Width != job.width || desc.Height != job.height || (desc.BindFlags & D3D11_BIND_RENDER_TARGET) == 0)
          return false;
 
-      com_ptr<ID3D11RenderTargetView> scene_rtv;
+      ComPtr<ID3D11RenderTargetView> scene_rtv;
       {
          auto& game_device_data = GetGameDeviceData(device_data);
          const std::lock_guard lock(game_device_data.textures_mutex);
@@ -816,7 +816,7 @@ class MetalGearSolidV final : public Game
             rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
             game_device_data.scene = scene;
             game_device_data.scene_rtv.reset();
-            native_device->CreateRenderTargetView(scene.get(), &rtv_desc, &game_device_data.scene_rtv);
+            native_device->CreateRenderTargetView(scene.get(), &rtv_desc, game_device_data.scene_rtv.put());
          }
          scene_rtv = game_device_data.scene_rtv;
       }
@@ -826,7 +826,7 @@ class MetalGearSolidV final : public Game
       job.target_rtv = std::move(scene_rtv);
 
       // Closed before the job is registered, like at FXAA
-      if (FAILED(native_device_context->FinishCommandList(TRUE, &job.partial_command_list)))
+      if (FAILED(native_device_context->FinishCommandList(TRUE, job.partial_command_list.put())))
          return false;
       const std::lock_guard lock(g_sr_jobs_mutex);
       g_sr_jobs_by_context[native_device_context] = std::move(job);
@@ -848,20 +848,20 @@ class MetalGearSolidV final : public Game
          return; // Turned off since the split: FXAA's target keeps the image without AA for this frame
 
       auto& game_device_data = GetGameDeviceData(device_data);
-      com_ptr<ID3D11Texture2D> input, output, exposure;
-      com_ptr<ID3D11RenderTargetView> input_rtv;
-      com_ptr<ID3D11ShaderResourceView> output_srv;
+      ComPtr<ID3D11Texture2D> input, output, exposure;
+      ComPtr<ID3D11RenderTargetView> input_rtv;
+      ComPtr<ID3D11ShaderResourceView> output_srv;
       ID3D11BlendState* const output_blend_state = job.before_bloom ? game_device_data.color_only_blend_state.get() : device_data.default_blend_state.get();
       {
-         com_ptr<ID3D11Device> native_device;
-         native_device_context->GetDevice(&native_device);
+         ComPtr<ID3D11Device> native_device;
+         native_device_context->GetDevice(native_device.put());
          const std::lock_guard lock(game_device_data.textures_mutex);
          if (!game_device_data.sr_exposure)
          {
             const float one = 1.f;
             const D3D11_TEXTURE2D_DESC exposure_desc = {1, 1, 1, 1, DXGI_FORMAT_R32_FLOAT, {1, 0}, D3D11_USAGE_IMMUTABLE, D3D11_BIND_SHADER_RESOURCE, 0, 0};
             const D3D11_SUBRESOURCE_DATA exposure_data = {&one, sizeof(one), 0};
-            native_device->CreateTexture2D(&exposure_desc, &exposure_data, &game_device_data.sr_exposure);
+            native_device->CreateTexture2D(&exposure_desc, &exposure_data, game_device_data.sr_exposure.put());
          }
          exposure = game_device_data.sr_exposure;
          if (EnsureTexture(native_device.get(), game_device_data.sr_input, nullptr, job.width, job.height, DXGI_FORMAT_R8G8B8A8_UNORM, nullptr, std::addressof(game_device_data.sr_input_rtv)) &&
@@ -873,8 +873,8 @@ class MetalGearSolidV final : public Game
             output_srv = game_device_data.sr_output_srv;
          }
       }
-      com_ptr<ID3D11VertexShader> copy_vs;
-      com_ptr<ID3D11PixelShader> copy_ps;
+      ComPtr<ID3D11VertexShader> copy_vs;
+      ComPtr<ID3D11PixelShader> copy_ps;
       {
          const std::shared_lock lock(s_mutex_shader_objects);
          const auto vs = device_data.native_vertex_shaders.find(CompileTimeStringHash("Copy VS"));
@@ -1027,7 +1027,7 @@ public:
       target_blend.DestBlend = target_blend.DestBlendAlpha = D3D11_BLEND_ZERO;
       target_blend.BlendOp = target_blend.BlendOpAlpha = D3D11_BLEND_OP_ADD;
       target_blend.RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_RED | D3D11_COLOR_WRITE_ENABLE_GREEN | D3D11_COLOR_WRITE_ENABLE_BLUE;
-      native_device->CreateBlendState(&blend_desc, &GetGameDeviceData(device_data).color_only_blend_state);
+      native_device->CreateBlendState(&blend_desc, GetGameDeviceData(device_data).color_only_blend_state.put());
 #endif
    }
 
