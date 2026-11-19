@@ -1,12 +1,19 @@
 #include "Hooks/DXGI/DXGISwapchainProxy.hpp"
 
+#include <algorithm>
 #include <array>
+#include <cstring>
+#include <optional>
+#include <utility>
+#include <vector>
 #include <atomic>
 #include <cstdint>
 
 #include <intrin.h>
 
 #include "Hooks/DeviceProxy.hpp"
+#include "Hooks/Slots.h"
+#include "Hooks/Scope.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
 
 namespace Luma {
@@ -17,8 +24,29 @@ namespace {
 constexpr GUID PROXY_GUID = {0x4c554d41, 0x5357, 0x5052, {0x4f, 0x58, 0x59, 0x00, 0x00, 0x00, 0x00, 0x01}};
 
 thread_local uint32_t forwarding_depth = 0;
-// Every proxy's, set by the first
-std::atomic<const void*> proxy_vtable = nullptr;
+// Luma's own calls go through the proxy (ResizeBuffers and the others below), so tools hooking it see them: its methods then call the real
+// swapchain inside Luma's scope
+thread_local bool luma_call = false;
+
+// Identical copies of Luma's outer Present: a tool hooks the function in the Present slot when the swapchain is created (Steam patches its
+// code), so when the one in the slot has been patched, the slot moves to an untouched copy, which runs first and calls the patched one
+constexpr size_t OUTER_COPIES = 4;
+// The first bytes of each copy, before any tool saw them
+constexpr size_t SIGNATURE_SIZE = 16;
+using Signature = std::array<uint8_t, SIGNATURE_SIZE>;
+
+Signature ReadSignature(const void* function)
+{
+   Signature signature;
+   std::memcpy(signature.data(), function, SIGNATURE_SIZE);
+   return signature;
+}
+
+// The outer Present ran Luma's prologue on this thread: the proxy's own Present, reached through other tools' hooks, doesn't again
+thread_local std::optional<bool> prologue_done;
+thread_local bool in_outer_present = false;
+// Which copy of the outer Present ran last: each writes its own number, so the linker can't fold the copies into one function
+thread_local uint32_t outer_copy = 0;
 
 struct Forwarding
 {
@@ -57,7 +85,16 @@ public:
       }
       Proxy* self = this;
       real->SetPrivateData(PROXY_GUID, sizeof(self), &self);
-      proxy_vtable = *reinterpret_cast<void* const*>(static_cast<IDXGISwapChain4*>(this));
+      // Its own vtable, Luma's outer Present in its Present slots, the compiler's methods after them
+      void* const* compiled = *reinterpret_cast<void* const* const*>(static_cast<IDXGISwapChain4*>(this));
+      vtable.assign(compiled, compiled + LumaMethodCount_IDXGISwapChain4);
+      inner_present = vtable[LumaSlot_IDXGISwapChain_Present];
+      inner_present1 = vtable[LumaSlot_IDXGISwapChain1_Present1];
+      next_present = inner_present;
+      next_present1 = inner_present1;
+      vtable[LumaSlot_IDXGISwapChain_Present] = GetOuters().present[0];
+      vtable[LumaSlot_IDXGISwapChain1_Present1] = GetOuters().present1[0];
+      *reinterpret_cast<void**>(static_cast<IDXGISwapChain4*>(this)) = vtable.data();
    }
 
    // IUnknown
@@ -126,7 +163,10 @@ public:
    }
 
    // IDXGISwapChain
-   HRESULT STDMETHODCALLTYPE Present(UINT sync_interval, UINT flags) override { return DXGI::PresentForGame(real, sync_interval, flags, nullptr, false); }
+   HRESULT STDMETHODCALLTYPE Present(UINT sync_interval, UINT flags) override
+   {
+      return DXGI::PresentForGame(real, sync_interval, flags, nullptr, false, std::exchange(prologue_done, std::nullopt));
+   }
 
    // An overlay that hooked the proxy (Steam hooks the swapchain the game holds) calls these from its Present, before the proxy's: it gets
    // the real buffers, composed first. Nothing is hooked between it and the proxy, so the return address is its own.
@@ -157,6 +197,11 @@ public:
 
    HRESULT STDMETHODCALLTYPE ResizeBuffers(UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags) override
    {
+      if (luma_call)
+      {
+         Scope::Guard scope;
+         return real->ResizeBuffers(count, width, height, format, flags);
+      }
       return Forward([&] { return real->ResizeBuffers(count, width, height, format, flags); });
    }
 
@@ -203,7 +248,7 @@ public:
 
    HRESULT STDMETHODCALLTYPE Present1(UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters) override
    {
-      return DXGI::PresentForGame(real, sync_interval, flags, parameters, true);
+      return DXGI::PresentForGame(real, sync_interval, flags, parameters, true, std::exchange(prologue_done, std::nullopt));
    }
 
    BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override
@@ -290,6 +335,11 @@ public:
 
    HRESULT STDMETHODCALLTYPE SetColorSpace1(DXGI_COLOR_SPACE_TYPE color_space) override
    {
+      if (luma_call)
+      {
+         Scope::Guard scope;
+         return real3->SetColorSpace1(color_space);
+      }
       return Forward([&] { return real3->SetColorSpace1(color_space); });
    }
 
@@ -301,12 +351,105 @@ public:
    // IDXGISwapChain4
    HRESULT STDMETHODCALLTYPE SetHDRMetaData(DXGI_HDR_METADATA_TYPE type, UINT size, void* metadata) override
    {
+      if (luma_call)
+      {
+         Scope::Guard scope;
+         return real4->SetHDRMetaData(type, size, metadata);
+      }
       return Forward([&] { return real4->SetHDRMetaData(type, size, metadata); });
    }
 
    IDXGISwapChain* GetReal() const { return real; }
 
 private:
+   using PresentFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain4* self, UINT sync_interval, UINT flags);
+   using Present1Function = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain4* self, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters);
+
+   template <size_t Copy>
+   static HRESULT STDMETHODCALLTYPE OuterPresent(IDXGISwapChain4* self, UINT sync_interval, UINT flags)
+   {
+      Proxy* proxy = static_cast<Proxy*>(self);
+      // Reached again through a tool that called what it hooked (an outer Present): the proxy's own Present
+      if (in_outer_present)
+         return reinterpret_cast<PresentFunction>(proxy->inner_present)(self, sync_interval, flags);
+      outer_copy = uint32_t(Copy);
+      proxy->Reclaim(LumaSlot_IDXGISwapChain_Present, GetOuters().present, GetOuters().present_signatures, proxy->next_present);
+      in_outer_present = true;
+      prologue_done = DXGI::PresentPrologue(proxy->real, sync_interval, flags);
+      const HRESULT result = reinterpret_cast<PresentFunction>(proxy->next_present)(self, sync_interval, flags);
+      prologue_done.reset();
+      in_outer_present = false;
+      return result;
+   }
+
+   template <size_t Copy>
+   static HRESULT STDMETHODCALLTYPE OuterPresent1(IDXGISwapChain4* self, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters)
+   {
+      Proxy* proxy = static_cast<Proxy*>(self);
+      if (in_outer_present)
+         return reinterpret_cast<Present1Function>(proxy->inner_present1)(self, sync_interval, flags, parameters);
+      outer_copy = uint32_t(Copy) + 100;
+      proxy->Reclaim(LumaSlot_IDXGISwapChain1_Present1, GetOuters().present1, GetOuters().present1_signatures, proxy->next_present1);
+      in_outer_present = true;
+      prologue_done = DXGI::PresentPrologue(proxy->real, sync_interval, flags);
+      const HRESULT result = reinterpret_cast<Present1Function>(proxy->next_present1)(self, sync_interval, flags, parameters);
+      prologue_done.reset();
+      in_outer_present = false;
+      return result;
+   }
+
+   struct Outers
+   {
+      std::array<void*, OUTER_COPIES> present;
+      std::array<void*, OUTER_COPIES> present1;
+      std::array<Signature, OUTER_COPIES> present_signatures;
+      std::array<Signature, OUTER_COPIES> present1_signatures;
+   };
+
+   template <size_t... Copies>
+   static Outers MakeOuters(std::index_sequence<Copies...>)
+   {
+      Outers outers = {{reinterpret_cast<void*>(&OuterPresent<Copies>)...}, {reinterpret_cast<void*>(&OuterPresent1<Copies>)...}};
+      for (size_t i = 0; i < OUTER_COPIES; i++)
+      {
+         outers.present_signatures[i] = ReadSignature(outers.present[i]);
+         outers.present1_signatures[i] = ReadSignature(outers.present1[i]);
+      }
+      return outers;
+   }
+
+   // Made with the first proxy, before any tool saw one
+   static const Outers& GetOuters()
+   {
+      static const Outers outers = MakeOuters(std::make_index_sequence<OUTER_COPIES>());
+      return outers;
+   }
+
+   // Luma's outer Present in the slot, untouched: a tool that replaced the slot or patched the outer Present there comes after it now (it
+   // calls what it hooked, an outer Present, which then goes on to the proxy's own)
+   void Reclaim(uint32_t slot, const std::array<void*, OUTER_COPIES>& copies, const std::array<Signature, OUTER_COPIES>& signatures, void*& next)
+   {
+      const auto is_untouched = [&](size_t i) { return ReadSignature(copies[i]) == signatures[i]; };
+      const auto current = std::ranges::find(copies, vtable[slot]);
+      if (current != copies.end() && is_untouched(size_t(current - copies.begin())))
+         return;
+      for (size_t i = 0; i < OUTER_COPIES; i++)
+      {
+         if (copies[i] != vtable[slot] && copies[i] != next && is_untouched(i))
+         {
+            next = vtable[slot];
+            vtable[slot] = copies[i];
+            return;
+         }
+      }
+   }
+
+   std::vector<void*> vtable;
+   void* inner_present = nullptr; // The compiler's Present (a tool may have patched its code: it still runs after Luma's outer one)
+   void* inner_present1 = nullptr;
+   void* next_present = nullptr; // What the outer Present calls: a tool's function, or the inner Present
+   void* next_present1 = nullptr;
+
    template <typename Call>
    static auto Forward(Call call)
    {
@@ -352,10 +495,9 @@ void Wrap(IDXGISwapChain1** swapchain)
 
 IDXGISwapChain* Unwrap(IDXGISwapChain* swapchain)
 {
-   // A proxy's private data is the real swapchain's: its vtable tells it apart. Every interface of it is the same pointer.
-   if (swapchain && proxy_vtable && *reinterpret_cast<void* const*>(swapchain) == proxy_vtable)
-      return static_cast<Proxy*>(static_cast<IDXGISwapChain4*>(swapchain))->GetReal();
-   return swapchain;
+   // A proxy's private data is the real swapchain's, which names the proxy: the pointer asked about is the proxy itself, or the real one
+   Proxy* proxy = FindProxy(swapchain);
+   return proxy && static_cast<IDXGISwapChain*>(static_cast<IDXGISwapChain4*>(proxy)) == swapchain ? proxy->GetReal() : swapchain;
 }
 
 bool HasProxy(IDXGISwapChain* swapchain)
@@ -366,6 +508,43 @@ bool HasProxy(IDXGISwapChain* swapchain)
 bool IsForwarding()
 {
    return forwarding_depth != 0;
+}
+
+HRESULT ResizeBuffers(IDXGISwapChain* swapchain, UINT count, UINT width, UINT height, DXGI_FORMAT format, UINT flags)
+{
+   Proxy* proxy = FindProxy(swapchain);
+   if (!proxy)
+      return swapchain->ResizeBuffers(count, width, height, format, flags);
+   luma_call = true;
+   // Through its vtable: a tool's hook on it runs first
+   IDXGISwapChain* game_facing = proxy;
+   const HRESULT result = game_facing->ResizeBuffers(count, width, height, format, flags);
+   luma_call = false;
+   return result;
+}
+
+HRESULT SetColorSpace1(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
+{
+   Proxy* proxy = FindProxy(swapchain);
+   if (!proxy)
+      return swapchain->SetColorSpace1(color_space);
+   luma_call = true;
+   IDXGISwapChain4* game_facing = proxy;
+   const HRESULT result = game_facing->SetColorSpace1(color_space);
+   luma_call = false;
+   return result;
+}
+
+HRESULT SetHDRMetaData(IDXGISwapChain4* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, void* metadata)
+{
+   Proxy* proxy = FindProxy(swapchain);
+   if (!proxy)
+      return swapchain->SetHDRMetaData(type, size, metadata);
+   luma_call = true;
+   IDXGISwapChain4* game_facing = proxy;
+   const HRESULT result = game_facing->SetHDRMetaData(type, size, metadata);
+   luma_call = false;
+   return result;
 }
 } // namespace SwapchainProxy
 } // namespace Hooks

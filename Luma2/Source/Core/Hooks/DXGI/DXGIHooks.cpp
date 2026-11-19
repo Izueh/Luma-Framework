@@ -658,18 +658,28 @@ void OnOverlayBufferRequest(IDXGISwapChain* swapchain)
    Handlers::OnOverlayBufferRequest(swapchain);
 }
 
-HRESULT PresentForGame(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters, bool present1)
+bool PresentPrologue(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags)
+{
+   if ((flags & DXGI_PRESENT_TEST) || Scope::IsActive())
+      return false;
+   Scope::Guard scope;
+   ObserveImmediateContext(swapchain);
+   Handlers::PrePresent(swapchain, sync_interval, flags);
+   return true;
+}
+
+HRESULT PresentForGame(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters, bool present1,
+   std::optional<bool> prologue)
 {
    DepthGuard guard(present_depth);
-   const bool is_game = guard.IsOutermost() && !(flags & DXGI_PRESENT_TEST) && !Scope::IsActive();
+   // The proxy's outer Present usually ran the prologue already, before other tools' hooks on the proxy
+   const bool is_game = prologue ? *prologue : (guard.IsOutermost() && PresentPrologue(swapchain, sync_interval, flags));
    // Composition writes the whole buffer: the game's dirty rects and scroll don't describe it
    const DXGI_PRESENT_PARAMETERS whole = {};
-   if (is_game)
+   if (is_game && present1)
    {
       Scope::Guard scope;
-      ObserveImmediateContext(swapchain);
-      Handlers::PrePresent(swapchain, sync_interval, flags);
-      if (present1 && Handlers::ComposesWholeBuffer(swapchain))
+      if (Handlers::ComposesWholeBuffer(swapchain))
          parameters = &whole;
    }
    HRESULT result = E_FAIL;

@@ -13,6 +13,7 @@
 #include "Display/D3D12/D3D12Composition.hpp"
 #include "Display/Levels.hpp"
 #include "Frame/Frame.hpp"
+#include "Hooks/DXGI/DXGISwapchainProxy.hpp"
 #include "Hooks/Lifetime.hpp"
 #include "Swapchain/D3D11/D3D11Swapchain.hpp"
 #include "Swapchain/D3D12/D3D12Swapchain.hpp"
@@ -77,8 +78,12 @@ struct State
    // The thread presenting, and a composition an overlay's request ran ahead of this frame's present
    DWORD present_thread = 0;
    bool composed_early = false;
+   // This frame's composition ran (until the real present returns): an overlay asking for a buffer after it doesn't compose again
+   bool composed_this_frame = false;
    // The game holds a proxy: overlays present after Luma
    bool wrapped = false;
+   // The game set a color space or HDR metadata: a tool that hooked the proxy saw it, so Luma's are set again at the next present
+   bool reapply_color_space = false;
 };
 
 std::mutex status_mutex;
@@ -192,7 +197,7 @@ void ApplyColorSpace(IDXGISwapChain* swapchain, State& state)
    ComPtr<IDXGISwapChain3> swapchain3;
    UINT support = 0;
    if (FAILED(swapchain->QueryInterface(IID_PPV_ARGS(&swapchain3))) || FAILED(swapchain3->CheckColorSpaceSupport(color_space, &support)) ||
-      !(support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) || FAILED(swapchain3->SetColorSpace1(color_space)))
+      !(support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) || FAILED(Hooks::SwapchainProxy::SetColorSpace1(swapchain3.Get(), color_space)))
    {
       Utils::Log::Warning("Swapchain: {} can't present color space {} (format {})", static_cast<void*>(swapchain), GetName(color_space), uint32_t(state.real.format));
       return;
@@ -215,11 +220,11 @@ void ApplyColorSpace(IDXGISwapChain* swapchain, State& state)
          .MaxContentLightLevel = UINT16(std::min(state.display.peak_nits, 65535.f)),
          .MaxFrameAverageLightLevel = UINT16(std::min(state.display.max_full_frame_nits, 65535.f)),
       };
-      swapchain4->SetHDRMetaData(DXGI_HDR_METADATA_TYPE_HDR10, sizeof(metadata), const_cast<DXGI_HDR_METADATA_HDR10*>(&metadata));
+      Hooks::SwapchainProxy::SetHDRMetaData(swapchain4.Get(), DXGI_HDR_METADATA_TYPE_HDR10, sizeof(metadata), const_cast<DXGI_HDR_METADATA_HDR10*>(&metadata));
    }
    else
    {
-      swapchain4->SetHDRMetaData(DXGI_HDR_METADATA_TYPE_NONE, 0, nullptr);
+      Hooks::SwapchainProxy::SetHDRMetaData(swapchain4.Get(), DXGI_HDR_METADATA_TYPE_NONE, 0, nullptr);
    }
 }
 
@@ -308,8 +313,8 @@ void SwitchOutput(IDXGISwapChain* swapchain, State& state, OutputMode output)
    ReleaseRealBuffers(state);
    DXGI_SWAP_CHAIN_DESC real = {};
    swapchain->GetDesc(&real);
-   // Through the vtable, so an overlay's ResizeBuffers hook sees it too
-   const HRESULT result = swapchain->ResizeBuffers(real.BufferCount, real.BufferDesc.Width, real.BufferDesc.Height, format, real.Flags);
+   // Through the proxy and the vtables, so an overlay's ResizeBuffers hook (on either) sees it too and lets go of the buffers
+   const HRESULT result = Hooks::SwapchainProxy::ResizeBuffers(swapchain, real.BufferCount, real.BufferDesc.Width, real.BufferDesc.Height, format, real.Flags);
    if (FAILED(result))
    {
       if (!state.switch_failed_logged)
@@ -483,7 +488,7 @@ void OnResized(IDXGISwapChain* swapchain, bool succeeded)
 void ComposeForOverlay(IDXGISwapChain* swapchain)
 {
    State* state = Find(swapchain);
-   if (!state || state->mode != Mode::Mirror || state->composed_early || GetCurrentThreadId() != state->present_thread)
+   if (!state || state->mode != Mode::Mirror || state->composed_early || state->composed_this_frame || GetCurrentThreadId() != state->present_thread)
       return;
    Compose(swapchain);
    state->composed_early = true;
@@ -534,13 +539,17 @@ bool SetColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
    if (state->game_color_space != color_space)
       Utils::Log::Info("Swapchain: the game set color space {} (kept as its image's, Luma presents {})", GetName(color_space), GetName(state->color_space));
    state->game_color_space = color_space;
+   state->reapply_color_space = true;
    return true;
 }
 
 bool SetHdrMetadata(IDXGISwapChain* swapchain, DXGI_HDR_METADATA_TYPE, UINT, const void*)
 {
    State* state = Find(swapchain);
-   return state && state->real.flip;
+   if (!state || !state->real.flip)
+      return false;
+   state->reapply_color_space = true;
+   return true;
 }
 
 bool SetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen)
@@ -594,6 +603,7 @@ void Compose(IDXGISwapChain* swapchain)
    if (std::exchange(state->composed_early, false))
       return;
    state->present_thread = GetCurrentThreadId();
+   state->composed_this_frame = true;
    RefreshDisplay(swapchain, *state, false);
    const bool requests_hdr = RequestsHdr();
    if (requests_hdr && !state->hdr_requested && state->display.hdr_supported && !state->display.hdr_enabled)
@@ -602,6 +612,8 @@ void Compose(IDXGISwapChain* swapchain)
       RefreshDisplay(swapchain, *state, true);
    }
    state->hdr_requested = requests_hdr;
+   if (std::exchange(state->reapply_color_space, false))
+      ApplyColorSpace(swapchain, *state);
    const bool mirror = state->mode == Mode::Mirror;
    if (mirror && state->real.flip)
    {
@@ -639,7 +651,10 @@ void Compose(IDXGISwapChain* swapchain)
 void OnPresented(IDXGISwapChain* swapchain)
 {
    State* state = Find(swapchain);
-   if (!state || state->mode != Mode::Mirror)
+   if (!state)
+      return;
+   state->composed_this_frame = false;
+   if (state->mode != Mode::Mirror)
       return;
    std::scoped_lock lock(state->mutex);
    if (!state->buffers.empty())

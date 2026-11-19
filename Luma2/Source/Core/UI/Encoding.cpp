@@ -45,8 +45,10 @@ float3 LinearToPQ(float3 color)
 float4 main(PS_INPUT input) : SV_Target
 {
    const float4 color = input.col * texture0.Sample(sampler0, input.uv);
-   // Encoded with gamma 2.2, as the overlay looks in SDR
-   const float3 linear_color = pow(saturate(color.rgb), 2.2);
+   // Decoded with sRGB, as Windows shows an SDR swapchain on an HDR display: the overlay looks the same in every output mode there
+   // (ReShade's used gamma 2.2, which darkens the dark panels)
+   const float3 encoded = saturate(color.rgb);
+   const float3 linear_color = encoded <= 0.04045 ? encoded / 12.92 : pow((encoded + 0.055) / 1.055, 2.4);
    if (encoding_kind == 1)
       return float4(linear_color * (paper_white / 80.0), color.a);
    const float3x3 BT709_TO_BT2020 = float3x3(
