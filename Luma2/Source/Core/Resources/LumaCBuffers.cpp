@@ -197,12 +197,16 @@ std::vector<Shaders::Compiler::Define> GetDefines(Api api)
    // Display composition's own (Display::Composition), below the others
    const uint32_t composition_slot = FindFreeSlot(SLOT_COUNT / 2 - 3, {settings_slot, data_slot, ui_slot});
    const std::string space = api == Api::D3D12 ? std::format(", space{}", Bindings::GetOptions().d3d12_space) : std::string();
-   return {
+   std::vector<Shaders::Compiler::Define> defines = {
       {"LUMA_SETTINGS_CB_INDEX", std::format("b{}{}", settings_slot, space)},
       {"LUMA_DATA_CB_INDEX", std::format("b{}{}", data_slot, space)},
       {"LUMA_UI_DATA_CB_INDEX", std::format("b{}{}", ui_slot, space)},
       {"LUMA_COMPOSITION_CB_INDEX", std::format("b{}{}", composition_slot, space)},
    };
+   // D3D12: a shader reading one of Luma's textures by name declares it in Luma's table (t112 to t127 of this space)
+   if (api == Api::D3D12 && Bindings::GetOptions().d3d12_space != 0)
+      defines.push_back({"LUMA_TEXTURE_SPACE", std::format("space{}", Bindings::GetOptions().d3d12_space)});
+   return defines;
 }
 
 // LumaSettings has no per pass values

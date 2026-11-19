@@ -243,6 +243,23 @@ std::vector<Binding> ReflectConstantBufferBindings(std::span<const uint8_t> byte
    return bindings;
 }
 
+std::vector<Binding> ReflectTextureBindings(std::span<const uint8_t> bytecode)
+{
+   std::vector<Binding> bindings;
+   const Lock lock;
+   ComPtr<ID3D11ShaderReflection> reflector;
+   D3D11_SHADER_DESC desc = {};
+   if (!Reflect(bytecode, __uuidof(ID3D11ShaderReflection), &reflector) || FAILED(reflector->GetDesc(&desc)))
+      return bindings;
+   for (UINT i = 0; i < desc.BoundResources; i++)
+   {
+      D3D11_SHADER_INPUT_BIND_DESC binding = {};
+      if (SUCCEEDED(reflector->GetResourceBindingDesc(i, &binding)) && binding.Type == D3D_SIT_TEXTURE && binding.Name)
+         bindings.push_back({binding.Name, binding.BindPoint});
+   }
+   return bindings;
+}
+
 #if DEVELOPMENT
 namespace {
 Variable::Kind GetKind(D3D_SHADER_VARIABLE_TYPE type)

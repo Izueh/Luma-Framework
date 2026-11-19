@@ -28,6 +28,7 @@
 #include "System/Jobs.hpp"
 #include "System/Paths.hpp"
 #include "Utils/Hash.hpp"
+#include "Trace/Capture.hpp"
 #include "Utils/Log.hpp"
 
 namespace Luma {
@@ -127,7 +128,10 @@ std::set<DWORD> recording_threads; // This frame
 std::array<uint64_t, size_t(Counter::Count)> totals = {};
 std::array<uint64_t, size_t(Counter::Count)> maxima = {};
 uint64_t frames = 0;
-std::chrono::steady_clock::time_point last_write;
+// Presenting thread: the last frame capture written with the report
+uint64_t written_capture = 0;
+// Any thread
+std::atomic<bool> write_requested = false;
 
 // Lock order: never held with another
 std::shared_mutex heaps_mutex;
@@ -224,8 +228,10 @@ RootSummary Summarize(const RootLayout& layout)
          break;
       default:
       {
-         const std::string_view kind = parameter.type == D3D12_ROOT_PARAMETER_TYPE_CBV ? "cbv" : parameter.type == D3D12_ROOT_PARAMETER_TYPE_SRV ? "srv" : "uav";
-         const char letter = parameter.type == D3D12_ROOT_PARAMETER_TYPE_CBV ? 'b' : parameter.type == D3D12_ROOT_PARAMETER_TYPE_SRV ? 't' : 'u';
+         const std::string_view kind = parameter.type == D3D12_ROOT_PARAMETER_TYPE_CBV ? "cbv" : parameter.type == D3D12_ROOT_PARAMETER_TYPE_SRV ? "srv"
+                                                                                                                                                 : "uav";
+         const char letter = parameter.type == D3D12_ROOT_PARAMETER_TYPE_CBV ? 'b' : parameter.type == D3D12_ROOT_PARAMETER_TYPE_SRV ? 't'
+                                                                                                                                     : 'u';
          summary.layout += std::format("{}({}{}{},{})", kind, letter, parameter.shader_register, parameter.space ? std::format(" space{}", parameter.space) : "", visibility);
          if (parameter.type == D3D12_ROOT_PARAMETER_TYPE_CBV)
             summary.luma_slot_conflict |= CoversLumaSlot(parameter.shader_register, 1, parameter.space);
@@ -315,6 +321,9 @@ std::string DescribeShaders()
 }
 
 // Under `mutex`, presenting thread. `shaders` is DescribeShaders'.
+// Where the shader lists go in a report, filled on the job
+constexpr std::string_view SHADERS_MARKER = "shaders";
+
 std::string BuildReport(const std::string& shaders)
 {
    std::string text = std::format("{{\n  \"frames\": {},\n  \"device\": {},\n", frames, Quote(device_info));
@@ -382,7 +391,9 @@ std::string BuildReport(const std::string& shaders)
          hashes += std::format("{}\"0x{:08X}\"", hashes.empty() ? "" : ", ", hash);
       text += std::format("    {{\"crc\": \"0x{:08X}\", \"version\": \"{}\", \"dwords\": {}, \"parameters\": {}, \"static_samplers\": {}, \"created\": {}, "
                           "\"pipelines\": {}, \"pipelines_with_replaced\": {}, \"replaced\": [{}], \"b12_b13_space0\": {}, \"unbounded\": {}, \"extended\": {}, \"layout\": {}}}{}\n",
-         sorted[i].first, root.version == D3D_ROOT_SIGNATURE_VERSION_1_0 ? "1.0" : root.version == D3D_ROOT_SIGNATURE_VERSION_1_1 ? "1.1" : "1.2", root.size,
+         sorted[i].first, root.version == D3D_ROOT_SIGNATURE_VERSION_1_0 ? "1.0" : root.version == D3D_ROOT_SIGNATURE_VERSION_1_1 ? "1.1"
+                                                                                                                                  : "1.2",
+         root.size,
          root.parameters, root.static_samplers, root.created, root.pipelines, root.pipelines_with_replaced, hashes, root.luma_slot_conflict, root.unbounded, root.extended,
          Quote(root.layout), i + 1 < sorted.size() ? "," : "");
    }
@@ -428,7 +439,9 @@ void RecordPipeline(const Pipeline& pipeline, const PipelineDesc& desc)
    }
    const bool compute = !desc.stages[size_t(ShaderStage::Compute)].empty();
    std::scoped_lock lock(mutex);
-   pipeline_counts[pipeline.kind == PipelineKind::Graphics ? "graphics" : pipeline.kind == PipelineKind::Compute ? "compute" : compute ? "stream compute" : "stream graphics"]++;
+   pipeline_counts[pipeline.kind == PipelineKind::Graphics ? "graphics" : pipeline.kind == PipelineKind::Compute ? "compute"
+         : compute                                                                                               ? "stream compute"
+                                                                                                                 : "stream graphics"]++;
    if (pipeline.from_library)
       pipeline_counts["from game library"]++;
    if (pipeline.embedded_root_signature)
@@ -545,31 +558,56 @@ void RecordExecute(UINT count)
 
 void CountFrame()
 {
-   const auto now = std::chrono::steady_clock::now();
-   const bool write = now - last_write >= std::chrono::seconds(5);
-   const std::string shaders = write ? DescribeShaders() : std::string();
-   std::scoped_lock lock(mutex);
-   frame_counters[size_t(Counter::RecordingThreads)].store(recording_threads.size(), std::memory_order_relaxed);
-   recording_threads.clear();
-   for (size_t i = 0; i < size_t(Counter::Count); i++)
+   // Written when asked and with each frame capture, the shaders described on the job: walking every shader at a present stalls it
+   bool write = write_requested.exchange(false);
+   if (const std::shared_ptr<const Capture::Frame> capture = Capture::GetLast(); capture && capture->id != written_capture)
    {
-      const uint64_t value = frame_counters[i].exchange(0, std::memory_order_relaxed);
-      totals[i] += value;
-      maxima[i] = std::max(maxima[i], value);
+      written_capture = capture->id;
+      write = true;
    }
-   frames++;
-   if (!write)
-      return;
-   last_write = now;
+   {
+      std::scoped_lock lock(mutex);
+      frame_counters[size_t(Counter::RecordingThreads)].store(recording_threads.size(), std::memory_order_relaxed);
+      recording_threads.clear();
+      for (size_t i = 0; i < size_t(Counter::Count); i++)
+      {
+         const uint64_t value = frame_counters[i].exchange(0, std::memory_order_relaxed);
+         totals[i] += value;
+         maxima[i] = std::max(maxima[i], value);
+      }
+      frames++;
+   }
+   if (write)
+      Write();
+}
+
+std::filesystem::path Write()
+{
+   std::scoped_lock lock(mutex);
    System::Jobs::Queue(
       "D3D12 stats",
-      [report = BuildReport(shaders)] {
+      [report = BuildReport(std::string(SHADERS_MARKER))]() mutable {
+         // The shader lists from here (the database and variants are read from any thread)
+         if (const size_t at = report.find(SHADERS_MARKER); at != std::string::npos)
+            report.replace(at, SHADERS_MARKER.size(), DescribeShaders());
          std::error_code error;
          std::filesystem::create_directories(System::Paths::GetDump(), error);
          std::ofstream file(System::Paths::GetDump() / L"D3D12Stats.json", std::ios::binary | std::ios::trunc);
          file << report;
       },
       [] { return System::Jobs::Outcome{}; }, System::Jobs::Priority::Low);
+   return System::Paths::GetDump() / L"D3D12Stats.json";
+}
+
+void RequestWrite()
+{
+   write_requested = true;
+}
+
+bool HasData()
+{
+   std::scoped_lock lock(mutex);
+   return !device_info.empty();
 }
 } // namespace D3D12
 } // namespace Stats

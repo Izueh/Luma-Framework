@@ -43,6 +43,8 @@
 #include "Shaders/Shaders.hpp"
 #include "Shaders/Variants.hpp"
 #include "System/Paths.hpp"
+#include "Trace/D3D12/D3D12Stats.hpp"
+#include "Utils/Strings.hpp"
 #include "Trace/Capture.hpp"
 #include "Trace/Cbuffers.hpp"
 #include "Trace/Readback.hpp"
@@ -63,6 +65,13 @@ struct Error
 {
    bool ok = false;
    std::string error;
+};
+
+struct Stats
+{
+   bool ok = true;
+   std::string path;
+   std::string note;
 };
 
 struct Setting
@@ -977,6 +986,19 @@ std::string DumpShader(const Request& request)
 }
 
 // Waits on the pipe thread for the build the reload starts, like 1.0's job waiting for its load
+// D3D12Stats.json, written now on a job (it's also written with each frame capture)
+std::string DumpStats(const Request& request)
+{
+   if (!Trace::Stats::D3D12::HasData())
+      return Error("no D3D12 device yet: the stats are D3D12's");
+   return RunOnRenderThread(
+      [] {
+         const std::filesystem::path path = Trace::Stats::D3D12::Write();
+         return Utils::Json::Write(Replies::Stats{.path = Utils::Strings::ToUtf8(path), .note = "written by a background job, ready within a frame or two"});
+      },
+      GetTimeout(request));
+}
+
 std::string ReloadShaders(const Request& request)
 {
    const bool unload = GetBool(request, "unload");
@@ -1872,6 +1894,8 @@ std::string Answer(const Request& request)
       return DumpShader(request);
    if (request.tool == "reload_shaders")
       return ReloadShaders(request);
+   if (request.tool == "dump_stats")
+      return DumpStats(request);
    if (request.tool == "patch_state")
       return PatchState(request);
    // Wait on the pipe thread for the patch job their change starts
@@ -1892,7 +1916,7 @@ std::string Answer(const Request& request)
    if (request.tool == "read_cbuffer")
       return ReadCbuffer(request);
 #endif
-   return Error(std::format("unknown tool '{}' (Luma 2 serves status, get_settings, set_setting, shader_list, shader_state, dump_shader, reload_shaders, "
+   return Error(std::format("unknown tool '{}' (Luma 2 serves status, get_settings, set_setting, shader_list, shader_state, dump_shader, reload_shaders, dump_stats, "
                             "patch_state, set_recipe, reload_patches, trace_capture, trace_list, trace_get, read_resource and read_cbuffer so far; luma_log, luma_compare"
                             " and luma_golden are the bridge's)",
       request.tool));

@@ -69,6 +69,8 @@ struct Binding
 
 // The cbuffers DXBC bytecode declares (the ones it reads: the compiler drops the others), by name. Empty when it was stripped.
 std::vector<Binding> ReflectConstantBufferBindings(std::span<const uint8_t> bytecode);
+// Its textures (shader resource views of a texture): name and register
+std::vector<Binding> ReflectTextureBindings(std::span<const uint8_t> bytecode);
 
 #if DEVELOPMENT
 // A cbuffer's layout, to show its contents typed

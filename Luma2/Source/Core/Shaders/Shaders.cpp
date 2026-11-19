@@ -93,7 +93,8 @@ std::string_view GetStageDefine(ShaderStage stage)
 }
 
 // What the bytecode requests from Resources::Database: Luma's cbuffers at the game's slots whatever its reflection says (1.0 binds
-// them to every stage running a Luma shader), and the other entries its cbuffers are named after, at their registers
+// them to every stage running a Luma shader), and the other entries its cbuffers and textures are named after, at their registers (a
+// texture on D3D12 in Luma's table: LUMA_TEXTURE_SPACE)
 std::shared_ptr<const CompiledShader> MakeCompiledShader(Bytecode bytecode)
 {
    auto compiled = std::make_shared<CompiledShader>();
@@ -103,6 +104,12 @@ std::shared_ptr<const CompiledShader> MakeCompiledShader(Bytecode bytecode)
       const std::optional<uint32_t> entry = Resources::Database::Find(Utils::Hash::Name(binding.name));
       if (entry && Resources::Database::Get(*entry).kind == Resources::Database::Kind::ConstantBuffer &&
          !std::ranges::contains(compiled->requests, *entry, &Request::entry))
+         compiled->requests.push_back({*entry, binding.slot});
+   }
+   for (const Compiler::Binding& binding : Compiler::ReflectTextureBindings(bytecode))
+   {
+      const std::optional<uint32_t> entry = Resources::Database::Find(Utils::Hash::Name(binding.name));
+      if (entry && Resources::Database::Get(*entry).kind == Resources::Database::Kind::Texture && !std::ranges::contains(compiled->requests, *entry, &Request::entry))
          compiled->requests.push_back({*entry, binding.slot});
    }
    compiled->bytecode = std::move(bytecode);
@@ -378,14 +385,14 @@ void Reload()
    built_api = build_api;
    std::vector<Compiler::Define> defines = Defines::Collect();
    Defines::SetCompiled(defines);
-   // The registers of Luma's cbuffers depend on the API
+   // The registers of Luma's cbuffers depend on the API, and D3D12 has its own (LUMA_TEXTURE_SPACE)
    for (const Compiler::Define& register_define : Resources::LumaCBuffers::GetDefines(*build_api))
    {
-      for (Compiler::Define& define : defines)
-      {
-         if (define.name == register_define.name)
-            define.value = register_define.value;
-      }
+      const auto it = std::ranges::find(defines, register_define.name, &Compiler::Define::name);
+      if (it != defines.end())
+         it->value = register_define.value;
+      else
+         defines.push_back(register_define);
    }
    // "#if _D3D12" in shaders of games that run on both APIs
    defines.push_back({"_D3D11", *build_api == Api::D3D11 ? "1" : "0"});

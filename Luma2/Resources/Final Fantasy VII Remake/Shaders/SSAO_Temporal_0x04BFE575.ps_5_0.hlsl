@@ -9,7 +9,12 @@ Texture2D<float4> t2 : register(t2);
 Texture2D<float4> t1 : register(t1);
 
 Texture3D<float4> t0 : register(t0);
-Texture2DArray<float4> FastNoise : register(t6);
+// Luma's FAST noise texture ("fast_noise" in the Textures folder), requested by its name: on D3D12 Luma's textures are in its table
+#ifdef LUMA_TEXTURE_SPACE
+Texture2DArray<float4> fast_noise : register(t127, LUMA_TEXTURE_SPACE);
+#else
+Texture2DArray<float4> fast_noise : register(t6);
+#endif
 
 SamplerState s0_s : register(s0);
 
@@ -70,7 +75,7 @@ float2 pixelCenter = trunc(v1.xy) + 0.5f;
 #else
   uint2 noisePixel = (uint2)localPixel & 127u;
   uint noiseSlice = frameIndex & 63u;
-  float4 random = FastNoise.Load(int4(int2(noisePixel), (int)noiseSlice, 0));
+  float4 random = fast_noise.Load(int4(int2(noisePixel), (int)noiseSlice, 0));
 #if SSAO_ALGORITHM == 1
   ao = r0.z > 0.0f ? CalculateVBAO(localPixel, r0.z, r3.z, r4.xyz, random) : 1.0f;
 #else

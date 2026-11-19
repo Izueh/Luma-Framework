@@ -18,6 +18,9 @@
 #include "Shaders/Shaders.hpp"
 #include "Hooks/Hooks.hpp"
 #include "Trace/Info.hpp"
+#if DEVELOPMENT
+#include "Trace/D3D12/D3D12Stats.hpp"
+#endif
 #include "UI/Icons.hpp"
 #include "UI/Input.hpp"
 #include "UI/Panels/Patches.hpp"
@@ -264,6 +267,11 @@ void DrawInfo(const Trace::Status& status)
       row("Validation", status.validation.debug_layer ? std::format("{} errors, {} warnings, {} corruptions", status.validation.errors, status.validation.warnings, status.validation.corruptions) : std::string("off"));
       Widgets::EndSection();
    }
+#if DEVELOPMENT
+   if (Trace::Stats::D3D12::HasData() &&
+      Widgets::Button("Write D3D12 Stats", Widgets::ButtonKind::Secondary, "Writes Luma/Dump/D3D12Stats.json (also written with each frame capture): what the game does on D3D12, for porting research"))
+      Trace::Stats::D3D12::Write();
+#endif
 }
 
 // The title bar is drawn by ImGui: a translucent gradient and the top highlight go over it, like the section headers' depth

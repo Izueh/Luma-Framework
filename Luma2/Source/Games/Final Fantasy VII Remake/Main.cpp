@@ -139,19 +139,6 @@ void OnPresent(IDXGISwapChain*, ID3D11Device*)
    ::OnPresent();
 }
 
-// 1.0's OnDraw_SSAO_Temporal: the FAST noise its replacement reads
-Luma::Game::DrawResult OnDrawSSAOTemporal(const Luma::Game::D3D11::Call& call)
-{
-   Microsoft::WRL::ComPtr<ID3D11Device> device;
-   call.context->GetDevice(&device);
-   if (ID3D11ShaderResourceView* fast_noise = Luma::Game::D3D11::GetTexture(device.Get(), "fast_noise"_h))
-   {
-      // t6 is free in the original 04BFE575 signature; t0-t5 retain the game's bindings.
-      call.context->PSSetShaderResources(6, 1, &fast_noise);
-   }
-   return Luma::Game::DrawResult::None;
-}
-
 Luma::Game::DrawResult OnDrawOutputHdr(const Luma::Game::D3D11::Call&)
 {
    return ::OnDrawOutputHdr();
@@ -433,14 +420,14 @@ void Luma::Game::Init()
       .on_init_swapchain = &D3D12Events::OnInitSwapchain,
       .on_present = &D3D12Events::OnPresent,
    });
-   D3D11::OnShaderDraw(SHADER_HASHES_SSAO_TEMPORAL, &D3D11Events::OnDrawSSAOTemporal);
    D3D11::OnShaderDraw(SHADER_HASHES_OUTPUT_HDR, &D3D11Events::OnDrawOutputHdr);
    D3D11::OnShaderDraw(SHADER_HASHES_OUTPUT_SDR, &D3D11Events::OnDrawOutputSdr);
    D3D12::OnShaderDraw(SHADER_HASHES_OUTPUT_HDR, &D3D12Events::OnDrawOutputHdr);
    D3D12::OnShaderDraw(SHADER_HASHES_OUTPUT_SDR, &D3D12Events::OnDrawOutputSdr);
    // 1.0's other draw callbacks wait for their steps: TAA (has_drawn_taa, then SR: Step 7), the output pass's has_drawn_taa gate and
    // post processing marker (Step 7; the two pass UI split is ENABLE_FRAMEGEN, never on in 1.0), DoF and Motion Blur (the SR sampler:
-   // Step 7). SSAO Temporal's noise on D3D12 waits for Luma's views in passes there.
+   // Step 7). 1.0's OnDraw_SSAO_Temporal (the FAST noise at t6) is Core's now: the replacement reads "fast_noise" by name, which Core binds on
+   // both APIs.
 }
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved)

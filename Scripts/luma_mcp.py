@@ -238,6 +238,9 @@ TOOLS = [
         {"hash": {"type": "string", "description": "Shader hash (0x12345678)"}, "disasm": {"type": "boolean", "description": "Include the replacement's disassembly"},
          "variant": {"type": "string", "description": "Luma 2, with hash: force what its binds take from now on (original, file, patch), auto to clear"}},
     ),
+    tool("luma_dump_stats", "Luma 2, D3D12, Development: writes Luma/Dump/D3D12Stats.json now (also written with each frame capture): the game's D3D12 "
+         "pipelines, root signatures, descriptor heaps, bind order before draws, per frame averages and maxima, and its shader lists, for porting research. "
+         "luma_status.d3d12 has the live counters.", annotations=LIVE_WRITE),
     tool("luma_reload_shaders", "Recompile and reload Luma's custom shaders (like the dev UI button) and return the compilation error log.",
          {"unload": {"type": "boolean", "description": "Unload them instead. Shader objects a game mod keeps itself (e.g. XeGTAO's compute shaders) keep running: "
                                                        "test a missing-shader fallback with the feature's dev toggle"}}, annotations=LIVE_WRITE),

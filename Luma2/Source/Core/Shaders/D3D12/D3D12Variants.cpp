@@ -27,6 +27,7 @@
 #include "Shaders/Patching.hpp"
 #include "System/Jobs.hpp"
 #include "Utils/Hash.hpp"
+#include "Utils/Debug.hpp"
 #include "Utils/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -370,7 +371,17 @@ void Publish(const std::shared_ptr<Core>& core, Key key, const std::array<Source
             {
                if (Resources::Database::Get(request.entry).kind != Resources::Database::Kind::Texture)
                   continue;
-               layout[request.slot - Resources::Bindings::D3D12_FIRST_TEXTURE_REGISTER] = request.entry;
+               // Only Luma's table is bound on D3D12: a texture elsewhere (a shader built without LUMA_TEXTURE_SPACE) isn't
+               const uint32_t table_index = request.slot - Resources::Bindings::D3D12_FIRST_TEXTURE_REGISTER;
+               if (request.slot < Resources::Bindings::D3D12_FIRST_TEXTURE_REGISTER || table_index >= layout.size())
+               {
+                  ASSERT_ONCE_MSG(false, "A Luma texture requested outside Luma's D3D12 table");
+                  Utils::Log::Error("D3D12: a variant reads Luma's texture \"{}\" at t{}, outside Luma's table (t{} to t{}): not bound",
+                     Resources::Database::Get(request.entry).name, request.slot, Resources::Bindings::D3D12_FIRST_TEXTURE_REGISTER,
+                     Resources::Bindings::D3D12_FIRST_TEXTURE_REGISTER + uint32_t(layout.size()) - 1);
+                  continue;
+               }
+               layout[table_index] = request.entry;
                textures = true;
             }
          }
