@@ -17,6 +17,8 @@ void Install();
 
 // Tells the hooks the overlay opened or closed. Also releases the game's cursor clip while it's open, and restores it afterwards.
 void OnOpenChanged(bool open);
+// The overlay is open, for any caller: inside a Luma scope too, where IsBlocking is false
+bool IsOverlayOpen();
 
 // The overlay is open and the call is the game's: Luma's own calls (inside a scope, e.g. ImGui's backend) are never blocked
 bool IsBlocking();

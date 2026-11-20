@@ -93,7 +93,7 @@ struct GameDeviceDataType
 // Fixed for the process: anything changed at runtime is a setting instead
 struct Options
 {
-   // The LumaData writer runs at every draw with a Luma shader; LumaData uploads only when its bytes changed (1.0)
+   // The LumaData writer runs at every draw with a Luma shader; LumaData uploads only when its bytes changed
    Luma::Resources::LumaCBuffers::Options cbuffers;
    // The bound-state cache's groups
    Draw::Options draw;
@@ -101,11 +101,11 @@ struct Options
    Luma::Resources::Bindings::Options bindings;
    // The .dds files of the Textures folders, as Resources::Database entries
    Luma::Resources::Textures::Options textures;
-   // 1.0's enable_samplers_upgrade: the game's anisotropic samplers get Luma's mirrors (16x, SR's LOD bias)
+   // The game's anisotropic samplers get Luma's mirrors (16x, SR's LOD bias)
    Luma::Resources::Samplers::Options samplers;
    // The game's own bytecode patches (recipes are files in the Recipes folder)
    Luma::Shaders::Patching::Options patching;
-   // How Luma presents: Mirror (the game draws to Luma's buffers) or in place (1.0's), the HDR output mode, borderless
+   // How Luma presents: Mirror (the game draws to Luma's buffers) or in place, the HDR output mode, borderless
    Luma::Swapchain::Options swapchain;
    GameDeviceDataType device_data;
 };
@@ -113,8 +113,7 @@ struct Options
 // Once, in Init. A second call is ignored.
 void SetOptions(const Options& options);
 
-// The game's textures Luma upgrades, through mirrors (1.0's texture_upgrade_formats and the other texture_format_upgrades_* statics). The
-// rules name DXGI formats, which D3D11 and D3D12 share: one call for both (Guidelines.md section 4). In Init.
+// The game's textures Luma upgrades, through mirrors. The rules name DXGI formats, which D3D11 and D3D12 share: one call for both (Guidelines.md section 4). In Init.
 namespace Resources {
 void SetUpgrades(const Luma::Resources::Upgrade::Rules& rules);
 } // namespace Resources
@@ -139,7 +138,7 @@ void MarkLumaSettingsDirty();
 // Null for a device Luma doesn't know. Any thread, the device or the game's proxy of it.
 GameDeviceData* GetGameDeviceData(Device device);
 
-// What the game's image is: its own HDR option (1.0's DisplayMode switch in FF7R's output pass). Any thread, applied at the next present:
+// What the game's image is: its own HDR option. Any thread, applied at the next present:
 // LumaSettings' display mode and white levels follow (SDR at 80 nits), the output mode doesn't.
 namespace Display {
 void SetHdr(bool hdr);
@@ -165,7 +164,7 @@ void BindLumaShader(ID3D11DeviceContext* context, uint64_t name_hash, const Luma
 ID3D11ShaderResourceView* GetTexture(ID3D11Device* device, uint64_t name_hash);
 } // namespace D3D11
 
-// For the D3D12 draw events, inside a Luma scope. Luma's shaders bound from a draw event come with the D3D12 passes (Step 5).
+// For the D3D12 draw events, inside a Luma scope. A draw event can't bind Luma's own shaders on D3D12 yet.
 namespace D3D12 {
 // The game's call on its list, with what the list has bound now (Luma's cbuffers for the variant bound included)
 void RunOriginal(const Call& call);

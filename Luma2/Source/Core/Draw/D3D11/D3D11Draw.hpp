@@ -27,7 +27,7 @@ struct StageState
    std::vector<Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView>> unordered_access;
 };
 
-// A context's state saved before a pass and restored after it (1.0's DrawStateStack), in the groups of `mask`
+// A context's state saved before a pass and restored after it, in the groups of `mask`
 struct StateStack
 {
    StateMask mask = FULLSCREEN_PASS;
@@ -80,9 +80,8 @@ void RecordDepthStencilState(ID3D11DeviceContext* context, ID3D11DepthStencilSta
 // ClearState, or a command list finished or executed without restoring the state
 void ForgetBoundState(ID3D11DeviceContext* context);
 
-// A pass drawing over a whole target with Luma's custom shaders (1.0's DrawCustomPixelShader): a 4 vertex strip, `source` at
-// t0, `sampler` at s0, Luma's cbuffers on both stages (LumaData with `custom`). The state of FULLSCREEN_PASS is saved and
-// restored around it.
+// A pass drawing over a whole target with Luma's custom shaders: a 4 vertex strip, `source` at t0, `sampler` at s0, Luma's
+// cbuffers on both stages (LumaData with `custom`). The state of FULLSCREEN_PASS is saved and restored around it.
 struct FullscreenPass
 {
    std::string_view name; // In trace
@@ -93,7 +92,7 @@ struct FullscreenPass
    ID3D11SamplerState* sampler = nullptr; // Optional
    ID3D11BlendState* blend = nullptr; // Null for the default states
    ID3D11DepthStencilState* depth = nullptr;
-   // Without alpha the blend factor's alpha is 0 (1.0)
+   // Without alpha the blend factor's alpha is 0
    bool alpha = true;
    Resources::Database::CustomData custom;
    // Drawn while Luma is off too: display composition, the only writer of the real back buffer

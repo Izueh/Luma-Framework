@@ -23,7 +23,7 @@ struct DeviceState
 namespace {
 std::atomic<uint64_t> generation = 0;
 
-// 1.0 starts from the screen's size, "an arbitrary guess that is better than 1920x1080", until the swapchain is created
+// The screen's size, a better guess than a fixed 1920x1080, until the swapchain is created
 Math::uint2 GetScreenSize()
 {
    return {uint32_t(GetSystemMetrics(SM_CXSCREEN)), uint32_t(GetSystemMetrics(SM_CYSCREEN))};

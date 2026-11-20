@@ -304,7 +304,7 @@ void PostCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE desti
 
 void PostCreateResource(ID3D12Device* device, ID3D12Resource* resource, std::optional<D3D12_RESOURCE_STATES> state, const D3D12_CLEAR_VALUE* clear, bool reserved)
 {
-   // Reserved resources aren't mirrored (Plan.md, Step 4). Enhanced barrier layouts would need the mirror's barriers in that model too.
+   // Reserved resources aren't mirrored. Enhanced barrier layouts would need the mirror's barriers in that model too.
    if (Resources::Mirrors::IsNeeded() && !reserved)
    {
       if (state)

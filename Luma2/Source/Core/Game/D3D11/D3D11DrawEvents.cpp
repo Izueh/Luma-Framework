@@ -23,7 +23,7 @@ namespace D3D11 {
 namespace {
 using Context = ID3D11DeviceContext;
 
-// The callback of the first stage of `stages` with one, in 1.0's order (pixel, then vertex)
+// The callback of the first stage of `stages` with one, pixel first, then vertex
 Game::D3D11::DrawCallback FindCallback(const Luma::Shaders::Variants::D3D11::BoundShaders& bound, Luma::Shaders::StageSet stages)
 {
    constexpr std::array ORDER = {ShaderStage::Pixel, ShaderStage::Vertex, ShaderStage::Geometry, ShaderStage::Hull, ShaderStage::Domain, ShaderStage::Compute};
@@ -44,7 +44,7 @@ struct Running
 
 thread_local Running* running = nullptr;
 
-// The variant event first (1.0's OnDrawOrDispatchCustomPipeline), then the callback by hash or the generic event
+// The variant event first, then the callback by hash or the generic event
 DrawResult RunEvents(Context* context, const Game::D3D11::DrawCall* draw, const Game::D3D11::DispatchCall* dispatch, Luma::Shaders::StageSet stages)
 {
    const Luma::Shaders::Variants::D3D11::BoundShaders* bound = Luma::Shaders::Variants::D3D11::GetBoundShaders(context);

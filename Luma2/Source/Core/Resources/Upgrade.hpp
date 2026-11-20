@@ -9,13 +9,11 @@
 
 #include "Common/Math.hpp"
 
-// Texture format upgrades as rules (1.0's ResourceUpgradeManager configuration and GetOptionalResourceUpgradeDesc): which of the game's
-// textures get a mirror (Resources::Mirrors) and in what desc. Shared by D3D11 and D3D12, which both describe textures with DXGI
+// Texture format upgrades as rules: which of the game's textures get a mirror (Resources::Mirrors) and in what desc. Shared by D3D11 and D3D12, which both describe textures with DXGI
 // formats: the rules name them (Guidelines.md section 4, typed declarations). Set once, in Init (Game::Resources::SetUpgrades).
 namespace Luma {
 namespace Resources {
 namespace Upgrade {
-// 1.0's TextureFormatUpgrades2DSizeFilters, the same bits
 enum class SizeFilters : uint32_t
 {
    // No bit: every size
@@ -70,7 +68,7 @@ struct Lut
    LutDimensions dimensions = LutDimensions::_2D;
 };
 
-// 1.0's texture_custom_dimensions_upgrades entry: a texture matching `filter` (width, height, depth or layers, samples; 0 ignores one) and
+// A texture matching `filter` (width, height, depth or layers, samples; 0 ignores one) and
 // `format` (UNKNOWN: any) gets `size` (0 keeps one)
 struct CustomDimensions
 {
@@ -79,24 +77,19 @@ struct CustomDimensions
    Math::uint4 size = {};
 };
 
-// 1.0's names in comments. Defaults are 1.0's.
 struct Rules
 {
-   // texture_upgrade_formats: render targets and UAVs of these formats get RGBA16F mirrors
+   // Render targets and UAVs of these formats get RGBA16F mirrors
    std::vector<DXGI_FORMAT> formats;
-   // texture_depth_upgrade_formats: depth textures of these get 32 bit depth (keeping a stencil)
+   // Depth textures of these get 32 bit depth (keeping a stencil)
    std::vector<DXGI_FORMAT> depth_formats;
-   // texture_format_upgrades_2d_size_filters, for 2D textures (LUTs and cubes apart)
+   // For 2D textures (LUTs and cubes apart)
    SizeFilters size_filters = SizeFilters::SwapchainResolution | SizeFilters::SwapchainAspectRatio;
-   // texture_format_upgrades_2d_custom_aspect_ratios
    std::vector<float> custom_aspect_ratios = {16.f / 9.f};
-   // texture_format_upgrades_2d_custom_sizes
    std::vector<Math::uint2> custom_sizes;
-   // texture_format_upgrades_2d_aspect_ratio_pixel_threshold
    uint32_t aspect_ratio_pixel_threshold = 1;
-   // texture_format_upgrades_lut_size and _dimensions
    Lut lut;
-   // texture_custom_dimensions_upgrades: a size change, Step 6's Scaling (declared, not applied yet)
+   // A size change, a scaled mirror (declared, not applied yet)
    std::vector<CustomDimensions> custom_dimensions;
 };
 
@@ -140,9 +133,9 @@ struct FrameState
    Math::uint2 display = {1, 1};
 };
 
-// The mirror's desc for a texture the rules match (1.0's GetOptionalResourceUpgradeDesc), none for the others
+// The mirror's desc for a texture the rules match, none for the others
 std::optional<TextureDesc> Match(const TextureDesc& desc, const FrameState& state, bool has_initial_data);
-// The format a matched texture's mirror gets (1.0's GetBestResourceUpgradeFormat)
+// The format a matched texture's mirror gets
 DXGI_FORMAT GetBestFormat(const TextureDesc& desc);
 enum class ViewKind : uint8_t
 {
@@ -151,7 +144,7 @@ enum class ViewKind : uint8_t
    UnorderedAccess,
    DepthStencil,
 };
-// The format of the mirror's view for a game's view of the original (1.0's GetBestResourceViewUpgradeFormat). An unknown view format
+// The format of the mirror's view for a game's view of the original. An unknown view format
 // (the resource's default view) stays unknown.
 DXGI_FORMAT GetBestViewFormat(DXGI_FORMAT view_format, ViewKind kind, DXGI_FORMAT original_format, DXGI_FORMAT mirror_format);
 } // namespace Upgrade

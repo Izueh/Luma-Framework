@@ -154,7 +154,7 @@ D3D12_GPU_VIRTUAL_ADDRESS UploadBytes(ID3D12GraphicsCommandList* list, const Lis
    return address;
 }
 
-// The entry's contents now for the list, uploaded again only when they changed (1.0): LumaSettings when its stamp moved, LumaData
+// The entry's contents now for the list, uploaded again only when they changed: LumaSettings when its stamp moved, LumaData
 // when its bytes differ from the list's last upload
 void UploadEntry(ID3D12GraphicsCommandList* list, List& state, uint32_t index, const Entry& entry, const CustomData& custom)
 {

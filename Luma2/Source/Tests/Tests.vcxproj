@@ -43,9 +43,18 @@
     <ClCompile Include="TraceTests.cpp" />
     <ClCompile Include="PatchingTests.cpp" />
     <ClCompile Include="UITests.cpp" />
+    <ClCompile Include="SwapchainTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Game\GameCBuffers.hlsl" />
+  </ItemGroup>
+  <!-- Built next to Tests.exe, loaded by the ReShade tests -->
+  <ItemGroup>
+    <ProjectReference Include="FakeReShade\FakeReShade.vcxproj">
+      <Project>{0591BB1E-F019-4D8A-B163-81923A52A46B}</Project>
+      <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
+      <LinkLibraryDependencies>false</LinkLibraryDependencies>
+    </ProjectReference>
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

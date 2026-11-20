@@ -100,7 +100,7 @@ Upgrade::TextureDesc Describe(const Desc& desc)
    return described;
 }
 
-// The resolutions the size filters compare with: the device's (Frame), the screen as the display until Step 5's System::Display
+// The resolutions the size filters compare with: the device's (Frame)
 Upgrade::FrameState GetFrameState(ID3D11Device* device)
 {
    const Frame::Resolutions resolutions = Frame::Read(Frame::Find(device));
@@ -299,7 +299,7 @@ void Swap(View** views, UINT count)
 }
 
 // A format a shader samples or a render target writes a resource of `format` as, raw values: typeless gets its typed family, sRGB its
-// UNORM (1.0's redirected copy)
+// UNORM
 DXGI_FORMAT GetRawFormat(DXGI_FORMAT format)
 {
    switch (format)
@@ -327,7 +327,7 @@ ComPtr<ID3D11Texture2D> CreateProxy(ID3D11Device* device, const D3D11_TEXTURE2D_
    return texture;
 }
 
-// 1.0's OnCopyResource_Internal: a copy between formats CopyResource can't take (a mirror's and an original's), drawn by Luma's copy
+// A copy between formats CopyResource can't take (a mirror's and an original's), drawn by Luma's copy
 // pass. Single sampled 2D textures, one mip and slice; the size may differ (then scaled). False when it can't.
 bool ConvertingCopy(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source)
 {
@@ -344,7 +344,7 @@ bool ConvertingCopy(ID3D11DeviceContext* context, ID3D11Resource* destination, I
       return false;
    ComPtr<ID3D11Device> device;
    context->GetDevice(&device);
-   // Through proxies where a side can't be read or drawn to (1.0's temp_copy_*_texture, made per copy here)
+   // Through proxies where a side can't be read or drawn to, made per copy
    ComPtr<ID3D11Texture2D> read = source_texture;
    if (!(source_desc.BindFlags & D3D11_BIND_SHADER_RESOURCE))
    {

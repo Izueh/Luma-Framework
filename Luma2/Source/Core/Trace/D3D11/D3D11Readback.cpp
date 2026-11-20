@@ -124,7 +124,7 @@ HRESULT CreateStaging(ID3D11Device* device, ID3D11Resource* source, Layout& layo
    }
 }
 
-// 1.0's ReadTexture: one mip, every slice, multisampled textures resolved first. On the immediate context.
+// One mip, every slice, multisampled textures resolved first. On the immediate context.
 Result ReadTexture(ID3D11DeviceContext* context, ID3D11Resource* source, DXGI_FORMAT view_format, uint32_t mip)
 {
    ComPtr<ID3D11Device> device;

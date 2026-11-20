@@ -2,7 +2,7 @@
 
 #include <d3d11_4.h>
 
-// Resources::Mirrors on D3D11 (1.0's indirect upgrades). A texture the rules match gets a mirror at its creation, held in the texture's
+// Resources::Mirrors on D3D11. A texture the rules match gets a mirror at its creation, held in the texture's
 // private data and released with it; each view the game creates of it gets the same view of the mirror, held in the view's. Binds swap
 // the game's views for their mirrors' while Mirrors::IsSwapping(); copies, resolves and clears that touch a mirrored texture are issued on
 // the mirrors (converted by a draw when the formats can't be copied); CPU uploads into a mirrored texture are converted into its mirror

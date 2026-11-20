@@ -11,4 +11,5 @@
   </Folder>
   <Project Path="Source/Core/Core.vcxitems" Id="90863f95-7fb1-4575-86f4-005003b20d8a" />
   <Project Path="Source/Tests/Tests.vcxproj" Id="98939f88-37cb-454c-a78c-0db8aabafe58" />
+  <Project Path="Source/Tests/FakeReShade/FakeReShade.vcxproj" Id="0591bb1e-f019-4d8a-b163-81923a52a46b" />
 </Solution>

@@ -8,6 +8,7 @@ namespace Hooks {
 namespace Scope {
 namespace {
 thread_local uint32_t depth = 0;
+thread_local bool third_party_work = false;
 std::atomic<bool> bypass = false;
 } // namespace
 
@@ -19,6 +20,16 @@ Guard::Guard()
 Guard::~Guard()
 {
    depth--;
+}
+
+Suspension::Suspension() : depth(Scope::depth)
+{
+   Scope::depth = 0;
+}
+
+Suspension::~Suspension()
+{
+   Scope::depth = depth;
 }
 
 bool IsActive()
@@ -34,6 +45,28 @@ void SetBypass(bool value)
 bool IsBypassed()
 {
    return bypass.load(std::memory_order_relaxed);
+}
+
+// One level of the scope's depth, so IsActive stays one check on the hot paths
+void BeginThirdPartyWork()
+{
+   if (third_party_work)
+      return;
+   third_party_work = true;
+   depth++;
+}
+
+void EndThirdPartyWork()
+{
+   if (!third_party_work)
+      return;
+   third_party_work = false;
+   depth--;
+}
+
+bool IsThirdPartyWorkOpen()
+{
+   return third_party_work;
 }
 } // namespace Scope
 } // namespace Hooks

@@ -126,7 +126,7 @@ std::optional<Copy> RecordCopy(ID3D12GraphicsCommandList* list, ID3D12Resource* 
    return copy;
 }
 
-// After the copy's work finished on the GPU: its bytes in 1.0's .bin layout
+// After the copy's work finished on the GPU: its bytes in the .bin layout
 Result Read(const Copy& copy)
 {
    const D3D12_RESOURCE_DESC& desc = copy.desc;

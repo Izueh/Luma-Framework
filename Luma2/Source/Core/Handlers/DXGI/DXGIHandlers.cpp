@@ -16,6 +16,7 @@
 #include <wrl/client.h>
 
 #include "Common/Api.hpp"
+#include "ReShade/ReShade.hpp"
 #include "Game/Registry.hpp"
 #include "Hooks/Hooks.hpp"
 #include "Hooks/Scope.hpp"
@@ -129,7 +130,7 @@ DXGI_SWAP_CHAIN_DESC Describe(IDXGISwapChain* swapchain, const Presenter& presen
    return desc;
 }
 
-// Where 1.0, ReShade and Special K keep a swapchain's color space, so they agree on it
+// Where ReShade and Special K keep a swapchain's color space, so they agree on it
 constexpr GUID COLOR_SPACE_GUID = {0x18b57e4, 0x1493, 0x4953, {0xad, 0xf2, 0xde, 0x6d, 0x99, 0xcc, 0x5, 0xe5}};
 // Luma's own: the format the color space was set for, which a resize to another format ends
 constexpr GUID COLOR_SPACE_FORMAT_GUID = {0x6f1c2a7e, 0x3d4b, 0x4c8a, {0x9b, 0x52, 0x1e, 0x7a, 0x60, 0x2d, 0x84, 0x31}};
@@ -160,7 +161,7 @@ bool HasCreateSwapchainEvent(bool d3d11)
    return d3d11 ? Game::Registry::GetD3D11Events().on_create_swapchain != nullptr : Game::Registry::GetD3D12Events().on_create_swapchain != nullptr;
 }
 
-// The game's on_create_swapchain for the creator's API, before Core's own changes (1.0's order)
+// The game's on_create_swapchain for the creator's API, before Core's own changes
 void ReportCreateSwapchain(bool d3d11, Game::SwapchainDesc& desc)
 {
    if (d3d11)
@@ -194,7 +195,7 @@ void ReportInitSwapchain(IDXGISwapChain* swapchain, const Presenter& presenter, 
 
 void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc)
 {
-   // The game's event first, then Luma's changes on what it made of the desc (1.0's order)
+   // The game's event first, then Luma's changes on what it made of the desc
    if (const bool d3d11 = IsD3D11(creator); HasCreateSwapchainEvent(d3d11))
    {
       Game::SwapchainDesc reported = {desc.BufferDesc.Format, desc.BufferCount, desc.Flags, desc.SwapEffect, desc.SampleDesc.Count, desc.Windowed != FALSE};
@@ -227,6 +228,8 @@ void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, D
 
 void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
 {
+   // A ReShade that loaded after Luma (as the game's dxgi.dll) wraps this swapchain next: its module has to be known before it reads it
+   ReShade::FindReShadeLoadedAfterLuma();
    const std::optional<Presenter> presenter = GetPresenter(creator);
    if (!presenter)
    {
@@ -268,6 +271,11 @@ void OnOverlayBufferRequest(IDXGISwapChain* swapchain)
 bool ShouldWrapSwapChain(IDXGISwapChain* swapchain)
 {
    return Swapchain::DXGI::Wraps(swapchain);
+}
+
+Hooks::SwapchainProxy::ReShadeSwapchainView GetReShadeSwapchainView(IDXGISwapChain* swapchain)
+{
+   return Swapchain::DXGI::GetReShadeSwapchainView(swapchain);
 }
 
 void OnSwapChainDestroyed(const IDXGISwapChain* swapchain)
@@ -397,11 +405,12 @@ std::optional<DXGI_COLOR_SPACE_TYPE> GetColorSpace(IDXGISwapChain* swapchain)
    return color_space;
 }
 
-void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags)
+void PrePresentWork(IDXGISwapChain* swapchain)
 {
-   flags = Swapchain::DXGI::GetPresentFlags(swapchain, sync_interval, flags);
    Trace::RecordPresent();
    Hooks::VerifyOnPresent();
+   // After the hooks were verified, whose counts it logs
+   ReShade::CheckHookOrderAtFirstPresent();
 #if DEVELOPMENT
    // A capture is one frame, present to present: what's drawn next (the game's present callback, the overlay) isn't in it. D3D12's
    // contents were copied at the calls; its events reached the frame when their lists were executed.
@@ -459,9 +468,22 @@ void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags)
    // on_present included)
    Display::Levels::Update();
    Swapchain::DXGI::Compose(swapchain);
-   // Last, on top of everything the game and Luma drew
+}
+
+void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags, bool present_work_done)
+{
+   flags = Swapchain::DXGI::GetPresentFlags(swapchain, sync_interval, flags);
+   if (!present_work_done)
+      PrePresentWork(swapchain);
+   ReShade::RecordWherePresentWorkRan(present_work_done);
+#if DEVELOPMENT
+   // What ran since the event passed through untraced: one entry stands for it
+   if (present_work_done && Trace::Capture::IsCapturing())
+      Trace::Capture::Add({.type = Trace::Capture::EventType::ThirdPartyWork, .name = "ReShade and add-on work at the last present (effects, overlay, present handlers)"});
+#endif
+   // Last, on top of everything the game, Luma and ReShade drew
    UI::DrawOverlay(swapchain);
-   // After the game's on_present and the overlay, as 1.0: what they changed (its settings object, the dev sliders) uploads from
+   // After the game's on_present and the overlay: what they changed (its settings object, the dev sliders) uploads from
    // the next draw
    Resources::LumaCBuffers::MarkSettingsDirty();
    Validation::D3D11::ReadMessages();

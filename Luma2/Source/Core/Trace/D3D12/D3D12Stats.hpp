@@ -8,7 +8,7 @@
 #include "Hooks/Functions.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
 
-// What a game does on D3D12, counted for Step 2's research (Plan.md 2A): pipelines, root signatures, descriptor heaps and
+// What a game does on D3D12, counted for research: pipelines, root signatures, descriptor heaps and
 // writes, the bind order before draws. Development builds only. Counted all the time (cheaply), written to Luma/Dump/D3D12Stats.json only when
 // asked (MCP's dump_stats, the Info tab) and with each frame capture: luma_status.d3d12 has the live counters.
 namespace Luma {

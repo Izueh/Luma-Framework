@@ -96,6 +96,14 @@ struct OutputInfo
    float ui_paper_white_nits = 0.f;
 };
 
+// What the ReShade module reports
+struct ReShadeInfo
+{
+   std::string load; // Whether ReShade is loaded and by whom, or why it isn't
+   std::string bridge; // Whether Luma's present work runs at ReShade's present event, before its effects
+   std::string mirror_swapchain_view; // Mirror: whether ReShade's own reads get the real swapchain, and the output switches through its wrapper
+};
+
 // Shaders::Patching: recipes and the game's bytecode patches
 struct PatchesInfo
 {
@@ -141,7 +149,7 @@ struct D3D12LibraryInfo
    uint32_t stored = 0;
 };
 
-// Resources::Mirrors::D3D12's counters (Plan.md Step 4 part C's questions among them)
+// Resources::Mirrors::D3D12's counters
 struct D3D12MirrorsInfo
 {
    uint32_t descriptors = 0; // Game CPU handles holding a mirrored view or sampler
@@ -199,6 +207,7 @@ struct Status
    bool overlay_open = false;
    CountsInfo counts;
    HooksInfo hooks;
+   ReShadeInfo reshade;
    ShadersInfo shaders;
    PatchesInfo patches;
    ResourcesInfo resources;

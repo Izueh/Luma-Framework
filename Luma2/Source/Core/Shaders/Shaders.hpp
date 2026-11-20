@@ -16,7 +16,7 @@ namespace Shaders {
 using Bytecode = std::vector<uint8_t>;
 
 // A resource a compiled shader reads from Luma: a Resources::Database entry, at a register of its stage. Known from its
-// reflection (a cbuffer named like an entry); patches (Step 3) add theirs from their recipe.
+// reflection (a cbuffer named like an entry); patches add theirs from their recipe.
 struct Request
 {
    uint32_t entry = 0;

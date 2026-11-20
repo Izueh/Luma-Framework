@@ -88,8 +88,7 @@ bool RestoreGameBuffers(const Game::D3D11::Call& call, Shaders::StageSet stages,
    return true;
 }
 
-// Before the events: a patch's resources, as 1.0 bound a recipe's before OnDrawOrDispatchCustomPipeline, so a callback sees the
-// call as it will run (a patch missing one already gave way to the game's shader). The stages where something was bound.
+// Before the events: a patch's resources, so a callback sees the call as it will run (a patch missing one already gave way to the game's shader). The stages where something was bound.
 Shaders::StageSet FulfilBeforeEvents(ID3D11DeviceContext* context, Shaders::StageSet stages)
 {
    if (!Shaders::IsNeeded() || !IsEnabled())
@@ -296,7 +295,7 @@ bool PreSetShaderResources(ID3D11DeviceContext*, ShaderStage, UINT, UINT count, 
 bool PreSetConstantBuffers(ID3D11DeviceContext* context, ShaderStage stage, UINT start, UINT count, ID3D11Buffer** buffers, const UINT* first_constant,
    const UINT* num_constants)
 {
-   // Reported before Core records them (1.0)
+   // Reported before Core records them
    Game::Registry::Call(GameEvents().on_bind_constant_buffers, context, stage, start, count, buffers);
    if (IsRestoringGameBuffers())
       Resources::LumaCBuffers::D3D11::RecordGameBuffers(context, stage, start, count, buffers, first_constant, num_constants);
@@ -534,7 +533,7 @@ bool PreClearView(ID3D11DeviceContext* context, ID3D11View* view, const FLOAT co
    return Resources::Mirrors::IsNeeded() && Resources::Mirrors::D3D11::RedirectClearView(context, view, color, rects, rect_count);
 }
 
-// The trace records the state before the game's callback changes it (1.0), and what the callback did with the call
+// The trace records the state before the game's callback changes it, and what the callback did with the call
 bool PreDraw(ID3D11DeviceContext* context, const DrawCall& draw)
 {
 #if DEVELOPMENT
@@ -618,7 +617,7 @@ void OnCommandListDestroyed(ID3D11Device*, const ID3D11CommandList*) {}
 
 bool PreExecuteCommandList(ID3D11DeviceContext* context, ID3D11CommandList* list, BOOL restore)
 {
-   // Before Core's handling (1.0): the game may execute its own lists or passes first, or skip this one
+   // Before Core's handling: the game may execute its own lists or passes first, or skip this one
    if (Game::Registry::Call(GameEvents().on_execute_command_list, context, list, restore))
       return true;
 #if DEVELOPMENT

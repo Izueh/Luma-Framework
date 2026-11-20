@@ -6,6 +6,7 @@
 #include <optional>
 #include <thread>
 
+#include "ReShade/ReShade.hpp"
 #include "Draw/Draw.hpp"
 #include "Game/Registry.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
@@ -155,6 +156,7 @@ void Initialize()
    Display::Levels::Register();
    Display::Spoofing::DXGI::Register();
    Validation::Register();
+   ReShade::Register();
    Game::Init();
    Game::Registry::LogDeclarations();
    System::Paths::ResolveRoots();

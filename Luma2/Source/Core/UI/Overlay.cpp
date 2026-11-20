@@ -11,6 +11,7 @@
 #include <imgui.h>
 #include <backends/imgui_impl_win32.h>
 
+#include "ReShade/ReShade.hpp"
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/InputHooks.hpp"
 #include "Hooks/Scope.hpp"
@@ -322,6 +323,12 @@ bool IsOpen()
 
 void SetOpen(bool value)
 {
+   // One overlay open at a time, ReShade's or Luma's
+   if (value && !open && ReShade::IsOverlayOpen())
+   {
+      Utils::Log::Info("UI: overlay kept closed, ReShade's is open");
+      return;
+   }
    if (open.exchange(value) == value)
       return;
    Utils::Log::Info("UI: overlay {}", value ? "opened" : "closed");

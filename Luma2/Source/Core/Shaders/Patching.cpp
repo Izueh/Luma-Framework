@@ -79,7 +79,7 @@ std::vector<const Database::Shader*> pending;
 // What each shader's patch came to. Lock order: never held with another lock.
 std::mutex patches_mutex;
 std::map<uint32_t, PatchInfo> patches;
-// Patched in their creation call (Options::patch_sync): a job doesn't touch them (1.0: the game's bytecode patch wins)
+// Patched in their creation call (Options::patch_sync): a job doesn't touch them (the game's bytecode patch wins)
 std::unordered_set<uint32_t> sync_patched;
 std::atomic<uint64_t> generation = 0;
 
@@ -89,7 +89,7 @@ std::string GetDumpName(const Database::Shader& shader)
 }
 
 #if DEVELOPMENT || TEST
-// 1.0's ALLOW_SHADER_PATCHES_DUMPING: the patched shader next to the game's dumps
+// The patched shader next to the game's dumps
 void Dump(const Database::Shader& shader, std::span<const uint8_t> bytecode)
 {
    if (!Settings::Get(Settings::Core::DUMP_SHADERS))
@@ -259,7 +259,7 @@ void Parse(Recipe& recipe)
    auto parsed = dxp::sm5::Recipe::ParseFromText(*text, recipe.identity);
    if (!parsed)
    {
-      // Its shaders go back to the game's (1.0 skipped a recipe that didn't parse) until it's fixed and reloaded
+      // Its shaders go back to the game's until it's fixed and reloaded
       recipe.error = parsed.error();
       recipe.parsed.reset();
       Utils::Log::Error("Shaders: recipe {} doesn't parse: {}", recipe.identity, recipe.error);
@@ -503,7 +503,7 @@ ChainResult RunChain(const Database::Shader& shader, const Chain& chain)
       result.entry = {};
    }
 
-   // Each enabled recipe patches the previous one's output (1.0)
+   // Each enabled recipe patches the previous one's output
    std::vector<uint8_t> code;
    std::map<std::string, dxp::ResourceBinding> bindings;
    for (const Link* link : links)
@@ -644,7 +644,7 @@ Outcome Patch(const Database::Shader& shader, const Job& job)
    info.stage = shader.stage;
    if (shader.bytecode.empty())
       return outcome;
-   // The game's patches win over recipes (1.0). The sync one runs here too when everything is patched again (a load).
+   // The game's patches win over recipes. The sync one runs here too when everything is patched again (a load).
    std::vector<uint8_t> bytecode;
    for (const BytecodePatcher patcher : {options.patch_sync, options.patch_async})
    {

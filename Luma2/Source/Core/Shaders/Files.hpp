@@ -10,7 +10,7 @@
 
 #include <cstdint>
 
-// The shader files in the Shaders roots, and what each is from its place and name (1.0's rules). Nothing under Includes/ or
+// The shader files in the Shaders roots, and what each is from its place and name. Nothing under Includes/ or
 // Game/ is compiled on its own.
 namespace Luma {
 namespace Shaders {
@@ -26,7 +26,7 @@ enum class Kind : uint8_t
 struct Hash
 {
    uint32_t value = 0;
-   // 1.0 defines "_<text>" when compiling for this hash, with the 8 characters after "0x" as written
+   // Compiling for this hash defines "_<text>", with the 8 characters after "0x" as written
    std::string text;
 
    friend bool operator==(const Hash&, const Hash&) = default;
@@ -54,7 +54,7 @@ struct File
    std::vector<Declaration> declarations; // Custom: none for a file without declarations (an include, a sample)
 };
 
-// The hashes a "<name>_0x########" file stands for (1.0's redirected_shader_hashes)
+// The hashes a "<name>_0x########" file stands for
 struct Redirect
 {
    std::string_view name;

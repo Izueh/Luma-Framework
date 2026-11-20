@@ -35,7 +35,7 @@ struct Library
 
 Library library;
 std::once_flag load_once;
-// FXC is used by one thread at a time (1.0: "apparently FXC isn't thread safe"). Recursive, so a caller holds a Lock across the use of
+// FXC is used by one thread at a time: it isn't thread safe. Recursive, so a caller holds a Lock across the use of
 // the reflector it got. Innermost: nothing else is locked while it's held, and each call holds it only for its own duration.
 std::recursive_mutex fxc_mutex;
 
@@ -54,7 +54,7 @@ uint64_t GetProductVersion(const std::filesystem::path& path)
    return (uint64_t(fixed->dwProductVersionMS) << 32) | fixed->dwProductVersionLS;
 }
 
-// 1.0: a copy shipped in the Luma folder, for Wine and Proton users whose system one may be missing or outdated, is used
+// A copy shipped in the Luma folder, for Wine and Proton users whose system one may be missing or outdated, is used
 // when newer. Product versions, as System32's file versions follow another scheme.
 void Load()
 {
@@ -126,7 +126,7 @@ std::string GetSource(std::string_view file)
    return std::format("#include \"{}\"\n", file);
 }
 
-// 1.0 skips defines with an empty name or value
+// Defines with an empty name or value are skipped
 std::vector<D3D_SHADER_MACRO> GetMacros(std::span<const Define> defines)
 {
    std::vector<D3D_SHADER_MACRO> macros;
@@ -178,7 +178,7 @@ Compiled Compile(std::span<const std::filesystem::path> roots, std::string_view 
    const Library& fxc = GetLibrary();
    if (!fxc.compile)
       return {{}, "D3DCompiler_47.dll isn't loaded", true};
-   // As 1.0: level 0 (its comment says /O3, the flag is /O0), and backwards compatibility for shader model 3 and older
+   // Optimization level 0 on purpose (another level changes every shader's bytecode), and backwards compatibility for shader model 3 and older
    UINT flags = D3DCOMPILE_OPTIMIZATION_LEVEL0;
    if (target.size() > 3 && target[3] <= '3')
       flags |= D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY;
@@ -218,7 +218,6 @@ std::optional<std::string> Disassemble(std::span<const uint8_t> bytecode)
    const Library& fxc = GetLibrary();
    const Lock lock;
    ComPtr<ID3DBlob> text;
-   // 1.0's flags
    if (!fxc.disassemble ||
       FAILED(fxc.disassemble(bytecode.data(), bytecode.size(),
          D3D_DISASM_ENABLE_DEFAULT_VALUE_PRINTS | D3D_DISASM_ENABLE_INSTRUCTION_NUMBERING | D3D_DISASM_ENABLE_INSTRUCTION_OFFSET, nullptr, &text)))

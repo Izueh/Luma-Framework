@@ -52,6 +52,7 @@ Luma2/Source/Games/**/vcpkg_installed/**
 **/Dump*/**.cso
 **/Dump*/**.meta
 **/Dump*/**/*.hlsl
+**/Dump*/**.json
 
 # Misc
 [Bb]uild/

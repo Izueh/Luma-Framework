@@ -180,7 +180,7 @@ void Save(Context* context, StateStack& stack)
          if (stack.render_targets[i])
             stack.render_target_count = i + 1;
       }
-      // 1.0's FullGraphics: the output merger's views start after the last render target
+      // The output merger's views start after the last render target
       if (mask.unordered_access.Has(ShaderStage::Pixel))
       {
          StageState& state = stack.stages[size_t(ShaderStage::Pixel)];
@@ -344,7 +344,7 @@ bool DrawFullscreen(Context* context, const FullscreenPass& pass)
 
    StateStack stack;
    Save(context, stack);
-   // 1.0 sets the blend factor's alpha to 0 without alpha, though the blend state rarely reads it
+   // The blend factor's alpha is 0 without alpha, though the blend state rarely reads it
    constexpr std::array<FLOAT, 4> FACTOR = {1.f, 1.f, 1.f, 1.f};
    constexpr std::array<FLOAT, 4> FACTOR_NO_ALPHA = {1.f, 1.f, 1.f, 0.f};
    context->OMSetBlendState(pass.blend, pass.alpha ? FACTOR.data() : FACTOR_NO_ALPHA.data(), UINT_MAX);

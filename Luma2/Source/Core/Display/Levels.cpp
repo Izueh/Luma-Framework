@@ -102,7 +102,7 @@ void Write()
       settings.UIPaperWhiteNits = HasSeparateUiPaperWhite() ? Settings::Get(Settings::Core::UI_PAPER_WHITE) : paper;
       settings.PeakWhiteNits = peak > 0.f ? peak : display.peak_nits;
       settings.DisplayMode = 1;
-      // 1.0 aligns everything to the paper white in this mode
+      // Everything aligns to the paper white in this mode
       if (Settings::Get(Settings::Core::SDR_ON_HDR))
       {
          settings.DisplayMode = 2;

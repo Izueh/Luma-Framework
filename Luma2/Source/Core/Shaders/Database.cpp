@@ -83,7 +83,7 @@ std::unordered_set<uint32_t> dumped;
 bool dumped_scanned = false;
 bool dumping = false;
 
-// 1.0 doesn't dump a hash again across boots: what's in the folder is done
+// A hash isn't dumped again across boots: what's in the folder is done
 void ScanDumped()
 {
    std::error_code error;
@@ -121,11 +121,11 @@ std::bitset<N> FromList(const std::vector<uint32_t>& list)
    return slots;
 }
 
-// 1.0's ReflectShaderSlots, and its check that the bindings were really found: games strip reflection data in ways that
+// From the reflection data, checking that the bindings were really found: games strip reflection data in ways that
 // still pass, with no bindings left
 bool ReflectSlots(std::span<const uint8_t> bytecode, ShaderStage stage, Reflection& reflection)
 {
-   // FXC's reflector is used under its lock (1.0: one thread at a time), released before it ends
+   // FXC's reflector is used under its lock (one thread at a time), released before it ends
    const Compiler::Lock lock;
    Microsoft::WRL::ComPtr<ID3D11ShaderReflection> reflector;
    D3D11_SHADER_DESC desc = {};
@@ -176,7 +176,7 @@ bool ReflectSlots(std::span<const uint8_t> bytecode, ShaderStage stage, Reflecti
    return (found_other_bindings || has_code) && (found_render_targets || stage != ShaderStage::Pixel);
 }
 
-// 1.0's fallback: the declarations at the top of the disassembly. Slow, so the result is cached.
+// The fallback: the declarations at the top of the disassembly. Slow, so the result is cached.
 bool DisassembleSlots(std::span<const uint8_t> bytecode, ShaderStage stage, std::string_view target, Reflection& reflection)
 {
    const std::optional<std::string> disassembly = Compiler::Disassemble(bytecode);
@@ -388,7 +388,7 @@ void QueueDumps()
       dumped_scanned = true;
       ScanDumped();
    }
-   // Switched off, what's created meanwhile waits to be dumped once it's on again (1.0)
+   // Switched off, what's created meanwhile waits to be dumped once it's on again
    if (dumping || !Settings::Get(Settings::Core::DUMP_SHADERS))
       return;
    std::vector<const Shader*> to_dump;

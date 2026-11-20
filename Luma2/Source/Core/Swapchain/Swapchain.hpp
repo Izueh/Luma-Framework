@@ -3,19 +3,13 @@
 #include <cstdint>
 #include <string_view>
 
-// The real swapchain Luma presents and the game's view of it (Guidelines.md section 12). The part every API shares: the game's
-// declaration, the settings, and the decisions made from them.
-//
-// Mirror: the game keeps the real swapchain (Luma's hooks are on it, so NvAPI, Streamline and overlays see the real object) but its
-// back buffers are Luma's textures in the size and format it asked for. Display composition is the only writer of the real buffers,
-// so the output mode (format, color space) changes at any present. InPlace: 1.0's upgrade, the game gets the real buffers in the
-// output mode's format, and composition reads a copy of them; the output mode changes at the game's next resize.
 namespace Luma {
 namespace Swapchain {
 enum class Mode : uint8_t
 {
-   Mirror,
-   InPlace,
+   Mirror, // The game draws to Luma's textures in its own size and format; composition alone writes the real buffers, so the output mode changes at any present
+   InPlace, // The game draws to the real buffers in the output mode's format and composition reads a copy; the output mode changes at the game's next resize
+   Native, // InPlace's presentation (flip model, tearing, borderless) with the game's (or a tool's above Luma) format and color space; nothing composed, only the overlay drawn
 };
 
 enum class OutputMode : uint8_t
@@ -28,11 +22,11 @@ enum class OutputMode : uint8_t
 // Game::Options::swapchain: fixed for the process
 struct Options
 {
-   // InPlace for a game ported from 1.0 that nobody verified Mirror on yet
+   // InPlace for a game where Mirror isn't verified yet, Native for a mod that leaves HDR to a ReShade add-on
    Mode mode = Mode::Mirror;
-   // What HDR presents as unless the user picks: most 1.0 games were made for scRGB
+   // What HDR presents as unless the user picks
    OutputMode hdr_output = OutputMode::Hdr10;
-   // 1.0's prevent_fullscreen_state: the game's exclusive fullscreen becomes a borderless window
+   // The game's exclusive fullscreen becomes a borderless window
    bool borderless = true;
 };
 
@@ -44,6 +38,8 @@ void Register();
 
 // From the settings over the game's options, read when a swapchain is created
 Mode GetMode();
+// Luma picks the real buffers' format, color space and output mode, and composition writes them: all but Native, where they're the game's
+bool ManagesOutput(Mode mode);
 bool UsesFlipModel();
 bool AllowsTearing();
 // The game gets a proxy of the swapchain (Luma.Swapchain.Wrap, Test builds): Luma presents before every other tool's Present hook
@@ -56,7 +52,7 @@ float GetScale();
 // The output mode the user picked, or the game's HDR one (Auto) when the display has HDR on. SDR when it hasn't, or without the
 // flip model.
 OutputMode GetOutputMode(bool hdr_display);
-// The user picked HDR10 or scRGB (not Auto): Windows HDR is turned on for it (1.0's display mode switch)
+// The user picked HDR10 or scRGB (not Auto): Windows HDR is turned on for it
 bool RequestsHdr();
 
 std::string_view GetName(Mode mode);

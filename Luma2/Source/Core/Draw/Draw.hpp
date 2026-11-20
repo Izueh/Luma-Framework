@@ -16,8 +16,8 @@ struct Range
    uint32_t count = 0;
 };
 
-// The state a StateStack saves and restores. 1.0's DrawStateStack had three fixed modes, kept as presets below; a pass names
-// the groups it changes, so nothing it doesn't touch is copied.
+// The state a StateStack saves and restores, with three presets below: a pass names the groups it changes, so nothing it
+// doesn't touch is copied.
 struct StateMask
 {
    Shaders::StageSet shaders;
@@ -40,7 +40,7 @@ struct StateMask
 inline constexpr Shaders::StageSet VERTEX_AND_PIXEL = {ShaderStage::Vertex, ShaderStage::Pixel};
 inline constexpr Shaders::StageSet PIXEL = {ShaderStage::Pixel};
 
-// 1.0's SimpleGraphics: the first 3 pixel shader resources and the first sampler, no unordered access views
+// The first 3 pixel shader resources and the first sampler, no unordered access views
 inline constexpr StateMask SIMPLE_GRAPHICS = {.shaders = VERTEX_AND_PIXEL,
    .shader_resources = PIXEL,
    .shader_resource_slots = {0, 3},
@@ -53,7 +53,7 @@ inline constexpr StateMask SIMPLE_GRAPHICS = {.shaders = VERTEX_AND_PIXEL,
    .rasterizer = true,
    .viewports = true,
    .input_assembler = true};
-// 1.0's FullGraphics
+// Every slot of the graphics stages, the output merger's unordered access views included
 inline constexpr StateMask FULL_GRAPHICS = {.shaders = VERTEX_AND_PIXEL,
    .shader_resources = PIXEL,
    .constant_buffers = VERTEX_AND_PIXEL,
@@ -65,13 +65,12 @@ inline constexpr StateMask FULL_GRAPHICS = {.shaders = VERTEX_AND_PIXEL,
    .rasterizer = true,
    .viewports = true,
    .input_assembler = true};
-// 1.0's Compute
 inline constexpr StateMask COMPUTE = {.shaders = Shaders::COMPUTE_STAGES,
    .shader_resources = Shaders::COMPUTE_STAGES,
    .constant_buffers = Shaders::COMPUTE_STAGES,
    .samplers = Shaders::COMPUTE_STAGES,
    .unordered_access = Shaders::COMPUTE_STAGES};
-// What a fullscreen pixel pass changes (1.0's DrawCustomPixelShader), Luma's cbuffers on both of its stages included: the default
+// What a fullscreen pixel pass changes, Luma's cbuffers on both of its stages included: the default
 inline constexpr StateMask FULLSCREEN_PASS = {.shaders = VERTEX_AND_PIXEL,
    .shader_resources = PIXEL,
    .shader_resource_slots = {0, 1},

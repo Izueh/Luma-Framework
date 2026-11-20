@@ -17,6 +17,7 @@
 
 #include <safetyhook.hpp>
 
+#include "Hooks/DInput/DInputDevices.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
 #include "Hooks/Hooks.hpp"
@@ -80,6 +81,38 @@ __declspec(noinline) int ThirdPartyDetour(int x)
 }
 
 __declspec(noinline) void ThirdPartyMethod() {}
+
+// A DirectInput device's method, its object first as a COM method's
+__declspec(noinline) int DeviceMethod(void*, int x)
+{
+   return x * 13 + 5;
+}
+
+int device_detour_depth = 0;
+bool device_detour_recursed = false;
+
+__declspec(noinline) int DeviceDetour(void* device, int x)
+{
+   // Stops a recursion the test reports, instead of overflowing the stack
+   if (device_detour_depth > 0)
+   {
+      device_detour_recursed = true;
+      return -1;
+   }
+   const auto original = Hooks::Input::DInput::GetOriginal(&DeviceDetour);
+   if (!original)
+      return -2;
+   device_detour_depth++;
+   const int result = original(device, x) + 100;
+   device_detour_depth--;
+   return result;
+}
+
+// Another tool's patch of the device's vtable slot (Steam's overlay, ReShade): it calls the code it found there
+__declspec(noinline) int PatchedDeviceMethod(void* device, int x)
+{
+   return DeviceMethod(device, x) + 1000;
+}
 
 #pragma optimize("", on)
 
@@ -482,4 +515,57 @@ TEST_CASE("ThirdPartyModules: a return address in an overlay's code is found by 
    CHECK(Hooks::ThirdPartyModules::Find(code + sizeof(code)).empty());
    Hooks::ThirdPartyModules::OnModuleUnloaded(code);
    CHECK(Hooks::ThirdPartyModules::Find(code + 8).empty());
+}
+
+TEST_CASE("Hooks: a DirectInput method is hooked once per detour, and a slot another tool patched over it doesn't recurse")
+{
+   using DeviceFunction = int (*)(void*, int);
+   struct FakeDevice
+   {
+      void* const* vtable;
+   };
+
+   constexpr size_t SLOT = 3;
+   void* vtable[] = {nullptr, nullptr, nullptr, reinterpret_cast<void*>(&DeviceMethod)};
+   FakeDevice first_device = {vtable};
+   Hooks::Scope::SetBypass(false);
+   Hooks::Input::DInput::HookMethod(&first_device, SLOT, reinterpret_cast<void*>(&DeviceDetour), "FakeDevice::Method");
+   REQUIRE(Hooks::Input::DInput::GetOriginal(&DeviceDetour) != nullptr);
+   CHECK(DeviceMethod(nullptr, 2) == 31 + 100);
+
+   // The other tool patches the shared vtable, then the game creates another device: its slot isn't hooked again
+   vtable[SLOT] = reinterpret_cast<void*>(&PatchedDeviceMethod);
+   FakeDevice second_device = {vtable};
+   const Hooks::Counts before = Hooks::GetCounts();
+   Hooks::Input::DInput::HookMethod(&second_device, SLOT, reinterpret_cast<void*>(&DeviceDetour), "FakeDevice::Method");
+   CHECK(Hooks::GetCounts().declared == before.declared);
+
+   // Through the patched slot: the other tool's code, the hooked method, the detour, then the first method's original, once
+   const auto call = reinterpret_cast<DeviceFunction>(second_device.vtable[SLOT]);
+   CHECK(call(&second_device, 2) == 31 + 100 + 1000);
+   CHECK_FALSE(device_detour_recursed);
+   CHECK(device_detour_depth == 0);
+
+   CHECK(Hooks::UninstallAll(true).removed == 1);
+   CHECK(DeviceMethod(nullptr, 2) == 31);
+}
+
+TEST_CASE("Hooks: the third-party work window is one level of the Luma scope, opened and closed once")
+{
+   CHECK_FALSE(Hooks::Scope::IsActive());
+   Hooks::Scope::BeginThirdPartyWork();
+   Hooks::Scope::BeginThirdPartyWork();
+   CHECK(Hooks::Scope::IsThirdPartyWorkOpen());
+   CHECK(Hooks::Scope::IsActive());
+   {
+      Hooks::Scope::Guard scope;
+      CHECK(Hooks::Scope::IsActive());
+   }
+   Hooks::Scope::EndThirdPartyWork();
+   CHECK_FALSE(Hooks::Scope::IsThirdPartyWorkOpen());
+   CHECK_FALSE(Hooks::Scope::IsActive());
+   // Closing a closed window doesn't unbalance a Luma scope
+   Hooks::Scope::Guard scope;
+   Hooks::Scope::EndThirdPartyWork();
+   CHECK(Hooks::Scope::IsActive());
 }

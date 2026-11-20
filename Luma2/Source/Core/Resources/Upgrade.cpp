@@ -15,7 +15,7 @@ namespace {
 Rules rules;
 bool set = false;
 
-// `width` x `height` is one of the mips of `base_width` x `base_height` (1.0's ResourceUpgradeIsMipOf)
+// `width` x `height` is one of the mips of `base_width` x `base_height`
 bool IsMipOf(uint32_t base_width, uint32_t base_height, uint32_t width, uint32_t height)
 {
    if (width == 0 || height == 0 || base_width == 0 || base_height == 0 || base_width < width || base_height < height)
@@ -30,7 +30,7 @@ bool Contains(const std::vector<DXGI_FORMAT>& formats, DXGI_FORMAT format)
    return std::ranges::find(formats, format) != formats.end();
 }
 
-// The 2D size filters of 1.0, in its order
+// The 2D size filters, in their bit order
 bool MatchesSize(const TextureDesc& desc, const FrameState& state)
 {
    const SizeFilters filters = rules.size_filters;
@@ -115,7 +115,7 @@ void SetRules(const Rules& value)
 {
    rules = value;
    set = !rules.formats.empty() || !rules.depth_formats.empty();
-   // A size change is a scaled mirror: Step 6
+   // A size change is a scaled mirror, not built yet
    if (!rules.custom_dimensions.empty())
       LUMA_UNIMPLEMENTED("Resources::Upgrade custom dimensions (Resources::Scaling)");
 }
@@ -132,7 +132,7 @@ bool IsNeeded()
 
 std::optional<TextureDesc> Match(const TextureDesc& desc, const FrameState& state, [[maybe_unused]] bool has_initial_data)
 {
-   // Only what the GPU writes: render targets and UAVs (1.0 also took writable shader resources, with its chains: Step 6), and depth
+   // Only what the GPU writes: render targets and UAVs (writable shader resources need chains, not built yet), and depth
    const bool color = desc.render_target || desc.unordered_access;
    if (!set || !desc.gpu_only || (!color && !desc.depth_stencil))
       return std::nullopt;
@@ -186,7 +186,7 @@ DXGI_FORMAT GetBestViewFormat(DXGI_FORMAT view_format, ViewKind kind, [[maybe_un
       return view_format == DXGI_FORMAT_X24_TYPELESS_G8_UINT || view_format == DXGI_FORMAT_X32_TYPELESS_G8X24_UINT ? DXGI_FORMAT_X32_TYPELESS_G8X24_UINT
                                                                                                                    : DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
    default:
-      // Another family: a typed mirror format replaces the view's; a typeless one keeps it (1.0's TODO)
+      // Another family: a typed mirror format replaces the view's; a typeless one keeps it (unverified)
       ASSERT_ONCE(IsTypeless(original_format) || GetTypeless(view_format) == GetTypeless(original_format));
       return IsTypeless(mirror_format) ? view_format : mirror_format;
    }

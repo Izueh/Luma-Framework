@@ -14,7 +14,7 @@
 
 // FXC (D3DCompiler_47.dll, loaded on first use) for DXBC targets ("ps_5_0"). Files and their #include lines are named from
 // the Shaders root ("Includes/Color/Color.hlsl") and found through `roots`, the first holding them winning. One thread uses it
-// at a time, whatever the call (1.0: FXC isn't thread safe): each call below takes the Lock for its duration, so shader
+// at a time, whatever the call (FXC isn't thread safe): each call below takes the Lock for its duration, so shader
 // creation waits for the compile in flight, not for a whole build.
 namespace Luma {
 namespace Shaders {

@@ -21,7 +21,7 @@ using namespace Luma::Math;
 using uint = uint32_t;
 } // namespace CB
 
-// The structs of the cbuffers, shared with the shaders (1.0's cbuffers.h): the game's parts from its Shaders folder, when it has
+// The structs of the cbuffers, shared with the shaders: the game's parts from its Shaders folder, when it has
 // them (CBuffers.hlsl defines empty ones otherwise, as in HLSL), then Luma's with the game's parts in them
 #if __has_include("Game/GameCBuffers.hlsl")
 #include "Game/GameCBuffers.hlsl"
@@ -36,8 +36,8 @@ static_assert(offsetof(CB::LumaGlobalSettings, GameSettings) % 16 == 0, "LumaSet
 static_assert(offsetof(CB::LumaInstanceData, GameData) % 16 == 0, "LumaData's part before GameData must be a multiple of 16 bytes");
 static_assert(alignof(CB::LumaGameSettings) == 4 && alignof(CB::LumaGameData) == 4, "A game's cbuffer part has 32 bit members only");
 
-// The LumaSettings and LumaData cbuffers (1.0's cbuffers.h and SetLumaConstantBuffers): two Resources::Database entries, which
-// every Luma shader (a replacement, one of Luma's own) gets bound at the game's slots wherever it runs. As 1.0: LumaSettings is
+// The LumaSettings and LumaData cbuffers: two Resources::Database entries, which every Luma shader (a replacement, one of Luma's
+// own) gets bound at the game's slots wherever it runs. LumaSettings is
 // uploaded by a context when it's dirty (its stamp moved: every present, a device's resolutions changed, MarkSettingsDirty),
 // LumaData written at every bind and uploaded when it differs from that context's last upload.
 namespace Luma {
@@ -53,25 +53,25 @@ struct WriteTarget;
 }
 
 namespace LumaCBuffers {
-// 1.0's cb_luma_global_settings: Core's part and the game's (GameSettings), which the settings registry's bindings write. Written
+// Core's part and the game's (GameSettings), which the settings registry's bindings write. Written
 // on the presenting thread only (Init, the present and swapchain callbacks, the settings registry and the overlay): uploads don't
 // read it, they copy what MarkSettingsDirty published, at the end of every present and when the game calls it after a change
 // within a frame. Its sizes and FrameIndex are written per upload, from the uploading context's device.
 extern CB::LumaGlobalSettings cb_luma_global_settings;
 
-// 1.0's UpdateLumaInstanceDataCB: the game's part of LumaData (data.GameData), written at every draw with a Luma shader, from any
+// The game's part of LumaData (data.GameData), written at every draw with a Luma shader, from any
 // thread, into a LumaData whose Luma part is filled and whose game part is zero. It gets the drawing context's device data and
-// resolutions, found once per context (1.0's DeviceData held both). Not called for a device without GameDeviceData.
+// resolutions, found once per context. Not called for a device without GameDeviceData.
 using UpdateLumaInstanceData = void (*)(CB::LumaInstanceData& data, const Game::GameDeviceData& game_device_data, const Frame::Resolutions& resolutions);
 
 // Game::Options::cbuffers: fixed for the process, they shape the cbuffers and are compiled into every shader
 struct Options
 {
-   // 1.0's luma_settings_cbuffer_index and luma_data_cbuffer_index: two different ones of 0 to 13
+   // Two different ones of 0 to 13
    uint32_t settings_slot = 13;
    uint32_t data_slot = 12;
    UpdateLumaInstanceData update_luma_instance_data = nullptr;
-   // 1.0's ENABLE_AUTO_CBUFFER_RESTORATION: after a draw that bound Luma's cbuffers, the game's buffers at the two slots are bound
+   // After a draw that bound Luma's cbuffers, the game's buffers at the two slots are bound
    // again, for games that bind theirs there once and expect them to stay. Hooks every *SetConstantBuffers.
    bool restore_after_draw = false;
 };
@@ -99,7 +99,7 @@ std::vector<Shaders::Compiler::Define> GetDefines(Api api = Api::D3D11);
 // LumaSettings 0, LumaData 1, other entries none: D3D12 binds them at Luma's root parameters, in this order
 std::optional<uint32_t> GetRootIndex(uint32_t entry);
 
-// The buffers' sizes, padded to 16 bytes (1.0's *Padded structs)
+// The buffers' sizes, padded to 16 bytes
 constexpr uint32_t SETTINGS_SIZE = (sizeof(CB::LumaGlobalSettings) + 15) / 16 * 16;
 constexpr uint32_t DATA_SIZE = (sizeof(CB::LumaInstanceData) + 15) / 16 * 16;
 
@@ -116,7 +116,7 @@ struct DevSetting
    std::string name;
 };
 
-// 1.0: "float DevSetting01; // Default, Min, Max, Name" lines of CBuffers.hlsl (1.0's Settings.hlsl), each part optional
+// The "float DevSetting01; // Default, Min, Max, Name" lines of CBuffers.hlsl, each part optional
 std::vector<DevSetting> ParseDevSettings(std::string_view text);
 } // namespace LumaCBuffers
 } // namespace Resources

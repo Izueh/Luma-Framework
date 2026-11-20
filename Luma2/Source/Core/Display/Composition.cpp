@@ -29,7 +29,7 @@ void Write(std::span<std::byte> destination, const Resources::Database::CustomDa
    std::memcpy(destination.data(), &current, sizeof(current));
 }
 
-// The value a define was last built with (1.0's GetShaderDefineCompiledNumericalValue), the shaders' default before the first build
+// The value a define was last built with, the shaders' default before the first build
 template <typename T>
 int32_t GetCompiled(const Shaders::Defines::Id<T>& define, int32_t fallback)
 {
@@ -40,7 +40,7 @@ int32_t GetCompiled(const Shaders::Defines::Id<T>& define, int32_t fallback)
    return value;
 }
 
-// 1.0's IsModActive: some of the game's shaders are replaced. Without, the defines don't describe the image.
+// Some of the game's shaders are replaced. Without, the defines don't describe the image.
 bool IsModActive()
 {
    static uint64_t generation = UINT64_MAX;
@@ -104,12 +104,14 @@ void Register()
 
 std::optional<Pass> Plan(const Inputs& inputs)
 {
+   if (inputs.off)
+      return std::nullopt;
    namespace Defines = Shaders::Defines;
    const bool mod_active = IsModActive();
    const int32_t post_process_space = GetCompiled(Defines::POST_PROCESS_SPACE_TYPE, 0);
    const int32_t gamma_correction = GetCompiled(Defines::GAMMA_CORRECTION_TYPE, 1);
    const bool sdr = Resources::LumaCBuffers::cb_luma_global_settings.DisplayMode == 0;
-   // 1.0's needs, from its OnPresent. Its output was a scRGB swapchain, or the game's linear one; an encode is a reencoding here.
+   // The input is linear when the mod's define says so, or the game asked for a linear back buffer; an encode is a reencoding here.
    const bool input_linear = mod_active ? post_process_space == 1 : inputs.game_linear;
    const bool needs_reencoding = inputs.encoding != Encoding::Linear || !input_linear;
    const bool early_display_encoding = post_process_space == 1 && GetCompiled(Defines::EARLY_DISPLAY_ENCODING, 0) >= 1;

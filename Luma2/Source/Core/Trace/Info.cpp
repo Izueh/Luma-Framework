@@ -10,6 +10,7 @@
 #include <set>
 
 #include "Common/Api.hpp"
+#include "ReShade/ReShade.hpp"
 #include "Game/Registry.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
@@ -117,6 +118,7 @@ Status GetStatus()
       .overlays = Hooks::ThirdPartyModules::GetLoaded(),
       .present_order = std::string(PRESENT_ORDERS[size_t(present.order)]),
       .present_overlay = present.overlay};
+   status.reshade = {ReShade::DescribeLoadState(), ReShade::DescribeBridge(), ReShade::DescribeMirrorSwapchainView()};
 
    status.shaders.loaded = Shaders::Variants::IsLoaded();
    for (const Shaders::Database::Shader* shader : Shaders::Database::GetShaders())

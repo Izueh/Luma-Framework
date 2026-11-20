@@ -6,6 +6,7 @@
 #include <winternl.h>
 
 #include "Startup.hpp"
+#include "ReShade/ReShade.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
 #include "Hooks/Hooks.hpp"
 #include "Utils/Log.hpp"
@@ -103,6 +104,10 @@ void Attach(HMODULE module)
       if (HMODULE graphics_module = GetModuleHandleW(name.data()))
          OnGraphicsModule(name, graphics_module, true);
    }
+
+   // Last, so ReShade's hooks and its loader notification go in after Luma's and it ends up on top. Still in DllMain, so the bridge
+   // registers before ReShade loads its add-ons (at the first device), but never from the loader notification.
+   ReShade::Load();
 }
 
 void Detach(bool is_process_terminating)

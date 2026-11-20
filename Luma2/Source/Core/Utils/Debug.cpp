@@ -10,7 +10,7 @@ namespace Debug {
 void Fail(std::string_view expression, std::string_view message, std::string_view file, int line)
 {
    Log::Error("Assert: {} ({}) at {}:{}", message.empty() ? expression : message, expression, file, line);
-   // 1.0 asks through a message box, which a fullscreen game can hide
+   // No message box: a fullscreen game can hide it
    if (IsDebuggerPresent())
       __debugbreak();
 }

@@ -1,7 +1,10 @@
 #include <doctest/doctest.h>
 
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <functional>
+#include <sstream>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -24,6 +27,21 @@
 #include "Trace/Info.hpp"
 #include "UI/Input.hpp"
 #include "UI/Overlay.hpp"
+#include "Validation/D3D11/D3D11Validation.hpp"
+#include "Validation/D3D12/D3D12Validation.hpp"
+#include "Validation/Validation.hpp"
+#include "Handlers/DXGI/DXGIHandlers.hpp"
+#include "Swapchain/DXGI/DXGISwapchain.hpp"
+#include "Swapchain/Swapchain.hpp"
+#include "ReShade/ReShade.hpp"
+#include "ReShade/ReShadeABI.hpp"
+#include "Draw/D3D11/D3D11Draw.hpp"
+#include "Draw/Draw.hpp"
+#include "Hooks/DXGI/DXGISwapchainProxy.hpp"
+#include "Hooks/ThirdPartyModules.hpp"
+#include "System/Modules.hpp"
+#include "Utils/Log.hpp"
+#include "Hooks/DXGI/DXGIHooks.hpp"
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3d12.lib")
@@ -43,6 +61,8 @@ void InstallHooks()
       Hooks::D3D11::Functions functions;
       for (const Hooks::D3D11::Function function : {Hooks::D3D11::Function::Present, Hooks::D3D11::Function::ResizeBuffers, Hooks::D3D11::Function::SetFullscreenState})
          functions.set(size_t(function));
+      // The bound-state cache's viewports, for the ReShade tests
+      functions.set(size_t(Hooks::D3D11::Function::RSSetViewports));
       Hooks::InstallDXGI(functions);
       Hooks::InstallD3D11(functions);
       Hooks::InstallD3D12({});
@@ -937,10 +957,6 @@ TEST_CASE("Overlay D3D12: draws on the swapchain's queue, survives resizes, and 
    CHECK(Hooks::DeviceProxy::GetCount() == 0);
 }
 
-#include "Validation/D3D11/D3D11Validation.hpp"
-#include "Validation/D3D12/D3D12Validation.hpp"
-#include "Validation/Validation.hpp"
-
 TEST_CASE("Validation: the debug layers' messages of the game's devices are read and counted")
 {
    InstallHooks();
@@ -1040,4 +1056,855 @@ TEST_CASE("Hooks: bypassed, the game's devices, swapchains and presents reach no
    CHECK(present_calls == 0);
    CHECK(Hooks::DeviceProxy::GetCount() == proxies);
    CHECK(Trace::GetStatus().swapchains.size() == swapchains);
+}
+
+namespace {
+// The game picks Native, with the swapchain settings at their defaults (flip model, tearing, borderless); all gone after
+struct NativeMode
+{
+   NativeMode()
+   {
+      if (!Settings::Find(Settings::Core::SWAPCHAIN_MODE.key))
+         Swapchain::Register();
+      // The game holds the real swapchain, as the other tests here
+      Settings::Set(Settings::Core::SWAPCHAIN_WRAP, false);
+      Swapchain::SetOptions({.mode = Swapchain::Mode::Native});
+   }
+
+   ~NativeMode()
+   {
+      Swapchain::SetOptions({});
+      Settings::Clear();
+   }
+};
+
+// Inside Luma's scope: the real swapchain's description
+DXGI_SWAP_CHAIN_DESC1 GetRealDesc(IDXGISwapChain1* swapchain)
+{
+   Hooks::Scope::Guard scope;
+   DXGI_SWAP_CHAIN_DESC1 desc = {};
+   REQUIRE(SUCCEEDED(swapchain->GetDesc1(&desc)));
+   return desc;
+}
+
+DXGI_SWAP_CHAIN_DESC GetRealDesc(IDXGISwapChain* swapchain)
+{
+   Hooks::Scope::Guard scope;
+   DXGI_SWAP_CHAIN_DESC desc = {};
+   REQUIRE(SUCCEEDED(swapchain->GetDesc(&desc)));
+   return desc;
+}
+
+bool SupportsColorSpace(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
+{
+   UINT support = 0;
+   return SUCCEEDED(swapchain->CheckColorSpaceSupport(color_space, &support)) && (support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT);
+}
+} // namespace
+
+TEST_CASE("Swapchain D3D11 Native: presented as in place (flip model, tearing, borderless), in the game's format and color space, never composed")
+{
+   InstallHooks();
+   GameCallbacks game;
+   NativeMode native;
+   HiddenWindow window;
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> immediate_context;
+   CreateD3D11Device(device, immediate_context);
+   ComPtr<IDXGIFactory2> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   // A blit swapchain of one buffer that may switch display modes, in a float format
+   const DXGI_SWAP_CHAIN_DESC1 desc = {
+      .Width = 320,
+      .Height = 180,
+      .Format = DXGI_FORMAT_R16G16B16A16_FLOAT,
+      .SampleDesc = {1, 0},
+      .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT | DXGI_USAGE_SHADER_INPUT,
+      .BufferCount = 1,
+      .Scaling = DXGI_SCALING_STRETCH,
+      .SwapEffect = DXGI_SWAP_EFFECT_DISCARD,
+      .AlphaMode = DXGI_ALPHA_MODE_IGNORE,
+      .Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,
+   };
+   ComPtr<IDXGISwapChain1> swapchain;
+   REQUIRE(SUCCEEDED(factory->CreateSwapChainForHwnd(device.Get(), window.hwnd, &desc, nullptr, nullptr, &swapchain)));
+   CHECK(swapchain_created_calls == 1);
+   // The presentation is rewritten, the format is the game's
+   const DXGI_SWAP_CHAIN_DESC1 real = GetRealDesc(swapchain.Get());
+   CHECK(real.SwapEffect == DXGI_SWAP_EFFECT_FLIP_DISCARD);
+   CHECK(real.BufferCount == 2);
+   CHECK(real.Flags == UINT(DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING));
+   CHECK(real.Format == desc.Format);
+   CHECK(real.Width == desc.Width);
+   CHECK(real.Height == desc.Height);
+   CHECK(real.SampleDesc.Count == 1);
+   CHECK((real.BufferUsage & ~DXGI_USAGE(DXGI_USAGE_BACK_BUFFER)) == desc.BufferUsage);
+   CHECK(real.Scaling == desc.Scaling);
+
+   // The game's buffer is the real one
+   {
+      ComPtr<ID3D11Texture2D> game_buffer;
+      REQUIRE(SUCCEEDED(swapchain->GetBuffer(0, IID_PPV_ARGS(&game_buffer))));
+      ComPtr<ID3D11Texture2D> real_buffer;
+      {
+         Hooks::Scope::Guard scope;
+         REQUIRE(SUCCEEDED(swapchain->GetBuffer(0, IID_PPV_ARGS(&real_buffer))));
+      }
+      CHECK(game_buffer.Get() == real_buffer.Get());
+   }
+
+   REQUIRE(SUCCEEDED(swapchain->Present(0, 0)));
+   CHECK(present_calls == 1);
+   Swapchain::DXGI::Status status = Swapchain::DXGI::GetStatus();
+   CHECK(status.mode == "Native");
+   CHECK_FALSE(status.composed);
+   CHECK(status.flip_model);
+   CHECK(status.tearing);
+   CHECK(status.borderless);
+   CHECK(status.real_format == desc.Format);
+   CHECK(status.game_format == desc.Format);
+   CHECK(status.output_mode == "scRGB");
+   CHECK(status.color_space == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+   CHECK_FALSE(status.game_color_space);
+   // The output is the real size: what upscaling targets
+   Frame::Resolutions resolutions = Frame::Get(Real(device));
+   CHECK(resolutions.output.x == 320);
+   CHECK(resolutions.swapchain.y == 180);
+
+   // The game's color space reaches the real swapchain (recorded there, what the overlay encodes for)
+   ComPtr<IDXGISwapChain3> swapchain3;
+   REQUIRE(SUCCEEDED(swapchain.As(&swapchain3)));
+   if (SupportsColorSpace(swapchain3.Get(), DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709))
+   {
+      REQUIRE(SUCCEEDED(swapchain3->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)));
+      CHECK(Handlers::GetColorSpace(swapchain.Get()) == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+      REQUIRE(SUCCEEDED(swapchain->Present(0, 0)));
+      CHECK(Swapchain::DXGI::GetStatus().game_color_space == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+   }
+   else
+   {
+      MESSAGE("scRGB isn't presentable here: the game's color space isn't checked");
+   }
+
+   // A resize keeps the game's new format, with the presentation rewritten as at creation
+   REQUIRE(SUCCEEDED(swapchain->ResizeBuffers(1, 400, 200, DXGI_FORMAT_R10G10B10A2_UNORM, 0)));
+   CHECK(swapchain_resized_calls == 1);
+   const DXGI_SWAP_CHAIN_DESC1 resized = GetRealDesc(swapchain.Get());
+   CHECK(resized.Width == 400);
+   CHECK(resized.Height == 200);
+   CHECK(resized.Format == DXGI_FORMAT_R10G10B10A2_UNORM);
+   CHECK(resized.BufferCount == 2);
+   CHECK(resized.Flags == UINT(DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING));
+   REQUIRE(SUCCEEDED(swapchain->Present(0, 0)));
+   status = Swapchain::DXGI::GetStatus();
+   CHECK_FALSE(status.composed);
+   CHECK(status.real_width == 400);
+   CHECK(status.real_format == DXGI_FORMAT_R10G10B10A2_UNORM);
+   // The float format's color space no longer describes the buffers
+   CHECK_FALSE(status.game_color_space);
+   CHECK(status.output_mode == "SDR");
+   resolutions = Frame::Get(Real(device));
+   CHECK(resolutions.output.x == 400);
+   CHECK(resolutions.swapchain.y == 200);
+
+   if (SupportsColorSpace(swapchain3.Get(), DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020))
+   {
+      REQUIRE(SUCCEEDED(swapchain3->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)));
+      REQUIRE(SUCCEEDED(swapchain->Present(0, 0)));
+      status = Swapchain::DXGI::GetStatus();
+      CHECK(status.output_mode == "HDR10");
+      CHECK(status.color_space == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+   }
+   else
+   {
+      MESSAGE("HDR10 isn't presentable here: the game's HDR color space isn't checked");
+   }
+
+   ComPtr<ID3D11InfoQueue> info_queue;
+   if (SUCCEEDED(device.As(&info_queue)))
+      CHECK(CountErrors<D3D11_MESSAGE>(info_queue.Get(), D3D11_MESSAGE_SEVERITY_ERROR) == 0);
+}
+
+TEST_CASE("Swapchain D3D11 Native: an sRGB format, which the flip model can't present, keeps the game's swap effect and format")
+{
+   InstallHooks();
+   GameCallbacks game;
+   NativeMode native;
+   HiddenWindow window;
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> immediate_context;
+   CreateD3D11Device(device, immediate_context);
+   ComPtr<IDXGIFactory> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   DXGI_SWAP_CHAIN_DESC desc = {
+      .BufferDesc = {.Width = 320, .Height = 180, .Format = DXGI_FORMAT_R8G8B8A8_UNORM_SRGB},
+      .SampleDesc = {1, 0},
+      .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
+      .BufferCount = 1,
+      .OutputWindow = window.hwnd,
+      .Windowed = TRUE,
+      .SwapEffect = DXGI_SWAP_EFFECT_DISCARD,
+      .Flags = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH,
+   };
+   ComPtr<IDXGISwapChain> swapchain;
+   REQUIRE(SUCCEEDED(factory->CreateSwapChain(device.Get(), &desc, &swapchain)));
+   CHECK(swapchain_created_calls == 1);
+   // Still the blit model: no tearing, the buffer count the game's, but borderless drops the mode switch
+   const DXGI_SWAP_CHAIN_DESC real = GetRealDesc(swapchain.Get());
+   CHECK(real.SwapEffect == DXGI_SWAP_EFFECT_DISCARD);
+   CHECK(real.BufferDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+   CHECK(real.BufferCount == 1);
+   CHECK(real.Flags == 0);
+   CHECK(real.BufferDesc.Width == 320);
+
+   REQUIRE(SUCCEEDED(swapchain->Present(0, 0)));
+   const Swapchain::DXGI::Status status = Swapchain::DXGI::GetStatus();
+   CHECK(status.mode == "Native");
+   CHECK_FALSE(status.flip_model);
+   CHECK_FALSE(status.tearing);
+   CHECK_FALSE(status.composed);
+   CHECK(status.real_format == DXGI_FORMAT_R8G8B8A8_UNORM_SRGB);
+   CHECK(status.output_mode == "SDR");
+   CHECK(status.color_space == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+
+   ComPtr<ID3D11InfoQueue> info_queue;
+   if (SUCCEEDED(device.As(&info_queue)))
+      CHECK(CountErrors<D3D11_MESSAGE>(info_queue.Get(), D3D11_MESSAGE_SEVERITY_ERROR) == 0);
+}
+
+TEST_CASE("Overlay D3D11 Native: a swapchain asked without render target usage gets it, and the overlay draws on it")
+{
+   InstallHooks();
+   InitializeOverlay();
+   NativeMode native;
+   GameWindow window;
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> immediate_context;
+   CreateD3D11Device(device, immediate_context);
+   ComPtr<IDXGIFactory2> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   const DXGI_SWAP_CHAIN_DESC1 desc = {
+      .Width = 320,
+      .Height = 180,
+      .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+      .SampleDesc = {1, 0},
+      .BufferUsage = DXGI_USAGE_UNORDERED_ACCESS,
+      .BufferCount = 2,
+      .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
+   };
+   ComPtr<IDXGISwapChain1> swapchain;
+   REQUIRE(SUCCEEDED(factory->CreateSwapChainForHwnd(device.Get(), window.hwnd, &desc, nullptr, nullptr, &swapchain)));
+   const DXGI_USAGE usage = GetRealDesc(swapchain.Get()).BufferUsage;
+   CHECK((usage & DXGI_USAGE_RENDER_TARGET_OUTPUT) != 0);
+   CHECK((usage & DXGI_USAGE_UNORDERED_ACCESS) != 0);
+   CHECK(UI::GetSwapchain() == swapchain.Get());
+   UI::SetOpen(true);
+   for (int i = 0; i < 2; i++)
+      CHECK(SUCCEEDED(swapchain->Present(0, 0)));
+   UI::SetOpen(false);
+   ComPtr<ID3D11InfoQueue> info_queue;
+   if (SUCCEEDED(device.As(&info_queue)))
+      CHECK(CountErrors<D3D11_MESSAGE>(info_queue.Get(), D3D11_MESSAGE_SEVERITY_ERROR) == 0);
+}
+
+namespace {
+namespace ReShadeABI = ReShade::ABI;
+
+// A stand-in for ReShade's dll (FakeReShade.dll, next to Tests.exe): it exports what Luma looks for and calls, and what it recorded
+HMODULE fake_reshade = nullptr;
+
+template <typename Function>
+Function GetFakeExport(const char* name)
+{
+   const auto function = reinterpret_cast<Function>(GetProcAddress(fake_reshade, name));
+   REQUIRE(function);
+   return function;
+}
+
+// ReShade's api::device and api::swapchain, as far as Luma reads them
+struct FakeDevice : ReShadeABI::Device
+{
+   ReShadeABI::DeviceApi api = ReShadeABI::DeviceApi::D3D11;
+
+   uint64_t GetNative() const override { return 0; }
+   void GetPrivateData(const uint8_t[16], uint64_t* data) const override { *data = 0; }
+   void SetPrivateData(const uint8_t[16], const uint64_t) override {}
+   ReShadeABI::DeviceApi GetApi() const override { return api; }
+};
+
+struct FakeSwapchain : ReShadeABI::DeviceObject
+{
+   FakeDevice* device = nullptr;
+   IDXGISwapChain* native = nullptr; // What ReShade's wrapper holds: the game's proxy
+
+   uint64_t GetNative() const override { return reinterpret_cast<uint64_t>(native); }
+   void GetPrivateData(const uint8_t[16], uint64_t* data) const override { *data = 0; }
+   void SetPrivateData(const uint8_t[16], const uint64_t) override {}
+   ReShadeABI::Device* GetDevice() override { return device; }
+};
+
+void* FindRegistered(ReShadeABI::Event event)
+{
+   return GetFakeExport<void* (*)(uint32_t)>("FakeReShadeGetEvent")(uint32_t(event));
+}
+
+// ReShade firing its events
+void FirePresent(FakeSwapchain& swapchain)
+{
+   using Callback = void (*)(void*, ReShadeABI::DeviceObject*, const void*, const void*, uint32_t, const void*);
+   reinterpret_cast<Callback>(FindRegistered(ReShadeABI::Event::Present))(nullptr, &swapchain, nullptr, nullptr, 0, nullptr);
+}
+
+void FireFinishPresent(FakeSwapchain& swapchain)
+{
+   using Callback = void (*)(void*, ReShadeABI::DeviceObject*);
+   reinterpret_cast<Callback>(FindRegistered(ReShadeABI::Event::FinishPresent))(nullptr, &swapchain);
+}
+
+bool FireOpenOverlay(bool open)
+{
+   using Callback = bool (*)(void*, bool, int32_t);
+   return reinterpret_cast<Callback>(FindRegistered(ReShadeABI::Event::ReShadeOpenOverlay))(nullptr, open, 0);
+}
+
+// The game holds a proxy of its swapchain, as with ReShade above Luma; the settings are gone after
+struct WrappedSwapchains
+{
+   WrappedSwapchains()
+   {
+      if (!Settings::Find(Settings::Core::SWAPCHAIN_WRAP.key))
+         Swapchain::Register();
+      Settings::Set(Settings::Core::SWAPCHAIN_WRAP, true);
+   }
+
+   ~WrappedSwapchains() { Settings::Clear(); }
+};
+
+uint32_t viewport_calls = 0;
+
+void OnBindViewports(ID3D11DeviceContext*, UINT, const D3D11_VIEWPORT*)
+{
+   viewport_calls++;
+}
+
+// The game's present and viewport events, and the viewports in the bound-state cache
+struct ViewportEvents
+{
+   ViewportEvents()
+   {
+      Game::SetEvents(Game::D3D11::Events{.on_present = &OnPresent<ID3D11Device>, .on_bind_viewports = &OnBindViewports});
+      Draw::SetOptions({.viewports = true});
+      viewport_calls = 0;
+   }
+
+   ~ViewportEvents() { Draw::SetOptions({}); }
+};
+
+ComPtr<IDXGISwapChain1> CreateSwapchain(IUnknown* presenter, HWND hwnd)
+{
+   ComPtr<IDXGIFactory2> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   const DXGI_SWAP_CHAIN_DESC1 desc = {
+      .Width = 320,
+      .Height = 180,
+      .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+      .SampleDesc = {1, 0},
+      .BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT,
+      .BufferCount = 2,
+      .SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD,
+   };
+   ComPtr<IDXGISwapChain1> swapchain;
+   REQUIRE(SUCCEEDED(factory->CreateSwapChainForHwnd(presenter, hwnd, &desc, nullptr, nullptr, &swapchain)));
+   return swapchain;
+}
+} // namespace
+
+TEST_CASE("ReShade D3D11: Luma's present work runs at the present event, once, and the window to Luma's Present passes calls through")
+{
+   InstallHooks();
+   GameCallbacks game;
+   ViewportEvents events;
+   WrappedSwapchains wrapped;
+   HiddenWindow window;
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   CreateD3D11Device(device, context);
+   ComPtr<IDXGISwapChain1> swapchain = CreateSwapchain(device.Get(), window.hwnd);
+   IDXGISwapChain* real = Hooks::SwapchainProxy::Unwrap(swapchain.Get());
+   REQUIRE(real != swapchain.Get());
+
+   const D3D11_VIEWPORT game_viewport = {0.f, 0.f, 320.f, 180.f, 0.f, 1.f};
+   const D3D11_VIEWPORT reshade_viewport = {0.f, 0.f, 16.f, 16.f, 0.f, 1.f};
+   context->RSSetViewports(1, &game_viewport);
+   CHECK(viewport_calls == 1);
+
+   // ReShade's present event: the game's frame is done (its on_present ran), then the window opens
+   CHECK(Hooks::DXGI::RunPresentWorkAtEvent(real));
+   CHECK(present_calls == 1);
+   CHECK(Hooks::Scope::IsThirdPartyWorkOpen());
+   // ReShade's effects bind their state and restore the game's: no game event, and the cache keeps the game's viewport
+   context->RSSetViewports(1, &reshade_viewport);
+   const Draw::D3D11::Bound* bound = Draw::D3D11::GetBound(context.Get());
+   REQUIRE(bound);
+   CHECK(bound->viewports[0].Width == 320.f);
+   context->RSSetViewports(1, &game_viewport);
+   CHECK(viewport_calls == 1);
+
+   // Luma's Present closes it and doesn't run the present work again
+   swapchain->Present(0, 0);
+   CHECK_FALSE(Hooks::Scope::IsThirdPartyWorkOpen());
+   CHECK(present_calls == 1);
+   context->RSSetViewports(1, &game_viewport);
+   CHECK(viewport_calls == 2);
+
+   // Without the event (a DO_NOT_WAIT retry, the bridge off) Present runs both parts
+   swapchain->Present(0, 0);
+   CHECK(present_calls == 2);
+   // DXGI_PRESENT_TEST runs neither
+   swapchain->Present(0, DXGI_PRESENT_TEST);
+   CHECK(present_calls == 2);
+
+   // Present1 the same: once
+   const DXGI_PRESENT_PARAMETERS parameters = {};
+   CHECK(Hooks::DXGI::RunPresentWorkAtEvent(real));
+   swapchain->Present1(0, 0, &parameters);
+   CHECK_FALSE(Hooks::Scope::IsThirdPartyWorkOpen());
+   CHECK(present_calls == 3);
+
+   // An event no Luma Present followed: the next Present doesn't skip its present work
+   CHECK(Hooks::DXGI::RunPresentWorkAtEvent(real));
+   CHECK(Hooks::DXGI::CloseThirdPartyWorkWindowAtFinishPresent());
+   CHECK_FALSE(Hooks::Scope::IsThirdPartyWorkOpen());
+   swapchain->Present(0, 0);
+   CHECK(present_calls == 5);
+
+   // Inside Luma's own work the event does nothing
+   {
+      Hooks::Scope::Guard scope;
+      CHECK_FALSE(Hooks::DXGI::RunPresentWorkAtEvent(real));
+   }
+   CHECK(present_calls == 5);
+}
+
+TEST_CASE("ReShade D3D11: without a proxy, Luma's Present hook closes the window and skips the present work the event ran")
+{
+   InstallHooks();
+   GameCallbacks game;
+   HiddenWindow window;
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   CreateD3D11Device(device, context);
+   ComPtr<IDXGISwapChain1> swapchain = CreateSwapchain(device.Get(), window.hwnd);
+   REQUIRE_FALSE(Hooks::SwapchainProxy::HasProxy(swapchain.Get()));
+   CHECK(Hooks::DXGI::RunPresentWorkAtEvent(swapchain.Get()));
+   CHECK(Hooks::Scope::IsThirdPartyWorkOpen());
+   swapchain->Present(0, 0);
+   CHECK_FALSE(Hooks::Scope::IsThirdPartyWorkOpen());
+   CHECK(present_calls == 1);
+   swapchain->Present(0, 0);
+   CHECK(present_calls == 2);
+}
+
+// A ReShade already in the process (as dxgi.dll, or injected by something else): Luma doesn't load another, and registers its bridge with it
+TEST_CASE("ReShade: another module exporting ReShadeVersion isn't loaded again, the bridge registers with it, and its events drive the present")
+{
+   InstallHooks();
+   GameCallbacks game;
+   WrappedSwapchains wrapped;
+   HiddenWindow window;
+   HiddenWindow d3d12_window;
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   CreateD3D11Device(device, context);
+   // Created while the executable is still the game's code
+   ComPtr<IDXGISwapChain1> swapchain = CreateSwapchain(device.Get(), window.hwnd);
+   REQUIRE(Hooks::SwapchainProxy::HasProxy(Hooks::SwapchainProxy::Unwrap(swapchain.Get())));
+   ComPtr<ID3D12Device> d3d12_device = CreateD3D12Device();
+   const D3D12_COMMAND_QUEUE_DESC queue_desc = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT};
+   ComPtr<ID3D12CommandQueue> queue;
+   REQUIRE(SUCCEEDED(d3d12_device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue))));
+   ComPtr<IDXGISwapChain1> d3d12_swapchain = CreateSwapchain(queue.Get(), d3d12_window.hwnd);
+   REQUIRE(Hooks::SwapchainProxy::HasProxy(Hooks::SwapchainProxy::Unwrap(d3d12_swapchain.Get())));
+
+   // Loaded after the first present's check, as ReShade would be before Luma: Load finds it
+   CHECK(ReShade::GetLoadState() == ReShade::LoadState::NotLoaded);
+   fake_reshade = LoadLibraryW((System::Modules::GetPath(GetModuleHandleW(nullptr)).parent_path() / L"FakeReShade.dll").c_str());
+   REQUIRE(fake_reshade);
+   ReShade::Load();
+   CHECK(ReShade::GetLoadState() == ReShade::LoadState::LoadedByAnotherModule);
+   // Registered as an overlay: a call from its code is its own
+   CHECK(Hooks::ThirdPartyModules::FindBase(GetProcAddress(fake_reshade, "ReShadeRegisterEvent")) == reinterpret_cast<uintptr_t>(fake_reshade));
+   CHECK(GetFakeExport<void* (*)()>("FakeReShadeGetModule")() == System::Modules::GetSelf());
+   CHECK(GetFakeExport<uint32_t (*)()>("FakeReShadeGetApiVersion")() == ReShadeABI::API_VERSION);
+   for (const ReShadeABI::Event event : {ReShadeABI::Event::Present, ReShadeABI::Event::FinishPresent, ReShadeABI::Event::ReShadeBeginEffects, ReShadeABI::Event::ReShadeFinishEffects,
+           ReShadeABI::Event::InitEffectRuntime, ReShadeABI::Event::DestroyEffectRuntime, ReShadeABI::Event::ReShadeOpenOverlay})
+      CHECK(FindRegistered(event) != nullptr);
+   CHECK(GetFakeExport<uint32_t (*)()>("FakeReShadeGetEventCount")() == 7);
+   CHECK(ReShade::DescribeBridge().starts_with("on"));
+
+   // D3D11: the event runs the present work once, Luma's Present closes the window
+   FakeDevice d3d11 = {};
+   FakeSwapchain reshade_swapchain = {};
+   reshade_swapchain.device = &d3d11;
+   reshade_swapchain.native = swapchain.Get();
+   FirePresent(reshade_swapchain);
+   CHECK(present_calls == 1);
+   CHECK(Hooks::Scope::IsThirdPartyWorkOpen());
+   swapchain->Present(0, 0);
+   FireFinishPresent(reshade_swapchain);
+   CHECK_FALSE(Hooks::Scope::IsThirdPartyWorkOpen());
+   CHECK(present_calls == 1);
+   // ReShade presents without reaching Luma's Present: finish_present closes the window
+   FirePresent(reshade_swapchain);
+   FireFinishPresent(reshade_swapchain);
+   CHECK_FALSE(Hooks::Scope::IsThirdPartyWorkOpen());
+   CHECK(present_calls == 2);
+
+   // D3D12 the same
+   FakeDevice d3d12 = {};
+   d3d12.api = ReShadeABI::DeviceApi::D3D12;
+   FakeSwapchain reshade_d3d12_swapchain = {};
+   reshade_d3d12_swapchain.device = &d3d12;
+   reshade_d3d12_swapchain.native = d3d12_swapchain.Get();
+   FirePresent(reshade_d3d12_swapchain);
+   CHECK(present_calls == 3);
+   CHECK(callback_presenter == queue.Get());
+   CHECK(Hooks::Scope::IsThirdPartyWorkOpen());
+   d3d12_swapchain->Present(0, 0);
+   CHECK_FALSE(Hooks::Scope::IsThirdPartyWorkOpen());
+   CHECK(present_calls == 3);
+
+   // Another API's swapchain (ReShade's OpenGL): nothing
+   FakeDevice opengl = {};
+   opengl.api = ReShadeABI::DeviceApi(0x10000);
+   reshade_swapchain.device = &opengl;
+   FirePresent(reshade_swapchain);
+   CHECK_FALSE(Hooks::Scope::IsThirdPartyWorkOpen());
+   CHECK(present_calls == 3);
+
+   // One overlay open at a time
+   UI::SetOpen(false);
+   CHECK_FALSE(FireOpenOverlay(true));
+   CHECK(ReShade::IsOverlayOpen());
+   UI::SetOpen(true);
+   CHECK_FALSE(UI::IsOpen());
+   CHECK_FALSE(FireOpenOverlay(false));
+   UI::SetOpen(true);
+   CHECK(UI::IsOpen());
+   CHECK(FireOpenOverlay(true));
+   CHECK_FALSE(ReShade::IsOverlayOpen());
+   UI::SetOpen(false);
+
+   // The presents may still be running on the GPU
+   ComPtr<ID3D12Fence> fence;
+   REQUIRE(SUCCEEDED(d3d12_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))));
+   queue->Signal(fence.Get(), 1);
+   CHECK(WaitFor([&] { return fence->GetCompletedValue() >= 1; }));
+}
+
+namespace {
+constexpr GUID COLOR_SPACE_GUID = {0x18b57e4, 0x1493, 0x4953, {0xad, 0xf2, 0xde, 0x6d, 0x99, 0xcc, 0x5, 0xe5}};
+
+// The fake ReShade in the process with its bridge on, whether the test above ran first or not
+void LoadFakeReShade()
+{
+   if (!fake_reshade)
+   {
+      fake_reshade = GetModuleHandleW(L"FakeReShade.dll");
+      if (!fake_reshade)
+         fake_reshade = LoadLibraryW((System::Modules::GetPath(GetModuleHandleW(nullptr)).parent_path() / L"FakeReShade.dll").c_str());
+   }
+   REQUIRE(fake_reshade);
+   ReShade::Load();
+   REQUIRE(ReShade::DescribeBridge().starts_with("on"));
+}
+
+// The fake's swapchain creation hook: the game gets ReShade's wrapper of its proxy
+ComPtr<IDXGISwapChain> WrapInFakeReShade(IDXGISwapChain* proxy, bool d3d12)
+{
+   ComPtr<IDXGISwapChain> wrapper;
+   wrapper.Attach(GetFakeExport<IDXGISwapChain* (*)(IDXGISwapChain*, bool)>("FakeReShadeWrap")(proxy, d3d12));
+   REQUIRE(wrapper);
+   return wrapper;
+}
+
+IUnknown* GetHeldBuffer(IDXGISwapChain* wrapper, uint32_t index)
+{
+   return GetFakeExport<IUnknown* (*)(IDXGISwapChain*, uint32_t)>("FakeReShadeGetHeldBuffer")(wrapper, index);
+}
+
+uint32_t ReadFake(const char* name, IDXGISwapChain* wrapper)
+{
+   return GetFakeExport<uint32_t (*)(IDXGISwapChain*)>(name)(wrapper);
+}
+
+// The first buffer a read from the fake's code gets now, as ReShade's runtime reads it: the real one inside a window, the game's outside
+IUnknown* ProbeRead(IDXGISwapChain* wrapper)
+{
+   return GetFakeExport<IUnknown* (*)(IDXGISwapChain*)>("FakeReShadeProbeRead")(wrapper);
+}
+
+// What Luma itself sees (its scope): the real swapchain's
+template <typename Interface>
+ComPtr<Interface> GetRealBuffer(IDXGISwapChain* real, UINT index)
+{
+   Hooks::Scope::Guard scope;
+   ComPtr<Interface> buffer;
+   REQUIRE(SUCCEEDED(real->GetBuffer(index, IID_PPV_ARGS(&buffer))));
+   return buffer;
+}
+
+DXGI_COLOR_SPACE_TYPE GetRecordedColorSpace(IDXGISwapChain* real)
+{
+   Hooks::Scope::Guard scope;
+   DXGI_COLOR_SPACE_TYPE color_space = DXGI_COLOR_SPACE_RESERVED;
+   UINT size = sizeof(color_space);
+   real->GetPrivateData(COLOR_SPACE_GUID, &size, &color_space);
+   return color_space;
+}
+
+// The fake's runtime switched off ([GENERAL] Disable=1), back on after
+struct FakeRuntimeDisabled
+{
+   FakeRuntimeDisabled() { GetFakeExport<void (*)(bool)>("FakeReShadeSetRuntimeEnabled")(false); }
+
+   ~FakeRuntimeDisabled() { GetFakeExport<void (*)(bool)>("FakeReShadeSetRuntimeEnabled")(true); }
+};
+} // namespace
+
+TEST_CASE("ReShade D3D11 Mirror: ReShade's runtime reads the real buffer and Luma's color space in its window, the game's calls through its wrapper get the mirror")
+{
+   InstallHooks();
+   GameCallbacks game;
+   WrappedSwapchains wrapped;
+   HiddenWindow window;
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   CreateD3D11Device(device, context);
+   LoadFakeReShade();
+   ComPtr<IDXGISwapChain1> swapchain = CreateSwapchain(device.Get(), window.hwnd);
+   IDXGISwapChain* real = Hooks::SwapchainProxy::Unwrap(swapchain.Get());
+   REQUIRE(real != swapchain.Get());
+   REQUIRE(Hooks::DXGI::GetReShadeSwapchainView(real) == Hooks::SwapchainProxy::ReShadeSwapchainView::RealInsideWindows);
+
+   ComPtr<IDXGISwapChain> reshade = WrapInFakeReShade(swapchain.Get(), false);
+   CHECK(ReadFake("FakeReShadeGetInits", reshade.Get()) == 1);
+   const ComPtr<ID3D11Texture2D> real_buffer = GetRealBuffer<ID3D11Texture2D>(real, 0);
+   CHECK(GetHeldBuffer(reshade.Get(), 0) == real_buffer.Get());
+   CHECK(ReadFake("FakeReShadeGetColorSpace", reshade.Get()) == uint32_t(GetRecordedColorSpace(real)));
+
+   // The game, through ReShade's wrapper and on the proxy: its mirror
+   ComPtr<ID3D11Texture2D> mirror;
+   REQUIRE(SUCCEEDED(Swapchain::DXGI::GetGameBuffer(real).As(&mirror)));
+   CHECK(mirror.Get() != real_buffer.Get());
+   ComPtr<ID3D11Texture2D> through_reshade;
+   REQUIRE(SUCCEEDED(reshade->GetBuffer(0, IID_PPV_ARGS(&through_reshade))));
+   CHECK(ReadFake("FakeReShadeGetGameBufferCalls", reshade.Get()) == 1);
+   CHECK(through_reshade.Get() == mirror.Get());
+   ComPtr<ID3D11Texture2D> from_proxy;
+   REQUIRE(SUCCEEDED(swapchain->GetBuffer(0, IID_PPV_ARGS(&from_proxy))));
+   CHECK(from_proxy.Get() == mirror.Get());
+   // Its runtime initialised: the window closed at its init_effect_runtime event, so its own read is the game's now
+   CHECK(ProbeRead(reshade.Get()) == static_cast<IUnknown*>(mirror.Get()));
+   DXGI_SWAP_CHAIN_DESC game_desc = {};
+   REQUIRE(SUCCEEDED(reshade->GetDesc(&game_desc)));
+   CHECK(game_desc.BufferDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM);
+   CHECK(game_desc.BufferCount == 2);
+
+   // The game's color space through the wrapper: ReShade resets and reads again once the proxy's SetColorSpace1 returned to it, the real
+   // buffer and Luma's color space, which the color space ReShade writes doesn't replace
+   const DXGI_COLOR_SPACE_TYPE luma_color_space = GetRecordedColorSpace(real);
+   const DXGI_COLOR_SPACE_TYPE game_color_space =
+      luma_color_space == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 ? DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709 : DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
+   ComPtr<IDXGISwapChain3> reshade3;
+   REQUIRE(SUCCEEDED(reshade.As(&reshade3)));
+   CHECK(SUCCEEDED(reshade3->SetColorSpace1(game_color_space)));
+   CHECK(ReadFake("FakeReShadeGetInits", reshade.Get()) == 2);
+   // Its runtime initialised again, so the window closed again
+   CHECK(ProbeRead(reshade.Get()) == static_cast<IUnknown*>(mirror.Get()));
+   CHECK(GetHeldBuffer(reshade.Get(), 0) == real_buffer.Get());
+   CHECK(GetRecordedColorSpace(real) == luma_color_space);
+   CHECK(ReadFake("FakeReShadeGetColorSpace", reshade.Get()) == uint32_t(luma_color_space));
+
+   // A present through the wrapper: Luma's present work at its event, once
+   const uint32_t presents = present_calls;
+   CHECK(SUCCEEDED(reshade->Present(0, 0)));
+   CHECK(present_calls == presents + 1);
+   CHECK_FALSE(Hooks::Scope::IsThirdPartyWorkOpen());
+}
+
+TEST_CASE("ReShade D3D11 Mirror: an init window no init_effect_runtime closes stays shut to the game, and closes at the next present")
+{
+   InstallHooks();
+   GameCallbacks game;
+   WrappedSwapchains wrapped;
+   HiddenWindow window;
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   CreateD3D11Device(device, context);
+   LoadFakeReShade();
+   FakeRuntimeDisabled disabled;
+   ComPtr<IDXGISwapChain1> swapchain = CreateSwapchain(device.Get(), window.hwnd);
+   IDXGISwapChain* real = Hooks::SwapchainProxy::Unwrap(swapchain.Get());
+   ComPtr<IDXGISwapChain> reshade = WrapInFakeReShade(swapchain.Get(), false);
+   CHECK(ReadFake("FakeReShadeGetInits", reshade.Get()) == 0);
+   // The window is still open: its read gets the real buffer
+   CHECK(ProbeRead(reshade.Get()) == static_cast<IUnknown*>(GetRealBuffer<ID3D11Texture2D>(real, 0).Get()));
+
+   // The game's call through the wrapper inside it: ReShade's module, but the game's code called it
+   ComPtr<ID3D11Texture2D> mirror;
+   REQUIRE(SUCCEEDED(Swapchain::DXGI::GetGameBuffer(real).As(&mirror)));
+   ComPtr<ID3D11Texture2D> through_reshade;
+   REQUIRE(SUCCEEDED(reshade->GetBuffer(0, IID_PPV_ARGS(&through_reshade))));
+   CHECK(through_reshade.Get() == mirror.Get());
+   CHECK(through_reshade.Get() != GetRealBuffer<ID3D11Texture2D>(real, 0).Get());
+
+   CHECK(SUCCEEDED(reshade->Present(0, 0)));
+   CHECK(ProbeRead(reshade.Get()) == static_cast<IUnknown*>(mirror.Get()));
+   through_reshade.Reset();
+   REQUIRE(SUCCEEDED(reshade->GetBuffer(0, IID_PPV_ARGS(&through_reshade))));
+   CHECK(through_reshade.Get() == mirror.Get());
+}
+
+TEST_CASE("ReShade D3D11 Mirror: Luma's resize goes through ReShade's wrapper, which lets go of the real buffer a resize under it can't")
+{
+   InstallHooks();
+   GameCallbacks game;
+   WrappedSwapchains wrapped;
+   HiddenWindow window;
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   CreateD3D11Device(device, context);
+   LoadFakeReShade();
+   ComPtr<IDXGISwapChain1> swapchain = CreateSwapchain(device.Get(), window.hwnd);
+   IDXGISwapChain* real = Hooks::SwapchainProxy::Unwrap(swapchain.Get());
+   ComPtr<IDXGISwapChain> reshade = WrapInFakeReShade(swapchain.Get(), false);
+   REQUIRE(GetHeldBuffer(reshade.Get(), 0) != nullptr);
+   ComPtr<ID3D11Texture2D> mirror;
+   REQUIRE(SUCCEEDED(Swapchain::DXGI::GetGameBuffer(real).As(&mirror)));
+   const DXGI_SWAP_CHAIN_DESC before = GetRealDesc(real);
+   const Hooks::SwapchainProxy::ResizeArguments game_arguments = {2, 320, 180, DXGI_FORMAT_R8G8B8A8_UNORM, 0};
+   const auto real_arguments = [&](DXGI_FORMAT format) {
+      return Hooks::SwapchainProxy::ResizeArguments{before.BufferCount, before.BufferDesc.Width, before.BufferDesc.Height, format, before.Flags};
+   };
+
+   // Under ReShade, whose runtime holds a view on the real buffer, DXGI refuses it
+   {
+      Hooks::Scope::Guard scope;
+      CHECK(Hooks::SwapchainProxy::ResizeBuffers(real, before.BufferCount, before.BufferDesc.Width, before.BufferDesc.Height, DXGI_FORMAT_R10G10B10A2_UNORM,
+               before.Flags) == DXGI_ERROR_INVALID_CALL);
+   }
+   CHECK(GetRealDesc(real).BufferDesc.Format == before.BufferDesc.Format);
+
+   // Through its wrapper, as Luma's output switch at the present event: ReShade sees the game's values, the real swapchain gets Luma's, and
+   // ReShade reads the new buffer and the color space Luma is about to set
+   std::optional<HRESULT> result;
+   {
+      Hooks::Scope::Guard scope;
+      result = Hooks::SwapchainProxy::ResizeBuffersThroughReShade(real, game_arguments, real_arguments(DXGI_FORMAT_R10G10B10A2_UNORM), DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+   }
+   REQUIRE(result);
+   CHECK(SUCCEEDED(*result));
+   CHECK(GetRealDesc(real).BufferDesc.Format == DXGI_FORMAT_R10G10B10A2_UNORM);
+   CHECK(ReadFake("FakeReShadeGetResizeFormat", reshade.Get()) == uint32_t(DXGI_FORMAT_R8G8B8A8_UNORM));
+   CHECK(GetHeldBuffer(reshade.Get(), 0) == GetRealBuffer<ID3D11Texture2D>(real, 0).Get());
+   CHECK(ReadFake("FakeReShadeGetColorSpace", reshade.Get()) == uint32_t(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020));
+   CHECK(ProbeRead(reshade.Get()) == static_cast<IUnknown*>(Swapchain::DXGI::GetGameBuffer(real).Get()));
+   // The game's view didn't move
+   DXGI_SWAP_CHAIN_DESC game_desc = {};
+   REQUIRE(SUCCEEDED(swapchain->GetDesc(&game_desc)));
+   CHECK(game_desc.BufferDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM);
+   CHECK(Swapchain::DXGI::GetGameBuffer(real).Get() == static_cast<IUnknown*>(mirror.Get()));
+
+   // And back, so the swapchain is as Luma set it
+   {
+      Hooks::Scope::Guard scope;
+      result = Hooks::SwapchainProxy::ResizeBuffersThroughReShade(real, game_arguments, real_arguments(before.BufferDesc.Format), GetRecordedColorSpace(real));
+   }
+   REQUIRE(result);
+   CHECK(SUCCEEDED(*result));
+   CHECK(GetRealDesc(real).BufferDesc.Format == before.BufferDesc.Format);
+}
+
+TEST_CASE("ReShade D3D11 Mirror: without ReShade's wrapper in the private data nothing is resized, and that's logged once")
+{
+   InstallHooks();
+   GameCallbacks game;
+   WrappedSwapchains wrapped;
+   HiddenWindow window;
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   CreateD3D11Device(device, context);
+   LoadFakeReShade();
+   ComPtr<IDXGISwapChain1> swapchain = CreateSwapchain(device.Get(), window.hwnd);
+   IDXGISwapChain* real = Hooks::SwapchainProxy::Unwrap(swapchain.Get());
+   const DXGI_SWAP_CHAIN_DESC before = GetRealDesc(real);
+   const std::filesystem::path log = std::filesystem::temp_directory_path() / "LumaTestsReShadeWrapper.log";
+   Utils::Log::Open(log);
+   for (int i = 0; i < 2; i++)
+   {
+      Hooks::Scope::Guard scope;
+      CHECK_FALSE(Hooks::SwapchainProxy::ResizeBuffersThroughReShade(real, {2, 320, 180, DXGI_FORMAT_R8G8B8A8_UNORM, 0},
+         {before.BufferCount, before.BufferDesc.Width, before.BufferDesc.Height, DXGI_FORMAT_R10G10B10A2_UNORM, before.Flags}, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020));
+      CHECK_FALSE(Hooks::SwapchainProxy::SetColorSpace1ThroughReShade(real, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020));
+   }
+   Utils::Log::Close();
+   CHECK(GetRealDesc(real).BufferDesc.Format == before.BufferDesc.Format);
+   std::stringstream text;
+   text << std::ifstream(log).rdbuf();
+   std::error_code error;
+   std::filesystem::remove(log, error);
+   const std::string contents = text.str();
+   const std::string line = std::format("swapchain {} has no ReShade wrapper", static_cast<void*>(real));
+   size_t count = 0;
+   for (size_t at = contents.find(line); at != std::string::npos; at = contents.find(line, at + 1))
+      count++;
+   CHECK(count == 1);
+}
+
+TEST_CASE("ReShade D3D12 Mirror: ReShade's runtime reads every real buffer, and at present the real index, while the game's calls get its mirrors")
+{
+   InstallHooks();
+   GameCallbacks game;
+   WrappedSwapchains wrapped;
+   HiddenWindow window;
+   LoadFakeReShade();
+   ComPtr<ID3D12Device> device = CreateD3D12Device();
+   const D3D12_COMMAND_QUEUE_DESC queue_desc = {.Type = D3D12_COMMAND_LIST_TYPE_DIRECT};
+   ComPtr<ID3D12CommandQueue> queue;
+   REQUIRE(SUCCEEDED(device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue))));
+   ComPtr<IDXGISwapChain1> swapchain = CreateSwapchain(queue.Get(), window.hwnd);
+   IDXGISwapChain* real = Hooks::SwapchainProxy::Unwrap(swapchain.Get());
+   REQUIRE(Hooks::DXGI::GetReShadeSwapchainView(real) == Hooks::SwapchainProxy::ReShadeSwapchainView::RealInsideWindows);
+   ComPtr<IDXGISwapChain> reshade = WrapInFakeReShade(swapchain.Get(), true);
+   const DXGI_SWAP_CHAIN_DESC real_desc = GetRealDesc(real);
+   REQUIRE(ReadFake("FakeReShadeGetHeldCount", reshade.Get()) == real_desc.BufferCount);
+   for (UINT i = 0; i < real_desc.BufferCount; i++)
+   {
+      const ComPtr<ID3D12Resource> real_buffer = GetRealBuffer<ID3D12Resource>(real, i);
+      CHECK(GetHeldBuffer(reshade.Get(), i) == real_buffer.Get());
+      ComPtr<ID3D12Resource> through_reshade;
+      REQUIRE(SUCCEEDED(reshade->GetBuffer(i, IID_PPV_ARGS(&through_reshade))));
+      CHECK(through_reshade.Get() != real_buffer.Get());
+   }
+
+   for (int frame = 0; frame < 3; frame++)
+   {
+      UINT real_index = 0;
+      {
+         Hooks::Scope::Guard scope;
+         ComPtr<IDXGISwapChain3> real3;
+         REQUIRE(SUCCEEDED(real->QueryInterface(IID_PPV_ARGS(&real3))));
+         real_index = real3->GetCurrentBackBufferIndex();
+      }
+      CHECK(SUCCEEDED(reshade->Present(0, 0)));
+      CHECK(ReadFake("FakeReShadeGetPresentIndex", reshade.Get()) == real_index);
+      CHECK(GetFakeExport<IUnknown* (*)(IDXGISwapChain*)>("FakeReShadeGetPresentBuffer")(reshade.Get()) == GetRealBuffer<ID3D12Resource>(real, real_index).Get());
+      CHECK_FALSE(Hooks::Scope::IsThirdPartyWorkOpen());
+   }
+
+   ComPtr<ID3D12Fence> fence;
+   REQUIRE(SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))));
+   queue->Signal(fence.Get(), 1);
+   CHECK(WaitFor([&] { return fence->GetCompletedValue() >= 1; }));
 }

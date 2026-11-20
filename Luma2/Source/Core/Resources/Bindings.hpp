@@ -10,7 +10,7 @@ namespace Bindings {
 struct Options
 {
    // D3D12: the register space of all of Luma's bindings in the game's extended root signatures (its cbuffers now; its views and samplers
-   // with the D3D12 passes, Step 5), declared by SM5.1 variants. A root signature using anything in it is a conflict, asserted in
+   // once D3D12 passes bind them), declared by SM5.1 variants. A root signature using anything in it is a conflict, asserted in
    // Development: the mod picks another space. 0 puts them in the game's space 0 at D3D11's slots instead.
    uint32_t d3d12_space = 100;
 };

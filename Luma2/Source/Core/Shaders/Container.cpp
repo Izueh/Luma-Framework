@@ -70,7 +70,7 @@ std::vector<Element> ReadElements(std::span<const uint8_t> chunk, Layout layout)
 }
 
 // DXBC's checksum: MD5 rounds over the container after its checksum field, finished DXBC's own way (from dxbc-spirv by Philip
-// Rebohle, MIT, as 1.0's CalcDXBCHash)
+// Rebohle, MIT)
 class Md5
 {
 public:

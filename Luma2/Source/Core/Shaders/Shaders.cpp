@@ -79,7 +79,7 @@ ShaderStage GetStage(std::string_view target)
    return ShaderStage::Pixel;
 }
 
-// 1.0 tells a custom shader its stage, so one file can hold several
+// A custom shader is told its stage, so one file can hold several
 std::string_view GetStageDefine(ShaderStage stage)
 {
    switch (stage)
@@ -92,8 +92,8 @@ std::string_view GetStageDefine(ShaderStage stage)
    }
 }
 
-// What the bytecode requests from Resources::Database: Luma's cbuffers at the game's slots whatever its reflection says (1.0 binds
-// them to every stage running a Luma shader), and the other entries its cbuffers and textures are named after, at their registers (a
+// What the bytecode requests from Resources::Database: Luma's cbuffers at the game's slots whatever its reflection says (they're
+// bound to every stage running a Luma shader), and the other entries its cbuffers and textures are named after, at their registers (a
 // texture on D3D12 in Luma's table: LUMA_TEXTURE_SPACE)
 std::shared_ptr<const CompiledShader> MakeCompiledShader(Bytecode bytecode)
 {
@@ -143,7 +143,7 @@ Result Compile(std::span<const std::filesystem::path> roots, std::string_view fi
    return {MakeCompiledShader(std::move(compiled.bytecode)), std::move(compiled.messages)};
 }
 
-// 1.0's log of failures, and of warnings in Development and Test builds
+// The log of failures, and of warnings in Development and Test builds
 void AddMessages(BuildInfo& info, std::string_view file, const Result& result)
 {
 #if !DEVELOPMENT && !TEST

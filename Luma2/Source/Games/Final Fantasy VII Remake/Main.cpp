@@ -7,8 +7,7 @@
 
 #include <wrl/client.h>
 
-// 1.0's GameDeviceDataFF7Remake: the fields UpdateLumaInstanceDataCB reads. TAA and SR set them (Step 7), until then they keep their
-// swapchain values.
+// The fields UpdateLumaInstanceDataCB reads. TAA and SR will set them; until then they keep their swapchain values.
 struct Luma::Game::GameDeviceData
 {
    Luma::Math::float2 upscaled_render_resolution = {1.f, 1.f};
@@ -21,7 +20,7 @@ using Luma::operator""_h;
 using Luma::Game::cb_luma_global_settings;
 using Luma::Game::GameDeviceData;
 
-// The Luma 1.0 FF7R mod's About text and credits (ReShade, which 2.0 doesn't use, left out)
+// The About text and credits
 constexpr std::string_view DESCRIPTION = "Luma for \"Final Fantasy VII Remake\" is developed by Izueh and Pumbo and is open source and free. It adds DLSS and improved HDR "
                                          "tonemapping. Additional thanks to ShortFuse and Musa from the RenoDX team and their HDR mods for Remake and Rebirth, which served "
                                          "as reference. If you enjoy it, consider donating to any of the contributors.";
@@ -48,7 +47,7 @@ constexpr std::array<Luma::Game::Link, 5> LINKS = {{
    {"Contribute on Github", "https://github.com/Filoppi/Luma-Framework"},
 }};
 
-// 1.0's shader hash lists, named (their forced_shader_names where 1.0 had one)
+// The game's shaders by hash, each with a debug name (Init)
 constexpr std::array<uint32_t, 1> SHADER_HASHES_TAA = {0x4729683B};
 constexpr std::array<uint32_t, 1> SHADER_HASHES_TITLE = {0x5FEE74F9};
 constexpr std::array<uint32_t, 1> SHADER_HASHES_DOF = {0xB400FAF6};
@@ -63,7 +62,7 @@ constexpr std::array<uint32_t, 1> SHADER_HASHES_SSAO_TEMPORAL = {0x04BFE575};
 // What "Output_HDR_0x########" and "Output_SDR_0x########" replace
 constexpr std::array<uint32_t, 8> SHADER_HASHES_OUTPUT_HDR = {0xA8EB118F, 0x922A71D1, 0x3A4D858E, 0xD950DA01, 0x5CD12E67, 0x3B489929, 0x8D04181D, 0x6846FF90};
 constexpr std::array<uint32_t, 8> SHADER_HASHES_OUTPUT_SDR = {0x506D5998, 0xF68D39B5, 0xBBB9CE42, 0x51E2B894, 0x803889E8, 0xD96EF76D, 0x5C2D3A71, 0x66162229};
-// Named by 1.0 without a list of their own
+// Named for debugging only
 constexpr std::array<uint32_t, 1> SHADER_HASHES_DOWNSAMPLE_BLOOM_2 = {0xA77F0B56};
 constexpr std::array<uint32_t, 2> SHADER_HASHES_UPSCALE_BLOOM = {0xD9E87012, 0x46727E9A};
 constexpr std::array<uint32_t, 2> SHADER_HASHES_BLUR_BLOOM = {0xCCD7FA05, 0x69467442};
@@ -76,7 +75,7 @@ Luma::Math::float2 ToFloat(Luma::Math::uint2 size)
    return {float(size.x), float(size.y)};
 }
 
-// As 1.0's, called at every draw with a Luma shader (LumaData is uploaded when its bytes change)
+// Called at every draw with a Luma shader (LumaData is uploaded when its bytes change)
 void UpdateLumaInstanceDataCB(CB::LumaInstanceData& data, const GameDeviceData& game_device_data, const Luma::Frame::Resolutions& resolutions)
 {
    const Luma::Math::float2 render_resolution = ToFloat(resolutions.render);
@@ -84,11 +83,11 @@ void UpdateLumaInstanceDataCB(CB::LumaInstanceData& data, const GameDeviceData& 
    data.GameData.OutputResolution = {game_device_data.upscaled_render_resolution.x, game_device_data.upscaled_render_resolution.y,
       1.0f / game_device_data.upscaled_render_resolution.x, 1.0f / game_device_data.upscaled_render_resolution.y};
    data.GameData.ResolutionScale = {game_device_data.resolution_scale, 1.0f / game_device_data.resolution_scale};
-   data.GameData.DrewUpscaling = 0; // 1.0's has_drawn_sr, which SR sets (Step 7)
+   data.GameData.DrewUpscaling = 0; // 0 until SR sets it
    data.GameData.ViewportRect = game_device_data.viewport_rect;
 }
 
-// 1.0's OnInitSwapchain, at creation and after each resize: Core set the device's output resolution from the swapchain before this.
+// At creation and after each resize: Core set the device's output resolution from the swapchain before this.
 // Either API's device.
 void OnInitSwapchain(Luma::Device device)
 {
@@ -99,13 +98,13 @@ void OnInitSwapchain(Luma::Device device)
    // from the swapchain buffer
    const Luma::Math::float2 output_resolution = ToFloat(Luma::Game::Frame::Get(device).output);
    game_device_data->upscaled_render_resolution = output_resolution;
-   // 1.0 set it while writing LumaData. Here, where its inputs change (and TAA's callback in Step 7), on the presenting thread:
-   // published for the draws until the next present
+   // Set where its inputs change (TAA's callback, not built yet, will too), on the presenting thread: published for the draws until
+   // the next present
    cb_luma_global_settings.GameSettings.can_sharpen = output_resolution == game_device_data->upscaled_render_resolution ? 1.f : 0.f;
    Luma::Game::MarkLumaSettingsDirty();
 }
 
-// 1.0's OnPresent, its part not about TAA and SR (Step 7)
+// The per frame random value. TAA and SR's per frame work isn't built yet.
 void OnPresent()
 {
    static std::mt19937 random_generator(uint32_t(std::chrono::system_clock::now().time_since_epoch().count()));
@@ -113,8 +112,8 @@ void OnPresent()
    cb_luma_global_settings.GameSettings.custom_random = static_cast<float>(random_generator() + (std::mt19937::min)()) / random_range;
 }
 
-// 1.0's OnDraw_OutputPass: the game's own HDR option picks its HDR or SDR output pass, and LumaSettings' display mode follows it (Core
-// applies it at the next present). 1.0 also turned Windows HDR on here and marked post processing done (Step 7's frame markers).
+// The game's own HDR option picks its HDR or SDR output pass, and LumaSettings' display mode follows it (Core applies it at the next
+// present). Marking post processing done waits for the frame markers, not built yet.
 Luma::Game::DrawResult OnDrawOutputHdr()
 {
    Luma::Game::Display::SetHdr(true);
@@ -183,7 +182,7 @@ using Luma::Settings::Sources::Binding;
 
 constexpr std::array<std::string_view, 2> TONEMAP_TYPES = {"Vanilla", "Neutwo"};
 
-// 1.0's settings.hpp table, with its keys. Its sliders print "%.0f" by default.
+// The settings, with the shipped mod's keys. Sliders print "%.0f" by default.
 const std::array SETTINGS = {
    Setting{
       .key = "FXBloom",
@@ -372,13 +371,13 @@ void Luma::Game::Init()
    Shaders::RedirectHashes("Output_HDR", SHADER_HASHES_OUTPUT_HDR);
    Shaders::RedirectHashes("Output_SDR", SHADER_HASHES_OUTPUT_SDR);
 
-   // 1.0's values for Luma's defines
+   // Luma's defines for this game
    Shaders::SetDefine(Defines::POST_PROCESS_SPACE_TYPE, 1);
    Shaders::SetDefine(Defines::EARLY_DISPLAY_ENCODING, true);
    Shaders::SetDefine(Defines::VANILLA_ENCODING_TYPE, 1);
    Shaders::SetDefine(Defines::GAMMA_CORRECTION_TYPE, 1);
    Shaders::SetDefine(Defines::UI_DRAW_TYPE, 1);
-   // 1.0's game shader define
+   // The game's own shader define
    Shaders::AddDefine({
       .name = "SSAO_ALGORITHM",
       .label = "SSAO Algorithm",
@@ -394,15 +393,13 @@ void Luma::Game::Init()
          .data_slot = 12,
          .update_luma_instance_data = &UpdateLumaInstanceDataCB,
       },
-      // 1.0's UseLumaFastNoise: the FAST noise texture, which SSAO Temporal and the Dithering Fix recipe read
+      // The FAST noise texture, which SSAO Temporal and the Dithering Fix recipe read
       .textures = {.load = true},
       .samplers = {.upgrade = true},
-      // 1.0's Publishing build presented HDR10 (Development scRGB)
       .swapchain = {.mode = Luma::Swapchain::Mode::Mirror, .hdr_output = Luma::Swapchain::OutputMode::Hdr10},
       .device_data = GameDeviceDataType::Of<GameDeviceData>(),
    });
-   // Texture upgrades (8 bit unorm and 11 bit float etc to 16 bit float). 1.0 also listed the 8 bit RGBA and BGRA formats, under
-   // "#if 0 // Probably not needed".
+   // Texture upgrades (10 bit unorm and 11 bit float to 16 bit float). 8 bit RGBA and BGRA are probably not needed.
    Resources::SetUpgrades({
       .formats = {DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R10G10B10A2_TYPELESS, DXGI_FORMAT_R11G11B10_FLOAT},
       // Upgrade all 16:9 render targets too, because the game defaults to that aspect ratio internally unless mods are applied
@@ -424,10 +421,9 @@ void Luma::Game::Init()
    D3D11::OnShaderDraw(SHADER_HASHES_OUTPUT_SDR, &D3D11Events::OnDrawOutputSdr);
    D3D12::OnShaderDraw(SHADER_HASHES_OUTPUT_HDR, &D3D12Events::OnDrawOutputHdr);
    D3D12::OnShaderDraw(SHADER_HASHES_OUTPUT_SDR, &D3D12Events::OnDrawOutputSdr);
-   // 1.0's other draw callbacks wait for their steps: TAA (has_drawn_taa, then SR: Step 7), the output pass's has_drawn_taa gate and
-   // post processing marker (Step 7; the two pass UI split is ENABLE_FRAMEGEN, never on in 1.0), DoF and Motion Blur (the SR sampler:
-   // Step 7). 1.0's OnDraw_SSAO_Temporal (the FAST noise at t6) is Core's now: the replacement reads "fast_noise" by name, which Core binds on
-   // both APIs.
+   // Not built yet: the TAA callback (then SR), the output pass's TAA gate and post processing marker, DoF and Motion Blur (they need
+   // the SR sampler). SSAO Temporal's FAST noise at t6 needs no callback: the replacement reads "fast_noise" by name, which Core binds
+   // on both APIs.
 }
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved)

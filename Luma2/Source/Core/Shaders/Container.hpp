@@ -33,8 +33,8 @@ std::string GetTarget(std::span<const uint8_t> bytecode);
 // The pipeline stage of a program kind, none for libraries, mesh and amplification shaders
 std::optional<ShaderStage> GetStage(const Program& program);
 
-// SM4/SM5 programs (SHEX or SHDR): the instructions after the version and length tokens, what 1.0 gave a game's bytecode patch
-// callback. Empty without one.
+// SM4/SM5 programs (SHEX or SHDR): the instructions after the version and length tokens, what a game's bytecode patch gets.
+// Empty without one.
 std::span<const uint8_t> GetProgramCode(std::span<const uint8_t> bytecode);
 // The container with its program's instructions replaced by `code` (a multiple of 4 bytes): chunk sizes and offsets moved, and
 // the checksum computed again, or the API refuses it. Empty if the container has no SM4/SM5 program.

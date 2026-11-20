@@ -18,7 +18,7 @@ namespace {
 using List = ID3D12GraphicsCommandList;
 using Luma::Shaders::Variants::D3D12::BoundPipeline;
 
-// The callback of the first stage with one, in 1.0's order (pixel, then vertex)
+// The callback of the first stage with one, pixel first, then vertex
 Game::D3D12::DrawCallback FindCallback(const Game::D3D12::Call& call, Luma::Shaders::StageSet stages)
 {
    constexpr std::array ORDER = {ShaderStage::Pixel, ShaderStage::Vertex, ShaderStage::Geometry, ShaderStage::Hull, ShaderStage::Domain, ShaderStage::Compute};

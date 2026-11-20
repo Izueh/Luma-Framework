@@ -144,7 +144,7 @@ Extended Append(const Desc& desc, D3D_ROOT_SIGNATURE_VERSION version, Desc D3D12
       LUMA_UNIMPLEMENTED("Sampler upgrades of anisotropic static samplers in D3D12 root signatures");
    if (conflict)
    {
-      // 1.0 asserts when a game shader reads a slot Luma binds its own to. The mod picks another space (Game::Options::bindings).
+      // A game shader reading a slot Luma binds its own to is a conflict. The mod picks another space (Game::Options::bindings).
       ASSERT_ONCE_MSG(false, std::format("A game root signature uses register space {}, Luma's: pick another in Game::Options::bindings", space));
       if (space != 0)
          Utils::Log::Warning("D3D12: a root signature uses register space {}, Luma's: not extended, its pipelines get no variants", space);

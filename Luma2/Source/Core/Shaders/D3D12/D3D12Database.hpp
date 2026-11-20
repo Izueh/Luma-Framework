@@ -16,7 +16,7 @@
 #include "Shaders/Database.hpp"
 
 // The game's pipelines and root signatures on D3D12, each in its object's private data: a pipeline's shaders are the same
-// Database::Shader as D3D11's (by hash), a root signature's layout is what its extension (Step 2B) and trace read.
+// Database::Shader as D3D11's (by hash), a root signature's layout is what its extension and trace read.
 namespace Luma {
 namespace Shaders {
 namespace Database {

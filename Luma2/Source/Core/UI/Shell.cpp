@@ -77,7 +77,7 @@ void DrawHeader(const Trace::Status& status)
    ImGui::SameLine();
    Widgets::TextDim(info.version);
 
-   // Right aligned: the API (the output mode chip arrives with Step 5), then the global switch
+   // Right aligned: the API, then the global switch
    const float unit = Style::Scale(Style::Sizes::UNIT);
    const float toggle_width = ImGui::GetFrameHeight() * 1.8f + ImGui::CalcTextSize(Icons::POWER).x + ImGui::GetStyle().ItemInnerSpacing.x;
    const float api_width = status.api.empty() ? 0.f : ImGui::CalcTextSize(status.api.c_str()).x + unit * 3.f;
@@ -150,7 +150,7 @@ void DrawSettings()
       CallPanel(Game::Registry::GetPanels().settings);
 }
 
-// 1.0's About tab: what the mod is, the game's own about panel, the credits, the version and build
+// The About tab: what the mod is, the game's own about panel, the credits, the version and build
 void DrawAbout()
 {
    const Game::Info& info = Game::Registry::GetInfo();
@@ -262,6 +262,9 @@ void DrawInfo(const Trace::Status& status)
             overlays += (overlays.empty() ? "" : ", ") + overlay;
          row("Overlays", overlays);
       }
+      row("ReShade load", status.reshade.load);
+      row("ReShade bridge", status.reshade.bridge);
+      row("ReShade swapchain view", status.reshade.mirror_swapchain_view);
       for (const Trace::SwapchainInfo& swapchain : status.swapchains)
          row("Swapchain", std::format("{} {}x{}, format {}, {} buffers", swapchain.api, swapchain.width, swapchain.height, swapchain.format, swapchain.buffers));
       row("Validation", status.validation.debug_layer ? std::format("{} errors, {} warnings, {} corruptions", status.validation.errors, status.validation.warnings, status.validation.corruptions) : std::string("off"));

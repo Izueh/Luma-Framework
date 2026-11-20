@@ -4,12 +4,12 @@
 
 struct IDXGIOutput;
 
-// The monitor a window is on (1.0's utils/display): its HDR state and luminance. No graphics API objects but DXGI's output, the one
+// The monitor a window is on: its HDR state and luminance. No graphics API objects but DXGI's output, the one
 // place the peak is known.
 namespace Luma {
 namespace System {
 namespace Display {
-// Windows' SDR reference white (1.0's srgb_white_level)
+// Windows' SDR reference white
 inline constexpr float SRGB_WHITE_NITS = 80.f;
 // BT.2408's reference white
 inline constexpr float DEFAULT_PAPER_WHITE_NITS = 203.f;

@@ -10,7 +10,7 @@
 
 #include "Common/ShaderStage.hpp"
 
-// 1.0's luma_read_resource: one view of one call read back right after the call ran, or the back buffer at present. One readback
+// luma_read_resource: one view of one call read back right after the call ran, or the back buffer at present. One readback
 // at a time: the pipe thread arms a target and waits, the draw path copies the view at the target call (D3D11's and D3D12's parts),
 // the present reads the copy and finishes it. Development builds; the draw path asks IsArmed() (a relaxed load) and does nothing
 // else while nothing is armed.
@@ -40,7 +40,7 @@ struct Target
    bool original = false;
 };
 
-// One mip of a texture, every array or depth slice, as rows of `row_pitch` bytes ordered [slice][z][row] (1.0's .bin layout)
+// One mip of a texture, every array or depth slice, as rows of `row_pitch` bytes ordered [slice][z][row] (the .bin layout)
 struct Texture
 {
    std::string dimension; // "1d", "2d", "3d"

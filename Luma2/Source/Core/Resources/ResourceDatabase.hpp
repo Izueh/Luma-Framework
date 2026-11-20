@@ -25,7 +25,7 @@ struct GameDeviceData;
 // Luma's named resources, which any module resolves by "name"_h and the framework creates and releases on every device (nothing
 // of Luma's keeps a device alive): Luma's shaders, found in the files, its cbuffers, and the textures in the Textures folders
 // (Resources::Textures). Everything Luma ships is registered by Core at init from what's on disk; a game registers only what it
-// captures from the game at runtime. Invalidation (a resize) comes with Step 4.
+// captures from the game at runtime. Nothing is invalidated on a resize yet.
 namespace Luma {
 namespace Resources {
 namespace Database {
@@ -43,7 +43,7 @@ enum class Owner : uint8_t
    Game,
 };
 
-// A pass's values for LumaData (1.0's CustomData1 to 4), given to the writers of the entries it requests
+// A pass's values for LumaData (CustomData1 to 4), given to the writers of the entries it requests
 struct CustomData
 {
    uint32_t custom_data_1 = 0;
@@ -73,9 +73,9 @@ struct Entry
    ShaderStage stage = ShaderStage::Pixel;
    std::string file; // Shaders: from the Shaders root. Textures: from the Textures root.
    // Constant buffers: their size and their contents now for a pass's custom values and the context's device. With a stamp, which
-   // moves whenever their contents may have changed (1.0's dirty flag), a context writes and uploads them again only when it moved
+   // moves whenever their contents may have changed, a context writes and uploads them again only when it moved
    // since its last upload (LumaSettings). Without, a context writes them at every bind and uploads them when the bytes differ from
-   // its last upload (LumaData, 1.0's compare).
+   // its last upload (LumaData).
    uint32_t size = 0;
    void (*write)(std::span<std::byte> destination, const CustomData& custom, const WriteTarget& target) = nullptr;
    uint64_t (*get_stamp)() = nullptr;

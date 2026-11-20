@@ -6,7 +6,7 @@
 #include "Shaders/Stages.hpp"
 
 // The game's draw events (Game::D3D11::Events::on_variant_draw and on_draw_or_dispatch, Game::D3D11::OnShaderDraw), run by the draw
-// and dispatch handlers where 1.0's Core ran OnDrawOrDispatch
+// and dispatch handlers
 namespace Luma {
 namespace Game {
 namespace DrawEvents {
@@ -15,7 +15,7 @@ struct Result
 {
    DrawResult result = DrawResult::None;
    // The stages where an event bound one of Luma's shaders with its requests (BindLumaShader): it took care of Luma's cbuffers for
-   // the call (1.0's updated_cbuffers)
+   // the call
    Luma::Shaders::StageSet luma_stages;
 };
 

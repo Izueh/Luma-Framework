@@ -27,7 +27,6 @@ constexpr uint32_t FILTER_COMPARISON_ANISOTROPIC = 0xd5;
 constexpr uint32_t MAX_ANISOTROPY = 16;
 constexpr float MIN_LOD_BIAS = -16.f;
 constexpr float MAX_LOD_BIAS = 15.99f;
-// 1.0's Publishing constants
 constexpr bool UPGRADE_COMPARISON_SAMPLERS = true;
 constexpr bool FORCE_UPGRADE_LINEAR_SAMPLERS = false;
 

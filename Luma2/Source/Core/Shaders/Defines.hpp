@@ -8,8 +8,7 @@
 #include "Settings/Registry.hpp"
 #include "Shaders/Compiler.hpp"
 
-// Shader defines are settings of Kind::Define with a Settings::Sources::Define source: Luma's (1.0's shader_defines_data, ids in
-// Settings/Keys.hpp), registered by Core before the game's Init, which sets their values with Game::Shaders::SetDefine and adds
+// Shader defines are settings of Kind::Define with a Settings::Sources::Define source: Luma's (ids in Settings/Keys.hpp), registered by Core before the game's Init, which sets their values with Game::Shaders::SetDefine and adds
 // its own with Game::Shaders::AddDefine. With the build's fixed ones (DEVELOPMENT, the game's name, the cbuffer slots) they make
 // the defines every shader is compiled with.
 namespace Luma {

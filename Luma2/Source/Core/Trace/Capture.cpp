@@ -54,7 +54,7 @@ bool IsResourceEvent(const Event& event)
 bool Matches(const Event& event, const Filter& filter)
 {
    const bool has_shader_filter = filter.stage || filter.hash || !filter.text.empty();
-   if (event.type == EventType::Present)
+   if (event.type == EventType::Present || event.type == EventType::ThirdPartyWork)
       return !has_shader_filter && !filter.replaced_only && !filter.cancelled_only;
    if (IsResourceEvent(event))
    {

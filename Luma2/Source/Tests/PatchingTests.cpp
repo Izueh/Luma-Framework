@@ -106,7 +106,7 @@ TEST_CASE("Patching: patches are variants below files, updated a few hashes at a
    CHECK(GetGeneration() != generation);
    std::vector<Variant> variants = GetVariants(FILE_AND_PATCH);
    REQUIRE(variants.size() == 2);
-   // A file wins over a patch (1.0)
+   // A file wins over a patch
    CHECK(variants[0].source == Source::File);
    CHECK(variants[1].source == Source::Patch);
    REQUIRE(GetCompiledShader(PATCH_ONLY, Source::Patch));
@@ -139,7 +139,7 @@ TEST_CASE("Patching: the FAST noise texture loads as 1.0 made it")
    REQUIRE(SUCCEEDED(resource.As(&texture)));
    D3D11_TEXTURE2D_DESC desc = {};
    texture->GetDesc(&desc);
-   // 1.0's LoadTexture2DArray: one slice per PNG, RGBA8, one mip
+   // One slice per PNG, RGBA8, one mip
    CHECK(desc.Width == 128);
    CHECK(desc.Height == 128);
    CHECK(desc.ArraySize == 64);

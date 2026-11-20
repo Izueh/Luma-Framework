@@ -230,7 +230,7 @@ Upgrade::TextureDesc Describe(const D3D12_RESOURCE_DESC& desc, bool gpu_only)
    return described;
 }
 
-// The resolutions the size filters compare with: the device's (Frame), the screen as the display until Step 5's System::Display
+// The resolutions the size filters compare with: the device's (Frame)
 Upgrade::FrameState GetFrameState(ID3D12Device* device)
 {
    const Frame::Resolutions resolutions = Frame::Read(Frame::Find(device));

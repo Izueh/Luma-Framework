@@ -19,7 +19,7 @@ struct Shader;
 }
 
 namespace Patching {
-// A game's bytecode patch (1.0's PatchShaderBytecodeSync and Async): `code` is the program's instructions
+// A game's bytecode patch: `code` is the program's instructions
 // (Container::GetProgramCode), `container` the whole shader. The new instructions, or nothing to leave the shader as it is.
 // Luma puts them back in the container and signs it.
 using BytecodePatcher = std::optional<std::vector<uint8_t>> (*)(ShaderStage stage, uint32_t hash, std::span<const uint8_t> code, std::span<const uint8_t> container);

@@ -1,18 +1,11 @@
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 
 #include <dxgi1_6.h>
 
-// The swapchain the game holds when Luma owns the real one (ReShade's model): an IDXGISwapChain4 forwarding to the real swapchain.
-// It exists for order and identity, its logic stays in the hooks and handlers:
-// * Present: Luma's work (composition, its overlay) runs in the proxy's Present, before the real Present, so every hook another tool
-//   put in DXGI's Present runs after it and draws on the final image, whatever the install order. A tool that hooks the proxy itself
-//   (Steam hooks the swapchain the game holds) is kept after Luma too: each proxy has its own vtable, whose Present slots hold Luma's
-//   outer Present, which composes and then calls what's next (a tool's patched slot, the proxy's own Present, a tool's patch of it);
-//   a tool replacing the slot is put back after Luma at the next present;
-// * the game's view: a call the proxy forwards is the game's (IsForwarding), answered with what the game asked for (its back buffers,
-//   its desc, its color space kept); anyone calling the real swapchain (an overlay, a capture tool) gets the real one.
 namespace Luma {
 namespace Hooks {
 namespace SwapchainProxy {
@@ -31,17 +24,45 @@ HRESULT ResizeBuffers(IDXGISwapChain* swapchain, UINT count, UINT width, UINT he
 // The same for the color space and HDR metadata Luma sets: a tool that hooked the proxy (Steam) encodes its drawing for what it saw set
 HRESULT SetColorSpace1(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space);
 HRESULT SetHDRMetaData(IDXGISwapChain4* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, void* metadata);
-} // namespace SwapchainProxy
 
-namespace DXGI {
-// Luma's handling of the game's present (composition, the overlay): false when it isn't the game's (a test). `flags` can gain tearing.
-bool PresentPrologue(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags);
-// The proxy's Present: the prologue unless `prologue` says it ran (and whether it was the game's), then the real one through its vtable
-// (every tool's hook) inside Luma's scope. In DXGIHooks.cpp.
-HRESULT PresentForGame(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters, bool present1,
-   std::optional<bool> prologue = std::nullopt);
-// An overlay asked the proxy for a buffer or the index (Swapchain::DXGI::ComposeForOverlay). In DXGIHooks.cpp.
-void OnOverlayBufferRequest(IDXGISwapChain* swapchain);
-} // namespace DXGI
+// What ReShade's calls on the game's swapchain get. Its wrapper forwards the game's calls and its own reads from the same module, so a
+// call from it is ReShade's own read only inside a window on the thread that creates, resizes or presents the swapchain:
+// * the init window: from the proxy's creation, ResizeBuffers(1) or SetColorSpace1 returning to ReShade, to its init_effect_runtime event
+//   (its runtime reads the buffers, their count and the color space in between). It also closes at any other method of the proxy, at
+//   Present and at the next creation or resize, and a read in it counts only when the code calling ReShade's is ReShade's too;
+// * the present window: from its present event to Luma's Present (D3D12 reads the buffer index each frame).
+enum class ReShadeSwapchainView : uint8_t
+{
+   SameAsOverlay, // Not Mirror: ReShade's calls are an overlay's (the buffers it gets are the real ones anyway)
+   SameAsGame, // Mirror, the bridge off: all of them get the game's view, so its effects draw before the composition
+   RealInsideWindows, // Mirror, the bridge on: reads inside a window get the real buffers, index, description and color space
+};
+
+// ReShade's module, once it's known (ReShade::Load), and whether its bridge is on
+void SetReShadeModule(const void* base, size_t size);
+void SetReShadeBridged(bool bridged);
+bool IsReShadeBridged();
+// At ReShade's init_effect_runtime event: this thread's init window ends
+void CloseReShadeInitWindow();
+
+struct ResizeArguments
+{
+   UINT count = 0;
+   UINT width = 0;
+   UINT height = 0;
+   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+   UINT flags = 0;
+};
+
+// Luma's own resize (an output switch) through ReShade's wrapper, found in the real swapchain's private data: its runtime holds views on
+// the real buffers, which only its own ResizeBuffers lets go of. ReShade sees `game` (what the game's own resize would pass), the real
+// swapchain gets `real`, and once it's resized ReShade's runtime re-reads it, its color space answered as `color_space`. Empty when there
+// is no wrapper (logged once per swapchain).
+std::optional<HRESULT> ResizeBuffersThroughReShade(IDXGISwapChain* swapchain, const ResizeArguments& game, const ResizeArguments& real,
+   DXGI_COLOR_SPACE_TYPE color_space);
+// The same for a color space change without a resize: ReShade's runtime reads the color space only when its own SetColorSpace1 or
+// ResizeBuffers resets it. Also empty when ReShade didn't pass the call on.
+std::optional<HRESULT> SetColorSpace1ThroughReShade(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space);
+} // namespace SwapchainProxy
 } // namespace Hooks
 } // namespace Luma

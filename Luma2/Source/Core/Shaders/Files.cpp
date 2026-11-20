@@ -27,7 +27,7 @@ constexpr size_t TARGET_LENGTH = 6;
 // Written while Init runs, read without a lock after
 std::vector<Redirect> redirects;
 
-// As 1.0's std::stoul: the hex digits the text starts with
+// The hex digits the text starts with
 std::optional<uint32_t> ParseHash(std::string_view text)
 {
    uint32_t value = 0;
@@ -62,7 +62,7 @@ std::optional<File> Parse(std::string_view path, std::span<const Redirect> decla
    ASSERT_ONCE_MSG(!is_luma || !has_hash, "Luma's own shaders start with \"Luma_\" and have no hash, a replacement doesn't start with it");
 
    File file = {.path = std::string(path), .name = std::string(name)};
-   // Luma's passes, by their name: anything under Luma/ (1.0's Global folder), or a game's "Luma_" file
+   // Luma's passes, by their name: anything under Luma/, or a game's "Luma_" file
    if (StartsWithIgnoreCase(path, "Luma/") || (is_luma && !has_hash))
    {
       file.kind = Kind::Custom;

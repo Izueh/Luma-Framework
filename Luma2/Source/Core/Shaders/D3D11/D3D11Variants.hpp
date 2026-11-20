@@ -41,13 +41,13 @@ void AttachVariant(ID3D11Device* device, ID3D11DeviceChild* object, bool stream_
 // The game binds `shader` (null unbinds): its variant goes in its place while Luma is enabled and the variants are loaded, and
 // the context's record follows
 void SwapInVariant(ID3D11DeviceContext* context, ShaderStage stage, ID3D11DeviceChild*& shader);
-// The game's shader back on `stage` in place of its variant, until the game binds another (1.0's UsePipelineVariant(Original))
+// The game's shader back on `stage` in place of its variant, until the game binds another
 void UseOriginal(ID3D11DeviceContext* context, ShaderStage stage);
 // The context's state went back to the defaults (ClearState, or a command list finished or executed without restoring it)
 void ForgetBoundShaders(ID3D11DeviceContext* context);
 // The context's record, null for a context without private data
 const BoundShaders* GetBoundShaders(ID3D11DeviceContext* context);
-// Before a draw or dispatch's events (1.0's OnDrawOrDispatchCustomPipeline): the resources the patches running on `stages` request.
+// Before a draw or dispatch's events: the resources the patches running on `stages` request.
 // A patch whose resource the device doesn't have (a texture that didn't load) gives way to the game's shader for this call. The
 // stages where something was bound.
 StageSet BindPatchResources(ID3D11DeviceContext* context, StageSet stages);

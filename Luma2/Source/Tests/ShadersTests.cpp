@@ -71,7 +71,7 @@ TEST_CASE("Shaders: files are what their place and name say, as in 1.0")
    CHECK(redirected->hashes == std::vector<Shaders::Files::Hash>{{0xA8EB118F, "A8EB118F"}, {0x922A71D1, "922A71D1"}});
    CHECK(Shaders::Files::Parse("Other_0x########.ps_5_0.hlsl", REDIRECTS)->hashes.empty());
 
-   // A short hash reads as 1.0's std::stoul does, its define keeps the characters after it
+   // A short hash reads as std::stoul does, its define keeps the characters after it
    const std::optional<File> short_hash = Shaders::Files::Parse("Bloom_VS_0x6667BA2.vs_5_0.hlsl", REDIRECTS);
    REQUIRE(short_hash);
    CHECK(short_hash->hashes == std::vector<Shaders::Files::Hash>{{0x06667BA2, "6667BA2."}});

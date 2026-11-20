@@ -29,6 +29,11 @@ void OnOpenChanged(bool value)
    User32::OnOpenChanged(value);
 }
 
+bool IsOverlayOpen()
+{
+   return open;
+}
+
 bool IsBlocking()
 {
    return open && !Scope::IsActive();

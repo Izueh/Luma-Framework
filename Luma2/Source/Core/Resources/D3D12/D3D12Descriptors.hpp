@@ -9,7 +9,7 @@
 // What D3D12 descriptors point to. Descriptors aren't objects (Guidelines.md section 5): a side table per descriptor heap keeps, per
 // descriptor, the resource (not held) and the view desc, written by Create*View and CopyDescriptors*, read by CPU or GPU handle.
 // The game's resources are known from their creation: their desc, a buffer's GPU address range (root CBVs and SRVs name buffers
-// by address), and the CPU copy of an upload heap buffer. Trace reads them in Development builds; the mirrors (Step 4) add their
+// by address), and the CPU copy of an upload heap buffer. Trace reads them in Development builds; the mirrors add their
 // need. Any thread.
 namespace Luma {
 namespace Resources {

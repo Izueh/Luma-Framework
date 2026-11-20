@@ -14,7 +14,7 @@ namespace Luma {
 namespace System {
 namespace Display {
 namespace {
-// The active path whose source is on the window's monitor (1.0's GetDisplayConfigPathInfo)
+// The active path whose source is on the window's monitor
 std::optional<DISPLAYCONFIG_PATH_INFO> FindPath(HMONITOR monitor)
 {
    UINT32 path_count = 0;

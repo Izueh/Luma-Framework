@@ -72,7 +72,7 @@ struct Call
 
 using DrawCallback = DrawResult (*)(const Call& call);
 
-// Each runs where 1.0's Core called the game and only reports, unless its comment says so. Calls made from one aren't tracked by
+// Each only reports, unless its comment says so. Calls made from one aren't tracked by
 // Core. Setting one installs its hook, so they are set in Init, in field order. They get the real API objects, not Luma's proxies.
 struct Events
 {
@@ -81,7 +81,7 @@ struct Events
    // The game released its last reference. First, while Core's objects are still valid; the GameDeviceData is destroyed after.
    void (*on_destroy_device)(ID3D11Device* device) = nullptr;
 
-   // At each creation and resize, before Core's own changes (1.0's order)
+   // At each creation and resize, before Core's own changes
    void (*on_create_swapchain)(SwapchainDesc& desc) = nullptr;
    // At the end of a creation and of each resize, the device's output resolution already set
    void (*on_init_swapchain)(IDXGISwapChain* swapchain, ID3D11Device* device, bool resize) = nullptr;
@@ -91,7 +91,7 @@ struct Events
    // After Core tracked it. `hash` is the game's bytecode's: shaders are changed through variants, never here.
    void (*on_create_shader)(ID3D11Device* device, ShaderStage stage, uint32_t hash, std::span<const uint8_t> bytecode, ID3D11DeviceChild* shader) = nullptr;
 
-   // Resources and views (Core's mirrors and trace hook them). As 1.0's: an on_create_* runs before Core and may edit the desc (Core
+   // Resources and views (Core's mirrors and trace hook them). An on_create_* runs before Core and may edit the desc (Core
    // sees the edit), an on_init_* after Core with the created object. Objects are always the game's, never Luma's mirrors.
    void (*on_create_buffer)(ID3D11Device* device, D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA*& initial_data) = nullptr;
    void (*on_init_buffer)(ID3D11Device* device, const D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Buffer* buffer) = nullptr;
@@ -133,7 +133,7 @@ struct Events
    // Not reported as a render target clear, even on a render target view
    bool (*on_clear_view)(ID3D11DeviceContext* context, ID3D11View* view, const FLOAT color[4], const D3D11_RECT* rects, UINT rect_count) = nullptr;
 
-   // After Core records them, except constant buffers, reported first (1.0)
+   // After Core records them, except constant buffers, reported first
    void (*on_bind_constant_buffers)(ID3D11DeviceContext* context, ShaderStage stage, UINT start, UINT count, ID3D11Buffer* const* buffers) = nullptr;
    void (*on_bind_viewports)(ID3D11DeviceContext* context, UINT count, const D3D11_VIEWPORT* viewports) = nullptr;
    void (*on_bind_scissor_rects)(ID3D11DeviceContext* context, UINT count, const D3D11_RECT* rects) = nullptr;
@@ -143,21 +143,21 @@ struct Events
    void (*on_clear_state)(ID3D11DeviceContext* context) = nullptr;
 
    // Draws and dispatches, before the game's call and before the variants' requests are bound (they're bound after the events, only
-   // when they all return None, 1.0). Their result can skip the call or replace it. Their own calls aren't hooked or traced, so they
+   // when they all return None). Their result can skip the call or replace it. Their own calls aren't hooked or traced, so they
    // restore what later draws would see. None while Luma is off.
-   // 1.0's OnDrawOrDispatchCustomPipeline: runs first, only for a call with a variant bound (`variant_stages`). The other events run
+   // Runs first, only for a call with a variant bound (`variant_stages`). The other events run
    // only if it returns None.
    DrawResult (*on_variant_draw)(const Call& call) = nullptr;
-   // 1.0's OnDrawOrDispatch: for each call no shader's callback (OnShaderDraw) took
+   // For each call no shader's callback (OnShaderDraw) took
    DrawResult (*on_draw_or_dispatch)(const Call& call) = nullptr;
 
    // After Core's handling
    void (*on_finish_command_list)(ID3D11DeviceContext* context, BOOL restore, ID3D11CommandList* list) = nullptr;
-   // Before Core's handling (1.0), so the game can run its own lists first. True skips the execution.
+   // Before Core's handling, so the game can run its own lists first. True skips the execution.
    bool (*on_execute_command_list)(ID3D11DeviceContext* context, ID3D11CommandList* list, BOOL restore) = nullptr;
 };
 
-// 1.0's draw_callbacks_by_shader_hashes, a list so a call: `callback` runs in place of on_draw_or_dispatch for a call with any of
+// `callback` runs in place of on_draw_or_dispatch for a call with any of
 // `hashes` bound, on any stage (pixel first, then vertex, geometry, hull, domain, compute). One callback per hash, the last set wins.
 void OnShaderDraw(std::span<const uint32_t> hashes, DrawCallback callback);
 } // namespace D3D11
@@ -219,7 +219,7 @@ struct Call
 
 using DrawCallback = DrawResult (*)(const Call& call);
 
-// As D3D11's: each runs where 1.0's Core called the game, set in Init, with the real API objects
+// As D3D11's: each is set in Init and gets the real API objects
 struct Events
 {
    void (*on_init_device)(ID3D12Device* device) = nullptr;

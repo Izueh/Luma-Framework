@@ -9,7 +9,7 @@
 
 #include "Common/ShaderStage.hpp"
 
-// 1.0's constant buffer tracking: one cbuffer slot of one shader, read again every frame after a capture, so its live values and
+// Constant buffer tracking: one cbuffer slot of one shader, read again every frame after a capture, so its live values and
 // what changes in them can be watched. Development builds; the draw path asks IsActive() (a relaxed load) and does nothing else
 // while nothing is tracked.
 namespace Luma {
@@ -20,7 +20,7 @@ struct Target
    uint32_t hash = 0;
    ShaderStage stage = ShaderStage::Pixel;
    uint32_t slot = 0;
-   // 1.0's target instance: the n-th call of the shader (at `stage`) to reach Luma's draw or dispatch hook in the frame, present to
+   // The target instance: the n-th call of the shader (at `stage`) to reach Luma's draw or dispatch hook in the frame, present to
    // present, across all contexts in the order the hooks ran. That is the order of the captured list, Luma's passes not counted; on
    // a deferred context it is the recording order, not the execution order.
    uint32_t instance = 0;

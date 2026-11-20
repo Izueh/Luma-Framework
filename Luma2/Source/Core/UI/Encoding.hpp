@@ -11,7 +11,7 @@
 
 // How the overlay's colors are written to the swapchain. ImGui's colors are sRGB-encoded (gamma 2.2) values for an SDR buffer: on an
 // HDR one they are linearized and scaled to the overlay's paper white, then encoded for its color space, in the pixel shader ImGui's
-// backends draw with (1.0 drew its overlay through ReShade's, which does the same).
+// backends draw with.
 namespace Luma {
 namespace UI {
 namespace Encoding {
@@ -39,7 +39,7 @@ struct Constants
 inline constexpr uint32_t CONSTANTS_REGISTER = 1;
 
 // The color space the game set wins: PQ in any format (FP16 can hold it), scRGB only for FP16. Without one, FP16 is scRGB (DXGI's
-// default for it) and anything else is SDR, as 1.0 assumed for 10 bit buffers.
+// default for it) and anything else is SDR, 10 bit buffers included.
 Kind GetKind(DXGI_FORMAT format, std::optional<DXGI_COLOR_SPACE_TYPE> color_space);
 
 Constants GetConstants(const Output& output);

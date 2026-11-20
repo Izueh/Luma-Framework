@@ -7,8 +7,8 @@
 #include "Common/ShaderStage.hpp"
 #include "Shaders/Stages.hpp"
 
-// Restoring the game's buffers at Luma's two cbuffer slots after a draw that bound Luma's there (Options::restore_after_draw, 1.0's
-// ENABLE_AUTO_CBUFFER_RESTORATION). Only those two slots are recorded, per stage of each context.
+// Restoring the game's buffers at Luma's two cbuffer slots after a draw that bound Luma's there (Options::restore_after_draw).
+// Only those two slots are recorded, per stage of each context.
 namespace Luma {
 namespace Resources {
 namespace LumaCBuffers {

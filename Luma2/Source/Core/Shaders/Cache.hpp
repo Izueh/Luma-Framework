@@ -13,7 +13,7 @@
 namespace Luma {
 namespace Shaders {
 namespace Cache {
-// 1.0's check: the preprocessed text (the source with its includes and defines applied), with the target and entry point.
+// The key is the preprocessed text (the source with its includes and defines applied), with the target and entry point.
 // Its #line directives are left out: they name files (one of them from the current directory), and don't reach bytecode
 // compiled without debug information. So a cache built anywhere matches.
 uint64_t GetKey(std::string_view preprocessed, std::string_view target, std::string_view entry);

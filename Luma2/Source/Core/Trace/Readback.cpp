@@ -10,7 +10,7 @@ namespace Luma {
 namespace Trace {
 namespace Readback {
 namespace {
-// A pass not reached in this many presents after its copy was asked for is reported missing (1.0's "readback_max_frames")
+// A pass not reached in this many presents after its copy was asked for is reported missing
 constexpr uint32_t MAX_MISSED_FRAMES = 3;
 
 std::atomic<bool> armed = false;

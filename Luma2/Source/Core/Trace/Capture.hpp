@@ -13,7 +13,7 @@
 #include "Hooks/Functions.hpp"
 #include "Shaders/Variants.hpp"
 
-// One frame's calls, recorded while a capture runs: the data behind 1.0's "Captured Commands". Development builds only; the
+// One frame's calls, recorded while a capture runs: the data behind the Trace tab. Development builds only; the
 // draw path asks IsCapturing() (a relaxed load) and does nothing else for trace outside a capture. Each API fills events with
 // what its context has bound, as plain values.
 namespace Luma {
@@ -28,6 +28,7 @@ enum class EventType : uint8_t
    Copy, // A copy or a resolve of a whole resource or a region
    Clear, // A view cleared
    CpuWrite, // Map for writing, UpdateSubresource
+   ThirdPartyWork, // ReShade's and its add-ons' calls at the last present, which aren't recorded one by one
 };
 
 enum class CopyKind : uint8_t
@@ -38,7 +39,7 @@ enum class CopyKind : uint8_t
    BufferRegion,
 };
 
-// A copy's arguments, as the game passed them (1.0's copy_info)
+// A copy's arguments, as the game passed them
 struct Copy
 {
    CopyKind kind = CopyKind::Resource;
@@ -61,7 +62,7 @@ enum class Outcome : uint8_t
 
 struct Resource
 {
-   std::string id; // The object's address ("0x1F2E3D4C5B60"), as 1.0's "resource"
+   std::string id; // The object's address ("0x1F2E3D4C5B60")
    std::string type; // "Texture2D", "Buffer"...
    uint32_t format = 0; // DXGI_FORMAT
    // Width, height, depth or array size, mips
@@ -190,12 +191,12 @@ struct Event
    std::vector<std::array<float, 6>> viewports; // x, y, width, height, min depth, max depth
    std::vector<std::array<int32_t, 4>> scissor_rects; // left, top, right, bottom
 
-   // Copies, clears and CPU writes name whole resources, not views (1.0's "source" and "target"): a copy's source and destination, a
+   // Copies, clears and CPU writes name whole resources, not views: a copy's source and destination, a
    // cleared view's resource, the resource written
    std::optional<Resource> source;
    std::optional<Resource> target;
    std::optional<Copy> copy;
-   // A clear's color, or depth and stencil (1.0 kept them in the blend factor)
+   // A clear's color, or depth and stencil
    std::array<float, 4> clear_values = {};
 };
 
@@ -215,8 +216,7 @@ uint32_t GetInstance(const Frame& frame, size_t index, ShaderStage stage, uint32
 // conditions match any of them.
 struct Filter
 {
-   // Also lists the draws whose primary shader is the vertex one, without a pixel shader (1.0 hid its vertex shader entries by
-   // default); MCP's include_vs
+   // Also lists the draws whose primary shader is the vertex one, without a pixel shader; MCP's include_vs
    bool include_vertex_only = false;
    bool luma_passes = true;
    std::optional<ShaderStage> stage; // Has a shader of this stage
@@ -225,8 +225,7 @@ struct Filter
    std::string text;
    bool replaced_only = false; // Its primary shader has variants
    bool cancelled_only = false; // A draw callback or the trace skipped or replaced it
-   // Copies, clears and CPU writes; CPU writes to buffers (cbuffer uploads, frequent) only with `buffer_writes` (1.0's
-   // include_buffer_writes)
+   // Copies, clears and CPU writes; CPU writes to buffers (cbuffer uploads, frequent) only with `buffer_writes`
    bool copies = true;
    bool buffer_writes = false;
 };
@@ -259,7 +258,7 @@ void SetContents(const Added& event, size_t constant_buffer, std::vector<std::by
 
 // Any thread: the last finished capture, null before the first
 std::shared_ptr<const Frame> GetLast();
-// Any thread: forgets the last capture (its memory goes once the panel and MCP let go of it, 1.0's "Clear Capture")
+// Any thread: forgets the last capture (its memory goes once the panel and MCP let go of it)
 void ClearLast();
 } // namespace Capture
 } // namespace Trace

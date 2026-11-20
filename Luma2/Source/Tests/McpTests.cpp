@@ -35,7 +35,7 @@ TEST_CASE("Mcp: status reports the process, and unknown tools and arguments are 
    CHECK(status["ignored_args"].get_array().size() == 1);
 
    Utils::Json::Value error;
-   // A 1.0 tool 2.0 doesn't serve yet (Step 7's)
+   // A tool that isn't served yet
    REQUIRE(Utils::Json::Read(Trace::Mcp::Answer(Trace::Mcp::ParseRequest("sr_state")), error));
    CHECK_FALSE(error["ok"].get<bool>());
    CHECK(error["error"].get<std::string>().find("sr_state") != std::string::npos);

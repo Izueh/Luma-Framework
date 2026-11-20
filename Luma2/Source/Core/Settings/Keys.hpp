@@ -23,11 +23,11 @@ inline constexpr Id<float> OVERLAY_OPACITY = {"Luma.Overlay.Opacity"};
 inline constexpr Id<float> OVERLAY_HDR_PAPER_WHITE = {"Luma.Overlay.HdrPaperWhite"};
 // What the real swapchain presents (Swapchain::OutputMode, Auto first): applied at the next present
 inline constexpr Id<Settings::EnumIndex> OUTPUT_MODE = {"Luma.Display.OutputMode"};
-// LumaSettings' white levels in HDR, in nits (1.0's ScenePeakWhite, ScenePaperWhite, UIPaperWhite): a peak of 0 is the display's
+// LumaSettings' white levels in HDR, in nits: a peak of 0 is the display's
 inline constexpr Id<float> PEAK_WHITE = {"Luma.Display.PeakWhite"};
 inline constexpr Id<float> PAPER_WHITE = {"Luma.Display.PaperWhite"};
 inline constexpr Id<float> UI_PAPER_WHITE = {"Luma.Display.UIPaperWhite"};
-// Test builds: 1.0's "SDR in HDR" display mode
+// Test builds: SDR content presented in the HDR display mode
 inline constexpr Id<bool> SDR_ON_HDR = {"Luma.Display.SdrOnHdr"};
 // Test builds: display composition's stages, each on its own (Display::Composition::Stage, in its order)
 inline constexpr std::array<Id<bool>, 6> COMPOSITION_STAGES = {{
@@ -54,13 +54,17 @@ inline constexpr Id<bool> SWAPCHAIN_WRAP = {"Luma.Swapchain.Wrap"};
 inline constexpr Id<Settings::EnumIndex> SWAPCHAIN_FULLSCREEN = {"Luma.Swapchain.Fullscreen"};
 // Development builds: the real swapchain's size over the game's (composition scales), from the game's next swapchain or resize
 inline constexpr Id<float> SWAPCHAIN_SCALE = {"Luma.Development.SwapchainScale"};
+// Test builds: "ReShade64.dll" next to Luma is loaded, from the game's next start
+inline constexpr Id<bool> LOAD_RESHADE = {"Luma.ReShade.Load"};
+// Test builds: Luma registers as a ReShade add-on, so its present work runs before ReShade's effects, from the game's next start
+inline constexpr Id<bool> RESHADE_BRIDGE = {"Luma.ReShade.Bridge"};
 // The most background jobs (System::Jobs) that run at once
 inline constexpr Id<int32_t> WORKER_THREADS = {"Luma.Advanced.WorkerThreads"};
 // Luma's mirrors of the game's textures swapped in (Resources::Mirrors), Development
 inline constexpr Id<bool> UPGRADES = {"Luma.Resources.Upgrades"};
 // Luma's mirrors of the game's samplers swapped in (Resources::Samplers), Development
 inline constexpr Id<bool> SAMPLERS = {"Luma.Resources.Samplers"};
-// Development builds: replaces the sampler LOD bias offset (0 until SR sets one, Step 7), 1.0's custom_texture_mip_lod_bias_offset
+// Development builds: replaces the sampler LOD bias offset (0 until SR sets one)
 inline constexpr Id<bool> SAMPLERS_CUSTOM_BIAS = {"Luma.Development.Samplers.CustomBias"};
 inline constexpr Id<float> SAMPLERS_BIAS = {"Luma.Development.Samplers.Bias"};
 // Compiles the shaders as soon as a define changes
@@ -94,7 +98,7 @@ struct Id : Settings::Id<T>
    std::string_view name;
 };
 
-// 1.0's shader_defines_data
+// The game's shader defines the composition reads
 inline constexpr Id<int32_t> POST_PROCESS_SPACE_TYPE = {{"Defines.POST_PROCESS_SPACE_TYPE"}, "POST_PROCESS_SPACE_TYPE"};
 inline constexpr Id<bool> EARLY_DISPLAY_ENCODING = {{"Defines.EARLY_DISPLAY_ENCODING"}, "EARLY_DISPLAY_ENCODING"};
 inline constexpr Id<int32_t> VANILLA_ENCODING_TYPE = {{"Defines.VANILLA_ENCODING_TYPE"}, "VANILLA_ENCODING_TYPE"};

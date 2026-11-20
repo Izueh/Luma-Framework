@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-// A constant buffer's contents as typed fields, for the trace detail pane (and luma_read_cbuffer, Step 4)
+// A constant buffer's contents as typed fields, for the trace detail pane and luma_read_cbuffer
 namespace Luma {
 namespace Trace {
 namespace Cbuffers {

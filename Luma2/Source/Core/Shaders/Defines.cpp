@@ -27,8 +27,8 @@ using Settings::Sources::Define;
 
 constexpr std::string_view CATEGORY = "Shader Defines";
 
-// 1.0's shader_defines_data. Its DEVELOPMENT and TEST follow the build (Collect). Values are 0 to 9, or a toggle where 1.0's
-// maximum is 1. What 1.0 only lets Development builds edit is a Development setting.
+// Luma's shader defines. DEVELOPMENT and TEST follow the build (Collect). Values are 0 to 9, or a toggle where the maximum is 1.
+// One only Development builds may edit is a Development setting.
 const std::array DEFINES = {
    Setting{
       .key = POST_PROCESS_SPACE_TYPE.key,
@@ -150,7 +150,7 @@ std::unordered_set<std::string> missing_defines;
 std::unordered_map<std::string, std::string> compiled;
 bool has_compiled = false;
 
-// 1.0's "GAME_<NAME>": the game's name upper case, other characters than letters and digits as underscores
+// "GAME_<NAME>": the game's name upper case, other characters than letters and digits as underscores
 std::string GetGameDefine()
 {
    std::string define = "GAME_";

@@ -25,16 +25,17 @@ enum class DeviceKind : uint8_t
 void SetDeviceKind(const void* device, DeviceKind kind);
 DeviceKind GetDeviceKind(const void* device);
 
-// Methods are hooked by their address (the code), found through the object's vtable on each call, as several objects (and the
-// "A" and "W" interfaces) can share them. A method that's already hooked is left alone.
+// Each detour is hooked once, at the method code of the first object it's given, and always calls that hook's original. A later object
+// whose slot holds other code (another tool patched the shared vtable, or another copy of the dll) isn't hooked again: that code
+// usually calls the hooked one.
 void HookMethod(const void* object, size_t index, void* detour, const char* name);
-// The function that calls the original of the object's method, null if it isn't hooked
-void* GetOriginalMethod(const void* object, size_t index);
+// The original of the method `detour` is hooked at, null if it isn't hooked
+void* GetOriginalMethod(const void* detour);
 
 template <typename Function>
-Function GetOriginal(const void* object, size_t index)
+Function GetOriginal(Function detour)
 {
-   return reinterpret_cast<Function>(GetOriginalMethod(object, index));
+   return reinterpret_cast<Function>(GetOriginalMethod(reinterpret_cast<const void*>(detour)));
 }
 } // namespace DInput
 } // namespace Input

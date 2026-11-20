@@ -123,7 +123,7 @@ bool WriteBuffer(ID3D11DeviceContext* context, ID3D11Buffer* buffer, uint32_t si
 }
 
 #if DEVELOPMENT && defined(_DEBUG)
-// 1.0's check: the slot holds nothing or the entry's own buffer, otherwise Luma takes a slot the game uses
+// The slot holds nothing or the entry's own buffer, otherwise Luma takes a slot the game uses
 void CheckSlot(ID3D11DeviceContext* context, ShaderStage stage, uint32_t slot, ID3D11Buffer* buffer)
 {
    ComPtr<ID3D11Buffer> bound;
@@ -245,7 +245,7 @@ bool BindRequested(ID3D11DeviceContext* context, ShaderStage stage, const Shader
       ID3D11Buffer* buffer = store->objects[request.entry].buffer.Get();
       if (entry.kind != Kind::ConstantBuffer || !buffer)
          continue;
-      // Uploaded again only when the contents changed for this context (1.0): LumaSettings when its stamp moved (its dirty flag),
+      // Uploaded again only when the contents changed for this context: LumaSettings when its stamp moved (its dirty flag),
       // LumaData when what it writes now differs from its last upload
       Upload& upload = state->uploads[request.entry];
       if (entry.get_stamp)

@@ -17,13 +17,13 @@
 #include "Shaders/Shaders.hpp"
 #include "Shaders/Variants.hpp"
 
-// Every shader the game creates, by hash (CRC32 of its bytecode, as 1.0). A shader is never forgotten, so pointers to it stay
+// Every shader the game creates, by hash (CRC32 of its bytecode). A shader is never forgotten, so pointers to it stay
 // valid; each API attaches its objects' state to them, destroyed with the object.
 namespace Luma {
 namespace Shaders {
 namespace Database {
 #if DEVELOPMENT
-// The slots a shader uses (1.0's CachedShader), from its reflection data, else from its disassembly. All of them when neither
+// The slots a shader uses, from its reflection data, else from its disassembly. All of them when neither
 // tells (`found` false).
 struct Reflection
 {

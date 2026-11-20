@@ -49,10 +49,10 @@ std::vector<Widgets::ListEntry> entries;
 size_t selected = SIZE_MAX;
 bool requested = false;
 
-// The list's filters (1.0's "Ignore Vertex Shaders" and "Ignore Custom Draws" as their opposites) and its options
+// The list's filters and options
 Trace::Capture::Filter filter;
-bool unique_only = false; // 1.0's "List Unique Shaders Only": the first call of each primary shader
-bool show_thread = false; // 1.0's "Show Command List / Thread Info"
+bool unique_only = false; // Only the first call of each primary shader
+bool show_thread = false; // Shows the command list and thread of each call
 // The events `unique_only` keeps, for the frame
 std::vector<bool> first_of_shader;
 // The constant buffer slot shown per stage, kept from one call to the next
@@ -91,6 +91,8 @@ Widgets::ListEntry Describe(const Event& event, size_t index)
    const std::string thread = show_thread ? std::format(" [{}{}]", event.thread, event.deferred ? " deferred" : "") : std::string();
    if (event.type == EventType::Present)
       return {std::format("{:>5} Present", index), Tone::Info};
+   if (event.type == EventType::ThirdPartyWork)
+      return {std::format("{:>5} {}", index, event.name), Tone::Info};
    if (event.type == EventType::LumaPass)
       return {std::format("{:>5} {} (Luma){}", index, event.name, thread), Tone::Injected};
    // A copy, clear or write: its function and the resource written
@@ -390,7 +392,7 @@ void DrawContents(ShaderStage stage, uint32_t hash, uint32_t slot, std::span<con
    Widgets::DataTable("Rows", COLUMNS, table.rows, max_height);
 }
 
-// 1.0's constant buffer tracking: this slot of this shader, read again every frame
+// Constant buffer tracking: this slot of this shader, read again every frame
 void DrawTrackButton(const Trace::Track::Target& target, bool tracking)
 {
    const std::string label = tracking ? std::format("{} Stop Tracking", Icons::STOP) : std::format("{} Track", Icons::TRACK);
@@ -619,8 +621,10 @@ void DrawEvent(const Event& event, size_t index)
       Widgets::EndSection();
    }
    const bool is_dispatch = event.type == EventType::Dispatch;
+   const bool has_no_call = event.type == EventType::Present || event.type == EventType::ThirdPartyWork;
    if (Widgets::Section(is_dispatch ? "Dispatch" : event.type == EventType::Present ? "Present"
-                                                                                    : "Draw"))
+                                                : event.type == EventType::ThirdPartyWork ? "Third-Party Work"
+                                                                                          : "Draw"))
    {
       std::vector<PropertyRow> rows = {
          {"Index", std::to_string(index)},
@@ -630,7 +634,7 @@ void DrawEvent(const Event& event, size_t index)
       };
       if (is_dispatch)
          rows.push_back({"Groups", std::format("{} x {} x {}", event.dispatch[0], event.dispatch[1], event.dispatch[2])});
-      else if (event.type != EventType::Present)
+      else if (!has_no_call)
       {
          rows.push_back({event.indexed ? "Indices" : "Vertices", std::to_string(event.vertex_or_index_count)});
          rows.push_back({"Instances", std::to_string(event.instance_count)});
@@ -645,7 +649,7 @@ void DrawEvent(const Event& event, size_t index)
       Widgets::PropertyGrid("Call", rows);
       Widgets::EndSection();
    }
-   if (event.type == EventType::Present)
+   if (has_no_call)
       return;
    if ((!event.render_targets.empty() || event.depth_stencil_view) && Widgets::Section("Output Targets"))
    {

@@ -12,7 +12,7 @@ namespace {
 Options options;
 
 constexpr std::array<std::string_view, 4> OUTPUT_MODES = {"Auto", "HDR10", "scRGB", "SDR"};
-constexpr std::array<std::string_view, 3> MODES = {"Game default", "Mirror", "In place"};
+constexpr std::array<std::string_view, 4> MODES = {"Game default", "Mirror", "In place", "Native"};
 constexpr std::array<std::string_view, 3> FULLSCREEN = {"Game default", "Borderless", "Exclusive"};
 
 constexpr std::array SETTINGS = {
@@ -36,8 +36,9 @@ constexpr std::array SETTINGS = {
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_MODE.key,
       .label = "Mode",
-      .tooltip = "Mirror - the game draws to Luma's textures and Luma presents\nIn place - the game draws to the real buffers, upgraded (1.0)\nFrom "
-                 "the game's next swapchain, usually a restart",
+      .tooltip = "Mirror - the game draws to Luma's textures and Luma presents\nIn place - the game draws to the real buffers, upgraded (1.0)\nNative "
+                 "- the game draws to the real buffers in its own format and color space (or a ReShade add-on's), nothing composed and no "
+                 "output mode; flip model, tearing and fullscreen as below\nFrom the game's next swapchain, usually a restart",
       .category = "Swapchain",
       .visibility = Settings::Visibility::Test,
       .default_value = Settings::EnumIndex{0},
@@ -118,8 +119,14 @@ Mode GetMode()
    {
    case 1: return Mode::Mirror;
    case 2: return Mode::InPlace;
+   case 3: return Mode::Native;
    default: return options.mode;
    }
+}
+
+bool ManagesOutput(Mode mode)
+{
+   return mode != Mode::Native;
 }
 
 bool UsesFlipModel()
@@ -182,7 +189,12 @@ bool RequestsHdr()
 
 std::string_view GetName(Mode mode)
 {
-   return mode == Mode::Mirror ? "Mirror" : "InPlace";
+   switch (mode)
+   {
+   case Mode::InPlace: return "InPlace";
+   case Mode::Native: return "Native";
+   default: return "Mirror";
+   }
 }
 
 std::string_view GetName(OutputMode mode)

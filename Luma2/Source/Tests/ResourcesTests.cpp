@@ -28,7 +28,7 @@ using Resources::Upgrade::SizeFilters;
 using Resources::Upgrade::TextureDesc;
 
 namespace {
-// FF7R's 1.0 configuration (main.cpp 2081 to 2106)
+// FF7R's upgrade rules
 Resources::Upgrade::Rules GetFF7RRules()
 {
    return {
@@ -127,7 +127,7 @@ TEST_CASE("DXGI formats: copy compatibility and CPU data converted to RGBA16F")
    CHECK(AreCopyCompatible(DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R16G16B16A16_TYPELESS));
    CHECK(AreCopyCompatible(DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_B8G8R8A8_UNORM));
    CHECK_FALSE(AreCopyCompatible(DXGI_FORMAT_R16G16B16A16_FLOAT, DXGI_FORMAT_R11G11B10_FLOAT));
-   // 1.0 took two formats without a typeless family as compatible
+   // Two formats without a typeless family are not compatible
    CHECK_FALSE(AreCopyCompatible(DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R9G9B9E5_SHAREDEXP));
    CHECK(AreCopyCompatible(DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R11G11B10_FLOAT));
 
@@ -182,7 +182,7 @@ TEST_CASE("Samplers: 1.0's mirror desc for anisotropic samplers")
    // A positive minimum LOD is lowered by the sharper bias
    CHECK(GetMirrorDesc({.filter = ANISOTROPIC, .max_anisotropy = 16, .min_lod = 2.f}, -1.f)->min_lod == 1.f);
    CHECK(GetMirrorDesc({.filter = COMPARISON_ANISOTROPIC, .max_anisotropy = 2}, 0.f)->max_anisotropy == 16);
-   // Not anisotropic: untouched (1.0's Publishing branch); nothing to change: none, D3D11 would give the game's own sampler
+   // Not anisotropic: untouched; nothing to change: none, D3D11 would give the game's own sampler
    CHECK_FALSE(GetMirrorDesc({.filter = LINEAR}, -1.f));
    CHECK_FALSE(GetMirrorDesc({.filter = ANISOTROPIC, .max_anisotropy = 16}, 0.f));
    // Out of the API's range: clamped

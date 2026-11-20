@@ -11,8 +11,8 @@
 
 #include "Shaders/Shaders.hpp"
 
-// Luma's versions of game shaders. A game shader hash has a list of variants, each with a source (a replacement file now, a patch
-// in Step 3) and a priority: the one bound is the highest-priority variant that compiled (and the device took). Files and patches
+// Luma's versions of game shaders. A game shader hash has a list of variants, each with a source (a replacement file or a patch)
+// and a priority: the one bound is the highest-priority variant that compiled (and the device took). Files and patches
 // behave the same from there: draw callbacks, requests and fulfil, trace. Each API creates the objects and swaps them in at bind.
 namespace Luma {
 namespace Shaders {
@@ -20,13 +20,13 @@ namespace Variants {
 enum class Source : uint8_t
 {
    File, // A "Name_0x########.ps_5_0.hlsl" replacement
-   Patch, // A recipe or a game's bytecode patch (Step 3)
+   Patch, // A recipe or a game's bytecode patch
 };
 
 inline constexpr size_t SOURCE_COUNT = 2;
 // The priority of a replacement file's variant
 inline constexpr int32_t FILE_PRIORITY = 100;
-// A patch's: below a file's, as 1.0 took a replacement file over a patch
+// A patch's: below a file's, so a replacement file wins over a patch
 inline constexpr int32_t PATCH_PRIORITY = 50;
 
 // "file", "patch"

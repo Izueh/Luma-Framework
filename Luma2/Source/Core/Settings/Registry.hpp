@@ -52,7 +52,7 @@ struct Value
 };
 
 // Writes the value (as a float: bools are 0 or 1, enums their index) to a variable, usually a field of the Luma settings
-// cbuffer, through `parse` if set. 1.0's settings.hpp tables (FF7R, Metro).
+// cbuffer, through `parse` if set.
 struct Binding
 {
    float* target = nullptr;

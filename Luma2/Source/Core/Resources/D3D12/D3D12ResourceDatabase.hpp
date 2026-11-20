@@ -13,8 +13,8 @@
 // (memory a command list wrote into lives until the list has executed) and are bound as root CBVs at Luma's parameters of the
 // extended root signature (Shaders::RootSignatures::D3D12), which the game never sets: nothing is restored after a draw. Textures
 // are created and uploaded at the device's creation; a variant reads them through Luma's texture table, whose descriptors are in
-// the bound heap's tail (Resources::HeapTail::D3D12), one range per table layout. Luma's shaders as objects come with the D3D12
-// passes (Step 5).
+// the bound heap's tail (Resources::HeapTail::D3D12), one range per table layout. Luma's shaders as objects aren't bound on D3D12
+// yet.
 namespace Luma {
 namespace Resources {
 namespace Database {

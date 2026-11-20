@@ -820,7 +820,7 @@ Built on part C's answers; the shapes below are the starting point.
 **Build:**
 * Release UI pass: every FF7R setting in the registry with categories, tooltips and defaults as in 1.0. Warnings as toasts. About and credits.
 * Packaging: `Scripts/package.ps1` and the CI workflow build and package the Luma2 FF7R.
-* `Compat::ReShade` as `Guidelines.md` section 14 and `plans/hook-manager-hardening.md` Phase 4 (deferred by the owner): Luma loads ReShade after its own export hooks are in (needs export stubs in place of the linker forwarders), third-party work recognised by calling module (`Hooks::ThirdPartyModules`), and the choice of which buffer ReShade's effects run on. No ReShade headers.
+* `Luma::ReShade` as `Guidelines.md` section 14 and `plans/hook-manager-hardening.md` Phase 4 (deferred by the owner): Luma loads ReShade after its own export hooks are in (needs export stubs in place of the linker forwarders), third-party work recognised by calling module (`Hooks::ThirdPartyModules`), and the choice of which buffer ReShade's effects run on. No ReShade headers.
 * Overlays (Steam, RTSS, Discord, NVIDIA): the Phase 0 test matrix of `plans/hook-manager-hardening.md` (the owner's session), then the Present order policy of its Phase 3.3 with Step 5's `GetBuffer`.
 * RenderDoc: a capture of FF7R on each API with the mod active. Fix only what's a real Luma bug.
 * OptiScale: FF7R built with another `LumaDllName` next to OptiScale's `dxgi.dll`. Document the working arrangement, or that there isn't one.

@@ -17,7 +17,7 @@ namespace Variants {
 namespace {
 std::atomic<bool> loaded = true;
 std::atomic<uint64_t> generation = 0;
-// Serializes publishers (files on the presenting thread, patches from Step 3's jobs). Lock order: before `mutex`.
+// Serializes publishers (files on the presenting thread, patches from their jobs). Lock order: before `mutex`.
 std::mutex publish_mutex;
 // Written by a publisher, read by shader creations on any thread. Never held with another lock but `publish_mutex`.
 std::shared_mutex mutex;

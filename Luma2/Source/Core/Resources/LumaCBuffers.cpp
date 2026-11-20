@@ -28,8 +28,8 @@
 namespace Luma {
 namespace Resources {
 namespace LumaCBuffers {
-// Display mode and white levels are 1.0's values before its display code updates them, which Step 5 ports. Sizes and the frame
-// index are the uploading device's and frame's.
+// Display mode and white levels are defaults until Display::Levels sets them. Sizes and the frame index are the uploading device's
+// and frame's.
 CB::LumaGlobalSettings cb_luma_global_settings = {
    .DisplayMode = 1, // HDR
    .PeakWhiteNits = 1000.f,
@@ -47,8 +47,7 @@ Options options;
 uint32_t settings_entry = 0;
 uint32_t data_entry = 0;
 
-// cb_luma_global_settings as MarkSettingsDirty last published it, which uploads copy (1.0 held s_mutex_reshade while copying the
-// settings and the UI while changing them). Never held with another lock.
+// cb_luma_global_settings as MarkSettingsDirty last published it, which uploads copy. Never held with another lock.
 std::mutex published_mutex;
 CB::LumaGlobalSettings published = cb_luma_global_settings;
 // Bumped after every publication
@@ -69,7 +68,7 @@ Math::float2 ToFloat(Math::uint2 size)
    return {float(size.x), float(size.y)};
 }
 
-// 1.0's FindNextUniqueNumberInRange: from `value` towards the side of the range with more room, the first one not excluded
+// From `value` towards the side of the range with more room, the first one not excluded
 uint32_t FindFreeSlot(uint32_t value, const std::unordered_set<uint32_t>& excluded)
 {
    const bool forward = value < (SLOT_COUNT - 1) / 2;
@@ -78,7 +77,7 @@ uint32_t FindFreeSlot(uint32_t value, const std::unordered_set<uint32_t>& exclud
    return value;
 }
 
-// Skips the spaces and commas, and returns the number the text starts with if it starts with a digit (as 1.0)
+// Skips the spaces and commas, and returns the number the text starts with if it starts with a digit
 std::optional<float> ReadNumber(std::string_view& text)
 {
    while (!text.empty() && (text.front() == ' ' || text.front() == ','))
@@ -106,7 +105,7 @@ const Options& GetOptions()
 
 void Register()
 {
-   // 1.0's flow: LumaSettings is uploaded when dirty (its stamp), LumaData's bytes are compared at every bind
+   // LumaSettings is uploaded when dirty (its stamp), LumaData's bytes are compared at every bind
    settings_entry = Database::Register({.name_hash = Utils::Hash::Name("LumaSettings"),
                                           .name = "LumaSettings",
                                           .kind = Database::Kind::ConstantBuffer,
@@ -168,7 +167,7 @@ void MarkSettingsDirty()
 
 uint64_t GetSettingsStamp()
 {
-   // 1.0's cb_luma_global_settings_dirty, per context: set at every present (the frame), when a device's resolutions change (a
+   // Dirty per context: at every present (the frame), when a device's resolutions change (a
    // resize) and when marked dirty. The three only grow, so their sum moves whenever one does.
    return Shaders::GetFrame() + Frame::GetGeneration() + settings_generation.load(std::memory_order_acquire);
 }
@@ -192,7 +191,7 @@ std::vector<Shaders::Compiler::Define> GetDefines(Api api)
    const uint32_t settings_slot = options.settings_slot;
    const uint32_t data_slot = options.data_slot;
    ASSERT_ONCE_MSG(settings_slot < SLOT_COUNT && data_slot < SLOT_COUNT && settings_slot != data_slot, "The Luma cbuffer slots must be two different ones of 0 to 13");
-   // 1.0 gives the UI cbuffer (unused yet) a free slot too: the compiler fails on two cbuffers with the same one
+   // The UI cbuffer (unused yet) gets a free slot too: the compiler fails on two cbuffers with the same one
    const uint32_t ui_slot = FindFreeSlot(SLOT_COUNT / 2 - 2, {settings_slot, data_slot});
    // Display composition's own (Display::Composition), below the others
    const uint32_t composition_slot = FindFreeSlot(SLOT_COUNT / 2 - 3, {settings_slot, data_slot, ui_slot});
@@ -228,7 +227,7 @@ void WriteSettings(std::span<std::byte> destination, const Database::CustomData&
    std::memcpy(destination.data(), &settings, sizeof(settings));
 }
 
-// At every bind (1.0): the caller's context state holds the device's, nothing is looked up
+// At every bind: the caller's context state holds the device's, nothing is looked up
 void WriteData(std::span<std::byte> destination, const Database::CustomData& custom, const Database::WriteTarget& target)
 {
    ASSERT_ONCE(destination.size() >= DATA_SIZE);
@@ -236,7 +235,7 @@ void WriteData(std::span<std::byte> destination, const Database::CustomData& cus
    const Math::float2 output = ToFloat(resolutions.output);
    const Math::float2 render = ToFloat(resolutions.render);
    const Math::float2 previous_render = ToFloat(resolutions.previous_render);
-   // render_scale_active stays 0 until Step 7 (1.0 derives it from the render target bound). The game's part starts zeroed.
+   // render_scale_active stays 0 until SR derives it from the render target bound. The game's part starts zeroed.
    CB::LumaInstanceData data = {
       .CustomData1 = custom.custom_data_1,
       .CustomData2 = custom.custom_data_2,

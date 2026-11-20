@@ -29,7 +29,7 @@ struct BytePattern
 
 inline constexpr BytePattern ANY{BytePattern::WildcardType::Wildcard};
 
-// Every place `pattern` starts in `memory`, or the first only (1.0's ScanMemoryForPattern)
+// Every place `pattern` starts in `memory`, or the first only
 std::vector<const std::byte*> ScanForPattern(std::span<const std::byte> memory, std::span<const BytePattern> pattern, bool first_only = false);
 std::vector<const std::byte*> ScanForPattern(std::span<const std::byte> memory, std::span<const std::byte> pattern, bool first_only = false);
 } // namespace Memory

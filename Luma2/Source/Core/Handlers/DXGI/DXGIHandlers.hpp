@@ -4,6 +4,8 @@
 
 #include <dxgi1_6.h>
 
+#include "Hooks/DXGI/DXGISwapchainProxy.hpp"
+
 // See D3D11Handlers.hpp. `creator` is the real D3D11 device or a D3D12 command queue.
 namespace Luma {
 namespace Handlers {
@@ -13,6 +15,8 @@ void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, D
 void OnOverlayBufferRequest(IDXGISwapChain* swapchain);
 // After PostCreateSwapChain: the game gets a proxy of it (Hooks::SwapchainProxy)
 bool ShouldWrapSwapChain(IDXGISwapChain* swapchain);
+// What ReShade's calls on the game's proxy of it get (Swapchain::DXGI)
+Hooks::SwapchainProxy::ReShadeSwapchainView GetReShadeSwapchainView(IDXGISwapChain* swapchain);
 // Reporting a swapchain twice is harmless
 void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator);
 void OnSwapChainDestroyed(const IDXGISwapChain* swapchain);
@@ -37,8 +41,12 @@ void PostGetOutputDesc1(IDXGIOutput6* output, DXGI_OUTPUT_DESC1& desc);
 void PostSetColorSpace(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space);
 // What the game last set, empty if it never did (DXGI then uses its default for the format)
 std::optional<DXGI_COLOR_SPACE_TYPE> GetColorSpace(IDXGISwapChain* swapchain);
-// Not for DXGI_PRESENT_TEST. `flags` can gain tearing.
-void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags);
+// Luma's present work, up to and including the display composition: at ReShade's present event, before its effects, when its bridge is
+// on, otherwise in PrePresent
+void PrePresentWork(IDXGISwapChain* swapchain);
+// Not for DXGI_PRESENT_TEST. `flags` can gain tearing. `present_work_done`: ReShade's present event ran PrePresentWork for this present;
+// Luma's overlay is drawn here either way, after ReShade's effects and overlay.
+void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags, bool present_work_done);
 // Composition wrote the whole buffer: Present1's dirty rects and scroll don't apply
 bool ComposesWholeBuffer(IDXGISwapChain* swapchain);
 // After a present that succeeded

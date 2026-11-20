@@ -38,7 +38,7 @@ void ResolveRoots()
    texture_roots = {root / L"Textures"};
    recipes = root / L"Recipes";
 #if DEVELOPMENT && defined(LUMA_RESOURCES_DIR)
-   // The repository this build was made from, as 1.0's SOLUTION_DIR: sources are edited in place
+   // The repository this build was made from: sources are edited in place
    const std::filesystem::path resources = LUMA_RESOURCES_DIR;
    const std::string_view name = Game::Registry::GetInfo().name;
    const std::filesystem::path game = resources / std::u8string(name.begin(), name.end());

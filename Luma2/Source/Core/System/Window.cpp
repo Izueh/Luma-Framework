@@ -24,7 +24,7 @@ void MakeBorderless(HWND window)
    GetWindowRect(window, &rect);
    int width = rect.right - rect.left;
    int height = rect.bottom - rect.top;
-   // 1.0: a game resizing itself past the screen (Thumper) is brought back to it. Other sizes are kept: some games stretch or
+   // A game resizing itself past the screen (Thumper) is brought back to it. Other sizes are kept: some games stretch or
    // refuse a forced resize.
    const bool resize = width > monitor_width || height > monitor_height;
    if (resize)

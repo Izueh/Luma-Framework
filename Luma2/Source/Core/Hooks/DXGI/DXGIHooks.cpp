@@ -7,6 +7,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <intrin.h>
@@ -18,6 +19,7 @@
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "System/Modules.hpp"
+#include "Hooks/DXGI/DXGIHooks.hpp"
 #include "Hooks/DXGI/DXGISwapchainProxy.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
 #include "Hooks/Lifetime.hpp"
@@ -457,16 +459,29 @@ void NoteCaller(const void* return_address)
    present_caller_base = base;
 }
 
+// The swapchain whose present work (up to the display composition) ReShade's present event ran on this thread: the Present that
+// closes the third-party work window skips it, any other Present drops it
+thread_local IDXGISwapChain* present_work_swapchain = nullptr;
+
+// The present work, unless the event ran it for this swapchain, then Luma's overlay
+void HandleGamePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags)
+{
+   const bool present_work_done = std::exchange(present_work_swapchain, nullptr) == swapchain;
+   Scope::Guard scope;
+   if (!present_work_done)
+      ObserveImmediateContext(swapchain);
+   Handlers::PrePresent(swapchain, sync_interval, flags, present_work_done);
+}
+
 HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags)
 {
+   DXGI::CloseThirdPartyWorkWindowAtPresent();
    DepthGuard guard(present_depth);
    const bool is_game = IsGamePresent(guard, flags, swapchain);
    if (is_game)
    {
       NoteCaller(_ReturnAddress());
-      Scope::Guard scope;
-      ObserveImmediateContext(swapchain);
-      Handlers::PrePresent(swapchain, sync_interval, flags);
+      HandleGamePresent(swapchain, sync_interval, flags);
    }
    const HRESULT result = CallRuntime(original_present, swapchain, sync_interval, flags);
    if (is_game && SUCCEEDED(result))
@@ -479,6 +494,7 @@ HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval,
 
 HRESULT STDMETHODCALLTYPE Present1(IDXGISwapChain1* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters)
 {
+   DXGI::CloseThirdPartyWorkWindowAtPresent();
    DepthGuard guard(present_depth);
    const bool is_game = IsGamePresent(guard, flags, swapchain);
    // Composition writes the whole buffer: the game's dirty rects and scroll don't describe it
@@ -486,9 +502,8 @@ HRESULT STDMETHODCALLTYPE Present1(IDXGISwapChain1* swapchain, UINT sync_interva
    if (is_game)
    {
       NoteCaller(_ReturnAddress());
+      HandleGamePresent(swapchain, sync_interval, flags);
       Scope::Guard scope;
-      ObserveImmediateContext(swapchain);
-      Handlers::PrePresent(swapchain, sync_interval, flags);
       if (Handlers::ComposesWholeBuffer(swapchain))
          parameters = &whole;
    }
@@ -658,19 +673,66 @@ void OnOverlayBufferRequest(IDXGISwapChain* swapchain)
    Handlers::OnOverlayBufferRequest(swapchain);
 }
 
+SwapchainProxy::ReShadeSwapchainView GetReShadeSwapchainView(IDXGISwapChain* swapchain)
+{
+   Scope::Guard scope;
+   return Handlers::GetReShadeSwapchainView(swapchain);
+}
+
+bool IsThirdPartyWorkWindowOpenFor(IDXGISwapChain* swapchain)
+{
+   return Scope::IsThirdPartyWorkOpen() && present_work_swapchain == swapchain;
+}
+
 bool PresentPrologue(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags)
 {
-   if ((flags & DXGI_PRESENT_TEST) || Scope::IsActive())
+   if (Scope::IsActive())
       return false;
-   Scope::Guard scope;
-   ObserveImmediateContext(swapchain);
-   Handlers::PrePresent(swapchain, sync_interval, flags);
+   if (flags & DXGI_PRESENT_TEST)
+   {
+      present_work_swapchain = nullptr;
+      return false;
+   }
+   HandleGamePresent(swapchain, sync_interval, flags);
+   return true;
+}
+
+bool RunPresentWorkAtEvent(IDXGISwapChain* swapchain)
+{
+   // Only where a Luma Present follows (the proxy's, or the hook's) to draw the overlay and close the window
+   if (!swapchain || Scope::IsActive() || (!SwapchainProxy::HasProxy(swapchain) && !original_present))
+      return false;
+   {
+      Scope::Guard scope;
+      ObserveImmediateContext(swapchain);
+      Handlers::PrePresentWork(swapchain);
+   }
+   present_work_swapchain = swapchain;
+   Scope::BeginThirdPartyWork();
+   return true;
+}
+
+void CloseThirdPartyWorkWindowAtPresent()
+{
+   if (Scope::IsThirdPartyWorkOpen())
+      Scope::EndThirdPartyWork();
+   else
+      present_work_swapchain = nullptr;
+}
+
+bool CloseThirdPartyWorkWindowAtFinishPresent()
+{
+   present_work_swapchain = nullptr;
+   if (!Scope::IsThirdPartyWorkOpen())
+      return false;
+   Scope::EndThirdPartyWork();
    return true;
 }
 
 HRESULT PresentForGame(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters, bool present1,
    std::optional<bool> prologue)
 {
+   CloseThirdPartyWorkWindowAtPresent();
    DepthGuard guard(present_depth);
    // The proxy's outer Present usually ran the prologue already, before other tools' hooks on the proxy
    const bool is_game = prologue ? *prologue : (guard.IsOutermost() && PresentPrologue(swapchain, sync_interval, flags));

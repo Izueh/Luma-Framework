@@ -289,7 +289,7 @@ struct TraceCapture
    std::vector<std::string> ignored_args;
 };
 
-// 1.0's luma_trace_list fields, those 2.0 has
+// The luma_trace_list fields of an entry
 struct TraceEntry
 {
    size_t index = 0;
@@ -426,7 +426,7 @@ struct TraceSampler
    std::optional<uint32_t> space;
 };
 
-// A copy's, clear's or CPU write's whole resource (1.0's "source" and "target")
+// A copy's, clear's or CPU write's whole resource
 struct TraceResource
 {
    std::string format;
@@ -491,7 +491,7 @@ struct TraceGet
    std::vector<std::string> ignored_args;
 };
 
-// 1.0's luma_read_resource reply: where the .bin is and how the bridge decodes it
+// The luma_read_resource reply: where the .bin is and how the bridge decodes it
 struct ReadResource
 {
    bool ok = true;
@@ -522,7 +522,7 @@ struct ReadResource
    std::vector<std::string> ignored_args;
 };
 
-// 1.0's luma_read_cbuffer reply: the bound range as hex dwords, or one entry per frame
+// The luma_read_cbuffer reply: the bound range as hex dwords, or one entry per frame
 struct ReadCbuffer
 {
    bool ok = true;
@@ -834,7 +834,7 @@ std::optional<std::string> GetName(const Shaders::Database::Shader& shader)
    return shader.name.empty() ? std::nullopt : std::optional(std::string(shader.name));
 }
 
-// Replaced while the variants are loaded, as 1.0 counts its file clones
+// Replaced while the variants are loaded
 bool IsReplaced(uint32_t hash)
 {
    return Shaders::Variants::IsLoaded() && Shaders::Variants::HasVariant(hash);
@@ -864,7 +864,7 @@ std::string ShaderList(const Request& request)
    const auto stage = request.args.find("stage");
    const bool replaced_only = GetBool(request, "replaced_only");
    const bool include_unloaded = GetBool(request, "include_unloaded");
-   // ~150 bytes per entry: the default stays under an agent's tool output cap (1.0)
+   // ~150 bytes per entry: the default stays under an agent's tool output cap
    const uint32_t offset = GetNumber(request, "offset", 0, 0, UINT32_MAX);
    const uint32_t limit = GetNumber(request, "limit", 200, 1, 100000);
    Replies::ShaderList reply;
@@ -985,7 +985,7 @@ std::string DumpShader(const Request& request)
    return Utils::Json::Write(reply);
 }
 
-// Waits on the pipe thread for the build the reload starts, like 1.0's job waiting for its load
+// Waits on the pipe thread for the build the reload starts
 // D3D12Stats.json, written now on a job (it's also written with each frame capture)
 std::string DumpStats(const Request& request)
 {
@@ -1119,7 +1119,7 @@ std::optional<std::string> WaitForPatches(uint64_t previous_generation, uint32_t
    }
 }
 
-// 1.0's set_recipe: a recipe's switch, or one of its env values set or reset, through their settings (saved like the overlay's)
+// The set_recipe tool: a recipe's switch, or one of its env values set or reset, through their settings (saved like the overlay's)
 std::string SetRecipe(const Request& request)
 {
    const auto identity = request.args.find("identity");
@@ -1228,13 +1228,13 @@ std::optional<ShaderStage> ParseStage(std::string_view name)
    return std::nullopt;
 }
 
-// 1.0's "replaced": the source of the hash's first variant, or "none"
+// The "replaced" field: the source of the hash's first variant, or "none"
 std::string GetReplacedName(const Capture::Shader& shader)
 {
    return shader.variants.empty() ? "none" : std::string(Shaders::Variants::GetName(shader.variants.front()));
 }
 
-// 1.0's "variant": the source of the variant that ran, or "original" for a shader with variants that ran the game's
+// The "variant" field: the source of the variant that ran, or "original" for a shader with variants that ran the game's
 std::optional<std::string> GetVariantName(const Capture::Shader& shader)
 {
    if (shader.variant)
@@ -1251,11 +1251,12 @@ std::string_view GetTypeName(EventType type)
    case EventType::Copy: return "copy";
    case EventType::Clear: return "clear";
    case EventType::CpuWrite: return "cpu_write";
+   case EventType::ThirdPartyWork: return "third_party";
    default: return "shader";
    }
 }
 
-// 1.0's luma_trace_list fields of an entry
+// Fills a luma_trace_list entry from an event
 template <typename Reply>
 void WriteSummary(Reply& reply, const Event& event, size_t index)
 {
@@ -1267,9 +1268,9 @@ void WriteSummary(Reply& reply, const Event& event, size_t index)
       reply.queue = event.queue;
    if (!event.list.empty())
       reply.list = event.list;
-   if (event.type == EventType::LumaPass || event.type == EventType::Present || Capture::IsResourceEvent(event))
+   if (event.type == EventType::LumaPass || event.type == EventType::Present || event.type == EventType::ThirdPartyWork || Capture::IsResourceEvent(event))
       reply.name = event.name;
-   // A copy's, clear's or write's target, as 1.0 listed it
+   // A copy's, clear's or write's target
    if (event.target)
       reply.rt0 = std::format("{} {}x{}", Utils::Format::GetName(event.target->format), event.target->size[0], event.target->size[1]);
    if (event.copy && event.copy->kind != Capture::CopyKind::Resource)
@@ -1277,7 +1278,7 @@ void WriteSummary(Reply& reply, const Event& event, size_t index)
       constexpr std::string_view KINDS[] = {"resource", "region", "resolve", "buffer_region"};
       reply.copy_kind = std::string(KINDS[size_t(event.copy->kind)]);
    }
-   // 1.0 listed an entry per stage; 2.0 lists the call once, by its primary shader, with its stages
+   // The call is listed once, by its primary shader, with its stages
    if (!event.shaders.empty())
    {
       std::string stages;
@@ -1671,7 +1672,7 @@ std::filesystem::path Utf8Path(std::string_view utf8)
    return std::u8string_view(reinterpret_cast<const char8_t*>(utf8.data()), utf8.size());
 }
 
-// `directory` is the readback root or inside it, ".." and junctions resolved (1.0's check)
+// `directory` is the readback root or inside it, ".." and junctions resolved
 bool IsInReadbackRoot(const std::filesystem::path& directory)
 {
    std::error_code error;
@@ -1765,7 +1766,7 @@ std::string HexDwords(const std::vector<std::byte>& contents)
    return hex;
 }
 
-// 1.0's luma_read_cbuffer, through Track: the slot is tracked for as many frames as asked, then the overlay's tracking (if any) is
+// The luma_read_cbuffer tool, through Track: the slot is tracked for as many frames as asked, then the overlay's tracking (if any) is
 // put back
 std::string ReadCbuffer(const Request& request)
 {
@@ -1785,7 +1786,7 @@ std::string ReadCbuffer(const Request& request)
    reply.slot = slot;
    const std::optional<Track::Target> previous = Track::Get();
    Track::Set(Track::Target{.hash = call->hash, .stage = call->stage, .slot = slot, .instance = call->instance});
-   // Frames without the call are misses: a few in a row and it's reported missing (1.0's budget)
+   // Frames without the call are misses: a few in a row and it's reported missing
    constexpr uint64_t MAX_MISSED_FRAMES = 3;
    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(GetTimeout(request));
    std::vector<Track::Reading> readings;

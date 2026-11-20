@@ -38,8 +38,7 @@ constexpr size_t CREATE_DEVICE_INDEX = 3;
 template <typename Device>
 HRESULT STDMETHODCALLTYPE GetDeviceState(Device* device, DWORD data_size, LPVOID data)
 {
-   using Function = HRESULT(STDMETHODCALLTYPE*)(Device*, DWORD, LPVOID);
-   const auto original = DInput::GetOriginal<Function>(device, GET_DEVICE_STATE_INDEX);
+   const auto original = DInput::GetOriginal(&GetDeviceState<Device>);
    if (!original)
       return DIERR_GENERIC;
    const HRESULT result = original(device, data_size, data);
@@ -75,9 +74,7 @@ HRESULT STDMETHODCALLTYPE GetDeviceState(Device* device, DWORD data_size, LPVOID
 template <typename Device>
 HRESULT STDMETHODCALLTYPE GetDeviceData(Device* device, DWORD object_data_size, LPDIDEVICEOBJECTDATA object_data, LPDWORD in_out, DWORD flags)
 {
-   using Function = HRESULT(STDMETHODCALLTYPE*)(Device*, DWORD, LPDIDEVICEOBJECTDATA, LPDWORD, DWORD);
-   // The function isn't cached: doing so crashes the Steam overlay
-   const auto original = DInput::GetOriginal<Function>(device, GET_DEVICE_DATA_INDEX);
+   const auto original = DInput::GetOriginal(&GetDeviceData<Device>);
    if (!original)
       return DIERR_GENERIC;
    HRESULT result = original(device, object_data_size, object_data, in_out, flags);
@@ -95,8 +92,7 @@ HRESULT STDMETHODCALLTYPE GetDeviceData(Device* device, DWORD object_data_size, 
 template <typename DirectInput, typename Device>
 HRESULT STDMETHODCALLTYPE CreateDevice(DirectInput* direct_input, REFGUID guid, Device** device, LPUNKNOWN outer)
 {
-   using Function = HRESULT(STDMETHODCALLTYPE*)(DirectInput*, REFGUID, Device**, LPUNKNOWN);
-   const auto original = DInput::GetOriginal<Function>(direct_input, CREATE_DEVICE_INDEX);
+   const auto original = DInput::GetOriginal(&CreateDevice<DirectInput, Device>);
    if (!original)
       return DIERR_GENERIC;
    const HRESULT result = original(direct_input, guid, device, outer);
