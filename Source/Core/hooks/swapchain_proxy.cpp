@@ -345,6 +345,7 @@ private:
    template <size_t Copy>
    static HRESULT STDMETHODCALLTYPE OuterPresent(IDXGISwapChain4* self, UINT sync_interval, UINT flags)
    {
+      DXGI::EnterPresent();
       Proxy* proxy = static_cast<Proxy*>(self);
       // Reached again through a tool's hook: the proxy's own Present
       if (in_outer_present)
@@ -362,6 +363,7 @@ private:
    template <size_t Copy>
    static HRESULT STDMETHODCALLTYPE OuterPresent1(IDXGISwapChain4* self, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters)
    {
+      DXGI::EnterPresent();
       Proxy* proxy = static_cast<Proxy*>(self);
       if (in_outer_present)
          return reinterpret_cast<Present1Function>(proxy->inner_present1)(self, sync_interval, flags, parameters);

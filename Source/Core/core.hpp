@@ -163,6 +163,7 @@
 #include "xess/XeSS.h" // see "ENABLE_XESS"
 #include "sr_bridge/SRBridge.h" // see "ENABLE_SR_BRIDGE"
 
+#include "reshade/reshade.hpp"
 #include "utils/config.hpp"
 #include "utils/log.hpp"
 #include "utils/modules.hpp"
@@ -11591,6 +11592,10 @@ namespace
                }
             }
 
+            ImGui::NewLine();
+            ImGui::Text("ReShade: %s", Luma::ReShade::Describe().c_str());
+            ImGui::Text("ReShade bridge: %s", Luma::ReShade::DescribeBridge().c_str());
+
             game->PrintImGuiInfo(device_data);
 
             ImGui::EndTabItem(); // Info
@@ -12223,6 +12228,7 @@ bool PreSetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutp
 
 void PrePresent(IDXGISwapChain* swapchain)
 {
+   ReShade::OnPresent();
    if (LUMA_GAME_WANTS(Present))
       game->PrePresent(swapchain);
    // A failed resize leaves it without data
@@ -12233,6 +12239,23 @@ void PrePresent(IDXGISwapChain* swapchain)
       return;
    OnPresent(swapchain);
    OnPresentTick(*swapchain_data->device_data);
+}
+
+void PrePresentOverlay(IDXGISwapChain* swapchain, bool after_third_party_work)
+{
+   ReShade::OnPresentOverlay(after_third_party_work);
+#if DEVELOPMENT
+   // ReShade's calls since PrePresent ran at its present event weren't traced (third party work window): one marker stands for them
+   if (after_third_party_work)
+   {
+      if (SwapchainData* swapchain_data = GetSwapchainData(swapchain))
+      {
+         DeviceData& device_data = *swapchain_data->device_data;
+         Trace::Marker(device_data.primary_command_list.get(), "ReShade/add-on work at the last present (effects, overlay, present handlers), not traced");
+         Trace::FlushQueued(device_data.primary_command_list_data, device_data.primary_command_list.get());
+      }
+   }
+#endif
    Overlay::OnPresent(swapchain);
 }
 

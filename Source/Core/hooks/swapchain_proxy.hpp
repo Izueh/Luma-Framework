@@ -30,8 +30,15 @@ struct Prologue
    bool ran = false; // Luma's work ran (it doesn't when the last present of the swapchain was still drawing)
 };
 
-// Luma's work for the game's present, `flags` can gain tearing
+// Luma's work for the game's present, `flags` can gain tearing. Callbacks::PrePresent unless ReShade's present event ran it, then PrePresentOverlay
 Prologue PresentPrologue(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags);
+// At ReShade's "present" event, before its effects: Callbacks::PrePresent for the Present that follows on this thread, then opens the
+// third party work window. False when it didn't run (inside Luma, a still drawing frame, a swapchain whose Present Luma doesn't see)
+bool PresentFromEvent(IDXGISwapChain* swapchain);
+// First thing in every Luma Present: closes the window, so the prologue skips the PrePresent the event ran
+void EnterPresent();
+// At ReShade's "finish_present" event: true when no Luma Present came to close the window (it's closed here)
+bool AbandonPresentFromEvent();
 void PresentEpilogue(IDXGISwapChain* swapchain, const Prologue& prologue, HRESULT result);
 // The proxy's Present: the prologue unless it ran, then the real Present
 HRESULT PresentForGame(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters, bool present1,

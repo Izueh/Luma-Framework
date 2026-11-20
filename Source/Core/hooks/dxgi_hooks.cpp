@@ -487,9 +487,14 @@ void AddTearingFlag(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags)
       flags |= DXGI_PRESENT_ALLOW_TEARING;
 }
 
+// The swapchain whose Luma present work (Callbacks::PrePresent, up to the display composition) ran at ReShade's present event on this thread, so its prologue skips it.
+// Kept by the Present that closes the third party work window, dropped by one that finds it closed
+thread_local IDXGISwapChain* swapchain_composed_at_event = nullptr;
+
 // Swapchains without a proxy (D3D11CreateDeviceAndSwapChain)
 HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags)
 {
+   DXGI::EnterPresent();
    Utils::DepthGuard guard(present_depth);
    const DXGI::Prologue prologue = IsGamePresent(guard, flags, swapchain) ? DXGI::PresentPrologue(swapchain, sync_interval, flags) : DXGI::Prologue{};
    const HRESULT result = CallRuntime(original_present, swapchain, sync_interval, flags);
@@ -499,6 +504,7 @@ HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval,
 
 HRESULT STDMETHODCALLTYPE Present1(IDXGISwapChain1* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters)
 {
+   DXGI::EnterPresent();
    Utils::DepthGuard guard(present_depth);
    const DXGI::Prologue prologue = IsGamePresent(guard, flags, swapchain) ? DXGI::PresentPrologue(swapchain, sync_interval, flags) : DXGI::Prologue{};
    const HRESULT result = CallRuntime(original_present1, swapchain, sync_interval, flags, parameters);
@@ -597,15 +603,54 @@ Prologue PresentPrologue(IDXGISwapChain* swapchain, UINT sync_interval, UINT& fl
 {
    if ((flags & DXGI_PRESENT_TEST) || Scope::IsActive())
       return {};
+   // Only the event's own swapchain skips Luma's present work (up to the display composition)
+   const bool present_work_ran_at_event = std::exchange(swapchain_composed_at_event, nullptr) == swapchain;
    AddTearingFlag(swapchain, sync_interval, flags);
    // The game presents the same frame again after a DXGI_PRESENT_DO_NOT_WAIT present that was still drawing (as ReShade)
    if (WasStillDrawing(swapchain))
       return {true, false};
    Scope::Guard scope;
-   VerifyOnPresent();
-   ObserveImmediateContext(swapchain);
-   Callbacks::PrePresent(swapchain);
+   if (!present_work_ran_at_event)
+   {
+      VerifyOnPresent();
+      ObserveImmediateContext(swapchain);
+      Callbacks::PrePresent(swapchain);
+   }
+   Callbacks::PrePresentOverlay(swapchain, present_work_ran_at_event);
    return {true, true};
+}
+
+bool PresentFromEvent(IDXGISwapChain* swapchain)
+{
+   // Only when a Luma Present follows (a proxy, or the Present hook) to draw the overlay and close the window
+   if (!swapchain || Scope::IsActive() || WasStillDrawing(swapchain) || (!SwapchainProxy::HasProxy(swapchain) && !original_present))
+      return false;
+   {
+      Scope::Guard scope;
+      VerifyOnPresent();
+      ObserveImmediateContext(swapchain);
+      Callbacks::PrePresent(swapchain);
+   }
+   swapchain_composed_at_event = swapchain;
+   Scope::BeginThirdPartyWork();
+   return true;
+}
+
+void EnterPresent()
+{
+   if (Scope::IsThirdPartyWorkOpen())
+      Scope::EndThirdPartyWork();
+   else
+      swapchain_composed_at_event = nullptr;
+}
+
+bool AbandonPresentFromEvent()
+{
+   swapchain_composed_at_event = nullptr;
+   if (!Scope::IsThirdPartyWorkOpen())
+      return false;
+   Scope::EndThirdPartyWork();
+   return true;
 }
 
 void PresentEpilogue(IDXGISwapChain* swapchain, const Prologue& prologue, HRESULT result)
@@ -622,6 +667,7 @@ void PresentEpilogue(IDXGISwapChain* swapchain, const Prologue& prologue, HRESUL
 HRESULT PresentForGame(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters, bool present1,
    std::optional<Prologue> prologue)
 {
+   DXGI::EnterPresent();
    Utils::DepthGuard guard(present_depth);
    // The proxy's outer Present usually ran it already
    const Prologue done = prologue ? *prologue : (guard.IsOutermost() ? PresentPrologue(swapchain, sync_interval, flags) : Prologue{});

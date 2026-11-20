@@ -26,7 +26,10 @@ void PostResizeBuffers(IDXGISwapChain* swapchain, UINT count, UINT width, UINT h
 // True skips the call
 bool PreSetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutput* output);
 
+// Luma's present work, up to and including the display composition. With the ReShade bridge on, at ReShade's "present" event, before its effects
 void PrePresent(IDXGISwapChain* swapchain);
+// Luma's overlay draw: always at Luma's Present, after ReShade's effects and overlay. `after_third_party_work`: PrePresent ran at the event
+void PrePresentOverlay(IDXGISwapChain* swapchain, bool after_third_party_work);
 void PostPresent(IDXGISwapChain* swapchain);
 
 // Resources

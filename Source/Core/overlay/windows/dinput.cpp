@@ -39,10 +39,10 @@ constexpr GUID IID_DIRECT_INPUT7_A = {0x9A4CB684, 0x236D, 0x11D3, {0x8E, 0x9D, 0
 constexpr GUID IID_DIRECT_INPUT7_W = {0x9A4CB685, 0x236D, 0x11D3, {0x8E, 0x9D, 0x00, 0xC0, 0x4F, 0x68, 0x44, 0xAE}};
 
 // It is technically possible to associate these hooks back to a device (cooperative level), but it may not be the same window as ReShade renders on
-#define IDirectInputDevice_GetDeviceState_Impl(vtable_index, device_interface_version, encoding) \
+#define IDirectInputDevice_GetDeviceState_Impl(device_interface_version, encoding) \
 	HRESULT STDMETHODCALLTYPE IDirectInputDevice##device_interface_version##encoding##_GetDeviceState(IDirectInputDevice##device_interface_version##encoding *pDevice, DWORD cbData, LPVOID lpvData) \
 	{ \
-		const auto original = DirectInput::GetOriginal<decltype(&IDirectInputDevice##device_interface_version##encoding##_GetDeviceState)>(pDevice, vtable_index); \
+		const auto original = DirectInput::GetOriginal(&IDirectInputDevice##device_interface_version##encoding##_GetDeviceState); \
 		if (original == nullptr) \
 			return DIERR_GENERIC; \
 		const HRESULT hr = original(pDevice, cbData, lpvData); \
@@ -60,17 +60,17 @@ constexpr GUID IID_DIRECT_INPUT7_W = {0x9A4CB685, 0x236D, 0x11D3, {0x8E, 0x9D, 0
 		return hr; \
 	}
 
-IDirectInputDevice_GetDeviceState_Impl(9,  , A)
-IDirectInputDevice_GetDeviceState_Impl(9,  , W)
-IDirectInputDevice_GetDeviceState_Impl(9, 2, A)
-IDirectInputDevice_GetDeviceState_Impl(9, 2, W)
-IDirectInputDevice_GetDeviceState_Impl(9, 7, A)
-IDirectInputDevice_GetDeviceState_Impl(9, 7, W)
+IDirectInputDevice_GetDeviceState_Impl( , A)
+IDirectInputDevice_GetDeviceState_Impl( , W)
+IDirectInputDevice_GetDeviceState_Impl(2, A)
+IDirectInputDevice_GetDeviceState_Impl(2, W)
+IDirectInputDevice_GetDeviceState_Impl(7, A)
+IDirectInputDevice_GetDeviceState_Impl(7, W)
 
-#define IDirectInputDevice_GetDeviceData_Impl(vtable_index, device_interface_version, encoding) \
+#define IDirectInputDevice_GetDeviceData_Impl(device_interface_version, encoding) \
 	HRESULT STDMETHODCALLTYPE IDirectInputDevice##device_interface_version##encoding##_GetDeviceData(IDirectInputDevice##device_interface_version##encoding *pDevice, DWORD cbObjectData, LPDIDEVICEOBJECTDATA rgdod, LPDWORD pdwInOut, DWORD dwFlags) \
 	{ \
-		const auto original = DirectInput::GetOriginal<decltype(&IDirectInputDevice##device_interface_version##encoding##_GetDeviceData)>(pDevice, vtable_index); \
+		const auto original = DirectInput::GetOriginal(&IDirectInputDevice##device_interface_version##encoding##_GetDeviceData); \
 		if (original == nullptr) \
 			return DIERR_GENERIC; \
 		HRESULT hr = original(pDevice, cbObjectData, rgdod, pdwInOut, dwFlags); \
@@ -93,17 +93,17 @@ IDirectInputDevice_GetDeviceState_Impl(9, 7, W)
 		return hr; \
 	}
 
-IDirectInputDevice_GetDeviceData_Impl(10,  , A)
-IDirectInputDevice_GetDeviceData_Impl(10,  , W)
-IDirectInputDevice_GetDeviceData_Impl(10, 2, A)
-IDirectInputDevice_GetDeviceData_Impl(10, 2, W)
-IDirectInputDevice_GetDeviceData_Impl(10, 7, A)
-IDirectInputDevice_GetDeviceData_Impl(10, 7, W)
+IDirectInputDevice_GetDeviceData_Impl( , A)
+IDirectInputDevice_GetDeviceData_Impl( , W)
+IDirectInputDevice_GetDeviceData_Impl(2, A)
+IDirectInputDevice_GetDeviceData_Impl(2, W)
+IDirectInputDevice_GetDeviceData_Impl(7, A)
+IDirectInputDevice_GetDeviceData_Impl(7, W)
 
-#define IDirectInput_CreateDevice_Impl(vtable_index, factory_interface_version, device_interface_version, encoding) \
+#define IDirectInput_CreateDevice_Impl(factory_interface_version, device_interface_version, encoding) \
 	HRESULT STDMETHODCALLTYPE IDirectInput##factory_interface_version##encoding##_CreateDevice(IDirectInput##factory_interface_version##encoding *pDI, REFGUID rguid, LPDIRECTINPUTDEVICE##device_interface_version##encoding *lplpDirectInputDevice, LPUNKNOWN pUnkOuter) \
 	{ \
-		const auto original = DirectInput::GetOriginal<decltype(&IDirectInput##factory_interface_version##encoding##_CreateDevice)>(pDI, vtable_index); \
+		const auto original = DirectInput::GetOriginal(&IDirectInput##factory_interface_version##encoding##_CreateDevice); \
 		if (original == nullptr) \
 			return DIERR_GENERIC; \
 		const HRESULT hr = original(pDI, rguid, lplpDirectInputDevice, pUnkOuter); \
@@ -128,10 +128,10 @@ IDirectInputDevice_GetDeviceData_Impl(10, 7, W)
 		} \
 		return hr; \
 	}
-#define IDirectInput_CreateDeviceEx_Impl(vtable_index, factory_interface_version, device_interface_version, encoding) \
+#define IDirectInput_CreateDeviceEx_Impl(factory_interface_version, device_interface_version, encoding) \
 	HRESULT STDMETHODCALLTYPE IDirectInput##factory_interface_version##encoding##_CreateDeviceEx(IDirectInput##factory_interface_version##encoding *pDI, REFGUID rguid, REFGUID riid, LPVOID *ppvOut, LPUNKNOWN pUnkOuter) \
 	{ \
-		const auto original = DirectInput::GetOriginal<decltype(&IDirectInput##factory_interface_version##encoding##_CreateDeviceEx)>(pDI, vtable_index); \
+		const auto original = DirectInput::GetOriginal(&IDirectInput##factory_interface_version##encoding##_CreateDeviceEx); \
 		if (original == nullptr) \
 			return DIERR_GENERIC; \
 		const HRESULT hr = original(pDI, rguid, riid, ppvOut, pUnkOuter); \
@@ -157,14 +157,14 @@ IDirectInputDevice_GetDeviceData_Impl(10, 7, W)
 		return hr; \
 	}
 
-IDirectInput_CreateDevice_Impl(3,  ,  , A)
-IDirectInput_CreateDevice_Impl(3,  ,  , W)
-IDirectInput_CreateDevice_Impl(3, 2, 2, A)
-IDirectInput_CreateDevice_Impl(3, 2, 2, W)
-IDirectInput_CreateDevice_Impl(3, 7, 7, A)
-IDirectInput_CreateDevice_Impl(3, 7, 7, W)
-IDirectInput_CreateDeviceEx_Impl(9, 7, 7, A)
-IDirectInput_CreateDeviceEx_Impl(9, 7, 7, W)
+IDirectInput_CreateDevice_Impl( ,  , A)
+IDirectInput_CreateDevice_Impl( ,  , W)
+IDirectInput_CreateDevice_Impl(2, 2, A)
+IDirectInput_CreateDevice_Impl(2, 2, W)
+IDirectInput_CreateDevice_Impl(7, 7, A)
+IDirectInput_CreateDevice_Impl(7, 7, W)
+IDirectInput_CreateDeviceEx_Impl(7, 7, A)
+IDirectInput_CreateDeviceEx_Impl(7, 7, W)
 
 using DirectInputCreateAFunction = HRESULT(WINAPI *)(HINSTANCE, DWORD, LPDIRECTINPUTA *, LPUNKNOWN);
 using DirectInputCreateWFunction = HRESULT(WINAPI *)(HINSTANCE, DWORD, LPDIRECTINPUTW *, LPUNKNOWN);

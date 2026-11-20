@@ -8,6 +8,7 @@ namespace Hooks {
 namespace Scope {
 namespace {
 thread_local uint32_t depth = 0;
+thread_local bool third_party_work = false;
 std::atomic<bool> bypass = false;
 } // namespace
 
@@ -34,6 +35,30 @@ void SetBypass(bool value)
 bool IsBypassed()
 {
    return bypass.load(std::memory_order_relaxed);
+}
+
+// One level of the scope depth, so IsActive stays a single check
+void BeginThirdPartyWork()
+{
+   if (!third_party_work)
+   {
+      third_party_work = true;
+      depth++;
+   }
+}
+
+void EndThirdPartyWork()
+{
+   if (third_party_work)
+   {
+      third_party_work = false;
+      depth--;
+   }
+}
+
+bool IsThirdPartyWorkOpen()
+{
+   return third_party_work;
 }
 } // namespace Scope
 } // namespace Hooks

@@ -26,16 +26,17 @@ enum class DeviceKind : uint8_t
 void SetDeviceKind(const void* device, DeviceKind kind);
 DeviceKind GetDeviceKind(const void* device);
 
-// Methods are hooked by their address (the code), found through the object's vtable at each call, as several objects (and
-// the "A" and "W" interfaces) can share them. A method that's already hooked is left alone.
+// Each detour is hooked once, at the first object's method code, and always calls that hook's original: a detour shared by several
+// hooks can't tell which one it runs for. A later object whose slot holds other code (another tool patched the shared vtable) isn't
+// hooked again, that code usually calls the hooked one. Code another detour already hooked (interfaces sharing code) is left to it.
 void HookMethod(const void* object, size_t index, void* detour, const char* name);
-// The function that calls the original of a method hooked with `HookMethod`, null if the object's method isn't hooked
-void* GetOriginalMethod(const void* object, size_t index);
+// The original of the method `detour` is hooked at, null if it isn't hooked
+void* GetOriginalMethod(const void* detour);
 
 template <typename Function>
-Function GetOriginal(const void* object, size_t index)
+Function GetOriginal(Function detour)
 {
-   return reinterpret_cast<Function>(GetOriginalMethod(object, index));
+   return reinterpret_cast<Function>(GetOriginalMethod(reinterpret_cast<const void*>(detour)));
 }
 } // namespace DirectInput
 } // namespace Overlay
