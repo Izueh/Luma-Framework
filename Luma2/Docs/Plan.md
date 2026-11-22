@@ -851,10 +851,17 @@ Order, chosen so each game adds features the previous ones didn't need:
 | 5 | Prey | CPU hooks and a native plugin (`System::Memory`, mid-function hooks), the oldest and most customised mod |
 | 6 | Mass Effect Andromeda | NVAPI HDR, append buffer redirection, XeSS, permutation-heavy shaders |
 | 7 | Granblue Fantasy Relink | UI scaling, game function hooks, a second engine-level upscale integration |
-| 8 | `_Template`, `_Generic Mod`, Graphics Analyzer | the starting points for new mods, on the 2.0 API |
+| 8 | `_Template` (done: the Visual Studio template, below), `_Generic Mod`, Graphics Analyzer | the starting points for new mods, on the 2.0 API |
 | 9 | Everything else | in batches by engine or by shared code. Most need no new feature by now |
 
 After each game: move code that the new game shares with an earlier one into the framework, and port the earlier game onto it in the same unit.
+
+**The Visual Studio template** (`Luma2/Templates/VisualStudio/Game`, plus `Luma2/Resources/_Template`) is how a new game starts. It is the game API written out as a project: every `Game::Options` member, every kind of setting (bool, int, float, enum, key and string, each source and visibility), `SetInfo`, defines, texture upgrades, panels, the LumaData writer and `GameDeviceData` in `Main.cpp`, and the rest of the API (every D3D11 and D3D12 event, the native callbacks, draw callbacks by hash, a bytecode patcher) in its Examples section, behind `LUMA_EXAMPLES`; it is one file, as FF7R's. `Resources/_Template` is a game's resources folder (cbuffer structs, a replacement, a custom pass and a recipe example), which the new project's first build copies to `Resources/<ProjectName>`.
+
+* **Keep it current, in the same commit as the change.** Any change to what a game can declare or write (a `Game::Options` member, a field of `Settings::Setting`, `Events` or `Callbacks`, `Info`, a define's id, `Upgrade::Rules`, a widget the panels use, the props) updates the template's file for it, and a feature that adds a game-facing option adds its stub. A change to a game project's `.vcxproj` (props imports, optional SDKs) updates `Template.vcxproj`.
+* **Check it.** `Scripts/Test-Luma2Template.ps1` unpacks the template as Visual Studio does, builds the project, then builds it again with `LUMA_EXAMPLES=1`, so the stubs are compiled against the current API (a renamed event breaks it). Run it before committing such a change. Not in CI yet (it compiles Core twice): add it to the workflow with the Packaging bullet of Step 8.
+* **Install it** with `Scripts/Install-Luma2Template.ps1` (copies the zip into `Documents\Visual Studio 18\Templates\ProjectTemplates`, then restart Visual Studio). Reinstall after any change to the template, and when the Visual Studio version changes (the project targets v145).
+* The swap (Step 10) moves the template's relative paths with `Luma2/Source`: the project's imports (`..\..\..\Props`, `..\..\Core`) and the test script's paths.
 
 ## Step 10: The swap
 

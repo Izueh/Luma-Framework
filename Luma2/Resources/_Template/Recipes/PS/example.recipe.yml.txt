@@ -1,0 +1,28 @@
+# A shader patch (a recipe): a file named "<name>.recipe.yml" in this folder (a "PS", "VS", "CS" subfolder is the stage it applies to,
+# none means any) changes the instructions of the game's shaders that match its rules, in memory, with no source needed. It needs the
+# DXP library: set UseLumaDXP to true in the project. Rename this file to "example.recipe.yml" to use it.
+# Final Fantasy VII Remake's "dithering_fix.recipe.yml" is a complete one: rewriting instructions, adding a texture, patching a load.
+version: 1
+# D3D12: Luma sets LUMA_SPACE to its register space, and the patched shader becomes SM5.1 to name it. D3D11 keeps SM5.0.
+upgrade_to_sm51: auto
+# Values the steps use. They show in the settings view and can be changed live ([Recipes] in Luma.toml)
+env:
+  LUMA_SPACE: 0
+# What Luma shows for it: its name makes it a setting of the settings view (without one it shows in Development builds only)
+meta:
+  name: Example Patch
+  description: What the patch does, for the user.
+  default_enabled: false
+  visibility: release
+steps:
+  # Each step is a kind: apply_rule, add_resource, check_opcode_count, check_resource_count, check_shader_version, declare_template.
+  # `required: false` lets a shader the rule doesn't match go on unpatched.
+  - kind: apply_rule
+    name: example_rule
+    rewrite_mode: replace
+    required: false
+    rule:
+      match:
+        - opcode: mul
+      emit:
+        - opcode: mul

@@ -1,0 +1,9 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "luma2-game-mod",
+  "version-string": "2.0.0",
+  "description": "A Luma 2 game mod",
+  "dependencies": [
+    "dxp"
+  ]
+}

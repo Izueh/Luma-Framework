@@ -1,0 +1,26 @@
+<VSTemplate Version="3.0.0" xmlns="http://schemas.microsoft.com/developer/vstemplate/2005" Type="Project">
+  <TemplateData>
+    <Name>Luma 2.0 Game Mod</Name>
+    <Description>A Luma 2.0 mod for a new game, with every game option stubbed. Create it in "Luma2\Source\Games" (it imports the shared props by relative path), then build once: it copies "Luma2\Resources\_Template" to "Luma2\Resources\&lt;ProjectName&gt;".</Description>
+    <ProjectType>VC</ProjectType>
+    <ProjectSubType>
+    </ProjectSubType>
+    <SortOrder>1000</SortOrder>
+    <CreateNewFolder>true</CreateNewFolder>
+    <DefaultName>GameName</DefaultName>
+    <ProvideDefaultName>true</ProvideDefaultName>
+    <LocationField>Enabled</LocationField>
+    <EnableLocationBrowseButton>true</EnableLocationBrowseButton>
+    <Icon>__TemplateIcon.ico</Icon>
+    <LanguageTag>cpp</LanguageTag>
+    <PlatformTag>windows</PlatformTag>
+    <ProjectTypeTag>library</ProjectTypeTag>
+  </TemplateData>
+  <TemplateContent>
+    <Project TargetFileName="$projectname$.vcxproj" File="Template.vcxproj" ReplaceParameters="true">
+      <ProjectItem ReplaceParameters="true" TargetFileName="Main.cpp">Main.cpp</ProjectItem>
+      <ProjectItem ReplaceParameters="false" TargetFileName="vcpkg.json">vcpkg.json</ProjectItem>
+      <ProjectItem ReplaceParameters="false" TargetFileName="vcpkg-configuration.json">vcpkg-configuration.json</ProjectItem>
+    </Project>
+  </TemplateContent>
+</VSTemplate>
