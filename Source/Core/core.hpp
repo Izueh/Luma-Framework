@@ -7300,6 +7300,24 @@ namespace
       return device_data.resource_upgrades.GetOptionalResourceUpgradeDesc(desc, state, has_initial_data);
    }
 
+   bool CanConvertResourceData(DXGI_FORMAT source_format, DXGI_FORMAT new_format)
+   {
+      if (new_format != DXGI_FORMAT_R16G16B16A16_FLOAT)
+         return false;
+      switch (source_format)
+      {
+      case DXGI_FORMAT_R8G8B8A8_UNORM:
+      case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+      case DXGI_FORMAT_B8G8R8A8_UNORM:
+      case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+      case DXGI_FORMAT_B8G8R8X8_UNORM:
+      case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+         return true;
+      default:
+         return false;
+      }
+   }
+
    // Returns true if it changed the data.
    // Remember to manually de-allocate the data later.
    bool ConvertResourceData(const D3D11_SUBRESOURCE_DATA* data, D3D11_SUBRESOURCE_DATA& new_data, const ResourceDesc& desc, DXGI_FORMAT new_format, bool pre_allocated = false)
@@ -7450,6 +7468,17 @@ namespace
          lock.unlock();
 
          const ResourceDesc original_desc = desc;
+
+         // Skip direct upgrades with unconvertible initial data to avoid driver out-of-bounds reads.
+         if (!enable_indirect_texture_format_upgrades && initial_data && initial_data->pSysMem && !CanConvertResourceData(original_desc.format, upgraded_desc.value().format))
+         {
+            static std::atomic<uint32_t> skipped_formats_logged_mask = 0;
+            const uint32_t format_bit = 1u << (uint32_t(original_desc.format) & 31u);
+            if (!(skipped_formats_logged_mask.fetch_or(format_bit) & format_bit))
+               Luma::Utils::Log::Warning("Resource upgrades: a {}x{} texture of format {} with initial data was left as the game created it, its data can't be converted to {} (logged once per source format)",
+                  original_desc.width, original_desc.height, uint32_t(original_desc.format), uint32_t(upgraded_desc.value().format));
+            return false;
+         }
 
 #if DEVELOPMENT
          last_attempted_upgraded_resource_creation_format = desc.format;

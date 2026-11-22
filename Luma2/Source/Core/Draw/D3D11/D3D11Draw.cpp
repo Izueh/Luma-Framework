@@ -354,11 +354,12 @@ bool DrawFullscreen(Context* context, const FullscreenPass& pass)
    const D3D11_VIEWPORT viewport = {0.f, 0.f, float(width), float(height), 0.f, 1.f};
    context->RSSetViewports(1, &viewport);
    context->RSSetState(nullptr);
+   // Bind the target first so D3D11 doesn't unbind `pass.source` as an SRV if it was still bound as an RTV.
+   context->OMSetRenderTargets(1, &pass.target, nullptr);
    context->PSSetShaderResources(0, 1, &pass.source);
    if (pass.sampler)
       context->PSSetSamplers(0, 1, &pass.sampler);
    context->OMSetDepthStencilState(pass.depth, 0);
-   context->OMSetRenderTargets(1, &pass.target, nullptr);
    Shaders::D3D11::Bind(context, ShaderStage::Vertex, vertex_shader->object.Get());
    Shaders::D3D11::Bind(context, ShaderStage::Pixel, pixel_shader->object.Get());
    // What Luma's shaders read (its cbuffers), where they declared them
