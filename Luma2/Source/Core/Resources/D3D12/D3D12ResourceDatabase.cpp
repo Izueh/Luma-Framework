@@ -154,28 +154,12 @@ D3D12_GPU_VIRTUAL_ADDRESS UploadBytes(ID3D12GraphicsCommandList* list, const Lis
    return address;
 }
 
-// The entry's contents now for the list, uploaded again only when they changed: LumaSettings when its stamp moved, LumaData
-// when its bytes differ from the list's last upload
 void UploadEntry(ID3D12GraphicsCommandList* list, List& state, uint32_t index, const Entry& entry, const CustomData& custom)
 {
-   Database::Upload& upload = state.uploads[index];
-   if (entry.get_stamp)
-   {
-      const uint64_t stamp = entry.get_stamp();
-      if (!NeedsUpload(upload, stamp))
-         return;
-      state.addresses[index] = UploadBytes(list, state, entry.size, [&](std::span<std::byte> destination) { entry.write(destination, custom, state.target); });
-      upload.stamp = stamp;
-      upload.done = state.addresses[index] != 0;
-      return;
-   }
-   state.written.resize(entry.size);
-   entry.write(state.written, custom, state.target);
-   if (ReplaceIfChanged(upload, state.written))
-   {
-      state.addresses[index] = UploadBytes(list, state, entry.size, [&](std::span<std::byte> destination) { std::ranges::copy(upload.bytes, destination.begin()); });
-      upload.done = state.addresses[index] != 0;
-   }
+   UploadIfDirty(entry, state.uploads[index], state.written, custom, state.target, [&](auto&& write) {
+      state.addresses[index] = UploadBytes(list, state, entry.size, write);
+      return state.addresses[index] != 0;
+   });
 }
 
 void Bind(ID3D12GraphicsCommandList* list, List& state, bool compute, uint32_t index)

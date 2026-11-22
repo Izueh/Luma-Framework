@@ -25,7 +25,7 @@ using Microsoft::WRL::ComPtr;
 using namespace Luma;
 using Resources::Upgrade::Dimension;
 using Resources::Upgrade::SizeFilters;
-using Resources::Upgrade::TextureDesc;
+using Resources::Upgrade::TextureInfo;
 
 namespace {
 // FF7R's upgrade rules
@@ -46,7 +46,7 @@ struct RulesFixture
    ~RulesFixture() { Resources::Upgrade::SetRules({}); }
 };
 
-TextureDesc Target(uint32_t width, uint32_t height, DXGI_FORMAT format)
+TextureInfo Target(uint32_t width, uint32_t height, DXGI_FORMAT format)
 {
    return {.width = width, .height = height, .format = format, .render_target = true};
 }
@@ -68,18 +68,18 @@ TEST_CASE("Upgrade: FF7R's rules match the textures 1.0 upgraded")
    CHECK_FALSE(Match(Target(512, 512, DXGI_FORMAT_R11G11B10_FLOAT), STATE, false));
    // Formats not in the list, and what the GPU doesn't write
    CHECK_FALSE(Match(Target(3440, 1440, DXGI_FORMAT_R8G8B8A8_UNORM), STATE, false));
-   TextureDesc read_only = Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT);
+   TextureInfo read_only = Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT);
    read_only.render_target = false;
    CHECK_FALSE(Match(read_only, STATE, false));
-   TextureDesc dynamic = Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT);
+   TextureInfo dynamic = Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT);
    dynamic.gpu_only = false;
    CHECK_FALSE(Match(dynamic, STATE, false));
    // Arrays aren't 2D targets
-   TextureDesc array = Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT);
+   TextureInfo array = Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT);
    array.depth_or_layers = 2;
    CHECK_FALSE(Match(array, STATE, false));
    // The 3D LUT, written by a compute shader, 32 on each side, one mip
-   TextureDesc lut = {.dimension = Dimension::Texture3D, .width = 32, .height = 32, .depth_or_layers = 32, .format = DXGI_FORMAT_R10G10B10A2_UNORM, .unordered_access = true};
+   TextureInfo lut = {.dimension = Dimension::Texture3D, .width = 32, .height = 32, .depth_or_layers = 32, .format = DXGI_FORMAT_R10G10B10A2_UNORM, .unordered_access = true};
    CHECK(Match(lut, STATE, false)->format == DXGI_FORMAT_R16G16B16A16_FLOAT);
    lut.levels = 2;
    CHECK_FALSE(Match(lut, STATE, false));
@@ -104,7 +104,7 @@ TEST_CASE("Upgrade: the size filters and the mirror's view formats as 1.0's")
    CHECK_FALSE(Match(Target(256, 100, DXGI_FORMAT_R11G11B10_FLOAT), state, false));
    CHECK_FALSE(Match(Target(1, 1, DXGI_FORMAT_R11G11B10_FLOAT), state, false));
    // Depth keeps its stencil, typeless so it can be read
-   TextureDesc depth = {.width = 512, .height = 256, .format = DXGI_FORMAT_R24G8_TYPELESS, .depth_stencil = true};
+   TextureInfo depth = {.width = 512, .height = 256, .format = DXGI_FORMAT_R24G8_TYPELESS, .depth_stencil = true};
    CHECK(Match(depth, state, false)->format == DXGI_FORMAT_R32G8X24_TYPELESS);
    Resources::Upgrade::SetRules({});
 
@@ -167,26 +167,20 @@ TEST_CASE("DXGI formats: copy compatibility and CPU data converted to RGBA16F")
    CHECK_FALSE(ConvertToRgba16Float(bgra.data(), 4, 4, DXGI_FORMAT_R32_FLOAT, 1, 1, 1));
 }
 
-TEST_CASE("Samplers: 1.0's mirror desc for anisotropic samplers")
+TEST_CASE("Samplers: mirror desc for anisotropic samplers")
 {
-   using Resources::Samplers::Desc;
    using Resources::Samplers::GetMirrorDesc;
-   constexpr uint32_t ANISOTROPIC = 0x55;
-   constexpr uint32_t COMPARISON_ANISOTROPIC = 0xd5;
-   constexpr uint32_t LINEAR = 0x15;
-   const std::optional<Desc> sharper = GetMirrorDesc({.filter = ANISOTROPIC, .mip_lod_bias = 0.f, .max_anisotropy = 4, .min_lod = 0.f}, -1.f);
+   const std::optional<D3D11_SAMPLER_DESC> sharper = GetMirrorDesc(
+      D3D11_SAMPLER_DESC{.Filter = D3D11_FILTER_ANISOTROPIC, .MipLODBias = 0.f, .MaxAnisotropy = 4, .MinLOD = 0.f}, -1.f);
    REQUIRE(sharper);
-   CHECK(sharper->max_anisotropy == 16);
-   CHECK(sharper->mip_lod_bias == -1.f);
-   CHECK(sharper->min_lod == 0.f);
-   // A positive minimum LOD is lowered by the sharper bias
-   CHECK(GetMirrorDesc({.filter = ANISOTROPIC, .max_anisotropy = 16, .min_lod = 2.f}, -1.f)->min_lod == 1.f);
-   CHECK(GetMirrorDesc({.filter = COMPARISON_ANISOTROPIC, .max_anisotropy = 2}, 0.f)->max_anisotropy == 16);
-   // Not anisotropic: untouched; nothing to change: none, D3D11 would give the game's own sampler
-   CHECK_FALSE(GetMirrorDesc({.filter = LINEAR}, -1.f));
-   CHECK_FALSE(GetMirrorDesc({.filter = ANISOTROPIC, .max_anisotropy = 16}, 0.f));
-   // Out of the API's range: clamped
-   CHECK(GetMirrorDesc({.filter = ANISOTROPIC, .mip_lod_bias = -15.f}, -4.f)->mip_lod_bias == -16.f);
+   CHECK(sharper->MaxAnisotropy == 16);
+   CHECK(sharper->MipLODBias == -1.f);
+   CHECK(sharper->MinLOD == 0.f);
+   CHECK(GetMirrorDesc(D3D11_SAMPLER_DESC{.Filter = D3D11_FILTER_ANISOTROPIC, .MaxAnisotropy = 16, .MinLOD = 2.f}, -1.f)->MinLOD == 1.f);
+   CHECK(GetMirrorDesc(D3D12_SAMPLER_DESC{.Filter = D3D12_FILTER_COMPARISON_ANISOTROPIC, .MaxAnisotropy = 2}, 0.f)->MaxAnisotropy == 16);
+   CHECK_FALSE(GetMirrorDesc(D3D11_SAMPLER_DESC{.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR}, -1.f));
+   CHECK_FALSE(GetMirrorDesc(D3D11_SAMPLER_DESC{.Filter = D3D11_FILTER_ANISOTROPIC, .MaxAnisotropy = 16}, 0.f));
+   CHECK(GetMirrorDesc(D3D12_SAMPLER_DESC{.Filter = D3D12_FILTER_ANISOTROPIC, .MipLODBias = -15.f}, -4.f)->MipLODBias == -16.f);
 }
 
 TEST_CASE("Mirrors D3D11: a matching texture gets a mirror, its views mirrored ones, CPU writes reach it, and both go with the texture")

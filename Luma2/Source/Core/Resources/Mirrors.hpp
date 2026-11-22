@@ -1,59 +1,157 @@
 #pragma once
 
 #include <cstdint>
+#include <format>
 #include <string>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "Hooks/Functions.hpp"
+#include "Hooks/Lifetime.hpp"
 #include "Resources/Upgrade.hpp"
+#include "Shaders/Shaders.hpp"
+#include "Utils/DXGI/DXGIFormat.hpp"
 
-// Luma's resources standing in for the game's (Guidelines.md section 6): a texture the upgrade rules match gets a mirror at its
-// creation, its views get mirrored views, and binds, copies, clears and writes are redirected to them. The game's objects are never
-// changed. This part is shared by the APIs: the need, the runtime switch, the counts and (Development) the list for the dev tools.
 namespace Luma {
 namespace Resources {
 namespace Mirrors {
-// Its settings, before the game's Init
 void Register();
-// The upgrade rules exist: mirrors are made, and their hooks installed
 bool IsNeeded();
-// Any thread, on the bind path: mirrors are swapped in (Luma.Enabled and Luma.Resources.Upgrades). Mirrors are made and kept in sync
-// either way, so switching back needs no catch-up.
 bool IsSwapping();
+bool HasAnyMirrors();
 Hooks::D3D11::Functions GetD3D11Functions();
-// D3D12's mirrors and sampler mirrors (Resources::Mirrors::D3D12 has both)
 Hooks::D3D12::Functions GetD3D12Functions();
 
 struct Stats
 {
    uint32_t mirrors = 0;
-   uint64_t bytes = 0; // Of the mirrors, estimated from their descs
+   uint64_t bytes = 0;
    uint32_t views = 0;
 };
 
 Stats GetStats();
-// Any thread: a mirror (its estimated size) or a mirrored view made, or released (negative)
 void CountMirror(int32_t count, int64_t bytes);
 void CountView(int32_t count);
-
-// The memory a texture of this desc takes, every mip and slice (an estimate: no padding)
-uint64_t EstimateBytes(const Upgrade::TextureDesc& desc);
+void LogCreationFailure(std::string_view what, HRESULT result);
+uint64_t EstimateBytes(const Upgrade::TextureInfo& info);
+DXGI_FORMAT GetResolveFormat(DXGI_FORMAT game_format, DXGI_FORMAT original_format, DXGI_FORMAT mirror_format);
 
 #if DEVELOPMENT
-// What the Resources tab lists
 struct Info
 {
-   std::string original; // The game's texture's address
+   std::string original;
    std::string debug_name;
-   Upgrade::TextureDesc original_desc;
-   Upgrade::TextureDesc mirror_desc;
-   uint64_t frame = 0; // When it was made
+   Upgrade::TextureInfo original_desc;
+   Upgrade::TextureInfo mirror_desc;
+   uint64_t frame = 0;
 };
 
 void AddInfo(const void* original, Info info);
 void RemoveInfo(const void* original);
 std::vector<Info> GetInfos();
 #endif
+
+template <typename Resource, typename OwnedResource>
+struct MirrorState
+{
+   OwnedResource mirror;
+   Upgrade::TextureInfo original_info;
+   Upgrade::TextureInfo info;
+   int64_t bytes = 0;
+   Resource* original = nullptr;
+
+   ~MirrorState()
+   {
+      CountMirror(-1, -bytes);
+#if DEVELOPMENT
+      RemoveInfo(original);
+#endif
+   }
+};
+
+template <typename Resource>
+struct OriginalState
+{
+   Resource* original = nullptr;
+};
+
+template <typename Resource, typename OwnedResource>
+void AttachMirror(Resource* original, OwnedResource mirror, const Upgrade::TextureInfo& original_info, const Upgrade::TextureInfo& mirror_info)
+{
+   const int64_t bytes = int64_t(EstimateBytes(mirror_info));
+   Hooks::Lifetime::SetState<OriginalState<Resource>>(mirror.Get(), original);
+   // Counted before SetState so a failed attach uncounts on destruction
+   CountMirror(1, bytes);
+   if (!Hooks::Lifetime::SetState<MirrorState<Resource, OwnedResource>>(original, std::move(mirror), original_info, mirror_info, bytes, original))
+      return;
+#if DEVELOPMENT
+   AddInfo(original, {.original = std::format("0x{:X}", reinterpret_cast<uintptr_t>(original)), .original_desc = original_info, .mirror_desc = mirror_info, .frame = Shaders::GetFrame()});
+#endif
+}
+
+template <typename OwnedResource, typename Resource>
+const MirrorState<Resource, OwnedResource>* FindMirrorState(Resource* resource)
+{
+   if (!resource || !HasAnyMirrors())
+      return nullptr;
+   return Hooks::Lifetime::GetState<MirrorState<Resource, OwnedResource>>(resource);
+}
+
+template <typename OwnedResource, typename Resource>
+Resource* FindMirror(Resource* resource)
+{
+   const auto* state = FindMirrorState<OwnedResource>(resource);
+   return state ? state->mirror.Get() : nullptr;
+}
+
+template <typename Resource>
+Resource* FindOriginal(Resource* mirror)
+{
+   if (!mirror || !HasAnyMirrors())
+      return nullptr;
+   const auto* state = Hooks::Lifetime::GetState<OriginalState<Resource>>(mirror);
+   return state ? state->original : nullptr;
+}
+
+enum class CopyAction : uint8_t
+{
+   Original,
+   DirectMirrorCopy,
+   NeedsConvertingCopy,
+};
+
+template <typename Resource>
+struct CopyPlan
+{
+   CopyAction action = CopyAction::Original;
+   Resource* destination = nullptr;
+   Resource* source = nullptr;
+   bool destination_mirrored = false;
+   bool source_mirrored = false;
+};
+
+template <typename Resource, typename GetFormatFn>
+CopyPlan<Resource> PlanCopy(Resource* destination, Resource* source, Resource* (*get_mirror)(Resource*), GetFormatFn&& get_format)
+{
+   if (!HasAnyMirrors())
+      return {};
+   Resource* mirror_dst = destination ? get_mirror(destination) : nullptr;
+   Resource* mirror_src = source ? get_mirror(source) : nullptr;
+   if (!mirror_dst && !mirror_src)
+      return {};
+   Resource* final_dst = mirror_dst ? mirror_dst : destination;
+   Resource* final_src = mirror_src ? mirror_src : source;
+   const bool compatible = (mirror_dst && mirror_src) ||
+      (final_dst && final_src && Utils::Format::DXGI::AreCopyCompatible(get_format(final_dst), get_format(final_src)));
+   return {
+      .action = compatible ? CopyAction::DirectMirrorCopy : CopyAction::NeedsConvertingCopy,
+      .destination = final_dst,
+      .source = final_src,
+      .destination_mirrored = mirror_dst != nullptr,
+      .source_mirrored = mirror_src != nullptr,
+   };
+}
 } // namespace Mirrors
 } // namespace Resources
 } // namespace Luma

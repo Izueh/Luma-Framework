@@ -5,11 +5,9 @@
 #include <span>
 #include <type_traits>
 
-#include "Frame/Frame.hpp"
 #include "Game/Registry.hpp"
-#include "Handlers/DXGI/DXGIHandlers.hpp"
+#include "Handlers/Handlers.hpp"
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
-#include "Hooks/DeviceProxy.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
 #include "Resources/Mirrors.hpp"
@@ -61,69 +59,48 @@ void BindVariantRequests(ID3D12GraphicsCommandList* list)
    }
 }
 
-#if DEVELOPMENT
-Trace::Capture::Outcome GetOutcome(Game::DrawResult result, bool skipped)
-{
-   if (skipped)
-      return Trace::Capture::Outcome::SkippedByTrace;
-   switch (result)
-   {
-   case Game::DrawResult::Skip: return Trace::Capture::Outcome::Skipped;
-   case Game::DrawResult::Replaced: return Trace::Capture::Outcome::Replaced;
-   default: return Trace::Capture::Outcome::Ran;
-   }
-}
-#endif
-
-// As D3D11's: the trace records the state before the game's events change it, then the events, the trace's skip, and the variant's
-// requests for a call that runs as the game made it. Whether the game's call doesn't run.
 template <typename Call>
 bool RunCall(ID3D12GraphicsCommandList* list, const Call& call)
 {
    constexpr bool dispatch = std::is_same_v<Call, Game::D3D12::DispatchCall>;
-   constexpr Shaders::StageSet stages = dispatch ? Shaders::COMPUTE_STAGES : Shaders::GRAPHICS_STAGES;
 #if DEVELOPMENT
    Trace::Stats::D3D12::RecordDraw(list, dispatch);
-   std::optional<Trace::Capture::D3D12::Recording> recording;
-   if (Trace::Capture::IsCapturing())
-   {
-      if constexpr (dispatch)
-         recording = Trace::Capture::D3D12::BeginDispatch(list, call);
-      else
-         recording = Trace::Capture::D3D12::BeginDraw(list, call);
-   }
-   if (Trace::Track::IsActive())
-      Trace::Capture::D3D12::TrackCall(list, stages);
 #endif
-   const Game::DrawResult result = Game::Registry::HasD3D12DrawCallbacks() ? Game::DrawEvents::D3D12::Run(list, call) : Game::DrawResult::None;
+   const auto run_draw = [&](Shaders::StageSet stages, Game::DrawResult& result, bool& skipped) {
+      result = Game::Registry::HasDrawCallbacks<Api::D3D12>() ? Game::DrawEvents::D3D12::Run(list, call) : Game::DrawResult::None;
 #if DEVELOPMENT
-   const bool skipped = result == Game::DrawResult::None && Trace::Capture::D3D12::IsSkipped(list, stages);
+      skipped = result == Game::DrawResult::None && Trace::Capture::D3D12::IsSkipped(list, stages);
+#endif
+      if (result == Game::DrawResult::None && !skipped)
+      {
+         BindVariantRequests(list);
+         if constexpr (!dispatch)
+            Shaders::Variants::D3D12::BindFormatVariant(list);
+      }
+      return result != Game::DrawResult::None || skipped;
+   };
+#if DEVELOPMENT
+   Game::D3D12::Call original = {.list = list};
+   if constexpr (dispatch)
+      original.dispatch = &call;
+   else
+      original.draw = &call;
+   return HandleDrawOrDispatch<dispatch>(
+      [&] {
+         if constexpr (dispatch)
+            return Trace::Capture::D3D12::BeginDispatch(list, call);
+         else
+            return Trace::Capture::D3D12::BeginDraw(list, call);
+      },
+      [&](Shaders::StageSet stages) { Trace::Capture::D3D12::TrackCall(list, stages); },
+      [&](Shaders::StageSet stages, bool handled) { return Trace::Readback::D3D12::ReadAfterCall(original, stages, handled); },
+      [](Trace::Capture::D3D12::Recording recording, Trace::Capture::Outcome outcome) { Trace::Capture::D3D12::End(std::move(recording), outcome); },
+      run_draw);
 #else
-   constexpr bool skipped = false;
+   Game::DrawResult result = Game::DrawResult::None;
+   bool skipped = false;
+   return run_draw(dispatch ? Shaders::COMPUTE_STAGES : Shaders::GRAPHICS_STAGES, result, skipped);
 #endif
-   if (result == Game::DrawResult::None && !skipped)
-   {
-      BindVariantRequests(list);
-      // Last: what's bound now is what draws
-      if constexpr (!dispatch)
-         Shaders::Variants::D3D12::BindFormatVariant(list);
-   }
-   bool handled = result != Game::DrawResult::None || skipped;
-#if DEVELOPMENT
-   // Last: the call as it ran is what's read
-   if (Trace::Readback::IsArmed())
-   {
-      Game::D3D12::Call original = {.list = list};
-      if constexpr (dispatch)
-         original.dispatch = &call;
-      else
-         original.draw = &call;
-      handled = Trace::Readback::D3D12::ReadAfterCall(original, stages, handled);
-   }
-   if (recording)
-      Trace::Capture::D3D12::End(std::move(*recording), GetOutcome(result, skipped));
-#endif
-   return handled;
 }
 } // namespace
 
@@ -134,31 +111,29 @@ void PreCreateDevice()
 
 void PostCreateDevice(ID3D12Device* device)
 {
-   Validation::D3D12::WatchDeviceMessages(device);
-   Utils::Log::Info("D3D12: device {} created ({} live)", static_cast<void*>(device), Hooks::DeviceProxy::GetCount());
-   Game::Registry::CreateDeviceData(device);
-   Frame::CreateDeviceState(device);
-   Shaders::SetApi(Api::D3D12);
-   if (Shaders::IsNeeded())
-      Resources::Database::D3D12::CreateDeviceObjects(device);
+   HandlePostCreateDevice<Api::D3D12>(
+      device, {},
+      [&] { Validation::D3D12::WatchDeviceMessages(device); },
+      [&] {
+         if (Shaders::IsNeeded())
+            Resources::Database::D3D12::CreateDeviceObjects(device);
 #if DEVELOPMENT
-   Trace::Stats::D3D12::RecordDevice(device);
+         Trace::Stats::D3D12::RecordDevice(device);
 #endif
-   Game::Registry::Call(Game::Registry::GetD3D12Events().on_init_device, device);
+      });
 }
 
 void OnDeviceDestroyed(ID3D12Device* device)
 {
-   Utils::Log::Info("D3D12: device {} released by the game ({} live)", static_cast<void*>(device), Hooks::DeviceProxy::GetCount());
-   Game::Registry::Call(Game::Registry::GetD3D12Events().on_destroy_device, device);
-   UI::DetachFromDevice(device);
-   ForgetSwapchains(device);
-   // Luma's objects hold the device
-   Resources::Database::D3D12::ReleaseDeviceObjects(device);
-   Resources::Mirrors::D3D12::ReleaseDeviceObjects(device);
-   Shaders::RootSignatures::D3D12::ReleaseDeviceObjects(device);
-   Shaders::PipelineLibrary::D3D12::ReleaseDeviceObjects(device);
-   Validation::D3D12::StopWatchingDevice(device);
+   HandleOnDeviceDestroyed<Api::D3D12>(
+      device,
+      [&] {
+         Resources::Database::D3D12::ReleaseDeviceObjects(device);
+         Resources::Mirrors::D3D12::ReleaseDeviceObjects(device);
+         Shaders::RootSignatures::D3D12::ReleaseDeviceObjects(device);
+         Shaders::PipelineLibrary::D3D12::ReleaseDeviceObjects(device);
+      },
+      [&] { Validation::D3D12::StopWatchingDevice(device); });
 }
 
 void PostExecuteCommandLists(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists)
@@ -522,12 +497,7 @@ bool PreResolveSubresource([[maybe_unused]] ID3D12GraphicsCommandList* list, [[m
    if (Resources::Mirrors::IsSwapping())
       Resources::Mirrors::D3D12::SwapCopy(destination, source);
    if (source != game_source)
-   {
-      const D3D12_RESOURCE_DESC desc = source->GetDesc();
-      const DXGI_FORMAT mapped = Resources::Upgrade::GetBestViewFormat(format, Resources::Upgrade::ViewKind::ShaderResource, game_source->GetDesc().Format, desc.Format);
-      if (mapped != DXGI_FORMAT_UNKNOWN)
-         format = mapped;
-   }
+      format = Resources::Mirrors::GetResolveFormat(format, game_source->GetDesc().Format, source->GetDesc().Format);
    return false;
 }
 

@@ -1,7 +1,5 @@
 #include "Game/D3D12/D3D12DrawEvents.hpp"
 
-#include <array>
-
 #include <wrl/client.h>
 
 #include "Game/Registry.hpp"
@@ -18,20 +16,6 @@ namespace {
 using List = ID3D12GraphicsCommandList;
 using Luma::Shaders::Variants::D3D12::BoundPipeline;
 
-// The callback of the first stage with one, pixel first, then vertex
-Game::D3D12::DrawCallback FindCallback(const Game::D3D12::Call& call, Luma::Shaders::StageSet stages)
-{
-   constexpr std::array ORDER = {ShaderStage::Pixel, ShaderStage::Vertex, ShaderStage::Geometry, ShaderStage::Hull, ShaderStage::Domain, ShaderStage::Compute};
-   for (const ShaderStage stage : ORDER)
-   {
-      if (!stages.Has(stage) || !call.hashes[size_t(stage)])
-         continue;
-      if (const Game::D3D12::DrawCallback callback = Registry::FindD3D12DrawCallback(call.hashes[size_t(stage)]))
-         return callback;
-   }
-   return nullptr;
-}
-
 Luma::Shaders::StageSet GetVariantStages(List* list, Luma::Shaders::StageSet stages)
 {
    const BoundPipeline bound = Luma::Shaders::Variants::D3D12::GetBoundPipeline(list);
@@ -43,27 +27,19 @@ DrawResult RunEvents(List* list, const Game::D3D12::DrawCall* draw, const Game::
    if (!IsEnabled())
       return DrawResult::None;
    const BoundPipeline bound = Luma::Shaders::Variants::D3D12::GetBoundPipeline(list);
-   Game::D3D12::Call call = {.list = list, .draw = draw, .dispatch = dispatch, .pipeline = bound.game};
+   Game::D3D12::Call call = {
+      .list = list,
+      .draw = draw,
+      .dispatch = dispatch,
+      .pipeline = bound.game,
+      .variant_stages = bound.built ? bound.built->variant_stages & stages : Luma::Shaders::StageSet(),
+   };
    for (size_t stage = 0; bound.tracked && stage < call.hashes.size(); stage++)
    {
       if (stages.Has(ShaderStage(stage)) && bound.tracked->shaders[stage])
          call.hashes[stage] = bound.tracked->shaders[stage]->hash;
    }
-   call.variant_stages = bound.built ? bound.built->variant_stages & stages : Luma::Shaders::StageSet();
-   const Game::D3D12::Events& events = Registry::GetD3D12Events();
-   const Game::D3D12::DrawCallback variant_callback = call.variant_stages.Any() ? events.on_variant_draw : nullptr;
-   const Game::D3D12::DrawCallback shader_callback = FindCallback(call, stages);
-   const Game::D3D12::DrawCallback callback = shader_callback ? shader_callback : events.on_draw_or_dispatch;
-   if (!variant_callback && !callback)
-      return DrawResult::None;
-   if (variant_callback)
-   {
-      if (const DrawResult result = variant_callback(call); result != DrawResult::None)
-         return result;
-      // It may have put the game's pipeline back (UseOriginal)
-      call.variant_stages = GetVariantStages(list, stages);
-   }
-   return callback ? callback(call) : DrawResult::None;
+   return Registry::DispatchDrawEvents<Api::D3D12>(call, stages, [&] { return GetVariantStages(list, stages); });
 }
 } // namespace
 

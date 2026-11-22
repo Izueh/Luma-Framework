@@ -189,27 +189,28 @@ void SetPanels(const Panels& panels)
 namespace {
 IUnknown* GetUnknown(Device device)
 {
-   if (ID3D11Device* const* d3d11 = std::get_if<ID3D11Device*>(&device))
-      return *d3d11;
-   if (ID3D12Device* const* d3d12 = std::get_if<ID3D12Device*>(&device))
-      return *d3d12;
-   return nullptr;
+   return std::visit(
+      Overloaded{
+         [](std::monostate) -> IUnknown* { return nullptr; },
+         [](auto* ptr) -> IUnknown* { return ptr; },
+      },
+      device);
 }
 } // namespace
 
 GameDeviceData* GetGameDeviceData(Device game_device)
 {
-   IUnknown* device = GetUnknown(game_device);
-   if (!device)
-      return nullptr;
-   device = Hooks::DeviceProxy::Unwrap(device);
-   Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device;
-   if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&d3d11_device))))
-      return GetDeviceData(d3d11_device.Get());
-   Microsoft::WRL::ComPtr<ID3D12Device> d3d12_device;
-   if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&d3d12_device))))
-      return GetDeviceData(d3d12_device.Get());
-   return nullptr;
+   return std::visit(
+      Overloaded{
+         [](std::monostate) -> GameDeviceData* { return nullptr; },
+         []<typename NativeDevice>(NativeDevice* device) -> GameDeviceData* {
+            if (!device)
+               return nullptr;
+            Microsoft::WRL::ComPtr<NativeDevice> unwrapped;
+            return SUCCEEDED(Hooks::DeviceProxy::Unwrap(device)->QueryInterface(IID_PPV_ARGS(&unwrapped))) ? GetDeviceData(unwrapped.Get()) : nullptr;
+         },
+      },
+      game_device);
 }
 
 Luma::Frame::Resolutions Frame::Get(Device device)

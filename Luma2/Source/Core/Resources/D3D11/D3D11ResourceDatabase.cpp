@@ -245,25 +245,8 @@ bool BindRequested(ID3D11DeviceContext* context, ShaderStage stage, const Shader
       ID3D11Buffer* buffer = store->objects[request.entry].buffer.Get();
       if (entry.kind != Kind::ConstantBuffer || !buffer)
          continue;
-      // Uploaded again only when the contents changed for this context: LumaSettings when its stamp moved (its dirty flag),
-      // LumaData when what it writes now differs from its last upload
-      Upload& upload = state->uploads[request.entry];
-      if (entry.get_stamp)
-      {
-         const uint64_t stamp = entry.get_stamp();
-         if (NeedsUpload(upload, stamp))
-         {
-            upload.done = WriteBuffer(context, buffer, entry.size, [&](std::span<std::byte> destination) { entry.write(destination, custom, state->target); });
-            upload.stamp = stamp;
-         }
-      }
-      else
-      {
-         state->written.resize(entry.size);
-         entry.write(state->written, custom, state->target);
-         if (ReplaceIfChanged(upload, state->written))
-            upload.done = WriteBuffer(context, buffer, entry.size, [&](std::span<std::byte> destination) { std::ranges::copy(upload.bytes, destination.begin()); });
-      }
+      UploadIfDirty(entry, state->uploads[request.entry], state->written, custom, state->target,
+         [&](auto&& write) { return WriteBuffer(context, buffer, entry.size, write); });
 #if DEVELOPMENT && defined(_DEBUG)
       // With the game's buffers restored after the draw, Luma's in a slot of the game's is expected
       if (!LumaCBuffers::GetOptions().restore_after_draw)

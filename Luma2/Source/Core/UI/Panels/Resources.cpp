@@ -24,7 +24,7 @@ using Widgets::TableColumn;
 using Widgets::TableRow;
 using Widgets::Tone;
 
-std::string DescribeSize(const Resources::Upgrade::TextureDesc& desc)
+std::string DescribeSize(const Resources::Upgrade::TextureInfo& desc)
 {
    switch (desc.dimension)
    {
@@ -36,7 +36,7 @@ std::string DescribeSize(const Resources::Upgrade::TextureDesc& desc)
    }
 }
 
-std::string DescribeBinds(const Resources::Upgrade::TextureDesc& desc)
+std::string DescribeBinds(const Resources::Upgrade::TextureInfo& desc)
 {
    std::string binds;
    const auto add = [&](bool bound, std::string_view name) {

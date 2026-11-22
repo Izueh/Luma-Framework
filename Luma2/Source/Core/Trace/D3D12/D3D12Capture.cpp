@@ -85,11 +85,6 @@ constexpr uint32_t MAX_CONSTANT_BUFFER_BYTES = D3D12_REQ_CONSTANT_BUFFER_ELEMENT
 constexpr uint32_t MAX_UNREFLECTED_REGISTERS = 128;
 constexpr uint32_t MAX_DECLARED_REGISTERS = 1024;
 
-// WKPDID_D3DDebugObjectNameW and WKPDID_D3DDebugObjectName, without linking dxguid
-constexpr GUID DEBUG_OBJECT_NAME_W = {0x4cca5fd8, 0x921f, 0x42c8, {0x85, 0x13, 0x2c, 0x87, 0x3d, 0x93, 0x1c, 0x9a}};
-constexpr GUID DEBUG_OBJECT_NAME = {0x429b8c22, 0x9188, 0x4b0c, {0x87, 0x42, 0xac, 0xb0, 0xbf, 0x85, 0xc2, 0x00}};
-
-// Never held with another lock
 std::mutex tracked_mutex;
 std::optional<Track::Reading> tracked_reading;
 
@@ -98,29 +93,9 @@ ListState* GetState(ID3D12GraphicsCommandList* list)
    return Hooks::Lifetime::GetOrCreateStateCached<ListState>(list);
 }
 
-std::string GetId(const void* object)
-{
-   return std::format("0x{:X}", reinterpret_cast<uintptr_t>(object));
-}
-
-std::string GetDebugName(ID3D12Resource* resource)
-{
-   std::array<wchar_t, 256> wide = {};
-   UINT size = UINT(sizeof(wide) - sizeof(wchar_t));
-   if (SUCCEEDED(resource->GetPrivateData(DEBUG_OBJECT_NAME_W, &size, wide.data())))
-      return Utils::Strings::ToUtf8(std::wstring_view(wide.data(), wcsnlen(wide.data(), size / sizeof(wchar_t))));
-   std::array<char, 256> name = {};
-   size = UINT(name.size() - 1);
-   if (SUCCEEDED(resource->GetPrivateData(DEBUG_OBJECT_NAME, &size, name.data())))
-      return std::string(name.data(), strnlen(name.data(), size));
-   return {};
-}
-
-// `expected_id` is the one the descriptor saw written (0: unknown). A resource Luma doesn't know, or one destroyed since, is named
-// by address only and never touched.
 Resource DescribeResource(ID3D12Resource* resource, uint64_t expected_id)
 {
-   Resource described = {.id = GetId(resource)};
+   Resource described = {.id = GetObjectId(resource)};
    const std::optional<ResourceInfo> info = Resources::Descriptors::D3D12::FindResource(resource);
    if (!info || (expected_id && info->id != expected_id))
    {
@@ -149,7 +124,7 @@ Resource DescribeResource(ID3D12Resource* resource, uint64_t expected_id)
    default: described.type = "Unknown"; break;
    }
    described.format = desc.Format;
-   described.debug_name = GetDebugName(resource);
+   described.debug_name = GetD3DDebugName(resource);
    // What the call read or wrote while the mirrors are swapped in
    if (ID3D12Resource* mirror = Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D12::GetMirror(resource) : nullptr)
    {
@@ -368,7 +343,7 @@ ConstantBuffer DescribeConstantBuffer(ShaderStage stage, uint32_t slot, uint32_t
       buffer.size = size;
       return buffer;
    }
-   buffer.id = GetId(info->resource);
+   buffer.id = GetObjectId(info->resource);
    buffer.size = uint32_t(info->desc.Width);
    const uint64_t offset = address - info->address;
    const uint64_t available = info->desc.Width - offset;
@@ -909,7 +884,7 @@ void OnExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* 
 {
    if (!IsCapturing())
       return;
-   const std::string queue_id = GetId(queue);
+   const std::string queue_id = GetObjectId(queue);
    for (UINT i = 0; i < count; i++)
    {
       Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> list;
@@ -918,7 +893,7 @@ void OnExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* 
       const ListState* state = Hooks::Lifetime::GetState<ListState>(list.Get());
       if (!state)
          continue;
-      const std::string list_id = GetId(list.Get());
+      const std::string list_id = GetObjectId(list.Get());
       // A list can be executed again: its events are copied
       for (Event event : state->events)
       {
@@ -932,31 +907,20 @@ void OnExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* 
 bool IsSkipped(ID3D12GraphicsCommandList* list, Shaders::StageSet stages)
 {
    const Shaders::Variants::D3D12::BoundPipeline bound = Shaders::Variants::D3D12::GetBoundPipeline(list);
-   if (!bound.tracked)
-      return false;
-   for (size_t stage = 0; stage < bound.tracked->shaders.size(); stage++)
-   {
-      const Shaders::Database::Shader* shader = bound.tracked->shaders[stage];
-      if (stages.Has(ShaderStage(stage)) && shader && shader->skip_draws.load(std::memory_order_relaxed))
-         return true;
-   }
-   return false;
+   return bound.tracked && IsAnyStageSkipped(bound.tracked->shaders, stages);
 }
 
 void TrackCall(ID3D12GraphicsCommandList* list, Shaders::StageSet stages)
 {
-   const std::optional<Track::Target> target = Track::Get();
-   if (!target || !stages.Has(target->stage))
-      return;
    const Shaders::Variants::D3D12::BoundPipeline bound = Shaders::Variants::D3D12::GetBoundPipeline(list);
-   const Shaders::Database::Shader* shader = bound.tracked ? bound.tracked->shaders[size_t(target->stage)] : nullptr;
-   if (!shader || shader->hash != target->hash || Track::CountCall() != target->instance)
+   const std::optional<Track::MatchedCall> matched = bound.tracked ? Track::MatchCall(bound.tracked->shaders, stages) : std::nullopt;
+   if (!matched)
       return;
    const ListState* state = GetState(list);
    if (!state)
       return;
    std::vector<ConstantBuffer> buffers;
-   AddConstantBuffers(buffers, *state, target->stage == ShaderStage::Compute, target->stage, shader, target->slot);
+   AddConstantBuffers(buffers, *state, matched->target.stage == ShaderStage::Compute, matched->target.stage, matched->shader, matched->target.slot);
    if (buffers.empty() || buffers.front().contents.empty())
       return;
    ConstantBuffer& buffer = buffers.front();

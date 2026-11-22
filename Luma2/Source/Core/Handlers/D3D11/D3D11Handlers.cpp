@@ -1,14 +1,14 @@
 #include "Handlers/D3D11/D3D11Handlers.hpp"
 
+#include <format>
 #include <optional>
+#include <type_traits>
 
 #include "Draw/D3D11/D3D11Draw.hpp"
 #include "Draw/Draw.hpp"
-#include "Frame/Frame.hpp"
 #include "Game/D3D11/D3D11DrawEvents.hpp"
 #include "Game/Registry.hpp"
-#include "Handlers/DXGI/DXGIHandlers.hpp"
-#include "Hooks/DeviceProxy.hpp"
+#include "Handlers/Handlers.hpp"
 #include "Luma.hpp"
 #include "Resources/D3D11/D3D11LumaCBuffers.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
@@ -50,21 +50,6 @@ bool IsRestoringGameBuffers()
    return Resources::LumaCBuffers::GetOptions().restore_after_draw;
 }
 
-#if DEVELOPMENT
-Trace::Capture::Outcome GetOutcome(Game::DrawResult result, bool skipped)
-{
-   if (skipped)
-      return Trace::Capture::Outcome::SkippedByTrace;
-   switch (result)
-   {
-   case Game::DrawResult::Skip: return Trace::Capture::Outcome::Skipped;
-   case Game::DrawResult::Replaced: return Trace::Capture::Outcome::Replaced;
-   default: return Trace::Capture::Outcome::Ran;
-   }
-}
-#endif
-
-// The context's state went back to the defaults
 void ForgetContextState(ID3D11DeviceContext* context)
 {
    if (Shaders::IsNeeded())
@@ -119,34 +104,26 @@ void PreCreateDevice(UINT& flags, const D3D_FEATURE_LEVEL*& feature_levels, UINT
 
 void PostCreateDevice(ID3D11Device* device)
 {
-   // First, so the debug layer's messages from what follows are read
-   Validation::D3D11::WatchDeviceMessages(device);
-   Utils::Log::Info("D3D11: device {} created (feature level 0x{:X}, {} live)", static_cast<void*>(device), uint32_t(device->GetFeatureLevel()),
-      Hooks::DeviceProxy::GetCount());
-   Game::Registry::CreateDeviceData(device);
-   Frame::CreateDeviceState(device);
-   Shaders::SetApi(Api::D3D11);
-   // Before the game's callback, which may create shaders: their variants and Luma's objects are found in these stores
-   if (Shaders::IsNeeded())
-      Shaders::Variants::D3D11::CreateVariantStore(device);
-   Resources::Database::D3D11::CreateDeviceObjects(device);
-   // After Core's objects, which the game's may use
-   Game::Registry::Call(GameEvents().on_init_device, device);
+   HandlePostCreateDevice<Api::D3D11>(
+      device, std::format("feature level 0x{:X}", uint32_t(device->GetFeatureLevel())),
+      [&] { Validation::D3D11::WatchDeviceMessages(device); },
+      [&] {
+         if (Shaders::IsNeeded())
+            Shaders::Variants::D3D11::CreateVariantStore(device);
+         Resources::Database::D3D11::CreateDeviceObjects(device);
+      });
 }
 
 void OnDeviceDestroyed(ID3D11Device* device)
 {
-   Utils::Log::Info("D3D11: device {} released by the game ({} live)", static_cast<void*>(device), Hooks::DeviceProxy::GetCount());
-   // First, while Core's objects are still there
-   Game::Registry::Call(GameEvents().on_destroy_device, device);
-   // Luma's objects on the device hold it: released now, not with the device
-   if (Shaders::IsNeeded())
-      Shaders::Variants::D3D11::ReleaseVariants(device);
-   Resources::Database::D3D11::ReleaseDeviceObjects(device);
-   UI::DetachFromDevice(device);
-   ForgetSwapchains(device);
-   // Last, so the messages of the releases above are read
-   Validation::D3D11::StopWatchingDevice(device);
+   HandleOnDeviceDestroyed<Api::D3D11>(
+      device,
+      [&] {
+         if (Shaders::IsNeeded())
+            Shaders::Variants::D3D11::ReleaseVariants(device);
+         Resources::Database::D3D11::ReleaseDeviceObjects(device);
+      },
+      [&] { Validation::D3D11::StopWatchingDevice(device); });
 }
 
 void PreCreateBuffer(ID3D11Device* device, D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA*& initial_data)
@@ -533,61 +510,53 @@ bool PreClearView(ID3D11DeviceContext* context, ID3D11View* view, const FLOAT co
    return Resources::Mirrors::IsNeeded() && Resources::Mirrors::D3D11::RedirectClearView(context, view, color, rects, rect_count);
 }
 
-// The trace records the state before the game's callback changes it, and what the callback did with the call
+template <typename Call>
+bool RunCall(ID3D11DeviceContext* context, const Call& call)
+{
+   constexpr bool dispatch = std::is_same_v<Call, DispatchCall>;
+   Game::D3D11::Call original = {.context = context};
+   if constexpr (dispatch)
+      original.dispatch = &call;
+   else
+      original.draw = &call;
+   const auto run_draw = [&](Shaders::StageSet stages, Game::DrawResult& result, bool& skipped) {
+      const Shaders::StageSet before = FulfilBeforeEvents(context, stages);
+      const Game::DrawEvents::D3D11::Result events =
+         Game::Registry::HasDrawCallbacks<Api::D3D11>() ? Game::DrawEvents::D3D11::Run(context, call) : Game::DrawEvents::D3D11::Result();
+      result = events.result;
+#if DEVELOPMENT
+      skipped = result == Game::DrawResult::None && Trace::Capture::D3D11::IsSkipped(context, stages);
+#endif
+      const Shaders::StageSet bound = FulfilAfterEvents(context, stages, events, skipped, before);
+      return RestoreGameBuffers(original, bound, result != Game::DrawResult::None || skipped);
+   };
+#if DEVELOPMENT
+   return HandleDrawOrDispatch<dispatch>(
+      [&] {
+         if constexpr (dispatch)
+            return Trace::Capture::D3D11::BeginDispatch(context, call);
+         else
+            return Trace::Capture::D3D11::BeginDraw(context, call);
+      },
+      [&](Shaders::StageSet stages) { Trace::Capture::D3D11::TrackCall(context, stages); },
+      [&](Shaders::StageSet stages, bool handled) { return Trace::Readback::D3D11::ReadAfterCall(original, stages, handled); },
+      [](Trace::Capture::D3D11::Recording recording, Trace::Capture::Outcome outcome) { Trace::Capture::D3D11::End(std::move(recording), outcome); },
+      run_draw);
+#else
+   Game::DrawResult result = Game::DrawResult::None;
+   bool skipped = false;
+   return run_draw(dispatch ? Shaders::COMPUTE_STAGES : Shaders::GRAPHICS_STAGES, result, skipped);
+#endif
+}
+
 bool PreDraw(ID3D11DeviceContext* context, const DrawCall& draw)
 {
-#if DEVELOPMENT
-   std::optional<Trace::Capture::D3D11::Recording> recording;
-   if (Trace::Capture::IsCapturing())
-      recording = Trace::Capture::D3D11::BeginDraw(context, draw);
-   if (Trace::Track::IsActive())
-      Trace::Capture::D3D11::TrackCall(context, Shaders::GRAPHICS_STAGES);
-#endif
-   const Shaders::StageSet before = FulfilBeforeEvents(context, Shaders::GRAPHICS_STAGES);
-   const Game::DrawEvents::D3D11::Result events = Game::Registry::HasDrawCallbacks() ? Game::DrawEvents::D3D11::Run(context, draw) : Game::DrawEvents::D3D11::Result();
-#if DEVELOPMENT
-   const bool skipped = events.result == Game::DrawResult::None && Trace::Capture::D3D11::IsSkipped(context, Shaders::GRAPHICS_STAGES);
-#else
-   constexpr bool skipped = false;
-#endif
-   const Shaders::StageSet bound = FulfilAfterEvents(context, Shaders::GRAPHICS_STAGES, events, skipped, before);
-   bool handled = RestoreGameBuffers({.context = context, .draw = &draw}, bound, events.result != Game::DrawResult::None || skipped);
-#if DEVELOPMENT
-   // Last: the call as it ran is what's read
-   if (Trace::Readback::IsArmed())
-      handled = Trace::Readback::D3D11::ReadAfterCall({.context = context, .draw = &draw}, Shaders::GRAPHICS_STAGES, handled);
-   if (recording)
-      Trace::Capture::D3D11::End(std::move(*recording), GetOutcome(events.result, skipped));
-#endif
-   return handled;
+   return RunCall(context, draw);
 }
 
 bool PreDispatch(ID3D11DeviceContext* context, const DispatchCall& dispatch)
 {
-#if DEVELOPMENT
-   std::optional<Trace::Capture::D3D11::Recording> recording;
-   if (Trace::Capture::IsCapturing())
-      recording = Trace::Capture::D3D11::BeginDispatch(context, dispatch);
-   if (Trace::Track::IsActive())
-      Trace::Capture::D3D11::TrackCall(context, Shaders::COMPUTE_STAGES);
-#endif
-   const Shaders::StageSet before = FulfilBeforeEvents(context, Shaders::COMPUTE_STAGES);
-   const Game::DrawEvents::D3D11::Result events =
-      Game::Registry::HasDrawCallbacks() ? Game::DrawEvents::D3D11::Run(context, dispatch) : Game::DrawEvents::D3D11::Result();
-#if DEVELOPMENT
-   const bool skipped = events.result == Game::DrawResult::None && Trace::Capture::D3D11::IsSkipped(context, Shaders::COMPUTE_STAGES);
-#else
-   constexpr bool skipped = false;
-#endif
-   const Shaders::StageSet bound = FulfilAfterEvents(context, Shaders::COMPUTE_STAGES, events, skipped, before);
-   bool handled = RestoreGameBuffers({.context = context, .dispatch = &dispatch}, bound, events.result != Game::DrawResult::None || skipped);
-#if DEVELOPMENT
-   if (Trace::Readback::IsArmed())
-      handled = Trace::Readback::D3D11::ReadAfterCall({.context = context, .dispatch = &dispatch}, Shaders::COMPUTE_STAGES, handled);
-   if (recording)
-      Trace::Capture::D3D11::End(std::move(*recording), GetOutcome(events.result, skipped));
-#endif
-   return handled;
+   return RunCall(context, dispatch);
 }
 
 void PostCreateDeferredContext(ID3D11Device* device, ID3D11DeviceContext* context)

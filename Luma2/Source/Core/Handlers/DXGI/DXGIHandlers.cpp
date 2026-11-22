@@ -117,12 +117,11 @@ void LogOverlays()
    }
 }
 
-// Logs the swapchain's real description (inside the scope), and reports it to Trace
 DXGI_SWAP_CHAIN_DESC Describe(IDXGISwapChain* swapchain, const Presenter& presenter, const char* event)
 {
    DXGI_SWAP_CHAIN_DESC desc = {};
    swapchain->GetDesc(&desc);
-   const std::string_view api = GetName(std::holds_alternative<ID3D11Device*>(presenter) ? Api::D3D11 : Api::D3D12);
+   const std::string_view api = GetName(GetApi(presenter));
    Utils::Log::Info("DXGI: {} swapchain {} {} ({}x{}, format {}, {} buffers, flags 0x{:X}, window {})", api, static_cast<void*>(swapchain), event,
       desc.BufferDesc.Width, desc.BufferDesc.Height, uint32_t(desc.BufferDesc.Format), desc.BufferCount, desc.Flags, static_cast<void*>(desc.OutputWindow));
    Trace::SetSwapchain({reinterpret_cast<uint64_t>(swapchain), std::string(api), desc.BufferDesc.Width, desc.BufferDesc.Height, uint32_t(desc.BufferDesc.Format),
@@ -147,59 +146,57 @@ std::string_view GetColorSpaceName(DXGI_COLOR_SPACE_TYPE color_space)
    }
 }
 
-// Null for D3D11CreateDeviceAndSwapChain, before the device exists
-bool IsD3D11(IUnknown* creator)
+Api GetCreatorApi(IUnknown* creator)
 {
    if (!creator)
-      return true;
+      return Api::D3D11;
    const std::optional<Presenter> presenter = GetPresenter(creator);
-   return presenter && std::holds_alternative<ID3D11Device*>(*presenter);
+   return presenter ? GetApi(*presenter) : Api::D3D12;
 }
 
-bool HasCreateSwapchainEvent(bool d3d11)
+bool HasCreateSwapchainEvent(Api api)
 {
-   return d3d11 ? Game::Registry::GetD3D11Events().on_create_swapchain != nullptr : Game::Registry::GetD3D12Events().on_create_swapchain != nullptr;
+   return api == Api::D3D11 ? Game::Registry::GetD3D11Events().on_create_swapchain != nullptr
+                            : Game::Registry::GetD3D12Events().on_create_swapchain != nullptr;
 }
 
-// The game's on_create_swapchain for the creator's API, before Core's own changes
-void ReportCreateSwapchain(bool d3d11, Game::SwapchainDesc& desc)
+void ReportCreateSwapchain(Api api, Game::SwapchainDesc& desc)
 {
-   if (d3d11)
+   if (api == Api::D3D11)
       Game::Registry::Call(Game::Registry::GetD3D11Events().on_create_swapchain, desc);
    else
       Game::Registry::Call(Game::Registry::GetD3D12Events().on_create_swapchain, desc);
 }
 
-// At the end of Core's handling of a creation or resize
 void ReportInitSwapchain(IDXGISwapChain* swapchain, const Presenter& presenter, bool resize)
 {
-   if (auto* const* device = std::get_if<ID3D11Device*>(&presenter))
-   {
-      Game::Registry::Call(Game::Registry::GetD3D11Events().on_init_swapchain, swapchain, *device, resize);
-      return;
-   }
+   std::visit(
+      Overloaded{
+         [&](ID3D11Device* device) { Game::Registry::Call(Game::Registry::GetD3D11Events().on_init_swapchain, swapchain, device, resize); },
+         [&](ID3D12CommandQueue* queue) {
 #if DEVELOPMENT
-   // DXGI creates the buffers itself: trace knows them from here
-   DXGI_SWAP_CHAIN_DESC desc = {};
-   swapchain->GetDesc(&desc);
-   for (UINT i = 0; i < desc.BufferCount; i++)
-   {
-      Microsoft::WRL::ComPtr<ID3D12Resource> buffer;
-      if (SUCCEEDED(swapchain->GetBuffer(i, IID_PPV_ARGS(&buffer))))
-         Resources::Descriptors::D3D12::TrackResource(buffer.Get());
-   }
+            DXGI_SWAP_CHAIN_DESC desc = {};
+            swapchain->GetDesc(&desc);
+            for (UINT i = 0; i < desc.BufferCount; i++)
+            {
+               ComPtr<ID3D12Resource> buffer;
+               if (SUCCEEDED(swapchain->GetBuffer(i, IID_PPV_ARGS(&buffer))))
+                  Resources::Descriptors::D3D12::TrackResource(buffer.Get());
+            }
 #endif
-   Game::Registry::Call(Game::Registry::GetD3D12Events().on_init_swapchain, swapchain, std::get<ID3D12CommandQueue*>(presenter), resize);
+            Game::Registry::Call(Game::Registry::GetD3D12Events().on_init_swapchain, swapchain, queue, resize);
+         },
+      },
+      presenter);
 }
 } // namespace
 
 void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc)
 {
-   // The game's event first, then Luma's changes on what it made of the desc
-   if (const bool d3d11 = IsD3D11(creator); HasCreateSwapchainEvent(d3d11))
+   if (const Api api = GetCreatorApi(creator); HasCreateSwapchainEvent(api))
    {
       Game::SwapchainDesc reported = {desc.BufferDesc.Format, desc.BufferCount, desc.Flags, desc.SwapEffect, desc.SampleDesc.Count, desc.Windowed != FALSE};
-      ReportCreateSwapchain(d3d11, reported);
+      ReportCreateSwapchain(api, reported);
       desc.BufferDesc.Format = reported.format;
       desc.BufferCount = reported.buffer_count;
       desc.Flags = reported.flags;
@@ -212,10 +209,10 @@ void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc)
 
 void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND hwnd)
 {
-   if (const bool d3d11 = IsD3D11(creator); HasCreateSwapchainEvent(d3d11))
+   if (const Api api = GetCreatorApi(creator); HasCreateSwapchainEvent(api))
    {
       Game::SwapchainDesc reported = {desc.Format, desc.BufferCount, desc.Flags, desc.SwapEffect, desc.SampleDesc.Count, fullscreen_desc.Windowed != FALSE};
-      ReportCreateSwapchain(d3d11, reported);
+      ReportCreateSwapchain(api, reported);
       desc.Format = reported.format;
       desc.BufferCount = reported.buffer_count;
       desc.Flags = reported.flags;
@@ -228,7 +225,6 @@ void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, D
 
 void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
 {
-   // A ReShade that loaded after Luma (as the game's dxgi.dll) wraps this swapchain next: its module has to be known before it reads it
    ReShade::FindReShadeLoadedAfterLuma();
    const std::optional<Presenter> presenter = GetPresenter(creator);
    if (!presenter)
@@ -237,18 +233,15 @@ void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
          static_cast<void*>(creator));
       return;
    }
-   // The real device, not the game's proxy
-   const void* device = nullptr;
-   if (auto* const* queue = std::get_if<ID3D12CommandQueue*>(&*presenter))
-   {
-      ComPtr<ID3D12Device> queue_device;
-      if (SUCCEEDED((*queue)->GetDevice(IID_PPV_ARGS(&queue_device))))
-         device = queue_device.Get();
-   }
-   else
-   {
-      device = std::get<ID3D11Device*>(*presenter);
-   }
+   const void* device = std::visit(
+      Overloaded{
+         [](ID3D11Device* d3d11) -> const void* { return d3d11; },
+         [](ID3D12CommandQueue* queue) -> const void* {
+            ComPtr<ID3D12Device> queue_device;
+            return SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&queue_device))) ? queue_device.Get() : nullptr;
+         },
+      },
+      *presenter);
    {
       std::scoped_lock lock(known_mutex);
       known.push_back({swapchain, *presenter, device});
@@ -294,15 +287,14 @@ void PreResizeBuffers(IDXGISwapChain* swapchain, UINT& count, UINT& width, UINT&
    const std::optional<Presenter> presenter = FindPresenter(swapchain);
    if (!presenter)
       return;
-   if (const bool d3d11 = std::holds_alternative<ID3D11Device*>(*presenter); HasCreateSwapchainEvent(d3d11))
+   if (const Api api = GetApi(*presenter); HasCreateSwapchainEvent(api))
    {
-      // What the game kept (zero, unknown) is reported as the swapchain's current value, and stays kept unless the game changed it
       DXGI_SWAP_CHAIN_DESC current = {};
       swapchain->GetDesc(&current);
       const DXGI_FORMAT resolved_format = format == DXGI_FORMAT_UNKNOWN ? current.BufferDesc.Format : format;
       const UINT resolved_count = count == 0 ? current.BufferCount : count;
       Game::SwapchainDesc reported = {resolved_format, resolved_count, flags, current.SwapEffect, current.SampleDesc.Count, current.Windowed != FALSE, true};
-      ReportCreateSwapchain(d3d11, reported);
+      ReportCreateSwapchain(api, reported);
       if (reported.format != resolved_format)
          format = reported.format;
       if (reported.buffer_count != resolved_count)
@@ -412,57 +404,60 @@ void PrePresentWork(IDXGISwapChain* swapchain)
    // After the hooks were verified, whose counts it logs
    ReShade::CheckHookOrderAtFirstPresent();
 #if DEVELOPMENT
-   // A capture is one frame, present to present: what's drawn next (the game's present callback, the overlay) isn't in it. D3D12's
-   // contents were copied at the calls; its events reached the frame when their lists were executed.
-   if (const std::optional<Presenter> presenting = FindPresenter(swapchain); presenting && std::holds_alternative<ID3D12CommandQueue*>(*presenting))
+   if (const std::optional<Presenter> presenting = FindPresenter(swapchain))
    {
-      Trace::Capture::D3D12::ReadBackTracked();
-      // Before the overlay: a swapchain readback is the game's image
-      Trace::Readback::D3D12::ReadBack(swapchain, std::get<ID3D12CommandQueue*>(*presenting));
+      std::visit(
+         Overloaded{
+            [&](ID3D11Device* device) {
+               Trace::Capture::D3D11::ReadBackConstantBuffers();
+               Trace::Capture::D3D11::ReadBackTracked();
+               Trace::Readback::D3D11::ReadBack(swapchain, device);
+            },
+            [&](ID3D12CommandQueue* queue) {
+               Trace::Capture::D3D12::ReadBackTracked();
+               Trace::Readback::D3D12::ReadBack(swapchain, queue);
+            },
+         },
+         *presenting);
    }
    else
    {
       Trace::Capture::D3D11::ReadBackConstantBuffers();
       Trace::Capture::D3D11::ReadBackTracked();
-      if (presenting)
-         Trace::Readback::D3D11::ReadBack(swapchain, std::get<ID3D11Device*>(*presenting));
    }
    Trace::Readback::OnPresent();
    Trace::Capture::AdvanceFrame();
 #endif
-   // The one writer of the settings: changes from other threads land here
    Settings::ApplyQueued();
 #if DEVELOPMENT
    Trace::Mcp::RunPendingJobs();
 #endif
-   // Finished jobs (a shader build) are published before the device's objects follow them, then the frame counts (retirement is by frame)
    System::Jobs::RunFinished();
 #if DEVELOPMENT || TEST
    if (Shaders::IsNeeded())
       Shaders::Database::QueueDumps();
 #endif
-   // The shaders the game created since, or all of them after a recipe change, patched on a job
    Shaders::Patching::OnPresent();
    Shaders::CountFrame();
    if (const std::optional<Presenter> presenter = FindPresenter(swapchain))
    {
-      if (auto* const* device = std::get_if<ID3D11Device*>(&*presenter))
-      {
-         Game::Registry::Call(Game::Registry::GetD3D11Events().on_present, swapchain, *device);
-         // After the game's callback: what its passes bound this frame is retired from now on
-         if (Shaders::IsNeeded())
-            Shaders::Variants::D3D11::PublishVariants(*device);
-         Resources::Database::D3D11::UpdateShaderObjects(*device);
-      }
-      else
-      {
-         Game::Registry::Call(Game::Registry::GetD3D12Events().on_present, swapchain, std::get<ID3D12CommandQueue*>(*presenter));
-         // After the game's callback, as D3D11's variants: pipelines whose choice changed are made again
-         PresentD3D12();
+      std::visit(
+         Overloaded{
+            [&](ID3D11Device* device) {
+               Game::Registry::Call(Game::Registry::GetD3D11Events().on_present, swapchain, device);
+               if (Shaders::IsNeeded())
+                  Shaders::Variants::D3D11::PublishVariants(device);
+               Resources::Database::D3D11::UpdateShaderObjects(device);
+            },
+            [&](ID3D12CommandQueue* queue) {
+               Game::Registry::Call(Game::Registry::GetD3D12Events().on_present, swapchain, queue);
+               PresentD3D12();
 #if DEVELOPMENT
-         Trace::Stats::D3D12::CountFrame();
+               Trace::Stats::D3D12::CountFrame();
 #endif
-      }
+            },
+         },
+         *presenter);
    }
    // A switch of the game's own HDR option this frame, then the game's image into the real buffer, once the game's frame is done (its
    // on_present included)

@@ -1,5 +1,8 @@
 #pragma once
 
+#include <array>
+#include <utility>
+
 #include "Hooks/Functions.hpp"
 #include "Luma.hpp"
 
@@ -40,6 +43,61 @@ auto Call(Callback callback, Arguments&&... arguments)
    if (!callback)
       return Result();
    return callback(std::forward<Arguments>(arguments)...);
+}
+
+template <Api api>
+const auto& GetEvents()
+{
+   if constexpr (api == Api::D3D11)
+      return GetD3D11Events();
+   else
+      return GetD3D12Events();
+}
+
+template <Api api>
+auto FindDrawCallback(uint32_t hash)
+{
+   if constexpr (api == Api::D3D11)
+      return FindDrawCallback(hash);
+   else
+      return FindD3D12DrawCallback(hash);
+}
+
+template <Api api>
+bool HasDrawCallbacks()
+{
+   if constexpr (api == Api::D3D11)
+      return HasDrawCallbacks();
+   else
+      return HasD3D12DrawCallbacks();
+}
+
+template <Api api, typename Call, typename RefreshVariantStagesFn>
+DrawResult DispatchDrawEvents(Call& call, Luma::Shaders::StageSet callback_stages, RefreshVariantStagesFn&& refresh_variant_stages)
+{
+   constexpr std::array ORDER = {ShaderStage::Pixel, ShaderStage::Vertex, ShaderStage::Geometry, ShaderStage::Hull, ShaderStage::Domain, ShaderStage::Compute};
+   const auto& events = GetEvents<api>();
+   const auto variant_callback = call.variant_stages.Any() ? events.on_variant_draw : nullptr;
+   decltype(events.on_draw_or_dispatch) callback = nullptr;
+   for (const ShaderStage stage : ORDER)
+   {
+      const uint32_t hash = call.hashes[size_t(stage)];
+      if (!callback_stages.Has(stage) || !hash)
+         continue;
+      if ((callback = FindDrawCallback<api>(hash)))
+         break;
+   }
+   if (!callback)
+      callback = events.on_draw_or_dispatch;
+   if (!variant_callback && !callback)
+      return DrawResult::None;
+   if (variant_callback)
+   {
+      if (const DrawResult result = variant_callback(call); result != DrawResult::None)
+         return result;
+      call.variant_stages = refresh_variant_stages();
+   }
+   return callback ? callback(call) : DrawResult::None;
 }
 } // namespace Registry
 } // namespace Game

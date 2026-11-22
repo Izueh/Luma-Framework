@@ -4,10 +4,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
 #include "Common/ShaderStage.hpp"
+#include "Shaders/Database.hpp"
+#include "Shaders/Stages.hpp"
 
 // Constant buffer tracking: one cbuffer slot of one shader, read again every frame after a capture, so its live values and
 // what changes in them can be watched. Development builds; the draw path asks IsActive() (a relaxed load) and does nothing else
@@ -49,8 +52,15 @@ std::optional<Target> Get();
 // Any thread, on the draw path
 bool IsActive();
 
-// Any thread, on the draw path: the instance number of this call of the tracked shader in the frame
 uint32_t CountCall();
+
+struct MatchedCall
+{
+   Target target;
+   const Shaders::Database::Shader* shader = nullptr;
+};
+
+std::optional<MatchedCall> MatchCall(std::span<const Shaders::Database::Shader* const> shaders, Shaders::StageSet stages);
 // Presenting thread, before the overlay draws: the contents read back for this frame, or none if the call didn't happen
 void SetReading(std::optional<Reading> reading);
 // The last reading, empty before the first

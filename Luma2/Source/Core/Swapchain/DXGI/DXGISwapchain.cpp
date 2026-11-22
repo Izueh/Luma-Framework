@@ -278,33 +278,33 @@ void ApplyColorSpace(IDXGISwapChain* swapchain, State& state, bool at_present = 
    }
 }
 
-// Mirror: the game's buffers, in the size and format it asked for
 void CreateBuffers(State& state)
 {
    std::vector<ComPtr<IUnknown>> buffers;
-   if (auto* const* device = std::get_if<ID3D11Device*>(&state.presenter))
-   {
-      if (ComPtr<ID3D11Texture2D> buffer = D3D11::CreateBuffer(*device, state.game))
-         buffers.push_back(std::move(buffer));
-   }
-   else
-   {
-      ComPtr<ID3D12Device> d3d12_device;
-      if (SUCCEEDED(std::get<ID3D12CommandQueue*>(state.presenter)->GetDevice(IID_PPV_ARGS(&d3d12_device))))
-      {
-         for (UINT i = 0; i < std::max(1u, state.game.count); i++)
-         {
-            if (ComPtr<ID3D12Resource> buffer = D3D12::CreateBuffer(d3d12_device.Get(), state.game, i))
+   std::visit(
+      Overloaded{
+         [&](ID3D11Device* device) {
+            if (ComPtr<ID3D11Texture2D> buffer = D3D11::CreateBuffer(device, state.game))
                buffers.push_back(std::move(buffer));
-         }
-      }
-   }
+         },
+         [&](ID3D12CommandQueue* queue) {
+            ComPtr<ID3D12Device> device;
+            if (SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&device))))
+            {
+               for (UINT i = 0; i < std::max(1u, state.game.count); i++)
+               {
+                  if (ComPtr<ID3D12Resource> buffer = D3D12::CreateBuffer(device.Get(), state.game, i))
+                     buffers.push_back(std::move(buffer));
+               }
+            }
+         },
+      },
+      state.presenter);
    std::scoped_lock lock(state.mutex);
    state.buffers = std::move(buffers);
    state.index = 0;
 }
 
-// A zero size is the window's: unscaled real buffers have it. Then the device's four resolutions.
 void ResolveSizes(IDXGISwapChain* swapchain, State& state)
 {
    DXGI_SWAP_CHAIN_DESC real = {};
@@ -316,26 +316,33 @@ void ResolveSizes(IDXGISwapChain* swapchain, State& state)
       state.game.width = real.BufferDesc.Width;
       state.game.height = real.BufferDesc.Height;
    }
-   ComPtr<IUnknown> device;
-   if (auto* const* d3d11_device = std::get_if<ID3D11Device*>(&state.presenter))
-      device = *d3d11_device;
-   else if (ComPtr<ID3D12Device> d3d12_device; SUCCEEDED(std::get<ID3D12CommandQueue*>(state.presenter)->GetDevice(IID_PPV_ARGS(&d3d12_device))))
-      device = d3d12_device;
+   ComPtr<IUnknown> device = std::visit(
+      Overloaded{
+         [](ID3D11Device* d3d11) -> ComPtr<IUnknown> { return d3d11; },
+         [](ID3D12CommandQueue* queue) -> ComPtr<IUnknown> {
+            ComPtr<ID3D12Device> d3d12;
+            return SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&d3d12))) ? ComPtr<IUnknown>(d3d12) : nullptr;
+         },
+      },
+      state.presenter);
    MONITORINFO monitor = {.cbSize = sizeof(monitor)};
    GetMonitorInfoW(MonitorFromWindow(state.window, MONITOR_DEFAULTTONEAREST), &monitor);
-   // Before the game's callbacks, which read them, and the game's buffers, whose upgrade rules match them
    Frame::SetOutputResolution(device.Get(), {state.game.width, state.game.height});
    Frame::SetSwapchainResolution(device.Get(), {state.real.width, state.real.height},
       {uint32_t(monitor.rcMonitor.right - monitor.rcMonitor.left), uint32_t(monitor.rcMonitor.bottom - monitor.rcMonitor.top)});
 }
 
-// Nothing of Luma's refers to the real buffers (a resize fails otherwise)
 void ReleaseRealBuffers(State& state)
 {
-   if (auto* const* device = std::get_if<ID3D11Device*>(&state.presenter))
-      D3D11::PrepareResize(*device, state.d3d11);
-   else if (state.d3d12)
-      Display::Composition::D3D12::WaitIdle(*state.d3d12);
+   std::visit(
+      Overloaded{
+         [&](ID3D11Device* device) { D3D11::PrepareResize(device, state.d3d11); },
+         [&](ID3D12CommandQueue*) {
+            if (state.d3d12)
+               Display::Composition::D3D12::WaitIdle(*state.d3d12);
+         },
+      },
+      state.presenter);
 }
 
 void RefreshDisplay(IDXGISwapChain* swapchain, State& state, bool force)
@@ -526,11 +533,18 @@ void OnCreated(IDXGISwapChain* swapchain, const Presenter& presenter)
    RefreshDisplay(swapchain, *state, true);
    if (state->mode == Mode::Mirror)
       CreateBuffers(*state);
-   if (auto* const* queue = std::get_if<ID3D12CommandQueue*>(&presenter); queue && ManagesOutput(state->mode))
+   if (ManagesOutput(state->mode))
    {
-      state->d3d12 = Display::Composition::D3D12::CreateRenderer(*queue);
-      if (!state->d3d12)
-         Utils::Log::Error("Swapchain: display composition couldn't be set up on queue {}", static_cast<void*>(*queue));
+      std::visit(
+         Overloaded{
+            [](ID3D11Device*) {},
+            [&](ID3D12CommandQueue* queue) {
+               state->d3d12 = Display::Composition::D3D12::CreateRenderer(queue);
+               if (!state->d3d12)
+                  Utils::Log::Error("Swapchain: display composition couldn't be set up on queue {}", static_cast<void*>(queue));
+            },
+         },
+         presenter);
    }
    if (ManagesOutput(state->mode))
    {
@@ -753,18 +767,20 @@ void Compose(IDXGISwapChain* swapchain)
    if (const std::optional<Display::Composition::Pass> pass = Display::Composition::Plan(inputs))
    {
       ComPtr<IUnknown> game_buffer = mirror ? GetGameBuffer(swapchain) : nullptr;
-      if (auto* const* device = std::get_if<ID3D11Device*>(&state->presenter))
-      {
-         ComPtr<ID3D11Texture2D> texture;
-         if (!mirror || (game_buffer && SUCCEEDED(game_buffer.As(&texture))))
-            state->composed = D3D11::Compose(swapchain, *device, texture.Get(), state->d3d11, *pass);
-      }
-      else if (state->d3d12)
-      {
-         ComPtr<ID3D12Resource> resource;
-         if (!mirror || (game_buffer && SUCCEEDED(game_buffer.As(&resource))))
-            state->composed = D3D12::Compose(swapchain, *state->d3d12, resource.Get(), *pass);
-      }
+      std::visit(
+         Overloaded{
+            [&](ID3D11Device* device) {
+               ComPtr<ID3D11Texture2D> texture;
+               if (!mirror || (game_buffer && SUCCEEDED(game_buffer.As(&texture))))
+                  state->composed = D3D11::Compose(swapchain, device, texture.Get(), state->d3d11, *pass);
+            },
+            [&](ID3D12CommandQueue*) {
+               ComPtr<ID3D12Resource> resource;
+               if (state->d3d12 && (!mirror || (game_buffer && SUCCEEDED(game_buffer.As(&resource)))))
+                  state->composed = D3D12::Compose(swapchain, *state->d3d12, resource.Get(), *pass);
+            },
+         },
+         state->presenter);
    }
    UpdateStatus(swapchain, *state);
 }

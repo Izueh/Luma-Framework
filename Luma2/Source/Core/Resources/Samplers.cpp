@@ -19,17 +19,6 @@ std::atomic<bool> custom_bias = false;
 std::atomic<float> custom_offset = 0.f;
 std::atomic<uint32_t> generation = 0;
 
-// D3D11_FILTER and D3D12_FILTER values (API-agnostic file)
-constexpr uint32_t FILTER_MIN_MAG_MIP_LINEAR = 0x15;
-constexpr uint32_t FILTER_ANISOTROPIC = 0x55;
-constexpr uint32_t FILTER_COMPARISON_ANISOTROPIC = 0xd5;
-// D3D11_REQ_MAXANISOTROPY, D3D11_MIP_LOD_BIAS_MIN and _MAX (D3D12's are the same)
-constexpr uint32_t MAX_ANISOTROPY = 16;
-constexpr float MIN_LOD_BIAS = -16.f;
-constexpr float MAX_LOD_BIAS = 15.99f;
-constexpr bool UPGRADE_COMPARISON_SAMPLERS = true;
-constexpr bool FORCE_UPGRADE_LINEAR_SAMPLERS = false;
-
 constexpr std::array SETTINGS = {
    Settings::Setting{
       .key = Settings::Core::SAMPLERS.key,
@@ -135,27 +124,6 @@ void SetLodBiasOffset(float offset)
 {
    if (sr_offset.exchange(offset) != offset)
       Bump();
-}
-
-std::optional<Desc> GetMirrorDesc(const Desc& desc, float offset)
-{
-   const bool upgraded = desc.filter == FILTER_ANISOTROPIC || (UPGRADE_COMPARISON_SAMPLERS && desc.filter == FILTER_COMPARISON_ANISOTROPIC) ||
-      (FORCE_UPGRADE_LINEAR_SAMPLERS && desc.filter == FILTER_MIN_MAG_MIP_LINEAR);
-   if (!upgraded)
-      return std::nullopt;
-   Desc mirror = desc;
-   if (mirror.filter == FILTER_MIN_MAG_MIP_LINEAR)
-      mirror.filter = FILTER_ANISOTROPIC;
-   mirror.max_anisotropy = MAX_ANISOTROPY;
-   // Out of range crashes D3D11
-   mirror.mip_lod_bias = std::clamp(desc.mip_lod_bias + offset, MIN_LOD_BIAS, MAX_LOD_BIAS);
-   // A sharper bias lowers the minimum LOD by as much
-   const float difference = mirror.mip_lod_bias - desc.mip_lod_bias;
-   mirror.min_lod = std::max(desc.min_lod + std::min(difference, 0.f), 0.f);
-   // Nothing to change: D3D11 would return the game's own sampler for the same desc
-   if (mirror.filter == desc.filter && mirror.max_anisotropy == desc.max_anisotropy && mirror.mip_lod_bias == desc.mip_lod_bias && mirror.min_lod == desc.min_lod)
-      return std::nullopt;
-   return mirror;
 }
 } // namespace Samplers
 } // namespace Resources

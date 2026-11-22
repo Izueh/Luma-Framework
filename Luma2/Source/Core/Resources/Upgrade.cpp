@@ -31,7 +31,7 @@ bool Contains(const std::vector<DXGI_FORMAT>& formats, DXGI_FORMAT format)
 }
 
 // The 2D size filters, in their bit order
-bool MatchesSize(const TextureDesc& desc, const FrameState& state)
+bool MatchesSize(const TextureInfo& desc, const FrameState& state)
 {
    const SizeFilters filters = rules.size_filters;
    if (filters == SizeFilters::All)
@@ -88,7 +88,7 @@ bool MatchesSize(const TextureDesc& desc, const FrameState& state)
    return matches;
 }
 
-bool IsLut(const TextureDesc& desc)
+bool IsLut(const TextureInfo& desc)
 {
    const uint32_t size = rules.lut.size;
    if (size == UINT32_MAX)
@@ -130,7 +130,7 @@ bool IsNeeded()
    return set;
 }
 
-std::optional<TextureDesc> Match(const TextureDesc& desc, const FrameState& state, [[maybe_unused]] bool has_initial_data)
+std::optional<TextureInfo> Match(const TextureInfo& desc, const FrameState& state, [[maybe_unused]] bool has_initial_data)
 {
    // Only what the GPU writes: render targets and UAVs (writable shader resources need chains, not built yet), and depth
    const bool color = desc.render_target || desc.unordered_access;
@@ -145,12 +145,12 @@ std::optional<TextureDesc> Match(const TextureDesc& desc, const FrameState& stat
       matches |= IsLut(desc);
    if (!matches)
       return std::nullopt;
-   TextureDesc mirror = desc;
+   TextureInfo mirror = desc;
    mirror.format = GetBestFormat(desc);
    return mirror;
 }
 
-DXGI_FORMAT GetBestFormat(const TextureDesc& desc)
+DXGI_FORMAT GetBestFormat(const TextureInfo& desc)
 {
    if (desc.depth_stencil)
    {

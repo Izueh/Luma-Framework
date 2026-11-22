@@ -9,6 +9,7 @@
 #include "Resources/Samplers.hpp"
 #include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
+#include "Utils/Log.hpp"
 
 namespace Luma {
 namespace Resources {
@@ -80,6 +81,11 @@ bool IsSwapping()
    return IsEnabled() && upgrades.load(std::memory_order_relaxed);
 }
 
+bool HasAnyMirrors()
+{
+   return mirrors.load(std::memory_order_relaxed) != 0;
+}
+
 Hooks::D3D11::Functions GetD3D11Functions()
 {
    using enum Hooks::D3D11::Function;
@@ -133,19 +139,37 @@ void CountView(int32_t count)
    views += uint32_t(count);
 }
 
-uint64_t EstimateBytes(const Upgrade::TextureDesc& desc)
+void LogCreationFailure(std::string_view what, HRESULT result)
 {
-   const uint64_t texel_bytes = GetBitsPerTexel(desc.format) / 8;
+   static std::atomic<uint32_t> failures = 0;
+   if (failures++ < 8)
+      Utils::Log::Warning("Mirrors: {} failed (0x{:08X}), the game's texture is used as it is", what, uint32_t(result));
+}
+
+uint64_t EstimateBytes(const Upgrade::TextureInfo& info)
+{
+   const uint64_t texel_bytes = GetBitsPerTexel(info.format) / 8;
    uint64_t total = 0;
-   const bool volume = desc.dimension == Upgrade::Dimension::Texture3D;
-   for (uint32_t level = 0; level < std::max(desc.levels, 1u); level++)
+   const bool volume = info.dimension == Upgrade::Dimension::Texture3D;
+   for (uint32_t level = 0; level < std::max(info.levels, 1u); level++)
    {
-      const uint64_t width = std::max(desc.width >> level, 1u);
-      const uint64_t height = std::max(desc.height >> level, 1u);
-      const uint64_t depth = volume ? std::max(desc.depth_or_layers >> level, 1u) : desc.depth_or_layers;
+      const uint64_t width = std::max(info.width >> level, 1u);
+      const uint64_t height = std::max(info.height >> level, 1u);
+      const uint64_t depth = volume ? std::max(info.depth_or_layers >> level, 1u) : info.depth_or_layers;
       total += width * height * depth * texel_bytes;
    }
-   return total * std::max(desc.samples, 1u);
+   return total * std::max(info.samples, 1u);
+}
+
+DXGI_FORMAT GetResolveFormat(DXGI_FORMAT game_format, DXGI_FORMAT original_format, DXGI_FORMAT mirror_format)
+{
+   using namespace Utils::Format::DXGI;
+   if (GetTypeless(game_format) == GetTypeless(mirror_format) && game_format != DXGI_FORMAT_UNKNOWN)
+      return game_format;
+   const DXGI_FORMAT mapped = Upgrade::GetBestViewFormat(game_format, Upgrade::ViewKind::ShaderResource, original_format, mirror_format);
+   if (mapped != DXGI_FORMAT_UNKNOWN)
+      return mapped;
+   return IsTypeless(mirror_format) ? GetDefaultTyped(mirror_format) : mirror_format;
 }
 
 #if DEVELOPMENT

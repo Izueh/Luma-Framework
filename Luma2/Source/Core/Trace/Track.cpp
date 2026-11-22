@@ -90,6 +90,17 @@ uint64_t GetFrame()
    std::scoped_lock lock(mutex);
    return frame;
 }
+
+std::optional<MatchedCall> MatchCall(std::span<const Shaders::Database::Shader* const> shaders, Shaders::StageSet stages)
+{
+   const std::optional<Target> current = Get();
+   if (!current || !stages.Has(current->stage) || size_t(current->stage) >= shaders.size())
+      return std::nullopt;
+   const Shaders::Database::Shader* shader = shaders[size_t(current->stage)];
+   if (!shader || shader->hash != current->hash || CountCall() != current->instance)
+      return std::nullopt;
+   return MatchedCall{*current, shader};
+}
 } // namespace Track
 } // namespace Trace
 } // namespace Luma

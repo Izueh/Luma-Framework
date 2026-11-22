@@ -1,6 +1,5 @@
 #include "Game/D3D11/D3D11DrawEvents.hpp"
 
-#include <array>
 #include <optional>
 #include <utility>
 
@@ -23,19 +22,6 @@ namespace D3D11 {
 namespace {
 using Context = ID3D11DeviceContext;
 
-// The callback of the first stage of `stages` with one, pixel first, then vertex
-Game::D3D11::DrawCallback FindCallback(const Luma::Shaders::Variants::D3D11::BoundShaders& bound, Luma::Shaders::StageSet stages)
-{
-   constexpr std::array ORDER = {ShaderStage::Pixel, ShaderStage::Vertex, ShaderStage::Geometry, ShaderStage::Hull, ShaderStage::Domain, ShaderStage::Compute};
-   for (const ShaderStage stage : ORDER)
-   {
-      if (stages.Has(stage))
-         return Registry::FindDrawCallback(bound.shaders[size_t(stage)]->hash);
-   }
-   return nullptr;
-}
-
-// The events running on this thread, which BindLumaShader reports the stages it bound to
 struct Running
 {
    Context* context = nullptr;
@@ -44,28 +30,19 @@ struct Running
 
 thread_local Running* running = nullptr;
 
-// The variant event first, then the callback by hash or the generic event
 DrawResult RunEvents(Context* context, const Game::D3D11::DrawCall* draw, const Game::D3D11::DispatchCall* dispatch, Luma::Shaders::StageSet stages)
 {
    const Luma::Shaders::Variants::D3D11::BoundShaders* bound = Luma::Shaders::Variants::D3D11::GetBoundShaders(context);
-   const Game::D3D11::Events& events = Registry::GetD3D11Events();
-   const Luma::Shaders::StageSet variant_stages = bound ? bound->variant_stages & stages : Luma::Shaders::StageSet();
-   const Luma::Shaders::StageSet callback_stages = bound ? bound->callback_stages & stages : Luma::Shaders::StageSet();
-   const Game::D3D11::DrawCallback variant_callback = variant_stages.Any() ? events.on_variant_draw : nullptr;
-   const Game::D3D11::DrawCallback callback = callback_stages.Any() ? FindCallback(*bound, callback_stages) : events.on_draw_or_dispatch;
-   if (!variant_callback && !callback)
-      return DrawResult::None;
-   Game::D3D11::Call call = {.context = context, .draw = draw, .dispatch = dispatch, .variant_stages = variant_stages};
+   Game::D3D11::Call call = {
+      .context = context,
+      .draw = draw,
+      .dispatch = dispatch,
+      .variant_stages = bound ? bound->variant_stages & stages : Luma::Shaders::StageSet(),
+   };
    for (size_t stage = 0; bound && stage < bound->shaders.size(); stage++)
       call.hashes[stage] = bound->shaders[stage] ? bound->shaders[stage]->hash : 0;
-   if (variant_callback)
-   {
-      if (const DrawResult result = variant_callback(call); result != DrawResult::None)
-         return result;
-      // It may have put the game's shaders back (UseOriginal)
-      call.variant_stages = bound->variant_stages & stages;
-   }
-   return callback ? callback(call) : DrawResult::None;
+   const Luma::Shaders::StageSet callback_stages = bound ? bound->callback_stages & stages : Luma::Shaders::StageSet();
+   return Registry::DispatchDrawEvents<Api::D3D11>(call, callback_stages, [&] { return bound->variant_stages & stages; });
 }
 
 Result RunReporting(Context* context, const Game::D3D11::DrawCall* draw, const Game::D3D11::DispatchCall* dispatch, Luma::Shaders::StageSet stages)

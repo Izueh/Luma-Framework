@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -89,11 +90,26 @@ struct Upload
    bool done = false;
 };
 
-// An entry with a stamp: whether the context uploads it again, the stamp now being `stamp`
 bool NeedsUpload(const Upload& upload, uint64_t stamp);
-// An entry without: `written` holds its contents now. When they differ from the last upload they become it (`written` gets the
-// old bytes, its storage reused at the next write) and the context uploads them.
 bool ReplaceIfChanged(Upload& upload, std::vector<std::byte>& written);
+
+template <typename EmitFn>
+void UploadIfDirty(const Entry& entry, Upload& upload, std::vector<std::byte>& scratch, const CustomData& custom, const WriteTarget& target, EmitFn&& emit)
+{
+   if (entry.get_stamp)
+   {
+      const uint64_t stamp = entry.get_stamp();
+      if (!NeedsUpload(upload, stamp))
+         return;
+      upload.done = emit([&](std::span<std::byte> destination) { entry.write(destination, custom, target); });
+      upload.stamp = stamp;
+      return;
+   }
+   scratch.resize(entry.size);
+   entry.write(scratch, custom, target);
+   if (ReplaceIfChanged(upload, scratch))
+      upload.done = emit([&](std::span<std::byte> destination) { std::ranges::copy(upload.bytes, destination.begin()); });
+}
 
 // Init only, before any device: entries are fixed from then on (a shader file added while the game runs needs a restart).
 // Null for a name already registered. A game's entry with the name of one of Core's is refused, or replaced when it came first.

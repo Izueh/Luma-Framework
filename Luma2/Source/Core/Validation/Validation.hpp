@@ -1,12 +1,17 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include <Windows.h>
 
 #include "Common/Api.hpp"
+#include "Hooks/Scope.hpp"
+#include "Utils/Log.hpp"
 
 #ifndef LUMA_DEBUG_LAYER
 #define LUMA_DEBUG_LAYER 0
@@ -72,6 +77,80 @@ void ReadMessages(Api api, InfoQueue* info_queue, uint64_t& next)
       info_queue->ClearStoredMessages();
       next = 0;
    }
+}
+
+namespace Detail {
+template <typename InfoQueue>
+struct InfoQueueReader
+{
+   InfoQueue* info_queue = nullptr;
+   uint64_t next = 0;
+};
+
+template <typename Device, typename InfoQueue>
+struct InfoQueueStore
+{
+   std::mutex mutex;
+   std::unordered_map<Device*, InfoQueueReader<InfoQueue>> readers;
+   std::atomic<uint32_t> count = 0;
+};
+
+template <typename Device, typename InfoQueue>
+InfoQueueStore<Device, InfoQueue>& GetInfoQueueStore()
+{
+   static InfoQueueStore<Device, InfoQueue> store;
+   return store;
+}
+} // namespace Detail
+
+template <Api api, typename InfoQueue, typename Device>
+bool WatchInfoQueue(Device* device)
+{
+   InfoQueue* info_queue = nullptr;
+   {
+      Hooks::Scope::Guard scope;
+      if (FAILED(device->QueryInterface(__uuidof(InfoQueue), reinterpret_cast<void**>(&info_queue))) || !info_queue)
+         return false;
+   }
+   info_queue->SetMessageCountLimit(UINT64(-1));
+   Utils::Log::Info("{}: device {} has the debug layer, its messages are logged", GetName(api), static_cast<void*>(device));
+   auto& store = Detail::GetInfoQueueStore<Device, InfoQueue>();
+   std::scoped_lock lock(store.mutex);
+   if (const auto it = store.readers.find(device); it != store.readers.end() && it->second.info_queue)
+      it->second.info_queue->Release();
+   store.readers[device] = {info_queue, 0};
+   store.count.store(uint32_t(store.readers.size()), std::memory_order_relaxed);
+   return true;
+}
+
+template <Api api, typename Device, typename InfoQueue, typename Message>
+void ReadInfoQueues()
+{
+   auto& store = Detail::GetInfoQueueStore<Device, InfoQueue>();
+   if (store.count.load(std::memory_order_relaxed) == 0)
+      return;
+   std::scoped_lock lock(store.mutex);
+   for (auto& [device, reader] : store.readers)
+      ReadMessages<Message>(api, reader.info_queue, reader.next);
+}
+
+template <Api api, typename InfoQueue, typename Message, typename Device>
+void StopWatchingInfoQueue(Device* device)
+{
+   Detail::InfoQueueReader<InfoQueue> reader;
+   {
+      auto& store = Detail::GetInfoQueueStore<Device, InfoQueue>();
+      std::scoped_lock lock(store.mutex);
+      const auto it = store.readers.find(device);
+      if (it == store.readers.end())
+         return;
+      reader = it->second;
+      store.readers.erase(it);
+      store.count.store(uint32_t(store.readers.size()), std::memory_order_relaxed);
+   }
+   ReadMessages<Message>(api, reader.info_queue, reader.next);
+   if (reader.info_queue)
+      reader.info_queue->Release();
 }
 } // namespace Validation
 } // namespace Luma

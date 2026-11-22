@@ -1,17 +1,14 @@
 #include "Validation/D3D12/D3D12Validation.hpp"
 
 #include <atomic>
-#include <mutex>
-#include <unordered_map>
 
 #include <d3d12sdklayers.h>
 #include <wrl/client.h>
 
-#include "Hooks/Scope.hpp"
 #include "Settings/Keys.hpp"
 #include "Settings/Registry.hpp"
-#include "Utils/Log.hpp"
 #include "System/Modules.hpp"
+#include "Utils/Log.hpp"
 #include "Validation/Validation.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -20,17 +17,6 @@ namespace Luma {
 namespace Validation {
 namespace D3D12 {
 namespace {
-struct Reader
-{
-   // Holds the real device until the game releases it
-   ComPtr<ID3D12InfoQueue> info_queue;
-   uint64_t next = 0;
-};
-
-// Never held with another lock
-std::mutex mutex;
-std::unordered_map<const void*, Reader> readers;
-std::atomic<uint32_t> reader_count = 0;
 std::atomic<bool> device_created = false;
 } // namespace
 
@@ -76,41 +62,17 @@ void EnableDebugLayer()
 void WatchDeviceMessages(ID3D12Device* device)
 {
    device_created = true;
-   ComPtr<ID3D12InfoQueue> info_queue;
-   {
-      Hooks::Scope::Guard scope;
-      if (FAILED(device->QueryInterface(IID_PPV_ARGS(&info_queue))))
-         return;
-   }
-   info_queue->SetMessageCountLimit(UINT64(-1));
-   Utils::Log::Info("D3D12: device {} has the debug layer, its messages are logged", static_cast<void*>(device));
-   std::scoped_lock lock(mutex);
-   readers[device] = {std::move(info_queue), 0};
-   reader_count = uint32_t(readers.size());
+   WatchInfoQueue<Api::D3D12, ID3D12InfoQueue>(device);
 }
 
 void ReadMessages()
 {
-   if (reader_count.load(std::memory_order_relaxed) == 0)
-      return;
-   std::scoped_lock lock(mutex);
-   for (auto& [device, reader] : readers)
-      Validation::ReadMessages<D3D12_MESSAGE>(Api::D3D12, reader.info_queue.Get(), reader.next);
+   ReadInfoQueues<Api::D3D12, ID3D12Device, ID3D12InfoQueue, D3D12_MESSAGE>();
 }
 
 void StopWatchingDevice(ID3D12Device* device)
 {
-   Reader reader;
-   {
-      std::scoped_lock lock(mutex);
-      const auto it = readers.find(device);
-      if (it == readers.end())
-         return;
-      reader = std::move(it->second);
-      readers.erase(it);
-      reader_count = uint32_t(readers.size());
-   }
-   Validation::ReadMessages<D3D12_MESSAGE>(Api::D3D12, reader.info_queue.Get(), reader.next);
+   StopWatchingInfoQueue<Api::D3D12, ID3D12InfoQueue, D3D12_MESSAGE>(device);
 }
 } // namespace D3D12
 } // namespace Validation

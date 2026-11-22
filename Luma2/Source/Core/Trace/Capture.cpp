@@ -179,6 +179,16 @@ void ClearLast()
    std::scoped_lock lock(mutex);
    last.reset();
 }
+
+bool IsAnyStageSkipped(std::span<const Shaders::Database::Shader* const> shaders, Shaders::StageSet stages)
+{
+   for (size_t stage = 0; stage < shaders.size(); stage++)
+   {
+      if (stages.Has(ShaderStage(stage)) && shaders[stage] && shaders[stage]->skip_draws.load(std::memory_order_relaxed))
+         return true;
+   }
+   return false;
+}
 } // namespace Capture
 } // namespace Trace
 } // namespace Luma

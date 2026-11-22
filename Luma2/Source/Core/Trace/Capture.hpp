@@ -4,14 +4,22 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <cwchar>
+#include <format>
+#include <guiddef.h>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
 #include "Common/ShaderStage.hpp"
 #include "Hooks/Functions.hpp"
+#include "Shaders/Database.hpp"
+#include "Shaders/Stages.hpp"
 #include "Shaders/Variants.hpp"
+#include "Utils/Strings.hpp"
 
 // One frame's calls, recorded while a capture runs: the data behind the Trace tab. Development builds only; the
 // draw path asks IsCapturing() (a relaxed load) and does nothing else for trace outside a capture. Each API fills events with
@@ -256,10 +264,32 @@ Added Add(Event event);
 // Before OnPresent ends the frame: a constant buffer's contents read back. Ignored for an event of another capture.
 void SetContents(const Added& event, size_t constant_buffer, std::vector<std::byte> contents);
 
-// Any thread: the last finished capture, null before the first
 std::shared_ptr<const Frame> GetLast();
-// Any thread: forgets the last capture (its memory goes once the panel and MCP let go of it)
 void ClearLast();
+
+template <typename Object>
+std::string GetObjectId(const Object* object)
+{
+   return std::format("0x{:X}", reinterpret_cast<uintptr_t>(object));
+}
+
+bool IsAnyStageSkipped(std::span<const Shaders::Database::Shader* const> shaders, Shaders::StageSet stages);
+
+template <typename D3DObject>
+std::string GetD3DDebugName(D3DObject* object)
+{
+   constexpr GUID NAME_W = {0x4cca5fd8, 0x921f, 0x42c8, {0x85, 0x13, 0x2c, 0x87, 0x3d, 0x93, 0x1c, 0x9a}};
+   constexpr GUID NAME_A = {0x429b8c22, 0x9188, 0x4b0c, {0x87, 0x42, 0xac, 0xb0, 0xbf, 0x85, 0xc2, 0x00}};
+   std::array<wchar_t, 256> wide = {};
+   uint32_t size = uint32_t(sizeof(wide) - sizeof(wchar_t));
+   if (object->GetPrivateData(NAME_W, &size, wide.data()) >= 0)
+      return Utils::Strings::ToUtf8(std::wstring_view(wide.data(), wcsnlen(wide.data(), size / sizeof(wchar_t))));
+   std::array<char, 256> narrow = {};
+   size = uint32_t(narrow.size() - 1);
+   if (object->GetPrivateData(NAME_A, &size, narrow.data()) >= 0)
+      return std::string(narrow.data(), strnlen(narrow.data(), size));
+   return {};
+}
 } // namespace Capture
 } // namespace Trace
 } // namespace Luma

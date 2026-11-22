@@ -16,6 +16,7 @@
 #include "Resources/Mirrors.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
 #include "Shaders/Database.hpp"
+#include "Trace/Capture.hpp"
 #include "Trace/Readback.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
 
@@ -37,14 +38,8 @@ struct Copy
    bool mirrored = false;
 };
 
-// Never held with another lock
 std::mutex mutex;
 std::optional<Copy> pending;
-
-std::string GetId(const void* object)
-{
-   return std::format("0x{:X}", reinterpret_cast<uintptr_t>(object));
-}
 
 // A GPU copy of `source` (no bindings, not CPU readable: the staging copy is made at present, on the immediate context)
 ComPtr<ID3D11Resource> CreateCopy(ID3D11Device* device, ID3D11Resource* source)
@@ -323,7 +318,7 @@ bool ReadAfterCall(const Game::D3D11::Call& call, Shaders::StageSet stages, bool
    }
    ComPtr<ID3D11Device> device;
    call.context->GetDevice(&device);
-   Copy copy = {.texture = CreateCopy(device.Get(), found.resource.Get()), .view_format = found.view_format, .resource = GetId(named.Get()), .mirrored = mirrored};
+   Copy copy = {.texture = CreateCopy(device.Get(), found.resource.Get()), .view_format = found.view_format, .resource = Capture::GetObjectId(named.Get()), .mirrored = mirrored};
    if (!copy.texture)
    {
       MarkCopied();
@@ -366,7 +361,7 @@ void ReadBack(IDXGISwapChain* swapchain, ID3D11Device* device)
          mirror->QueryInterface(IID_PPV_ARGS(back_buffer.ReleaseAndGetAddressOf()));
       Result result = ReadTexture(context.Get(), back_buffer.Get(), DXGI_FORMAT_UNKNOWN, target->mip);
       if (result.texture)
-         result.texture->resource = GetId(back_buffer.Get());
+         result.texture->resource = Capture::GetObjectId(back_buffer.Get());
       return Finish(std::move(result));
    }
    std::optional<Copy> copy;

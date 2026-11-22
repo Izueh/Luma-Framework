@@ -34,7 +34,6 @@ namespace {
 // Luma's CPU heaps grow by this many descriptors
 constexpr uint32_t POOL_CHUNK = 4096;
 
-std::atomic<uint32_t> mirror_count = 0;
 std::atomic<uint32_t> entry_count = 0;
 std::atomic<uint32_t> sampler_count = 0;
 std::atomic<uint32_t> swapped_copies = 0;
@@ -43,33 +42,10 @@ std::atomic<uint32_t> unhandled_copies = 0;
 std::atomic<uint32_t> unhandled_clears = 0;
 std::atomic<uint32_t> layout_resources = 0;
 std::atomic<uint32_t> aliasing_barriers = 0;
-// Per heap type: the same for every device of an adapter (one device in practice)
 std::array<std::atomic<uint32_t>, D3D12_DESCRIPTOR_HEAP_TYPE_NUM_TYPES> increments = {};
 
-// In the game's texture's private data: released with it
-struct MirrorState
-{
-   ComPtr<ID3D12Resource> mirror;
-   Upgrade::TextureDesc original_desc;
-   Upgrade::TextureDesc desc; // The mirror's
-   int64_t bytes = 0;
-   const void* original = nullptr;
-
-   ~MirrorState()
-   {
-      mirror_count--;
-      CountMirror(-1, -bytes);
-#if DEVELOPMENT
-      RemoveInfo(original);
-#endif
-   }
-};
-
-// In the mirror's private data: the game's texture it stands for (not held, it holds the mirror)
-struct OriginalState
-{
-   ID3D12Resource* original = nullptr;
-};
+using OwnedResource = ComPtr<ID3D12Resource>;
+using ResourceMirrorState = MirrorState<ID3D12Resource, OwnedResource>;
 
 // Luma's CPU descriptor heaps of a device, per type, in its private data. A slot goes back to its pool when no game handle holds it.
 struct Pool
@@ -209,9 +185,9 @@ std::shared_ptr<Slot> Allocate(ID3D12Device* device, D3D12_DESCRIPTOR_HEAP_TYPE 
    return slot;
 }
 
-Upgrade::TextureDesc Describe(const D3D12_RESOURCE_DESC& desc, bool gpu_only)
+Upgrade::TextureInfo Describe(const D3D12_RESOURCE_DESC& desc, bool gpu_only)
 {
-   Upgrade::TextureDesc described = {.width = uint32_t(desc.Width),
+   Upgrade::TextureInfo described = {.width = uint32_t(desc.Width),
       .height = desc.Height,
       .depth_or_layers = desc.DepthOrArraySize,
       .levels = desc.MipLevels,
@@ -230,18 +206,10 @@ Upgrade::TextureDesc Describe(const D3D12_RESOURCE_DESC& desc, bool gpu_only)
    return described;
 }
 
-// The resolutions the size filters compare with: the device's (Frame)
 Upgrade::FrameState GetFrameState(ID3D12Device* device)
 {
    const Frame::Resolutions resolutions = Frame::Read(Frame::Find(device));
    return {.render = resolutions.render, .output = resolutions.output, .display = resolutions.display};
-}
-
-void LogFailure(std::string_view what, HRESULT result)
-{
-   static std::atomic<uint32_t> failures = 0;
-   if (failures++ < 8)
-      Utils::Log::Warning("Mirrors: {} failed (0x{:08X}), the game's texture is used as it is", what, uint32_t(result));
 }
 
 Upgrade::ViewKind ToUpgradeKind(ViewKind kind)
@@ -255,22 +223,20 @@ Upgrade::ViewKind ToUpgradeKind(ViewKind kind)
    }
 }
 
-// The game's view desc for the mirror: its format mapped to the mirror's family
 template <typename Desc>
-Desc MapFormat(const void* desc, ViewKind kind, const MirrorState& state, DXGI_FORMAT& format)
+Desc MapFormat(const void* desc, ViewKind kind, const ResourceMirrorState& state, DXGI_FORMAT& format)
 {
    Desc mapped = *static_cast<const Desc*>(desc);
-   const DXGI_FORMAT best = Upgrade::GetBestViewFormat(mapped.Format, ToUpgradeKind(kind), state.original_desc.format, state.desc.format);
+   const DXGI_FORMAT best = Upgrade::GetBestViewFormat(mapped.Format, ToUpgradeKind(kind), state.original_info.format, state.info.format);
    if (best != DXGI_FORMAT_UNKNOWN)
       mapped.Format = best;
    format = mapped.Format;
    return mapped;
 }
 
-// The mirror's view, as the game's, at `handle`. The view's format, UNKNOWN if it couldn't be made.
-DXGI_FORMAT WriteMirrorView(ID3D12Device* device, ID3D12Resource* mirror, ViewKind kind, const void* desc, const MirrorState& state, uint64_t handle)
+DXGI_FORMAT WriteMirrorView(ID3D12Device* device, ID3D12Resource* mirror, ViewKind kind, const void* desc, const ResourceMirrorState& state, uint64_t handle)
 {
-   DXGI_FORMAT format = state.desc.format;
+   DXGI_FORMAT format = state.info.format;
    const D3D12_CPU_DESCRIPTOR_HANDLE destination = {SIZE_T(handle)};
    Hooks::Scope::Guard scope;
    switch (kind)
@@ -314,33 +280,13 @@ D3D12_DESCRIPTOR_HEAP_TYPE GetHeapType(ViewKind kind)
    }
 }
 
-Samplers::Desc ToSamplerDesc(const D3D12_SAMPLER_DESC& desc)
-{
-   return {.filter = uint32_t(desc.Filter), .mip_lod_bias = desc.MipLODBias, .max_anisotropy = desc.MaxAnisotropy, .min_lod = desc.MinLOD};
-}
-
-// The sampler's mirror for the offset now. None when the rules leave it as the game made it.
-std::optional<D3D12_SAMPLER_DESC> GetMirrorSampler(const D3D12_SAMPLER_DESC& desc)
-{
-   const std::optional<Samplers::Desc> mirrored = Samplers::GetMirrorDesc(ToSamplerDesc(desc), Samplers::GetLodBiasOffset());
-   if (!mirrored)
-      return std::nullopt;
-   D3D12_SAMPLER_DESC mirror = desc;
-   mirror.Filter = D3D12_FILTER(mirrored->filter);
-   mirror.MipLODBias = mirrored->mip_lod_bias;
-   mirror.MaxAnisotropy = mirrored->max_anisotropy;
-   mirror.MinLOD = mirrored->min_lod;
-   return mirror;
-}
-
-// A sampler mirror written for an older offset is written again (it's Luma's own descriptor: the copies already made keep theirs)
 void RefreshSampler(Slot& slot)
 {
    const uint32_t generation = Samplers::GetGeneration();
    if (slot.generation == generation)
       return;
    slot.generation = generation;
-   const D3D12_SAMPLER_DESC mirror = GetMirrorSampler(slot.game_sampler).value_or(slot.game_sampler);
+   const D3D12_SAMPLER_DESC mirror = Samplers::GetMirrorDesc(slot.game_sampler).value_or(slot.game_sampler);
    Hooks::Scope::Guard scope;
    slot.device->CreateSampler(&mirror, {SIZE_T(slot.handle)});
 }
@@ -384,15 +330,13 @@ void CreateMirror(ID3D12Device* device, ID3D12Resource* resource, D3D12_RESOURCE
    // Placed resources have no heap properties of their own: they're GPU only unless their heap says otherwise, which nothing renders into
    D3D12_HEAP_PROPERTIES properties = {D3D12_HEAP_TYPE_DEFAULT};
    resource->GetHeapProperties(&properties, nullptr);
-   const Upgrade::TextureDesc described = Describe(desc, properties.Type == D3D12_HEAP_TYPE_DEFAULT);
-   const std::optional<Upgrade::TextureDesc> mirrored = Upgrade::Match(described, GetFrameState(device), false);
+   const Upgrade::TextureInfo described = Describe(desc, properties.Type == D3D12_HEAP_TYPE_DEFAULT);
+   const std::optional<Upgrade::TextureInfo> mirrored = Upgrade::Match(described, GetFrameState(device), false);
    if (!mirrored)
       return;
    D3D12_RESOURCE_DESC mirror_desc = desc;
    mirror_desc.Format = mirrored->format;
-   // Luma reads it (readbacks, its passes)
    mirror_desc.Flags &= ~D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
-   // The game's clear color in the mirror's format (a depth mirror's view format isn't known here: it gets none, a slower clear at worst)
    std::optional<D3D12_CLEAR_VALUE> mirror_clear;
    if (clear && !mirrored->depth_stencil)
    {
@@ -407,33 +351,18 @@ void CreateMirror(ID3D12Device* device, ID3D12Resource* resource, D3D12_RESOURCE
       result = device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &mirror_desc, state, mirror_clear ? &*mirror_clear : nullptr, IID_PPV_ARGS(&mirror));
    }
    if (FAILED(result) || !mirror)
-      return LogFailure(std::format("a {} mirror of a {} texture", Utils::Format::GetName(mirrored->format), Utils::Format::GetName(desc.Format)), result);
-   const int64_t bytes = int64_t(EstimateBytes(*mirrored));
-   Hooks::Lifetime::SetState<OriginalState>(mirror.Get(), resource);
-   // Counted first: a state the texture refuses is destroyed at once, which uncounts it
-   mirror_count++;
-   CountMirror(1, bytes);
-   if (!Hooks::Lifetime::SetState<MirrorState>(resource, std::move(mirror), described, *mirrored, bytes, static_cast<const void*>(resource)))
-      return;
-#if DEVELOPMENT
-   AddInfo(resource, {.original = std::format("0x{:X}", reinterpret_cast<uintptr_t>(resource)), .original_desc = described, .mirror_desc = *mirrored, .frame = Shaders::GetFrame()});
-#endif
+      return LogCreationFailure(std::format("a {} mirror of a {} texture", Utils::Format::GetName(mirrored->format), Utils::Format::GetName(desc.Format)), result);
+   AttachMirror(resource, std::move(mirror), described, *mirrored);
 }
 
 ID3D12Resource* GetMirror(ID3D12Resource* resource)
 {
-   if (!resource || mirror_count.load(std::memory_order_relaxed) == 0)
-      return nullptr;
-   const MirrorState* state = Hooks::Lifetime::GetState<MirrorState>(resource);
-   return state ? state->mirror.Get() : nullptr;
+   return FindMirror<OwnedResource>(resource);
 }
 
 ID3D12Resource* GetOriginal(ID3D12Resource* mirror)
 {
-   if (!mirror || mirror_count.load(std::memory_order_relaxed) == 0)
-      return nullptr;
-   const OriginalState* state = Hooks::Lifetime::GetState<OriginalState>(mirror);
-   return state ? state->original : nullptr;
+   return FindOriginal(mirror);
 }
 
 void ReleaseDeviceObjects(ID3D12Device* device)
@@ -452,7 +381,7 @@ void ReleaseDeviceObjects(ID3D12Device* device)
 
 bool HasMirrors()
 {
-   return mirror_count.load(std::memory_order_relaxed) != 0 || entry_count.load(std::memory_order_relaxed) != 0;
+   return HasAnyMirrors() || entry_count.load(std::memory_order_relaxed) != 0;
 }
 
 void TrackHeap(ID3D12Device* device, ID3D12DescriptorHeap* heap, const D3D12_DESCRIPTOR_HEAP_DESC& desc)
@@ -467,10 +396,9 @@ void TrackHeap(ID3D12Device* device, ID3D12DescriptorHeap* heap, const D3D12_DES
 
 void OnCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, ViewKind kind, ID3D12Resource* resource, const void* desc, bool swapping)
 {
-   const MirrorState* state = resource && kind != ViewKind::ConstantBuffer && mirror_count.load(std::memory_order_relaxed) ? Hooks::Lifetime::GetState<MirrorState>(resource) : nullptr;
+   const ResourceMirrorState* state = kind != ViewKind::ConstantBuffer ? FindMirrorState<OwnedResource>(resource) : nullptr;
    if (!state)
       return Forget(destination.ptr);
-   // Straight into a shader-visible heap: no copy to swap at, so the mirror's view goes there now
    if (IsShaderVisible(destination.ptr))
    {
       if (swapping)
@@ -491,7 +419,7 @@ void OnCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination,
 
 void OnCreateSampler(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, const D3D12_SAMPLER_DESC& desc, bool swapping)
 {
-   const std::optional<D3D12_SAMPLER_DESC> mirror = GetMirrorSampler(desc);
+   const std::optional<D3D12_SAMPLER_DESC> mirror = Samplers::GetMirrorDesc(desc);
    if (!mirror)
       return Forget(destination.ptr);
    if (IsShaderVisible(destination.ptr))
@@ -569,7 +497,7 @@ void OnCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destina
 
 std::span<const D3D12_RESOURCE_BARRIER> AddMirrorBarriers(std::span<const D3D12_RESOURCE_BARRIER> barriers)
 {
-   if (mirror_count.load(std::memory_order_relaxed) == 0)
+   if (!HasAnyMirrors())
       return barriers;
    thread_local std::vector<D3D12_RESOURCE_BARRIER> extended;
    extended.clear();
@@ -640,34 +568,21 @@ bool SwapHandle(D3D12_CPU_DESCRIPTOR_HANDLE& handle)
 
 void SwapCopy(ID3D12Resource*& destination, ID3D12Resource*& source)
 {
-   if (mirror_count.load(std::memory_order_relaxed) == 0)
+   const CopyPlan<ID3D12Resource> plan = PlanCopy(destination, source, &GetMirror, &GetFormat);
+   if (plan.action == CopyAction::Original)
       return;
-   ID3D12Resource* mirror_destination = GetMirror(destination);
-   ID3D12Resource* mirror_source = source ? GetMirror(source) : nullptr;
-   if (!mirror_destination && !mirror_source)
-      return;
-   ID3D12Resource* final_destination = mirror_destination ? mirror_destination : destination;
-   ID3D12Resource* final_source = mirror_source ? mirror_source : source;
-   if (mirror_destination && mirror_source)
+   if (plan.action == CopyAction::DirectMirrorCopy)
    {
-      destination = final_destination;
-      source = final_source;
-      return;
-   }
-   // One side mirrored: fine when the other's format copies to the mirror's. Not for a buffer footprint (an upload into a mirrored
-   // texture, a readback of one): the mirror's format has another layout.
-   if (source && Utils::Format::DXGI::AreCopyCompatible(GetFormat(final_destination), GetFormat(final_source)))
-   {
-      destination = final_destination;
-      source = final_source;
+      destination = plan.destination;
+      source = plan.source;
       return;
    }
    if (!source)
       return;
    if (unhandled_copies++ == 0)
       Utils::Log::Warning("Mirrors: a copy between a {} mirror and a {} texture without one needs Luma's copy pass on D3D12, the game's textures are copied",
-         Utils::Format::GetName(GetFormat(mirror_destination ? mirror_destination : mirror_source)),
-         Utils::Format::GetName(GetFormat(mirror_destination ? source : destination)));
+         Utils::Format::GetName(GetFormat(plan.destination_mirrored ? plan.destination : plan.source)),
+         Utils::Format::GetName(GetFormat(plan.destination_mirrored ? source : destination)));
    LUMA_UNIMPLEMENTED("Converting copies between a mirror and a texture without one on D3D12 (Luma's copy pass, Step 5)");
 }
 

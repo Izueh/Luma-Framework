@@ -48,18 +48,12 @@ ID3D11SamplerState* Refresh(SamplerState& state, uint32_t generation)
    const auto found = std::ranges::find(state.mirrors, offset, &std::pair<float, ComPtr<ID3D11SamplerState>>::first);
    if (found != state.mirrors.end())
       mirror = found->second.Get();
-   else if (const std::optional<Desc> mirror_desc = GetMirrorDesc({uint32_t(state.desc.Filter), state.desc.MipLODBias, state.desc.MaxAnisotropy, state.desc.MinLOD}, offset))
+   else if (const std::optional<D3D11_SAMPLER_DESC> mirror_desc = GetMirrorDesc(state.desc, offset))
    {
-      D3D11_SAMPLER_DESC desc = state.desc;
-      desc.Filter = D3D11_FILTER(mirror_desc->filter);
-      desc.MipLODBias = mirror_desc->mip_lod_bias;
-      desc.MaxAnisotropy = mirror_desc->max_anisotropy;
-      desc.MinLOD = mirror_desc->min_lod;
       ComPtr<ID3D11Device> device;
       state.sampler->GetDevice(&device);
       ComPtr<ID3D11SamplerState> created;
-      // D3D11 shares state objects: a desc another sampler has gives that one
-      ASSERT_ONCE(SUCCEEDED(device->CreateSamplerState(&desc, &created)));
+      ASSERT_ONCE(SUCCEEDED(device->CreateSamplerState(&*mirror_desc, &created)));
       mirror = created.Get();
       state.mirrors.emplace_back(offset, std::move(created));
    }

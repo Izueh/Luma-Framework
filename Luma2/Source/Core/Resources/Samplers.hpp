@@ -1,13 +1,11 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <optional>
 
 #include "Hooks/Functions.hpp"
 
-// Sampler mirrors: the game's anisotropic samplers get 16x anisotropy and the LOD bias offset added, which SR sets from its render
-// scale (0 until SR sets one, or a Development setting). A mirror is made per sampler
-// and offset the first time a bind needs it, and swapped in at every bind while Luma is on. Shared by the APIs: the rules and the offset.
 namespace Luma {
 namespace Resources {
 namespace Samplers {
@@ -18,31 +16,44 @@ struct Options
 
 void SetOptions(const Options& options);
 const Options& GetOptions();
-// Its settings, before the game's Init
 void Register();
 bool IsNeeded();
-// Any thread, on the bind path: mirrors are swapped in (Luma.Enabled and Luma.Resources.Samplers)
 bool IsSwapping();
 Hooks::D3D11::Functions GetD3D11Functions();
 
-// The offset added to the LOD bias of the mirrors: SR's, or the Development setting's when on. Any thread.
 float GetLodBiasOffset();
-// Changes whenever the offset does: a sampler's mirror for an older one is made again at its next bind
 uint32_t GetGeneration();
-// The offset SR picked. Any thread.
 void SetLodBiasOffset(float offset);
 
-// The parts of a sampler desc the mirror changes, as both APIs have them (D3D11_FILTER and D3D12_FILTER share their values)
-struct Desc
+// Works directly on native D3D11_SAMPLER_DESC and D3D12_SAMPLER_DESC
+template <typename D3DSamplerDesc>
+std::optional<D3DSamplerDesc> GetMirrorDesc(const D3DSamplerDesc& desc, float offset = GetLodBiasOffset())
 {
-   uint32_t filter = 0;
-   float mip_lod_bias = 0.f;
-   uint32_t max_anisotropy = 0;
-   float min_lod = 0.f;
-};
+   constexpr uint32_t FILTER_MIN_MAG_MIP_LINEAR = 0x15;
+   constexpr uint32_t FILTER_ANISOTROPIC = 0x55;
+   constexpr uint32_t FILTER_COMPARISON_ANISOTROPIC = 0xd5;
+   constexpr uint32_t MAX_ANISOTROPY = 16;
+   constexpr float MIN_LOD_BIAS = -16.f;
+   constexpr float MAX_LOD_BIAS = 15.99f;
+   constexpr bool UPGRADE_COMPARISON_SAMPLERS = true;
+   constexpr bool FORCE_UPGRADE_LINEAR_SAMPLERS = false;
 
-// The mirror's desc (comparison samplers included), none when the sampler isn't upgraded or wouldn't change
-std::optional<Desc> GetMirrorDesc(const Desc& desc, float offset);
+   const uint32_t filter = uint32_t(desc.Filter);
+   const bool upgraded = filter == FILTER_ANISOTROPIC || (UPGRADE_COMPARISON_SAMPLERS && filter == FILTER_COMPARISON_ANISOTROPIC) ||
+      (FORCE_UPGRADE_LINEAR_SAMPLERS && filter == FILTER_MIN_MAG_MIP_LINEAR);
+   if (!upgraded)
+      return std::nullopt;
+   D3DSamplerDesc mirror = desc;
+   if (filter == FILTER_MIN_MAG_MIP_LINEAR)
+      mirror.Filter = decltype(desc.Filter)(FILTER_ANISOTROPIC);
+   mirror.MaxAnisotropy = MAX_ANISOTROPY;
+   mirror.MipLODBias = std::clamp(desc.MipLODBias + offset, MIN_LOD_BIAS, MAX_LOD_BIAS);
+   const float difference = mirror.MipLODBias - desc.MipLODBias;
+   mirror.MinLOD = std::max(desc.MinLOD + std::min(difference, 0.f), 0.f);
+   if (mirror.Filter == desc.Filter && mirror.MaxAnisotropy == desc.MaxAnisotropy && mirror.MipLODBias == desc.MipLODBias && mirror.MinLOD == desc.MinLOD)
+      return std::nullopt;
+   return mirror;
+}
 } // namespace Samplers
 } // namespace Resources
 } // namespace Luma

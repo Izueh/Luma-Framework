@@ -63,21 +63,12 @@ std::vector<TrackedCopy> tracked;
 // Never held with another lock
 std::mutex pending_mutex;
 std::vector<Pending> pending;
-// What the copies of one capture may take, so a frame of thousands of draws doesn't run out of memory
 constexpr uint64_t MAX_COPIED_BYTES = 64ull << 20;
 std::atomic<uint64_t> copied_bytes = 0;
 
-// WKPDID_D3DDebugObjectName, without linking dxguid
-constexpr GUID DEBUG_OBJECT_NAME = {0x429b8c22, 0x9188, 0x4b0c, {0x87, 0x42, 0xac, 0xb0, 0xbf, 0x85, 0xc2, 0x00}};
-
-std::string GetId(const void* object)
-{
-   return std::format("0x{:X}", reinterpret_cast<uintptr_t>(object));
-}
-
 Resource DescribeOwn(ID3D11Resource* resource)
 {
-   Resource described = {.id = GetId(resource)};
+   Resource described = {.id = GetObjectId(resource)};
    D3D11_RESOURCE_DIMENSION dimension = D3D11_RESOURCE_DIMENSION_UNKNOWN;
    resource->GetType(&dimension);
    switch (dimension)
@@ -119,10 +110,7 @@ Resource DescribeOwn(ID3D11Resource* resource)
    }
    default: described.type = "Unknown"; break;
    }
-   char name[256] = {};
-   UINT size = sizeof(name) - 1;
-   if (SUCCEEDED(resource->GetPrivateData(DEBUG_OBJECT_NAME, &size, name)))
-      described.debug_name.assign(name, strnlen(name, size));
+   described.debug_name = GetD3DDebugName(resource);
    return described;
 }
 
@@ -300,7 +288,7 @@ void AddConstantBuffers(Recording& recording, ID3D11DeviceContext1* context1, Sh
       buffer->GetDesc(&desc);
       // The whole buffer, as the D3D11.0 binds report it (4096 constants), is no range
       const bool whole = first[slot] == 0 && uint64_t(counts[slot]) * 16 >= desc.ByteWidth;
-      recording.event.constant_buffers.push_back({stage, slot, GetId(buffer.Get()), desc.ByteWidth, whole ? 0 : first[slot], whole ? 0 : counts[slot]});
+      recording.event.constant_buffers.push_back({stage, slot, GetObjectId(buffer.Get()), desc.ByteWidth, whole ? 0 : first[slot], whole ? 0 : counts[slot]});
       if (!immediate || copied_bytes.fetch_add(desc.ByteWidth, std::memory_order_relaxed) + desc.ByteWidth > MAX_COPIED_BYTES)
          continue;
       const D3D11_BUFFER_DESC copy_desc = {desc.ByteWidth, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};
@@ -615,47 +603,37 @@ void AddWrite(ID3D11DeviceContext* context, std::string_view name, ID3D11Resourc
 bool IsSkipped(ID3D11DeviceContext* context, Shaders::StageSet stages)
 {
    const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(context);
-   if (!bound)
-      return false;
-   for (size_t stage = 0; stage < bound->shaders.size(); stage++)
-   {
-      const Shaders::Database::Shader* shader = bound->shaders[stage];
-      if (stages.Has(ShaderStage(stage)) && shader && shader->skip_draws.load(std::memory_order_relaxed))
-         return true;
-   }
-   return false;
+   return bound && IsAnyStageSkipped(bound->shaders, stages);
 }
 
 void TrackCall(ID3D11DeviceContext* context, Shaders::StageSet stages)
 {
-   const std::optional<Track::Target> target = Track::Get();
-   if (!target || !stages.Has(target->stage))
-      return;
    const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(context);
-   const Shaders::Database::Shader* shader = bound ? bound->shaders[size_t(target->stage)] : nullptr;
-   if (!shader || shader->hash != target->hash || Track::CountCall() != target->instance)
+   const std::optional<Track::MatchedCall> matched = bound ? Track::MatchCall(bound->shaders, stages) : std::nullopt;
+   if (!matched)
       return;
+   const Track::Target& target = matched->target;
    std::array<ID3D11Buffer*, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT> buffers = {};
    std::array<UINT, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT> first = {};
    std::array<UINT, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT> counts = {};
    ComPtr<ID3D11DeviceContext1> context1;
    context->QueryInterface(IID_PPV_ARGS(&context1));
-   GetConstantBuffers(context, context1.Get(), target->stage, buffers.data(), first.data(), counts.data());
+   GetConstantBuffers(context, context1.Get(), target.stage, buffers.data(), first.data(), counts.data());
    ComPtr<ID3D11Buffer> buffer;
    for (uint32_t slot = 0; slot < buffers.size(); slot++)
    {
-      if (slot == target->slot)
+      if (slot == target.slot)
          buffer.Attach(buffers[slot]);
       else if (buffers[slot])
          buffers[slot]->Release();
    }
-   if (!buffer || target->slot >= buffers.size())
+   if (!buffer || target.slot >= buffers.size())
       return;
    D3D11_BUFFER_DESC desc;
    buffer->GetDesc(&desc);
-   const bool whole = first[target->slot] == 0 && uint64_t(counts[target->slot]) * 16 >= desc.ByteWidth;
+   const bool whole = first[target.slot] == 0 && uint64_t(counts[target.slot]) * 16 >= desc.ByteWidth;
    const bool deferred = context->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED;
-   TrackedCopy copy = {*target, nullptr, nullptr, GetId(buffer.Get()), whole ? 0 : first[target->slot], whole ? 0 : counts[target->slot],
+   TrackedCopy copy = {target, nullptr, nullptr, GetObjectId(buffer.Get()), whole ? 0 : first[target.slot], whole ? 0 : counts[target.slot],
       deferred ? context : nullptr, nullptr, !deferred};
    context->GetDevice(&copy.device);
    const D3D11_BUFFER_DESC copy_desc = {desc.ByteWidth, D3D11_USAGE_STAGING, 0, D3D11_CPU_ACCESS_READ, 0, 0};

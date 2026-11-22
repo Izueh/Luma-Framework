@@ -46,14 +46,8 @@ struct Copy
    ComPtr<ID3D12CommandQueue> queue;
 };
 
-// Never held with another lock
 std::mutex mutex;
 std::optional<Copy> pending;
-
-std::string GetId(const void* object)
-{
-   return std::format("0x{:X}", reinterpret_cast<uintptr_t>(object));
-}
 
 // Records the copy of `mip` (every array slice) of `resource`, in `state`, into a new readback buffer
 std::optional<Copy> RecordCopy(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES state, uint32_t mip, std::string* error)
@@ -121,7 +115,7 @@ std::optional<Copy> RecordCopy(ID3D12GraphicsCommandList* list, ID3D12Resource* 
    std::erase_if(barriers, [](const D3D12_RESOURCE_BARRIER& barrier) { return barrier.Type != D3D12_RESOURCE_BARRIER_TYPE_TRANSITION; });
    if (!barriers.empty())
       list->ResourceBarrier(UINT(barriers.size()), barriers.data());
-   copy.resource = GetId(resource);
+   copy.resource = Capture::GetObjectId(resource);
    copy.list = list;
    return copy;
 }
@@ -246,7 +240,7 @@ bool ReadAfterCall(const Game::D3D12::Call& call, Shaders::StageSet stages, bool
    {
       // The game's view format names the game's texture: the mirror's own is how its data reads
       copy->view_format = DXGI_FORMAT_UNKNOWN;
-      copy->resource = GetId(view->resource);
+      copy->resource = Capture::GetObjectId(view->resource);
       copy->mirrored = true;
    }
    std::scoped_lock lock(mutex);

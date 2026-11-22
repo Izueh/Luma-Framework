@@ -105,8 +105,7 @@ enum class Dimension : uint8_t
    Texture3D,
 };
 
-// A texture as both APIs describe it, what the rules look at
-struct TextureDesc
+struct TextureInfo
 {
    Dimension dimension = Dimension::Texture2D;
    uint32_t width = 1;
@@ -119,13 +118,11 @@ struct TextureDesc
    bool unordered_access = false;
    bool depth_stencil = false;
    bool cube = false;
-   // GPU only (D3D11 DEFAULT or IMMUTABLE usage, a D3D12 default heap): anything else can't be a render target or UAV
    bool gpu_only = true;
 
-   bool operator==(const TextureDesc&) const = default;
+   bool operator==(const TextureInfo&) const = default;
 };
 
-// The resolutions the size filters compare with, when the texture is created
 struct FrameState
 {
    Math::uint2 render = {1, 1};
@@ -133,10 +130,8 @@ struct FrameState
    Math::uint2 display = {1, 1};
 };
 
-// The mirror's desc for a texture the rules match, none for the others
-std::optional<TextureDesc> Match(const TextureDesc& desc, const FrameState& state, bool has_initial_data);
-// The format a matched texture's mirror gets
-DXGI_FORMAT GetBestFormat(const TextureDesc& desc);
+std::optional<TextureInfo> Match(const TextureInfo& info, const FrameState& state, bool has_initial_data);
+DXGI_FORMAT GetBestFormat(const TextureInfo& info);
 enum class ViewKind : uint8_t
 {
    ShaderResource,

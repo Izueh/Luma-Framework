@@ -1,6 +1,5 @@
 #include "Resources/D3D11/D3D11Mirrors.hpp"
 
-#include <atomic>
 #include <cstring>
 #include <format>
 #include <optional>
@@ -28,32 +27,9 @@ namespace Mirrors {
 namespace D3D11 {
 namespace {
 using namespace Utils::Format::DXGI;
+using OwnedResource = ComPtr<ID3D11Resource>;
+using ResourceMirrorState = MirrorState<ID3D11Resource, OwnedResource>;
 
-// In the game's texture's private data: released with it
-struct MirrorState
-{
-   ComPtr<ID3D11Resource> mirror;
-   Upgrade::TextureDesc original_desc;
-   Upgrade::TextureDesc desc; // The mirror's
-   int64_t bytes = 0;
-   const void* original = nullptr; // The key of the dev tools' list
-
-   ~MirrorState()
-   {
-      CountMirror(-1, -bytes);
-#if DEVELOPMENT
-      RemoveInfo(original);
-#endif
-   }
-};
-
-// In the mirror's private data: the game's texture it stands for (not held, it holds the mirror)
-struct OriginalState
-{
-   ID3D11Resource* original = nullptr;
-};
-
-// In a game's view of a mirrored texture: the same view of the mirror
 struct ViewState
 {
    ComPtr<ID3D11View> mirror;
@@ -72,9 +48,9 @@ Upgrade::Dimension ToDimension(D3D11_RESOURCE_DIMENSION dimension)
 }
 
 template <typename Desc>
-Upgrade::TextureDesc Describe(const Desc& desc)
+Upgrade::TextureInfo Describe(const Desc& desc)
 {
-   Upgrade::TextureDesc described = {.width = desc.Width, .levels = desc.MipLevels, .format = desc.Format};
+   Upgrade::TextureInfo described = {.width = desc.Width, .levels = desc.MipLevels, .format = desc.Format};
    if constexpr (std::is_same_v<Desc, D3D11_TEXTURE1D_DESC>)
    {
       described.dimension = Upgrade::Dimension::Texture1D;
@@ -119,7 +95,7 @@ struct ConvertedData
    std::vector<D3D11_SUBRESOURCE_DATA> data;
 };
 
-std::optional<ConvertedData> ConvertInitialData(const Upgrade::TextureDesc& desc, DXGI_FORMAT mirror_format, const D3D11_SUBRESOURCE_DATA* initial_data)
+std::optional<ConvertedData> ConvertInitialData(const Upgrade::TextureInfo& desc, DXGI_FORMAT mirror_format, const D3D11_SUBRESOURCE_DATA* initial_data)
 {
    if (!initial_data || mirror_format != DXGI_FORMAT_R16G16B16A16_FLOAT)
       return std::nullopt;
@@ -155,22 +131,14 @@ Desc MakeMirrorDesc(Desc desc, DXGI_FORMAT format)
    return desc;
 }
 
-void LogFailure(std::string_view what, HRESULT result)
-{
-   static std::atomic<uint32_t> failures = 0;
-   if (failures++ < 8)
-      Utils::Log::Warning("Mirrors: {} failed (0x{:08X}), the game's texture is used as it is", what, uint32_t(result));
-}
-
 template <typename Desc, typename Texture>
 void Create(ID3D11Device* device, const Desc& desc, const D3D11_SUBRESOURCE_DATA* initial_data, Texture* texture)
 {
-   const Upgrade::TextureDesc described = Describe(desc);
-   const std::optional<Upgrade::TextureDesc> mirrored = Upgrade::Match(described, GetFrameState(device), initial_data != nullptr);
+   const Upgrade::TextureInfo described = Describe(desc);
+   const std::optional<Upgrade::TextureInfo> mirrored = Upgrade::Match(described, GetFrameState(device), initial_data != nullptr);
    if (!mirrored)
       return;
    const std::optional<ConvertedData> data = ConvertInitialData(described, mirrored->format, initial_data);
-   // Initial data the mirror can't take in its format: it starts empty, and the game's texture is what such a texture usually is (static)
    ASSERT_ONCE_MSG(!initial_data || data, "A texture matching the upgrade rules has initial data that can't be converted to its mirror's format");
    ComPtr<ID3D11Resource> mirror;
    HRESULT result = E_FAIL;
@@ -194,16 +162,8 @@ void Create(ID3D11Device* device, const Desc& desc, const D3D11_SUBRESOURCE_DATA
       result = device->CreateTexture3D(&mirror_desc, data ? data->data.data() : nullptr, reinterpret_cast<ID3D11Texture3D**>(mirror.GetAddressOf()));
    }
    if (FAILED(result) || !mirror)
-      return LogFailure(std::format("a {} mirror of a {} texture", Utils::Format::GetName(mirrored->format), Utils::Format::GetName(desc.Format)), result);
-   const int64_t bytes = int64_t(EstimateBytes(*mirrored));
-   Hooks::Lifetime::SetState<OriginalState>(mirror.Get(), static_cast<ID3D11Resource*>(texture));
-   // Counted first: a state the texture refuses is destroyed at once, which uncounts it
-   CountMirror(1, bytes);
-   if (!Hooks::Lifetime::SetState<MirrorState>(texture, mirror, described, *mirrored, bytes, static_cast<const void*>(texture)))
-      return;
-#if DEVELOPMENT
-   AddInfo(texture, {.original = std::format("0x{:X}", reinterpret_cast<uintptr_t>(texture)), .original_desc = described, .mirror_desc = *mirrored, .frame = Shaders::GetFrame()});
-#endif
+      return LogCreationFailure(std::format("a {} mirror of a {} texture", Utils::Format::GetName(mirrored->format), Utils::Format::GetName(desc.Format)), result);
+   AttachMirror<ID3D11Resource>(texture, std::move(mirror), described, *mirrored);
 }
 
 template <typename Desc>
@@ -260,21 +220,20 @@ HRESULT CreateView(ID3D11Device* device, ID3D11Resource* mirror, const D3D11_DEP
 template <typename Desc, typename View>
 void CreateMirroredView(ID3D11Device* device, ID3D11Resource* resource, const Desc* desc, View* view)
 {
-   const MirrorState* state = resource ? Hooks::Lifetime::GetState<MirrorState>(resource) : nullptr;
+   const ResourceMirrorState* state = FindMirrorState<OwnedResource>(resource);
    if (!state || !view)
       return;
    std::optional<Desc> mirror_desc;
    if (desc)
    {
       mirror_desc = *desc;
-      const DXGI_FORMAT format = Upgrade::GetBestViewFormat(desc->Format, GetViewKind(desc), state->original_desc.format, state->desc.format);
+      const DXGI_FORMAT format = Upgrade::GetBestViewFormat(desc->Format, GetViewKind(desc), state->original_info.format, state->info.format);
       mirror_desc->Format = format != DXGI_FORMAT_UNKNOWN ? format : desc->Format;
    }
    ComPtr<ID3D11View> mirror_view;
    const HRESULT result = CreateView(device, state->mirror.Get(), mirror_desc ? &*mirror_desc : nullptr, mirror_view);
    if (FAILED(result) || !mirror_view)
-      return LogFailure(std::format("a view of a {} mirror", Utils::Format::GetName(state->desc.format)), result);
-   // Counted first, as mirrors
+      return LogCreationFailure(std::format("a view of a {} mirror", Utils::Format::GetName(state->info.format)), result);
    CountView(1);
    Hooks::Lifetime::SetState<ViewState>(view, std::move(mirror_view));
 }
@@ -402,24 +361,6 @@ DXGI_FORMAT GetFormat(ID3D11Resource* resource)
    default: return DXGI_FORMAT_UNKNOWN;
    }
 }
-
-// The mirrors of a copy's two sides while swapping; none when neither is mirrored
-struct Sides
-{
-   ID3D11Resource* destination = nullptr;
-   ID3D11Resource* source = nullptr;
-};
-
-std::optional<Sides> GetSides(ID3D11Resource* destination, ID3D11Resource* source)
-{
-   if (!IsSwapping() || !GetStats().mirrors)
-      return std::nullopt;
-   ID3D11Resource* mirror_destination = destination ? GetMirror(destination) : nullptr;
-   ID3D11Resource* mirror_source = source ? GetMirror(source) : nullptr;
-   if (!mirror_destination && !mirror_source)
-      return std::nullopt;
-   return Sides{mirror_destination ? mirror_destination : destination, mirror_source ? mirror_source : source};
-}
 } // namespace
 
 void CreateMirror(ID3D11Device* device, const D3D11_TEXTURE1D_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture1D* texture)
@@ -482,27 +423,27 @@ void SwapView(ID3D11DepthStencilView*& view)
 
 ID3D11Resource* GetMirror(ID3D11Resource* resource)
 {
-   const MirrorState* state = Hooks::Lifetime::GetState<MirrorState>(resource);
-   return state ? state->mirror.Get() : nullptr;
+   return FindMirror<OwnedResource>(resource);
 }
 
 ID3D11Resource* GetOriginal(ID3D11Resource* mirror)
 {
-   const OriginalState* state = Hooks::Lifetime::GetState<OriginalState>(mirror);
-   return state ? state->original : nullptr;
+   return FindOriginal(mirror);
 }
 
 bool RedirectCopy(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source)
 {
-   const std::optional<Sides> sides = GetSides(destination, source);
-   if (!sides)
+   if (!IsSwapping())
       return false;
-   if (AreCopyCompatible(GetFormat(sides->destination), GetFormat(sides->source)))
+   const CopyPlan<ID3D11Resource> plan = PlanCopy(destination, source, &GetMirror, &GetFormat);
+   if (plan.action == CopyAction::Original)
+      return false;
+   if (plan.action == CopyAction::DirectMirrorCopy)
    {
-      context->CopyResource(sides->destination, sides->source);
+      context->CopyResource(plan.destination, plan.source);
       return true;
    }
-   if (ConvertingCopy(context, sides->destination, sides->source))
+   if (ConvertingCopy(context, plan.destination, plan.source))
       return true;
    ASSERT_ONCE_MSG(false, "A copy between a mirror and a texture of another format couldn't be converted: the game's textures are copied, the mirror is stale");
    return false;
@@ -511,20 +452,21 @@ bool RedirectCopy(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3
 bool RedirectCopyRegion(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, UINT x, UINT y, UINT z, ID3D11Resource* source,
    UINT source_subresource, const D3D11_BOX* box, UINT copy_flags)
 {
-   const std::optional<Sides> sides = GetSides(destination, source);
-   if (!sides)
+   if (!IsSwapping())
       return false;
-   if (AreCopyCompatible(GetFormat(sides->destination), GetFormat(sides->source)))
+   const CopyPlan<ID3D11Resource> plan = PlanCopy(destination, source, &GetMirror, &GetFormat);
+   if (plan.action == CopyAction::Original)
+      return false;
+   if (plan.action == CopyAction::DirectMirrorCopy)
    {
       ComPtr<ID3D11DeviceContext1> context1;
       if (copy_flags && SUCCEEDED(context->QueryInterface(IID_PPV_ARGS(&context1))))
-         context1->CopySubresourceRegion1(sides->destination, destination_subresource, x, y, z, sides->source, source_subresource, box, copy_flags);
+         context1->CopySubresourceRegion1(plan.destination, destination_subresource, x, y, z, plan.source, source_subresource, box, copy_flags);
       else
-         context->CopySubresourceRegion(sides->destination, destination_subresource, x, y, z, sides->source, source_subresource, box);
+         context->CopySubresourceRegion(plan.destination, destination_subresource, x, y, z, plan.source, source_subresource, box);
       return true;
    }
-   // A whole single subresource converts like a CopyResource
-   if (!box && x == 0 && y == 0 && z == 0 && destination_subresource == 0 && source_subresource == 0 && ConvertingCopy(context, sides->destination, sides->source))
+   if (!box && x == 0 && y == 0 && z == 0 && destination_subresource == 0 && source_subresource == 0 && ConvertingCopy(context, plan.destination, plan.source))
       return true;
    ASSERT_ONCE_MSG(false, "A region copy between a mirror and a texture of another format isn't converted: the game's textures are copied, the mirror is stale");
    return false;
@@ -533,19 +475,20 @@ bool RedirectCopyRegion(ID3D11DeviceContext* context, ID3D11Resource* destinatio
 bool RedirectResolve(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, ID3D11Resource* source, UINT source_subresource,
    DXGI_FORMAT format)
 {
-   const std::optional<Sides> sides = GetSides(destination, source);
-   if (!sides)
+   if (!IsSwapping())
       return false;
-   const DXGI_FORMAT destination_format = GetFormat(sides->destination);
-   const DXGI_FORMAT source_format = GetFormat(sides->source);
+   const CopyPlan<ID3D11Resource> plan = PlanCopy(destination, source, &GetMirror, &GetFormat);
+   if (plan.action == CopyAction::Original)
+      return false;
+   const DXGI_FORMAT destination_format = GetFormat(plan.destination);
+   const DXGI_FORMAT source_format = GetFormat(plan.source);
    if (GetTypeless(destination_format) != GetTypeless(source_format) || destination_format == DXGI_FORMAT_UNKNOWN)
    {
       LUMA_UNIMPLEMENTED("Resources::Mirrors resolving between a mirror and a texture of another format");
       return false;
    }
-   // The mirrors' format, typed: the game's names the original's family
-   const DXGI_FORMAT resolve_format = IsTypeless(destination_format) ? GetDefaultTyped(destination_format) : destination_format;
-   context->ResolveSubresource(sides->destination, destination_subresource, sides->source, source_subresource, GetTypeless(format) == GetTypeless(destination_format) ? format : resolve_format);
+   const DXGI_FORMAT resolve_format = GetResolveFormat(format, GetFormat(source), destination_format);
+   context->ResolveSubresource(plan.destination, destination_subresource, plan.source, source_subresource, resolve_format);
    return true;
 }
 
@@ -607,10 +550,10 @@ bool RedirectClearView(ID3D11DeviceContext* context, ID3D11View* view, const FLO
 
 void WriteToMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch)
 {
-   const MirrorState* state = resource && GetStats().mirrors ? Hooks::Lifetime::GetState<MirrorState>(resource) : nullptr;
+   const ResourceMirrorState* state = FindMirrorState<OwnedResource>(resource);
    if (!state || !data)
       return;
-   const Upgrade::TextureDesc& desc = state->original_desc;
+   const Upgrade::TextureInfo& desc = state->original_info;
    const uint32_t level = subresource % std::max(desc.levels, 1u);
    const bool volume = desc.dimension == Upgrade::Dimension::Texture3D;
    const uint32_t width = box ? box->right - box->left : MipSize(desc.width, level);
@@ -618,7 +561,7 @@ void WriteToMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT 
    const uint32_t depth = box ? box->back - box->front : volume ? MipSize(desc.depth_or_layers, level)
                                                                 : 1;
    std::optional<Converted> converted;
-   if (state->desc.format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+   if (state->info.format == DXGI_FORMAT_R16G16B16A16_FLOAT)
       converted = ConvertToRgba16Float(data, row_pitch, depth_pitch, desc.format, width, height, depth);
    if (!converted)
    {
