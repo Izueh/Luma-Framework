@@ -33,6 +33,7 @@
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Swapchain/DXGI/DXGISwapchain.hpp"
 #include "Swapchain/Swapchain.hpp"
+#include "ReShade/AddonEvents.hpp"
 #include "ReShade/ReShade.hpp"
 #include "ReShade/ReShadeABI.hpp"
 #include "Draw/D3D11/D3D11Draw.hpp"
@@ -1600,6 +1601,96 @@ TEST_CASE("ReShade: another module exporting ReShadeVersion isn't loaded again, 
    REQUIRE(SUCCEEDED(d3d12_device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))));
    queue->Signal(fence.Get(), 1);
    CHECK(WaitFor([&] { return fence->GetCompletedValue() >= 1; }));
+}
+
+namespace {
+void LoadFakeReShade();
+bool addon_handler_in_scope = false;
+uint64_t addon_handler_args[9] = {};
+
+// What an add-on's handler does when ReShade calls it: reads its arguments and whether Luma's hooks would let the call through
+uint64_t AddonHandlerBody(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7, uint64_t a8)
+{
+   addon_handler_in_scope = Hooks::Scope::IsActive();
+   const uint64_t args[9] = {a0, a1, a2, a3, a4, a5, a6, a7, a8};
+   std::copy(std::begin(args), std::end(args), std::begin(addon_handler_args));
+   return a0 + a8;
+}
+} // namespace
+
+// An add-on's handlers (here the fake's, in a dll that isn't Luma's) run in a Luma scope, whatever the registration function it used
+TEST_CASE("ReShade: add-on event handlers are wrapped in a Luma scope, unwrapped and unregistered through their own pointer")
+{
+   InstallHooks();
+   LoadFakeReShade();
+   constexpr uint32_t EVENT = 40;
+   void* const handler = reinterpret_cast<void*>(GetProcAddress(fake_reshade, "FakeReShadeAddonHandler"));
+   REQUIRE(handler);
+   GetFakeExport<void (*)(void*)>("FakeReShadeSetHandlerBody")(reinterpret_cast<void*>(&AddonHandlerBody));
+   using Handler = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+   const auto find_event = [] { return GetFakeExport<void* (*)(uint32_t)>("FakeReShadeGetEvent")(EVENT); };
+
+   // The plain registration: ReShade holds a wrapper, registered for the handler's module
+   GetFakeExport<void (*)(uint32_t, void*)>("ReShadeRegisterEvent")(EVENT, handler);
+   void* wrapper = find_event();
+   REQUIRE(wrapper);
+   CHECK(wrapper != handler);
+   CHECK(GetFakeExport<void* (*)(uint32_t)>("FakeReShadeGetEventModule")(EVENT) == fake_reshade);
+   CHECK(ReShade::DescribeBridge().find("add-on handlers kept out of Luma's hooks") != std::string::npos);
+
+   // Its arguments (the ones on the stack too) and result pass through, the call is in a scope that ends with it
+   CHECK_FALSE(Hooks::Scope::IsActive());
+   CHECK(reinterpret_cast<Handler>(wrapper)(1, 2, 3, 4, 5, 6, 7, 8, 9) == 10);
+   CHECK(addon_handler_in_scope);
+   CHECK_FALSE(Hooks::Scope::IsActive());
+   for (uint64_t index = 0; index < 9; index++)
+      CHECK(addon_handler_args[index] == index + 1);
+
+   // Unregistered by the handler's own pointer: ReShade's wrapper goes
+   GetFakeExport<void (*)(uint32_t, void*)>("ReShadeUnregisterEvent")(EVENT, handler);
+   CHECK(find_event() == nullptr);
+
+   // By add-on: the module given is kept
+   GetFakeExport<void (*)(void*, uint32_t, void*)>("ReShadeRegisterEventForAddon")(fake_reshade, EVENT, handler);
+   wrapper = find_event();
+   REQUIRE(wrapper);
+   CHECK(wrapper != handler);
+   CHECK(GetFakeExport<void* (*)(uint32_t)>("FakeReShadeGetEventModule")(EVENT) == fake_reshade);
+   addon_handler_in_scope = false;
+   CHECK(reinterpret_cast<Handler>(wrapper)(5, 0, 0, 0, 0, 0, 0, 0, 6) == 11);
+   CHECK(addon_handler_in_scope);
+   GetFakeExport<void (*)(void*, uint32_t, void*)>("ReShadeUnregisterEventForAddon")(fake_reshade, EVENT, handler);
+   CHECK(find_event() == nullptr);
+
+   // Reload cleanup: ReShadeUnregisterAddon clears all wrapped slots for that module so they are recycled on reload
+   GetFakeExport<void (*)(void*, uint32_t, void*)>("ReShadeRegisterEventForAddon")(fake_reshade, EVENT, handler);
+   GetFakeExport<void (*)(void*, uint32_t, void*)>("ReShadeRegisterEventForAddon")(fake_reshade, EVENT + 1, handler);
+   CHECK(ReShade::AddonEvents::Describe().find("2 add-on handlers") != std::string::npos);
+   GetFakeExport<void (*)(void*)>("ReShadeUnregisterAddon")(fake_reshade);
+   CHECK(find_event() == nullptr);
+   CHECK(ReShade::AddonEvents::Describe().find("0 add-on handlers") != std::string::npos);
+   GetFakeExport<void (*)(void*)>("FakeReShadeSetHandlerBody")(nullptr);
+
+   // Native caller tracking for .addon64/.addon32/.addon modules (excluding regular .dlls, Luma, and ReShade itself)
+   alignas(64) uint8_t fake_addon64[64] = {};
+   alignas(64) uint8_t fake_addon32[64] = {};
+   alignas(64) uint8_t fake_addon[64] = {};
+   alignas(64) uint8_t fake_regular_dll[64] = {};
+   ReShade::AddonEvents::OnModuleLoaded(L"renodx.addon64", fake_addon64, sizeof(fake_addon64));
+   ReShade::AddonEvents::OnModuleLoaded(L"legacy.addon32", fake_addon32, sizeof(fake_addon32));
+   ReShade::AddonEvents::OnModuleLoaded(L"generic.addon", fake_addon, sizeof(fake_addon));
+   ReShade::AddonEvents::OnModuleLoaded(L"game_helper.dll", fake_regular_dll, sizeof(fake_regular_dll));
+   CHECK(ReShade::AddonEvents::IsAddonAddress(fake_addon64 + 8));
+   CHECK(ReShade::AddonEvents::IsAddonAddress(fake_addon32 + 8));
+   CHECK(ReShade::AddonEvents::IsAddonAddress(fake_addon + 8));
+   CHECK_FALSE(ReShade::AddonEvents::IsAddonAddress(fake_regular_dll + 8));
+   CHECK_FALSE(ReShade::AddonEvents::IsAddonAddress(handler)); // ReShade itself must never be treated as an add-on
+   ReShade::AddonEvents::OnModuleUnloaded(fake_addon64);
+   ReShade::AddonEvents::OnModuleUnloaded(fake_addon32);
+   ReShade::AddonEvents::OnModuleUnloaded(fake_addon);
+   CHECK_FALSE(ReShade::AddonEvents::IsAddonAddress(fake_addon64 + 8));
+   CHECK_FALSE(ReShade::AddonEvents::IsAddonAddress(fake_addon32 + 8));
+   CHECK_FALSE(ReShade::AddonEvents::IsAddonAddress(fake_addon + 8));
 }
 
 namespace {

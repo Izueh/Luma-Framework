@@ -1,4 +1,5 @@
 #include "reshade/reshade.hpp"
+#include "reshade/addon_events.hpp"
 #include "reshade/reshade_abi.hpp"
 
 #include <array>
@@ -245,6 +246,7 @@ void RegisterBridge()
    const Arrangement current = arrangement.load(std::memory_order_acquire);
    if (!IsLoaded(current) || bridge_attempted.exchange(true))
       return;
+   AddonEvents::Install(reinterpret_cast<HMODULE>(module_base), current == Arrangement::AlreadyLoaded);
    constexpr const char* FALLBACK = "Luma's present work runs at the proxy's Present: ReShade's effects and add-ons see the image before Luma's display composition";
    bool enabled = true;
    Config::Get(CONFIG_SECTION, BRIDGE_CONFIG, enabled);
@@ -400,8 +402,8 @@ std::string Describe()
    {
    case Arrangement::Absent: return "none";
    case Arrangement::Disabled: return std::format("{} next to Luma, turned off in Luma.toml", Utils::Strings::ToUtf8(FILE_NAME));
-   case Arrangement::InjectedByLuma: return std::format("{}, injected by Luma, {}", module_name, order_text);
-   case Arrangement::AlreadyLoaded: return std::format("{}, not loaded by Luma (a proxy, or injected by something else), {}", module_name, order_text);
+   case Arrangement::InjectedByLuma: return std::format("{}, injected by Luma, {}; {}", module_name, order_text, AddonEvents::Describe());
+   case Arrangement::AlreadyLoaded: return std::format("{}, not loaded by Luma (a proxy, or injected by something else), {}; {}", module_name, order_text, AddonEvents::Describe());
    case Arrangement::LoadFailed: return std::format("{} failed to load (see Luma.log)", Utils::Strings::ToUtf8(FILE_NAME));
    }
    return {};

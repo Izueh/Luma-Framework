@@ -5,6 +5,7 @@
 
 #include <winternl.h>
 
+#include "reshade/addon_events.hpp"
 #include "reshade/reshade.hpp"
 #include "hooks/third_party_modules.hpp"
 #include "hooks/hooks.hpp"
@@ -53,12 +54,14 @@ VOID CALLBACK OnDllNotification(ULONG reason, const LdrDllNotificationData* data
    if (reason == LDR_DLL_NOTIFICATION_REASON_UNLOADED)
    {
       Hooks::ThirdPartyModules::OnModuleUnloaded(data->dll_base);
+      ReShade::AddonEvents::OnModuleUnloaded(data->dll_base);
       return;
    }
    if (reason != LDR_DLL_NOTIFICATION_REASON_LOADED)
       return;
    const std::wstring_view name(data->base_dll_name->Buffer, data->base_dll_name->Length / sizeof(wchar_t));
    Hooks::ThirdPartyModules::OnModuleLoaded(name, data->dll_base, data->size_of_image);
+   ReShade::AddonEvents::OnModuleLoaded(name, data->dll_base, data->size_of_image);
    if (Utils::Strings::EqualsIgnoreCase(name, GRAPHICS_MODULE))
       OnGraphicsModule(data->dll_base, false);
    if (initialized)

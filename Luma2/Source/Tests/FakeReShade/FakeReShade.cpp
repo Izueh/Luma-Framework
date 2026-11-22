@@ -14,6 +14,7 @@ constexpr uint32_t EVENT_COUNT = 256;
 void* registered_module = reinterpret_cast<void*>(1);
 uint32_t registered_api_version = 0;
 void* registered_events[EVENT_COUNT] = {};
+void* registered_event_modules[EVENT_COUNT] = {};
 uint32_t registered_event_count = 0;
 
 // ReShade 6.8.0's numbers and GUIDs
@@ -330,11 +331,71 @@ extern "C" __declspec(dllexport) bool ReShadeRegisterAddon(void* module, uint32_
    return true;
 }
 
-extern "C" __declspec(dllexport) void ReShadeRegisterEvent(uint32_t event, void* callback)
+// Not through the exports: Luma hooks those
+static void StoreEvent(uint32_t event, void* callback)
 {
    if (event < EVENT_COUNT)
       registered_events[event] = callback;
    registered_event_count++;
+}
+
+extern "C" __declspec(dllexport) void ReShadeRegisterEvent(uint32_t event, void* callback)
+{
+   StoreEvent(event, callback);
+}
+
+// The by-add-on forms: the fake keeps one handler per event, so the module is only recorded
+extern "C" __declspec(dllexport) void ReShadeRegisterEventForAddon(void* module, uint32_t event, void* callback)
+{
+   registered_event_modules[event < EVENT_COUNT ? event : 0] = module;
+   StoreEvent(event, callback);
+}
+
+static void RemoveEvent(uint32_t event, void* callback)
+{
+   if (event < EVENT_COUNT && registered_events[event] == callback)
+      registered_events[event] = nullptr;
+}
+
+extern "C" __declspec(dllexport) void ReShadeUnregisterEvent(uint32_t event, void* callback)
+{
+   RemoveEvent(event, callback);
+}
+
+extern "C" __declspec(dllexport) void ReShadeUnregisterEventForAddon(void*, uint32_t event, void* callback)
+{
+   RemoveEvent(event, callback);
+}
+
+extern "C" __declspec(dllexport) void ReShadeUnregisterAddon(void* module)
+{
+   for (uint32_t event = 0; event < EVENT_COUNT; event++)
+   {
+      if (registered_event_modules[event] == module)
+      {
+         registered_events[event] = nullptr;
+         registered_event_modules[event] = nullptr;
+      }
+   }
+}
+
+// An add-on's handler for the tests (this dll isn't Luma's): runs `FakeReShadeSetHandlerBody`'s function with the arguments it got, and returns its result
+using HandlerBody = uint64_t (*)(uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t, uint64_t);
+HandlerBody handler_body = nullptr;
+
+extern "C" __declspec(dllexport) uint64_t FakeReShadeAddonHandler(uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7, uint64_t a8)
+{
+   return handler_body ? handler_body(a0, a1, a2, a3, a4, a5, a6, a7, a8) : 0;
+}
+
+extern "C" __declspec(dllexport) void FakeReShadeSetHandlerBody(void* body)
+{
+   handler_body = reinterpret_cast<HandlerBody>(body);
+}
+
+extern "C" __declspec(dllexport) void* FakeReShadeGetEventModule(uint32_t event)
+{
+   return registered_event_modules[event < EVENT_COUNT ? event : 0];
 }
 
 // What the tests read back

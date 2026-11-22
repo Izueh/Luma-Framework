@@ -10,6 +10,7 @@
 #include <vector>
 
 #include <d3d11_4.h>
+#include <intrin.h>
 #include <wrl/client.h>
 
 #include "hooks/callbacks.hpp"
@@ -27,38 +28,38 @@ thread_local uint32_t context_depth = 0;
 // Detours are instanced per context vtable: 0 is the immediate one, 1 the deferred one
 
 template <auto Detour, auto Pre, typename Context, typename... Args>
-void ReportBefore(Context* context, Args... args)
+void ReportBefore(const void* caller, Context* context, Args... args)
 {
    Utils::DepthGuard guard(context_depth);
-   if (Detours::IsGameCall(guard) && Detours::Report(Pre, context, args...))
+   if (Detours::IsGameCall(guard, caller) && Detours::Report(Pre, context, args...))
       return;
    original<Detour>(context, args...);
 }
 
 template <auto Detour, auto Post, typename... Args>
-void ReportAfter(ID3D11DeviceContext* context, Args... args)
+void ReportAfter(const void* caller, ID3D11DeviceContext* context, Args... args)
 {
    Utils::DepthGuard guard(context_depth);
    original<Detour>(context, args...);
-   if (Detours::IsGameCall(guard))
+   if (Detours::IsGameCall(guard, caller))
       Detours::Report(Post, context, args...);
 }
 
 template <auto Detour, auto Pre, typename Shader>
-void SetShader(ID3D11DeviceContext* context, Shader* shader, ID3D11ClassInstance* const* instances, UINT instance_count)
+void SetShader(const void* caller, ID3D11DeviceContext* context, Shader* shader, ID3D11ClassInstance* const* instances, UINT instance_count)
 {
    Utils::DepthGuard guard(context_depth);
-   if (Detours::IsGameCall(guard) && Detours::Report(Pre, context, shader))
+   if (Detours::IsGameCall(guard, caller) && Detours::Report(Pre, context, shader))
       return;
    original<Detour>(context, shader, instances, instance_count);
 }
 
 // The callback edits a copy of the game's array
 template <auto Detour, auto Pre, size_t Max, typename Context, typename T, typename... Extra>
-void SetArray(Context* context, UINT start, UINT count, T* const* items, Extra... extra)
+void SetArray(const void* caller, Context* context, UINT start, UINT count, T* const* items, Extra... extra)
 {
    Utils::DepthGuard guard(context_depth);
-   if (!Detours::IsGameCall(guard) || !items || count > Max)
+   if (!Detours::IsGameCall(guard, caller) || !items || count > Max)
       return original<Detour>(context, start, count, items, extra...);
    std::array<T*, Max> game_items;
    std::copy_n(items, count, game_items.begin());
@@ -77,31 +78,31 @@ bool PreSetConstantBuffers(ID3D11DeviceContext* context, UINT start, UINT count,
    template <size_t V>                                                                                                                      \
    void STDMETHODCALLTYPE Stage##SetShader(ID3D11DeviceContext* context, Shader* shader, ID3D11ClassInstance* const* instances, UINT count) \
    {                                                                                                                                        \
-      SetShader<&Stage##SetShader<V>, &Callbacks::Pre##Stage##SetShader>(context, shader, instances, count);                               \
+      SetShader<&Stage##SetShader<V>, &Callbacks::Pre##Stage##SetShader>(_ReturnAddress(), context, shader, instances, count);              \
    }                                                                                                                                        \
    template <size_t V>                                                                                                                      \
    void STDMETHODCALLTYPE Stage##SetShaderResources(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11ShaderResourceView* const* views) \
    {                                                                                                                                        \
       SetArray<&Stage##SetShaderResources<V>, &Callbacks::Pre##Stage##SetShaderResources, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT>(  \
-         context, start, count, views);                                                                                                     \
+         _ReturnAddress(), context, start, count, views);                                                                                   \
    }                                                                                                                                        \
    template <size_t V>                                                                                                                      \
    void STDMETHODCALLTYPE Stage##SetConstantBuffers(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11Buffer* const* buffers)   \
    {                                                                                                                                        \
       SetArray<&Stage##SetConstantBuffers<V>, &PreSetConstantBuffers<&Callbacks::Pre##Stage##SetConstantBuffers>,                         \
-         D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT>(context, start, count, buffers);                                                \
+         D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT>(_ReturnAddress(), context, start, count, buffers);                              \
    }                                                                                                                                        \
    template <size_t V>                                                                                                                      \
    void STDMETHODCALLTYPE Stage##SetConstantBuffers1(ID3D11DeviceContext1* context, UINT start, UINT count, ID3D11Buffer* const* buffers,  \
       const UINT* first_constant, const UINT* num_constants)                                                                                \
    {                                                                                                                                        \
       SetArray<&Stage##SetConstantBuffers1<V>, &Callbacks::Pre##Stage##SetConstantBuffers, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT>( \
-         context, start, count, buffers, first_constant, num_constants);                                                                    \
+         _ReturnAddress(), context, start, count, buffers, first_constant, num_constants);                                                  \
    }                                                                                                                                        \
    template <size_t V>                                                                                                                      \
    void STDMETHODCALLTYPE Stage##SetSamplers(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11SamplerState* const* samplers)   \
    {                                                                                                                                        \
-      SetArray<&Stage##SetSamplers<V>, &Callbacks::Pre##Stage##SetSamplers, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT>(context, start, count, samplers); \
+      SetArray<&Stage##SetSamplers<V>, &Callbacks::Pre##Stage##SetSamplers, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT>(_ReturnAddress(), context, start, count, samplers); \
    }
 
 LUMA_STAGE_DETOURS(VS, ID3D11VertexShader)
@@ -116,14 +117,14 @@ template <size_t V>
 void STDMETHODCALLTYPE CSSetUnorderedAccessViews(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11UnorderedAccessView* const* views,
    const UINT* initial_counts)
 {
-   SetArray<&CSSetUnorderedAccessViews<V>, &Callbacks::PreCSSetUnorderedAccessViews, D3D11_1_UAV_SLOT_COUNT>(context, start, count, views, initial_counts);
+   SetArray<&CSSetUnorderedAccessViews<V>, &Callbacks::PreCSSetUnorderedAccessViews, D3D11_1_UAV_SLOT_COUNT>(_ReturnAddress(), context, start, count, views, initial_counts);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE OMSetRenderTargets(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView* const* views, ID3D11DepthStencilView* depth_stencil)
 {
    Utils::DepthGuard guard(context_depth);
-   if (!Detours::IsGameCall(guard) || count > D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT)
+   if (!Detours::IsGameCall(guard, _ReturnAddress()) || count > D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT)
       return original<&OMSetRenderTargets<V>>(context, count, views, depth_stencil);
    std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> game_views;
    ID3D11RenderTargetView** edited_views = nullptr;
@@ -144,7 +145,7 @@ void STDMETHODCALLTYPE OMSetRenderTargetsAndUnorderedAccessViews(ID3D11DeviceCon
    Utils::DepthGuard guard(context_depth);
    const bool keep_views = count == D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL;
    const bool keep_uavs = uav_count == D3D11_KEEP_UNORDERED_ACCESS_VIEWS;
-   if (!Detours::IsGameCall(guard) || (!keep_views && count > D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT) || (!keep_uavs && uav_count > D3D11_1_UAV_SLOT_COUNT))
+   if (!Detours::IsGameCall(guard, _ReturnAddress()) || (!keep_views && count > D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT) || (!keep_uavs && uav_count > D3D11_1_UAV_SLOT_COUNT))
       return original<&OMSetRenderTargetsAndUnorderedAccessViews<V>>(context, count, views, depth_stencil, uav_start, uav_count, uavs, initial_counts);
    std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> game_views;
    std::array<ID3D11UnorderedAccessView*, D3D11_1_UAV_SLOT_COUNT> game_uavs;
@@ -170,43 +171,43 @@ void STDMETHODCALLTYPE OMSetRenderTargetsAndUnorderedAccessViews(ID3D11DeviceCon
 template <size_t V>
 void STDMETHODCALLTYPE RSSetViewports(ID3D11DeviceContext* context, UINT count, const D3D11_VIEWPORT* viewports)
 {
-   ReportAfter<&RSSetViewports<V>, &Callbacks::PostRSSetViewports>(context, count, viewports);
+   ReportAfter<&RSSetViewports<V>, &Callbacks::PostRSSetViewports>(_ReturnAddress(), context, count, viewports);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE RSSetScissorRects(ID3D11DeviceContext* context, UINT count, const D3D11_RECT* rects)
 {
-   ReportAfter<&RSSetScissorRects<V>, &Callbacks::PostRSSetScissorRects>(context, count, rects);
+   ReportAfter<&RSSetScissorRects<V>, &Callbacks::PostRSSetScissorRects>(_ReturnAddress(), context, count, rects);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE OMSetBlendState(ID3D11DeviceContext* context, ID3D11BlendState* state, const FLOAT blend_factor[4], UINT sample_mask)
 {
-   ReportAfter<&OMSetBlendState<V>, &Callbacks::PostOMSetBlendState>(context, state, blend_factor, sample_mask);
+   ReportAfter<&OMSetBlendState<V>, &Callbacks::PostOMSetBlendState>(_ReturnAddress(), context, state, blend_factor, sample_mask);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE OMSetDepthStencilState(ID3D11DeviceContext* context, ID3D11DepthStencilState* state, UINT stencil_ref)
 {
-   ReportAfter<&OMSetDepthStencilState<V>, &Callbacks::PostOMSetDepthStencilState>(context, state, stencil_ref);
+   ReportAfter<&OMSetDepthStencilState<V>, &Callbacks::PostOMSetDepthStencilState>(_ReturnAddress(), context, state, stencil_ref);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE IASetVertexBuffers(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11Buffer* const* buffers, const UINT* strides, const UINT* offsets)
 {
-   ReportAfter<&IASetVertexBuffers<V>, &Callbacks::PostIASetVertexBuffers>(context, start, count, buffers, strides, offsets);
+   ReportAfter<&IASetVertexBuffers<V>, &Callbacks::PostIASetVertexBuffers>(_ReturnAddress(), context, start, count, buffers, strides, offsets);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE IASetIndexBuffer(ID3D11DeviceContext* context, ID3D11Buffer* buffer, DXGI_FORMAT format, UINT offset)
 {
-   ReportAfter<&IASetIndexBuffer<V>, &Callbacks::PostIASetIndexBuffer>(context, buffer, format, offset);
+   ReportAfter<&IASetIndexBuffer<V>, &Callbacks::PostIASetIndexBuffer>(_ReturnAddress(), context, buffer, format, offset);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE ClearState(ID3D11DeviceContext* context)
 {
-   ReportAfter<&ClearState<V>, &Callbacks::PostClearState>(context);
+   ReportAfter<&ClearState<V>, &Callbacks::PostClearState>(_ReturnAddress(), context);
 }
 
 template <size_t V>
@@ -215,7 +216,7 @@ HRESULT STDMETHODCALLTYPE Map(ID3D11DeviceContext* context, ID3D11Resource* reso
 {
    Utils::DepthGuard guard(context_depth);
    const HRESULT result = original<&Map<V>>(context, resource, subresource, type, flags, mapped);
-   if (Detours::IsGameCall(guard) && SUCCEEDED(result) && mapped)
+   if (Detours::IsGameCall(guard, _ReturnAddress()) && SUCCEEDED(result) && mapped)
       Detours::Report(&Callbacks::PostMap, context, resource, subresource, type, flags, *mapped);
    return result;
 }
@@ -224,7 +225,7 @@ template <size_t V>
 void STDMETHODCALLTYPE Unmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource)
 {
    Utils::DepthGuard guard(context_depth);
-   const bool game_call = Detours::IsGameCall(guard);
+   const bool game_call = Detours::IsGameCall(guard, _ReturnAddress());
    if (game_call && Detours::Report(&Callbacks::PreUnmap, context, resource, subresource))
       return;
    original<&Unmap<V>>(context, resource, subresource);
@@ -237,7 +238,7 @@ void STDMETHODCALLTYPE UpdateSubresource(ID3D11DeviceContext* context, ID3D11Res
    const void* data, UINT row_pitch, UINT depth_pitch)
 {
    Utils::DepthGuard guard(context_depth);
-   if (Detours::IsGameCall(guard) && Detours::Report(&Callbacks::PreUpdateSubresource, context, resource, subresource, box, data, row_pitch, depth_pitch, 0u))
+   if (Detours::IsGameCall(guard, _ReturnAddress()) && Detours::Report(&Callbacks::PreUpdateSubresource, context, resource, subresource, box, data, row_pitch, depth_pitch, 0u))
       return;
    original<&UpdateSubresource<V>>(context, resource, subresource, box, data, row_pitch, depth_pitch);
 }
@@ -246,13 +247,13 @@ template <size_t V>
 void STDMETHODCALLTYPE UpdateSubresource1(ID3D11DeviceContext1* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box,
    const void* data, UINT row_pitch, UINT depth_pitch, UINT copy_flags)
 {
-   ReportBefore<&UpdateSubresource1<V>, &Callbacks::PreUpdateSubresource>(context, resource, subresource, box, data, row_pitch, depth_pitch, copy_flags);
+   ReportBefore<&UpdateSubresource1<V>, &Callbacks::PreUpdateSubresource>(_ReturnAddress(), context, resource, subresource, box, data, row_pitch, depth_pitch, copy_flags);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE CopyResource(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source)
 {
-   ReportBefore<&CopyResource<V>, &Callbacks::PreCopyResource>(context, destination, source);
+   ReportBefore<&CopyResource<V>, &Callbacks::PreCopyResource>(_ReturnAddress(), context, destination, source);
 }
 
 template <size_t V>
@@ -260,7 +261,7 @@ void STDMETHODCALLTYPE CopySubresourceRegion(ID3D11DeviceContext* context, ID3D1
    UINT z, ID3D11Resource* source, UINT source_subresource, const D3D11_BOX* box)
 {
    Utils::DepthGuard guard(context_depth);
-   if (Detours::IsGameCall(guard) &&
+   if (Detours::IsGameCall(guard, _ReturnAddress()) &&
       Detours::Report(&Callbacks::PreCopySubresourceRegion, context, destination, destination_subresource, x, y, z, source, source_subresource, box, 0u))
       return;
    original<&CopySubresourceRegion<V>>(context, destination, destination_subresource, x, y, z, source, source_subresource, box);
@@ -270,7 +271,7 @@ template <size_t V>
 void STDMETHODCALLTYPE CopySubresourceRegion1(ID3D11DeviceContext1* context, ID3D11Resource* destination, UINT destination_subresource, UINT x,
    UINT y, UINT z, ID3D11Resource* source, UINT source_subresource, const D3D11_BOX* box, UINT copy_flags)
 {
-   ReportBefore<&CopySubresourceRegion1<V>, &Callbacks::PreCopySubresourceRegion>(context, destination, destination_subresource, x, y, z, source,
+   ReportBefore<&CopySubresourceRegion1<V>, &Callbacks::PreCopySubresourceRegion>(_ReturnAddress(), context, destination, destination_subresource, x, y, z, source,
       source_subresource, box, copy_flags);
 }
 
@@ -278,98 +279,98 @@ template <size_t V>
 void STDMETHODCALLTYPE ResolveSubresource(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, ID3D11Resource* source,
    UINT source_subresource, DXGI_FORMAT format)
 {
-   ReportBefore<&ResolveSubresource<V>, &Callbacks::PreResolveSubresource>(context, destination, destination_subresource, source, source_subresource, format);
+   ReportBefore<&ResolveSubresource<V>, &Callbacks::PreResolveSubresource>(_ReturnAddress(), context, destination, destination_subresource, source, source_subresource, format);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE ClearRenderTargetView(ID3D11DeviceContext* context, ID3D11RenderTargetView* view, const FLOAT color[4])
 {
-   ReportBefore<&ClearRenderTargetView<V>, &Callbacks::PreClearRenderTargetView>(context, view, color);
+   ReportBefore<&ClearRenderTargetView<V>, &Callbacks::PreClearRenderTargetView>(_ReturnAddress(), context, view, color);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE CopyStructureCount(ID3D11DeviceContext* context, ID3D11Buffer* dest, UINT dest_offset, ID3D11UnorderedAccessView* source)
 {
-   ReportBefore<&CopyStructureCount<V>, &Callbacks::PreCopyStructureCount>(context, dest, dest_offset, source);
+   ReportBefore<&CopyStructureCount<V>, &Callbacks::PreCopyStructureCount>(_ReturnAddress(), context, dest, dest_offset, source);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE ClearDepthStencilView(ID3D11DeviceContext* context, ID3D11DepthStencilView* view, UINT flags, FLOAT depth, UINT8 stencil)
 {
-   ReportBefore<&ClearDepthStencilView<V>, &Callbacks::PreClearDepthStencilView>(context, view, flags, depth, stencil);
+   ReportBefore<&ClearDepthStencilView<V>, &Callbacks::PreClearDepthStencilView>(_ReturnAddress(), context, view, flags, depth, stencil);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE ClearUnorderedAccessViewUint(ID3D11DeviceContext* context, ID3D11UnorderedAccessView* view, const UINT values[4])
 {
-   ReportBefore<&ClearUnorderedAccessViewUint<V>, &Callbacks::PreClearUnorderedAccessViewUint>(context, view, values);
+   ReportBefore<&ClearUnorderedAccessViewUint<V>, &Callbacks::PreClearUnorderedAccessViewUint>(_ReturnAddress(), context, view, values);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE ClearUnorderedAccessViewFloat(ID3D11DeviceContext* context, ID3D11UnorderedAccessView* view, const FLOAT values[4])
 {
-   ReportBefore<&ClearUnorderedAccessViewFloat<V>, &Callbacks::PreClearUnorderedAccessViewFloat>(context, view, values);
+   ReportBefore<&ClearUnorderedAccessViewFloat<V>, &Callbacks::PreClearUnorderedAccessViewFloat>(_ReturnAddress(), context, view, values);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE ClearView(ID3D11DeviceContext1* context, ID3D11View* view, const FLOAT color[4], const D3D11_RECT* rects, UINT rect_count)
 {
-   ReportBefore<&ClearView<V>, &Callbacks::PreClearView>(context, view, color, rects, rect_count);
+   ReportBefore<&ClearView<V>, &Callbacks::PreClearView>(_ReturnAddress(), context, view, color, rects, rect_count);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE Draw(ID3D11DeviceContext* context, UINT vertex_count, UINT start_vertex)
 {
-   ReportBefore<&Draw<V>, &Callbacks::PreDraw>(context, vertex_count, start_vertex);
+   ReportBefore<&Draw<V>, &Callbacks::PreDraw>(_ReturnAddress(), context, vertex_count, start_vertex);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE DrawInstanced(ID3D11DeviceContext* context, UINT vertex_count, UINT instance_count, UINT start_vertex, UINT start_instance)
 {
-   ReportBefore<&DrawInstanced<V>, &Callbacks::PreDrawInstanced>(context, vertex_count, instance_count, start_vertex, start_instance);
+   ReportBefore<&DrawInstanced<V>, &Callbacks::PreDrawInstanced>(_ReturnAddress(), context, vertex_count, instance_count, start_vertex, start_instance);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE DrawIndexed(ID3D11DeviceContext* context, UINT index_count, UINT start_index, INT base_vertex)
 {
-   ReportBefore<&DrawIndexed<V>, &Callbacks::PreDrawIndexed>(context, index_count, start_index, base_vertex);
+   ReportBefore<&DrawIndexed<V>, &Callbacks::PreDrawIndexed>(_ReturnAddress(), context, index_count, start_index, base_vertex);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE DrawIndexedInstanced(ID3D11DeviceContext* context, UINT index_count, UINT instance_count, UINT start_index, INT base_vertex,
    UINT start_instance)
 {
-   ReportBefore<&DrawIndexedInstanced<V>, &Callbacks::PreDrawIndexedInstanced>(context, index_count, instance_count, start_index, base_vertex, start_instance);
+   ReportBefore<&DrawIndexedInstanced<V>, &Callbacks::PreDrawIndexedInstanced>(_ReturnAddress(), context, index_count, instance_count, start_index, base_vertex, start_instance);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE DrawAuto(ID3D11DeviceContext* context)
 {
-   ReportBefore<&DrawAuto<V>, &Callbacks::PreDrawAuto>(context);
+   ReportBefore<&DrawAuto<V>, &Callbacks::PreDrawAuto>(_ReturnAddress(), context);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE DrawInstancedIndirect(ID3D11DeviceContext* context, ID3D11Buffer* arguments, UINT offset)
 {
-   ReportBefore<&DrawInstancedIndirect<V>, &Callbacks::PreDrawInstancedIndirect>(context, arguments, offset);
+   ReportBefore<&DrawInstancedIndirect<V>, &Callbacks::PreDrawInstancedIndirect>(_ReturnAddress(), context, arguments, offset);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE DrawIndexedInstancedIndirect(ID3D11DeviceContext* context, ID3D11Buffer* arguments, UINT offset)
 {
-   ReportBefore<&DrawIndexedInstancedIndirect<V>, &Callbacks::PreDrawIndexedInstancedIndirect>(context, arguments, offset);
+   ReportBefore<&DrawIndexedInstancedIndirect<V>, &Callbacks::PreDrawIndexedInstancedIndirect>(_ReturnAddress(), context, arguments, offset);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE Dispatch(ID3D11DeviceContext* context, UINT x, UINT y, UINT z)
 {
-   ReportBefore<&Dispatch<V>, &Callbacks::PreDispatch>(context, x, y, z);
+   ReportBefore<&Dispatch<V>, &Callbacks::PreDispatch>(_ReturnAddress(), context, x, y, z);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE DispatchIndirect(ID3D11DeviceContext* context, ID3D11Buffer* arguments, UINT offset)
 {
-   ReportBefore<&DispatchIndirect<V>, &Callbacks::PreDispatchIndirect>(context, arguments, offset);
+   ReportBefore<&DispatchIndirect<V>, &Callbacks::PreDispatchIndirect>(_ReturnAddress(), context, arguments, offset);
 }
 
 template <size_t V>
@@ -377,7 +378,7 @@ HRESULT STDMETHODCALLTYPE FinishCommandList(ID3D11DeviceContext* context, BOOL r
 {
    Utils::DepthGuard guard(context_depth);
    const HRESULT result = original<&FinishCommandList<V>>(context, restore, list);
-   if (Detours::IsGameCall(guard) && SUCCEEDED(result) && list && *list)
+   if (Detours::IsGameCall(guard, _ReturnAddress()) && SUCCEEDED(result) && list && *list)
    {
       Scope::Guard scope;
       Microsoft::WRL::ComPtr<ID3D11Device> device;
@@ -391,13 +392,13 @@ HRESULT STDMETHODCALLTYPE FinishCommandList(ID3D11DeviceContext* context, BOOL r
 template <size_t V>
 void STDMETHODCALLTYPE ExecuteCommandList(ID3D11DeviceContext* context, ID3D11CommandList* list, BOOL restore)
 {
-   ReportBefore<&ExecuteCommandList<V>, &Callbacks::PreExecuteCommandList>(context, list, restore);
+   ReportBefore<&ExecuteCommandList<V>, &Callbacks::PreExecuteCommandList>(_ReturnAddress(), context, list, restore);
 }
 
 template <size_t V>
 void STDMETHODCALLTYPE Flush(ID3D11DeviceContext* context)
 {
-   ReportBefore<&Flush<V>, &Callbacks::PreFlush>(context);
+   ReportBefore<&Flush<V>, &Callbacks::PreFlush>(_ReturnAddress(), context);
 }
 
 // Kept for the log: the name of a hook (hooks keep a pointer to it)

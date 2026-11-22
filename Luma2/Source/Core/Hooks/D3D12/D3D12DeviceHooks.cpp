@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <d3d12.h>
+#include <intrin.h>
 #include <wrl/client.h>
 
 #include "Handlers/D3D12/D3D12Handlers.hpp"
@@ -51,10 +52,10 @@ constexpr PipelineKind GetKind()
 
 // Pipelines from the device and from the game's pipeline library, tracked the same way. `call` calls the original with a desc.
 template <typename Desc, typename Call>
-HRESULT CreatePipeline(ID3D12Device* device, bool from_library, const Desc* desc, void** pipeline, Call call)
+HRESULT CreatePipeline(ID3D12Device* device, bool from_library, const Desc* desc, void** pipeline, const void* caller, Call call)
 {
    DepthGuard guard(device_depth);
-   if (!Detours::IsGameCall(guard) || !desc)
+   if (!Detours::IsGameCall(guard, caller) || !desc)
       return call(desc);
    // A root signature that comes with the pipeline is replaced by its extended one
    const std::optional<Shaders::RootSignatures::D3D12::RewrittenDesc> rewritten = Detours::Report(&Handlers::PreCreatePipelineState, device, GetKind<Desc>(), static_cast<const void*>(desc));
@@ -77,39 +78,39 @@ ComPtr<ID3D12Device> GetDevice(ID3D12DeviceChild* child)
 
 HRESULT STDMETHODCALLTYPE CreateGraphicsPipelineState(ID3D12Device* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID riid, void** pipeline)
 {
-   return CreatePipeline(device, false, desc, pipeline, [&](const auto* final_desc) { return original<&CreateGraphicsPipelineState>(device, final_desc, riid, pipeline); });
+   return CreatePipeline(device, false, desc, pipeline, _ReturnAddress(), [&](const auto* final_desc) { return original<&CreateGraphicsPipelineState>(device, final_desc, riid, pipeline); });
 }
 
 HRESULT STDMETHODCALLTYPE CreateComputePipelineState(ID3D12Device* device, const D3D12_COMPUTE_PIPELINE_STATE_DESC* desc, REFIID riid, void** pipeline)
 {
-   return CreatePipeline(device, false, desc, pipeline, [&](const auto* final_desc) { return original<&CreateComputePipelineState>(device, final_desc, riid, pipeline); });
+   return CreatePipeline(device, false, desc, pipeline, _ReturnAddress(), [&](const auto* final_desc) { return original<&CreateComputePipelineState>(device, final_desc, riid, pipeline); });
 }
 
 HRESULT STDMETHODCALLTYPE CreatePipelineState(ID3D12Device2* device, const D3D12_PIPELINE_STATE_STREAM_DESC* desc, REFIID riid, void** pipeline)
 {
-   return CreatePipeline(device, false, desc, pipeline, [&](const auto* final_desc) { return original<&CreatePipelineState>(device, final_desc, riid, pipeline); });
+   return CreatePipeline(device, false, desc, pipeline, _ReturnAddress(), [&](const auto* final_desc) { return original<&CreatePipelineState>(device, final_desc, riid, pipeline); });
 }
 
 HRESULT STDMETHODCALLTYPE LoadGraphicsPipeline(ID3D12PipelineLibrary* library, LPCWSTR name, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID riid, void** pipeline)
 {
-   return CreatePipeline(GetDevice(library).Get(), true, desc, pipeline, [&](const auto* final_desc) { return original<&LoadGraphicsPipeline>(library, name, final_desc, riid, pipeline); });
+   return CreatePipeline(GetDevice(library).Get(), true, desc, pipeline, _ReturnAddress(), [&](const auto* final_desc) { return original<&LoadGraphicsPipeline>(library, name, final_desc, riid, pipeline); });
 }
 
 HRESULT STDMETHODCALLTYPE LoadComputePipeline(ID3D12PipelineLibrary* library, LPCWSTR name, const D3D12_COMPUTE_PIPELINE_STATE_DESC* desc, REFIID riid, void** pipeline)
 {
-   return CreatePipeline(GetDevice(library).Get(), true, desc, pipeline, [&](const auto* final_desc) { return original<&LoadComputePipeline>(library, name, final_desc, riid, pipeline); });
+   return CreatePipeline(GetDevice(library).Get(), true, desc, pipeline, _ReturnAddress(), [&](const auto* final_desc) { return original<&LoadComputePipeline>(library, name, final_desc, riid, pipeline); });
 }
 
 HRESULT STDMETHODCALLTYPE LoadPipeline(ID3D12PipelineLibrary1* library, LPCWSTR name, const D3D12_PIPELINE_STATE_STREAM_DESC* desc, REFIID riid, void** pipeline)
 {
-   return CreatePipeline(GetDevice(library).Get(), true, desc, pipeline, [&](const auto* final_desc) { return original<&LoadPipeline>(library, name, final_desc, riid, pipeline); });
+   return CreatePipeline(GetDevice(library).Get(), true, desc, pipeline, _ReturnAddress(), [&](const auto* final_desc) { return original<&LoadPipeline>(library, name, final_desc, riid, pipeline); });
 }
 
 HRESULT STDMETHODCALLTYPE CreatePipelineLibrary(ID3D12Device1* device, const void* blob, SIZE_T length, REFIID riid, void** library)
 {
    DepthGuard guard(device_depth);
    const HRESULT result = original<&CreatePipelineLibrary>(device, blob, length, riid, library);
-   if (Detours::IsGameCall(guard))
+   if (Detours::IsGameCall(guard, _ReturnAddress()))
       Detours::Report(&Handlers::PostCreatePipelineLibrary, size_t(length), result);
    return result;
 }
@@ -118,7 +119,7 @@ HRESULT STDMETHODCALLTYPE CreatePipelineLibrary(ID3D12Device1* device, const voi
 HRESULT STDMETHODCALLTYPE CreateRootSignature(ID3D12Device* device, UINT node_mask, const void* blob, SIZE_T length, REFIID riid, void** root_signature)
 {
    DepthGuard guard(device_depth);
-   if (!Detours::IsGameCall(guard) || !blob)
+   if (!Detours::IsGameCall(guard, _ReturnAddress()) || !blob)
       return original<&CreateRootSignature>(device, node_mask, blob, length, riid, root_signature);
    const std::span game_blob(static_cast<const uint8_t*>(blob), length);
    const Shaders::RootSignatures::D3D12::Extended extended = Detours::Report(&Handlers::PreCreateRootSignature, game_blob);
@@ -148,7 +149,7 @@ HRESULT STDMETHODCALLTYPE CreateRootSignatureFromSubobjectInLibrary(ID3D12Device
 {
    DepthGuard guard(device_depth);
    const HRESULT result = original<&CreateRootSignatureFromSubobjectInLibrary>(device, node_mask, library, length, name, riid, root_signature);
-   if (Detours::IsGameCall(guard) && SUCCEEDED(result))
+   if (Detours::IsGameCall(guard, _ReturnAddress()) && SUCCEEDED(result))
       Detours::Report(&Handlers::PostCreateRootSignatureFromLibrary);
    return result;
 }
@@ -157,7 +158,7 @@ HRESULT STDMETHODCALLTYPE CreateStateObject(ID3D12Device5* device, const D3D12_S
 {
    DepthGuard guard(device_depth);
    const HRESULT result = original<&CreateStateObject>(device, desc, riid, state_object);
-   if (Detours::IsGameCall(guard) && SUCCEEDED(result))
+   if (Detours::IsGameCall(guard, _ReturnAddress()) && SUCCEEDED(result))
       Detours::Report(&Handlers::PostCreateStateObject);
    return result;
 }
@@ -166,7 +167,7 @@ HRESULT STDMETHODCALLTYPE AddToStateObject(ID3D12Device7* device, const D3D12_ST
 {
    DepthGuard guard(device_depth);
    const HRESULT result = original<&AddToStateObject>(device, addition, existing, riid, state_object);
-   if (Detours::IsGameCall(guard) && SUCCEEDED(result))
+   if (Detours::IsGameCall(guard, _ReturnAddress()) && SUCCEEDED(result))
       Detours::Report(&Handlers::PostCreateStateObject);
    return result;
 }
@@ -175,7 +176,7 @@ HRESULT STDMETHODCALLTYPE AddToStateObject(ID3D12Device7* device, const D3D12_ST
 HRESULT STDMETHODCALLTYPE CreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC* desc, REFIID riid, void** heap)
 {
    DepthGuard guard(device_depth);
-   if (!Detours::IsGameCall(guard) || !desc)
+   if (!Detours::IsGameCall(guard, _ReturnAddress()) || !desc)
       return original<&CreateDescriptorHeap>(device, desc, riid, heap);
    const std::optional<D3D12_DESCRIPTOR_HEAP_DESC> extended = Detours::Report(&Handlers::PreCreateDescriptorHeap, *desc);
    HRESULT result = E_FAIL;
@@ -205,9 +206,9 @@ using Resources::Descriptors::D3D12::Descriptor;
 using Resources::Descriptors::D3D12::Kind;
 
 // Views and samplers, with what they describe
-void ReportView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, Kind kind, ID3D12Resource* resource, const void* desc, size_t desc_size)
+void ReportView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, Kind kind, ID3D12Resource* resource, const void* desc, size_t desc_size, const void* caller)
 {
-   if (Scope::IsActive())
+   if (!Detours::IsGameCall(caller))
       return;
    Descriptor descriptor = {.kind = kind, .has_desc = desc != nullptr, .resource = resource};
    if (desc)
@@ -218,41 +219,41 @@ void ReportView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, K
 void STDMETHODCALLTYPE CreateConstantBufferView(ID3D12Device* device, const D3D12_CONSTANT_BUFFER_VIEW_DESC* desc, D3D12_CPU_DESCRIPTOR_HANDLE destination)
 {
    original<&CreateConstantBufferView>(device, desc, destination);
-   ReportView(device, destination, Kind::ConstantBuffer, nullptr, desc, sizeof(*desc));
+   ReportView(device, destination, Kind::ConstantBuffer, nullptr, desc, sizeof(*desc), _ReturnAddress());
 }
 
 void STDMETHODCALLTYPE CreateShaderResourceView(ID3D12Device* device, ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC* desc,
    D3D12_CPU_DESCRIPTOR_HANDLE destination)
 {
    original<&CreateShaderResourceView>(device, resource, desc, destination);
-   ReportView(device, destination, Kind::ShaderResource, resource, desc, sizeof(*desc));
+   ReportView(device, destination, Kind::ShaderResource, resource, desc, sizeof(*desc), _ReturnAddress());
 }
 
 void STDMETHODCALLTYPE CreateUnorderedAccessView(ID3D12Device* device, ID3D12Resource* resource, ID3D12Resource* counter,
    const D3D12_UNORDERED_ACCESS_VIEW_DESC* desc, D3D12_CPU_DESCRIPTOR_HANDLE destination)
 {
    original<&CreateUnorderedAccessView>(device, resource, counter, desc, destination);
-   ReportView(device, destination, Kind::UnorderedAccess, resource, desc, sizeof(*desc));
+   ReportView(device, destination, Kind::UnorderedAccess, resource, desc, sizeof(*desc), _ReturnAddress());
 }
 
 void STDMETHODCALLTYPE CreateRenderTargetView(ID3D12Device* device, ID3D12Resource* resource, const D3D12_RENDER_TARGET_VIEW_DESC* desc,
    D3D12_CPU_DESCRIPTOR_HANDLE destination)
 {
    original<&CreateRenderTargetView>(device, resource, desc, destination);
-   ReportView(device, destination, Kind::RenderTarget, resource, desc, sizeof(*desc));
+   ReportView(device, destination, Kind::RenderTarget, resource, desc, sizeof(*desc), _ReturnAddress());
 }
 
 void STDMETHODCALLTYPE CreateDepthStencilView(ID3D12Device* device, ID3D12Resource* resource, const D3D12_DEPTH_STENCIL_VIEW_DESC* desc,
    D3D12_CPU_DESCRIPTOR_HANDLE destination)
 {
    original<&CreateDepthStencilView>(device, resource, desc, destination);
-   ReportView(device, destination, Kind::DepthStencil, resource, desc, sizeof(*desc));
+   ReportView(device, destination, Kind::DepthStencil, resource, desc, sizeof(*desc), _ReturnAddress());
 }
 
 void STDMETHODCALLTYPE CreateSampler(ID3D12Device* device, const D3D12_SAMPLER_DESC* desc, D3D12_CPU_DESCRIPTOR_HANDLE destination)
 {
    original<&CreateSampler>(device, desc, destination);
-   ReportView(device, destination, Kind::Sampler, nullptr, desc, sizeof(*desc));
+   ReportView(device, destination, Kind::Sampler, nullptr, desc, sizeof(*desc), _ReturnAddress());
 }
 
 // The destination and source ranges can be split differently: reported a pair of runs at a time
@@ -260,7 +261,7 @@ void STDMETHODCALLTYPE CopyDescriptors(ID3D12Device* device, UINT destination_co
    const UINT* destination_sizes, UINT source_count, const D3D12_CPU_DESCRIPTOR_HANDLE* source_starts, const UINT* source_sizes, D3D12_DESCRIPTOR_HEAP_TYPE type)
 {
    original<&CopyDescriptors>(device, destination_count, destination_starts, destination_sizes, source_count, source_starts, source_sizes, type);
-   if (Scope::IsActive() || !destination_starts || !source_starts)
+   if (!Detours::IsGameCall(_ReturnAddress()) || !destination_starts || !source_starts)
       return;
    Scope::Guard scope;
    const SIZE_T increment = device->GetDescriptorHandleIncrementSize(type);
@@ -294,16 +295,16 @@ void STDMETHODCALLTYPE CopyDescriptorsSimple(ID3D12Device* device, UINT count, D
    D3D12_DESCRIPTOR_HEAP_TYPE type)
 {
    original<&CopyDescriptorsSimple>(device, count, destination, source, type);
-   if (!Scope::IsActive())
+   if (Detours::IsGameCall(_ReturnAddress()))
       Detours::Report(&Handlers::PostCopyDescriptors, device, destination, source, count, type);
 }
 
 // Every resource creation: the outermost the game made (versions call each other). `state` is the legacy initial state, none for a
 // creation with an enhanced barrier layout; `reserved` for a reserved (tiled) resource.
 HRESULT ReportResource(const DepthGuard& guard, HRESULT result, void** resource, ID3D12Device* device, std::optional<D3D12_RESOURCE_STATES> state,
-   const D3D12_CLEAR_VALUE* clear, bool reserved)
+   const D3D12_CLEAR_VALUE* clear, bool reserved, const void* caller)
 {
-   if (Detours::IsGameCall(guard))
+   if (Detours::IsGameCall(guard, caller))
    {
       if (const ComPtr<ID3D12Resource> created = GetCreated<ID3D12Resource>(result, resource))
          Detours::Report(&Handlers::PostCreateResource, device, created.Get(), state, clear, reserved);
@@ -315,49 +316,49 @@ HRESULT STDMETHODCALLTYPE CreateCommittedResource(ID3D12Device* device, const D3
    D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear, REFIID riid, void** resource)
 {
    DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreateCommittedResource>(device, heap, flags, desc, state, clear, riid, resource), resource, device, state, clear, false);
+   return ReportResource(guard, original<&CreateCommittedResource>(device, heap, flags, desc, state, clear, riid, resource), resource, device, state, clear, false, _ReturnAddress());
 }
 
 HRESULT STDMETHODCALLTYPE CreatePlacedResource(ID3D12Device* device, ID3D12Heap* heap, UINT64 offset, const D3D12_RESOURCE_DESC* desc, D3D12_RESOURCE_STATES state,
    const D3D12_CLEAR_VALUE* clear, REFIID riid, void** resource)
 {
    DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreatePlacedResource>(device, heap, offset, desc, state, clear, riid, resource), resource, device, state, clear, false);
+   return ReportResource(guard, original<&CreatePlacedResource>(device, heap, offset, desc, state, clear, riid, resource), resource, device, state, clear, false, _ReturnAddress());
 }
 
 HRESULT STDMETHODCALLTYPE CreateReservedResource(ID3D12Device* device, const D3D12_RESOURCE_DESC* desc, D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear,
    REFIID riid, void** resource)
 {
    DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreateReservedResource>(device, desc, state, clear, riid, resource), resource, device, state, clear, true);
+   return ReportResource(guard, original<&CreateReservedResource>(device, desc, state, clear, riid, resource), resource, device, state, clear, true, _ReturnAddress());
 }
 
 HRESULT STDMETHODCALLTYPE CreateCommittedResource1(ID3D12Device4* device, const D3D12_HEAP_PROPERTIES* heap, D3D12_HEAP_FLAGS flags, const D3D12_RESOURCE_DESC* desc,
    D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear, ID3D12ProtectedResourceSession* session, REFIID riid, void** resource)
 {
    DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreateCommittedResource1>(device, heap, flags, desc, state, clear, session, riid, resource), resource, device, state, clear, false);
+   return ReportResource(guard, original<&CreateCommittedResource1>(device, heap, flags, desc, state, clear, session, riid, resource), resource, device, state, clear, false, _ReturnAddress());
 }
 
 HRESULT STDMETHODCALLTYPE CreateReservedResource1(ID3D12Device4* device, const D3D12_RESOURCE_DESC* desc, D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear,
    ID3D12ProtectedResourceSession* session, REFIID riid, void** resource)
 {
    DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreateReservedResource1>(device, desc, state, clear, session, riid, resource), resource, device, state, clear, true);
+   return ReportResource(guard, original<&CreateReservedResource1>(device, desc, state, clear, session, riid, resource), resource, device, state, clear, true, _ReturnAddress());
 }
 
 HRESULT STDMETHODCALLTYPE CreateCommittedResource2(ID3D12Device8* device, const D3D12_HEAP_PROPERTIES* heap, D3D12_HEAP_FLAGS flags, const D3D12_RESOURCE_DESC1* desc,
    D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear, ID3D12ProtectedResourceSession* session, REFIID riid, void** resource)
 {
    DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreateCommittedResource2>(device, heap, flags, desc, state, clear, session, riid, resource), resource, device, state, clear, false);
+   return ReportResource(guard, original<&CreateCommittedResource2>(device, heap, flags, desc, state, clear, session, riid, resource), resource, device, state, clear, false, _ReturnAddress());
 }
 
 HRESULT STDMETHODCALLTYPE CreatePlacedResource1(ID3D12Device8* device, ID3D12Heap* heap, UINT64 offset, const D3D12_RESOURCE_DESC1* desc, D3D12_RESOURCE_STATES state,
    const D3D12_CLEAR_VALUE* clear, REFIID riid, void** resource)
 {
    DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreatePlacedResource1>(device, heap, offset, desc, state, clear, riid, resource), resource, device, state, clear, false);
+   return ReportResource(guard, original<&CreatePlacedResource1>(device, heap, offset, desc, state, clear, riid, resource), resource, device, state, clear, false, _ReturnAddress());
 }
 
 HRESULT STDMETHODCALLTYPE CreateCommittedResource3(ID3D12Device10* device, const D3D12_HEAP_PROPERTIES* heap, D3D12_HEAP_FLAGS flags, const D3D12_RESOURCE_DESC1* desc,
@@ -365,21 +366,21 @@ HRESULT STDMETHODCALLTYPE CreateCommittedResource3(ID3D12Device10* device, const
    REFIID riid, void** resource)
 {
    DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreateCommittedResource3>(device, heap, flags, desc, layout, clear, session, castable_count, castable, riid, resource), resource, device, std::nullopt, clear, false);
+   return ReportResource(guard, original<&CreateCommittedResource3>(device, heap, flags, desc, layout, clear, session, castable_count, castable, riid, resource), resource, device, std::nullopt, clear, false, _ReturnAddress());
 }
 
 HRESULT STDMETHODCALLTYPE CreatePlacedResource2(ID3D12Device10* device, ID3D12Heap* heap, UINT64 offset, const D3D12_RESOURCE_DESC1* desc, D3D12_BARRIER_LAYOUT layout,
    const D3D12_CLEAR_VALUE* clear, UINT32 castable_count, const DXGI_FORMAT* castable, REFIID riid, void** resource)
 {
    DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreatePlacedResource2>(device, heap, offset, desc, layout, clear, castable_count, castable, riid, resource), resource, device, std::nullopt, clear, false);
+   return ReportResource(guard, original<&CreatePlacedResource2>(device, heap, offset, desc, layout, clear, castable_count, castable, riid, resource), resource, device, std::nullopt, clear, false, _ReturnAddress());
 }
 
 HRESULT STDMETHODCALLTYPE CreateReservedResource2(ID3D12Device10* device, const D3D12_RESOURCE_DESC* desc, D3D12_BARRIER_LAYOUT layout, const D3D12_CLEAR_VALUE* clear,
    ID3D12ProtectedResourceSession* session, UINT32 castable_count, const DXGI_FORMAT* castable, REFIID riid, void** resource)
 {
    DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreateReservedResource2>(device, desc, layout, clear, session, castable_count, castable, riid, resource), resource, device, std::nullopt, clear, true);
+   return ReportResource(guard, original<&CreateReservedResource2>(device, desc, layout, clear, session, castable_count, castable, riid, resource), resource, device, std::nullopt, clear, true, _ReturnAddress());
 }
 
 template <auto Detour>

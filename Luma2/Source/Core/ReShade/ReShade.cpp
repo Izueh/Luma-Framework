@@ -1,4 +1,5 @@
 #include "ReShade/ReShade.hpp"
+#include "ReShade/AddonEvents.hpp"
 #include "ReShade/ReShadeABI.hpp"
 
 #include <array>
@@ -31,7 +32,11 @@
 namespace Luma {
 namespace ReShade {
 namespace {
+#ifdef _WIN64
 constexpr const wchar_t* FILE_NAME = L"ReShade64.dll";
+#else
+constexpr const wchar_t* FILE_NAME = L"ReShade32.dll";
+#endif
 // Without it, an injected ReShade's DllMain fails unless a "ReShade.ini" is in the game's folder
 constexpr const wchar_t* LOADING_CHECK_VARIABLE = L"RESHADE_DISABLE_LOADING_CHECK";
 
@@ -282,6 +287,7 @@ void RegisterBridge()
 {
    if (!IsReShadeLoaded(load_state.load(std::memory_order_acquire)) || bridge_attempted.exchange(true))
       return;
+   AddonEvents::Install(reinterpret_cast<HMODULE>(reshade_module_base), load_state.load(std::memory_order_acquire) != LoadState::LoadedByLuma);
    constexpr const char* FALLBACK = "Luma's present work runs at the proxy's Present: ReShade's effects and add-ons see the image before Luma's display composition";
    if (!IsSettingOnOrUnregistered(Settings::Core::RESHADE_BRIDGE))
    {
@@ -512,13 +518,13 @@ std::string DescribeBridge()
    case BridgeState::On: break;
    }
    if (!off_reason.empty())
-      return std::format("off ({}), Luma's present work runs at the proxy's Present: ReShade's effects run before Luma's composition", off_reason);
+      return std::format("off ({}), Luma's present work runs at the proxy's Present: ReShade's effects run before Luma's composition; {}", off_reason, AddonEvents::Describe());
    const bool effects_ran = present_event_at_last_effects.load(std::memory_order_relaxed) == present_events.load(std::memory_order_relaxed);
-   return std::format("on (API {}), Luma's present work runs at {}; effects {}; effect runtime {} ({} inits); ReShade's overlay {}", ABI::API_VERSION,
+   return std::format("on (API {}), Luma's present work runs at {}; effects {}; effect runtime {} ({} inits); ReShade's overlay {}; {}", ABI::API_VERSION,
       last_present_work_at_event.load(std::memory_order_relaxed) ? "ReShade's present event" : "the proxy's Present (no event before the last present)",
       effects_ran ? std::format("ran in the last frame, {:.2f} ms CPU", effects_cpu_ms.load(std::memory_order_relaxed)) : std::string("didn't run in the last frame"),
       live_effect_runtimes.load(std::memory_order_relaxed) != 0 ? "ready" : "not initialized", effect_runtime_inits.load(std::memory_order_relaxed),
-      reshade_overlay_open.load(std::memory_order_relaxed) ? "open" : "closed");
+      reshade_overlay_open.load(std::memory_order_relaxed) ? "open" : "closed", AddonEvents::Describe());
 }
 } // namespace ReShade
 } // namespace Luma

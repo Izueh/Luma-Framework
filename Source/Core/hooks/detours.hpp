@@ -7,6 +7,7 @@
 #include <d3d11_4.h>
 
 #include "hooks/scope.hpp"
+#include "reshade/addon_events.hpp"
 #include "utils/depth_guard.hpp"
 
 namespace Luma {
@@ -16,10 +17,10 @@ namespace Detours {
 template <auto Detour>
 inline decltype(Detour) original = nullptr;
 
-// The outermost of nested hooked calls, not made by Luma
-inline bool IsGameCall(const Utils::DepthGuard& guard)
+// The outermost of nested hooked calls, not made by Luma or directly by a ReShade add-on
+inline bool IsGameCall(const Utils::DepthGuard& guard, const void* caller = nullptr)
 {
-   return guard.IsOutermost() && !Scope::IsActive();
+   return guard.IsOutermost() && !Scope::IsActive() && (!caller || !ReShade::AddonEvents::IsAddonAddress(caller));
 }
 
 template <typename Callback, typename... Args>
