@@ -22,21 +22,6 @@
 
 using Microsoft::WRL::ComPtr;
 
-// ImGui's DX12 backend calls CreateDXGIFactory1, but Luma can't link dxgi.lib: it is the dxgi.dll proxy. When nothing else
-// defines the function, the linker uses this one.
-extern "C" HRESULT WINAPI LumaCreateDXGIFactory1(REFIID riid, void** factory)
-{
-   static const auto function = [] {
-      wchar_t path[MAX_PATH] = {};
-      const UINT length = GetSystemDirectoryW(path, MAX_PATH);
-      HMODULE dxgi = length ? LoadLibraryW((std::wstring(path, length) + L"\\dxgi.dll").c_str()) : nullptr;
-      return dxgi ? reinterpret_cast<HRESULT(WINAPI*)(REFIID, void**)>(GetProcAddress(dxgi, "CreateDXGIFactory1")) : nullptr;
-   }();
-   return function ? function(riid, factory) : E_FAIL;
-}
-
-#pragma comment(linker, "/ALTERNATENAME:CreateDXGIFactory1=LumaCreateDXGIFactory1")
-
 namespace Luma {
 namespace UI {
 namespace D3D12 {

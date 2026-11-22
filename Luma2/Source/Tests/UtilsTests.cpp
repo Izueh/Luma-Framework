@@ -154,26 +154,42 @@ TEST_CASE("Toml: malformed documents fail and keys are quoted when needed")
 
 #include <Windows.h>
 #include <Psapi.h>
+#include <dxgi1_4.h>
+#include <wrl/client.h>
 
 #include "System/Modules.hpp"
 
-TEST_CASE("Dll exports: every dxgi export forwards to the System32 dxgi.dll")
+TEST_CASE("Dll exports: every dxgi export reaches the System32 dxgi.dll")
 {
-   // Tests.exe links the same forwarders as a game dll
+   // Tests.exe links the same exports as a game dll
    HMODULE self = GetModuleHandleW(nullptr);
    HMODULE dxgi = Luma::System::Modules::FindSystemModule(L"dxgi.dll");
    REQUIRE(dxgi);
-   for (const char* name : {"CreateDXGIFactory", "CreateDXGIFactory1", "CreateDXGIFactory2", "DXGIGetDebugInterface1", "DXGIDeclareAdapterRemovalSupport", "CompatValue", "CompatString", "SetAppCompatStringPointer"})
+   // Wine/DXVK-implemented exports are Luma functions that call into the System32 dxgi.dll
+   for (const char* name : {"CreateDXGIFactory", "CreateDXGIFactory1", "CreateDXGIFactory2", "DXGID3D10CreateDevice", "DXGID3D10RegisterLayers", "DXGIDeclareAdapterRemovalSupport", "DXGIGetDebugInterface1"})
+   {
+      CAPTURE(name);
+      CHECK(GetProcAddress(self, name) != nullptr);
+   }
+   // Same ordinals as the system dll
+   CHECK(GetProcAddress(self, MAKEINTRESOURCEA(11)) == GetProcAddress(self, "CreateDXGIFactory1"));
+   // Calling through the exported wrapper succeeds
+   const auto create_factory1 = reinterpret_cast<HRESULT(WINAPI*)(REFIID, void**)>(GetProcAddress(self, "CreateDXGIFactory1"));
+   REQUIRE(create_factory1 != nullptr);
+   Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+   CHECK(SUCCEEDED(create_factory1(IID_PPV_ARGS(&factory))));
+   CHECK(factory != nullptr);
+
+   // Windows-only exports stay PE forwarders to the System32 dxgi.dll
+   for (const char* name : {"CompatValue", "CompatString", "SetAppCompatStringPointer"})
    {
       CAPTURE(name);
       void* forwarded = reinterpret_cast<void*>(GetProcAddress(self, name));
       CHECK(forwarded);
       CHECK(forwarded == Luma::System::Modules::FindExport(dxgi, name));
    }
-   // Same ordinals as the system dll
-   CHECK(reinterpret_cast<void*>(GetProcAddress(self, MAKEINTRESOURCEA(11))) == Luma::System::Modules::FindExport(dxgi, "CreateDXGIFactory1"));
 
-   // The full path forwarders reuse the loaded dxgi instead of loading a second copy
+   // The full path forwarders and wrappers reuse the loaded dxgi instead of loading a second copy
    HMODULE modules[1024];
    DWORD size = 0;
    REQUIRE(K32EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &size));
