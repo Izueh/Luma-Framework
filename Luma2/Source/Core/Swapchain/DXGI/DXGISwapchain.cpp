@@ -568,6 +568,7 @@ void OnCreated(IDXGISwapChain* swapchain, const Presenter& presenter)
       if (state->game_fullscreen)
          System::Window::MakeBorderless(state->window);
    }
+   System::Window::SetFocusLossSuppression(state->window, SuppressesFocusLoss());
    Log::Info("Swapchain: {} is {}, {} ({}x{} format {} x{} for the game, format {} x{}{}{})", static_cast<void*>(swapchain), GetName(state->mode),
       GetName(state->real.output), state->game.width, state->game.height, uint32_t(state->game.format), state->game.count, uint32_t(state->real.format),
       state->real.count, state->real.flip ? ", flip" : ", the game's swap effect", state->real.tearing ? ", tearing" : "");

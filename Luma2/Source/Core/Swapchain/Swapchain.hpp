@@ -46,6 +46,8 @@ bool AllowsTearing();
 bool Wraps();
 // Read at every fullscreen change
 bool IsBorderless();
+// Focus-loss window messages hidden from the game's window so Alt-Tab doesn't pause it
+bool SuppressesFocusLoss();
 bool SetsHdrMetadata();
 // The real buffers' size over the game's: 1 but in Development (Luma.Development.SwapchainScale)
 float GetScale();

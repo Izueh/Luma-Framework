@@ -481,6 +481,7 @@ void Luma::Game::Init()
    // Settings::SetDefault(Settings::Core::OUTPUT_MODE, Settings::EnumIndex{1}); // 0 SDR, 1 HDR10, 2 scRGB
    // Settings::SetDefault(Settings::Core::SWAPCHAIN_FLIP_MODEL, true);
    // Settings::SetDefault(Settings::Core::SWAPCHAIN_TEARING, true);
+   // Settings::SetDefault(Settings::Core::SUPPRESS_FOCUS_LOSS, false);
    // Settings::SetDefault(Settings::Core::LOAD_RESHADE, true);
 
    Options options = {

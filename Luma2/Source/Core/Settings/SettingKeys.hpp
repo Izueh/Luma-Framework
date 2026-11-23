@@ -52,6 +52,8 @@ inline constexpr std::array<Id<bool>, 6> COMPOSITION_STAGES = {{
 inline constexpr Id<bool> REPORT_HDR = {"Luma.Display.ReportHdr"};
 // HDR10 metadata (the display's peak) on an HDR10 swapchain
 inline constexpr Id<bool> HDR_METADATA = {"Luma.Display.HdrMetadata"};
+// Focus-loss messages hidden from the game's window so Alt-Tab doesn't pause it (on by default in Development)
+inline constexpr Id<bool> SUPPRESS_FOCUS_LOSS = {"Luma.Display.SuppressFocusLoss"};
 // Test builds: Swapchain::Mode (the game's choice first), from the game's next swapchain
 inline constexpr Id<Settings::EnumIndex> SWAPCHAIN_MODE = {"Luma.Swapchain.Mode"};
 // Test builds: the real swapchain uses the flip model (HDR needs it), from the game's next swapchain

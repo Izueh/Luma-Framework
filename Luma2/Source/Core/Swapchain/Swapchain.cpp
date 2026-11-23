@@ -5,6 +5,7 @@
 
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
+#include "System/WindowPolicy.hpp"
 
 namespace Luma {
 namespace Swapchain {
@@ -34,6 +35,17 @@ constexpr std::array LUMA_SETTINGS = {
       .category = "Display",
       .visibility = Settings::Visibility::Test,
       .default_value = true,
+   },
+   Settings::Setting{
+      .key = Settings::Core::SUPPRESS_FOCUS_LOSS.key,
+      .label = "Suppress Focus Loss",
+      .tooltip = "Keeps the game from pausing when Alt-Tabbed by hiding focus-loss messages from its window.",
+      .category = "Display",
+#if DEVELOPMENT
+      .default_value = true,
+#else
+      .default_value = false,
+#endif
    },
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_MODE.key,
@@ -111,6 +123,15 @@ void ApplyOptionDefaults()
    if (Settings::Find(Settings::Core::SWAPCHAIN_FULLSCREEN.key))
       Settings::SetDefault(Settings::Core::SWAPCHAIN_FULLSCREEN, Settings::EnumIndex{options.borderless ? 0 : 1});
 }
+
+void OnSettingChanged(const Settings::Setting& setting, const Settings::Value& value)
+{
+   if (setting.key == Settings::Core::SUPPRESS_FOCUS_LOSS.key)
+   {
+      if (const bool* enabled = std::get_if<bool>(&value))
+         System::Window::SetFocusLossSuppression(*enabled);
+   }
+}
 } // namespace
 
 void SetOptions(const Options& value)
@@ -131,6 +152,8 @@ void Register()
    Settings::Register(DEV_SETTINGS, Settings::Kind::Development);
 #endif
    ApplyOptionDefaults();
+   System::Window::SetFocusLossSuppression(SuppressesFocusLoss());
+   Settings::AddChangeListener(&OnSettingChanged);
 }
 
 Mode GetMode()
@@ -167,6 +190,11 @@ bool AllowsTearing()
 bool IsBorderless()
 {
    return Settings::Get(Settings::Core::SWAPCHAIN_FULLSCREEN).value == 0;
+}
+
+bool SuppressesFocusLoss()
+{
+   return Settings::Get(Settings::Core::SUPPRESS_FOCUS_LOSS);
 }
 
 bool SetsHdrMetadata()
