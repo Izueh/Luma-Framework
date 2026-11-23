@@ -7,8 +7,6 @@
 
 #include "BS2_CrashFix\BS2_CrashFix.h"
 
-#include <MinHook.h>
-
 namespace
 {
    ShaderHashesList pixel_shader_hashes_Bloom;

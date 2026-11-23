@@ -17,7 +17,4 @@
       <Filter>BS2_CrashFix</Filter>
     </ClInclude>
   </ItemGroup>
-  <ItemGroup>
-    <None Include="vcpkg.json" />
-  </ItemGroup>
 </Project>

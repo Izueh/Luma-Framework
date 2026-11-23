@@ -287,6 +287,7 @@ namespace DrawDav
          UINT blend_sample_mask;
          ComPtr<ID3D11VertexShader> vs;
          ComPtr<ID3D11PixelShader> ps;
+         ComPtr<ID3D11GeometryShader> gs;
          ComPtr<ID3D11ComputeShader> cs;
 #if ENABLE_SHADER_CLASS_INSTANCES
          UINT vs_instances_count = max_shader_class_instances;

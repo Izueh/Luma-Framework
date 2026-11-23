@@ -121,9 +121,6 @@
 #ifndef ENABLE_DRAW_DISPATCH_DATA_CACHE
 #define ENABLE_DRAW_DISPATCH_DATA_CACHE 0
 #endif // ENABLE_DRAW_DISPATCH_DATA_CACHE
-#ifndef ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
-#define ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE 0
-#endif // ENABLE_DRAW_STATE_VERTEX_BUFFER_CACHE
 #ifndef TEST_DUPLICATE_SHADER_HASH
 #define TEST_DUPLICATE_SHADER_HASH 0
 #endif // TEST_DUPLICATE_SHADER_HASH
@@ -2202,7 +2199,7 @@ namespace
 
             for (CachedPipeline* cached_pipeline : pipelines_pair->second)
             {
-               if (cached_pipeline == nullptr || cached_pipeline->manually_unloaded) continue;
+               if (cached_pipeline == nullptr || cached_pipeline->manually_unloaded || cached_pipeline->patch_application_mode == Shader::PatchApplicationMode::Inplace) continue;
                if (!pipelines_filter.empty() && !pipelines_filter.contains(cached_pipeline->pipeline.handle)) continue;
                if (!iterated_pipelines.emplace(cached_pipeline->pipeline.handle).second) continue;
                pipelines_to_clone.emplace_back(cached_pipeline);
@@ -2303,13 +2300,16 @@ namespace
                    }
                 }
 
-                // Check for DXP/bytecode patched shader
+                // Check for DXP/bytecode patched shader (not for in-place patched pipelines, whose original shader object already carries the patch)
 #if LUMA_PATCH_PROVIDERS != 0
-                if (auto patched = Patch::GetShaderData(device_data, shader_hash); !patches_unloaded && patched)
+                if (cached_pipeline->patch_application_mode != Shader::PatchApplicationMode::Inplace)
                 {
-                   if (cached_pipeline->clone_origin != Shader::CloneOrigin::File) cached_pipeline->clone_origin = Shader::CloneOrigin::Patch;
-                   Shader::RecordCloneShader(cached_pipeline->custom_pipeline_data, type, patched);
-                   return std::make_pair(patched->code.data(), static_cast<uint32_t>(patched->code.size()));
+                   if (auto patched = Patch::GetShaderData(device_data, shader_hash); !patches_unloaded && patched)
+                   {
+                      if (cached_pipeline->clone_origin != Shader::CloneOrigin::File) cached_pipeline->clone_origin = Shader::CloneOrigin::Patch;
+                      Shader::RecordCloneShader(cached_pipeline->custom_pipeline_data, type, patched);
+                      return std::make_pair(patched->code.data(), static_cast<uint32_t>(patched->code.size()));
+                   }
                 }
 #endif
 
@@ -2357,7 +2357,8 @@ namespace
 #endif
          cached_pipeline->cloned = true;
          // Clones registered here come from the background AutoLoadShaders thread (async).
-         cached_pipeline->patch_application_mode = Shader::PatchApplicationMode::Async;
+         if (cached_pipeline->patch_application_mode != Shader::PatchApplicationMode::Inplace)
+            cached_pipeline->patch_application_mode = Shader::PatchApplicationMode::Async;
          // TODO: make sure the pixel shaders have the same signature (through reflections) unless the vertex shader was also changed and has a different output signature? Just to make sure random hashes didn't end up replacing an accidentally equal hash (however unlikely)
          device_data.pipeline_cache_by_pipeline_clone_handle[pipeline_clone.handle] = cached_pipeline;
          device_data.cloned_pipeline_count++;
@@ -2718,6 +2719,7 @@ namespace
 
       {
          const std::unique_lock lock(s_mutex_device);
+         device_data.destroyed = true;
          if (std::vector<ID3D11Device*>::iterator position = std::find(global_native_devices.begin(), global_native_devices.end(), native_device); position != global_native_devices.end())
          {
             global_native_devices.erase(position);
@@ -2770,7 +2772,8 @@ namespace
 
       if (enable_samplers_upgrade)
       {
-         // Release custom samplers outside the lock, as releasing them can trigger "OnDestroySampler()", which locks it again (and would hang)
+         // Release custom samplers outside the lock, as releasing them can trigger OnDestroySampler.
+         // Device teardown can precede child-object destruction, and samplers can be shared.
          decltype(device_data.custom_sampler_by_original_sampler) samplers;
          {
             const std::unique_lock lock_samplers(s_mutex_samplers);
@@ -5849,19 +5852,13 @@ namespace
                // Usually the swapchain, if the UI was already drawn on the side, we wouldn't really need to change the render target manually (we could just upgrade that texture format, and replace the shader that composes the UI if it wasn't done properly),
                // however some games compose the UI on a render target that contains the UI, but that isn't the swapchain yet, and then later copy it on the swapchain (possibly in a shader pass that does gamma/brightness adjustments, which we might as well skip on for the UI in HDR anyway, given we'd want them to be neutral).
                bool targeting_swapchain = false;
-               // TODO: this used to look up the RTV (a view) in the back buffer resources, so it never matched, and "targeting_swapchain" was always false here.
-               // Kept that way to not change behaviour, the fix is probably to look up the RTV's resource instead.
-#if DEVELOPMENT
                if (!device_data.ui_initial_original_rtv)
                {
-                  bool rtv_is_back_buffer = false;
-                  {
-                     const std::shared_lock lock(device_data.mutex);
-                     rtv_is_back_buffer = device_data.back_buffers.contains(GetResourceFromView(rtv.get()));
-                  }
-                  ASSERT_ONCE_MSG(!rtv_is_back_buffer, "UI separation: the UI drew to the swapchain, but \"targeting_swapchain\" is never set (it used to look up the RTV, not its resource). Fix it to \"back_buffers.contains(GetResourceFromView(rtv))\" if this game needs it.");
+                  ComPtr<ID3D11Resource> render_target_resource;
+                  rtv->GetResource(render_target_resource.put());
+                  const std::shared_lock lock(device_data.mutex);
+                  targeting_swapchain = device_data.back_buffers.contains(render_target_resource.get());
                }
-#endif
                if ((ui_separation_use_ui_hashes_only && cmd_list_data.is_known_ui_shader_bound) || targeting_swapchain || (AreViewsOfSameResource(rtv.get(), device_data.ui_initial_original_rtv.get()) && rtv_desc.Texture2D.MipSlice == 0)) // Make sure it was writing to the base mip (just in case the game did weird stuff)
                {
                   device_data.ui_latest_original_rtv = rtv;
@@ -7195,7 +7192,7 @@ namespace
       // This only seems to happen when the game shuts down in Prey (as any destroy callback, it can be called from an arbitrary thread, but that's fine).
       // We don't need to check the custom samplers within the map even if they might be the same object, because they are strong pointers and thus wouldn't get destroyed if they were non null.
       DeviceData* device_data = GetDeviceData(device);
-      if (!device_data)
+      if (!device_data || device_data->destroyed)
          return;
       ID3D11SamplerState* const original_sampler = const_cast<ID3D11SamplerState*>(sampler); // Only to look it up
       s_mutex_samplers.lock();
@@ -8212,9 +8209,9 @@ namespace
       auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(dsv);
       if (!ignore_indirect_upgraded_textures && original_resource_view_to_mirrored_upgraded_resource_view != device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
-         const auto original_resource_view_to_mirrored_upgraded_resource_view_ptr = original_resource_view_to_mirrored_upgraded_resource_view->second;
+         ComPtr<ID3D11DepthStencilView> mirrored_view = static_cast<ID3D11DepthStencilView*>(original_resource_view_to_mirrored_upgraded_resource_view->second);
          lock.unlock(); // Avoids deadlock with the device
-         cmd_list_data.native_device_context->ClearDepthStencilView(static_cast<ID3D11DepthStencilView*>(original_resource_view_to_mirrored_upgraded_resource_view_ptr), flags, depth, stencil);
+         cmd_list_data.native_device_context->ClearDepthStencilView(mirrored_view.get(), flags, depth, stencil);
          return true;
       }
 
@@ -8233,9 +8230,9 @@ namespace
       auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(rtv);
       if (!ignore_indirect_upgraded_textures && original_resource_view_to_mirrored_upgraded_resource_view != device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
-         const auto original_resource_view_to_mirrored_upgraded_resource_view_ptr = original_resource_view_to_mirrored_upgraded_resource_view->second;
+         ComPtr<ID3D11RenderTargetView> mirrored_view = static_cast<ID3D11RenderTargetView*>(original_resource_view_to_mirrored_upgraded_resource_view->second);
          lock.unlock(); // Avoids deadlock with the device
-         cmd_list_data.native_device_context->ClearRenderTargetView(static_cast<ID3D11RenderTargetView*>(original_resource_view_to_mirrored_upgraded_resource_view_ptr), color);
+         cmd_list_data.native_device_context->ClearRenderTargetView(mirrored_view.get(), color);
          return true;
       }
 
@@ -8254,12 +8251,11 @@ namespace
       auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(uav);
       if (!ignore_indirect_upgraded_textures && original_resource_view_to_mirrored_upgraded_resource_view != device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
-         const auto original_resource_view_to_mirrored_upgraded_resource_view_ptr = original_resource_view_to_mirrored_upgraded_resource_view->second;
+         ComPtr<ID3D11UnorderedAccessView> mirrored_view = static_cast<ID3D11UnorderedAccessView*>(original_resource_view_to_mirrored_upgraded_resource_view->second);
          lock.unlock(); // Avoids deadlock with the device
 #if DEVELOPMENT
-         ID3D11UnorderedAccessView* mirror_uav = static_cast<ID3D11UnorderedAccessView*>(original_resource_view_to_mirrored_upgraded_resource_view_ptr);
          D3D11_UNORDERED_ACCESS_VIEW_DESC desc;
-         mirror_uav->GetDesc(&desc);
+         mirrored_view->GetDesc(&desc);
          ASSERT_ONCE(!IsIntFormat(desc.Format)); // UNORM/SNORM/SFLOAT/UFLOAT formats are all support with the UAV clear float functions, only INT/UINT formats are not
 #endif
          // Use the float clearing function as all upgraded textures are float for the moment
@@ -8268,7 +8264,7 @@ namespace
          upgraded_values[1] = values[1];
          upgraded_values[2] = values[2];
          upgraded_values[3] = values[3];
-         cmd_list_data.native_device_context->ClearUnorderedAccessViewFloat(static_cast<ID3D11UnorderedAccessView*>(original_resource_view_to_mirrored_upgraded_resource_view_ptr), upgraded_values);
+         cmd_list_data.native_device_context->ClearUnorderedAccessViewFloat(mirrored_view.get(), upgraded_values);
          return true;
       }
 
@@ -8287,9 +8283,9 @@ namespace
       auto original_resource_view_to_mirrored_upgraded_resource_view = device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.find(uav);
       if (!ignore_indirect_upgraded_textures && original_resource_view_to_mirrored_upgraded_resource_view != device_data.resource_upgrades.original_resource_views_to_mirrored_upgraded_resource_views.end())
       {
-         const auto original_resource_view_to_mirrored_upgraded_resource_view_ptr = original_resource_view_to_mirrored_upgraded_resource_view->second;
+         ComPtr<ID3D11UnorderedAccessView> mirrored_view = static_cast<ID3D11UnorderedAccessView*>(original_resource_view_to_mirrored_upgraded_resource_view->second);
          lock.unlock(); // Avoids deadlock with the device
-         cmd_list_data.native_device_context->ClearUnorderedAccessViewFloat(static_cast<ID3D11UnorderedAccessView*>(original_resource_view_to_mirrored_upgraded_resource_view_ptr), values);
+         cmd_list_data.native_device_context->ClearUnorderedAccessViewFloat(mirrored_view.get(), values);
          return true;
       }
 
@@ -8871,17 +8867,12 @@ namespace
          thread_auto_dumping = std::thread(AutoDumpShaders);
       }
 
-      s_mutex_loading.lock_shared();
-      // Load new shaders
-      // We avoid running this if "thread_auto_compiling" is still running from boot.
-      // Note that this thread doesn't really need to be by "device", but we did so to make it simpler, to automatically handle the "CreateDeviceNativeShaders()" shaders.
 #if (LUMA_PATCH_PROVIDERS & (LUMA_PATCH_PROVIDER_BYTECODE_ASYNC | LUMA_PATCH_PROVIDER_RECIPE_ASYNC))
-      // Publish completed clones at the present boundary — the live clone map
-      // never mutates mid-frame (see worker lifecycle: OnInitDevice).
+      // Publish at the present boundary. Publishing takes s_mutex_generic and
+      // does not read custom_shaders_cache. Shader loading takes s_mutex_generic
+      // before s_mutex_loading, so holding s_mutex_loading here can deadlock.
       Patch::PublishReadyAsyncClones(device_data);
 #endif
-
-      s_mutex_loading.unlock_shared();
 
       if (needs_unload_shaders)
       {
@@ -9608,6 +9599,7 @@ namespace
                ImGui::BeginDisabled(selected_custom_shader == nullptr);
 
                ID3D11DeviceChild* pipeline_to_recompile = nullptr;
+               const ID3D11DeviceChild* pipeline_to_unload = nullptr;
 
                // Make sure our selected shader is still in the "custom_shaders_cache" list, without blocking its mutex through the whole imgui rendering
                bool custom_shader_found = false;
@@ -9690,7 +9682,7 @@ namespace
                         {
                            for (auto pipeline : pipelines_pair->second)
                            {
-                              ASSERT_ONCE(pipeline->cloned || !selected_custom_shader->compilation_errors.empty());
+                              ASSERT_ONCE(pipeline->cloned || pipeline->manually_unloaded || !selected_custom_shader->compilation_errors.empty());
 
                               ImGui::PushID(i);
                               ImGui::NewLine();
@@ -9702,12 +9694,10 @@ namespace
                                  if (pipeline->HasPixelShader())
                                     ImGui::SliderInt("Shader Custom Depth/Stencil Type", reinterpret_cast<int*>(&pipeline->custom_depth_stencil), 0, IM_ARRAYSIZE(CachedPipeline::shader_custom_depth_stencil_type_names) - 1, CachedPipeline::shader_custom_depth_stencil_type_names[(size_t)pipeline->custom_depth_stencil], ImGuiSliderFlags_NoInput);
                               }
-                              if (ImGui::Button("Unload"))
+                              if (pipeline->cloned && ImGui::Button("Unload"))
                               {
-                                 const ID3D11DeviceChild* pipeline_to_unload = pipeline->pipeline.handle; // Read before unlocking, "pipeline" might be destroyed after
-                                 s_mutex_generic.unlock(); // Hack to avoid deadlocks with the device destroying pipelines
-                                 UnloadCustomShaders(device_data, { pipeline_to_unload }, false);
-                                 s_mutex_generic.lock();
+                                 pipeline->manually_unloaded = true;
+                                 pipeline_to_unload = pipeline->pipeline.handle;
                               }
 #if 0 // TODO: this still deadlocks!
                               if (ImGui::Button(pipeline->cloned ? "Recompile" : "Load"))
@@ -9755,6 +9745,12 @@ namespace
                      }
                      ImGui::EndChild();
                   }
+               }
+
+               // Destroy clones after releasing the cache lock and leaving its iteration.
+               if (pipeline_to_unload != 0)
+               {
+                  UnloadCustomShaders(device_data, { pipeline_to_unload }, false);
                }
 
                if (pipeline_to_recompile != 0)

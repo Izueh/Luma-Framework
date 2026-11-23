@@ -282,6 +282,8 @@ struct DeviceData
    std::thread thread_auto_loading;
    std::atomic<bool> thread_auto_loading_running = false;
 
+   std::atomic<bool> destroyed = false;
+
    // TODO(Patch module): move the patch_context member below and this async clone
    // machinery (AsyncCloneEntry + the LUMA_PATCH_PROVIDERS-gated members) into
    // patch.hpp once the include-order rework lands (see patch.inl).
