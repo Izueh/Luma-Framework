@@ -195,7 +195,7 @@
 #include "includes/ui/ui.hpp"
 #endif
 
-#include "hooks/DXGIHooks.h"
+#include "spoofing/DXGIHooks.h"
 #include "utils/format.hpp"
 #include "utils/pipeline.hpp"
 #include "utils/shader_compiler.hpp"
@@ -205,15 +205,16 @@
 #include "utils/draw.hpp"
 #include "utils/system.h"
 
-#define ICON_FK_CANCEL "X"
-#define ICON_FK_OK "OK"
-#define ICON_FK_PLUS "+"
-#define ICON_FK_MINUS "-"
-#define ICON_FK_REFRESH "R"
-#define ICON_FK_UNDO "U"
-#define ICON_FK_SEARCH "S"
-#define ICON_FK_WARNING "!"
-#define ICON_FK_FILE_CODE "F"
+#include <IconsFontAwesome6.h>
+#define ICON_FK_CANCEL ICON_FA_XMARK
+#define ICON_FK_OK ICON_FA_CHECK
+#define ICON_FK_PLUS ICON_FA_PLUS
+#define ICON_FK_MINUS ICON_FA_MINUS
+#define ICON_FK_REFRESH ICON_FA_ARROWS_ROTATE
+#define ICON_FK_UNDO ICON_FA_ROTATE_LEFT
+#define ICON_FK_SEARCH ICON_FA_MAGNIFYING_GLASS
+#define ICON_FK_WARNING ICON_FA_TRIANGLE_EXCLAMATION
+#define ICON_FK_FILE_CODE ICON_FA_FILE_CODE
 
 extern "C" const char* NAME = &Globals::MOD_NAME[0];
 const char* DESCRIPTION = &Globals::DESCRIPTION[0];

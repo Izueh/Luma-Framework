@@ -17,14 +17,14 @@
     <ClCompile Include="xess\XeSS.cpp">
       <Filter>XeSS</Filter>
     </ClCompile>
-    <ClCompile Include="hooks\DXGIHooks.cpp">
-      <Filter>Hooks</Filter>
+    <ClCompile Include="spoofing\DXGIHooks.cpp">
+      <Filter>Spoofing</Filter>
     </ClCompile>
-    <ClCompile Include="hooks\FidelityFXHooks.cpp">
-      <Filter>Hooks</Filter>
+    <ClCompile Include="spoofing\FidelityFXHooks.cpp">
+      <Filter>Spoofing</Filter>
     </ClCompile>
-    <ClCompile Include="hooks\SystemHooks.cpp">
-      <Filter>Hooks</Filter>
+    <ClCompile Include="spoofing\SystemHooks.cpp">
+      <Filter>Spoofing</Filter>
     </ClCompile>
     <ClCompile Include="system\dxgi_exports.cpp">
       <Filter>Hooks</Filter>
@@ -106,6 +106,9 @@
     <Filter Include="Hooks">
       <UniqueIdentifier>{3f6d2a1e-8c4b-4f7a-9e2d-5b1c0a7e6d41}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Spoofing">
+      <UniqueIdentifier>{8a4e91c2-5b3f-4d17-9c68-2f7a1b8e3d90}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Interop">
       <UniqueIdentifier>{a2c94e17-6b3d-4d58-8f1a-0e7b9c3d2f65}</UniqueIdentifier>
     </Filter>
@@ -183,17 +186,17 @@
     <ClInclude Include="xess\XeSS.h">
       <Filter>XeSS</Filter>
     </ClInclude>
-    <ClInclude Include="hooks\DXGIHooks.h">
-      <Filter>Hooks</Filter>
+    <ClInclude Include="spoofing\DXGIHooks.h">
+      <Filter>Spoofing</Filter>
     </ClInclude>
-    <ClInclude Include="hooks\FidelityFXHooks.h">
-      <Filter>Hooks</Filter>
+    <ClInclude Include="spoofing\FidelityFXHooks.h">
+      <Filter>Spoofing</Filter>
     </ClInclude>
-    <ClInclude Include="hooks\Hooks.h">
-      <Filter>Hooks</Filter>
+    <ClInclude Include="spoofing\Hooks.h">
+      <Filter>Spoofing</Filter>
     </ClInclude>
-    <ClInclude Include="hooks\SystemHooks.h">
-      <Filter>Hooks</Filter>
+    <ClInclude Include="spoofing\SystemHooks.h">
+      <Filter>Spoofing</Filter>
     </ClInclude>
     <ClInclude Include="system\loader.hpp">
       <Filter>Hooks</Filter>

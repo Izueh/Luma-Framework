@@ -66,9 +66,13 @@
     <LumaCoreRoot>$(MSBuildThisFileDirectory)..\Core</LumaCoreRoot>
     <LumaGlazeRoot>$(MSBuildThisFileDirectory)..\..\Luma2\External\glaze</LumaGlazeRoot>
     <LumaImGuiRoot>$(MSBuildThisFileDirectory)..\..\Luma2\External\imgui</LumaImGuiRoot>
+    <LumaFontsRoot>$(MSBuildThisFileDirectory)..\..\Luma2\External\Fonts</LumaFontsRoot>
   </PropertyGroup>
 
   <ItemGroup Condition="'$(UseLumaSafetyHook)'=='true' and '$(UseLumaNativeHooks)'=='true'">
+    <ResourceCompile Include="$(LumaCoreRoot)\overlay\fonts.rc">
+      <AdditionalIncludeDirectories>$(LumaFontsRoot)\FontAwesome;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ResourceCompile>
     <ClCompile Include="$(LumaCoreRoot)\hooks\hooks.cpp;$(LumaCoreRoot)\hooks\third_party_modules.cpp;$(LumaCoreRoot)\hooks\vtables.cpp;$(LumaCoreRoot)\hooks\scope.cpp;$(LumaCoreRoot)\hooks\lifetime.cpp;$(LumaCoreRoot)\hooks\device_proxy.cpp;$(LumaCoreRoot)\hooks\d3d11_hooks.cpp;$(LumaCoreRoot)\hooks\d3d11_device_hooks.cpp;$(LumaCoreRoot)\hooks\d3d11_context_hooks.cpp;$(LumaCoreRoot)\hooks\dxgi_hooks.cpp;$(LumaCoreRoot)\hooks\swapchain_proxy.cpp;$(LumaCoreRoot)\hooks\slots.c;$(LumaCoreRoot)\system\dxgi_exports.cpp;$(LumaCoreRoot)\system\loader.cpp;$(LumaCoreRoot)\reshade\reshade.cpp;$(LumaCoreRoot)\reshade\addon_events.cpp;$(LumaCoreRoot)\overlay\overlay.cpp;$(LumaCoreRoot)\overlay\input.cpp;$(LumaCoreRoot)\overlay\input_hooks.cpp;$(LumaCoreRoot)\overlay\input_windows.cpp;$(LumaCoreRoot)\overlay\windows\dinput.cpp;$(LumaCoreRoot)\overlay\windows\dinput8.cpp;$(LumaCoreRoot)\overlay\windows\dinput_common.cpp;$(LumaCoreRoot)\overlay\d3d11_renderer.cpp;$(LumaCoreRoot)\overlay\encoding.cpp">
       <ObjectFileName>$(IntDir)luma_hooks\</ObjectFileName>
       <AdditionalIncludeDirectories>$(LumaCoreRoot);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -151,7 +155,7 @@
       <PreprocessorDefinitions>UNICODE;_UNICODE;ENABLE_D3D12_INTEROP=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Condition="'$(UseLumaSafetyHook)'=='true'">
-      <AdditionalIncludeDirectories>$(LumaImGuiRoot);$(LumaSafetyHookRoot)\include;$(LumaZydisRoot)\include;$(LumaZydisRoot)\dependencies\zycore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(LumaImGuiRoot);$(LumaFontsRoot)\FontAwesome;$(LumaSafetyHookRoot)\include;$(LumaZydisRoot)\include;$(LumaZydisRoot)\dependencies\zycore\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>UNICODE;_UNICODE;ZYDIS_STATIC_BUILD;ZYCORE_STATIC_BUILD;ENABLE_SAFETYHOOK=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Condition="'$(UseLumaSRBridge)'=='true'">

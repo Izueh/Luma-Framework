@@ -2,7 +2,7 @@
 
 #include "FSR.h"
 #include "../interop/D3D12Interop.h"
-#include "../hooks/Hooks.h"
+#include "../spoofing/Hooks.h"
 
 #include <functional>
 

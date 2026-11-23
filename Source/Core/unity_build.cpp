@@ -7,9 +7,9 @@
 #include "utils/system.cpp"
 
 #include "interop/D3D12Interop.cpp"
-#include "hooks/DXGIHooks.cpp"
-#include "hooks/SystemHooks.cpp"
-#include "hooks/FidelityFXHooks.cpp"
+#include "spoofing/DXGIHooks.cpp"
+#include "spoofing/SystemHooks.cpp"
+#include "spoofing/FidelityFXHooks.cpp"
 
 #include "dlss/DLSS.cpp"
 #include "fsr/FSR.cpp"

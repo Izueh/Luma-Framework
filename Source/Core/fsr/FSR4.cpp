@@ -10,7 +10,7 @@
 #include "../includes/debug.h"
 #include "../utils/system.h"
 #include "../interop/D3D12Interop.h"
-#include "../hooks/FidelityFXHooks.h"
+#include "../spoofing/FidelityFXHooks.h"
 
 
 #include <format>

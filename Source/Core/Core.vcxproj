@@ -590,9 +590,9 @@
     <ClCompile Include="fsr\FSR.cpp" />
     <ClCompile Include="fsr\FSR4.cpp" />
     <ClCompile Include="xess\XeSS.cpp" />
-    <ClCompile Include="hooks\DXGIHooks.cpp" />
-    <ClCompile Include="hooks\FidelityFXHooks.cpp" />
-    <ClCompile Include="hooks\SystemHooks.cpp" />
+    <ClCompile Include="spoofing\DXGIHooks.cpp" />
+    <ClCompile Include="spoofing\FidelityFXHooks.cpp" />
+    <ClCompile Include="spoofing\SystemHooks.cpp" />
     <ClCompile Include="interop\D3D12Interop.cpp" />
     <ClCompile Include="utils\system.cpp" />
     <ClCompile Include="hooks\hooks.cpp" />
@@ -626,10 +626,10 @@
     <ClInclude Include="fsr\FSR.h" />
     <ClInclude Include="fsr\FSR4.h" />
     <ClInclude Include="xess\XeSS.h" />
-    <ClInclude Include="hooks\DXGIHooks.h" />
-    <ClInclude Include="hooks\FidelityFXHooks.h" />
-    <ClInclude Include="hooks\Hooks.h" />
-    <ClInclude Include="hooks\SystemHooks.h" />
+    <ClInclude Include="spoofing\DXGIHooks.h" />
+    <ClInclude Include="spoofing\FidelityFXHooks.h" />
+    <ClInclude Include="spoofing\Hooks.h" />
+    <ClInclude Include="spoofing\SystemHooks.h" />
     <ClInclude Include="interop\D3D12Interop.h" />
     <ClInclude Include="includes\callbacks.h" />
     <ClInclude Include="includes\cbuffers.h" />

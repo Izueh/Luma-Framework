@@ -17,3 +17,6 @@ url=https://github.com/gottyduke/DKUtil.git
 [submodule "Luma2/External/glaze"]
 	path = Luma2/External/glaze
 	url = https://github.com/stephenberry/glaze.git
+[submodule "Luma2/External/concurrentqueue"]
+	path = Luma2/External/concurrentqueue
+	url = https://github.com/cameron314/concurrentqueue.git

@@ -22,6 +22,7 @@
 #include "overlay/input_hooks.hpp"
 #include "utils/config.hpp"
 #include "utils/log.hpp"
+#include "utils/modules.hpp"
 
 // Declared by ImGui's Win32 backend only in a comment, to keep <Windows.h> out of its header
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam);
@@ -79,6 +80,24 @@ bool Attach(IDXGISwapChain* swapchain, ID3D11Device* device)
    ImGuiIO& io = ImGui::GetIO();
    io.IniFilename = nullptr; // Nothing written next to the game
    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+   io.Fonts->AddFontDefault();
+   if (HMODULE self = Utils::Modules::Self())
+   {
+      if (HRSRC res = FindResourceW(self, L"FontAwesomeSolid", MAKEINTRESOURCEW(10)))
+      {
+         if (HGLOBAL loaded = LoadResource(self, res))
+         {
+            if (void* data = LockResource(loaded))
+            {
+               ImFontConfig icon_config;
+               icon_config.MergeMode = true;
+               icon_config.FontDataOwnedByAtlas = false;
+               icon_config.ExtraSizeScale = 0.85f;
+               io.Fonts->AddFontFromMemoryTTF(data, int(SizeofResource(self, res)), 13.f, &icon_config);
+            }
+         }
+      }
+   }
    ImGui::StyleColorsDark();
    const float scale = ImGui_ImplWin32_GetDpiScaleForHwnd(desc.OutputWindow);
    ImGui::GetStyle().ScaleAllSizes(scale);
