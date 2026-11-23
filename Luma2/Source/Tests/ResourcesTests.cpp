@@ -11,6 +11,8 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
+#include "Draw/D3D11/D3D11Draw.hpp"
+#include "Draw/Draw.hpp"
 #include "Frame/FrameState.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
@@ -119,6 +121,109 @@ TEST_CASE("Upgrade: the size filters and the mirror's view formats as 1.0's")
       DXGI_FORMAT_X32_TYPELESS_G8X24_UINT);
    CHECK(GetBestViewFormat(DXGI_FORMAT_R24_UNORM_X8_TYPELESS, ViewKind::ShaderResource, DXGI_FORMAT_R24G8_TYPELESS, DXGI_FORMAT_R32G8X24_TYPELESS) ==
       DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS);
+   // A typeless mirror takes the view's encoding in the mirror's family
+   CHECK(GetBestViewFormat(DXGI_FORMAT_R8G8B8A8_UNORM, ViewKind::ShaderResource, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R16G16B16A16_TYPELESS) ==
+      DXGI_FORMAT_R16G16B16A16_UNORM);
+   CHECK(GetBestViewFormat(DXGI_FORMAT_R8G8B8A8_SNORM, ViewKind::ShaderResource, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R16G16B16A16_TYPELESS) ==
+      DXGI_FORMAT_R16G16B16A16_SNORM);
+   CHECK(GetBestViewFormat(DXGI_FORMAT_R8G8B8A8_UINT, ViewKind::UnorderedAccess, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R16G16B16A16_TYPELESS) ==
+      DXGI_FORMAT_R16G16B16A16_UINT);
+   CHECK(GetBestViewFormat(DXGI_FORMAT_R8G8B8A8_SINT, ViewKind::UnorderedAccess, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R16G16B16A16_TYPELESS) ==
+      DXGI_FORMAT_R16G16B16A16_SINT);
+   CHECK(GetBestViewFormat(DXGI_FORMAT_R11G11B10_FLOAT, ViewKind::ShaderResource, DXGI_FORMAT_R11G11B10_FLOAT, DXGI_FORMAT_R16G16B16A16_TYPELESS) ==
+      DXGI_FORMAT_R16G16B16A16_FLOAT);
+   // An encoding the mirror's family doesn't have (sRGB on 16-bit) falls back to the mirror's default typed format
+   CHECK(GetBestViewFormat(DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, ViewKind::ShaderResource, DXGI_FORMAT_R8G8B8A8_TYPELESS, DXGI_FORMAT_R16G16B16A16_TYPELESS) ==
+      DXGI_FORMAT_R16G16B16A16_FLOAT);
+}
+
+TEST_CASE("DXGI formats: typeless families, encodings and remapping")
+{
+   using namespace Utils::Format::DXGI;
+   CHECK(GetTypeless(DXGI_FORMAT_BC1_UNORM_SRGB) == DXGI_FORMAT_BC1_TYPELESS);
+   CHECK(GetTypeless(DXGI_FORMAT_BC2_UNORM) == DXGI_FORMAT_BC2_TYPELESS);
+   CHECK(GetTypeless(DXGI_FORMAT_BC3_UNORM_SRGB) == DXGI_FORMAT_BC3_TYPELESS);
+   CHECK(GetTypeless(DXGI_FORMAT_BC4_SNORM) == DXGI_FORMAT_BC4_TYPELESS);
+   CHECK(GetTypeless(DXGI_FORMAT_BC5_UNORM) == DXGI_FORMAT_BC5_TYPELESS);
+   CHECK(GetTypeless(DXGI_FORMAT_BC6H_SF16) == DXGI_FORMAT_BC6H_TYPELESS);
+   CHECK(GetTypeless(DXGI_FORMAT_BC7_UNORM_SRGB) == DXGI_FORMAT_BC7_TYPELESS);
+   CHECK(AreCopyCompatible(DXGI_FORMAT_BC1_TYPELESS, DXGI_FORMAT_BC1_UNORM_SRGB));
+   CHECK(AreCopyCompatible(DXGI_FORMAT_BC7_UNORM, DXGI_FORMAT_BC7_UNORM_SRGB));
+   CHECK_FALSE(AreCopyCompatible(DXGI_FORMAT_BC1_UNORM, DXGI_FORMAT_BC7_UNORM));
+
+   CHECK(GetEncoding(DXGI_FORMAT_R16G16B16A16_TYPELESS) == Encoding::Typeless);
+   CHECK(GetEncoding(DXGI_FORMAT_R10G10B10A2_UNORM) == Encoding::Unorm);
+   CHECK(GetEncoding(DXGI_FORMAT_B8G8R8A8_UNORM_SRGB) == Encoding::UnormSrgb);
+   CHECK(GetEncoding(DXGI_FORMAT_R8G8_SNORM) == Encoding::Snorm);
+   CHECK(GetEncoding(DXGI_FORMAT_R16_UINT) == Encoding::Uint);
+   CHECK(GetEncoding(DXGI_FORMAT_R32_SINT) == Encoding::Sint);
+   CHECK(GetEncoding(DXGI_FORMAT_R11G11B10_FLOAT) == Encoding::UFloat);
+   CHECK(GetEncoding(DXGI_FORMAT_R16G16B16A16_FLOAT) == Encoding::SFloat);
+
+   CHECK(GetRemapped(DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R16G16B16A16_TYPELESS) == DXGI_FORMAT_R16G16B16A16_UNORM);
+   CHECK(GetRemapped(DXGI_FORMAT_R8G8B8A8_SNORM, DXGI_FORMAT_R16G16B16A16_FLOAT) == DXGI_FORMAT_R16G16B16A16_SNORM);
+   CHECK(GetRemapped(DXGI_FORMAT_R16_UINT, DXGI_FORMAT_R32_TYPELESS) == DXGI_FORMAT_R32_UINT);
+   CHECK(GetRemapped(DXGI_FORMAT_R16_SINT, DXGI_FORMAT_R32_TYPELESS) == DXGI_FORMAT_R32_SINT);
+   CHECK(GetRemapped(DXGI_FORMAT_BC1_UNORM_SRGB, DXGI_FORMAT_BC7_TYPELESS) == DXGI_FORMAT_BC7_UNORM_SRGB);
+   CHECK(GetRemapped(DXGI_FORMAT_BC6H_UF16, DXGI_FORMAT_R16G16B16A16_TYPELESS) == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   CHECK(GetTyped(DXGI_FORMAT_R32_TYPELESS, Encoding::Unorm, true) == DXGI_FORMAT_UNKNOWN);
+}
+
+TEST_CASE("Draw D3D11: EXTENDED_GRAPHICS saves and restores vertex buffers, index buffer and geometry shader")
+{
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
+
+   const D3D11_BUFFER_DESC vb_desc = {.ByteWidth = 64, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_VERTEX_BUFFER};
+   const D3D11_BUFFER_DESC ib_desc = {.ByteWidth = 64, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_INDEX_BUFFER};
+   ComPtr<ID3D11Buffer> vb0;
+   ComPtr<ID3D11Buffer> vb1;
+   ComPtr<ID3D11Buffer> ib;
+   REQUIRE(SUCCEEDED(device->CreateBuffer(&vb_desc, nullptr, &vb0)));
+   REQUIRE(SUCCEEDED(device->CreateBuffer(&vb_desc, nullptr, &vb1)));
+   REQUIRE(SUCCEEDED(device->CreateBuffer(&ib_desc, nullptr, &ib)));
+
+   ID3D11Buffer* vbs[2] = {vb0.Get(), vb1.Get()};
+   const UINT strides[2] = {16, 32};
+   const UINT offsets[2] = {4, 8};
+   context->IASetVertexBuffers(0, 2, vbs, strides, offsets);
+   context->IASetIndexBuffer(ib.Get(), DXGI_FORMAT_R16_UINT, 12);
+
+   Draw::D3D11::StateStack stack;
+   stack.mask = Draw::EXTENDED_GRAPHICS;
+   Draw::D3D11::Save(context.Get(), stack);
+
+   ID3D11Buffer* null_vbs[2] = {nullptr, nullptr};
+   const UINT zero_strides[2] = {0, 0};
+   const UINT zero_offsets[2] = {0, 0};
+   context->IASetVertexBuffers(0, 2, null_vbs, zero_strides, zero_offsets);
+   context->IASetIndexBuffer(nullptr, DXGI_FORMAT_R32_UINT, 0);
+
+   Draw::D3D11::Restore(context.Get(), stack);
+
+   ComPtr<ID3D11Buffer> restored_vb0;
+   ComPtr<ID3D11Buffer> restored_vb1;
+   ID3D11Buffer* restored_vbs[2] = {};
+   UINT restored_strides[2] = {};
+   UINT restored_offsets[2] = {};
+   context->IAGetVertexBuffers(0, 2, restored_vbs, restored_strides, restored_offsets);
+   restored_vb0.Attach(restored_vbs[0]);
+   restored_vb1.Attach(restored_vbs[1]);
+   CHECK(restored_vb0.Get() == vb0.Get());
+   CHECK(restored_vb1.Get() == vb1.Get());
+   CHECK(restored_strides[0] == 16);
+   CHECK(restored_strides[1] == 32);
+   CHECK(restored_offsets[0] == 4);
+   CHECK(restored_offsets[1] == 8);
+
+   ComPtr<ID3D11Buffer> restored_ib;
+   DXGI_FORMAT restored_format = DXGI_FORMAT_UNKNOWN;
+   UINT restored_ib_offset = 0;
+   context->IAGetIndexBuffer(&restored_ib, &restored_format, &restored_ib_offset);
+   CHECK(restored_ib.Get() == ib.Get());
+   CHECK(restored_format == DXGI_FORMAT_R16_UINT);
+   CHECK(restored_ib_offset == 12);
 }
 
 TEST_CASE("DXGI formats: copy compatibility and CPU data converted to RGBA16F")

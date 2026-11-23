@@ -47,6 +47,12 @@ struct StateStack
    UINT scissor_count = 0;
    D3D11_PRIMITIVE_TOPOLOGY topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
    Microsoft::WRL::ComPtr<ID3D11InputLayout> input_layout;
+   std::array<Microsoft::WRL::ComPtr<ID3D11Buffer>, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT> vertex_buffers;
+   std::array<UINT, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT> vertex_buffer_strides = {};
+   std::array<UINT, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT> vertex_buffer_offsets = {};
+   Microsoft::WRL::ComPtr<ID3D11Buffer> index_buffer;
+   DXGI_FORMAT index_buffer_format = DXGI_FORMAT_UNKNOWN;
+   UINT index_buffer_offset = 0;
 };
 
 // Inside a Luma scope, as everything Luma calls on a context

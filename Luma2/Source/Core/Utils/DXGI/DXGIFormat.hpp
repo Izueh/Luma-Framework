@@ -12,6 +12,19 @@ namespace Luma {
 namespace Utils {
 namespace Format {
 namespace DXGI {
+enum class Encoding : uint8_t
+{
+   Typeless,
+   Unorm,
+   UnormSrgb,
+   Snorm,
+   Uint,
+   Sint,
+   UFloat,
+   SFloat,
+   Other,
+};
+
 bool IsBlockCompressed(DXGI_FORMAT format);
 // Fully typeless (R16G16B16A16_TYPELESS); the partially typeless depth stencil read formats (R24_UNORM_X8_TYPELESS) aren't
 bool IsTypeless(DXGI_FORMAT format);
@@ -20,6 +33,12 @@ bool IsDepthStencil(DXGI_FORMAT format);
 // The typeless format of a format's family (R16G16B16A16_FLOAT -> R16G16B16A16_TYPELESS), UNKNOWN for a format without one
 // (R11G11B10_FLOAT)
 DXGI_FORMAT GetTypeless(DXGI_FORMAT format);
+Encoding GetEncoding(DXGI_FORMAT format);
+// The typed format of `typeless_format`'s family with `encoding`; `UNKNOWN` (or `typeless_format` when `!unknown_on_failure`)
+// when the family has no such encoding. Not for depth formats.
+DXGI_FORMAT GetTyped(DXGI_FORMAT typeless_format, Encoding encoding, bool unknown_on_failure = false);
+// `target_format`'s family with `source_format`'s encoding (e.g. R8G8B8A8_UNORM + R16G16B16A16_TYPELESS -> R16G16B16A16_UNORM)
+DXGI_FORMAT GetRemapped(DXGI_FORMAT source_format, DXGI_FORMAT target_format);
 // A typed format (never sRGB) for a typeless one, the format itself otherwise. Depth stencil
 // formats give the one a shader reads their depth with.
 DXGI_FORMAT GetDefaultTyped(DXGI_FORMAT format);

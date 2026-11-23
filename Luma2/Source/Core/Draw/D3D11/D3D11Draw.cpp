@@ -207,6 +207,14 @@ void Save(Context* context, StateStack& stack)
       context->IAGetPrimitiveTopology(&stack.topology);
       context->IAGetInputLayout(&stack.input_layout);
    }
+   if (mask.input_buffers)
+   {
+      for (ComPtr<ID3D11Buffer>& buffer : stack.vertex_buffers)
+         buffer.Reset();
+      context->IAGetVertexBuffers(0, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, reinterpret_cast<ID3D11Buffer**>(stack.vertex_buffers.data()),
+         stack.vertex_buffer_strides.data(), stack.vertex_buffer_offsets.data());
+      context->IAGetIndexBuffer(stack.index_buffer.ReleaseAndGetAddressOf(), &stack.index_buffer_format, &stack.index_buffer_offset);
+   }
 }
 
 void Restore(Context* context, const StateStack& stack)
@@ -233,6 +241,12 @@ void Restore(Context* context, const StateStack& stack)
    {
       context->IASetPrimitiveTopology(stack.topology);
       context->IASetInputLayout(stack.input_layout.Get());
+   }
+   if (mask.input_buffers)
+   {
+      context->IASetVertexBuffers(0, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT, AsRaw(stack.vertex_buffers), stack.vertex_buffer_strides.data(),
+         stack.vertex_buffer_offsets.data());
+      context->IASetIndexBuffer(stack.index_buffer.Get(), stack.index_buffer_format, stack.index_buffer_offset);
    }
    if (mask.viewports)
    {

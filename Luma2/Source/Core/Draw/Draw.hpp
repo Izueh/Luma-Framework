@@ -35,9 +35,11 @@ struct StateMask
    bool rasterizer = false;
    bool viewports = false; // And scissor rects
    bool input_assembler = false; // Topology and input layout
+   bool input_buffers = false; // Vertex and index buffers
 };
 
 inline constexpr Shaders::StageSet VERTEX_AND_PIXEL = {ShaderStage::Vertex, ShaderStage::Pixel};
+inline constexpr Shaders::StageSet VERTEX_GEOMETRY_AND_PIXEL = {ShaderStage::Vertex, ShaderStage::Geometry, ShaderStage::Pixel};
 inline constexpr Shaders::StageSet PIXEL = {ShaderStage::Pixel};
 
 // The first 3 pixel shader resources and the first sampler, no unordered access views
@@ -65,6 +67,19 @@ inline constexpr StateMask FULL_GRAPHICS = {.shaders = VERTEX_AND_PIXEL,
    .rasterizer = true,
    .viewports = true,
    .input_assembler = true};
+// FULL_GRAPHICS plus the geometry shader and input assembler vertex/index buffers
+inline constexpr StateMask EXTENDED_GRAPHICS = {.shaders = VERTEX_GEOMETRY_AND_PIXEL,
+   .shader_resources = PIXEL,
+   .constant_buffers = VERTEX_AND_PIXEL,
+   .samplers = PIXEL,
+   .unordered_access = PIXEL,
+   .targets = true,
+   .blend = true,
+   .depth = true,
+   .rasterizer = true,
+   .viewports = true,
+   .input_assembler = true,
+   .input_buffers = true};
 inline constexpr StateMask COMPUTE = {.shaders = Shaders::COMPUTE_STAGES,
    .shader_resources = Shaders::COMPUTE_STAGES,
    .constant_buffers = Shaders::COMPUTE_STAGES,

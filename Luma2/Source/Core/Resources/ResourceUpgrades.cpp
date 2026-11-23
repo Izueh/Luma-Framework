@@ -186,9 +186,14 @@ DXGI_FORMAT GetBestViewFormat(DXGI_FORMAT view_format, ViewKind kind, [[maybe_un
       return view_format == DXGI_FORMAT_X24_TYPELESS_G8_UINT || view_format == DXGI_FORMAT_X32_TYPELESS_G8X24_UINT ? DXGI_FORMAT_X32_TYPELESS_G8X24_UINT
                                                                                                                    : DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS;
    default:
-      // Another family: a typed mirror format replaces the view's; a typeless one keeps it (unverified)
+   {
+      // Another family: a typed mirror format replaces the view's; a typeless one takes the view's encoding in the mirror's family
       ASSERT_ONCE(IsTypeless(original_format) || GetTypeless(view_format) == GetTypeless(original_format));
-      return IsTypeless(mirror_format) ? view_format : mirror_format;
+      if (!IsTypeless(mirror_format))
+         return mirror_format;
+      const DXGI_FORMAT remapped = GetRemapped(view_format, mirror_format);
+      return IsTypeless(remapped) ? GetDefaultTyped(mirror_format) : remapped;
+   }
    }
 }
 } // namespace Upgrade
