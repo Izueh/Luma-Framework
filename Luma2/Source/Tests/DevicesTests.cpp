@@ -15,17 +15,17 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
-#include "Frame/Frame.hpp"
-#include "Game/Registry.hpp"
-#include "Hooks/Hooks.hpp"
+#include "Frame/FrameState.hpp"
+#include "Game/GameRegistry.hpp"
+#include "Hooks/HookManager.hpp"
 #include "Hooks/InputHooks.hpp"
-#include "Hooks/Lifetime.hpp"
+#include "Hooks/ObjectLifetime.hpp"
 #include "Hooks/DeviceProxy.hpp"
-#include "Hooks/Scope.hpp"
+#include "Hooks/HookScope.hpp"
 #include "Resources/LumaCBuffers.hpp"
-#include "Settings/Registry.hpp"
-#include "Trace/Info.hpp"
-#include "UI/Input.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "Trace/RuntimeStatus.hpp"
+#include "UI/OverlayInput.hpp"
 #include "UI/Overlay.hpp"
 #include "Validation/D3D11/D3D11Validation.hpp"
 #include "Validation/D3D12/D3D12Validation.hpp"
@@ -41,7 +41,7 @@
 #include "Hooks/DXGI/DXGISwapchainProxy.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
 #include "System/Modules.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "Hooks/DXGI/DXGIHooks.hpp"
 
 #pragma comment(lib, "d3d11.lib")
@@ -1328,8 +1328,11 @@ struct FakeDevice : ReShadeABI::Device
    ReShadeABI::DeviceApi api = ReShadeABI::DeviceApi::D3D11;
 
    uint64_t GetNative() const override { return 0; }
+
    void GetPrivateData(const uint8_t[16], uint64_t* data) const override { *data = 0; }
+
    void SetPrivateData(const uint8_t[16], const uint64_t) override {}
+
    ReShadeABI::DeviceApi GetApi() const override { return api; }
 };
 
@@ -1339,8 +1342,11 @@ struct FakeSwapchain : ReShadeABI::DeviceObject
    IDXGISwapChain* native = nullptr; // What ReShade's wrapper holds: the game's proxy
 
    uint64_t GetNative() const override { return reinterpret_cast<uint64_t>(native); }
+
    void GetPrivateData(const uint8_t[16], uint64_t* data) const override { *data = 0; }
+
    void SetPrivateData(const uint8_t[16], const uint64_t) override {}
+
    ReShadeABI::Device* GetDevice() override { return device; }
 };
 
@@ -1931,7 +1937,7 @@ TEST_CASE("ReShade D3D11 Mirror: without ReShade's wrapper in the private data n
    IDXGISwapChain* real = Hooks::SwapchainProxy::Unwrap(swapchain.Get());
    const DXGI_SWAP_CHAIN_DESC before = GetRealDesc(real);
    const std::filesystem::path log = std::filesystem::temp_directory_path() / "LumaTestsReShadeWrapper.log";
-   Utils::Log::Open(log);
+   Log::Open(log);
    for (int i = 0; i < 2; i++)
    {
       Hooks::Scope::Guard scope;
@@ -1939,7 +1945,7 @@ TEST_CASE("ReShade D3D11 Mirror: without ReShade's wrapper in the private data n
          {before.BufferCount, before.BufferDesc.Width, before.BufferDesc.Height, DXGI_FORMAT_R10G10B10A2_UNORM, before.Flags}, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020));
       CHECK_FALSE(Hooks::SwapchainProxy::SetColorSpace1ThroughReShade(real, DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020));
    }
-   Utils::Log::Close();
+   Log::Close();
    CHECK(GetRealDesc(real).BufferDesc.Format == before.BufferDesc.Format);
    std::stringstream text;
    text << std::ifstream(log).rdbuf();

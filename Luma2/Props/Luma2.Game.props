@@ -5,7 +5,7 @@
     <!-- Every game is built as the system dll it replaces, in its own output folder so they don't overwrite each other -->
     <TargetName>$(LumaDllName)</TargetName>
     <OutDir>$(Luma2Root)Binaries\$(Configuration)\$(ProjectName)\</OutDir>
-    <!-- Optional SDKs, opted into per game in its project's Globals (Guidelines section 7) -->
+    <!-- Optional SDKs, opted into per game in its project's Globals -->
     <UseLumaDXP Condition="'$(UseLumaDXP)'==''">false</UseLumaDXP>
   </PropertyGroup>
 
@@ -22,6 +22,7 @@
       <!-- The game's shaders, for the cbuffer structs Core and the game share with them ("Game/GameCBuffers.hlsl"): before Global's,
            as the game's files win a name clash at runtime -->
       <AdditionalIncludeDirectories>$(Luma2Root)Resources\$(ProjectName)\Shaders;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>LUMA_PROJECT_NAME="$(ProjectName)";%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <ClCompile Condition="'$(UseLumaDXP)'=='true'">
       <PreprocessorDefinitions>LUMA_USE_DXP=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>

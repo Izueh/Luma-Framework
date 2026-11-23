@@ -15,19 +15,19 @@
 #include <Windows.h>
 #include <wrl/client.h>
 
-#include "Resources/Bindings.hpp"
+#include "Resources/ResourceBindings.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
-#include "Resources/Mirrors.hpp"
+#include "Resources/ResourceMirrors.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Utils/Format.hpp"
-#include "Hooks/Lifetime.hpp"
+#include "Hooks/ObjectLifetime.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
-#include "Shaders/Database.hpp"
-#include "Shaders/Variants.hpp"
+#include "Shaders/ShaderDatabase.hpp"
+#include "Shaders/ShaderVariants.hpp"
 #include "Trace/StateNames.hpp"
-#include "Trace/Track.hpp"
+#include "Trace/CbufferTracker.hpp"
 #include "Utils/Strings.hpp"
 
 namespace Luma {
@@ -126,7 +126,7 @@ Resource DescribeResource(ID3D12Resource* resource, uint64_t expected_id)
    described.format = desc.Format;
    described.debug_name = GetD3DDebugName(resource);
    // What the call read or wrote while the mirrors are swapped in
-   if (ID3D12Resource* mirror = Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D12::GetMirror(resource) : nullptr)
+   if (ID3D12Resource* mirror = Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D12::FindMirror(resource) : nullptr)
    {
       const D3D12_RESOURCE_DESC mirror_desc = mirror->GetDesc();
       described.mirror = std::format("{} {}x{}", Utils::Format::GetName(mirror_desc.Format), uint32_t(mirror_desc.Width), mirror_desc.Height);
@@ -243,8 +243,8 @@ View DescribeBufferView(D3D12_GPU_VIRTUAL_ADDRESS address, uint32_t slot)
 Sampler DescribeSampler(uint32_t slot, D3D12_FILTER filter, D3D12_TEXTURE_ADDRESS_MODE u, D3D12_TEXTURE_ADDRESS_MODE v, D3D12_TEXTURE_ADDRESS_MODE w,
    float mip_lod_bias)
 {
-   return {slot, StateNames::Filter(filter), uint32_t(filter), {uint32_t(u), uint32_t(v), uint32_t(w)},
-      std::format("{} {} {}", StateNames::Address(u), StateNames::Address(v), StateNames::Address(w)), mip_lod_bias};
+   return {slot, StateNames::GetFilterName(filter), uint32_t(filter), {uint32_t(u), uint32_t(v), uint32_t(w)},
+      std::format("{} {} {}", StateNames::GetAddressName(u), StateNames::GetAddressName(v), StateNames::GetAddressName(w)), mip_lod_bias};
 }
 
 // The parameters a stage sees: compute sees all of its signature's
@@ -274,7 +274,7 @@ bool IsSet(const std::bitset<N>& slots, uint32_t reg)
 bool Reads(const Shaders::Database::Shader* shader, BindingType type, uint32_t space, uint32_t reg)
 {
    if (shader && shader->bindings.found)
-      return shader->bindings.Declares(type, space, reg);
+      return Shaders::Container::Declares(shader->bindings, type, space, reg);
    const Shaders::Database::Reflection* reflection = GetReflection(shader);
    if (!reflection)
       return true;
@@ -504,14 +504,14 @@ void AddOutputState(Event& event, ID3D12GraphicsCommandList* list, ListState& st
       event.depth_stencil.state_bound = true;
       event.depth_stencil.depth_enable = depth.DepthEnable;
       event.depth_stencil.depth_write = depth.DepthWriteMask == D3D12_DEPTH_WRITE_MASK_ALL;
-      event.depth_stencil.depth_func = StateNames::Comparison(depth.DepthFunc);
+      event.depth_stencil.depth_func = StateNames::GetComparisonName(depth.DepthFunc);
       event.depth_stencil.stencil_enable = depth.StencilEnable;
       event.depth_stencil.read_mask = depth.StencilReadMask;
       event.depth_stencil.write_mask = depth.StencilWriteMask;
       event.depth_stencil.front = StateNames::DescribeStencilFace(depth.FrontFace);
       event.depth_stencil.back = StateNames::DescribeStencilFace(depth.BackFace);
       const D3D12_RASTERIZER_DESC& rasterizer = graphics->rasterizer;
-      event.rasterizer = {true, StateNames::Cull(rasterizer.CullMode), StateNames::Fill(rasterizer.FillMode), bool(rasterizer.FrontCounterClockwise),
+      event.rasterizer = {true, StateNames::GetCullName(rasterizer.CullMode), StateNames::GetFillName(rasterizer.FillMode), bool(rasterizer.FrontCounterClockwise),
          int32_t(graphics->depth_bias), rasterizer.SlopeScaledDepthBias, bool(rasterizer.DepthClipEnable), true, bool(rasterizer.MultisampleEnable)};
    }
    for (const D3D12_VIEWPORT& viewport : state.viewports)
@@ -598,13 +598,13 @@ std::vector<RootArgument>& GetArguments(ListState& state, bool compute, UINT ind
 }
 } // namespace
 
-void OnReset(ID3D12GraphicsCommandList* list)
+void RecordReset(ID3D12GraphicsCommandList* list)
 {
    if (ListState* state = GetState(list))
       *state = {};
 }
 
-void OnClearState(ID3D12GraphicsCommandList* list)
+void RecordClearState(ID3D12GraphicsCommandList* list)
 {
    if (ListState* state = GetState(list))
    {
@@ -657,7 +657,7 @@ void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, D3D12_CPU_
    AddResourceEvent(list, std::move(event));
 }
 
-void OnResourceBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers)
+void RecordBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers)
 {
    ListState* state = GetState(list);
    if (!state || !barriers)
@@ -749,7 +749,7 @@ std::optional<BoundView> FindBoundView(ID3D12GraphicsCommandList* list, Readback
    }
 }
 
-void OnSetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12RootSignature* root_signature)
+void RecordRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12RootSignature* root_signature)
 {
    ListState* state = GetState(list);
    if (!state || state->signatures[compute] == root_signature)
@@ -760,7 +760,7 @@ void OnSetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12Roo
    state->arguments[compute].assign(state->layouts[compute] ? state->layouts[compute]->parameters.size() : 0, {});
 }
 
-void OnSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
+void RecordRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
    const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil)
 {
    ListState* state = GetState(list);
@@ -781,19 +781,19 @@ void OnSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12
    state->depth_stencil = depth_stencil ? std::optional(*depth_stencil) : std::nullopt;
 }
 
-void OnSetRootTable(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_DESCRIPTOR_HANDLE table)
+void RecordRootTable(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_DESCRIPTOR_HANDLE table)
 {
    if (ListState* state = GetState(list))
       GetArguments(*state, compute, index)[index] = {RootArgument::Type::Table, table.ptr};
 }
 
-void OnSetRootDescriptor(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
+void RecordRootDescriptor(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
 {
    if (ListState* state = GetState(list))
       GetArguments(*state, compute, index)[index] = {RootArgument::Type::Descriptor, address};
 }
 
-void OnSetRootConstants(ID3D12GraphicsCommandList* list, bool compute, UINT index, UINT count, const void* values, UINT offset)
+void RecordRootConstants(ID3D12GraphicsCommandList* list, bool compute, UINT index, UINT count, const void* values, UINT offset)
 {
    ListState* state = GetState(list);
    if (!state || !values)
@@ -805,31 +805,31 @@ void OnSetRootConstants(ID3D12GraphicsCommandList* list, bool compute, UINT inde
    std::memcpy(argument.constants.data() + offset, values, size_t(count) * 4);
 }
 
-void OnSetViewports(ID3D12GraphicsCommandList* list, UINT count, const D3D12_VIEWPORT* viewports)
+void RecordViewports(ID3D12GraphicsCommandList* list, UINT count, const D3D12_VIEWPORT* viewports)
 {
    if (ListState* state = GetState(list))
       state->viewports.assign(viewports, viewports + (viewports ? count : 0));
 }
 
-void OnSetScissorRects(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RECT* rects)
+void RecordScissorRects(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RECT* rects)
 {
    if (ListState* state = GetState(list))
       state->scissor_rects.assign(rects, rects + (rects ? count : 0));
 }
 
-void OnSetTopology(ID3D12GraphicsCommandList* list, D3D12_PRIMITIVE_TOPOLOGY topology)
+void RecordTopology(ID3D12GraphicsCommandList* list, D3D12_PRIMITIVE_TOPOLOGY topology)
 {
    if (ListState* state = GetState(list))
       state->topology = topology;
 }
 
-void OnSetBlendFactor(ID3D12GraphicsCommandList* list, const FLOAT factor[4])
+void RecordBlendFactor(ID3D12GraphicsCommandList* list, const FLOAT factor[4])
 {
    if (ListState* state = GetState(list))
       state->blend_factor = factor ? std::array<float, 4>{factor[0], factor[1], factor[2], factor[3]} : std::array<float, 4>{1.f, 1.f, 1.f, 1.f};
 }
 
-void OnSetStencilRef(ID3D12GraphicsCommandList* list, UINT stencil_ref)
+void RecordStencilRef(ID3D12GraphicsCommandList* list, UINT stencil_ref)
 {
    if (ListState* state = GetState(list))
       state->stencil_ref = stencil_ref;
@@ -872,7 +872,7 @@ void End(Recording recording, Outcome outcome)
       state->events.push_back(std::move(recording.event));
 }
 
-void OnExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle)
+void RecordExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle)
 {
    ListState* to = GetState(list);
    const ListState* from = bundle ? GetState(bundle) : nullptr;
@@ -880,7 +880,7 @@ void OnExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList*
       to->events.insert(to->events.end(), from->events.begin(), from->events.end());
 }
 
-void OnExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists)
+void RecordExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists)
 {
    if (!IsCapturing())
       return;

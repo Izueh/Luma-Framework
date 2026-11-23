@@ -72,7 +72,8 @@ float4 ConditionalLinearizeUI(float4 UIColor, bool PreMultipliedAlphaByAlpha = f
 	
 	bool gammaSpace = true;
 	
-#if POST_PROCESS_SPACE_TYPE == 1 // Disable this branch to leave the UI blend in in linear (note that we ignore "LumaUIData.BackgroundTonemappingAmount" when we blend in the UI in gamma space, as it's not as necessary)
+	if (POST_PROCESS_SPACE_TYPE == 1)
+	{ // Disable this branch to leave the UI blend in linear
 	// Apply the "inverse" of the blend state transformation, and some other modulation of the UI color and alpha,
 	// to emulate vanilla gamma space blends as closely as possible, while avoiding the hue shift from gamma space blends too (which will shift the look from Vanilla a bit, but might possibly look even better).
 	if (LumaUIData.AlphaBlendState == 1 || ForceStraightAlphaBlend)
@@ -186,7 +187,7 @@ float4 ConditionalLinearizeUI(float4 UIColor, bool PreMultipliedAlphaByAlpha = f
 	{
 		// Nothing we can do here top make it look more like vanilla
 	}
-#endif // POST_PROCESS_SPACE_TYPE == 1
+	}
 
 	return SDRToHDR(UIColor, gammaSpace, true, !IsSceneColor);
 }

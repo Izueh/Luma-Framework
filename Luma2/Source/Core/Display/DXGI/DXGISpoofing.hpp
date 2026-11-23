@@ -2,7 +2,7 @@
 
 #include <dxgi1_6.h>
 
-// What the game is told about the display (Guidelines.md section 12), so a game without an HDR option of its own takes the HDR path the
+// What the game is told about the display, so a game without an HDR option of its own takes the HDR path Luma wants.
 // mod wants. Only the game's calls are answered: Luma's own, inside its scope, see the real display.
 namespace Luma {
 namespace Display {

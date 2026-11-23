@@ -2,7 +2,7 @@
 
 #include <d3d12.h>
 
-#include "Game/Events.hpp"
+#include "Game/GameEvents.hpp"
 
 // The game's D3D12 draw events (Game::D3D12::Events::on_variant_draw and on_draw_or_dispatch, Game::D3D12::OnShaderDraw), run by
 // the draw, dispatch and ExecuteIndirect handlers as D3D11's

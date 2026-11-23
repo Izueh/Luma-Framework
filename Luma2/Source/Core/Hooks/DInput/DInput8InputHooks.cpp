@@ -15,9 +15,9 @@
 #include <type_traits>
 
 #include "Hooks/DInput/DInputDevices.hpp"
-#include "Hooks/Hooks.hpp"
+#include "Hooks/HookManager.hpp"
 #include "Hooks/InputHooks.hpp"
-#include "Hooks/Scope.hpp"
+#include "Hooks/HookScope.hpp"
 
 namespace Luma {
 namespace Hooks {

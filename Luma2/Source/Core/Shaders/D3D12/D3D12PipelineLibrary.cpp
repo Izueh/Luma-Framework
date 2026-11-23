@@ -9,10 +9,10 @@
 #include <shared_mutex>
 #include <vector>
 
-#include "Hooks/Scope.hpp"
-#include "System/Jobs.hpp"
+#include "Hooks/HookScope.hpp"
+#include "System/JobQueue.hpp"
 #include "System/Paths.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -54,7 +54,7 @@ void Open(ID3D12Device* device)
    ComPtr<ID3D12Device1> device1;
    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&device1))))
    {
-      Utils::Log::Warning("D3D12: no ID3D12Device1, variant pipelines aren't kept across boots");
+      Log::Warning("D3D12: no ID3D12Device1, variant pipelines aren't kept across boots");
       return;
    }
    std::ifstream file(GetPath(), std::ios::binary);
@@ -68,7 +68,7 @@ void Open(ID3D12Device* device)
       if (FAILED(result))
       {
          // D3D12_ERROR_DRIVER_VERSION_MISMATCH, D3D12_ERROR_ADAPTER_NOT_FOUND, or a damaged file
-         Utils::Log::Info("D3D12: the pipeline library was made by another driver or adapter (0x{:08X}), it starts over", uint32_t(result));
+         Log::Info("D3D12: the pipeline library was made by another driver or adapter (0x{:08X}), it starts over", uint32_t(result));
          std::error_code error;
          std::filesystem::remove(GetPath(), error);
          library.blob.clear();
@@ -76,10 +76,10 @@ void Open(ID3D12Device* device)
    }
    if (FAILED(result) && FAILED(device1->CreatePipelineLibrary(nullptr, 0, IID_PPV_ARGS(&library.library))))
    {
-      Utils::Log::Warning("D3D12: no pipeline library, variant pipelines aren't kept across boots");
+      Log::Warning("D3D12: no pipeline library, variant pipelines aren't kept across boots");
       return;
    }
-   Utils::Log::Info("D3D12: pipeline library opened ({} bytes)", library.blob.size());
+   Log::Info("D3D12: pipeline library opened ({} bytes)", library.blob.size());
 }
 
 // The library for `device`, opened at its first use. Null for another device or without one.
@@ -166,7 +166,7 @@ void Save()
             bytes.resize(library.library->GetSerializedSize());
             if (FAILED(library.library->Serialize(bytes.data(), bytes.size())))
             {
-               Utils::Log::Error("D3D12: the pipeline library couldn't be serialized");
+               Log::Error("D3D12: the pipeline library couldn't be serialized");
                return;
             }
          }
@@ -180,7 +180,7 @@ void Save()
          }
          std::filesystem::rename(temporary, GetPath(), error);
          if (error)
-            Utils::Log::Error("D3D12: the pipeline library couldn't be written ({})", error.message());
+            Log::Error("D3D12: the pipeline library couldn't be written ({})", error.message());
       },
       [] {
          saving = false;

@@ -5,14 +5,14 @@
 #include <span>
 #include <type_traits>
 
-#include "Game/Registry.hpp"
+#include "Game/GameRegistry.hpp"
 #include "Handlers/Handlers.hpp"
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
-#include "Resources/Mirrors.hpp"
-#include "Resources/Samplers.hpp"
-#include "Resources/Upgrade.hpp"
+#include "Resources/ResourceMirrors.hpp"
+#include "Resources/SamplerMirrors.hpp"
+#include "Resources/ResourceUpgrades.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
@@ -20,16 +20,17 @@
 #include "Game/D3D12/D3D12DrawEvents.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
 #if DEVELOPMENT
-#include "Trace/Capture.hpp"
+#include "Trace/DebugDraw.hpp"
+#include "Trace/FrameCapture.hpp"
 #include "Trace/D3D12/D3D12Capture.hpp"
 #include "Trace/D3D12/D3D12Readback.hpp"
 #include "Trace/D3D12/D3D12Stats.hpp"
-#include "Trace/Readback.hpp"
-#include "Trace/Track.hpp"
+#include "Trace/ResourceReadback.hpp"
+#include "Trace/CbufferTracker.hpp"
 #endif
 #include "UI/Overlay.hpp"
 #include "Utils/Debug.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "Validation/D3D12/D3D12Validation.hpp"
 
 namespace Luma {
@@ -41,9 +42,9 @@ Shaders::Database::D3D12::PipelineDesc Describe(PipelineKind kind, const void* d
 {
    switch (kind)
    {
-   case PipelineKind::Graphics: return Shaders::Database::D3D12::Describe(*static_cast<const D3D12_GRAPHICS_PIPELINE_STATE_DESC*>(desc));
-   case PipelineKind::Compute: return Shaders::Database::D3D12::Describe(*static_cast<const D3D12_COMPUTE_PIPELINE_STATE_DESC*>(desc));
-   default: return Shaders::Database::D3D12::Describe(*static_cast<const D3D12_PIPELINE_STATE_STREAM_DESC*>(desc));
+   case PipelineKind::Graphics: return Shaders::Database::D3D12::DescribePipeline(*static_cast<const D3D12_GRAPHICS_PIPELINE_STATE_DESC*>(desc));
+   case PipelineKind::Compute: return Shaders::Database::D3D12::DescribePipeline(*static_cast<const D3D12_COMPUTE_PIPELINE_STATE_DESC*>(desc));
+   default: return Shaders::Database::D3D12::DescribePipeline(*static_cast<const D3D12_PIPELINE_STATE_STREAM_DESC*>(desc));
    }
 }
 
@@ -70,6 +71,8 @@ bool RunCall(ID3D12GraphicsCommandList* list, const Call& call)
       result = Game::Registry::HasDrawCallbacks<Api::D3D12>() ? Game::DrawEvents::D3D12::Run(list, call) : Game::DrawResult::None;
 #if DEVELOPMENT
       skipped = result == Game::DrawResult::None && Trace::Capture::D3D12::IsSkipped(list, stages);
+#else
+      (void)stages;
 #endif
       if (result == Game::DrawResult::None && !skipped)
       {
@@ -128,6 +131,9 @@ void OnDeviceDestroyed(ID3D12Device* device)
    HandleOnDeviceDestroyed<Api::D3D12>(
       device,
       [&] {
+#if DEVELOPMENT
+         Trace::DebugDraw::ReleaseD3D12(device);
+#endif
          Resources::Database::D3D12::ReleaseDeviceObjects(device);
          Resources::Mirrors::D3D12::ReleaseDeviceObjects(device);
          Shaders::RootSignatures::D3D12::ReleaseDeviceObjects(device);
@@ -140,7 +146,7 @@ void PostExecuteCommandLists(ID3D12CommandQueue* queue, UINT count, ID3D12Comman
 {
    Hooks::Lifetime::D3D12::MoveReferencesToQueue(queue, count, lists);
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnExecute(queue, count, lists);
+   Trace::Capture::D3D12::RecordExecute(queue, count, lists);
    Trace::Readback::D3D12::OnExecute(queue, count, lists);
    Trace::Stats::D3D12::RecordExecute(count);
 #endif
@@ -194,7 +200,7 @@ Shaders::RootSignatures::D3D12::Extended PreCreateRootSignature(std::span<const 
 void PostExtendedRootSignatureRefused(HRESULT result)
 {
    ASSERT_ONCE_MSG(false, "The device refused an extended root signature");
-   Utils::Log::Error("D3D12: the device refused an extended root signature (0x{:08X}), the game's is used and its pipelines get no variants", uint32_t(result));
+   Log::Error("D3D12: the device refused an extended root signature (0x{:08X}), the game's is used and its pipelines get no variants", uint32_t(result));
 }
 
 void PostCreateRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table)
@@ -245,7 +251,7 @@ void PostCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destinatio
    if (descriptor.kind == Kind::Sampler)
    {
       if (Resources::Samplers::IsNeeded() && descriptor.has_desc)
-         Resources::Mirrors::D3D12::OnCreateSampler(device, destination, descriptor.desc.sampler, Resources::Samplers::IsSwapping());
+         Resources::Mirrors::D3D12::TrackSampler(device, destination, descriptor.desc.sampler, Resources::Samplers::IsSwapping());
    }
    else if (Resources::Mirrors::IsNeeded())
    {
@@ -258,7 +264,7 @@ void PostCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destinatio
       case Kind::DepthStencil: kind = ViewKind::DepthStencil; break;
       default: break;
       }
-      Resources::Mirrors::D3D12::OnCreateView(device, destination, kind, descriptor.resource, descriptor.has_desc ? &descriptor.desc : nullptr,
+      Resources::Mirrors::D3D12::TrackView(device, destination, kind, descriptor.resource, descriptor.has_desc ? &descriptor.desc : nullptr,
          Resources::Mirrors::IsSwapping());
    }
 #if DEVELOPMENT
@@ -270,7 +276,7 @@ void PostCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destinatio
 void PostCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type)
 {
    if (Resources::Mirrors::IsNeeded() || Resources::Samplers::IsNeeded())
-      Resources::Mirrors::D3D12::OnCopyDescriptors(device, destination, source, count, type, Resources::Mirrors::IsSwapping(), Resources::Samplers::IsSwapping());
+      Resources::Mirrors::D3D12::SwapCopiedDescriptors(device, destination, source, count, type, Resources::Mirrors::IsSwapping(), Resources::Samplers::IsSwapping());
 #if DEVELOPMENT
    Resources::Descriptors::D3D12::Copy(destination, source, count);
    Trace::Stats::D3D12::RecordCopy(destination, count);
@@ -302,7 +308,7 @@ void PreReset(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline)
    Resources::Database::D3D12::ForgetList(list);
    Shaders::Variants::D3D12::SwapInVariant(list, pipeline);
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnReset(list);
+   Trace::Capture::D3D12::RecordReset(list);
    Trace::Stats::D3D12::RecordReset(list);
    if (pipeline)
       Trace::Stats::D3D12::RecordBind(list, Trace::Stats::D3D12::Bind::PipelineState);
@@ -316,7 +322,7 @@ void PreClearState(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeli
    Resources::Database::D3D12::ForgetList(list);
    Shaders::Variants::D3D12::SwapInVariant(list, pipeline);
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnClearState(list);
+   Trace::Capture::D3D12::RecordClearState(list);
 #endif
 }
 
@@ -337,7 +343,7 @@ void PreSetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12Ro
 {
    Resources::Database::D3D12::SetRootSignature(list, compute, root_signature);
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnSetRootSignature(list, compute, root_signature);
+   Trace::Capture::D3D12::RecordRootSignature(list, compute, root_signature);
    Trace::Stats::D3D12::RecordBind(list, Trace::Stats::D3D12::Bind::RootSignature);
 #endif
 }
@@ -347,7 +353,7 @@ void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3
 {
 #if DEVELOPMENT
    // The game's targets
-   Trace::Capture::D3D12::OnSetRenderTargets(list, count, render_targets, single_range, depth_stencil);
+   Trace::Capture::D3D12::RecordRenderTargets(list, count, render_targets, single_range, depth_stencil);
    Trace::Stats::D3D12::RecordBind(list, Trace::Stats::D3D12::Bind::RenderTargets);
 #endif
    if (Resources::Mirrors::IsNeeded())
@@ -373,7 +379,7 @@ void PreSetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12De
 void PreSetRootTable([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] bool compute, [[maybe_unused]] UINT index, [[maybe_unused]] D3D12_GPU_DESCRIPTOR_HANDLE table)
 {
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnSetRootTable(list, compute, index, table);
+   Trace::Capture::D3D12::RecordRootTable(list, compute, index, table);
 #endif
 }
 
@@ -381,7 +387,7 @@ void PreSetRootDescriptor([[maybe_unused]] ID3D12GraphicsCommandList* list, [[ma
    [[maybe_unused]] D3D12_GPU_VIRTUAL_ADDRESS address)
 {
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnSetRootDescriptor(list, compute, index, address);
+   Trace::Capture::D3D12::RecordRootDescriptor(list, compute, index, address);
 #endif
 }
 
@@ -389,49 +395,57 @@ void PreSetRootConstants([[maybe_unused]] ID3D12GraphicsCommandList* list, [[may
    [[maybe_unused]] const void* values, [[maybe_unused]] UINT offset)
 {
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnSetRootConstants(list, compute, index, count, values, offset);
+   Trace::Capture::D3D12::RecordRootConstants(list, compute, index, count, values, offset);
 #endif
 }
 
 void PreSetViewports([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] UINT count, [[maybe_unused]] const D3D12_VIEWPORT* viewports)
 {
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnSetViewports(list, count, viewports);
+   Trace::Capture::D3D12::RecordViewports(list, count, viewports);
 #endif
 }
 
 void PreSetScissorRects([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] UINT count, [[maybe_unused]] const D3D12_RECT* rects)
 {
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnSetScissorRects(list, count, rects);
+   Trace::Capture::D3D12::RecordScissorRects(list, count, rects);
 #endif
 }
 
 void PreSetTopology([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] D3D12_PRIMITIVE_TOPOLOGY topology)
 {
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnSetTopology(list, topology);
+   Trace::Capture::D3D12::RecordTopology(list, topology);
 #endif
 }
 
 void PreSetBlendFactor([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] const FLOAT factor[4])
 {
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnSetBlendFactor(list, factor);
+   Trace::Capture::D3D12::RecordBlendFactor(list, factor);
 #endif
 }
 
 void PreSetStencilRef([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] UINT stencil_ref)
 {
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnSetStencilRef(list, stencil_ref);
+   Trace::Capture::D3D12::RecordStencilRef(list, stencil_ref);
 #endif
 }
 
 std::span<const D3D12_RESOURCE_BARRIER> PreResourceBarrier([[maybe_unused]] ID3D12GraphicsCommandList* list, std::span<const D3D12_RESOURCE_BARRIER> barriers)
 {
 #if DEVELOPMENT
-   Trace::Capture::D3D12::OnResourceBarrier(list, UINT(barriers.size()), barriers.data());
+   Trace::Capture::D3D12::RecordBarrier(list, UINT(barriers.size()), barriers.data());
+   if (Trace::DebugDraw::IsActive())
+   {
+      for (const D3D12_RESOURCE_BARRIER& barrier : barriers)
+      {
+         if (barrier.Type == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION && barrier.Transition.pResource && barrier.Flags != D3D12_RESOURCE_BARRIER_FLAG_END_ONLY)
+            Trace::DebugDraw::CaptureD3D12(list, barrier.Transition.pResource, barrier.Transition.StateBefore);
+      }
+   }
 #endif
    return Resources::Mirrors::IsNeeded() ? Resources::Mirrors::D3D12::AddMirrorBarriers(barriers) : barriers;
 }
@@ -462,7 +476,7 @@ bool PreCopyTextureRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[ma
          .destination_subresource = subresource(destination),
          .destination_offset = {x, y, z}};
       if (box)
-         copy.source_box = std::array<uint32_t, 6>{box->left, box->top, box->front, box->right, box->bottom, box->back};
+         copy.source_box = std::array<uint64_t, 6>{box->left, box->top, box->front, box->right, box->bottom, box->back};
       Trace::Capture::D3D12::AddCopy(list, "CopyTextureRegion", destination.pResource, source.pResource, copy);
    }
 #endif
@@ -479,8 +493,8 @@ bool PreCopyBufferRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[may
    if (Trace::Capture::IsCapturing())
       Trace::Capture::D3D12::AddCopy(list, "CopyBufferRegion", destination, source,
          {.kind = Trace::Capture::CopyKind::BufferRegion,
-            .destination_offset = {uint32_t(destination_offset), 0, 0},
-            .source_box = std::array<uint32_t, 6>{uint32_t(source_offset), 0, 0, uint32_t(source_offset + size), 1, 1}});
+            .destination_offset = {destination_offset, 0, 0},
+            .source_box = std::array<uint64_t, 6>{source_offset, 0, 0, source_offset + size, 1, 1}});
 #endif
    return false;
 }
@@ -572,7 +586,7 @@ void PreExecuteBundle(ID3D12GraphicsCommandList* list, [[maybe_unused]] ID3D12Gr
 #if DEVELOPMENT
    Trace::Stats::D3D12::RecordExecuteBundle();
    if (Trace::Capture::IsCapturing())
-      Trace::Capture::D3D12::OnExecuteBundle(list, bundle);
+      Trace::Capture::D3D12::RecordExecuteBundle(list, bundle);
 #endif
    Resources::Database::D3D12::BindForBundle(list);
 }

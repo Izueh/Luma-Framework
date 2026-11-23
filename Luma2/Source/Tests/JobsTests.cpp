@@ -9,7 +9,7 @@
 #include <thread>
 #include <vector>
 
-#include "System/Jobs.hpp"
+#include "System/JobQueue.hpp"
 
 namespace Jobs = Luma::System::Jobs;
 
@@ -193,5 +193,47 @@ TEST_CASE("Jobs: each job has its own progress")
    CHECK(Jobs::GetStatus().done == 1);
 
    release = true;
+   Drain();
+}
+
+TEST_CASE("Jobs: concurrent producers and lock-free finished drain lose no jobs")
+{
+   Jobs::SetThreadCount(4);
+   constexpr uint32_t PRODUCERS = 4;
+   constexpr uint32_t PER_PRODUCER = 100;
+   constexpr uint32_t TOTAL = PRODUCERS * PER_PRODUCER;
+   std::atomic<uint32_t> worked = 0;
+   uint32_t finished = 0;
+
+   std::vector<std::thread> producers;
+   producers.reserve(PRODUCERS);
+   for (uint32_t p = 0; p < PRODUCERS; p++)
+   {
+      producers.emplace_back([&] {
+         for (uint32_t i = 0; i < PER_PRODUCER; i++)
+         {
+            Jobs::Queue(
+               "Stress",
+               [&] {
+                  Jobs::SetProgress(1, 2);
+                  worked.fetch_add(1, std::memory_order_relaxed);
+                  Jobs::SetProgress(2, 2);
+               },
+               [&] {
+                  finished++;
+                  return Jobs::Outcome{};
+               });
+         }
+      });
+   }
+   for (std::thread& thread : producers)
+      thread.join();
+
+   REQUIRE(WaitFor([&] {
+      Jobs::RunFinished();
+      return finished == TOTAL;
+   }));
+   CHECK(worked.load() == TOTAL);
+   CHECK(finished == TOTAL);
    Drain();
 }

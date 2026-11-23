@@ -1,4 +1,4 @@
-#include "Hooks/Hooks.hpp"
+#include "Hooks/HookManager.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,11 +22,11 @@
 #include "Hooks/DXGI/DXGIHooks.hpp"
 #include "Hooks/DXGI/DXGISwapchainProxy.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
-#include "Hooks/Lifetime.hpp"
-#include "Hooks/Scope.hpp"
-#include "Hooks/Slots.h"
+#include "Hooks/ObjectLifetime.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Hooks/VtableSlots.h"
 #include "Hooks/DepthGuard.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -454,7 +454,7 @@ void NoteCaller(const void* return_address)
       return;
    std::scoped_lock lock(present_caller_mutex);
    if (present_caller != overlay)
-      Utils::Log::Info("DXGI: {} calls Present before Luma's handling, its drawing goes into the game's image", overlay);
+      Log::Info("DXGI: {} calls Present before Luma's handling, its drawing goes into the game's image", overlay);
    present_caller = std::move(overlay);
    present_caller_base = base;
 }

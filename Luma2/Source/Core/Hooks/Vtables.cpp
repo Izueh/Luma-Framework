@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "System/Modules.hpp"
 #include "Utils/Strings.hpp"
 
@@ -131,7 +131,7 @@ bool Classify(Interface interface_type, std::string_view name, const std::vector
    }
    if (!third_party.empty())
    {
-      Utils::Log::Info("Vtables: {} has {} methods patched by {} (slot {} first), the hooks on the recorded ones still see their calls", name, third_party.size(),
+      Log::Info("Vtables: {} has {} methods patched by {} (slot {} first), the hooks on the recorded ones still see their calls", name, third_party.size(),
          System::Modules::GetName(third_party.front().second), third_party.front().first);
    }
    return variants.empty();
@@ -146,7 +146,7 @@ void LogPatchedMethods(std::string_view name, const std::vector<void*>& methods)
       const HMODULE module = GetModule(methods[i]);
       if (module != api && !IsApiModule(module))
       {
-         Utils::Log::Warning("Vtables: {} slot {} is in {} when first seen, patched before Luma: its hook goes on that tool's function", name, i,
+         Log::Warning("Vtables: {} slot {} is in {} when first seen, patched before Luma: its hook goes on that tool's function", name, i,
             System::Modules::GetName(methods[i]));
          return;
       }
@@ -181,7 +181,7 @@ bool Set(Interface interface_type, IUnknown* object, std::span<const InterfaceVe
    {
       if (Classify(interface_type, name, unknown))
          return true;
-      Utils::Log::Warning("Vtables: {} at {} in {} has different methods from the first one, its functions may not be hooked",
+      Log::Warning("Vtables: {} at {} in {} has different methods from the first one, its functions may not be hooked",
          name, static_cast<const void*>(vtable), System::Modules::GetName(vtable));
       return false;
    }
@@ -220,7 +220,7 @@ bool Set(Interface interface_type, IUnknown* object, std::span<const InterfaceVe
    if (!unknown.empty())
       return Classify(interface_type, name, unknown);
    // The vtable may be in heap memory (D3D11 contexts), its methods never are
-   Utils::Log::Info("Vtables: {} ({}) at {} in {}, methods in {}", name, highest_version, static_cast<const void*>(vtable),
+   Log::Info("Vtables: {} ({}) at {} in {}, methods in {}", name, highest_version, static_cast<const void*>(vtable),
       System::Modules::GetName(vtable), System::Modules::GetName(vtable[3]));
    LogPatchedMethods(name, methods);
    return true;

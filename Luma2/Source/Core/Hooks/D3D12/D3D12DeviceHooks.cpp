@@ -1,4 +1,4 @@
-#include "Hooks/Hooks.hpp"
+#include "Hooks/HookManager.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -14,7 +14,7 @@
 
 #include "Handlers/D3D12/D3D12Handlers.hpp"
 #include "Hooks/Detours.hpp"
-#include "Hooks/Slots.h"
+#include "Hooks/VtableSlots.h"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
 #include "Shaders/D3D12/D3D12RootSignatures.hpp"

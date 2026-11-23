@@ -8,12 +8,15 @@
 
 #include <wrl/client.h>
 
-#include "Frame/Frame.hpp"
+#include "Frame/FrameState.hpp"
 #include "Game/Game.hpp"
-#include "Resources/Bindings.hpp"
+#include "Resources/ResourceBindings.hpp"
 #include "Resources/ResourceDatabase.hpp"
+#if DEVELOPMENT
+#include "Trace/DebugDraw.hpp"
+#endif
 #include "Utils/Debug.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -74,7 +77,7 @@ void Wait(Renderer& renderer, uint64_t value)
    if (renderer.fence->GetCompletedValue() >= value)
       return;
    if (SUCCEEDED(renderer.fence->SetEventOnCompletion(value, renderer.event)) && WaitForSingleObject(renderer.event, 2000) == WAIT_TIMEOUT)
-      Utils::Log::Warning("Display: composition's D3D12 work hasn't finished after 2s");
+      Log::Warning("Display: composition's D3D12 work hasn't finished after 2s");
 }
 
 PFN_D3D12_SERIALIZE_ROOT_SIGNATURE GetSerialize()
@@ -128,7 +131,7 @@ bool CreatePipeline(Renderer& renderer, Pipeline& pipeline)
    if (!serialize || FAILED(serialize(&signature_desc, D3D_ROOT_SIGNATURE_VERSION_1, &blob, &errors)) ||
       FAILED(renderer.device->CreateRootSignature(0, blob->GetBufferPointer(), blob->GetBufferSize(), IID_PPV_ARGS(&pipeline.signature))))
    {
-      Utils::Log::Error("Display: composition's D3D12 root signature couldn't be created{}", errors ? std::string(": ") + static_cast<const char*>(errors->GetBufferPointer()) : "");
+      Log::Error("Display: composition's D3D12 root signature couldn't be created{}", errors ? std::string(": ") + static_cast<const char*>(errors->GetBufferPointer()) : "");
       return false;
    }
 
@@ -146,7 +149,7 @@ bool CreatePipeline(Renderer& renderer, Pipeline& pipeline)
    desc.SampleDesc = {1, 0};
    if (FAILED(renderer.device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline.state))))
    {
-      Utils::Log::Error("Display: composition's D3D12 pipeline couldn't be created for format {}", uint32_t(pipeline.format));
+      Log::Error("Display: composition's D3D12 pipeline couldn't be created for format {}", uint32_t(pipeline.format));
       return false;
    }
    return true;
@@ -286,14 +289,19 @@ bool Compose(Renderer& renderer, ID3D12Resource* source, ID3D12Resource* target,
    ID3D12GraphicsCommandList* list = renderer.list.Get();
    list->Reset(frame.allocator.Get(), nullptr);
 
-   // The game's image at t0, the rest stay null
+   // The game's image at t0, null views at t1..t8 (then debug draw if active)
    const D3D12_CPU_DESCRIPTOR_HANDLE views = {renderer.views->GetCPUDescriptorHandleForHeapStart().ptr + SIZE_T(index) * VIEWS * renderer.view_increment};
+   WriteNullViews(renderer, views);
    const D3D12_RESOURCE_DESC source_desc = source->GetDesc();
    const D3D12_SHADER_RESOURCE_VIEW_DESC view_desc = {.Format = source_desc.Format,
       .ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D,
       .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING,
       .Texture2D = {.MipLevels = 1}};
    renderer.device->CreateShaderResourceView(source, &view_desc, views);
+   Resources::Database::CustomData custom = pass.custom;
+#if DEVELOPMENT
+   Trace::DebugDraw::BindD3D12(renderer.device.Get(), views, renderer.view_increment, custom.custom_data_2, custom.custom_data_3);
+#endif
    const D3D12_CPU_DESCRIPTOR_HANDLE target_view = {renderer.targets->GetCPUDescriptorHandleForHeapStart().ptr + SIZE_T(index) * renderer.target_increment};
    const D3D12_RENDER_TARGET_VIEW_DESC target_view_desc = {.Format = target_desc.Format, .ViewDimension = D3D12_RTV_DIMENSION_TEXTURE2D};
    renderer.device->CreateRenderTargetView(target, &target_view_desc, target_view);
@@ -312,7 +320,7 @@ bool Compose(Renderer& renderer, ID3D12Resource* source, ID3D12Resource* target,
       if (offset + size > CBUFFER_SLICE)
          break;
       std::memset(slice + offset, 0, size);
-      entry.write(std::span(slice + offset, entry.size), pass.custom, write_target);
+      entry.write(std::span(slice + offset, entry.size), custom, write_target);
       addresses.push_back(slice_address + offset);
       offset += size;
    }

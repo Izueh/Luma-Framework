@@ -4,8 +4,8 @@
 #include <d3d11.h>
 #include <dxgi.h>
 
-#include "Luma.hpp"
-#include "Shaders/Stages.hpp"
+#include "Game/GameEvents.hpp"
+#include "Shaders/ShaderStages.hpp"
 
 // Trace::Readback on D3D11: the armed view is copied on the context right after the armed call ran, and read at the next present
 namespace Luma {

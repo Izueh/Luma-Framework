@@ -5,7 +5,7 @@
 #include <d3d11.h>
 
 #include "Common/ShaderStage.hpp"
-#include "Shaders/Stages.hpp"
+#include "Shaders/ShaderStages.hpp"
 
 // Restoring the game's buffers at Luma's two cbuffer slots after a draw that bound Luma's there (Options::restore_after_draw).
 // Only those two slots are recorded, per stage of each context.

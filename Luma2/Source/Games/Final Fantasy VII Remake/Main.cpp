@@ -7,18 +7,19 @@
 
 #include <wrl/client.h>
 
+using namespace Luma;
+
 // The fields UpdateLumaInstanceDataCB reads. TAA and SR will set them; until then they keep their swapchain values.
 struct Luma::Game::GameDeviceData
 {
-   Luma::Math::float2 upscaled_render_resolution = {1.f, 1.f};
+   Math::float2 upscaled_render_resolution = {1.f, 1.f};
    float resolution_scale = 1.f;
-   Luma::Math::uint4 viewport_rect = {0, 0, 1, 1};
+   Math::uint4 viewport_rect = {0, 0, 1, 1};
 };
 
 namespace {
-using Luma::operator""_h;
-using Luma::Game::cb_luma_global_settings;
-using Luma::Game::GameDeviceData;
+using Game::cb_luma_global_settings;
+using Game::GameDeviceData;
 
 // The About text and credits
 constexpr std::string_view DESCRIPTION = "Luma for \"Final Fantasy VII Remake\" is developed by Izueh and Pumbo and is open source and free. It adds DLSS and improved HDR "
@@ -38,13 +39,10 @@ constexpr std::array<std::string_view, 12> CREDITS = {
    "Oklab",
    "DICE (HDR tonemapper)",
 };
-constexpr std::array<Luma::Game::Link, 5> LINKS = {{
+constexpr std::array<Game::Link, 3> LINKS = {{
    {"Buy Izueh a Coffee on ko-fi", "https://ko-fi.com/izueh"},
    {"Buy Pumbo a Coffee on buymeacoffee", "https://buymeacoffee.com/realfiloppi"},
    {"Buy Pumbo a Coffee on ko-fi", "https://ko-fi.com/realpumbo"},
-   // Unique link for Luma by Pumbo (to track where people join from), not to be used for anything else
-   {"Join our \"HDR Den\" Discord", "https://discord.gg/J9fM3EVuEZ"},
-   {"Contribute on Github", "https://github.com/Filoppi/Luma-Framework"},
 }};
 
 // The game's shaders by hash, each with a debug name (Init)
@@ -70,15 +68,15 @@ constexpr std::array<uint32_t, 1> SHADER_HASHES_AMBIENT_OCCLUSION = {0x1D610CBA}
 constexpr std::array<uint32_t, 1> SHADER_HASHES_AMBIENT_OCCLUSION_DENOISE_1 = {0x8BD60486};
 constexpr std::array<uint32_t, 1> SHADER_HASHES_AMBIENT_OCCLUSION_DENOISE_2 = {0xE6A8D4FB};
 
-Luma::Math::float2 ToFloat(Luma::Math::uint2 size)
+Math::float2 ToFloat(Math::uint2 size)
 {
    return {float(size.x), float(size.y)};
 }
 
 // Called at every draw with a Luma shader (LumaData is uploaded when its bytes change)
-void UpdateLumaInstanceDataCB(CB::LumaInstanceData& data, const GameDeviceData& game_device_data, const Luma::Frame::Resolutions& resolutions)
+void UpdateLumaInstanceDataCB(CB::LumaInstanceData& data, const GameDeviceData& game_device_data, const Frame::Resolutions& resolutions)
 {
-   const Luma::Math::float2 render_resolution = ToFloat(resolutions.render);
+   const Math::float2 render_resolution = ToFloat(resolutions.render);
    data.GameData.RenderResolution = {render_resolution.x, render_resolution.y, 1.0f / render_resolution.x, 1.0f / render_resolution.y};
    data.GameData.OutputResolution = {game_device_data.upscaled_render_resolution.x, game_device_data.upscaled_render_resolution.y,
       1.0f / game_device_data.upscaled_render_resolution.x, 1.0f / game_device_data.upscaled_render_resolution.y};
@@ -89,19 +87,19 @@ void UpdateLumaInstanceDataCB(CB::LumaInstanceData& data, const GameDeviceData& 
 
 // At creation and after each resize: Core set the device's output resolution from the swapchain before this.
 // Either API's device.
-void OnInitSwapchain(Luma::Device device)
+void OnInitSwapchain(Device device)
 {
-   GameDeviceData* game_device_data = Luma::Game::GetGameDeviceData(device);
+   GameDeviceData* game_device_data = Game::GetGameDeviceData(device);
    if (!game_device_data)
       return;
    // Start from here, we then update it later in case the game rendered with black bars due to forcing a different aspect ratio
    // from the swapchain buffer
-   const Luma::Math::float2 output_resolution = ToFloat(Luma::Game::Frame::Get(device).output);
+   const Math::float2 output_resolution = ToFloat(Game::Frame::Get(device).output);
    game_device_data->upscaled_render_resolution = output_resolution;
    // Set where its inputs change (TAA's callback, not built yet, will too), on the presenting thread: published for the draws until
    // the next present
    cb_luma_global_settings.GameSettings.can_sharpen = output_resolution == game_device_data->upscaled_render_resolution ? 1.f : 0.f;
-   Luma::Game::MarkLumaSettingsDirty();
+   Game::MarkLumaSettingsDirty();
 }
 
 // The per frame random value. TAA and SR's per frame work isn't built yet.
@@ -114,16 +112,16 @@ void OnPresent()
 
 // The game's own HDR option picks its HDR or SDR output pass, and LumaSettings' display mode follows it (Core applies it at the next
 // present). Marking post processing done waits for the frame markers, not built yet.
-Luma::Game::DrawResult OnDrawOutputHdr()
+Game::DrawResult OnDrawOutputHdr()
 {
-   Luma::Game::Display::SetHdr(true);
-   return Luma::Game::DrawResult::None;
+   Game::Display::SetHdr(true);
+   return Game::DrawResult::None;
 }
 
-Luma::Game::DrawResult OnDrawOutputSdr()
+Game::DrawResult OnDrawOutputSdr()
 {
-   Luma::Game::Display::SetHdr(false);
-   return Luma::Game::DrawResult::None;
+   Game::Display::SetHdr(false);
+   return Game::DrawResult::None;
 }
 
 // The game runs on D3D11 or D3D12 (its -d3d11 and -dx12 switches): the same code from each API's events
@@ -138,24 +136,24 @@ void OnPresent(IDXGISwapChain*, ID3D11Device*)
    ::OnPresent();
 }
 
-Luma::Game::DrawResult OnDrawOutputHdr(const Luma::Game::D3D11::Call&)
+Game::DrawResult OnDrawOutputHdr(const Game::D3D11::Call&)
 {
    return ::OnDrawOutputHdr();
 }
 
-Luma::Game::DrawResult OnDrawOutputSdr(const Luma::Game::D3D11::Call&)
+Game::DrawResult OnDrawOutputSdr(const Game::D3D11::Call&)
 {
    return ::OnDrawOutputSdr();
 }
 } // namespace D3D11Events
 
 namespace D3D12Events {
-Luma::Game::DrawResult OnDrawOutputHdr(const Luma::Game::D3D12::Call&)
+Game::DrawResult OnDrawOutputHdr(const Game::D3D12::Call&)
 {
    return ::OnDrawOutputHdr();
 }
 
-Luma::Game::DrawResult OnDrawOutputSdr(const Luma::Game::D3D12::Call&)
+Game::DrawResult OnDrawOutputSdr(const Game::D3D12::Call&)
 {
    return ::OnDrawOutputSdr();
 }
@@ -174,11 +172,10 @@ void OnPresent(IDXGISwapChain*, ID3D12CommandQueue*)
 }
 } // namespace D3D12Events
 
-namespace Defines = Luma::Shaders::Defines;
-using Luma::Settings::EnumIndex;
-using Luma::Settings::Range;
-using Luma::Settings::Setting;
-using Luma::Settings::Sources::Binding;
+using Settings::EnumIndex;
+using Settings::Range;
+using Settings::Setting;
+using Settings::Sources::Binding;
 
 constexpr std::array<std::string_view, 2> TONEMAP_TYPES = {"Vanilla", "Neutwo"};
 
@@ -338,7 +335,6 @@ const std::array SETTINGS = {
 void Luma::Game::Init()
 {
    SetInfo({
-      .name = "Final Fantasy VII Remake",
       .version = "2.0.0-stage1",
       .description = DESCRIPTION,
       .credits = CREDITS,
@@ -371,12 +367,6 @@ void Luma::Game::Init()
    Shaders::RedirectHashes("Output_HDR", SHADER_HASHES_OUTPUT_HDR);
    Shaders::RedirectHashes("Output_SDR", SHADER_HASHES_OUTPUT_SDR);
 
-   // Luma's defines for this game
-   Shaders::SetDefine(Defines::POST_PROCESS_SPACE_TYPE, 1);
-   Shaders::SetDefine(Defines::EARLY_DISPLAY_ENCODING, true);
-   Shaders::SetDefine(Defines::VANILLA_ENCODING_TYPE, 1);
-   Shaders::SetDefine(Defines::GAMMA_CORRECTION_TYPE, 1);
-   Shaders::SetDefine(Defines::UI_DRAW_TYPE, 1);
    // The game's own shader define
    Shaders::AddDefine({
       .name = "SSAO_ALGORITHM",
@@ -396,18 +386,25 @@ void Luma::Game::Init()
       // The FAST noise texture, which SSAO Temporal and the Dithering Fix recipe read
       .textures = {.load = true},
       .samplers = {.upgrade = true},
-      .swapchain = {.mode = Luma::Swapchain::Mode::Mirror, .hdr_output = Luma::Swapchain::OutputMode::Hdr10},
+      .swapchain = {.mode = Swapchain::Mode::Mirror, .hdr_output = Swapchain::OutputMode::Hdr10},
+      .composition = {
+         .post_process_space = 1,
+         .early_display_encoding = true,
+         .vanilla_encoding = 1,
+         .gamma_correction = 1,
+         .ui_draw_type = 1,
+      },
       .device_data = GameDeviceDataType::Of<GameDeviceData>(),
    });
    // Texture upgrades (10 bit unorm and 11 bit float to 16 bit float). 8 bit RGBA and BGRA are probably not needed.
    Resources::SetUpgrades({
       .formats = {DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R10G10B10A2_TYPELESS, DXGI_FORMAT_R11G11B10_FLOAT},
       // Upgrade all 16:9 render targets too, because the game defaults to that aspect ratio internally unless mods are applied
-      .size_filters = Luma::Resources::Upgrade::SizeFilters::SwapchainResolution | Luma::Resources::Upgrade::SizeFilters::SwapchainAspectRatio |
-         Luma::Resources::Upgrade::SizeFilters::CustomAspectRatio,
+      .size_filters = Resources::Upgrade::SizeFilters::SwapchainResolution | Resources::Upgrade::SizeFilters::SwapchainAspectRatio |
+         Resources::Upgrade::SizeFilters::CustomAspectRatio,
       .custom_aspect_ratios = {16.f / 9.f},
       // LUT is 3D 32x
-      .lut = {.size = 32, .dimensions = Luma::Resources::Upgrade::LutDimensions::_3D},
+      .lut = {.size = 32, .dimensions = Resources::Upgrade::LutDimensions::_3D},
    });
    SetEvents(D3D11::Events{
       .on_init_swapchain = &D3D11Events::OnInitSwapchain,

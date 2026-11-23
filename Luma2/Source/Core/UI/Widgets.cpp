@@ -15,9 +15,9 @@
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 
-#include "Shaders/Defines.hpp"
+#include "Shaders/ShaderDefines.hpp"
 #include "UI/Icons.hpp"
-#include "UI/Input.hpp"
+#include "UI/OverlayInput.hpp"
 #include "UI/Style.hpp"
 
 namespace Luma {
@@ -95,7 +95,7 @@ ImVec4 GetColor(Tone tone)
    case Tone::Warning: return Style::Colors::WARNING;
    case Tone::Error: return Style::Colors::DANGER;
    case Tone::Injected: return Style::Colors::INJECTED;
-   default: return Style::Colors::ACCENT;
+   default: return Style::Colors::TEXT_LABEL;
    }
 }
 
@@ -171,6 +171,13 @@ Mark GetMark(std::string_view url)
    return {Icons::LINK, Style::Colors::ACCENT};
 }
 
+float CalcTagWidth(std::string_view text)
+{
+   const ImVec2 size = ImGui::CalcTextSize(text.data(), text.data() + text.size());
+   const float padding_x = Style::Scale(Style::Sizes::UNIT * 1.5f);
+   return size.x + padding_x * 2.f;
+}
+
 void DrawTag(std::string_view text, ImVec4 color)
 {
    const ImVec2 size = ImGui::CalcTextSize(text.data(), text.data() + text.size());
@@ -185,16 +192,15 @@ void DrawTag(std::string_view text, ImVec4 color)
    ImGui::Dummy(ImVec2(max.x - min.x, ImGui::GetFrameHeight()));
 }
 
-float GetControlWidth()
+float GetControlWidth(float right_gutter)
 {
-   // Room for the reset icon and a badge
-   return std::max(ImGui::GetContentRegionAvail().x - Style::Scale(Style::Sizes::UNIT * 22.f), Style::Scale(Style::Sizes::UNIT * 30.f));
+   return std::max(ImGui::GetContentRegionAvail().x - right_gutter, Style::Scale(Style::Sizes::UNIT * 24.f));
 }
 
-bool DrawControl(const Settings::Setting& setting, Settings::Value& value)
+bool DrawControl(const Settings::Setting& setting, Settings::Value& value, float control_width)
 {
    const std::string id(setting.key);
-   ImGui::SetNextItemWidth(GetControlWidth());
+   ImGui::SetNextItemWidth(control_width);
    return std::visit([&]<typename T>(T& typed) {
       if constexpr (std::is_same_v<T, bool>)
          return Toggle(id, typed);
@@ -213,7 +219,7 @@ bool DrawControl(const Settings::Setting& setting, Settings::Value& value)
       else if constexpr (std::is_same_v<T, Settings::EnumIndex>)
       {
          if (setting.enum_labels.size() <= MAX_SEGMENTS)
-            return Segmented(id, typed.value, setting.enum_labels, GetControlWidth());
+            return Segmented(id, typed.value, setting.enum_labels, control_width);
          return Combo(id, typed.value, setting.enum_labels);
       }
       else if constexpr (std::is_same_v<T, std::string>)
@@ -227,12 +233,11 @@ bool DrawControl(const Settings::Setting& setting, Settings::Value& value)
 
 bool Section(std::string_view label, bool default_open, const char* icon)
 {
-   // Every category header, whatever it holds, has this look and height
    const Style::Category category = Style::GetCategory(label);
    if (!icon)
       icon = category.icon;
    const float unit = Style::Scale(Style::Sizes::UNIT);
-   const ImVec2 padding(unit * 2.f, unit * 1.5f);
+   const ImVec2 padding(unit * 1.75f, unit);
    const float rounding = Style::Scale(Style::Sizes::CONTROL_ROUNDING);
    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, padding);
    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, rounding);
@@ -240,35 +245,53 @@ bool Section(std::string_view label, bool default_open, const char* icon)
    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, Style::Colors::HOVER_OVERLAY);
    ImGui::PushStyleColor(ImGuiCol_HeaderActive, Style::Colors::HIGHLIGHT);
 
-   // The header on top, its raised background and accent bar under it once its rectangle is known
+   // The header on top, its raised background and subtle accent bar under it once its rectangle is known
    ImDrawList* draw_list = ImGui::GetWindowDrawList();
    draw_list->ChannelsSplit(2);
    draw_list->ChannelsSetCurrent(1);
-   const float text_x = ImGui::GetCursorScreenPos().x + ImGui::GetFontSize() + padding.x * 3.f;
+   const float text_x = ImGui::GetCursorScreenPos().x + ImGui::GetFontSize() + padding.x * 2.5f;
    const std::string text = std::format("{}{}###{}", IconRoom(icon), label, label);
    const bool open = ImGui::CollapsingHeader(text.c_str(), ImGuiTreeNodeFlags_SpanAvailWidth | (default_open ? ImGuiTreeNodeFlags_DefaultOpen : 0));
    const ImVec2 min = ImGui::GetItemRectMin();
    const ImVec2 max = ImGui::GetItemRectMax();
-   DrawIcon(ImVec2(text_x, min.y + padding.y), icon, category.tint);
+   DrawIcon(ImVec2(text_x, min.y + padding.y), icon, open ? Style::Colors::TEXT : category.tint);
    draw_list->ChannelsSetCurrent(0);
    Style::DrawRaised(draw_list, min, max, rounding);
-   draw_list->AddRectFilled(min, ImVec2(min.x + Style::Scale(Style::Sizes::ACCENT_BAR), max.y), ImGui::GetColorU32(category.tint), rounding,
+   const ImVec4 bar_color = open ? Style::WithAlpha(Style::Colors::ACCENT, 0.55f) : Style::Colors::BORDER;
+   draw_list->AddRectFilled(min, ImVec2(min.x + Style::Scale(Style::Sizes::ACCENT_BAR), max.y), ImGui::GetColorU32(bar_color), rounding,
       ImDrawFlags_RoundCornersLeft);
    draw_list->ChannelsMerge();
    ImGui::PopStyleColor(3);
    ImGui::PopStyleVar(2);
    if (open)
    {
-      ImGui::Indent(unit * 2.f);
-      ImGui::Dummy(ImVec2(0.f, unit * 0.5f));
+      ImGui::Indent(unit * 1.5f);
+      ImGui::Dummy(ImVec2(0.f, unit * 0.25f));
    }
    return open;
 }
 
 void EndSection()
 {
-   ImGui::Unindent(Style::Scale(Style::Sizes::UNIT) * 2.f);
-   ImGui::Dummy(ImVec2(0.f, Style::Scale(Style::Sizes::UNIT)));
+   ImGui::Unindent(Style::Scale(Style::Sizes::UNIT) * 1.5f);
+   ImGui::Dummy(ImVec2(0.f, Style::Scale(Style::Sizes::UNIT * 0.5f)));
+}
+
+void SetNextSectionOpen(bool open)
+{
+   ImGui::SetNextItemOpen(open, ImGuiCond_Always);
+}
+
+void SubHeader(std::string_view label)
+{
+   ImGui::PushStyleColor(ImGuiCol_Text, Style::Colors::TEXT_LABEL);
+   ImGui::SeparatorText(Terminated(label).c_str());
+   ImGui::PopStyleColor();
+}
+
+void RegisterCategoryIcon(std::string_view category, const char* icon)
+{
+   Style::RegisterCategoryIcon(category, icon);
 }
 
 bool Tab(std::string_view label, const char* icon)
@@ -283,7 +306,7 @@ bool Tab(std::string_view label, const char* icon)
    const ImVec2 padding = ImGui::GetStyle().FramePadding;
    ImDrawList* draw_list = ImGui::GetWindowDrawList();
    draw_list->PushClipRectFullScreen();
-   draw_list->AddText(ImVec2(min.x + padding.x, min.y + padding.y), ImGui::GetColorU32(selected ? category.tint : Style::Colors::ICON_DISABLED), icon);
+   draw_list->AddText(ImVec2(min.x + padding.x, min.y + padding.y), ImGui::GetColorU32(selected ? Style::Colors::ACCENT : Style::Colors::ICON_DISABLED), icon);
    if (selected)
    {
       const float thickness = Style::Scale(2.f);
@@ -376,12 +399,22 @@ bool SettingRow(const Settings::Setting& setting)
    ImGui::PushID(Terminated(setting.key).c_str());
    const ImGuiID row_id = ImGui::GetID("Row");
    const bool is_default = *current == Settings::Clamp(setting, setting.default_value);
+   const bool is_pending = Shaders::Defines::IsPending(setting);
+   const std::string restart_label = setting.requires_restart ? std::format("{} Restart", Icons::RESTART) : std::string();
    RowLabel(setting.label.empty() ? setting.key : setting.label, setting.tooltip, !is_default);
+   const ImGuiStyle& style = ImGui::GetStyle();
+   const float reset_button_width = ImGui::CalcTextSize(Icons::RESET).x + style.FramePadding.x * 2.f;
+   // Always reserve space for the reset icon so controls stay aligned across rows
+   float right_gutter = reset_button_width + style.ItemSpacing.x;
+   if (setting.requires_restart)
+      right_gutter += CalcTagWidth(restart_label) + style.ItemSpacing.x;
+   if (is_pending)
+      right_gutter += CalcTagWidth("pending") + style.ItemSpacing.x;
    const bool enabled = !setting.is_enabled || setting.is_enabled();
    ImGui::BeginDisabled(!enabled);
    // A drag or a typed edit shows its own value until it ends, and only then reaches the registry
    Settings::Value edited = editing_id == row_id ? editing_value : *current;
-   const bool control_changed = DrawControl(setting, edited);
+   const bool control_changed = DrawControl(setting, edited, GetControlWidth(right_gutter));
    const bool deferred = IsAppliedOnRelease(setting);
    bool changed = false;
    if (deferred && ImGui::IsItemActive())
@@ -396,17 +429,26 @@ bool SettingRow(const Settings::Setting& setting)
    if (deferred ? ImGui::IsItemDeactivatedAfterEdit() || (setting.live && control_changed) : control_changed)
       changed = Settings::Set(setting.key, edited);
    Tooltip(setting.tooltip);
+   ImGui::SameLine();
    if (*Settings::GetValue(setting.key) != Settings::Clamp(setting, setting.default_value))
    {
-      ImGui::SameLine();
       ImGui::PushStyleColor(ImGuiCol_Text, Style::Colors::ACCENT);
       if (IconButton(Icons::RESET, "Reset to default"))
          changed |= Settings::Reset(setting.key);
       ImGui::PopStyleColor();
    }
+   else
+   {
+      ImGui::Dummy(ImVec2(reset_button_width, ImGui::GetFrameHeight()));
+   }
    ImGui::EndDisabled();
+   if (setting.requires_restart)
+   {
+      ImGui::SameLine();
+      Tag(restart_label, Tone::Error, "Takes effect on next launch");
+   }
    // A define the shaders weren't built with yet
-   if (Shaders::Defines::IsPending(setting))
+   if (is_pending)
    {
       ImGui::SameLine();
       const std::optional<std::string> compiled = Shaders::Defines::GetCompiledText(std::get<Settings::Sources::Define>(setting.source).name);
@@ -466,6 +508,29 @@ bool Combo(std::string_view id, int32_t& index, std::span<const std::string_view
    return changed;
 }
 
+// Truncates `text` with "..." so it fits within `max_width` pixels
+std::string FitWithEllipsis(std::string_view text, float max_width, bool& truncated)
+{
+   truncated = false;
+   if (max_width <= 0.f || ImGui::CalcTextSize(text.data(), text.data() + text.size()).x <= max_width)
+      return std::string(text);
+   truncated = true;
+   const float ellipsis_w = ImGui::CalcTextSize("...").x;
+   if (max_width <= ellipsis_w)
+      return "...";
+   size_t lo = 0;
+   size_t hi = text.size();
+   while (lo < hi)
+   {
+      const size_t mid = (lo + hi + 1) / 2;
+      if (ImGui::CalcTextSize(text.data(), text.data() + mid).x + ellipsis_w <= max_width)
+         lo = mid;
+      else
+         hi = mid - 1;
+   }
+   return std::format("{}...", text.substr(0, lo));
+}
+
 bool Segmented(std::string_view id, int32_t& index, std::span<const std::string_view> labels, float width)
 {
    if (labels.empty())
@@ -515,10 +580,14 @@ bool Segmented(std::string_view id, int32_t& index, std::span<const std::string_
          draw_list->AddLine(ImVec2(min.x, min.y + height * 0.25f), ImVec2(min.x, max.y - height * 0.25f), ImGui::GetColorU32(Style::Colors::BORDER));
       }
       const std::string_view label = labels[size_t(i)];
-      const ImVec2 text_size = ImGui::CalcTextSize(label.data(), label.data() + label.size());
+      bool truncated = false;
+      const float inner_pad = Style::Scale(Style::Sizes::UNIT);
+      const std::string shown = FitWithEllipsis(label, segment - inner_pad * 2.f, truncated);
+      const ImVec2 text_size = ImGui::CalcTextSize(shown.c_str());
       const ImVec4 text_color = disabled ? Style::Colors::ICON_DISABLED : (selected ? Style::Colors::TEXT_BRIGHT : Style::Colors::TEXT_LABEL);
-      draw_list->AddText(ImVec2(min.x + (segment - text_size.x) * 0.5f, min.y + (height - text_size.y) * 0.5f), ImGui::GetColorU32(text_color), label.data(),
-         label.data() + label.size());
+      draw_list->AddText(ImVec2(min.x + (segment - text_size.x) * 0.5f, min.y + (height - text_size.y) * 0.5f), ImGui::GetColorU32(text_color), shown.c_str());
+      if (truncated && hovered)
+         ImGui::SetTooltip("%.*s", int(label.size()), label.data());
       x += segment;
    }
    // One item for the layout and for the caller's tooltip
@@ -729,11 +798,14 @@ void ListDetail(std::string_view id, std::span<const ListEntry> entries, size_t&
          {
             const size_t i = shown[size_t(row)];
             const ListEntry& entry = entries[i];
-            if (entry.tone != Tone::Info)
+            const bool tinted = entry.color.has_value() || entry.tone != Tone::Info;
+            if (entry.color)
+               ImGui::PushStyleColor(ImGuiCol_Text, ImVec4((*entry.color)[0], (*entry.color)[1], (*entry.color)[2], (*entry.color)[3]));
+            else if (entry.tone != Tone::Info)
                ImGui::PushStyleColor(ImGuiCol_Text, GetColor(entry.tone));
             if (ImGui::Selectable(std::format("{}##{}", entry.label, i).c_str(), i == selected))
                selected = i;
-            if (entry.tone != Tone::Info)
+            if (tinted)
                ImGui::PopStyleColor();
          }
       }
@@ -754,7 +826,7 @@ void ListDetail(std::string_view id, std::span<const ListEntry> entries, size_t&
 void PropertyGrid(std::string_view id, std::span<const PropertyRow> rows)
 {
    const std::string table = Terminated(id);
-   if (!ImGui::BeginTable(table.c_str(), 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchProp))
+   if (!ImGui::BeginTable(table.c_str(), 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp))
       return;
    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, Style::Scale(Style::Sizes::LABEL_WIDTH));
    ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
@@ -786,7 +858,7 @@ void DataTable(std::string_view id, std::span<const TableColumn> columns, std::s
 {
    if (columns.empty())
       return;
-   ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersOuterH | ImGuiTableFlags_SizingStretchProp;
+   ImGuiTableFlags flags = ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_BordersOuterH | ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingStretchProp;
    ImVec2 size(0.f, 0.f);
    const float row_height = ImGui::GetTextLineHeight() + ImGui::GetStyle().CellPadding.y * 2.f;
    if (max_height > 0.f && row_height * float(rows.size() + 1) > max_height)
@@ -882,6 +954,16 @@ void TextDim(std::string_view text)
    ImGui::PopStyleColor();
 }
 
+void TextEllipsis(std::string_view text, float max_width, Tone tone)
+{
+   const float limit = max_width > 0.f ? max_width : ImGui::GetContentRegionAvail().x;
+   bool truncated = false;
+   const std::string shown = FitWithEllipsis(text, limit, truncated);
+   Text(shown, tone);
+   if (truncated && ImGui::IsItemHovered())
+      ImGui::SetTooltip("%.*s", int(text.size()), text.data());
+}
+
 void Toast(Tone tone, std::string message)
 {
    std::scoped_lock lock(toasts_mutex);
@@ -954,10 +1036,10 @@ void StatusBar(std::span<const StatusItem> items)
          {
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + Style::Scale(Style::Sizes::UNIT * 2.f));
          }
-         // The icon tinted (the accent, or its state's color), the text dim unless it reports a state
+         // Status icon: muted neutral for info, semantic tint for warnings/errors
          if (item.icon)
          {
-            ImGui::PushStyleColor(ImGuiCol_Text, GetColor(item.tone));
+            ImGui::PushStyleColor(ImGuiCol_Text, item.tone == Tone::Info ? Style::Colors::TEXT_DIM : GetColor(item.tone));
             ImGui::TextUnformatted(item.icon);
             ImGui::PopStyleColor();
             Tooltip(item.tooltip);

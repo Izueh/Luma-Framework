@@ -1,4 +1,4 @@
-#include "Hooks/Hooks.hpp"
+#include "Hooks/HookManager.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,8 +15,8 @@
 #include "Handlers/D3D11/D3D11Handlers.hpp"
 #include "Hooks/D3D11/D3D11Stages.hpp"
 #include "Hooks/Detours.hpp"
-#include "Hooks/Lifetime.hpp"
-#include "Hooks/Slots.h"
+#include "Hooks/ObjectLifetime.hpp"
+#include "Hooks/VtableSlots.h"
 
 namespace Luma {
 namespace Hooks {

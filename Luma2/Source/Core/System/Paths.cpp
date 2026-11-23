@@ -4,9 +4,8 @@
 #include <system_error>
 #include <vector>
 
-#include "Game/Registry.hpp"
-#include "Utils/Log.hpp"
 #include "System/Modules.hpp"
+#include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
 
 namespace Luma {
@@ -32,7 +31,7 @@ void Initialize()
    std::filesystem::create_directories(root, error);
 }
 
-void ResolveRoots()
+void ResolveRoots(std::string_view game_folder)
 {
    shader_roots = {root / L"Shaders"};
    texture_roots = {root / L"Textures"};
@@ -40,15 +39,16 @@ void ResolveRoots()
 #if DEVELOPMENT && defined(LUMA_RESOURCES_DIR)
    // The repository this build was made from: sources are edited in place
    const std::filesystem::path resources = LUMA_RESOURCES_DIR;
-   const std::string_view name = Game::Registry::GetInfo().name;
-   const std::filesystem::path game = resources / std::u8string(name.begin(), name.end());
-   if (!name.empty() && IsDirectory(game) && IsDirectory(resources / L"Global"))
+   const std::filesystem::path game = resources / std::u8string(game_folder.begin(), game_folder.end());
+   if (!game_folder.empty() && IsDirectory(game) && IsDirectory(resources / L"Global"))
    {
       shader_roots = {game / L"Shaders", resources / L"Global" / L"Shaders"};
       texture_roots = {game / L"Textures", resources / L"Global" / L"Textures"};
       recipes = game / L"Recipes";
-      Utils::Log::Info("Paths: shaders, textures and recipes from the repository, {}", Utils::Strings::ToUtf8(resources));
+      Log::Info("Paths: shaders, textures and recipes from the repository, {}", Utils::Strings::ToUtf8(resources));
    }
+#else
+   (void)game_folder;
 #endif
 }
 

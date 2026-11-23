@@ -15,18 +15,19 @@
 
 #include <DDSTextureLoader12.h>
 
-#include "Frame/Frame.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "Frame/FrameState.hpp"
+#include "Game/Game.hpp"
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
-#include "Hooks/Lifetime.hpp"
-#include "Hooks/Scope.hpp"
-#include "Luma.hpp"
+#include "Hooks/ObjectLifetime.hpp"
+#include "Hooks/HookScope.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
 #include "Resources/LumaCBuffers.hpp"
-#include "Resources/Textures.hpp"
+#include "Resources/TextureLoader.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
 #include "Shaders/D3D12/D3D12RootSignatures.hpp"
 #include "Utils/Debug.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -121,7 +122,7 @@ bool NewChunk(ID3D12Device* device, Store& store)
    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&buffer))) ||
       FAILED(buffer->Map(0, nullptr, &mapped)))
    {
-      Utils::Log::Error("D3D12: Luma's cbuffer memory ({} KB) couldn't be created", CHUNK_SIZE / 1024);
+      Log::Error("D3D12: Luma's cbuffer memory ({} KB) couldn't be created", CHUNK_SIZE / 1024);
       return false;
    }
    auto chunk = std::make_unique<Chunk>();
@@ -264,7 +265,7 @@ Texture LoadTexture(ID3D12Device* device, uint32_t index)
       result = Upload(device, texture.resource.Get(), subresources);
    if (FAILED(result))
    {
-      Utils::Log::Error("Resources: texture \"{}\" ({}) couldn't be loaded on D3D12 (0x{:08X})", entry.name, entry.file, uint32_t(result));
+      Log::Error("Resources: texture \"{}\" ({}) couldn't be loaded on D3D12 (0x{:08X})", entry.name, entry.file, uint32_t(result));
       return {};
    }
    const D3D12_RESOURCE_DESC desc = texture.resource->GetDesc();
@@ -359,7 +360,7 @@ uint32_t RegisterTable(const TableLayout& layout)
    if (count == MAX_TABLES)
    {
       ASSERT_ONCE_MSG(false, "More layouts of Luma's texture table than the heap tail has room for");
-      Utils::Log::Error("D3D12: more than {} layouts of Luma's texture table: patches with another one run the game's shaders", MAX_TABLES);
+      Log::Error("D3D12: more than {} layouts of Luma's texture table: patches with another one run the game's shaders", MAX_TABLES);
       return NO_TABLE;
    }
    tables[count] = layout;
@@ -441,7 +442,7 @@ void SetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12Descr
 
 bool BindRequested(ID3D12GraphicsCommandList* list, bool compute, std::span<const uint32_t> entries, const CustomData& custom, uint32_t table)
 {
-   if (entries.empty() || !IsEnabled())
+   if (entries.empty() || !Settings::IsEnabled())
       return true;
    List* state = GetList(list);
    if (!state || !state->store || state->bundle)

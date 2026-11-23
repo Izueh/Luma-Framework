@@ -6,7 +6,7 @@
 
 #include <d3d12.h>
 
-// What D3D12 descriptors point to. Descriptors aren't objects (Guidelines.md section 5): a side table per descriptor heap keeps, per
+// What D3D12 descriptors point to. Because descriptors are not COM objects, a side table per descriptor heap keeps, per
 // descriptor, the resource (not held) and the view desc, written by Create*View and CopyDescriptors*, read by CPU or GPU handle.
 // The game's resources are known from their creation: their desc, a buffer's GPU address range (root CBVs and SRVs name buffers
 // by address), and the CPU copy of an upload heap buffer. Trace reads them in Development builds; the mirrors add their
@@ -32,6 +32,7 @@ struct Descriptor
    bool has_desc = false; // The game passed a desc; without one the view is the resource's default
    ID3D12Resource* resource = nullptr; // Not held; null for a null descriptor, a CBV and a sampler
    uint64_t resource_id = 0; // TrackResource's, to tell a resource from a later one at the same address; 0 when unknown
+
    union
    {
       D3D12_CONSTANT_BUFFER_VIEW_DESC constant_buffer;

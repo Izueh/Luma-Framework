@@ -5,8 +5,8 @@
 #include <string_view>
 #include <vector>
 
-#include "Game/Registry.hpp"
-#include "Hooks/Scope.hpp"
+#include "Game/GameRegistry.hpp"
+#include "Hooks/HookScope.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Startup.hpp"
 

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Hooks/Functions.hpp"
+#include "Hooks/HookFunctions.hpp"
 
 namespace Luma {
 namespace Startup {

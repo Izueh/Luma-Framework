@@ -5,8 +5,9 @@
 
 #include <wrl/client.h>
 
-#include "Game/Registry.hpp"
-#include "Hooks/Functions.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "Game/GameRegistry.hpp"
+#include "Hooks/HookFunctions.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
@@ -47,7 +48,7 @@ DrawResult RunEvents(Context* context, const Game::D3D11::DrawCall* draw, const 
 
 Result RunReporting(Context* context, const Game::D3D11::DrawCall* draw, const Game::D3D11::DispatchCall* dispatch, Luma::Shaders::StageSet stages)
 {
-   if (!IsEnabled())
+   if (!Settings::IsEnabled())
       return {};
    Running current = {.context = context};
    Running* const previous = std::exchange(running, &current);

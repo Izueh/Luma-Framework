@@ -1,6 +1,6 @@
 #include "Resources/LumaCBuffers.hpp"
 
-#include "Resources/Bindings.hpp"
+#include "Resources/ResourceBindings.hpp"
 
 #include <algorithm>
 #include <array>
@@ -15,15 +15,15 @@
 #include <unordered_set>
 
 #include "Common/Math.hpp"
-#include "Frame/Frame.hpp"
-#include "Settings/Keys.hpp"
-#include "Settings/Registry.hpp"
+#include "Frame/FrameState.hpp"
+#include "Settings/SettingKeys.hpp"
+#include "Settings/SettingsRegistry.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "System/Paths.hpp"
 #include "Utils/Debug.hpp"
 #include "Utils/Hash.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 namespace Luma {
 namespace Resources {
@@ -35,6 +35,10 @@ CB::LumaGlobalSettings cb_luma_global_settings = {
    .PeakWhiteNits = 1000.f,
    .GamePaperWhiteNits = 203.f,
    .UIPaperWhiteNits = 203.f,
+   .DisplayComposition = {
+      .GammaCorrectionType = 1,
+      .Stages = 0x3Fu,
+   },
 };
 
 namespace {
@@ -120,7 +124,7 @@ void Register()
    std::ifstream stream(path, std::ios::binary);
    const std::vector<DevSetting> parsed = ParseDevSettings(std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()));
    if (parsed.empty())
-      Utils::Log::Warning("Shaders: no dev settings in Includes/Core/CBuffers.hlsl, the dev sliders are unnamed");
+      Log::Warning("Shaders: no dev settings in Includes/Core/CBuffers.hlsl, the dev sliders are unnamed");
    std::array<Settings::Setting, DEV_SETTING_COUNT> dev_settings;
    for (size_t i = 0; i < DEV_SETTING_COUNT; i++)
    {
@@ -130,7 +134,7 @@ void Register()
          .key = Settings::Core::DEV_SETTINGS[i].key,
          .label = dev_setting_labels[i],
          .tooltip = std::string_view("DevSetting01 to 10 of the LumaSettings cbuffer (DVS1 to DVS10). Named in Includes/Core/CBuffers.hlsl."),
-         .category = "Development",
+         .category = "Dev Sliders",
          .visibility = Settings::Visibility::Development,
          .default_value = dev_setting.default_value,
          .range = Settings::Range{dev_setting.min, dev_setting.max},

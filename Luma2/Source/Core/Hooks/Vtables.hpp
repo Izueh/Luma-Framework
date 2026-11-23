@@ -6,7 +6,7 @@
 
 #include <Unknwn.h>
 
-#include "Hooks/Slots.h"
+#include "Hooks/VtableSlots.h"
 
 namespace Luma {
 namespace Hooks {

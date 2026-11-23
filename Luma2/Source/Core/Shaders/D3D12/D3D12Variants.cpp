@@ -16,19 +16,19 @@
 #include <wrl/client.h>
 
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
-#include "Hooks/Lifetime.hpp"
-#include "Hooks/Scope.hpp"
-#include "Luma.hpp"
-#include "Resources/Bindings.hpp"
-#include "Resources/Mirrors.hpp"
+#include "Hooks/ObjectLifetime.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "Resources/ResourceBindings.hpp"
+#include "Resources/ResourceMirrors.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
-#include "Shaders/Patching.hpp"
-#include "System/Jobs.hpp"
+#include "Shaders/ShaderPatching.hpp"
+#include "System/JobQueue.hpp"
 #include "Utils/Hash.hpp"
 #include "Utils/Debug.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -173,13 +173,13 @@ struct NativeDesc
 {
    std::vector<std::byte> bytes;
    D3D12_PIPELINE_STATE_STREAM_DESC stream = {};
-
-   const void* Get(Database::D3D12::PipelineKind kind)
-   {
-      stream = {bytes.size(), bytes.data()};
-      return kind == Database::D3D12::PipelineKind::Stream ? static_cast<const void*>(&stream) : bytes.data();
-   }
 };
+
+const void* GetNativeDesc(NativeDesc& native, Database::D3D12::PipelineKind kind)
+{
+   native.stream = {native.bytes.size(), native.bytes.data()};
+   return kind == Database::D3D12::PipelineKind::Stream ? static_cast<const void*>(&native.stream) : native.bytes.data();
+}
 
 NativeDesc MakeNative(const Database::D3D12::DescCopy& desc, const Key& key)
 {
@@ -311,16 +311,16 @@ FormatVariant* GetFormatVariant(Core& core, const std::shared_ptr<const Built>& 
    NativeDesc native = {std::move(bytes)};
    const std::wstring name = std::format(L"{}F{:08X}", GetLibraryName(*core.desc, native.bytes),
       Utils::Hash::CRC32({reinterpret_cast<const uint8_t*>(formats.data()), sizeof(formats)}));
-   ComPtr<ID3D12PipelineState> pipeline = PipelineLibrary::D3D12::Load(core.device.Get(), name, core.desc->kind, native.Get(core.desc->kind));
+   ComPtr<ID3D12PipelineState> pipeline = PipelineLibrary::D3D12::Load(core.device.Get(), name, core.desc->kind, GetNativeDesc(native, core.desc->kind));
    if (!pipeline)
    {
       if (!std::exchange(core.format_logged, true))
-         Utils::Log::Info("D3D12: the pipeline of {} draws into mirrors: its variant with their formats is made at the draw", DescribeStages(core, Key{}));
-      pipeline = Create(core.device.Get(), core.desc->kind, native.Get(core.desc->kind));
+         Log::Info("D3D12: the pipeline of {} draws into mirrors: its variant with their formats is made at the draw", DescribeStages(core, Key{}));
+      pipeline = Create(core.device.Get(), core.desc->kind, GetNativeDesc(native, core.desc->kind));
       if (pipeline)
          PipelineLibrary::D3D12::Store(core.device.Get(), name, pipeline.Get());
       else
-         Utils::Log::Error("D3D12: the device refused a pipeline with its mirrors' render target formats, the game's runs (wrong formats)");
+         Log::Error("D3D12: the device refused a pipeline with its mirrors' render target formats, the game's runs (wrong formats)");
    }
    auto variant = std::make_unique<FormatVariant>();
    variant->built = built;
@@ -376,7 +376,7 @@ void Publish(const std::shared_ptr<Core>& core, Key key, const std::array<Source
                if (request.slot < Resources::Bindings::D3D12_FIRST_TEXTURE_REGISTER || table_index >= layout.size())
                {
                   ASSERT_ONCE_MSG(false, "A Luma texture requested outside Luma's D3D12 table");
-                  Utils::Log::Error("D3D12: a variant reads Luma's texture \"{}\" at t{}, outside Luma's table (t{} to t{}): not bound",
+                  Log::Error("D3D12: a variant reads Luma's texture \"{}\" at t{}, outside Luma's table (t{} to t{}): not bound",
                      Resources::Database::Get(request.entry).name, request.slot, Resources::Bindings::D3D12_FIRST_TEXTURE_REGISTER,
                      Resources::Bindings::D3D12_FIRST_TEXTURE_REGISTER + uint32_t(layout.size()) - 1);
                   continue;
@@ -431,7 +431,7 @@ void Update(const std::shared_ptr<Core>& core)
    }
    NativeDesc native = MakeNative(*core->desc, key);
    const std::wstring name = GetLibraryName(*core->desc, native.bytes);
-   if (ComPtr<ID3D12PipelineState> loaded = PipelineLibrary::D3D12::Load(core->device.Get(), name, core->desc->kind, native.Get(core->desc->kind)))
+   if (ComPtr<ID3D12PipelineState> loaded = PipelineLibrary::D3D12::Load(core->device.Get(), name, core->desc->kind, GetNativeDesc(native, core->desc->kind)))
    {
       Publish(core, std::move(key), sources, std::move(loaded));
       return;
@@ -441,11 +441,11 @@ void Update(const std::shared_ptr<Core>& core)
    System::Jobs::Queue(
       "Creating pipelines",
       [core, made, native = std::move(native), name, stages = std::move(stages)]() mutable {
-         *made = Create(core->device.Get(), core->desc->kind, native.Get(core->desc->kind));
+         *made = Create(core->device.Get(), core->desc->kind, GetNativeDesc(native, core->desc->kind));
          if (*made)
             PipelineLibrary::D3D12::Store(core->device.Get(), name, made->Get());
          else
-            Utils::Log::Error("D3D12: the device refused a variant pipeline with {}, the game's runs", stages);
+            Log::Error("D3D12: the device refused a variant pipeline with {}, the game's runs", stages);
       },
       [core, made, key = std::move(key), sources] {
          Publish(core, key, sources, std::move(*made));
@@ -504,11 +504,11 @@ void SwapInVariant(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeli
       return;
    record->bound.reset();
    record->game = pipeline;
-   record->tracked = pipeline ? Database::D3D12::Find(pipeline) : nullptr;
+   record->tracked = pipeline ? Database::D3D12::FindPipeline(pipeline) : nullptr;
    record->formats_dirty = record->targets_mirrored;
    record->format_variant_bound = false;
    const Holder* holder = pipeline ? Hooks::Lifetime::GetState<Holder>(pipeline) : nullptr;
-   if (!holder || !IsEnabled() || !IsLoaded())
+   if (!holder || !Settings::IsEnabled() || !IsLoaded())
       return;
    Core& core = *holder->core;
    std::shared_ptr<const Built> built = core.built.load(std::memory_order_acquire);

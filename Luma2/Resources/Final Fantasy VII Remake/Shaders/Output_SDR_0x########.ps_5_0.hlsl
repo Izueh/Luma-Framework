@@ -504,9 +504,10 @@ void main(
       color.xyz = saturate(r0.yzw ? r2.xyz : r1.xyz);
     }
 
-#if EARLY_DISPLAY_ENCODING // Linear out in every build, as Output_HDR
-    color.xyz = gamma_to_linear(color.xyz, GCT_MIRROR, 2.2f);
-#endif
+    if (EARLY_DISPLAY_ENCODING != 0) // Linear out in every build, as Output_HDR
+    {
+      color.xyz = gamma_to_linear(color.xyz, GCT_MIRROR, 2.2f);
+    }
 
     o0.xyz = color.xyz;
     o0.w = 1;

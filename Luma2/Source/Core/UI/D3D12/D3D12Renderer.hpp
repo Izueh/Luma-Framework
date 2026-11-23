@@ -5,7 +5,7 @@
 #include <d3d12.h>
 #include <dxgi.h>
 
-#include "UI/Encoding.hpp"
+#include "UI/OverlayEncoding.hpp"
 
 struct ImDrawData;
 

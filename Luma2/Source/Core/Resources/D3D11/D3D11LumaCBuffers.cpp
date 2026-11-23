@@ -5,7 +5,7 @@
 #include <wrl/client.h>
 
 #include "Hooks/D3D11/D3D11Stages.hpp"
-#include "Hooks/Lifetime.hpp"
+#include "Hooks/ObjectLifetime.hpp"
 #include "Resources/LumaCBuffers.hpp"
 
 using Microsoft::WRL::ComPtr;

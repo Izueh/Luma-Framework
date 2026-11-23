@@ -4,32 +4,33 @@
 #include <optional>
 #include <type_traits>
 
+#include "Settings/SettingsRegistry.hpp"
 #include "Draw/D3D11/D3D11Draw.hpp"
 #include "Draw/Draw.hpp"
 #include "Game/D3D11/D3D11DrawEvents.hpp"
-#include "Game/Registry.hpp"
+#include "Game/GameRegistry.hpp"
 #include "Handlers/Handlers.hpp"
-#include "Luma.hpp"
 #include "Resources/D3D11/D3D11LumaCBuffers.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D11/D3D11Samplers.hpp"
-#include "Resources/Mirrors.hpp"
-#include "Resources/Samplers.hpp"
+#include "Resources/ResourceMirrors.hpp"
+#include "Resources/SamplerMirrors.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Shaders/D3D11/D3D11Database.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
 #include "Shaders/Shaders.hpp"
 #if DEVELOPMENT
-#include "Trace/Capture.hpp"
+#include "Trace/DebugDraw.hpp"
+#include "Trace/FrameCapture.hpp"
 #include "Trace/D3D11/D3D11Capture.hpp"
 #include "Trace/D3D11/D3D11Readback.hpp"
-#include "Trace/Readback.hpp"
-#include "Trace/Track.hpp"
+#include "Trace/ResourceReadback.hpp"
+#include "Trace/CbufferTracker.hpp"
 #endif
 #include "UI/Overlay.hpp"
 #include "Utils/Hash.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "Validation/D3D11/D3D11Validation.hpp"
 
 namespace Luma {
@@ -76,7 +77,7 @@ bool RestoreGameBuffers(const Game::D3D11::Call& call, Shaders::StageSet stages,
 // Before the events: a patch's resources, so a callback sees the call as it will run (a patch missing one already gave way to the game's shader). The stages where something was bound.
 Shaders::StageSet FulfilBeforeEvents(ID3D11DeviceContext* context, Shaders::StageSet stages)
 {
-   if (!Shaders::IsNeeded() || !IsEnabled())
+   if (!Shaders::IsNeeded() || !Settings::IsEnabled())
       return {};
    return Shaders::Variants::D3D11::BindPatchResources(context, stages);
 }
@@ -119,6 +120,9 @@ void OnDeviceDestroyed(ID3D11Device* device)
    HandleOnDeviceDestroyed<Api::D3D11>(
       device,
       [&] {
+#if DEVELOPMENT
+         Trace::DebugDraw::ReleaseD3D11(device);
+#endif
          if (Shaders::IsNeeded())
             Shaders::Variants::D3D11::ReleaseVariants(device);
          Resources::Database::D3D11::ReleaseDeviceObjects(device);
@@ -373,14 +377,39 @@ void PostClearState(ID3D11DeviceContext* context)
 void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped)
 {
 #if DEVELOPMENT
-   if (Trace::Capture::IsCapturing() && type != D3D11_MAP_READ)
-      Trace::Capture::D3D11::AddWrite(context, "Map", resource);
+   if (Trace::Capture::IsCapturing())
+   {
+      const auto get_map_type = [](D3D11_MAP map_type) -> std::string {
+         switch (map_type)
+         {
+         case D3D11_MAP_READ: return "Read";
+         case D3D11_MAP_WRITE: return "Write";
+         case D3D11_MAP_READ_WRITE: return "ReadWrite";
+         case D3D11_MAP_WRITE_DISCARD: return "WriteDiscard";
+         case D3D11_MAP_WRITE_NO_OVERWRITE: return "WriteNoOverwrite";
+         default: return std::to_string(uint32_t(map_type));
+         }
+      };
+      const Trace::Capture::CpuAccess access = {
+         .api_function = "Map",
+         .map_type = get_map_type(type),
+         .subresource = subresource,
+         .row_pitch = mapped.RowPitch,
+         .depth_pitch = mapped.DepthPitch,
+      };
+      Trace::Capture::D3D11::AddWrite(context, "Map", resource, access,
+         type == D3D11_MAP_READ ? Trace::Capture::EventType::CpuRead : Trace::Capture::EventType::CpuWrite);
+   }
 #endif
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::TrackMappedMirror(context, resource, subresource, type, mapped);
    Game::Registry::Call(GameEvents().on_map, context, resource, subresource, type, flags, mapped);
 }
 
 bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource)
 {
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::CommitMappedMirror(context, resource, subresource);
    return Game::Registry::Call(GameEvents().on_unmap, context, resource, subresource);
 }
 
@@ -396,7 +425,17 @@ bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource
       return true;
 #if DEVELOPMENT
    if (Trace::Capture::IsCapturing())
-      Trace::Capture::D3D11::AddWrite(context, "UpdateSubresource", resource);
+   {
+      Trace::Capture::CpuAccess access = {
+         .api_function = "UpdateSubresource",
+         .subresource = subresource,
+         .row_pitch = row_pitch,
+         .depth_pitch = depth_pitch,
+      };
+      if (box)
+         access.destination_box = std::array<uint32_t, 6>{box->left, box->top, box->front, box->right, box->bottom, box->back};
+      Trace::Capture::D3D11::AddWrite(context, "UpdateSubresource", resource, access, Trace::Capture::EventType::CpuWrite);
+   }
 #endif
    // Into the mirror too, whether it's swapped in or not; the game's call still writes the original
    if (Resources::Mirrors::IsNeeded())
@@ -431,7 +470,7 @@ bool PreCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* dest
          .destination_subresource = destination_subresource,
          .destination_offset = {x, y, z}};
       if (box)
-         copy.source_box = std::array<uint32_t, 6>{box->left, box->top, box->front, box->right, box->bottom, box->back};
+         copy.source_box = std::array<uint64_t, 6>{box->left, box->top, box->front, box->right, box->bottom, box->back};
       Trace::Capture::D3D11::AddCopy(context, "CopySubresourceRegion", destination, source, copy);
    }
 #endif
@@ -528,7 +567,12 @@ bool RunCall(ID3D11DeviceContext* context, const Call& call)
       skipped = result == Game::DrawResult::None && Trace::Capture::D3D11::IsSkipped(context, stages);
 #endif
       const Shaders::StageSet bound = FulfilAfterEvents(context, stages, events, skipped, before);
-      return RestoreGameBuffers(original, bound, result != Game::DrawResult::None || skipped);
+      const bool handled = RestoreGameBuffers(original, bound, result != Game::DrawResult::None || skipped);
+#if DEVELOPMENT
+      if (Trace::DebugDraw::IsActive())
+         Trace::DebugDraw::CaptureBoundD3D11(context);
+#endif
+      return handled;
    };
 #if DEVELOPMENT
    return HandleDrawOrDispatch<dispatch>(

@@ -2,16 +2,17 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <span>
 
 #include <d3d11.h>
 #include <wrl/client.h>
 
 #include "Common/ShaderStage.hpp"
-#include "Shaders/Database.hpp"
+#include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/Shaders.hpp"
-#include "Shaders/Stages.hpp"
-#include "Shaders/Variants.hpp"
+#include "Shaders/ShaderStages.hpp"
+#include "Shaders/ShaderVariants.hpp"
 
 // The variant objects of each replaced game shader hash and device, one per source, swapped in at bind on every stage. Owned by
 // the device's state and released with the device; objects of the same hash share them.
@@ -27,7 +28,7 @@ struct BoundShaders
    std::array<const Database::Shader*, 6> shaders = {};
    // Where a variant runs: the game's shader it stands for (UseOriginal binds it back), its compiled shader (its requests) and source
    std::array<Microsoft::WRL::ComPtr<ID3D11DeviceChild>, 6> originals;
-   std::array<const CompiledShader*, 6> compiled = {};
+   std::array<std::shared_ptr<const CompiledShader>, 6> compiled;
    std::array<Source, 6> sources = {};
    StageSet variant_stages;
    StageSet callback_stages; // The shader has a draw callback

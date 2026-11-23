@@ -15,10 +15,10 @@
 
 #include "Hooks/DXGI/DXGIHooks.hpp"
 #include "Hooks/DeviceProxy.hpp"
-#include "Hooks/Slots.h"
-#include "Hooks/Scope.hpp"
+#include "Hooks/VtableSlots.h"
+#include "Hooks/HookScope.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -779,8 +779,8 @@ std::optional<HRESULT> ResizeBuffersThroughReShade(IDXGISwapChain* swapchain, co
    if (!wrapper)
    {
       if (proxy && proxy->IsFirstMissingWrapperReport())
-         Utils::Log::Warning("ReShade: swapchain {} has no ReShade wrapper in its private data (ReShade didn't wrap it, or a ReShade newer than 6.8 keeps it elsewhere): "
-                             "Luma doesn't switch its output mode while ReShade is loaded, it keeps presenting the current one",
+         Log::Warning("ReShade: swapchain {} has no ReShade wrapper in its private data (ReShade didn't wrap it, or a ReShade newer than 6.8 keeps it elsewhere): "
+                      "Luma doesn't switch its output mode while ReShade is loaded, it keeps presenting the current one",
             static_cast<void*>(proxy->GetReal()));
       return std::nullopt;
    }

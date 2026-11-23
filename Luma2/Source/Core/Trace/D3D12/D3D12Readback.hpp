@@ -4,8 +4,8 @@
 #include <d3d12.h>
 #include <dxgi.h>
 
-#include "Luma.hpp"
-#include "Shaders/Stages.hpp"
+#include "Game/GameEvents.hpp"
+#include "Shaders/ShaderStages.hpp"
 
 // Trace::Readback on D3D12: right after the armed call, its list transitions the view's resource to a copy source, copies it into a
 // readback buffer and transitions it back; once a queue executed the list, the present waits for it and reads the buffer. The back

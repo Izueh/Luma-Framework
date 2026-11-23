@@ -17,35 +17,35 @@
 
 #include "Common/Api.hpp"
 #include "ReShade/ReShade.hpp"
-#include "Game/Registry.hpp"
-#include "Hooks/Hooks.hpp"
-#include "Hooks/Scope.hpp"
-#include "Settings/Registry.hpp"
+#include "Game/GameRegistry.hpp"
+#include "Hooks/HookManager.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Settings/SettingsRegistry.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Swapchain/DXGI/DXGISwapchain.hpp"
-#include "Display/Levels.hpp"
+#include "Display/DisplayMode.hpp"
 #include "Display/DXGI/DXGISpoofing.hpp"
-#include "Frame/Frame.hpp"
-#include "Shaders/Patching.hpp"
+#include "Frame/FrameState.hpp"
+#include "Shaders/ShaderPatching.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
-#include "Shaders/Database.hpp"
+#include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/Shaders.hpp"
-#include "System/Jobs.hpp"
+#include "System/JobQueue.hpp"
 #if DEVELOPMENT
-#include "Trace/Capture.hpp"
+#include "Trace/FrameCapture.hpp"
 #include "Trace/D3D11/D3D11Capture.hpp"
 #include "Trace/D3D11/D3D11Readback.hpp"
 #include "Trace/D3D12/D3D12Capture.hpp"
 #include "Trace/D3D12/D3D12Readback.hpp"
-#include "Trace/Readback.hpp"
+#include "Trace/ResourceReadback.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Trace/D3D12/D3D12Stats.hpp"
 #endif
-#include "Trace/Info.hpp"
-#include "Trace/Mcp.hpp"
+#include "Trace/RuntimeStatus.hpp"
+#include "Trace/McpServer.hpp"
 #include "UI/Overlay.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
 #include "Validation/D3D11/D3D11Validation.hpp"
 #include "Validation/D3D12/D3D12Validation.hpp"
@@ -112,7 +112,7 @@ void LogOverlays()
    std::scoped_lock lock(mutex);
    if (loaded != logged)
    {
-      Utils::Log::Info("DXGI: overlays loaded: {}", loaded.empty() ? "none" : loaded);
+      Log::Info("DXGI: overlays loaded: {}", loaded.empty() ? "none" : loaded);
       logged = loaded;
    }
 }
@@ -122,7 +122,7 @@ DXGI_SWAP_CHAIN_DESC Describe(IDXGISwapChain* swapchain, const Presenter& presen
    DXGI_SWAP_CHAIN_DESC desc = {};
    swapchain->GetDesc(&desc);
    const std::string_view api = GetName(GetApi(presenter));
-   Utils::Log::Info("DXGI: {} swapchain {} {} ({}x{}, format {}, {} buffers, flags 0x{:X}, window {})", api, static_cast<void*>(swapchain), event,
+   Log::Info("DXGI: {} swapchain {} {} ({}x{}, format {}, {} buffers, flags 0x{:X}, window {})", api, static_cast<void*>(swapchain), event,
       desc.BufferDesc.Width, desc.BufferDesc.Height, uint32_t(desc.BufferDesc.Format), desc.BufferCount, desc.Flags, static_cast<void*>(desc.OutputWindow));
    Trace::SetSwapchain({reinterpret_cast<uint64_t>(swapchain), std::string(api), desc.BufferDesc.Width, desc.BufferDesc.Height, uint32_t(desc.BufferDesc.Format),
       desc.BufferCount});
@@ -229,7 +229,7 @@ void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
    const std::optional<Presenter> presenter = GetPresenter(creator);
    if (!presenter)
    {
-      Utils::Log::Warning("DXGI: swapchain {} was created with {}, which is neither a D3D11 device nor a D3D12 queue", static_cast<void*>(swapchain),
+      Log::Warning("DXGI: swapchain {} was created with {}, which is neither a D3D11 device nor a D3D12 queue", static_cast<void*>(swapchain),
          static_cast<void*>(creator));
       return;
    }
@@ -279,7 +279,7 @@ void OnSwapChainDestroyed(const IDXGISwapChain* swapchain)
       std::scoped_lock lock(known_mutex);
       std::erase_if(known, [swapchain](const KnownSwapchain& entry) { return entry.swapchain == swapchain; });
    }
-   Utils::Log::Info("DXGI: swapchain {} destroyed", static_cast<const void*>(swapchain));
+   Log::Info("DXGI: swapchain {} destroyed", static_cast<const void*>(swapchain));
 }
 
 void PreResizeBuffers(IDXGISwapChain* swapchain, UINT& count, UINT& width, UINT& height, DXGI_FORMAT& format, UINT& flags, const UINT*, IUnknown* const*)
@@ -323,7 +323,7 @@ void PostResizeBuffers(IDXGISwapChain* swapchain, UINT, UINT, UINT, DXGI_FORMAT,
    {
       swapchain->SetPrivateData(COLOR_SPACE_GUID, 0, nullptr);
       swapchain->SetPrivateData(COLOR_SPACE_FORMAT_GUID, 0, nullptr);
-      Utils::Log::Info("DXGI: swapchain {} color space forgotten, its format changed", static_cast<void*>(swapchain));
+      Log::Info("DXGI: swapchain {} color space forgotten, its format changed", static_cast<void*>(swapchain));
    }
    Frame::SetOutputResolution(FindDevice(swapchain), {desc.BufferDesc.Width, desc.BufferDesc.Height});
    // The game's buffers again, and the real color space (Luma's, set after the check above)
@@ -336,7 +336,7 @@ bool PreSetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutp
 {
    (void)output;
    const bool borderless = Swapchain::DXGI::SetFullscreenState(swapchain, fullscreen);
-   Utils::Log::Info("DXGI: swapchain {} {} fullscreen{}", static_cast<void*>(swapchain), fullscreen ? "enters" : "leaves", borderless ? " (borderless)" : "");
+   Log::Info("DXGI: swapchain {} {} fullscreen{}", static_cast<void*>(swapchain), fullscreen ? "enters" : "leaves", borderless ? " (borderless)" : "");
    return borderless;
 }
 
@@ -384,7 +384,7 @@ void PostSetColorSpace(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_s
    DXGI_SWAP_CHAIN_DESC desc = {};
    swapchain->GetDesc(&desc);
    swapchain->SetPrivateData(COLOR_SPACE_FORMAT_GUID, sizeof(desc.BufferDesc.Format), &desc.BufferDesc.Format);
-   Utils::Log::Info("DXGI: swapchain {} color space {} ({}), format {}", static_cast<void*>(swapchain), GetColorSpaceName(color_space), uint32_t(color_space),
+   Log::Info("DXGI: swapchain {} color space {} ({}), format {}", static_cast<void*>(swapchain), GetColorSpaceName(color_space), uint32_t(color_space),
       uint32_t(desc.BufferDesc.Format));
 }
 
@@ -461,7 +461,7 @@ void PrePresentWork(IDXGISwapChain* swapchain)
    }
    // A switch of the game's own HDR option this frame, then the game's image into the real buffer, once the game's frame is done (its
    // on_present included)
-   Display::Levels::Update();
+   Display::DisplayMode::Update();
    Swapchain::DXGI::Compose(swapchain);
 }
 

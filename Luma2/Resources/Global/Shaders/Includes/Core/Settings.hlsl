@@ -8,85 +8,13 @@
 // Include the game cbuffer structs define before this ("LUMA_GAME_CB_STRUCTS") if you have one.
 /////////////////////////////////////////
 
-// Whether we store the post process buffers in linear space scRGB or gamma space (sRGB under normal circumstances) (like in the vanilla game, though now we use FP16 textures as opposed to UNORM8 ones).
-// Note that converting between linear and gamma space back and forth results in quality loss, especially over very high and very low values, so this is best left on.
-// 0 Gamma space:
-//   vanilla like (including UI, depending on "UI_DRAW_TYPE"), but on float/linear buffers
-//   this has as tiny loss of quality due to storing sRGB gamma space on linear buffers
-//   gamma correction happens at the end, in the linearization pass
-//   colors are stored with the same white level (paper white) of SDR, with 1 being the SDR peak white
-// 1 Linear space:
-//   UI might look slightly different from vanilla (in alpha blends) (depending on "UI_DRAW_TYPE")
-//   gamma correction happens early, in tonemapping, or at the end (depending on "EARLY_DISPLAY_ENCODING")
-//   colors are stored with the same white level (paper white) of SDR, with 1 being the SDR peak white, or in dynamic paper white range (also depending on "EARLY_DISPLAY_ENCODING")
-// 2 Linear space until UI, then gamma space:
-//   more specifically, linear until the last pass that always runs before UI (e.g. "PostAAComposites" for "Prey"),
-//   this has the some of the advantage of both linear and gamma methods, and UI looks like vanilla out of the box
-//   gamma correction happens at the end, in the linearization pass
-//   (to avoid a billion different formulas around the code and to make gamma blends look like vanilla,
-//    if we corrected in the tonemap/grading shader, then we'd need to use sRGB gamma in the end,
-//    also we wouldn't know whether to correct the 0-1 range of the whole range)
-//   ideally we would have gamma corrected before HDR tonemapping, but the complexity cost is too big for the small visual gains
-#ifndef POST_PROCESS_SPACE_TYPE
-#define POST_PROCESS_SPACE_TYPE 0
-#endif
-// How did the Vanilla SDR encode after tonemapping?
-// If the game used sRGB "linear" buffers, select sRGB.
-// If the game drew in gamma space already without ever passing through linear HDR before tonemapping, select Gamma 2.2.
-// If the game used a random encoding formula (e.g. tonemap and encoding in a single function), also select Gamma 2.2.
-// If "POST_PROCESS_SPACE_TYPE" is 0, we assume the HDR implementation uses the same encoding.
-// Note that all gamma 2.2 setting with inherit whatever gamma is set by "DefaultGamma", be it 2.2, 2.4 or anything else.
+// Composition pipeline parameters live in LumaSettings.DisplayComposition (runtime cbuffer fields) and are aliased below
+// after cbuffer LumaSettings is declared so shared includes and game shaders can read them directly.
 //
-// 0 sRGB
-// 1 Gamma 2.2
-#ifndef VANILLA_ENCODING_TYPE
-#define VANILLA_ENCODING_TYPE 0
-#endif
-// As many games, Prey rendered and tonemapped in linear space, though applied the sRGB gamma transfer function to apply the color grading LUT.
-// Almost all TVs follow gamma 2.2 and most monitors also do, so to maintain the SDR look (and near black level), we need to linearize with gamma 2.2 and not sRGB (1).
-// Disabling this will linearize with gamma sRGB, ignoring that the game would have been developed on (and for) gamma 2.2 displays (<=0).
-// If you want something in between, thus keeping the sRGB color hue (channels ratio) but with the gamma 2.2 corrected luminance, set this to a higher value (>=2).
-// Note that if "POST_PROCESS_SPACE_TYPE" is 0, this simply determines how gamma is linearized for intermediary operations,
-// while everything stays in sRGB gamma (as theoretically it would have been originally, even if it was displayed on 2.2) when stored in textures,
-// so this determines how the final shader should linearize (if >=1, from 2.2, if <=0, from sRGB, thus causing raised blacks compared to how the gamma would have appeared on gamma 2.2 displays).
-// Note that by gamma correction we mean fixing up the game's bad gamma implementation, though sometimes this term is used to imply "display encoding".
-// Note that all gamma 2.2 setting with inherit whatever gamma is set by "DefaultGamma", be it 2.2, 2.4 or anything else.
-// 
-// 0 sRGB
-// 1 Gamma 2.2
-// 2 sRGB (color hues) with gamma 2.2 luminance (kinda assuming "VANILLA_ENCODING_TYPE" is 0)
-// 3 sRGB (color hues) with gamma 2.2 luminance (corrected by luminance)
-// 4 Gamma 2.2 (corrected by luminance) with per channel correction chrominance
-#ifndef GAMMA_CORRECTION_TYPE
-#define GAMMA_CORRECTION_TYPE 1
-#endif
-// Whether we correct gamma even on colors beyond the 0-1 range. Usually that's not suggested as they can overshoot due to pow differences (sRGB is completely different below and around zero),
-// and given these colors were never "seen" and we generated them ourselves with tonemapper modifications, it makes no sense to apply gamma correction on them too.
-// If se set this to 0, we'd also need to pre-acknowledge the later peak shift when tonemapping to the display. Plus, pow changes direction around 1, so doing that would contribute to creating a less contiguous curve.
-// 
-// 0 Whole range
-// 1 0-1 range only
+// Whether we correct gamma even on colors beyond the 0-1 range.
+// 0 Whole range, 1 0-1 range only
 #ifndef GAMMA_CORRECTION_RANGE_TYPE
 #define GAMMA_CORRECTION_RANGE_TYPE 1
-#endif
-// Whether the main gamma correction and paper white scaling happens early in post processing or in the final display composition pass (only applies if "POST_PROCESS_SPACE_TYPE" is set to linear).
-// For simplicity and consistency of post processing passes, it's better to keep this disabled.
-#ifndef EARLY_DISPLAY_ENCODING
-#define EARLY_DISPLAY_ENCODING 0
-#endif
-// Ensures the final colors are valid and contained within the display/output gamut range.
-// It's possibly good to turn this on if "EARLY_DISPLAY_ENCODING" is false, in case late gamma correction generated any invalid luminance or out of gamut colors. Film grain and sharpening etc can also often generated invalid colors.
-// 
-// 0 None
-// 1 Auto (SDR/HDR)
-// 2 SDR - BT.709
-// 3 HDR - BT.2020
-#ifndef GAMUT_MAPPING_TYPE
-#define GAMUT_MAPPING_TYPE 0
-#endif
-// See c++
-#ifndef UI_DRAW_TYPE
-#define UI_DRAW_TYPE 0
 #endif
 // Higher quality gamma<->linear conversions, it avoids the error generated from the conversion by restoring the change on the original color in an additive way.
 // This has a relatively high performance cost for the visual gains it returns.
@@ -169,6 +97,22 @@ cbuffer LumaSettings : register(LUMA_SETTINGS_CB_INDEX)
 {
   CB::LumaGlobalSettings LumaSettings : packoffset(c0);
 }
+
+#define POST_PROCESS_SPACE_TYPE (LumaSettings.DisplayComposition.PostProcessSpaceType)
+#define VANILLA_ENCODING_TYPE (LumaSettings.DisplayComposition.VanillaEncodingType)
+#define GAMMA_CORRECTION_TYPE (LumaSettings.DisplayComposition.GammaCorrectionType)
+#define GAMUT_MAPPING_TYPE (LumaSettings.DisplayComposition.GamutMappingType)
+#define UI_DRAW_TYPE (LumaSettings.DisplayComposition.UIDrawType)
+#define EARLY_DISPLAY_ENCODING (LumaSettings.DisplayComposition.EarlyDisplayEncoding)
+#if DEVELOPMENT
+#define TEST_2X_ZOOM ((LumaSettings.DisplayComposition.DebugFlags & 1u) != 0u)
+#define TEST_SDR_HDR_SPLIT_VIEW_MODE ((LumaSettings.DisplayComposition.DebugFlags >> 1u) & 7u)
+#define TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL ((LumaSettings.DisplayComposition.DebugFlags & 16u) != 0u)
+#else
+#define TEST_2X_ZOOM 0
+#define TEST_SDR_HDR_SPLIT_VIEW_MODE 0
+#define TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL 0
+#endif
 
 // These parameters are already pushed directly from c++ so we don't need to check them manually anymore
 #if 1

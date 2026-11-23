@@ -5,8 +5,8 @@
 #include <d3d11_4.h>
 
 #include "Common/ShaderStage.hpp"
-#include "Hooks/Functions.hpp"
-#include "Luma.hpp"
+#include "Game/GameEvents.hpp"
+#include "Hooks/HookFunctions.hpp"
 
 // One handler per hooked native function, called by its detour inside a Luma scope. A "Pre" handler runs before the original
 // and can edit its arguments (true skips the original), a "Post" one after it succeeded. "On*Destroyed" ones receive an object

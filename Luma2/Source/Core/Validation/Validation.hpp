@@ -10,8 +10,8 @@
 #include <Windows.h>
 
 #include "Common/Api.hpp"
-#include "Hooks/Scope.hpp"
-#include "Utils/Log.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Log/Log.hpp"
 
 #ifndef LUMA_DEBUG_LAYER
 #define LUMA_DEBUG_LAYER 0
@@ -40,14 +40,16 @@ struct Counts
    uint64_t warnings = 0;
 };
 
-// The GPU validation setting (Development builds)
+// The debug layer and GPU validation settings (Development builds)
 void Register();
-// Whether the debug layer, and its GPU-based validation, were turned on for this run's D3D12 devices: by the build
-// (LumaDebugLayer, LumaGpuValidation) or the setting
+// Whether the debug layer / GPU validation is requested for new devices (build prop or setting)
+bool WantsDebugLayer();
+bool WantsGpuValidation();
+// Whether the debug layer, and its GPU-based validation, are active for this run's devices
 bool IsDebugLayerOn();
 bool IsGpuValidationOn();
-// D3D12: at the first device's creation, what this run uses (the debug layer can't be turned on once a device exists)
-void SetD3D12Layers(bool debug_layer, bool gpu_validation);
+// Records what this run actually activated on device creation
+void SetActiveLayers(bool debug_layer, bool gpu_validation);
 
 // Each message id is logged a few times, then only counted
 void Report(Api api, Severity severity, int32_t id, std::string_view text);
@@ -79,7 +81,6 @@ void ReadMessages(Api api, InfoQueue* info_queue, uint64_t& next)
    }
 }
 
-namespace Detail {
 template <typename InfoQueue>
 struct InfoQueueReader
 {
@@ -95,16 +96,8 @@ struct InfoQueueStore
    std::atomic<uint32_t> count = 0;
 };
 
-template <typename Device, typename InfoQueue>
-InfoQueueStore<Device, InfoQueue>& GetInfoQueueStore()
-{
-   static InfoQueueStore<Device, InfoQueue> store;
-   return store;
-}
-} // namespace Detail
-
 template <Api api, typename InfoQueue, typename Device>
-bool WatchInfoQueue(Device* device)
+bool WatchInfoQueue(InfoQueueStore<Device, InfoQueue>& store, Device* device)
 {
    InfoQueue* info_queue = nullptr;
    {
@@ -113,8 +106,7 @@ bool WatchInfoQueue(Device* device)
          return false;
    }
    info_queue->SetMessageCountLimit(UINT64(-1));
-   Utils::Log::Info("{}: device {} has the debug layer, its messages are logged", GetName(api), static_cast<void*>(device));
-   auto& store = Detail::GetInfoQueueStore<Device, InfoQueue>();
+   Log::Info("{}: device {} has the debug layer, its messages are logged", GetName(api), static_cast<void*>(device));
    std::scoped_lock lock(store.mutex);
    if (const auto it = store.readers.find(device); it != store.readers.end() && it->second.info_queue)
       it->second.info_queue->Release();
@@ -123,10 +115,9 @@ bool WatchInfoQueue(Device* device)
    return true;
 }
 
-template <Api api, typename Device, typename InfoQueue, typename Message>
-void ReadInfoQueues()
+template <Api api, typename Message, typename Device, typename InfoQueue>
+void ReadInfoQueues(InfoQueueStore<Device, InfoQueue>& store)
 {
-   auto& store = Detail::GetInfoQueueStore<Device, InfoQueue>();
    if (store.count.load(std::memory_order_relaxed) == 0)
       return;
    std::scoped_lock lock(store.mutex);
@@ -134,12 +125,11 @@ void ReadInfoQueues()
       ReadMessages<Message>(api, reader.info_queue, reader.next);
 }
 
-template <Api api, typename InfoQueue, typename Message, typename Device>
-void StopWatchingInfoQueue(Device* device)
+template <Api api, typename Message, typename Device, typename InfoQueue>
+void StopWatchingInfoQueue(InfoQueueStore<Device, InfoQueue>& store, Device* device)
 {
-   Detail::InfoQueueReader<InfoQueue> reader;
+   InfoQueueReader<InfoQueue> reader;
    {
-      auto& store = Detail::GetInfoQueueStore<Device, InfoQueue>();
       std::scoped_lock lock(store.mutex);
       const auto it = store.readers.find(device);
       if (it == store.readers.end())

@@ -3,7 +3,7 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
-#include "Display/Composition.hpp"
+#include "Display/DisplayComposition.hpp"
 #include "Swapchain/DXGI/DXGISwapchain.hpp"
 
 // The swapchain's D3D11 part: the game's back buffer, and composition on the immediate context. Inside Luma's scope.

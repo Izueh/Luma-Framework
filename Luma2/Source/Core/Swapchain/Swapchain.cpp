@@ -3,8 +3,8 @@
 #include <array>
 #include <span>
 
-#include "Settings/Keys.hpp"
-#include "Settings/Registry.hpp"
+#include "Settings/SettingKeys.hpp"
+#include "Settings/SettingsRegistry.hpp"
 
 namespace Luma {
 namespace Swapchain {
@@ -12,18 +12,20 @@ namespace {
 Options options;
 
 constexpr std::array<std::string_view, 4> OUTPUT_MODES = {"Auto", "HDR10", "scRGB", "SDR"};
-constexpr std::array<std::string_view, 4> MODES = {"Game default", "Mirror", "In place", "Native"};
-constexpr std::array<std::string_view, 3> FULLSCREEN = {"Game default", "Borderless", "Exclusive"};
+constexpr std::array<std::string_view, 3> MODES = {"Mirror", "In place", "Native"};
+constexpr std::array<std::string_view, 2> FULLSCREEN = {"Borderless", "Exclusive"};
 
-constexpr std::array SETTINGS = {
+constexpr std::array LUMA_SETTINGS = {
    Settings::Setting{
       .key = Settings::Core::OUTPUT_MODE.key,
       .label = "Output Mode",
-      .tooltip = "What the game is presented as.\nAuto - HDR when Windows has it on for the display (the game's choice of HDR10 or scRGB), SDR "
-                 "otherwise\nHDR10 - 10 bit PQ, BT.2020\nscRGB - 16 bit float, linear\nSDR - 8 bit sRGB",
+      .tooltip = "What the game is presented as. Switches live in Mirror mode; in In place mode applies on swapchain resize or restart.\n"
+                 "Auto - HDR when Windows has it on for the display (the mod's HDR choice of HDR10 or scRGB), SDR otherwise\n"
+                 "HDR10 - 10 bit PQ, BT.2020\nscRGB - 16 bit float, linear\nSDR - 8 bit sRGB",
       .category = "Display",
       .default_value = Settings::EnumIndex{0},
       .enum_labels = OUTPUT_MODES,
+      .is_visible = [] { return ManagesOutput(GetMode()); },
    },
    Settings::Setting{
       .key = Settings::Core::HDR_METADATA.key,
@@ -36,40 +38,43 @@ constexpr std::array SETTINGS = {
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_MODE.key,
       .label = "Mode",
-      .tooltip = "Mirror - the game draws to Luma's textures and Luma presents\nIn place - the game draws to the real buffers, upgraded (1.0)\nNative "
+      .tooltip = "Mirror - the game draws to Luma's textures and Luma presents\nIn place - the game draws to the real buffers, upgraded in place\nNative "
                  "- the game draws to the real buffers in its own format and color space (or a ReShade add-on's), nothing composed and no "
-                 "output mode; flip model, tearing and fullscreen as below\nFrom the game's next swapchain, usually a restart",
+                 "output mode; flip model, tearing and fullscreen as below",
       .category = "Swapchain",
       .visibility = Settings::Visibility::Test,
       .default_value = Settings::EnumIndex{0},
       .enum_labels = MODES,
+      .requires_restart = true,
    },
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_FLIP_MODEL.key,
       .label = "Flip Model",
       .tooltip = "Present with the flip model (needed for HDR, and for independent flip in a borderless window). Off presents as the game "
-                 "asked, in SDR.\nFrom the game's next swapchain, usually a restart",
+                 "asked, in SDR.",
       .category = "Swapchain",
       .visibility = Settings::Visibility::Test,
       .default_value = true,
+      .requires_restart = true,
    },
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_TEARING.key,
       .label = "Tearing",
-      .tooltip = "Allows tearing with V-Sync off in a window (variable refresh rate, uncapped frame rates).\nFrom the game's next swapchain, "
-                 "usually a restart",
+      .tooltip = "Allows tearing with V-Sync off in a window (variable refresh rate, uncapped frame rates).",
       .category = "Swapchain",
       .visibility = Settings::Visibility::Test,
       .default_value = true,
+      .requires_restart = true,
    },
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_WRAP.key,
       .label = "Wrap",
-      .tooltip = "The game gets a wrapper of the swapchain (as ReShade's): Luma composes before any overlay's Present runs, and only the game "
-                 "sees its own back buffers. Off, the game holds the real swapchain.\nFrom the game's next swapchain, usually a restart",
+      .tooltip = "The game gets a wrapper of the swapchain: Luma composes before any overlay's Present runs, and only the game "
+                 "sees its own back buffers. Off, the game holds the real swapchain.",
       .category = "Swapchain",
       .visibility = Settings::Visibility::Test,
       .default_value = true,
+      .requires_restart = true,
    },
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_FULLSCREEN.key,
@@ -80,25 +85,38 @@ constexpr std::array SETTINGS = {
       .visibility = Settings::Visibility::Test,
       .default_value = Settings::EnumIndex{0},
       .enum_labels = FULLSCREEN,
+      .requires_restart = true,
    },
+};
+
 #if DEVELOPMENT
+constexpr std::array DEV_SETTINGS = {
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_SCALE.key,
       .label = "Swapchain Scale",
-      .tooltip = "The real swapchain's size over the game's back buffer: composition scales the image (Mirror mode only).\nFrom the game's next swapchain or resize",
-      .category = "Development",
+      .tooltip = "The real swapchain's size over the game's back buffer: composition scales the image (Mirror mode only).",
+      .category = "Display Composition",
       .visibility = Settings::Visibility::Development,
       .default_value = 1.f,
       .range = Settings::Range{0.25f, 2.f},
       .format = "%.2f",
    },
-#endif
 };
+#endif
+
+void ApplyOptionDefaults()
+{
+   if (Settings::Find(Settings::Core::SWAPCHAIN_MODE.key))
+      Settings::SetDefault(Settings::Core::SWAPCHAIN_MODE, Settings::EnumIndex{int32_t(options.mode)});
+   if (Settings::Find(Settings::Core::SWAPCHAIN_FULLSCREEN.key))
+      Settings::SetDefault(Settings::Core::SWAPCHAIN_FULLSCREEN, Settings::EnumIndex{options.borderless ? 0 : 1});
+}
 } // namespace
 
 void SetOptions(const Options& value)
 {
    options = value;
+   ApplyOptionDefaults();
 }
 
 const Options& GetOptions()
@@ -108,18 +126,20 @@ const Options& GetOptions()
 
 void Register()
 {
-   // The Development one is a Development kind: in that section of the view and the file
-   Settings::Register(std::span(SETTINGS).first(6), Settings::Kind::Luma);
-   Settings::Register(std::span(SETTINGS).subspan(6), Settings::Kind::Development);
+   Settings::Register(LUMA_SETTINGS, Settings::Kind::Luma);
+#if DEVELOPMENT
+   Settings::Register(DEV_SETTINGS, Settings::Kind::Development);
+#endif
+   ApplyOptionDefaults();
 }
 
 Mode GetMode()
 {
    switch (Settings::Get(Settings::Core::SWAPCHAIN_MODE).value)
    {
-   case 1: return Mode::Mirror;
-   case 2: return Mode::InPlace;
-   case 3: return Mode::Native;
+   case 0: return Mode::Mirror;
+   case 1: return Mode::InPlace;
+   case 2: return Mode::Native;
    default: return options.mode;
    }
 }
@@ -146,12 +166,7 @@ bool AllowsTearing()
 
 bool IsBorderless()
 {
-   switch (Settings::Get(Settings::Core::SWAPCHAIN_FULLSCREEN).value)
-   {
-   case 1: return true;
-   case 2: return false;
-   default: return options.borderless;
-   }
+   return Settings::Get(Settings::Core::SWAPCHAIN_FULLSCREEN).value == 0;
 }
 
 bool SetsHdrMetadata()

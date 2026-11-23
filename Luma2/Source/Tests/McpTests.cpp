@@ -5,7 +5,7 @@
 
 #include <Windows.h>
 
-#include "Trace/Mcp.hpp"
+#include "Trace/McpServer.hpp"
 #include "Utils/Json.hpp"
 
 using namespace Luma;

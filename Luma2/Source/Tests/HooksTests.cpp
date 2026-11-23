@@ -20,9 +20,9 @@
 #include "Hooks/DInput/DInputDevices.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
-#include "Hooks/Hooks.hpp"
-#include "Hooks/Scope.hpp"
-#include "Hooks/Slots.h"
+#include "Hooks/HookManager.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Hooks/VtableSlots.h"
 #include "Hooks/Vtables.hpp"
 #include "System/Modules.hpp"
 
@@ -520,6 +520,7 @@ TEST_CASE("ThirdPartyModules: a return address in an overlay's code is found by 
 TEST_CASE("Hooks: a DirectInput method is hooked once per detour, and a slot another tool patched over it doesn't recurse")
 {
    using DeviceFunction = int (*)(void*, int);
+
    struct FakeDevice
    {
       void* const* vtable;

@@ -16,9 +16,9 @@
 
 #include <DDSTextureLoader11.h>
 
-#include "Shaders/Container.hpp"
-#include "Shaders/Variants.hpp"
-#include "System/Memory.hpp"
+#include "Shaders/ShaderContainer.hpp"
+#include "Shaders/ShaderVariants.hpp"
+#include "System/MemoryScan.hpp"
 
 using namespace Luma;
 using Microsoft::WRL::ComPtr;

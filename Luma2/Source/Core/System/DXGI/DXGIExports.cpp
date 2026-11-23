@@ -40,18 +40,17 @@ LUMA_DXGI_EXPORT(DXGIDisableVBlankVirtualization, 18)
 LUMA_DXGI_FUNCTION(DXGIGetDebugInterface1, 19, 12)
 LUMA_DXGI_EXPORT(DXGIReportAdapterConfiguration, 20)
 
-namespace
+namespace {
+// Loads the system dxgi.dll if it isn't loaded yet. Not GetProcAddress (see FindExport).
+void* FindSystemExport(const char* name)
 {
-   // Loads the system dxgi.dll if it isn't loaded yet. Not GetProcAddress (see FindExport).
-   void* FindSystemExport(const char* name)
-   {
-      HMODULE module = Luma::System::Modules::FindSystemModule(L"dxgi.dll");
-      if (!module)
-         module = LoadLibraryW(Luma::System::Modules::SystemPath(L"dxgi.dll").c_str());
-      if (!module || module == Luma::System::Modules::GetSelf())
-         return nullptr;
-      return Luma::System::Modules::FindExport(module, name);
-   }
+   HMODULE module = Luma::System::Modules::FindSystemModule(L"dxgi.dll");
+   if (!module)
+      module = LoadLibraryW(Luma::System::Modules::GetSystemPath(L"dxgi.dll").c_str());
+   if (!module || module == Luma::System::Modules::GetSelf())
+      return nullptr;
+   return Luma::System::Modules::FindExport(module, name);
+}
 } // namespace
 
 extern "C" HRESULT WINAPI CreateDXGIFactory(REFIID riid, void** factory)

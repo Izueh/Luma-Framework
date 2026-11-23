@@ -7,7 +7,7 @@
 #include <vector>
 
 #include "Common/Api.hpp"
-#include "Hooks/Functions.hpp"
+#include "Hooks/HookFunctions.hpp"
 
 // Game shaders replaced by files, Luma's own shaders, their defines. One feature with one need decision: Core asks
 // GetD3D11Functions once.

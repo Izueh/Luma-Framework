@@ -12,17 +12,17 @@
 
 #include <wrl/client.h>
 
-#include "Frame/Frame.hpp"
-#include "Hooks/Lifetime.hpp"
-#include "Hooks/Scope.hpp"
-#include "Resources/Mirrors.hpp"
-#include "Resources/Samplers.hpp"
-#include "Resources/Upgrade.hpp"
+#include "Frame/FrameState.hpp"
+#include "Hooks/ObjectLifetime.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Resources/ResourceMirrors.hpp"
+#include "Resources/SamplerMirrors.hpp"
+#include "Resources/ResourceUpgrades.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Utils/Debug.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
 #include "Utils/Format.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -355,14 +355,14 @@ void CreateMirror(ID3D12Device* device, ID3D12Resource* resource, D3D12_RESOURCE
    AttachMirror(resource, std::move(mirror), described, *mirrored);
 }
 
-ID3D12Resource* GetMirror(ID3D12Resource* resource)
+ID3D12Resource* FindMirror(ID3D12Resource* resource)
 {
-   return FindMirror<OwnedResource>(resource);
+   return Mirrors::FindMirror<OwnedResource>(resource);
 }
 
-ID3D12Resource* GetOriginal(ID3D12Resource* mirror)
+ID3D12Resource* FindOriginal(ID3D12Resource* mirror)
 {
-   return FindOriginal(mirror);
+   return Mirrors::FindOriginal(mirror);
 }
 
 void ReleaseDeviceObjects(ID3D12Device* device)
@@ -394,7 +394,7 @@ void TrackHeap(ID3D12Device* device, ID3D12DescriptorHeap* heap, const D3D12_DES
    heaps.insert(std::ranges::upper_bound(heaps, range.start, {}, &HeapRange::start), range);
 }
 
-void OnCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, ViewKind kind, ID3D12Resource* resource, const void* desc, bool swapping)
+void TrackView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, ViewKind kind, ID3D12Resource* resource, const void* desc, bool swapping)
 {
    const ResourceMirrorState* state = kind != ViewKind::ConstantBuffer ? FindMirrorState<OwnedResource>(resource) : nullptr;
    if (!state)
@@ -417,7 +417,7 @@ void OnCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination,
    Remember(destination.ptr, std::move(slot));
 }
 
-void OnCreateSampler(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, const D3D12_SAMPLER_DESC& desc, bool swapping)
+void TrackSampler(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, const D3D12_SAMPLER_DESC& desc, bool swapping)
 {
    const std::optional<D3D12_SAMPLER_DESC> mirror = Samplers::GetMirrorDesc(desc);
    if (!mirror)
@@ -446,7 +446,7 @@ void OnCreateSampler(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destinati
    Remember(destination.ptr, std::move(slot));
 }
 
-void OnCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type,
+void SwapCopiedDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type,
    bool swap_views, bool swap_samplers)
 {
    if (entry_count.load(std::memory_order_relaxed) == 0 || !count)
@@ -507,16 +507,16 @@ std::span<const D3D12_RESOURCE_BARRIER> AddMirrorBarriers(std::span<const D3D12_
       switch (barrier.Type)
       {
       case D3D12_RESOURCE_BARRIER_TYPE_TRANSITION:
-         if ((mirrored.Transition.pResource = GetMirror(barrier.Transition.pResource)))
+         if ((mirrored.Transition.pResource = FindMirror(barrier.Transition.pResource)))
             extended.push_back(mirrored);
          break;
       case D3D12_RESOURCE_BARRIER_TYPE_UAV:
-         if ((mirrored.UAV.pResource = GetMirror(barrier.UAV.pResource)))
+         if ((mirrored.UAV.pResource = FindMirror(barrier.UAV.pResource)))
             extended.push_back(mirrored);
          break;
       default:
          // Mirrors are committed: they alias nothing
-         if (GetMirror(barrier.Aliasing.pResourceBefore) || GetMirror(barrier.Aliasing.pResourceAfter))
+         if (FindMirror(barrier.Aliasing.pResourceBefore) || FindMirror(barrier.Aliasing.pResourceAfter))
             aliasing_barriers++;
          break;
       }
@@ -568,7 +568,7 @@ bool SwapHandle(D3D12_CPU_DESCRIPTOR_HANDLE& handle)
 
 void SwapCopy(ID3D12Resource*& destination, ID3D12Resource*& source)
 {
-   const CopyPlan<ID3D12Resource> plan = PlanCopy(destination, source, &GetMirror, &GetFormat);
+   const CopyPlan<ID3D12Resource> plan = PlanCopy(destination, source, &FindMirror, &GetFormat);
    if (plan.action == CopyAction::Original)
       return;
    if (plan.action == CopyAction::DirectMirrorCopy)
@@ -580,15 +580,15 @@ void SwapCopy(ID3D12Resource*& destination, ID3D12Resource*& source)
    if (!source)
       return;
    if (unhandled_copies++ == 0)
-      Utils::Log::Warning("Mirrors: a copy between a {} mirror and a {} texture without one needs Luma's copy pass on D3D12, the game's textures are copied",
+      Log::Warning("Mirrors: a copy between a {} mirror and a {} texture without one needs Luma's copy pass on D3D12, the game's textures are copied",
          Utils::Format::GetName(GetFormat(plan.destination_mirrored ? plan.destination : plan.source)),
          Utils::Format::GetName(GetFormat(plan.destination_mirrored ? source : destination)));
-   LUMA_UNIMPLEMENTED("Converting copies between a mirror and a texture without one on D3D12 (Luma's copy pass, Step 5)");
+   LUMA_UNIMPLEMENTED("Converting copies between a mirror and a texture without one on D3D12");
 }
 
 void OnClearUnorderedAccess(ID3D12Resource* resource)
 {
-   if (!GetMirror(resource))
+   if (!FindMirror(resource))
       return;
    unhandled_clears++;
    LUMA_UNIMPLEMENTED("UAV clears of mirrored textures on D3D12 (the mirror's view in the heap tail)");

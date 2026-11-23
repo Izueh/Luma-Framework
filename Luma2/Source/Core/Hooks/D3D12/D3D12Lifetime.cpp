@@ -9,9 +9,9 @@
 
 #include <d3d12.h>
 
-#include "Hooks/Lifetime.hpp"
-#include "Hooks/Scope.hpp"
-#include "Utils/Log.hpp"
+#include "Hooks/ObjectLifetime.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -135,7 +135,7 @@ void MoveReferencesToQueue(ID3D12CommandQueue* queue, UINT count, ID3D12CommandL
       ComPtr<ID3D12Device> device;
       if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device))) || FAILED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&queue_references->fence))))
       {
-         Utils::Log::Error("D3D12: no fence for queue {}, Luma objects its lists used are kept until it's destroyed", static_cast<void*>(queue));
+         Log::Error("D3D12: no fence for queue {}, Luma objects its lists used are kept until it's destroyed", static_cast<void*>(queue));
          queue_references->pending.push_back({UINT64_MAX, std::move(executed)});
          return;
       }

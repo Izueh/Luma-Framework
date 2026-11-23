@@ -3,8 +3,8 @@
 #include <cstdint>
 
 #include "Common/ShaderStage.hpp"
-#include "Hooks/Functions.hpp"
-#include "Shaders/Stages.hpp"
+#include "Hooks/HookFunctions.hpp"
+#include "Shaders/ShaderStages.hpp"
 
 // Saving and restoring a context's state around Luma's own passes, what the game bound (recorded at bind), and the passes
 // themselves. The API-agnostic part: which state, and what's recorded.

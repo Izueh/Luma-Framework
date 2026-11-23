@@ -20,14 +20,19 @@
     <ProjectCapability Include="SourceItemsFromImports" />
   </ItemGroup>
 
-  <!-- Object files mirror Core's folders under "Core\" (two files can share a name in different folders) -->
+  <PropertyGroup>
+    <LumaDllFolder Condition="'$(LumaDllName)' == 'dxgi'">DXGI</LumaDllFolder>
+    <LumaDllFolder Condition="'$(LumaDllFolder)' == ''">$(LumaDllName)</LumaDllFolder>
+  </PropertyGroup>
+
+  <!-- Object files mirror Core's folders under "Core\" -->
   <ItemGroup>
     <ClInclude Include="$(MSBuildThisFileDirectory)**\*.hpp;$(MSBuildThisFileDirectory)**\*.h" />
     <!-- The exports of the system dll the project is built as ("LumaDllName"), the others left out -->
     <ClCompile Include="$(MSBuildThisFileDirectory)**\*.cpp;$(MSBuildThisFileDirectory)**\*.c" Exclude="$(MSBuildThisFileDirectory)System\*\*Exports.cpp">
       <ObjectFileName>$(IntDir)Core\%(RecursiveDir)</ObjectFileName>
     </ClCompile>
-    <ClCompile Include="$(MSBuildThisFileDirectory)System\$(LumaDllName)\$(LumaDllName)Exports.cpp">
+    <ClCompile Include="$(MSBuildThisFileDirectory)System\$(LumaDllFolder)\$(LumaDllFolder)Exports.cpp">
       <ObjectFileName>$(IntDir)Core\System\</ObjectFileName>
     </ClCompile>
     <!-- The overlay's fonts -->

@@ -1,69 +1,104 @@
 #include <doctest/doctest.h>
 
 #include <array>
-#include <ostream>
 #include <cstdint>
+#include <filesystem>
+#include <ostream>
 #include <string_view>
 #include <vector>
 
-#include "Settings/Keys.hpp"
-#include "Settings/Registry.hpp"
-#include "Shaders/Defines.hpp"
-#include "UI/Encoding.hpp"
-#include "UI/Shell.hpp"
+#include "Settings/SettingKeys.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "Settings/SettingsStorage.hpp"
+#include "Shaders/ShaderDefines.hpp"
+#include "UI/OverlayEncoding.hpp"
+#include "UI/OverlayWindow.hpp"
 
 using namespace Luma;
 using Settings::Kind;
 using Settings::Setting;
 
 namespace {
-std::vector<std::string_view> GetTitles()
+std::vector<std::string_view> GetTitles(UI::SettingsTab tab = UI::SettingsTab::Settings)
 {
    std::vector<std::string_view> titles;
-   for (const UI::SettingsSection& section : UI::CollectSettingsSections())
+   for (const UI::SettingsSection& section : UI::CollectSettingsSections(tab))
       titles.push_back(section.title);
    return titles;
 }
 } // namespace
 
-TEST_CASE("UI: the settings view puts Luma and Overlay first, then the game, the defines with Auto Compile, then the rest")
+TEST_CASE("UI: settings tabs split Display/Game/Recipes, Framework, Overlay, and Development cleanly")
 {
    Settings::Clear();
    const std::array<Setting, 2> game = {{
-      {.key = "Brightness", .category = "Display", .default_value = 1.f},
+      {.key = "Brightness", .category = "Post Processing", .default_value = 1.f},
       {.key = "Saturation", .category = "Color Grading", .default_value = 1.f},
    }};
-   const std::array<Setting, 5> luma = {{
+   const std::array<Setting, 7> luma = {{
       {.key = "Luma.Overlay.FontSize", .category = "Overlay", .default_value = 16.f},
       {.key = Settings::Core::AUTO_COMPILE.key, .category = "Shaders", .default_value = false},
       {.key = "Luma.Advanced.Thing", .category = "Advanced", .default_value = false},
+      {.key = "Luma.Display.OutputMode", .category = "Display", .default_value = int32_t(0)},
       {.key = "Luma.Enabled", .category = "Luma", .default_value = true},
+      {.key = "Luma.EnabledKey", .category = "Luma", .default_value = Settings::Key{0x78}},
       {.key = "Luma.Hidden", .category = "Luma", .visibility = Settings::Visibility::Development, .is_visible = [] { return false; }},
    }};
    const std::array<Setting, 1> defines = {{
       {.key = "Defines.TEST_UI_SECTIONS", .category = "Shader Defines", .default_value = int32_t(0), .source = Settings::Sources::Define{"TEST_UI_SECTIONS"}},
    }};
-   // Registered in another order than they're shown
+   const std::array<Setting, 2> recipes = {{
+      {.key = "Recipes.UserRecipe", .category = "Recipes", .visibility = Settings::Visibility::Release, .default_value = true, .source = Settings::Sources::Recipe{"UserRecipe", {}}},
+      {.key = "Recipes.DevRecipe", .category = "Recipes", .visibility = Settings::Visibility::Development, .default_value = false, .source = Settings::Sources::Recipe{"DevRecipe", {}}},
+   }};
+   const std::array<Setting, 1> dev = {{
+      {.key = "Luma.Development.Sample", .category = "Display Composition", .visibility = Settings::Visibility::Development, .default_value = false},
+   }};
    REQUIRE(Settings::Register(game, Kind::Game));
    REQUIRE(Settings::Register(luma, Kind::Luma));
    REQUIRE(Settings::Register(defines, Kind::Define));
+   REQUIRE(Settings::Register(recipes, Kind::Recipe));
+   REQUIRE(Settings::Register(dev, Kind::Development));
 
+   // Settings::IsEnabled tracks Luma.Enabled lock-free
+   CHECK(Settings::IsEnabled());
+   REQUIRE(Settings::Set("Luma.Enabled", false));
+   CHECK_FALSE(Settings::IsEnabled());
+   REQUIRE(Settings::Set("Luma.Enabled", true));
+   CHECK(Settings::IsEnabled());
+
+   // Settings tab: Display, Game categories, and user-visible Recipes (no General section; Enabled/Key live in the header bar)
 #if DEVELOPMENT
-   const std::vector<std::string_view> expected = {"Luma", "Overlay", "Display", "Color Grading", "Shader Defines", "Advanced", "Development Settings"};
+   CHECK(GetTitles(UI::SettingsTab::Settings) == std::vector<std::string_view>{"Display", "Post Processing", "Color Grading", "Recipes"});
 #else
-   const std::vector<std::string_view> expected = {"Luma", "Overlay", "Display", "Color Grading", "Shader Defines", "Advanced"};
+   CHECK(GetTitles(UI::SettingsTab::Settings) == std::vector<std::string_view>{"Display", "Post Processing", "Color Grading", "Recipes", "Advanced Settings", "Advanced"});
 #endif
-   CHECK(GetTitles() == expected);
+   const std::vector<UI::SettingsSection> settings_sections = UI::CollectSettingsSections(UI::SettingsTab::Settings);
+   CHECK(settings_sections[0].default_open);
+   CHECK(settings_sections[1].role == UI::SettingsSection::Role::Game);
+   CHECK(settings_sections[1].default_open);
+   // Only the user-visible recipe appears on the Settings tab
+   CHECK(settings_sections[3].title == "Recipes");
+   REQUIRE(settings_sections[3].settings.size() == 1);
+   CHECK(settings_sections[3].settings[0]->key == "Recipes.UserRecipe");
 
-   const std::vector<UI::SettingsSection> sections = UI::CollectSettingsSections();
-   const UI::SettingsSection& shader_defines = sections[4];
+   // Overlay tab
+   CHECK(GetTitles(UI::SettingsTab::Overlay) == std::vector<std::string_view>{"Overlay"});
+
+   // Framework tab (Advanced + Shader Defines with Auto Compile first + ALL Recipes including dev-only)
+   CHECK(GetTitles(UI::SettingsTab::Framework) == std::vector<std::string_view>{"Advanced", "Shader Defines", "Recipes"});
+   const std::vector<UI::SettingsSection> framework_sections = UI::CollectSettingsSections(UI::SettingsTab::Framework);
+   const UI::SettingsSection& shader_defines = framework_sections[1];
    CHECK(shader_defines.role == UI::SettingsSection::Role::Defines);
    REQUIRE(shader_defines.settings.size() == 2);
    CHECK(shader_defines.settings[0]->key == Settings::Core::AUTO_COMPILE.key);
    CHECK(shader_defines.settings[1]->key == "Defines.TEST_UI_SECTIONS");
-   // Hidden settings aren't collected
-   CHECK(sections[0].settings.size() == 1);
-   CHECK(sections[2].role == UI::SettingsSection::Role::Game);
+   CHECK(framework_sections[2].settings.size() == 2);
+
+#if DEVELOPMENT
+   // Development tab
+   CHECK(GetTitles(UI::SettingsTab::Development) == std::vector<std::string_view>{"Display Composition"});
+#endif
    Settings::Clear();
 }
 
@@ -72,9 +107,38 @@ TEST_CASE("UI: Auto Compile alone makes no Shader Defines section")
    Settings::Clear();
    const std::array<Setting, 1> luma = {{{.key = Settings::Core::AUTO_COMPILE.key, .category = "Shaders", .default_value = false}}};
    REQUIRE(Settings::Register(luma, Kind::Luma));
-   for (const UI::SettingsSection& section : UI::CollectSettingsSections())
+   for (const UI::SettingsSection& section : UI::CollectSettingsSections(UI::SettingsTab::Framework))
+      CHECK(section.title != "Shader Defines");
+   for (const UI::SettingsSection& section : UI::CollectSettingsSections(UI::SettingsTab::Settings))
       CHECK(section.title != "Shader Defines");
    Settings::Clear();
+}
+
+TEST_CASE("UI: overlay ImGui layout persists in Luma.toml and clears cleanly")
+{
+   Settings::Clear();
+   Settings::Storage::Reset();
+   const std::filesystem::path temp = std::filesystem::temp_directory_path() / "luma2_ui_layout_test.toml";
+   std::error_code error;
+   std::filesystem::remove(temp, error);
+
+   constexpr std::string_view SAMPLE_INI = "[Window][Luma]\nPos=40,40\nSize=640,720\nCollapsed=0\n";
+   Settings::Storage::SetOverlayLayout(SAMPLE_INI);
+   REQUIRE(Settings::Storage::Save(temp));
+
+   Settings::Storage::Reset();
+   CHECK(Settings::Storage::GetOverlayLayout().empty());
+   REQUIRE(Settings::Storage::Load(temp));
+   CHECK(Settings::Storage::GetOverlayLayout() == SAMPLE_INI);
+
+   Settings::Storage::SetOverlayLayout({});
+   REQUIRE(Settings::Storage::Save(temp));
+   Settings::Storage::Reset();
+   REQUIRE(Settings::Storage::Load(temp));
+   CHECK(Settings::Storage::GetOverlayLayout().empty());
+
+   std::filesystem::remove(temp, error);
+   Settings::Storage::Reset();
 }
 
 TEST_CASE("Shaders: a define is pending while its value differs from the one the shaders were built with")

@@ -9,17 +9,20 @@
 #include <d3d11.h>
 #include <d3d12.h>
 
-#include "Display/Composition.hpp"
+#include "Display/DisplayComposition.hpp"
 #include "Display/D3D12/D3D12Composition.hpp"
-#include "Display/Levels.hpp"
-#include "Frame/Frame.hpp"
+#include "Display/DisplayMode.hpp"
+#include "Frame/FrameState.hpp"
 #include "Hooks/DXGI/DXGISwapchainProxy.hpp"
-#include "Hooks/Lifetime.hpp"
+#include "Hooks/ObjectLifetime.hpp"
 #include "Swapchain/D3D11/D3D11Swapchain.hpp"
 #include "Swapchain/D3D12/D3D12Swapchain.hpp"
-#include "System/Display.hpp"
-#include "System/Window.hpp"
-#include "Utils/Log.hpp"
+#include "System/MonitorDisplay.hpp"
+#include "System/WindowPolicy.hpp"
+#if DEVELOPMENT
+#include "Trace/DebugDraw.hpp"
+#endif
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -249,7 +252,7 @@ void ApplyColorSpace(IDXGISwapChain* swapchain, State& state, bool at_present = 
    if (FAILED(swapchain->QueryInterface(IID_PPV_ARGS(&swapchain3))) || FAILED(swapchain3->CheckColorSpaceSupport(color_space, &support)) ||
       !(support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) || FAILED(SetRealColorSpace(swapchain, swapchain3.Get(), state, color_space, at_present)))
    {
-      Utils::Log::Warning("Swapchain: {} can't present color space {} (format {})", static_cast<void*>(swapchain), GetName(color_space), uint32_t(state.real.format));
+      Log::Warning("Swapchain: {} can't present color space {} (format {})", static_cast<void*>(swapchain), GetName(color_space), uint32_t(state.real.format));
       return;
    }
    state.color_space = color_space;
@@ -357,7 +360,7 @@ void RefreshDisplay(IDXGISwapChain* swapchain, State& state, bool force)
    const System::Display::Info display = System::Display::Query(state.window, output.Get());
    if (display.hdr_enabled != state.display.hdr_enabled || display.monitor != state.display.monitor || force)
    {
-      Utils::Log::Info("Swapchain: display {} HDR {}{}, peak {:.0f} nits, SDR white {:.0f} nits", static_cast<void*>(display.monitor),
+      Log::Info("Swapchain: display {} HDR {}{}, peak {:.0f} nits, SDR white {:.0f} nits", static_cast<void*>(display.monitor),
          display.hdr_enabled ? "on" : "off", display.hdr_supported ? "" : " (unsupported)", display.peak_nits, display.sdr_white_nits);
    }
    state.display = display;
@@ -378,8 +381,8 @@ bool SwitchThroughReShade(IDXGISwapChain* swapchain, State& state, OutputMode ou
    state.reshade_switch_stopped = true;
    // A missing wrapper was logged by the proxy
    if (result)
-      Utils::Log::Error("Swapchain: {} couldn't switch to {} through ReShade's wrapper (0x{:X}): Luma doesn't switch its output mode while ReShade is loaded, "
-                        "it keeps presenting {}",
+      Log::Error("Swapchain: {} couldn't switch to {} through ReShade's wrapper (0x{:X}): Luma doesn't switch its output mode while ReShade is loaded, "
+                 "it keeps presenting {}",
          static_cast<void*>(swapchain), GetName(output), uint32_t(*result), GetName(state.real.output));
    return false;
 }
@@ -396,7 +399,7 @@ bool ResizeRealBuffers(IDXGISwapChain* swapchain, State& state, OutputMode outpu
    if (SUCCEEDED(result))
       return true;
    if (!state.switch_failed_logged)
-      Utils::Log::Error("Swapchain: {} couldn't switch to {} (0x{:X})", static_cast<void*>(swapchain), GetName(output), uint32_t(result));
+      Log::Error("Swapchain: {} couldn't switch to {} (0x{:X})", static_cast<void*>(swapchain), GetName(output), uint32_t(result));
    state.switch_failed_logged = true;
    return false;
 }
@@ -408,12 +411,12 @@ void SwitchOutput(IDXGISwapChain* swapchain, State& state, OutputMode output)
    ReleaseRealBuffers(state);
    if (!ResizeRealBuffers(swapchain, state, output, format))
       return;
-   Utils::Log::Info("Swapchain: {} now presents {} (format {})", static_cast<void*>(swapchain), GetName(output), uint32_t(format));
+   Log::Info("Swapchain: {} now presents {} (format {})", static_cast<void*>(swapchain), GetName(output), uint32_t(format));
    state.real.output = output;
    state.real.format = format;
    state.switch_failed_logged = false;
    ApplyColorSpace(swapchain, state);
-   Display::Levels::ApplyOutputMode(output != OutputMode::Sdr, state.display);
+   Display::DisplayMode::ApplyOutputMode(output != OutputMode::Sdr, state.display);
 }
 
 // At present: Windows HDR for the user's HDR choice, Luma's color space again after the game set its own, and in Mirror the output
@@ -423,7 +426,7 @@ void FollowOutputMode(IDXGISwapChain* swapchain, State& state)
    const bool requests_hdr = RequestsHdr();
    if (requests_hdr && !state.hdr_requested && state.display.hdr_supported && !state.display.hdr_enabled)
    {
-      Utils::Log::Info("Swapchain: turning Windows HDR on for the HDR output picked: {}", System::Display::SetHdrEnabled(state.window, true) ? "done" : "failed");
+      Log::Info("Swapchain: turning Windows HDR on for the HDR output picked: {}", System::Display::SetHdrEnabled(state.window, true) ? "done" : "failed");
       RefreshDisplay(swapchain, state, true);
    }
    state.hdr_requested = requests_hdr;
@@ -541,7 +544,7 @@ void OnCreated(IDXGISwapChain* swapchain, const Presenter& presenter)
             [&](ID3D12CommandQueue* queue) {
                state->d3d12 = Display::Composition::D3D12::CreateRenderer(queue);
                if (!state->d3d12)
-                  Utils::Log::Error("Swapchain: display composition couldn't be set up on queue {}", static_cast<void*>(queue));
+                  Log::Error("Swapchain: display composition couldn't be set up on queue {}", static_cast<void*>(queue));
             },
          },
          presenter);
@@ -549,10 +552,11 @@ void OnCreated(IDXGISwapChain* swapchain, const Presenter& presenter)
    if (ManagesOutput(state->mode))
    {
       ApplyColorSpace(swapchain, *state);
-      Display::Levels::ApplyOutputMode(state->real.output != OutputMode::Sdr, state->display);
+      Display::DisplayMode::ApplyOutputMode(state->real.output != OutputMode::Sdr, state->display);
    }
    else
    {
+      Display::DisplayMode::SetUnmanaged();
       DescribeNativeOutput(*state);
    }
    if (IsBorderless())
@@ -564,7 +568,7 @@ void OnCreated(IDXGISwapChain* swapchain, const Presenter& presenter)
       if (state->game_fullscreen)
          System::Window::MakeBorderless(state->window);
    }
-   Utils::Log::Info("Swapchain: {} is {}, {} ({}x{} format {} x{} for the game, format {} x{}{}{})", static_cast<void*>(swapchain), GetName(state->mode),
+   Log::Info("Swapchain: {} is {}, {} ({}x{} format {} x{} for the game, format {} x{}{}{})", static_cast<void*>(swapchain), GetName(state->mode),
       GetName(state->real.output), state->game.width, state->game.height, uint32_t(state->game.format), state->game.count, uint32_t(state->real.format),
       state->real.count, state->real.flip ? ", flip" : ", the game's swap effect", state->real.tearing ? ", tearing" : "");
    UpdateStatus(swapchain, *state);
@@ -613,12 +617,13 @@ void OnResized(IDXGISwapChain* swapchain, bool succeeded)
       // As the swapchain's recorded one: a color space set for another format no longer describes the buffers
       if (real.BufferDesc.Format != previous_format)
          state->game_color_space.reset();
+      Display::DisplayMode::SetUnmanaged();
       DescribeNativeOutput(*state);
       UpdateStatus(swapchain, *state);
       return;
    }
    ApplyColorSpace(swapchain, *state);
-   Display::Levels::ApplyOutputMode(state->real.output != OutputMode::Sdr, state->display);
+   Display::DisplayMode::ApplyOutputMode(state->real.output != OutputMode::Sdr, state->display);
    UpdateStatus(swapchain, *state);
 }
 
@@ -683,7 +688,7 @@ bool SetColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
    if (!state->real.flip)
       return false;
    if (state->game_color_space != color_space)
-      Utils::Log::Info("Swapchain: the game set color space {} (kept as its image's, Luma presents {})", GetName(color_space), GetName(state->color_space));
+      Log::Info("Swapchain: the game set color space {} (kept as its image's, Luma presents {})", GetName(color_space), GetName(state->color_space));
    state->game_color_space = color_space;
    state->reapply_color_space = true;
    return true;
@@ -706,6 +711,8 @@ bool SetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen)
    state->game_fullscreen = fullscreen;
    if (fullscreen)
       System::Window::MakeBorderless(state->window);
+   else
+      System::Window::RestoreBorderless(state->window);
    return true;
 }
 
@@ -754,11 +761,17 @@ void Compose(IDXGISwapChain* swapchain)
    const bool mirror = state->mode == Mode::Mirror;
    if (ManagesOutput(state->mode))
       FollowOutputMode(swapchain, *state);
+   const bool game_pq = state->game_color_space &&
+      (*state->game_color_space == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 || *state->game_color_space == DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020);
    const Display::Composition::Inputs inputs = {
       .encoding = GetEncoding(state->real.output, state->real.format),
       .game_linear = IsLinear(state->game.format),
+      .game_pq = game_pq,
       .always = mirror,
       .off = !ManagesOutput(state->mode),
+#if DEVELOPMENT
+      .debug_draw_active = Trace::DebugDraw::IsActive(),
+#endif
       // The scale stage: the game's image over the real buffer (Mirror only)
       .source_scale = {mirror ? float(state->game.width) / float(std::max(state->real.width, 1u)) : 1.f,
          mirror ? float(state->game.height) / float(std::max(state->real.height, 1u)) : 1.f},
@@ -815,7 +828,7 @@ bool Wraps(IDXGISwapChain* swapchain)
    if (!state || !Swapchain::Wraps())
       return false;
    state->wrapped = true;
-   Utils::Log::Info("Swapchain: the game gets a proxy of {}", static_cast<void*>(swapchain));
+   Log::Info("Swapchain: the game gets a proxy of {}", static_cast<void*>(swapchain));
    return true;
 }
 

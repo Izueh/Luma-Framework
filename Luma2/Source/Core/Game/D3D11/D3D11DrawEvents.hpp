@@ -2,8 +2,8 @@
 
 #include <d3d11.h>
 
-#include "Game/Events.hpp"
-#include "Shaders/Stages.hpp"
+#include "Game/GameEvents.hpp"
+#include "Shaders/ShaderStages.hpp"
 
 // The game's draw events (Game::D3D11::Events::on_variant_draw and on_draw_or_dispatch, Game::D3D11::OnShaderDraw), run by the draw
 // and dispatch handlers

@@ -6,7 +6,7 @@
 
 #include <d3d12.h>
 
-#include "Resources/Bindings.hpp"
+#include "Resources/ResourceBindings.hpp"
 #include "Resources/ResourceDatabase.hpp"
 
 // Resources::Database on D3D12: the fulfil step for Luma's cbuffers and textures. Cbuffer contents go into an upload ring per device

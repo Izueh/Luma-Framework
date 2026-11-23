@@ -5,7 +5,7 @@
 
 #include <d3d12.h>
 
-#include "Hooks/Functions.hpp"
+#include "Hooks/HookFunctions.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
 
 // What a game does on D3D12, counted for research: pipelines, root signatures, descriptor heaps and

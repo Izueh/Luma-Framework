@@ -2,8 +2,9 @@
 
 #include <wrl/client.h>
 
-#include "Game/Registry.hpp"
-#include "Hooks/Scope.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "Game/GameRegistry.hpp"
+#include "Hooks/HookScope.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
 
@@ -24,7 +25,7 @@ Luma::Shaders::StageSet GetVariantStages(List* list, Luma::Shaders::StageSet sta
 
 DrawResult RunEvents(List* list, const Game::D3D12::DrawCall* draw, const Game::D3D12::DispatchCall* dispatch, Luma::Shaders::StageSet stages)
 {
-   if (!IsEnabled())
+   if (!Settings::IsEnabled())
       return DrawResult::None;
    const BoundPipeline bound = Luma::Shaders::Variants::D3D12::GetBoundPipeline(list);
    Game::D3D12::Call call = {

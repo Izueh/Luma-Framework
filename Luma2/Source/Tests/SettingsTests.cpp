@@ -11,9 +11,9 @@
 
 #include <Windows.h>
 
-#include "Settings/Registry.hpp"
-#include "Settings/Storage.hpp"
-#include "Shaders/Defines.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "Settings/SettingsStorage.hpp"
+#include "Shaders/ShaderDefines.hpp"
 
 using namespace Luma;
 using namespace Luma::Settings;

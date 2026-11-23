@@ -23,18 +23,18 @@
 #include <wrl/client.h>
 
 #include "Luma.hpp"
-#include "Shaders/Cache.hpp"
-#include "Shaders/Compiler.hpp"
-#include "Shaders/Container.hpp"
+#include "Shaders/ShaderCache.hpp"
+#include "Shaders/ShaderCompiler.hpp"
+#include "Shaders/ShaderContainer.hpp"
 #include "Shaders/D3D12/D3D12RootSignatures.hpp"
-#include "Resources/Bindings.hpp"
+#include "Resources/ResourceBindings.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
-#include "Shaders/Database.hpp"
-#include "Shaders/Defines.hpp"
-#include "Shaders/Files.hpp"
-#include "Shaders/Signatures.hpp"
-#include "Shaders/Variants.hpp"
+#include "Shaders/ShaderDatabase.hpp"
+#include "Shaders/ShaderDefines.hpp"
+#include "Shaders/ShaderFiles.hpp"
+#include "Shaders/ShaderSignatures.hpp"
+#include "Shaders/ShaderVariants.hpp"
 #include "Utils/Hash.hpp"
 
 #pragma comment(lib, "d3dcompiler.lib")
@@ -231,11 +231,11 @@ TEST_CASE("Shaders: the registers and spaces a shader declares, without reflecti
    REQUIRE(SUCCEEDED(D3DCompile(sm50.data(), sm50.size(), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, &blob, nullptr)));
    const Shaders::Container::Bindings old = Shaders::Container::GetBindings(GetBytes(blob.Get()));
    CHECK(old.found);
-   CHECK(old.Declares(BindingType::ShaderResource, 0, 3));
-   CHECK(old.Declares(BindingType::Sampler, 0, 1));
-   CHECK(old.Declares(BindingType::ConstantBuffer, 0, 2));
-   CHECK_FALSE(old.Declares(BindingType::ShaderResource, 0, 2));
-   CHECK_FALSE(old.UsesSpace(1));
+   CHECK(Shaders::Container::Declares(old, BindingType::ShaderResource, 0, 3));
+   CHECK(Shaders::Container::Declares(old, BindingType::Sampler, 0, 1));
+   CHECK(Shaders::Container::Declares(old, BindingType::ConstantBuffer, 0, 2));
+   CHECK_FALSE(Shaders::Container::Declares(old, BindingType::ShaderResource, 0, 2));
+   CHECK_FALSE(Shaders::Container::UsesSpace(old, 1));
 
    // SM5.1: ranges in spaces, unbounded arrays
    const std::string_view sm51 = "Texture2D t[4] : register(t2, space1); Texture2D u[] : register(t0, space7); RWTexture2D<float4> w : register(u1, space3);"
@@ -245,16 +245,16 @@ TEST_CASE("Shaders: the registers and spaces a shader declares, without reflecti
    REQUIRE(SUCCEEDED(D3DCompile(sm51.data(), sm51.size(), nullptr, nullptr, nullptr, "main", "ps_5_1", D3DCOMPILE_ENABLE_UNBOUNDED_DESCRIPTOR_TABLES, 0, &blob, nullptr)));
    const Shaders::Container::Bindings bindings = Shaders::Container::GetBindings(GetBytes(blob.Get()));
    CHECK(bindings.found);
-   CHECK(bindings.Declares(BindingType::ShaderResource, 1, 2));
-   CHECK(bindings.Declares(BindingType::ShaderResource, 1, 5));
-   CHECK_FALSE(bindings.Declares(BindingType::ShaderResource, 1, 6));
-   CHECK_FALSE(bindings.Declares(BindingType::ShaderResource, 0, 2));
-   CHECK(bindings.Declares(BindingType::ShaderResource, 7, 100000));
-   CHECK(bindings.HasUnbounded());
-   CHECK(bindings.Declares(BindingType::UnorderedAccess, 3, 1));
-   CHECK(bindings.Declares(BindingType::ConstantBuffer, 100, 5));
-   CHECK(bindings.Declares(BindingType::Sampler, 2, 0));
-   CHECK(bindings.UsesSpace(100));
+   CHECK(Shaders::Container::Declares(bindings, BindingType::ShaderResource, 1, 2));
+   CHECK(Shaders::Container::Declares(bindings, BindingType::ShaderResource, 1, 5));
+   CHECK_FALSE(Shaders::Container::Declares(bindings, BindingType::ShaderResource, 1, 6));
+   CHECK_FALSE(Shaders::Container::Declares(bindings, BindingType::ShaderResource, 0, 2));
+   CHECK(Shaders::Container::Declares(bindings, BindingType::ShaderResource, 7, 100000));
+   CHECK(Shaders::Container::HasUnbounded(bindings));
+   CHECK(Shaders::Container::Declares(bindings, BindingType::UnorderedAccess, 3, 1));
+   CHECK(Shaders::Container::Declares(bindings, BindingType::ConstantBuffer, 100, 5));
+   CHECK(Shaders::Container::Declares(bindings, BindingType::Sampler, 2, 0));
+   CHECK(Shaders::Container::UsesSpace(bindings, 100));
    CHECK_FALSE(bindings.resource_heap_indexed);
 
    // SM6 (DXIL): PSV0's resource list, SFI0's heap indexing flag
@@ -292,9 +292,9 @@ TEST_CASE("Shaders: the registers and spaces a shader declares, without reflecti
    container.insert(container.end(), features.begin(), features.end());
    const Shaders::Container::Bindings dxil = Shaders::Container::GetBindings(container);
    CHECK(dxil.found);
-   CHECK(dxil.Declares(BindingType::ShaderResource, 4, 12345));
-   CHECK(dxil.Declares(BindingType::ConstantBuffer, 0, 1));
-   CHECK_FALSE(dxil.Declares(BindingType::ConstantBuffer, 0, 0));
+   CHECK(Shaders::Container::Declares(dxil, BindingType::ShaderResource, 4, 12345));
+   CHECK(Shaders::Container::Declares(dxil, BindingType::ConstantBuffer, 0, 1));
+   CHECK_FALSE(Shaders::Container::Declares(dxil, BindingType::ConstantBuffer, 0, 0));
    CHECK(dxil.resource_heap_indexed);
    CHECK_FALSE(dxil.sampler_heap_indexed);
 }
@@ -507,15 +507,34 @@ TEST_CASE("Resources: the C++ cbuffer structs are laid out as FXC packs the shad
 #else
                              MEMBER(Settings, Padding1),
 #endif
-                             MEMBER(Settings, GameSettings)}));
+                             MEMBER(Settings, DisplayComposition), MEMBER(Settings, GameSettings)}));
 #if DEVELOPMENT
-   CHECK(offsetof(Settings, GameSettings) == 96);
+   CHECK(offsetof(Settings, DisplayComposition) == 96);
+   CHECK(offsetof(Settings, GameSettings) == 128);
 #else
-   CHECK(offsetof(Settings, GameSettings) == 64);
+   CHECK(offsetof(Settings, DisplayComposition) == 64);
+   CHECK(offsetof(Settings, GameSettings) == 96);
 #endif
+   using Composition = CB::DisplayCompositionSettings;
+   CheckMembers(settings->GetMemberTypeByName("DisplayComposition"),
+      std::to_array({MEMBER(Composition, PostProcessSpaceType), MEMBER(Composition, VanillaEncodingType), MEMBER(Composition, GammaCorrectionType), MEMBER(Composition, GamutMappingType), MEMBER(Composition, UIDrawType), MEMBER(Composition, EarlyDisplayEncoding), MEMBER(Composition, Stages), MEMBER(Composition, DebugFlags)}));
    using GameSettings = CB::LumaGameSettings;
    CheckMembers(settings->GetMemberTypeByName("GameSettings"),
       std::to_array({MEMBER(GameSettings, Strength), MEMBER(GameSettings, Mode), MEMBER(GameSettings, Center), MEMBER(GameSettings, Tint), MEMBER(GameSettings, Last)}));
+
+   // Verify Luma_DisplayComposition.hlsl compiles cleanly with the runtime DisplayComposition cbuffer fields
+   const std::array<std::filesystem::path, 2> composition_roots = {tests, tests / "../../Resources/Global/Shaders"};
+   const std::vector<Shaders::Compiler::Define> composition_defines = {
+      {"DEVELOPMENT", "1"},
+      {"LUMA_SETTINGS_CB_INDEX", "b13"},
+      {"LUMA_DATA_CB_INDEX", "b12"},
+      {"LUMA_UI_DATA_CB_INDEX", "b11"},
+      {"LUMA_COMPOSITION_CB_INDEX", "b10"},
+   };
+   const Shaders::Compiler::Compiled composition_compiled =
+      Shaders::Compiler::Compile(composition_roots, "Luma/Display/Luma_DisplayComposition.hlsl", composition_defines, "ps_5_0", "main");
+   INFO(composition_compiled.messages);
+   CHECK_FALSE(composition_compiled.failed);
 
    using Data = CB::LumaInstanceData;
    ID3D11ShaderReflectionType* data = GetStructType(reflection.Get(), "LumaData", Resources::LumaCBuffers::DATA_SIZE);

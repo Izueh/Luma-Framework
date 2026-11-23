@@ -38,7 +38,7 @@ cbuffer LumaData : register(LUMA_DATA_CB_INDEX)
 // Note that these partially ignore "VANILLA_ENCODING_TYPE", they ignore "GAMMA_CORRECTION_RANGE_TYPE" (it acts as if it was 0) and ignore "EARLY_DISPLAY_ENCODING" (it acts as if it's true).
 float3 game_gamma_to_linear(float3 Color, bool Mirrored = true)
 {
-#if POST_PROCESS_SPACE_TYPE == 1 && GAMMA_CORRECTION_TYPE >= 2 && 0 // Disabled for intermediary conversions (fall back to sRGB (this assumes "VANILLA_ENCODING_TYPE" 0)). Moved to final linearization shader
+#if 0 // Disabled for intermediary conversions (fall back to sRGB (this assumes "VANILLA_ENCODING_TYPE" 0)). Moved to final linearization shader
 #if 1
   return RestoreLuminance(gamma_sRGB_to_linear(Color, Mirrored ? GCT_MIRROR : GCT_NONE), gamma_to_linear(Color, Mirrored ? GCT_MIRROR : GCT_NONE));
 #else // Alternative version (by luminance instead of by channel)
@@ -46,9 +46,8 @@ float3 game_gamma_to_linear(float3 Color, bool Mirrored = true)
 #endif
 #endif
 
-#if (POST_PROCESS_SPACE_TYPE == 1 && GAMMA_CORRECTION_TYPE == 1) || VANILLA_ENCODING_TYPE == 1
-	return gamma_to_linear(Color, Mirrored ? GCT_MIRROR : GCT_NONE);
-#endif
+  if ((POST_PROCESS_SPACE_TYPE == 1 && GAMMA_CORRECTION_TYPE == 1) || VANILLA_ENCODING_TYPE == 1)
+    return gamma_to_linear(Color, Mirrored ? GCT_MIRROR : GCT_NONE);
 
   // any other "GAMMA_CORRECTION_TYPE", any "POST_PROCESS_SPACE_TYPE"
   return gamma_sRGB_to_linear(Color, Mirrored ? GCT_MIRROR : GCT_NONE);
@@ -56,7 +55,7 @@ float3 game_gamma_to_linear(float3 Color, bool Mirrored = true)
 // This function undoes any gamma correction we had done
 float3 linear_to_game_gamma(float3 Color, bool Mirrored = true)
 {
-#if POST_PROCESS_SPACE_TYPE == 1 && GAMMA_CORRECTION_TYPE >= 2 && 0 // Disabled for intermediary conversions (fall back to sRGB (this assumes "VANILLA_ENCODING_TYPE" 0)). Moved to final linearization shader
+#if 0 // Disabled for intermediary conversions (fall back to sRGB (this assumes "VANILLA_ENCODING_TYPE" 0)). Moved to final linearization shader
 #if 1 // This version of this inverse formula is a little more accurate, though none of the two are a perfect mirror, as the original operation is destructive (and if it's not, it's complicated and slow to accurately revert)
     float3 gammaCorrectedColor = gamma_sRGB_to_linear(linear_to_gamma(Color, Mirrored ? GCT_MIRROR : GCT_NONE), Mirrored ? GCT_MIRROR : GCT_NONE);
 #else
@@ -65,9 +64,8 @@ float3 linear_to_game_gamma(float3 Color, bool Mirrored = true)
 	  return linear_to_sRGB_gamma(RestoreLuminance(Color, gammaCorrectedColor), Mirrored ? GCT_MIRROR : GCT_NONE);
 #endif
 
-#if (POST_PROCESS_SPACE_TYPE == 1 && GAMMA_CORRECTION_TYPE == 1) || VANILLA_ENCODING_TYPE == 1
-	return linear_to_gamma(Color, Mirrored ? GCT_MIRROR : GCT_NONE);
-#endif
+  if ((POST_PROCESS_SPACE_TYPE == 1 && GAMMA_CORRECTION_TYPE == 1) || VANILLA_ENCODING_TYPE == 1)
+    return linear_to_gamma(Color, Mirrored ? GCT_MIRROR : GCT_NONE);
 
   // any other "GAMMA_CORRECTION_TYPE", any "POST_PROCESS_SPACE_TYPE"
   return linear_to_sRGB_gamma(Color, Mirrored ? GCT_MIRROR : GCT_NONE);
@@ -234,72 +232,62 @@ float3 DecodeBackBufferToLinearSDRRange(float3 color, bool UI = false)
 bool ShouldForceSDR(float2 UV, bool FlipY /*= false*/, out bool blackBar, float aspectRatio = 1.0, float barLength = 0.00125)
 {
   blackBar = false;
-#if defined(TEST_SDR_HDR_SPLIT_VIEW_MODE) && TEST_SDR_HDR_SPLIT_VIEW_MODE >= 1
-#if TEST_SDR_HDR_SPLIT_VIEW_MODE == 1 || TEST_SDR_HDR_SPLIT_VIEW_MODE == 3 // 2 bars (1 split)
-	static const uint numberOfBars = 2;
-#else // 3 bars (2 splits, 2 SDR and 1 HDR)
-	static const uint numberOfBars = 3;
-#endif
+#if DEVELOPMENT
+  const uint splitMode = TEST_SDR_HDR_SPLIT_VIEW_MODE;
+  if (splitMode >= 1)
+  {
+    const uint numberOfBars = (splitMode == 1 || splitMode == 3) ? 2u : 3u;
+    float targetUV;
+    if (splitMode <= 2) // Horizontal
+    {
+      targetUV = UV.x;
+      barLength /= aspectRatio;
+    }
+    else // Vertical
+    {
+      targetUV = UV.y;
+      if (splitMode == 3)
+        targetUV = 1.0 - targetUV;
+      if (FlipY)
+        targetUV = 1.0 - targetUV;
+    }
 
-#if TEST_SDR_HDR_SPLIT_VIEW_MODE <= 2 // Horizontal
-	float targetUV = UV.x;
-	barLength /= aspectRatio; // Scale by the usually wider side to match the thickness on both axes
-#else // Vertical
-	float targetUV = UV.y;
-#if TEST_SDR_HDR_SPLIT_VIEW_MODE == 3
-  // Flip Y bars to have HDR on top, unless the game engine already flipped them (e.g. Unity)
-  targetUV = 1.0 - targetUV;
-#endif
-  if (FlipY) targetUV = 1.0 - targetUV;
-#endif
-
-#if 1 // Draw black bars
-	if (numberOfBars != 3)
-	{
-    [unroll]
-		for (uint i = 1; i < numberOfBars; i++)
-		{
-			float barUV = (float)i / numberOfBars;
-			if (targetUV > barUV - barLength && targetUV < barUV + barLength)
+    if (numberOfBars != 3)
+    {
+      const float barUV = 0.5;
+      if (targetUV > barUV - barLength && targetUV < barUV + barLength)
+        blackBar = true;
+    }
+    else
+    {
+      const float2 splits = float2(0.25, 0.75);
+      [unroll]
+      for (uint i = 0; i < 2; i++)
       {
-				blackBar = true;
-        break;
+        const float barUV = splits[i];
+        if (targetUV > barUV - barLength && targetUV < barUV + barLength)
+        {
+          blackBar = true;
+          break;
+        }
       }
-		}
-	}
-  // Custom separators at 0.25 and 0.75
-	else
-	{
-   	float2 splits = float2(0.25, 0.75);
-    [unroll]
-		for (uint i = 0; i < 2; i++)
-		{
-			float barUV = splits[i];
-			if (targetUV > barUV - barLength && targetUV < barUV + barLength)
-      {
-	  		blackBar = true;
-        break;
-      }
-		}
-	}
+    }
+
+    float barIndex = floor(targetUV * (float)numberOfBars);
+    if (numberOfBars == 3)
+    {
+      if (targetUV <= 0.25)
+        barIndex = 0.0;
+      else if (targetUV >= 0.75)
+        barIndex = 2.0;
+      else
+        barIndex = 1.0;
+    }
+
+    if (fmod(barIndex, 2.0) == 0.0)
+      return true;
+  }
 #endif
-
-	float barIndex = floor(targetUV * (float)numberOfBars);
-	// Custom split: make central bar as wide as the sum of the other two
-	if (numberOfBars == 3)
-	{
-		if (targetUV <= 0.25)
-			barIndex = 0.0;       // left
-		else if (targetUV >= 0.75)
-			barIndex = 2.0;       // middle (double width)
-		else
-			barIndex = 1.0;       // right
-	}
-
-	// Force SDR only on even bars
-	if (fmod(barIndex, 2.0) == 0.0)
-    return true;
-#endif // TEST_SDR_HDR_SPLIT_VIEW_MODE
   return false;
 }
 

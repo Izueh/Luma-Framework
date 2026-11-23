@@ -17,10 +17,10 @@
 #include "Resources/ResourceDatabase.hpp"
 #include "Utils/Format.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
-#include "Shaders/Database.hpp"
-#include "Shaders/Variants.hpp"
+#include "Shaders/ShaderDatabase.hpp"
+#include "Shaders/ShaderVariants.hpp"
 #include "Trace/StateNames.hpp"
-#include "Trace/Track.hpp"
+#include "Trace/CbufferTracker.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -117,7 +117,7 @@ Resource DescribeOwn(ID3D11Resource* resource)
 // A mirror is bound in place of the game's texture: described as the game's, with the mirror's format and size
 Resource DescribeResource(ID3D11Resource* resource)
 {
-   ID3D11Resource* original = Resources::Mirrors::D3D11::GetOriginal(resource);
+   ID3D11Resource* original = Resources::Mirrors::D3D11::FindOriginal(resource);
    if (!original)
       return DescribeOwn(resource);
    Resource described = DescribeOwn(original);
@@ -266,8 +266,9 @@ void GetConstantBuffers(ID3D11DeviceContext* context, ID3D11DeviceContext1* cont
 }
 
 // The constant buffers a stage's shader reads (all bound ones when its reflection didn't tell), copied for their contents on the
-// immediate context
-void AddConstantBuffers(Recording& recording, ID3D11DeviceContext1* context1, ShaderStage stage, const Shaders::Database::Shader* shader)
+// immediate context. Also includes Luma cbuffers requested by a replaced/patched shader.
+void AddConstantBuffers(Recording& recording, ID3D11DeviceContext1* context1, ShaderStage stage, const Shaders::Database::Shader* shader,
+   const Shaders::CompiledShader* compiled = nullptr)
 {
    ID3D11DeviceContext* context = recording.context.Get();
    std::array<ID3D11Buffer*, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT> buffers = {};
@@ -278,10 +279,37 @@ void AddConstantBuffers(Recording& recording, ID3D11DeviceContext1* context1, Sh
    const bool immediate = context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE;
    ComPtr<ID3D11Device> device;
    context->GetDevice(&device);
+
+   // Slots that a custom/replaced shader binds to Luma's own cbuffers (e.g. LumaSettings, LumaData)
+   std::array<const Resources::Database::Entry*, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT> luma_slots = {};
+   if (compiled)
+   {
+      for (const Shaders::Request& request : compiled->requests)
+      {
+         if (request.slot >= luma_slots.size())
+            continue;
+         const Resources::Database::Entry& entry = Resources::Database::Get(request.entry);
+         if (entry.kind == Resources::Database::Kind::ConstantBuffer)
+            luma_slots[request.slot] = &entry;
+      }
+   }
+
    for (uint32_t slot = 0; slot < buffers.size(); slot++)
    {
       ComPtr<ID3D11Buffer> buffer;
       buffer.Attach(buffers[slot]);
+      if (const Resources::Database::Entry* luma_entry = luma_slots[slot])
+      {
+         ConstantBuffer cb = {stage, slot, "Luma", luma_entry->size, 0, 0};
+         cb.luma_name = luma_entry->name;
+         if (luma_entry->write && luma_entry->size > 0)
+         {
+            cb.contents.resize(luma_entry->size);
+            luma_entry->write(cb.contents, {}, {device.Get(), {}});
+         }
+         recording.event.constant_buffers.push_back(std::move(cb));
+         continue;
+      }
       if (!buffer || (known && !shader->reflection.constant_buffers[slot]))
          continue;
       D3D11_BUFFER_DESC desc;
@@ -347,8 +375,8 @@ void DescribeState(Recording& recording, ShaderStage stage, bool recorded)
          continue;
       D3D11_SAMPLER_DESC desc;
       sampler->GetDesc(&desc);
-      event.samplers.push_back({slot, StateNames::Filter(desc.Filter), uint32_t(desc.Filter), {uint32_t(desc.AddressU), uint32_t(desc.AddressV), uint32_t(desc.AddressW)},
-         std::format("{} {} {}", StateNames::Address(desc.AddressU), StateNames::Address(desc.AddressV), StateNames::Address(desc.AddressW)),
+      event.samplers.push_back({slot, StateNames::GetFilterName(desc.Filter), uint32_t(desc.Filter), {uint32_t(desc.AddressU), uint32_t(desc.AddressV), uint32_t(desc.AddressW)},
+         std::format("{} {} {}", StateNames::GetAddressName(desc.AddressU), StateNames::GetAddressName(desc.AddressV), StateNames::GetAddressName(desc.AddressW)),
          desc.MipLODBias});
    }
 
@@ -414,7 +442,7 @@ void DescribeState(Recording& recording, ShaderStage stage, bool recorded)
       event.depth_stencil.state_bound = depth != nullptr;
       event.depth_stencil.depth_enable = depth_desc.DepthEnable;
       event.depth_stencil.depth_write = depth_desc.DepthWriteMask == D3D11_DEPTH_WRITE_MASK_ALL;
-      event.depth_stencil.depth_func = StateNames::Comparison(depth_desc.DepthFunc);
+      event.depth_stencil.depth_func = StateNames::GetComparisonName(depth_desc.DepthFunc);
       event.depth_stencil.stencil_enable = depth_desc.StencilEnable;
       event.depth_stencil.read_mask = depth_desc.StencilReadMask;
       event.depth_stencil.write_mask = depth_desc.StencilWriteMask;
@@ -426,7 +454,7 @@ void DescribeState(Recording& recording, ShaderStage stage, bool recorded)
       D3D11_RASTERIZER_DESC rasterizer_desc = CD3D11_RASTERIZER_DESC(D3D11_DEFAULT);
       if (rasterizer)
          rasterizer->GetDesc(&rasterizer_desc);
-      event.rasterizer = {rasterizer != nullptr, StateNames::Cull(rasterizer_desc.CullMode), StateNames::Fill(rasterizer_desc.FillMode),
+      event.rasterizer = {rasterizer != nullptr, StateNames::GetCullName(rasterizer_desc.CullMode), StateNames::GetFillName(rasterizer_desc.FillMode),
          bool(rasterizer_desc.FrontCounterClockwise), rasterizer_desc.DepthBias, rasterizer_desc.SlopeScaledDepthBias, bool(rasterizer_desc.DepthClipEnable),
          bool(rasterizer_desc.ScissorEnable), bool(rasterizer_desc.MultisampleEnable)};
 
@@ -493,9 +521,10 @@ Recording BeginGameCall(ID3D11DeviceContext* context, EventType type, Shaders::S
          }
          recorded.forced = shader->forced_variant.load(std::memory_order_relaxed);
       }
-      if (bound && bound->variant_stages.Has(stage))
+      const Shaders::CompiledShader* compiled = (bound && bound->variant_stages.Has(stage)) ? bound->compiled[index].get() : nullptr;
+      if (compiled)
          recorded.variant = bound->sources[index];
-      AddConstantBuffers(recording, context1.Get(), stage, shader);
+      AddConstantBuffers(recording, context1.Get(), stage, shader, compiled);
       if (stage == ShaderStage::Pixel)
          main_stage = stage;
    }
@@ -592,11 +621,15 @@ void AddClear(ID3D11DeviceContext* context, std::string_view name, ID3D11View* v
    Add(std::move(event));
 }
 
-void AddWrite(ID3D11DeviceContext* context, std::string_view name, ID3D11Resource* resource)
+void AddWrite(ID3D11DeviceContext* context, std::string_view name, ID3D11Resource* resource, const CpuAccess& access, EventType type)
 {
-   Event event = MakeResourceEvent(context, EventType::CpuWrite, name);
+   Event event = MakeResourceEvent(context, type, name);
    if (resource)
       event.target = DescribeResource(resource);
+   CpuAccess details = access;
+   if (details.api_function.empty())
+      details.api_function = std::string(name);
+   event.cpu_access = std::move(details);
    Add(std::move(event));
 }
 
@@ -682,7 +715,7 @@ void ReadBackTracked()
    std::optional<TrackedCopy> copy;
    {
       std::scoped_lock lock(tracked_mutex);
-      const std::optional<Track::Target> target = Track::Get();
+      const std::optional<Track::Target> target = Track::GetTarget();
       std::erase_if(tracked, [&](const TrackedCopy& entry) { return entry.target != target; });
       const auto newest = std::ranges::find_last_if(tracked, &TrackedCopy::executed);
       if (!newest.empty())

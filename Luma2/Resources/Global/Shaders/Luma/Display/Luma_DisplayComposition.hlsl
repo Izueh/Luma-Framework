@@ -25,7 +25,7 @@ cbuffer LumaComposition : register(LUMA_COMPOSITION_CB_INDEX)
 }
 
 // Each stage can be switched off on its own (Display::Composition::Stage), and is an identity then
-bool HasStage(uint stage) { return (LumaComposition.Stages & (1u << stage)) != 0; }
+bool HasStage(uint stage) { return (LumaSettings.DisplayComposition.Stages & (1u << stage)) != 0; }
 #define STAGE_DECODE 0u // The game's encoding to linear
 #define STAGE_UI 1u // UI composite and its paper white
 #define STAGE_GAMMA 2u // Gamma correction (sRGB and 2.2 mismatch)
@@ -73,6 +73,7 @@ bool DrawDebugTexture(float3 pos, inout float4 outColor, float gamePaperWhite, f
 	}
 	// TODO: add better support for depth stencil formats? uint?
 	// Skip if there's no texture. It might be undefined behaviour, but it seems to work on Nvidia
+	bool drew = false;
 	if (debugWidth != 0.0)
 	{
 		float2 resolutionScale = 1.0;
@@ -250,55 +251,57 @@ bool DrawDebugTexture(float3 pos, inout float4 outColor, float gamePaperWhite, f
 		if (validTexel || !backgroundPassthrough)
 		{
 			outColor = color * gamePaperWhite; // Scale by user paper white brightness just to make it more visible
-			return true;
+			drew = true;
 		}
-    }
-	return false;
+	}
+	return drew;
 }
 #endif
 
 float3 ComposeUI(float3 pos, float3 linearSceneColor, float gamePaperWhite, float UIPaperWhite)
 {
-#if POST_PROCESS_SPACE_TYPE != 1
 	float4 UIColor = uiTexture.Load((int3)pos.xyz);
-    float UIIntensity = saturate(UIColor.a);
+	float UIIntensity = saturate(UIColor.a);
 	float UIPaperWhiteScale = UIPaperWhite / gamePaperWhite;
 
-	// The scene and UI arrive in the game's native gamma encoding. Normalize the scene to UI paper white in linear space,
-	// restore its original encoding for the blend, then return to the encoded post-process path after restoring the scale.
-	float3 UIBackgroundLinear = game_gamma_to_linear(linearSceneColor.rgb, GCT_MIRROR) / UIPaperWhiteScale;
-	float3 UIBackgroundGamma = linear_to_game_gamma(UIBackgroundLinear, GCT_MIRROR);
-	float3 composedColorGamma = UIBackgroundGamma * (1.0 - UIIntensity) + UIColor.rgb;
-	float3 linearComposedColor = game_gamma_to_linear(composedColorGamma, GCT_MIRROR) * UIPaperWhiteScale;
-	return linear_to_game_gamma(linearComposedColor, GCT_MIRROR);
-#else
-	float4 UIColor = uiTexture.Load((int3)pos.xyz);
-    float UIIntensity = saturate(UIColor.a);
-	float UIPaperWhiteScale = UIPaperWhite / gamePaperWhite;
+	if (POST_PROCESS_SPACE_TYPE != 1)
+	{
+		// The scene and UI arrive in the game's native gamma encoding. Normalize the scene to UI paper white in linear space,
+		// restore its original encoding for the blend, then return to the encoded post-process path after restoring the scale.
+		float3 UIBackgroundLinear = game_gamma_to_linear(linearSceneColor.rgb, GCT_MIRROR) / UIPaperWhiteScale;
+		float3 UIBackgroundGamma = linear_to_game_gamma(UIBackgroundLinear, GCT_MIRROR);
+		float3 composedColorGamma = UIBackgroundGamma * (1.0 - UIIntensity) + UIColor.rgb;
+		float3 linearComposedColor = game_gamma_to_linear(composedColorGamma, GCT_MIRROR) * UIPaperWhiteScale;
+		return linear_to_game_gamma(linearComposedColor, GCT_MIRROR);
+	}
+	else
+	{
+		// Preserve the game's original gamma-space UI blending. Normalize the linear scene to the UI paper-white range,
+		// encode it into the same space as the separated UI, blend the premultiplied UI there, then decode and restore
+		// the UI-relative scale. The final gamePaperWhite multiply consequently controls the scene while this scale
+		// independently controls the UI.
+		float3 UIBackgroundLinear = linearSceneColor.rgb / UIPaperWhiteScale;
+		float3 UIBackgroundGamma;
+		float3 linearComposedColor;
 
-	// Preserve the game's original gamma-space UI blending. Normalize the linear scene to the UI paper-white range,
-	// encode it into the same space as the separated UI, blend the premultiplied UI there, then decode and restore
-	// the UI-relative scale. The final gamePaperWhite multiply consequently controls the scene while this scale
-	// independently controls the UI.
-	float3 UIBackgroundLinear = linearSceneColor.rgb / UIPaperWhiteScale;
-	float3 UIBackgroundGamma;
-	float3 linearComposedColor;
+		// If gamma correction still occurs after composition, use sRGB as the intermediate storage/blending encoding;
+		// the later correction makes it visually match gamma 2.2. If correction already happened, blend in gamma 2.2 directly.
+		if ((!EARLY_DISPLAY_ENCODING && GAMMA_CORRECTION_TYPE <= 1) || GAMMA_CORRECTION_TYPE >= 2)
+		{
+			UIBackgroundGamma = linear_to_sRGB_gamma(UIBackgroundLinear, GCT_MIRROR);
+			float3 composedColorGamma = UIBackgroundGamma * (1.0 - UIIntensity) + UIColor.rgb;
+			linearComposedColor = gamma_sRGB_to_linear(composedColorGamma, GCT_MIRROR);
+		}
+		else
+		{
+			UIBackgroundGamma = linear_to_gamma(UIBackgroundLinear, GCT_MIRROR);
+			float3 composedColorGamma = UIBackgroundGamma * (1.0 - UIIntensity) + UIColor.rgb;
+			linearComposedColor = gamma_to_linear(composedColorGamma, GCT_MIRROR);
+		}
 
-	// If gamma correction still occurs after composition, use sRGB as the intermediate storage/blending encoding;
-	// the later correction makes it visually match gamma 2.2. If correction already happened, blend in gamma 2.2 directly.
-#if (!EARLY_DISPLAY_ENCODING && GAMMA_CORRECTION_TYPE <= 1) || GAMMA_CORRECTION_TYPE >= 2
-	UIBackgroundGamma = linear_to_sRGB_gamma(UIBackgroundLinear, GCT_MIRROR);
-	float3 composedColorGamma = UIBackgroundGamma * (1.0 - UIIntensity) + UIColor.rgb;
-	linearComposedColor = gamma_sRGB_to_linear(composedColorGamma, GCT_MIRROR);
-#else
-	UIBackgroundGamma = linear_to_gamma(UIBackgroundLinear, GCT_MIRROR);
-	float3 composedColorGamma = UIBackgroundGamma * (1.0 - UIIntensity) + UIColor.rgb;
-	linearComposedColor = gamma_to_linear(composedColorGamma, GCT_MIRROR);
-#endif
-
-	linearComposedColor *= UIPaperWhiteScale;
-	return linearComposedColor;
-#endif
+		linearComposedColor *= UIPaperWhiteScale;
+		return linearComposedColor;
+	}
 }
 
 // Custom Luma shader to apply the display (or output) transfer function from a linear input (or apply custom gamma correction).
@@ -323,10 +326,11 @@ float4 Compose(float4 pos)
 	float sourceHeight;
 	sourceTexture.GetDimensions(sourceWidth, sourceHeight);
 
-#if TEST_2X_ZOOM // TEST: zoom into the image to analyze it
-	const float scale = 2.0;
-	pos.xy = pos.xy / scale + float2(sourceWidth, sourceHeight) / (scale * 2.0);
-#endif
+	if (HasStage(STAGE_DEVELOPMENT) && TEST_2X_ZOOM)
+	{
+		const float scale = 2.0;
+		pos.xy = pos.xy / scale + float2(sourceWidth, sourceHeight) / (scale * 2.0);
+	}
 
 	float2 uv = pos.xy / float2(sourceWidth, sourceHeight);
 
@@ -361,41 +365,57 @@ float4 Compose(float4 pos)
 #endif
 	//return mipColor2; //TODOFT
 
-	// This case means the game currently doesn't have Luma custom shaders built in (fallback in case of problems), or has manually unloaded them, so the value of some macro defines do not matter
+	// This case means the game currently doesn't have Luma custom shaders built in (fallback in case of problems), or has manually unloaded them
 	const bool modActive = LumaData.CustomData1 == 0;
 	if (!modActive)
 	{
+		// Native HDR10 PQ game output (Luma disabled/unloaded while presenting through Mirror swapchain)
+		if (LumaData.CustomData1 == 3)
+		{
+			if (HasStage(STAGE_DECODE))
+			{
+				color.rgb = PQ_to_Linear(color.rgb);
+				color.rgb *= (HDR10_MaxWhiteNits / sRGB_WhiteLevelNits);
+				color.rgb = BT2020_To_BT709(color.rgb);
+			}
+			return float4(color.rgb, color.a);
+		}
 		// SDR was already linear, assuming we are outputting on scRGB HDR buffers (usually implies "POST_PROCESS_SPACE_TYPE" is 1)
-		const bool vanillaSwapchainWasLinear = LumaData.CustomData1 >= 2;
+		const bool vanillaSwapchainWasLinear = LumaData.CustomData1 == 2;
 		// "VANILLA_ENCODING_TYPE" is expected to be 0 for this branch
 		if (vanillaSwapchainWasLinear && HasStage(STAGE_GAMMA))
 		{
 			// SDR (on SDR)
 			if (LumaSettings.DisplayMode <= 0)
 			{
-				// Nothing to do, the game would have encoded with sRGB, the display will decode sRGB with gamma 2.2 as it would have in vanilla SDR, handling gamma correction for us.
-				// "GAMMA_CORRECTION_TYPE" is not implemented here as it's not a common case that we'd wanna handle, and we want to keep SDR looking like SDR always did.
+				// Nothing to do, the game would have encoded with sRGB, the display will decode sRGB with gamma 2.2 as it would have in vanilla SDR.
 			}
 			// HDR
 			else
 			{
-				//TODOFT: wrap in a func, given it's duplicate below too? One of the ColorGradingLUTTransferFunctionIn...
 				float3 colorGammaCorrectedByChannel = gamma_to_linear(linear_to_sRGB_gamma(color.rgb, GCT_MIRROR), GCT_MIRROR);
 				float luminanceGammaCorrected = gamma_to_linear(linear_to_sRGB_gamma(GetLuminance(color.rgb), GCT_POSITIVE).x, GCT_POSITIVE).x;
 				float3 colorGammaCorrectedByLuminance = RestoreLuminance(color.rgb, luminanceGammaCorrected);
-#if GAMMA_CORRECTION_TYPE == 1
-				color.rgb = colorGammaCorrectedByChannel;
-#elif GAMMA_CORRECTION_TYPE == 2
-  				color.rgb = RestoreLuminance(color.rgb, colorGammaCorrectedByChannel);
-				float3 colorGammaCorrectedByChannelMip1 = gamma_to_linear(linear_to_sRGB_gamma(mipColor1.rgb, GCT_MIRROR), GCT_MIRROR);
-				float3 colorGammaCorrectedByChannelMip2 = gamma_to_linear(linear_to_sRGB_gamma(mipColor2.rgb, GCT_MIRROR), GCT_MIRROR);
-  				mipColor1.rgb = RestoreLuminance(mipColor1.rgb, colorGammaCorrectedByChannelMip1);
-  				mipColor2.rgb = RestoreLuminance(mipColor2.rgb, colorGammaCorrectedByChannelMip2);
-#elif GAMMA_CORRECTION_TYPE == 3 //TODOFT: probably doesn't look good? It'd treat green and blue massively different
-  				color.rgb = colorGammaCorrectedByLuminance;
-#elif GAMMA_CORRECTION_TYPE >= 4
-  				color.rgb = RestoreHueAndChrominance(colorGammaCorrectedByLuminance, colorGammaCorrectedByChannel, 0.0, 1.0);
-#endif // GAMMA_CORRECTION_TYPE == 1
+				if (GAMMA_CORRECTION_TYPE == 1)
+				{
+					color.rgb = colorGammaCorrectedByChannel;
+				}
+				else if (GAMMA_CORRECTION_TYPE == 2)
+				{
+					color.rgb = RestoreLuminance(color.rgb, colorGammaCorrectedByChannel);
+					float3 colorGammaCorrectedByChannelMip1 = gamma_to_linear(linear_to_sRGB_gamma(mipColor1.rgb, GCT_MIRROR), GCT_MIRROR);
+					float3 colorGammaCorrectedByChannelMip2 = gamma_to_linear(linear_to_sRGB_gamma(mipColor2.rgb, GCT_MIRROR), GCT_MIRROR);
+					mipColor1.rgb = RestoreLuminance(mipColor1.rgb, colorGammaCorrectedByChannelMip1);
+					mipColor2.rgb = RestoreLuminance(mipColor2.rgb, colorGammaCorrectedByChannelMip2);
+				}
+				else if (GAMMA_CORRECTION_TYPE == 3)
+				{
+					color.rgb = colorGammaCorrectedByLuminance;
+				}
+				else if (GAMMA_CORRECTION_TYPE >= 4)
+				{
+					color.rgb = RestoreHueAndChrominance(colorGammaCorrectedByLuminance, colorGammaCorrectedByChannel, 0.0, 1.0);
+				}
 			}
 		}
 		// SDR was gamma space, but now we are outputting on scRGB HDR buffers
@@ -463,129 +483,92 @@ float4 Compose(float4 pos)
 	}
 
 	float postLinearizationScale = 1.0;
-	
-//TODOFT: split this and other code behaviours into functions
-#if UI_DRAW_TYPE == 2 // The scene color was scaled by "scene paper white / UI paper white" (in linear space) to make the UI blend in correctly in gamma space without modifying its shaders. sRGB/2.2 gamma mismatch correction would have already applied temporarily at native SDR range on the pre-UI scene color, before scaling it by the UI factors, to then be undone. So we need to re-apply the gamma mismatch fix on the UI SDR range color (and the rest of the scene, for which the fix was already undone at that scaling level, and thus will normalize itself out).
 
-	if (HasStage(STAGE_UI))
+	if (UI_DRAW_TYPE == 2)
 	{
-  		postLinearizationScale *= UIPaperWhite;
-#if !EARLY_DISPLAY_ENCODING
-  		postLinearizationScale /= gamePaperWhite;
-#endif
+		if (HasStage(STAGE_UI))
+		{
+			postLinearizationScale *= UIPaperWhite;
+			if (EARLY_DISPLAY_ENCODING == 0)
+				postLinearizationScale /= gamePaperWhite;
+		}
 	}
-
-#elif UI_DRAW_TYPE == 3 // Compose UI on top of "scene" and tonemap the scene background //TODOFT6: clean up all the defines that we don't need anymore
-
-	// These should imply the scene is rendering (the UI might still be all zero)
-	if (!HasStage(STAGE_UI))
+	else if (UI_DRAW_TYPE == 3)
 	{
+		if (!HasStage(STAGE_UI))
+		{
+		}
+		else if (LumaData.CustomData4 != 0.f)
+		{
+			color.rgb = ComposeUI(pos.xyz, color.rgb, gamePaperWhite, UIPaperWhite);
+		}
+		else
+		{
+			color.rgb = ComposeUI(pos.xyz, color.rgb, UIPaperWhite, UIPaperWhite);
+			gamePaperWhite = UIPaperWhite;
+		}
 	}
-	else if (LumaData.CustomData4 != 0.f)
-	{
-		color.rgb = ComposeUI(pos.xyz, color.rgb, gamePaperWhite, UIPaperWhite);
-		
-		//color.rgb = game_gamma_to_linear(uiTexture.Load((int3)pos.xyz, GCT_MIRROR).rgb);
-		//color.rgb = uiTexture.Load((int3)pos.xyz, GCT_MIRROR).a;
-	}
-	// There is no scene rendering, so both the source and separated layers are UI content (for example, loading screens).
-	// Compose the separated layer as well: explicit UI shader routing may leave the source texture completely black.
-	else
-	{
-		color.rgb = ComposeUI(pos.xyz, color.rgb, UIPaperWhite, UIPaperWhite);
-		gamePaperWhite = UIPaperWhite;
-	}
-
-#endif // UI_DRAW_TYPE != 0
 
 	// SDR: In this case, paper white (game and UI) would have been 1 (neutral for SDR), so we can ignore it if we want to
 	if (LumaSettings.DisplayMode <= 0)
 	{
-		color.rgb = saturate(color.rgb); // Optional, but saves performance on the gamma pows below (the vanilla SDR tonemapper might have retained some values beyond 1 so we want to clip them anyway, for a "reliable" SDR look)
-
-#if POST_PROCESS_SPACE_TYPE == 1
-		// Revert whatever gamma adjustment "GAMMA_CORRECTION_TYPE" would have made, and get the color is sRGB gamma encoding (which would have been meant for 2.2 displays)
-		// This function does more stuff than we need (like handling colors beyond the 0-1 range, which we've clamped out above), but we use it anyway for simplicity
-		if (HasStage(STAGE_GAMMA))
-			ColorGradingLUTTransferFunctionInOutCorrected(color.rgb, (EARLY_DISPLAY_ENCODING && GAMMA_CORRECTION_TYPE < 2) ? GAMMA_CORRECTION_TYPE : VANILLA_ENCODING_TYPE, LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB, true);
-		// No need for "postLinearizationScale", it should always be 1 in SDR.
-#else // POST_PROCESS_SPACE_TYPE != 1
-		// In SDR, we ignore "GAMMA_CORRECTION_TYPE" as they are not that relevant
-		// We are target the gamma 2.2 look here, which would likely match the average SDR screen, so
-		// we linearize with sRGB because scRGB HDR buffers (Luma) in SDR are re-encoded with sRGB and then (likely) linearized by the display with 2.2, which would then apply the gamma correction.
-		// For any user that wanted to play in sRGB, they'd need to have an sRGB monitor.
-		// We could theoretically add a mode that fakes sRGB output on scRGB->2.2 but it wouldn't really be useful as the game was likely designed for 2.2 displays (unconsciously).
-		if (HasStage(STAGE_DECODE))
-			color.rgb = ColorGradingLUTTransferFunctionOut(color.rgb, LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB, false);
-#endif // POST_PROCESS_SPACE_TYPE == 1
-
-#if 0 // For linux support (somehow scRGB is not interpreted as linear when in SDR) //TODOFT4: expose?
-		color.rgb = linear_to_sRGB_gamma(color.rgb, GCT_NONE);
-#endif
-	}
-	// HDR and SDR in HDR: in this case the UI paper white would have already been mutliplied in, relatively to the game paper white, so we only apply the game paper white.
-	else if (LumaSettings.DisplayMode >= 1)
-	{
-#if POST_PROCESS_SPACE_TYPE != 1 // Gamma->Linear space
-
-		// At this point, in this case, the color would have been gamma space (sRGB or 2.2, depending on the game), normalized around SDR range (80 nits paper white).
-		// The gamma correction both acts as correction but also as "absolute" gamma curve selection (emulating either an sRGB or Gamma 2.2 display).
-
-#if GAMMA_CORRECTION_RANGE_TYPE == 1 // Apply gamma correction only in the 0-1 range
-
-		if (HasStage(STAGE_DECODE))
-			color.rgb = HasStage(STAGE_GAMMA) ? ColorGradingLUTTransferFunctionOutCorrected(color.rgb, VANILLA_ENCODING_TYPE, GAMMA_CORRECTION_TYPE) : ColorGradingLUTTransferFunctionOut(color.rgb, VANILLA_ENCODING_TYPE);
-		
-#else // GAMMA_CORRECTION_RANGE_TYPE != 0 // Apply gamma correction around the whole range (alternative branch) (this doesn't acknowledge "VANILLA_ENCODING_TYPE", it doesn't need to)
-
-		if (HasStage(STAGE_DECODE))
-			color.rgb = ColorGradingLUTTransferFunctionOut(color.rgb, HasStage(STAGE_GAMMA) ? GAMMA_CORRECTION_TYPE : VANILLA_ENCODING_TYPE);
-
-#endif // GAMMA_CORRECTION_RANGE_TYPE == 1
-
-#else // POST_PROCESS_SPACE_TYPE == 1 // Linear->Linear space
-
-#if EARLY_DISPLAY_ENCODING
-		// At this point, for this case, we expect the paper white to already have been multiplied in the color (earlier in the linear post processing pipeline)
-		color.rgb /= gamePaperWhite;
-#endif
-
-#if !EARLY_DISPLAY_ENCODING && GAMMA_CORRECTION_TYPE <= 1
-
-		if (HasStage(STAGE_GAMMA))
-			ColorGradingLUTTransferFunctionInOutCorrected(color.rgb, VANILLA_ENCODING_TYPE, GAMMA_CORRECTION_TYPE, true); // We enforce "GAMMA_CORRECTION_RANGE_TYPE" 1 as the other case it too complicated and unnecessary to implement
-
-// "GAMMA_CORRECTION_TYPE >= 2" is always delayed until the end and treated as sRGB gamma before (independently of "EARLY_DISPLAY_ENCODING").
-// We originally applied this gamma correction directly during tonemapping/grading and other later passes,
-// but given that the formula is slow to execute and isn't easily revertible
-// (mirroring back and forth is lossy, at least in the current lightweight implementation),
-// we moved it to a single application here (it might not look as good but it's certainly good enough).
-// Any linear->gamma->linear encoding (e.g. "PostAAComposites") or linear->gamma->luminance encoding (e.g. Anti Aliasing)
-// should fall back on gamma 2.2 instead of sRGB for this gamma correction type, but we haven't bothered implementing that (it's not worth it).
-#elif GAMMA_CORRECTION_TYPE >= 2 // Note: this might not work with "UI_DRAW_TYPE == 2"
-
-		if (HasStage(STAGE_GAMMA))
-		{
-   		float3 colorInExcess = color.rgb - saturate(color.rgb); // Only correct in the 0-1 range
 		color.rgb = saturate(color.rgb);
 
-		float3 colorGammaCorrectedByChannel = gamma_to_linear(linear_to_sRGB_gamma(color.rgb));
-		float luminanceGammaCorrected = gamma_to_linear1(linear_to_sRGB_gamma1(GetLuminance(color.rgb)));
-		float3 colorGammaCorrectedByLuminance = RestoreLuminance(color.rgb, luminanceGammaCorrected);
-#if GAMMA_CORRECTION_TYPE == 2
-		color.rgb = RestoreLuminance(color.rgb, colorGammaCorrectedByChannel);
-#elif GAMMA_CORRECTION_TYPE == 3
-  		color.rgb = colorGammaCorrectedByLuminance;
-#elif GAMMA_CORRECTION_TYPE >= 4
-  		color.rgb = RestoreHueAndChrominance(colorGammaCorrectedByLuminance, colorGammaCorrectedByChannel, 0.0, 1.0);
-#endif // GAMMA_CORRECTION_TYPE == 2
-
-		color.rgb += colorInExcess;
+		if (POST_PROCESS_SPACE_TYPE == 1)
+		{
+			if (HasStage(STAGE_GAMMA))
+				ColorGradingLUTTransferFunctionInOutCorrected(color.rgb, (EARLY_DISPLAY_ENCODING != 0 && GAMMA_CORRECTION_TYPE < 2) ? GAMMA_CORRECTION_TYPE : VANILLA_ENCODING_TYPE, LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB, true);
 		}
+		else
+		{
+			if (HasStage(STAGE_DECODE))
+				color.rgb = ColorGradingLUTTransferFunctionOut(color.rgb, LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB, false);
+		}
+	}
+	// HDR and SDR in HDR
+	else if (LumaSettings.DisplayMode >= 1)
+	{
+		if (POST_PROCESS_SPACE_TYPE != 1) // Gamma->Linear space
+		{
+#if GAMMA_CORRECTION_RANGE_TYPE == 1
+			if (HasStage(STAGE_DECODE))
+				color.rgb = HasStage(STAGE_GAMMA) ? ColorGradingLUTTransferFunctionOutCorrected(color.rgb, VANILLA_ENCODING_TYPE, GAMMA_CORRECTION_TYPE) : ColorGradingLUTTransferFunctionOut(color.rgb, VANILLA_ENCODING_TYPE);
+#else
+			if (HasStage(STAGE_DECODE))
+				color.rgb = ColorGradingLUTTransferFunctionOut(color.rgb, HasStage(STAGE_GAMMA) ? GAMMA_CORRECTION_TYPE : VANILLA_ENCODING_TYPE);
+#endif
+		}
+		else // POST_PROCESS_SPACE_TYPE == 1 (Linear->Linear space)
+		{
+			if (EARLY_DISPLAY_ENCODING != 0)
+				color.rgb /= gamePaperWhite;
 
-#endif // !EARLY_DISPLAY_ENCODING && GAMMA_CORRECTION_TYPE <= 1
+			if (EARLY_DISPLAY_ENCODING == 0 && GAMMA_CORRECTION_TYPE <= 1)
+			{
+				if (HasStage(STAGE_GAMMA))
+					ColorGradingLUTTransferFunctionInOutCorrected(color.rgb, VANILLA_ENCODING_TYPE, GAMMA_CORRECTION_TYPE, true);
+			}
+			else if (GAMMA_CORRECTION_TYPE >= 2)
+			{
+				if (HasStage(STAGE_GAMMA))
+				{
+					float3 colorInExcess = color.rgb - saturate(color.rgb); // Only correct in the 0-1 range
+					color.rgb = saturate(color.rgb);
 
-#endif // POST_PROCESS_SPACE_TYPE != 1
+					float3 colorGammaCorrectedByChannel = gamma_to_linear(linear_to_sRGB_gamma(color.rgb));
+					float luminanceGammaCorrected = gamma_to_linear1(linear_to_sRGB_gamma1(GetLuminance(color.rgb)));
+					float3 colorGammaCorrectedByLuminance = RestoreLuminance(color.rgb, luminanceGammaCorrected);
+					if (GAMMA_CORRECTION_TYPE == 2)
+						color.rgb = RestoreLuminance(color.rgb, colorGammaCorrectedByChannel);
+					else if (GAMMA_CORRECTION_TYPE == 3)
+						color.rgb = colorGammaCorrectedByLuminance;
+					else if (GAMMA_CORRECTION_TYPE >= 4)
+						color.rgb = RestoreHueAndChrominance(colorGammaCorrectedByLuminance, colorGammaCorrectedByChannel, 0.0, 1.0);
+
+					color.rgb += colorInExcess;
+				}
+			}
+		}
 
 		color.rgb *= postLinearizationScale;
 
@@ -608,50 +591,37 @@ float4 Compose(float4 pos)
 			}
 			else
 			{
-#if defined(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL) && TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL
-				color.rgb = saturate(color.rgb);
-#else // Tonemap instead of raw clipping if the game didn't natively implement our split view mode in the tonemapper
-    			const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
-  				color.rgb = Reinhard::ReinhardRange(color.rgb, MidGray, peakWhite, 1.0, true); // Acknowledge the previous peak tonemapping to better compress from the HDR display to the SDR range
-#endif
+				if (TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL)
+				{
+					color.rgb = saturate(color.rgb);
+				}
+				else // Tonemap instead of raw clipping if the game didn't natively implement our split view mode in the tonemapper
+				{
+					const float peakWhite = LumaSettings.PeakWhiteNits / sRGB_WhiteLevelNits;
+					color.rgb = Reinhard::ReinhardRange(color.rgb, MidGray, peakWhite, 1.0, true); // Acknowledge the previous peak tonemapping to better compress from the HDR display to the SDR range
+				}
 				color.rgb = gamma_to_linear(round(linear_to_gamma(color.rgb) * 255.0) / 255.0); // Quantize to 8 bit
 			}
 		}
 
-		if (gamutMap)
+		if (gamutMap && GAMUT_MAPPING_TYPE > 0)
 		{
 			// Applying gamma correction could both generate negative (invalid) luminances and colors beyond the human visible range,
 			// so here we try and fix them up.
 			// Depending on the HDR tonemapper, film grain and sharpening math we used, prior passes might have also generated invalid colors.
-
-#if GAMUT_MAPPING_TYPE > 0
-			float3 preColor = color.rgb;
-
 			FixColorGradingLUTNegativeLuminance(color.rgb);
 
 			bool sdr = LumaSettings.DisplayMode != 1; // "GAMUT_MAPPING_TYPE == 1" is "auto"
-#if GAMUT_MAPPING_TYPE == 2
-			sdr = true;
-#else // GAMUT_MAPPING_TYPE >= 3
-			sdr = false;
-#endif // GAMUT_MAPPING_TYPE == 2
+			if (GAMUT_MAPPING_TYPE == 2)
+				sdr = true;
+			else if (GAMUT_MAPPING_TYPE >= 3)
+				sdr = false;
 			if (sdr)
-			{
 				color.rgb = SimpleGamutClip(color.rgb, false);
-			}
 			else
-			{
 				color.rgb = BT2020_To_BT709(SimpleGamutClip(BT709_To_BT2020(color.rgb), true)); // For scRGB HDR we could go even wider than BT.2020 (e.g. AP0) but it should overall do fine.
-			}
-#if DEVELOPMENT && 0 // Display gamut mapped colors
-			if (any(abs(color.rgb - preColor.rgb) > 0.00001))
-			{
-				color.rgb = 100;
-			}
-#endif
-#endif // GAMUT_MAPPING_TYPE > 0
 		}
-		
+
 		color.rgb *= gamePaperWhite;
 	}
 

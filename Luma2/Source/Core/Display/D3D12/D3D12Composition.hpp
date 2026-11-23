@@ -4,7 +4,7 @@
 
 #include <d3d12.h>
 
-#include "Display/Composition.hpp"
+#include "Display/DisplayComposition.hpp"
 
 // Display composition on D3D12: Luma's own command list on the queue that presents, with its own root signature (the shader's
 // cbuffers as root views in their space, its views from a heap of its own, a static linear sampler) and pipeline. One renderer per

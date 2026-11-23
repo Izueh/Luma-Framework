@@ -16,10 +16,10 @@
 #include <string>
 
 #include "Hooks/DInput/DInputDevices.hpp"
-#include "Hooks/Hooks.hpp"
+#include "Hooks/HookManager.hpp"
 #include "Hooks/InputHooks.hpp"
-#include "Hooks/Scope.hpp"
-#include "Utils/Log.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Log/Log.hpp"
 
 namespace Luma {
 namespace Hooks {
@@ -159,7 +159,7 @@ HRESULT STDMETHODCALLTYPE CreateDevice(DirectInput* direct_input, REFGUID guid, 
    }
    else
    {
-      Utils::Log::Warning("Hooks: IDirectInput::CreateDevice failed with error code 0x{:08X}", static_cast<unsigned int>(hr));
+      Log::Warning("Hooks: IDirectInput::CreateDevice failed with error code 0x{:08X}", static_cast<unsigned int>(hr));
    }
    return hr;
 }
@@ -178,7 +178,7 @@ HRESULT STDMETHODCALLTYPE CreateDeviceEx(DirectInput* direct_input, REFGUID guid
    }
    else
    {
-      Utils::Log::Warning("Hooks: IDirectInput7::CreateDeviceEx failed with error code 0x{:08X}", static_cast<unsigned int>(hr));
+      Log::Warning("Hooks: IDirectInput7::CreateDeviceEx failed with error code 0x{:08X}", static_cast<unsigned int>(hr));
    }
    return hr;
 }
@@ -216,7 +216,7 @@ HRESULT WINAPI DirectInputCreateA(HINSTANCE instance, DWORD version, LPDIRECTINP
    }
    else
    {
-      Utils::Log::Warning("Hooks: DirectInputCreateA failed with error code 0x{:08X}", static_cast<unsigned int>(hr));
+      Log::Warning("Hooks: DirectInputCreateA failed with error code 0x{:08X}", static_cast<unsigned int>(hr));
    }
    return hr;
 }
@@ -231,7 +231,7 @@ HRESULT WINAPI DirectInputCreateW(HINSTANCE instance, DWORD version, LPDIRECTINP
    }
    else
    {
-      Utils::Log::Warning("Hooks: DirectInputCreateW failed with error code 0x{:08X}", static_cast<unsigned int>(hr));
+      Log::Warning("Hooks: DirectInputCreateW failed with error code 0x{:08X}", static_cast<unsigned int>(hr));
    }
    return hr;
 }
@@ -241,7 +241,7 @@ HRESULT WINAPI DirectInputCreateEx(HINSTANCE instance, DWORD version, REFIID iid
    const HRESULT hr = original_direct_input_create_ex(instance, version, iid, out, outer);
    if (FAILED(hr))
    {
-      Utils::Log::Warning("Hooks: DirectInputCreateEx failed with error code 0x{:08X}", static_cast<unsigned int>(hr));
+      Log::Warning("Hooks: DirectInputCreateEx failed with error code 0x{:08X}", static_cast<unsigned int>(hr));
       return hr;
    }
    if (out && *out && !Scope::IsActive())

@@ -11,12 +11,12 @@ namespace System {
 namespace Modules {
 void SetSelf(HMODULE module);
 std::filesystem::path GetPath(HMODULE module);
-std::filesystem::path SelfDirectory();
+std::filesystem::path GetSelfDirectory();
 // Luma's dll, null (the executable) before SetSelf
 HMODULE GetSelf();
 
 // Full path of a System32 dll
-std::filesystem::path SystemPath(std::wstring_view name);
+std::filesystem::path GetSystemPath(std::wstring_view name);
 // If it's loaded. Never a dll of the same name elsewhere, like Luma's own proxy.
 HMODULE FindSystemModule(std::wstring_view name);
 

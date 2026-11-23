@@ -6,15 +6,16 @@
 #include <mutex>
 #include <unordered_map>
 
-#include "Hooks/Lifetime.hpp"
-#include "Hooks/Scope.hpp"
-#include "Luma.hpp"
+#include "Hooks/ObjectLifetime.hpp"
+#include "Hooks/HookScope.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
+#include "Settings/SettingsRegistry.hpp"
 #include "Shaders/D3D11/D3D11Database.hpp"
 #include "Shaders/D3D11/D3D11Shaders.hpp"
-#include "Shaders/Variants.hpp"
+#include "Shaders/ShaderVariants.hpp"
 #include "Utils/Debug.hpp"
-#include "Utils/Log.hpp"
+#include "Utils/Hash.hpp"
+#include "Log/Log.hpp"
 
 namespace Luma {
 namespace Shaders {
@@ -68,9 +69,9 @@ void PublishVariant(ID3D11Device* device, Store& store, Variant& variant)
       Shaders::D3D11::Published& published = variant.published[index];
       const bool had_object = published.live != nullptr;
       if (!Shaders::D3D11::Publish(device, variant.shader->stage, published, std::move(compiled), store.retired))
-         Utils::Log::Error("Shaders: the device refused the {} variant of 0x{:08X}", GetName(source), hash);
+         Log::Error("Shaders: the device refused the {} variant of 0x{:08X}", GetName(source), hash);
       else if (had_object != (published.live != nullptr))
-         Utils::Log::Verbose("Shaders: 0x{:08X} {} its {} variant", hash, had_object ? "no longer has" : "has", GetName(source));
+         Log::Verbose("Shaders: 0x{:08X} {} its {} variant", hash, had_object ? "no longer has" : "has", GetName(source));
    }
    uint16_t order = NO_SOURCE;
    uint32_t shift = 0;
@@ -112,7 +113,7 @@ void CreateVariantStore(ID3D11Device* device)
 
 void AttachVariant(ID3D11Device* device, ID3D11DeviceChild* object, bool stream_output)
 {
-   const Database::Shader* shader = Database::D3D11::Find(object);
+   const Database::Shader* shader = Database::D3D11::FindShader(object);
    Store* store = Hooks::Lifetime::GetState<Store>(device);
    if (!shader || !store)
       return;
@@ -141,7 +142,7 @@ void SwapInVariant(ID3D11DeviceContext* context, ShaderStage stage, ID3D11Device
    const Database::Shader* game_shader = binding ? binding->variant->shader : nullptr;
    const Shaders::D3D11::Live* replacement = nullptr;
    Source source = Source::File;
-   if (binding && !binding->stream_output && IsEnabled() && IsLoaded())
+   if (binding && !binding->stream_output && Settings::IsEnabled() && IsLoaded())
    {
 #if DEVELOPMENT
       const Choice forced = game_shader->forced_variant.load(std::memory_order_relaxed);
@@ -150,11 +151,22 @@ void SwapInVariant(ID3D11DeviceContext* context, ShaderStage stage, ID3D11Device
 #endif
       replacement = Choose(*binding->variant, forced, source);
    }
+#if DEVELOPMENT
+   // Per-shader Draw Purple debug override (PS and CS): substitutes Luma's magenta debug shader
+   if (game_shader && game_shader->draw_purple.load(std::memory_order_relaxed) && (stage == ShaderStage::Pixel || stage == ShaderStage::Compute))
+   {
+      Microsoft::WRL::ComPtr<ID3D11Device> device;
+      context->GetDevice(&device);
+      const uint64_t purple_hash = Utils::Hash::Name(stage == ShaderStage::Pixel ? "Luma_DrawPurple_PS" : "Luma_DrawPurple_CS");
+      if (const Shaders::D3D11::Live* purple = Resources::Database::D3D11::GetShader(device.Get(), purple_hash))
+         replacement = purple;
+   }
+#endif
    if (BoundShaders* state = Hooks::Lifetime::GetOrCreateStateCached<BoundShaders>(context))
    {
       state->shaders[size_t(stage)] = game_shader;
       state->originals[size_t(stage)] = replacement ? shader : nullptr;
-      state->compiled[size_t(stage)] = replacement ? replacement->compiled.get() : nullptr;
+      state->compiled[size_t(stage)] = replacement ? replacement->compiled : nullptr;
       state->sources[size_t(stage)] = source;
       state->variant_stages.Set(stage, replacement != nullptr);
       state->callback_stages.Set(stage, game_shader && game_shader->draw_callback);
@@ -195,7 +207,7 @@ StageSet BindPatchResources(ID3D11DeviceContext* context, StageSet stages)
    for (uint32_t index = 0; index < bound->compiled.size(); index++)
    {
       const ShaderStage stage = ShaderStage(index);
-      const CompiledShader* compiled = bound->compiled[index];
+      const CompiledShader* compiled = bound->compiled[index].get();
       if (!(bound->variant_stages & stages).Has(stage) || bound->sources[index] != Source::Patch || !compiled || compiled->requests.empty())
          continue;
       if (!Resources::Database::D3D11::HasRequested(context, *compiled))

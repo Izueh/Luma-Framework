@@ -24,6 +24,11 @@
   </ImportGroup>
   <ItemGroup>
     <ClCompile Include="Main.cpp" />
+    <None Include="vcpkg.json" />
+    <None Include="vcpkg-configuration.json" />
+    <None Include="$(Luma2Root)Resources\$(ProjectName)\**\*" Exclude="$(Luma2Root)Resources\$(ProjectName)\**\.gitkeep">
+      <Link>Resources\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </None>
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

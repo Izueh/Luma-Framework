@@ -7,7 +7,7 @@
 #include <shared_mutex>
 
 #include "Utils/Debug.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 namespace Luma {
 namespace Resources {
@@ -30,17 +30,17 @@ std::optional<uint32_t> Register(Entry entry)
       if (registered.owner == Owner::Game && entry.owner == Owner::Core)
       {
          ASSERT_ONCE_MSG(false, "A game registered a Resources::Database name Core owns");
-         Utils::Log::Error("Resources: the game's \"{}\" is replaced by Core's, whose entries are read-only", entry.name);
+         Log::Error("Resources: the game's \"{}\" is replaced by Core's, whose entries are read-only", entry.name);
          registered = std::move(entry);
          return *existing;
       }
       if (registered.owner == Owner::Core && entry.owner == Owner::Game)
       {
          ASSERT_ONCE_MSG(false, "A game registered a Resources::Database name Core owns");
-         Utils::Log::Error("Resources: the game's \"{}\" is refused, Core's entries are read-only", entry.name);
+         Log::Error("Resources: the game's \"{}\" is refused, Core's entries are read-only", entry.name);
       }
       else
-         Utils::Log::Error("Resources: a second \"{}\" is ignored", entry.name);
+         Log::Error("Resources: a second \"{}\" is ignored", entry.name);
       return std::nullopt;
    }
    entries.push_back(std::move(entry));

@@ -4,7 +4,7 @@
 
 #include "Hooks/DInput/DInput7InputHooks.hpp"
 #include "Hooks/DInput/DInput8InputHooks.hpp"
-#include "Hooks/Scope.hpp"
+#include "Hooks/HookScope.hpp"
 #include "Hooks/User32/User32InputHooks.hpp"
 
 namespace Luma {

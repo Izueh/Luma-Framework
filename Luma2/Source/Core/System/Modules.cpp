@@ -6,7 +6,7 @@
 
 #include <winternl.h>
 
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
 
 namespace Luma {
@@ -52,12 +52,12 @@ HMODULE GetSelf()
    return self;
 }
 
-std::filesystem::path SelfDirectory()
+std::filesystem::path GetSelfDirectory()
 {
    return GetPath(self).parent_path();
 }
 
-std::filesystem::path SystemPath(std::wstring_view name)
+std::filesystem::path GetSystemPath(std::wstring_view name)
 {
    wchar_t system_directory[MAX_PATH];
    const UINT length = GetSystemDirectoryW(system_directory, MAX_PATH);
@@ -66,7 +66,7 @@ std::filesystem::path SystemPath(std::wstring_view name)
 
 HMODULE FindSystemModule(std::wstring_view name)
 {
-   return GetModuleHandleW(SystemPath(name).c_str());
+   return GetModuleHandleW(GetSystemPath(name).c_str());
 }
 
 void* FindExport(HMODULE module, const char* name, bool* waits_for_dll)
@@ -189,7 +189,7 @@ void Pin()
       return;
    HMODULE module = nullptr;
    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(&FindSelf), &module);
-   Utils::Log::Info("Core: Luma's dll stays loaded until the process exits");
+   Log::Info("Core: Luma's dll stays loaded until the process exits");
 }
 } // namespace Modules
 } // namespace System

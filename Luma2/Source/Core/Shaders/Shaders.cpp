@@ -8,22 +8,22 @@
 #include <unordered_set>
 #include <utility>
 
-#include "Game/Registry.hpp"
+#include "Game/GameRegistry.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
-#include "Settings/Keys.hpp"
-#include "Settings/Registry.hpp"
-#include "Shaders/Cache.hpp"
-#include "Shaders/Compiler.hpp"
-#include "Shaders/Database.hpp"
-#include "Shaders/Defines.hpp"
-#include "Shaders/Files.hpp"
-#include "Shaders/Patching.hpp"
-#include "System/Jobs.hpp"
-#include "Shaders/Variants.hpp"
+#include "Settings/SettingKeys.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "Shaders/ShaderCache.hpp"
+#include "Shaders/ShaderCompiler.hpp"
+#include "Shaders/ShaderDatabase.hpp"
+#include "Shaders/ShaderDefines.hpp"
+#include "Shaders/ShaderFiles.hpp"
+#include "Shaders/ShaderPatching.hpp"
+#include "System/JobQueue.hpp"
+#include "Shaders/ShaderVariants.hpp"
 #include "System/Paths.hpp"
 #include "Utils/Hash.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 namespace Luma {
 namespace Shaders {
@@ -227,9 +227,9 @@ System::Jobs::Outcome Publish(Build build)
    Variants::Publish(Variants::Source::File, std::move(build.replacements));
    Resources::Database::PublishShaders(std::move(build.luma_shaders));
    const BuildInfo& info = build.info;
-   Utils::Log::Info("Shaders: {} compiled, {} from the cache, {} failed", info.compiled, info.cached, info.failed);
+   Log::Info("Shaders: {} compiled, {} from the cache, {} failed", info.compiled, info.cached, info.failed);
    if (!info.errors.empty())
-      Utils::Log::Warning("Shaders: {}", info.errors);
+      Log::Warning("Shaders: {}", info.errors);
    System::Jobs::Outcome outcome = {info.failed != 0, info.failed ? std::format("{} shader{} failed to compile", info.failed, info.failed == 1 ? "" : "s") : std::format("Shaders ready: {} compiled, {} from the cache", info.compiled, info.cached)};
    {
       std::scoped_lock lock(last_build_mutex);
@@ -274,7 +274,7 @@ void Start()
 #if DEVELOPMENT
    // The documented override (a game's file replacing a shared one), logged so it's never by accident
    for (const std::string& path : overridden)
-      Utils::Log::Info("Shaders: the game's {} overrides Global's", path);
+      Log::Info("Shaders: the game's {} overrides Global's", path);
 #endif
    bool any_program = false;
    for (const Files::File& file : files)
@@ -344,7 +344,7 @@ void SetApi(Api set)
 {
    int32_t expected = -1;
    if (!api.compare_exchange_strong(expected, int32_t(set)) && expected != int32_t(set))
-      Utils::Log::Warning("Shaders: a {} device after a {} one, the shaders stay built for {}", GetName(set), GetName(Api(expected)), GetName(Api(expected)));
+      Log::Warning("Shaders: a {} device after a {} one, the shaders stay built for {}", GetName(set), GetName(Api(expected)), GetName(Api(expected)));
 }
 
 std::optional<Api> GetApi()
@@ -406,13 +406,13 @@ void Reload()
 void Unload()
 {
    Variants::SetLoaded(false);
-   Utils::Log::Info("Shaders: unloaded");
+   Log::Info("Shaders: unloaded");
 }
 
 void Load()
 {
    Variants::SetLoaded(true);
-   Utils::Log::Info("Shaders: loaded");
+   Log::Info("Shaders: loaded");
    Reload();
 }
 

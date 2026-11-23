@@ -17,10 +17,10 @@
 #include <unordered_map>
 #include <utility>
 
-#include "Hooks/Hooks.hpp"
+#include "Hooks/HookManager.hpp"
 #include "Hooks/InputHooks.hpp"
-#include "Hooks/Scope.hpp"
-#include "Utils/Log.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Log/Log.hpp"
 
 namespace Luma {
 namespace Hooks {
@@ -151,7 +151,7 @@ BOOL WINAPI RegisterRawInputDevices(PCRAWINPUTDEVICE devices, UINT device_count,
 
    if (!original_register_raw_input_devices(devices, device_count, size))
    {
-      Utils::Log::Warning("Hooks: RegisterRawInputDevices failed with error code {}", GetLastError());
+      Log::Warning("Hooks: RegisterRawInputDevices failed with error code {}", GetLastError());
       return FALSE;
    }
    return TRUE;
@@ -329,14 +329,14 @@ HHOOK SetWindowsHook(int hook_type, HOOKPROC proc, HINSTANCE module, DWORD threa
    }
    else
    {
-      Utils::Log::Verbose("Hooks: Windows hook function of type {} was already registered for thread {}", hook_type, thread_id);
+      Log::Verbose("Hooks: Windows hook function of type {} was already registered for thread {}", hook_type, thread_id);
    }
 
    const HHOOK result = Original(hook_type, proc, module, thread_id);
 
    if (result != nullptr && proc != original_hook_proc)
    {
-      Utils::Log::Verbose("Hooks: Windows hook function of type {} registered for thread {}", hook_type, thread_id);
+      Log::Verbose("Hooks: Windows hook function of type {} registered for thread {}", hook_type, thread_id);
       windows_hooks[thread_lookup_key] = std::make_pair(result, original_hook_proc);
    }
    return result;
@@ -358,7 +358,7 @@ BOOL WINAPI UnhookWindowsHookEx(HHOOK hook)
    {
       if (entry.second.first == hook)
       {
-         Utils::Log::Verbose("Hooks: Windows hook function of type {} unregistered for thread {}", static_cast<int>(entry.first >> 32), static_cast<DWORD>(entry.first & 0xFFFFFFFF));
+         Log::Verbose("Hooks: Windows hook function of type {} unregistered for thread {}", static_cast<int>(entry.first >> 32), static_cast<DWORD>(entry.first & 0xFFFFFFFF));
          windows_hooks[entry.first] = std::make_pair(nullptr, nullptr);
          break;
       }

@@ -28,5 +28,7 @@ void OnRawMouse(USHORT button_flags, USHORT button_data);
 bool IsOpen();
 void SetOpen(bool open);
 const void* GetSwapchain();
+// Clears the saved ImGui layout from Luma.toml and restores default window position/size
+void ResetLayout();
 } // namespace UI
 } // namespace Luma

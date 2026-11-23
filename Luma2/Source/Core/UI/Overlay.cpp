@@ -9,25 +9,26 @@
 #include <variant>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <backends/imgui_impl_win32.h>
 
 #include "ReShade/ReShade.hpp"
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/InputHooks.hpp"
-#include "Hooks/Scope.hpp"
-#include "Settings/Keys.hpp"
-#include "Settings/Registry.hpp"
-#include "Settings/Storage.hpp"
-#include "System/Jobs.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Settings/SettingKeys.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "Settings/SettingsStorage.hpp"
+#include "System/JobQueue.hpp"
 #include "UI/D3D11/D3D11Renderer.hpp"
 #include "UI/D3D12/D3D12Renderer.hpp"
-#include "UI/Encoding.hpp"
-#include "UI/Input.hpp"
+#include "UI/OverlayEncoding.hpp"
+#include "UI/OverlayInput.hpp"
 #include "UI/Icons.hpp"
-#include "UI/Shell.hpp"
+#include "UI/OverlayWindow.hpp"
 #include "UI/Style.hpp"
 #include "UI/Widgets.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
 
 // Declared by ImGui's Win32 backend only in a comment, to keep <Windows.h> out of its header
@@ -69,7 +70,7 @@ constexpr std::array SETTINGS = {
    Settings::Setting{
       .key = Settings::Core::OVERLAY_HDR_PAPER_WHITE.key,
       .label = "HDR brightness",
-      .tooltip = "This overlay's white on an HDR swapchain, in nits. 203 is the reference white of BT.2408 (as 1.0's overlay under ReShade).",
+      .tooltip = "This overlay's white on an HDR swapchain, in nits. 203 is BT.2408's reference white.",
       .category = "Overlay",
       .default_value = 203.f,
       .range = Settings::Range{80.f, 500.f},
@@ -109,14 +110,16 @@ bool Attach(IDXGISwapChain* swapchain, Presenter presenter, const void* device)
       return false;
    ImGui::CreateContext();
    ImGuiIO& io = ImGui::GetIO();
-   io.IniFilename = nullptr; // Nothing written next to the game
-   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+   io.IniFilename = nullptr; // Persisted in Luma.toml instead of imgui.ini next to the game
+   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+   if (const std::string layout = Settings::Storage::GetOverlayLayout(); !layout.empty())
+      ImGui::LoadIniSettingsFromMemory(layout.data(), layout.size());
    Fonts::Load();
    ImGui_ImplWin32_Init(desc.OutputWindow);
 
    attached = Attachment{desc.OutputWindow, swapchain, presenter, device, ImGui_ImplWin32_GetDpiScaleForHwnd(desc.OutputWindow)};
    Input::Attach(desc.OutputWindow);
-   Utils::Log::Info("UI: overlay attached to swapchain {} (window {})", static_cast<void*>(swapchain), static_cast<void*>(desc.OutputWindow));
+   Log::Info("UI: overlay attached to swapchain {} (window {})", static_cast<void*>(swapchain), static_cast<void*>(desc.OutputWindow));
    return true;
 }
 
@@ -126,12 +129,20 @@ void Detach()
 {
    if (!attached)
       return;
+   if (ImGui::GetCurrentContext() && ImGui::GetIO().WantSaveIniSettings)
+   {
+      size_t size = 0;
+      const char* ini = ImGui::SaveIniSettingsToMemory(&size);
+      Settings::Storage::SetOverlayLayout(ini && size ? std::string_view(ini, size) : std::string_view());
+      ImGui::GetIO().WantSaveIniSettings = false;
+      settings_changed = true;
+   }
    D3D11::Shutdown();
    D3D12::Shutdown();
    ImGui_ImplWin32_Shutdown();
    ImGui::DestroyContext();
    Input::Detach(attached->window);
-   Utils::Log::Info("UI: overlay detached from swapchain {}", static_cast<void*>(attached->swapchain));
+   Log::Info("UI: overlay detached from swapchain {}", static_cast<void*>(attached->swapchain));
    attached.reset();
 }
 
@@ -148,7 +159,7 @@ void BuildFrame(const DXGI_SWAP_CHAIN_DESC& desc)
    Style::Apply(Settings::Get(Settings::Core::OVERLAY_FONT_SIZE), attached->dpi_scale, Settings::Get(Settings::Core::OVERLAY_OPACITY) / 100.f);
    ImGui::NewFrame();
    if (open)
-      DrawShell();
+      DrawWindow();
    Widgets::DrawToasts();
    ImGui::Render();
 }
@@ -203,7 +214,7 @@ void SaveSettings()
 {
    settings_changed = false;
    if (!Settings::Storage::Save(settings_path))
-      Utils::Log::Warning("UI: settings couldn't be saved to {}", Utils::Strings::ToUtf8(settings_path));
+      Log::Warning("UI: settings couldn't be saved to {}", Utils::Strings::ToUtf8(settings_path));
 }
 } // namespace
 
@@ -247,6 +258,18 @@ void DrawOverlay(IDXGISwapChain* swapchain)
       return;
    // A copy: drawing may attach again
    const bool drawn = std::visit([&](auto* presenter) { return Draw(swapchain, presenter, desc); }, Presenter(attached->presenter));
+   if (drawn && ImGui::GetCurrentContext())
+   {
+      ImGuiIO& io = ImGui::GetIO();
+      if (io.WantSaveIniSettings && !ImGui::IsAnyItemActive() && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+      {
+         size_t size = 0;
+         const char* ini = ImGui::SaveIniSettingsToMemory(&size);
+         Settings::Storage::SetOverlayLayout(ini && size ? std::string_view(ini, size) : std::string_view());
+         io.WantSaveIniSettings = false;
+         settings_changed = true;
+      }
+   }
    // Saved once an edit is done (not on every step of a slider drag)
    if (drawn && settings_changed && !ImGui::IsAnyItemActive())
       SaveSettings();
@@ -326,12 +349,12 @@ void SetOpen(bool value)
    // One overlay open at a time, ReShade's or Luma's
    if (value && !open && ReShade::IsOverlayOpen())
    {
-      Utils::Log::Info("UI: overlay kept closed, ReShade's is open");
+      Log::Info("UI: overlay kept closed, ReShade's is open");
       return;
    }
    if (open.exchange(value) == value)
       return;
-   Utils::Log::Info("UI: overlay {}", value ? "opened" : "closed");
+   Log::Info("UI: overlay {}", value ? "opened" : "closed");
    Hooks::Input::OnOpenChanged(value);
    if (value)
       return;
@@ -348,6 +371,19 @@ const void* GetSwapchain()
 {
    std::scoped_lock lock(mutex);
    return attached ? attached->swapchain : nullptr;
+}
+
+void ResetLayout()
+{
+   std::scoped_lock lock(mutex);
+   Settings::Storage::SetOverlayLayout({});
+   if (attached && ImGui::GetCurrentContext())
+   {
+      ImGui::ClearIniSettings();
+      ImGui::GetIO().WantSaveIniSettings = false;
+   }
+   RequestResetWindowLayout();
+   settings_changed = true;
 }
 } // namespace UI
 } // namespace Luma

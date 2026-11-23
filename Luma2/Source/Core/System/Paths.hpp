@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <span>
+#include <string_view>
 
 // Everything a mod reads or writes at runtime is in one "Luma" folder next to the game's executable. Shaders and Textures
 // are an overlay of two roots, the game's then Global's: packaged mods have them merged into the Luma folder, Development
@@ -11,8 +12,8 @@ namespace System {
 namespace Paths {
 // Creates the Luma folder. Before the log opens, under the loader lock.
 void Initialize();
-// After the game's Init, which names the game's folder in the repository
-void ResolveRoots();
+// After Game::Init, using the game's resource folder name in the repository
+void ResolveRoots(std::string_view game_folder = {});
 
 const std::filesystem::path& GetRoot();
 std::filesystem::path GetConfig();

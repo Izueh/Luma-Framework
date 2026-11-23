@@ -13,8 +13,8 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 
-#include "Hooks/Scope.hpp"
-#include "Utils/Log.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Log/Log.hpp"
 
 namespace Luma {
 namespace Hooks {

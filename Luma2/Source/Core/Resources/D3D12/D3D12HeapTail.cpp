@@ -5,8 +5,8 @@
 #include <mutex>
 #include <vector>
 
-#include "Hooks/Lifetime.hpp"
-#include "Utils/Log.hpp"
+#include "Hooks/ObjectLifetime.hpp"
+#include "Log/Log.hpp"
 
 namespace Luma {
 namespace Resources {
@@ -42,7 +42,7 @@ std::optional<D3D12_DESCRIPTOR_HEAP_DESC> Extend(const D3D12_DESCRIPTOR_HEAP_DES
    if (uint64_t(desc.NumDescriptors) + TAIL_SIZE > MAX_DESCRIPTORS)
    {
       if (refused++ == 0)
-         Utils::Log::Warning("D3D12: a shader-visible heap of {} descriptors has no room for Luma's {}: Luma's textures can't be bound with it", desc.NumDescriptors, TAIL_SIZE);
+         Log::Warning("D3D12: a shader-visible heap of {} descriptors has no room for Luma's {}: Luma's textures can't be bound with it", desc.NumDescriptors, TAIL_SIZE);
       return std::nullopt;
    }
    D3D12_DESCRIPTOR_HEAP_DESC extended = desc;

@@ -9,8 +9,9 @@
 
 #include <wrl/client.h>
 
-#include "Hooks/Lifetime.hpp"
-#include "Resources/Samplers.hpp"
+#include "Hooks/ObjectLifetime.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Resources/SamplerMirrors.hpp"
 #include "Utils/Debug.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -53,9 +54,18 @@ ID3D11SamplerState* Refresh(SamplerState& state, uint32_t generation)
       ComPtr<ID3D11Device> device;
       state.sampler->GetDevice(&device);
       ComPtr<ID3D11SamplerState> created;
-      ASSERT_ONCE(SUCCEEDED(device->CreateSamplerState(&*mirror_desc, &created)));
+      {
+         const Hooks::Scope::Guard scope;
+         ASSERT_ONCE(SUCCEEDED(device->CreateSamplerState(&*mirror_desc, &created)));
+      }
       mirror = created.Get();
-      state.mirrors.emplace_back(offset, std::move(created));
+      // D3D11 deduplicates samplers by desc: never store a self-reference or back-edge to another tracked sampler that could cycle
+      if (mirror == state.sampler)
+         mirror = nullptr;
+      else if (mirror && Hooks::Lifetime::GetState<SamplerState>(mirror))
+         state.mirrors.emplace_back(offset, nullptr);
+      else
+         state.mirrors.emplace_back(offset, std::move(created));
    }
    else
       state.mirrors.emplace_back(offset, nullptr);

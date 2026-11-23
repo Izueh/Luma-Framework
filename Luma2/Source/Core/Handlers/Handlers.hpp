@@ -5,19 +5,19 @@
 #include <utility>
 
 #include "Common/Api.hpp"
-#include "Frame/Frame.hpp"
-#include "Game/Registry.hpp"
+#include "Frame/FrameState.hpp"
+#include "Game/GameRegistry.hpp"
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Shaders/Shaders.hpp"
-#include "Shaders/Stages.hpp"
+#include "Shaders/ShaderStages.hpp"
 #if DEVELOPMENT
-#include "Trace/Capture.hpp"
-#include "Trace/Readback.hpp"
-#include "Trace/Track.hpp"
+#include "Trace/FrameCapture.hpp"
+#include "Trace/ResourceReadback.hpp"
+#include "Trace/CbufferTracker.hpp"
 #endif
 #include "UI/Overlay.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 namespace Luma {
 namespace Handlers {
@@ -26,9 +26,9 @@ void HandlePostCreateDevice(Device* device, std::string_view details, StartValid
 {
    start_validation();
    if (details.empty())
-      Utils::Log::Info("{}: device {} created ({} live)", GetName(api), static_cast<void*>(device), Hooks::DeviceProxy::GetCount());
+      Log::Info("{}: device {} created ({} live)", GetName(api), static_cast<void*>(device), Hooks::DeviceProxy::GetCount());
    else
-      Utils::Log::Info("{}: device {} created ({}, {} live)", GetName(api), static_cast<void*>(device), details, Hooks::DeviceProxy::GetCount());
+      Log::Info("{}: device {} created ({}, {} live)", GetName(api), static_cast<void*>(device), details, Hooks::DeviceProxy::GetCount());
    Game::Registry::CreateDeviceData(device);
    Frame::CreateDeviceState(device);
    Shaders::SetApi(api);
@@ -39,7 +39,7 @@ void HandlePostCreateDevice(Device* device, std::string_view details, StartValid
 template <Api api, typename Device, typename ReleaseCoreFn, typename StopValidationFn>
 void HandleOnDeviceDestroyed(Device* device, ReleaseCoreFn&& release_core_objects, StopValidationFn&& stop_validation)
 {
-   Utils::Log::Info("{}: device {} released by the game ({} live)", GetName(api), static_cast<void*>(device), Hooks::DeviceProxy::GetCount());
+   Log::Info("{}: device {} released by the game ({} live)", GetName(api), static_cast<void*>(device), Hooks::DeviceProxy::GetCount());
    Game::Registry::Call(Game::Registry::GetEvents<api>().on_destroy_device, device);
    UI::DetachFromDevice(device);
    ForgetSwapchains(device);

@@ -2,7 +2,7 @@
 
 #include <Windows.h>
 
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 namespace Luma {
 namespace Utils {

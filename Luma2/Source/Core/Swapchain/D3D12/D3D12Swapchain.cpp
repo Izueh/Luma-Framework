@@ -5,11 +5,11 @@
 #include <dxgi1_4.h>
 
 #include "Resources/D3D12/D3D12Mirrors.hpp"
-#include "Resources/Mirrors.hpp"
+#include "Resources/ResourceMirrors.hpp"
 #if DEVELOPMENT
 #include "Resources/D3D12/D3D12Descriptors.hpp"
 #endif
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -35,7 +35,7 @@ ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, const DXGI::BufferDesc
    // A back buffer starts in the present state, which is the common one
    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &resource_desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&buffer))))
    {
-      Utils::Log::Error("Swapchain: the game's D3D12 back buffer {} couldn't be created ({}x{}, format {})", index, desc.width, desc.height, uint32_t(desc.format));
+      Log::Error("Swapchain: the game's D3D12 back buffer {} couldn't be created ({}x{}, format {})", index, desc.width, desc.height, uint32_t(desc.format));
       return nullptr;
    }
    buffer->SetName((L"Luma game back buffer " + std::to_wstring(index)).c_str());
@@ -58,7 +58,7 @@ bool Compose(IDXGISwapChain* swapchain, Display::Composition::D3D12::Renderer& r
    // The upgraded mirror holds what the game drew while it's swapped in (its barriers follow the game buffer's)
    if (game_buffer && Resources::Mirrors::IsSwapping())
    {
-      if (ID3D12Resource* mirror = Resources::Mirrors::D3D12::GetMirror(game_buffer))
+      if (ID3D12Resource* mirror = Resources::Mirrors::D3D12::FindMirror(game_buffer))
          source = mirror;
    }
    return Display::Composition::D3D12::Compose(renderer, source, target.Get(), pass);

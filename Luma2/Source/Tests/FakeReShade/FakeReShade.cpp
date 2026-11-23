@@ -33,8 +33,11 @@ bool runtime_enabled = true;
 struct ApiDevice
 {
    virtual uint64_t GetNative() const { return 0; }
+
    virtual void GetPrivateData(const uint8_t[16], uint64_t* data) const { *data = 0; }
+
    virtual void SetPrivateData(const uint8_t[16], const uint64_t) {}
+
    virtual int32_t GetApi() const { return api; }
 
    int32_t api = D3D11_API;
@@ -43,8 +46,11 @@ struct ApiDevice
 struct ApiSwapchain
 {
    virtual uint64_t GetNative() const { return reinterpret_cast<uint64_t>(native); }
+
    virtual void GetPrivateData(const uint8_t[16], uint64_t* data) const { *data = 0; }
+
    virtual void SetPrivateData(const uint8_t[16], const uint64_t) {}
+
    virtual ApiDevice* GetDevice() { return device; }
 
    ApiDevice* device = nullptr;
@@ -202,9 +208,13 @@ struct Wrapper final : IDXGISwapChain4
 
    // IDXGIObject
    HRESULT STDMETHODCALLTYPE SetPrivateData(REFGUID name, UINT size, const void* data) override { return orig->SetPrivateData(name, size, data); }
+
    HRESULT STDMETHODCALLTYPE SetPrivateDataInterface(REFGUID name, const IUnknown* unknown) override { return orig->SetPrivateDataInterface(name, unknown); }
+
    HRESULT STDMETHODCALLTYPE GetPrivateData(REFGUID name, UINT* size, void* data) override { return orig->GetPrivateData(name, size, data); }
+
    HRESULT STDMETHODCALLTYPE GetParent(REFIID riid, void** parent) override { return orig->GetParent(riid, parent); }
+
    HRESULT STDMETHODCALLTYPE GetDevice(REFIID riid, void** device) override { return orig->GetDevice(riid, device); }
 
    // IDXGISwapChain
@@ -226,6 +236,7 @@ struct Wrapper final : IDXGISwapChain4
    }
 
    HRESULT STDMETHODCALLTYPE SetFullscreenState(BOOL fullscreen, IDXGIOutput* output) override { return orig->SetFullscreenState(fullscreen, output); }
+
    HRESULT STDMETHODCALLTYPE GetFullscreenState(BOOL* fullscreen, IDXGIOutput** output) override { return orig->GetFullscreenState(fullscreen, output); }
 
    HRESULT STDMETHODCALLTYPE GetDesc(DXGI_SWAP_CHAIN_DESC* desc) override { return orig->GetDesc(desc); }
@@ -247,14 +258,20 @@ struct Wrapper final : IDXGISwapChain4
    }
 
    HRESULT STDMETHODCALLTYPE ResizeTarget(const DXGI_MODE_DESC* mode) override { return orig->ResizeTarget(mode); }
+
    HRESULT STDMETHODCALLTYPE GetContainingOutput(IDXGIOutput** output) override { return orig->GetContainingOutput(output); }
+
    HRESULT STDMETHODCALLTYPE GetFrameStatistics(DXGI_FRAME_STATISTICS* statistics) override { return orig->GetFrameStatistics(statistics); }
+
    HRESULT STDMETHODCALLTYPE GetLastPresentCount(UINT* count) override { return orig->GetLastPresentCount(count); }
 
    // IDXGISwapChain1
    HRESULT STDMETHODCALLTYPE GetDesc1(DXGI_SWAP_CHAIN_DESC1* desc) override { return orig->GetDesc1(desc); }
+
    HRESULT STDMETHODCALLTYPE GetFullscreenDesc(DXGI_SWAP_CHAIN_FULLSCREEN_DESC* desc) override { return orig->GetFullscreenDesc(desc); }
+
    HRESULT STDMETHODCALLTYPE GetHwnd(HWND* window) override { return orig->GetHwnd(window); }
+
    HRESULT STDMETHODCALLTYPE GetCoreWindow(REFIID riid, void** window) override { return orig->GetCoreWindow(riid, window); }
 
    HRESULT STDMETHODCALLTYPE Present1(UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters) override
@@ -264,19 +281,30 @@ struct Wrapper final : IDXGISwapChain4
    }
 
    BOOL STDMETHODCALLTYPE IsTemporaryMonoSupported() override { return orig->IsTemporaryMonoSupported(); }
+
    HRESULT STDMETHODCALLTYPE GetRestrictToOutput(IDXGIOutput** output) override { return orig->GetRestrictToOutput(output); }
+
    HRESULT STDMETHODCALLTYPE SetBackgroundColor(const DXGI_RGBA* color) override { return orig->SetBackgroundColor(color); }
+
    HRESULT STDMETHODCALLTYPE GetBackgroundColor(DXGI_RGBA* color) override { return orig->GetBackgroundColor(color); }
+
    HRESULT STDMETHODCALLTYPE SetRotation(DXGI_MODE_ROTATION rotation) override { return orig->SetRotation(rotation); }
+
    HRESULT STDMETHODCALLTYPE GetRotation(DXGI_MODE_ROTATION* rotation) override { return orig->GetRotation(rotation); }
 
    // IDXGISwapChain2
    HRESULT STDMETHODCALLTYPE SetSourceSize(UINT width, UINT height) override { return orig->SetSourceSize(width, height); }
+
    HRESULT STDMETHODCALLTYPE GetSourceSize(UINT* width, UINT* height) override { return orig->GetSourceSize(width, height); }
+
    HRESULT STDMETHODCALLTYPE SetMaximumFrameLatency(UINT latency) override { return orig->SetMaximumFrameLatency(latency); }
+
    HRESULT STDMETHODCALLTYPE GetMaximumFrameLatency(UINT* latency) override { return orig->GetMaximumFrameLatency(latency); }
+
    HANDLE STDMETHODCALLTYPE GetFrameLatencyWaitableObject() override { return orig->GetFrameLatencyWaitableObject(); }
+
    HRESULT STDMETHODCALLTYPE SetMatrixTransform(const DXGI_MATRIX_3X2_F* matrix) override { return orig->SetMatrixTransform(matrix); }
+
    HRESULT STDMETHODCALLTYPE GetMatrixTransform(DXGI_MATRIX_3X2_F* matrix) override { return orig->GetMatrixTransform(matrix); }
 
    // IDXGISwapChain3

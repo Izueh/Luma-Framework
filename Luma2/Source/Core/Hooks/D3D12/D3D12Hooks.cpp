@@ -1,4 +1,4 @@
-#include "Hooks/Hooks.hpp"
+#include "Hooks/HookManager.hpp"
 
 #include <array>
 #include <atomic>
@@ -10,10 +10,10 @@
 
 #include "Handlers/D3D12/D3D12Handlers.hpp"
 #include "Hooks/DeviceProxy.hpp"
-#include "Hooks/Scope.hpp"
-#include "Hooks/Slots.h"
+#include "Hooks/HookScope.hpp"
+#include "Hooks/VtableSlots.h"
 #include "Hooks/DepthGuard.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -98,7 +98,7 @@ void SetVtable(Vtables::Interface interface_type, const ComPtr<T>& object, const
    if (SUCCEEDED(result) && object)
       Vtables::Set(interface_type, object.Get(), versions);
    else
-      Utils::Log::Error("D3D12: failed to create a temporary {} to read its vtable (0x{:08X})", versions.front().name, uint32_t(result));
+      Log::Error("D3D12: failed to create a temporary {} to read its vtable (0x{:08X})", versions.front().name, uint32_t(result));
 }
 
 // From temporary objects on the game's device, so vtables come from the same implementation
@@ -163,7 +163,7 @@ void OnDeviceCreated(HRESULT result, REFIID riid, void** device_pointer)
    bool created = false;
    if (!DeviceProxy::Wrap(device_pointer, riid, device.Get(), &OnDeviceReleased, created))
    {
-      Utils::Log::Warning("D3D12: device {} was returned as an interface proxies don't cover, Luma ignores it", static_cast<void*>(device.Get()));
+      Log::Warning("D3D12: device {} was returned as an interface proxies don't cover, Luma ignores it", static_cast<void*>(device.Get()));
       return;
    }
    if (created)

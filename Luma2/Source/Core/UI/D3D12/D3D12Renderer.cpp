@@ -18,7 +18,7 @@
 #include <imgui.h>
 #include <backends/imgui_impl_dx12.h>
 
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -66,7 +66,7 @@ void Wait(uint64_t value)
    if (renderer->fence->GetCompletedValue() >= value)
       return;
    if (SUCCEEDED(renderer->fence->SetEventOnCompletion(value, renderer->event)) && WaitForSingleObject(renderer->event, 2000) == WAIT_TIMEOUT)
-      Utils::Log::Warning("UI: the overlay's D3D12 work hasn't finished after 2s");
+      Log::Warning("UI: the overlay's D3D12 work hasn't finished after 2s");
 }
 
 void AllocateSrv(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* cpu, D3D12_GPU_DESCRIPTOR_HANDLE* gpu)
@@ -82,7 +82,7 @@ void AllocateSrv(ImGui_ImplDX12_InitInfo*, D3D12_CPU_DESCRIPTOR_HANDLE* cpu, D3D
       gpu->ptr += uint64_t(i) * renderer->srv_increment;
       return;
    }
-   Utils::Log::Error("UI: the overlay's {} texture descriptors are all used", SRV_DESCRIPTOR_COUNT);
+   Log::Error("UI: the overlay's {} texture descriptors are all used", SRV_DESCRIPTOR_COUNT);
    *cpu = {};
    *gpu = {};
 }
@@ -200,7 +200,7 @@ ComPtr<ID3D12PipelineState> CreateEncodingPipeline(ID3D12Device* device, ID3D12R
    desc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_ALWAYS;
    ComPtr<ID3D12PipelineState> pipeline;
    if (FAILED(device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(&pipeline))))
-      Utils::Log::Error("UI: the overlay's HDR pipeline couldn't be created");
+      Log::Error("UI: the overlay's HDR pipeline couldn't be created");
    return pipeline;
 }
 
@@ -308,7 +308,7 @@ bool NewFrame(ID3D12CommandQueue* queue, const DXGI_SWAP_CHAIN_DESC& desc)
 {
    if (!renderer && !Create(queue, desc.BufferDesc.Format, desc.BufferCount))
    {
-      Utils::Log::Error("UI: ImGui's D3D12 renderer failed to initialize on queue {}", static_cast<void*>(queue));
+      Log::Error("UI: ImGui's D3D12 renderer failed to initialize on queue {}", static_cast<void*>(queue));
       return false;
    }
    ImGui_ImplDX12_NewFrame();

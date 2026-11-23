@@ -6,7 +6,7 @@
 
 #include <d3d12.h>
 
-// Luma's descriptors in the game's shader-visible heaps (Guidelines.md section 4): every shader-visible CBV/SRV/UAV heap the game
+// Luma's descriptors in the game's shader-visible heaps: every shader-visible CBV/SRV/UAV heap the game
 // creates gets TAIL_SIZE more descriptors at its end, which the game never sees (GetDesc answers its own size) and so never writes. Luma
 // writes its views there, valid while the game's heap is bound, so its tables need no heap of their own (a list binds one heap of a
 // type). A heap whose size with the tail would pass the device's limit gets none: Luma's tables can't be bound while it is.

@@ -12,15 +12,16 @@
 
 #include <DDSTextureLoader11.h>
 
-#include "Frame/Frame.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "Frame/FrameState.hpp"
+#include "Game/Game.hpp"
 #include "Hooks/D3D11/D3D11Stages.hpp"
-#include "Hooks/Lifetime.hpp"
-#include "Luma.hpp"
+#include "Hooks/ObjectLifetime.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
-#include "Resources/Textures.hpp"
+#include "Resources/TextureLoader.hpp"
 #include "Utils/Debug.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -65,7 +66,7 @@ ComPtr<ID3D11Buffer> CreateBuffer(ID3D11Device* device, const Entry& entry)
    const D3D11_BUFFER_DESC desc = {entry.size, D3D11_USAGE_DYNAMIC, D3D11_BIND_CONSTANT_BUFFER, D3D11_CPU_ACCESS_WRITE, 0, 0};
    ComPtr<ID3D11Buffer> buffer;
    if (FAILED(device->CreateBuffer(&desc, nullptr, &buffer)))
-      Utils::Log::Error("Resources: \"{}\" ({} bytes) couldn't be created", entry.name, entry.size);
+      Log::Error("Resources: \"{}\" ({} bytes) couldn't be created", entry.name, entry.size);
    return buffer;
 }
 
@@ -77,7 +78,7 @@ ComPtr<ID3D11ShaderResourceView> LoadTexture(ID3D11Device* device, uint32_t inde
    ComPtr<ID3D11ShaderResourceView> view;
    const HRESULT result = path.empty() ? HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) : DirectX::CreateDDSTextureFromFile(device, path.c_str(), nullptr, &view);
    if (FAILED(result))
-      Utils::Log::Error("Resources: texture \"{}\" ({}) couldn't be loaded (0x{:08X})", entry.name, entry.file, uint32_t(result));
+      Log::Error("Resources: texture \"{}\" ({}) couldn't be loaded (0x{:08X})", entry.name, entry.file, uint32_t(result));
    return view;
 }
 
@@ -92,7 +93,7 @@ void UpdateShaders(ID3D11Device* device, Store& store)
    {
       const Entry& entry = Get(index);
       if (entry.kind == Kind::Shader && !Shaders::D3D11::Publish(device, entry.stage, store.objects[index].shader, Database::GetShader(index).compiled, store.retired))
-         Utils::Log::Error("Resources: the device refused shader \"{}\"", entry.name);
+         Log::Error("Resources: the device refused shader \"{}\"", entry.name);
    }
 }
 
@@ -220,7 +221,7 @@ bool HasRequested(ID3D11DeviceContext* context, const Shaders::CompiledShader& c
 
 bool BindRequested(ID3D11DeviceContext* context, ShaderStage stage, const Shaders::CompiledShader& compiled, const CustomData& custom, bool while_off)
 {
-   if (compiled.requests.empty() || (!IsEnabled() && !while_off))
+   if (compiled.requests.empty() || (!Settings::IsEnabled() && !while_off))
       return false;
    Context* state = Hooks::Lifetime::GetOrCreateStateCached<Context>(context);
    const Store* store = state ? GetStore(context, *state) : nullptr;

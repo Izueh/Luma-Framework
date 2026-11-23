@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -8,7 +9,7 @@
 #include <string_view>
 
 #include "Common/ShaderStage.hpp"
-#include "Settings/Registry.hpp"
+#include "Settings/SettingsRegistry.hpp"
 
 // The only place that calls raw ImGui controls for settings, so every panel looks and behaves the same. Games use these in
 // their panels too. `id`s are unique within the current window or section.
@@ -31,10 +32,16 @@ enum class Tone : uint8_t
    Injected, // What Luma added, in trace
 };
 
-// A collapsible category header, raised, with an accent bar and an icon tinted by category (chosen from the label, or
-// `icon`). True while open: draw its rows, then call EndSection().
+// A collapsible category header, raised, with an accent bar and an icon (chosen from the label, or `icon`).
+// True while open: draw its rows, then call EndSection().
 bool Section(std::string_view label, bool default_open = true, const char* icon = nullptr);
 void EndSection();
+// Forces the next Section() call to open or collapse on this frame
+void SetNextSectionOpen(bool open);
+// Lightweight sub-header for detail panes (no raised bar)
+void SubHeader(std::string_view label);
+// Registers a custom icon for a category name
+void RegisterCategoryIcon(std::string_view category, const char* icon);
 
 // A tab of the overlay's tab bar, underlined in the accent color while selected. True while selected: call EndTab().
 bool Tab(std::string_view label, const char* icon = nullptr);
@@ -96,6 +103,7 @@ struct ListEntry
 {
    std::string label;
    Tone tone = Tone::Info; // Info is plain text
+   std::optional<std::array<float, 4>> color; // Optional explicit RGBA override (e.g. semantic trace colors)
 };
 
 // A list on the left (its width can be dragged), the selected entry's detail on the right, drawn by `detail` with the entry's index.
@@ -140,6 +148,8 @@ void HashChip(uint32_t hash, ShaderStage stage, std::string_view name = {});
 void Code(std::string_view text);
 void Text(std::string_view text, Tone tone = Tone::Info);
 void TextDim(std::string_view text);
+// Draws text truncated with "..." if wider than `max_width` (0 = available width), showing the full text in a tooltip on hover
+void TextEllipsis(std::string_view text, float max_width = 0.f, Tone tone = Tone::Info);
 
 // A transient message in the corner of the screen, also shown while the overlay is closed. Any thread.
 void Toast(Tone tone, std::string message);

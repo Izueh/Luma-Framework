@@ -9,8 +9,8 @@
 
 #include "Shaders/D3D12/D3D12Database.hpp"
 #include "Shaders/Shaders.hpp"
-#include "Shaders/Stages.hpp"
-#include "Shaders/Variants.hpp"
+#include "Shaders/ShaderStages.hpp"
+#include "Shaders/ShaderVariants.hpp"
 
 // Variant pipelines: a game pipeline with each replaced stage's bytecode swapped for the variant D3D11 would bind (the published
 // one of highest priority, or the trace's forced choice), and the same, extended, root signature. Swapped in at SetPipelineState.

@@ -5,18 +5,18 @@
 #include <optional>
 #include <utility>
 
-#include "Luma.hpp"
+#include "Settings/SettingsRegistry.hpp"
 
 #include "Hooks/D3D11/D3D11Stages.hpp"
-#include "Hooks/Lifetime.hpp"
+#include "Hooks/ObjectLifetime.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
 #include "Utils/Debug.hpp"
 #include "Utils/Hash.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #if DEVELOPMENT
-#include "Trace/Capture.hpp"
+#include "Trace/FrameCapture.hpp"
 #include "Trace/D3D11/D3D11Capture.hpp"
 #endif
 
@@ -332,7 +332,7 @@ void ForgetBoundState(Context* context)
 
 bool DrawFullscreen(Context* context, const FullscreenPass& pass)
 {
-   if ((!IsEnabled() && !pass.while_off) || !pass.target)
+   if ((!Settings::IsEnabled() && !pass.while_off) || !pass.target)
       return false;
    ComPtr<ID3D11Device> device;
    context->GetDevice(&device);
@@ -343,6 +343,7 @@ bool DrawFullscreen(Context* context, const FullscreenPass& pass)
       return false;
 
    StateStack stack;
+   stack.mask = pass.state_mask;
    Save(context, stack);
    // The blend factor's alpha is 0 without alpha, though the blend state rarely reads it
    constexpr std::array<FLOAT, 4> FACTOR = {1.f, 1.f, 1.f, 1.f};
@@ -354,6 +355,12 @@ bool DrawFullscreen(Context* context, const FullscreenPass& pass)
    const D3D11_VIEWPORT viewport = {0.f, 0.f, float(width), float(height), 0.f, 1.f};
    context->RSSetViewports(1, &viewport);
    context->RSSetState(nullptr);
+   // Clear active tessellation/geometry shaders when the mask saves them so they can't intercept the fullscreen strip
+   for (const ShaderStage stage : {ShaderStage::Hull, ShaderStage::Domain, ShaderStage::Geometry})
+   {
+      if (stack.mask.shaders.Has(stage))
+         Shaders::D3D11::Bind(context, stage, nullptr);
+   }
    // Bind the target first so D3D11 doesn't unbind `pass.source` as an SRV if it was still bound as an RTV.
    context->OMSetRenderTargets(1, &pass.target, nullptr);
    context->PSSetShaderResources(0, 1, &pass.source);
@@ -379,12 +386,12 @@ bool DrawFullscreen(Context* context, const FullscreenPass& pass)
    return true;
 }
 
-bool Copy(Context* context, ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target)
+bool Copy(Context* context, ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target, StateMask state_mask)
 {
-   return DrawFullscreen(context, {.name = "Luma Copy", .vertex_shader = "Luma_Copy_VS"_h, .pixel_shader = "Luma_Copy_PS"_h, .source = source, .target = target});
+   return DrawFullscreen(context, {.name = "Luma Copy", .vertex_shader = "Luma_Copy_VS"_h, .pixel_shader = "Luma_Copy_PS"_h, .source = source, .target = target, .state_mask = state_mask});
 }
 
-bool Scale(Context* context, ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target)
+bool Scale(Context* context, ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target, StateMask state_mask)
 {
    // The API returns the same object for the same desc: no state to keep
    ComPtr<ID3D11Device> device;
@@ -394,7 +401,8 @@ bool Scale(Context* context, ID3D11ShaderResourceView* source, ID3D11RenderTarge
    ComPtr<ID3D11SamplerState> linear_sampler;
    if (FAILED(device->CreateSamplerState(&desc, &linear_sampler)))
       return false;
-   return DrawFullscreen(context, {.name = "Luma Scale", .vertex_shader = "Luma_Scale_VS"_h, .pixel_shader = "Luma_Scale_PS"_h, .source = source, .target = target, .sampler = linear_sampler.Get()});
+   return DrawFullscreen(
+      context, {.name = "Luma Scale", .vertex_shader = "Luma_Scale_VS"_h, .pixel_shader = "Luma_Scale_PS"_h, .source = source, .target = target, .sampler = linear_sampler.Get(), .state_mask = state_mask});
 }
 } // namespace D3D11
 } // namespace Draw

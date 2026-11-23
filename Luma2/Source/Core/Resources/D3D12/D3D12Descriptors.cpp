@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include "Hooks/Lifetime.hpp"
+#include "Hooks/ObjectLifetime.hpp"
 
 namespace Luma {
 namespace Resources {

@@ -3,7 +3,7 @@
 #include <d3d11.h>
 #include <dxgi.h>
 
-#include "UI/Encoding.hpp"
+#include "UI/OverlayEncoding.hpp"
 
 struct ImDrawData;
 

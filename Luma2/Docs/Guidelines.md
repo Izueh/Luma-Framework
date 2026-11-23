@@ -36,16 +36,17 @@ Dependencies point down. A module never includes one above it.
 ```
 Games            mod code: declarations in Init(), callbacks, game hooks       (includes Luma.hpp only)
 ──────────────────────────────────────────────────────────────────────────────
-UI               overlay shell, style, widgets, panels
+UI               overlay window, style, widgets, panels
 Effects          SR (DLSS, FSR, XeSS), SMAA, RCAS, Bloom, GTAO                 optional, built on the features below
-Features         Shaders · Resources · Swapchain · Display · Draw · Trace
+Features         Shaders · Resources · Swapchain · Display · Draw · Frame · Trace
 Settings         the one registry, its sources and storage
 ──────────────────────────────────────────────────────────────────────────────
 Handlers         per native function: runs the game callback and the features, in a fixed order
 Hooks            install, vtables, lifetime, scope, device proxy, detours
 ──────────────────────────────────────────────────────────────────────────────
-System           loader, dll exports, memory scan and CPU hooks, display, window
-Utils / Common   log, hash, strings, json, toml, formats, math, Api
+System           loader, dll exports, memory scan and CPU hooks, monitor display, window policy, jobs
+Utils / Common   hash, strings, json, toml, formats, math, Api, Device, Enabled
+Log              process-wide log sink and asserts
 ```
 
 ### Namespaces
@@ -55,22 +56,23 @@ A folder is a namespace. Something is found by asking "which feature owns it".
 | Namespace | Owns |
 |---|---|
 | `Luma` | shared value types: `float2..4`, `uint2..4`, `Api`, `Presenter` |
-| `Luma::Utils::{Log, Debug, Hash, Strings, Json, Toml, Format}` | stateless leaf helpers: no knowledge of the process, its modules or the hooks. The one exception is the log sink (`Log`, and `Debug`'s asserts that write to it), which every layer, `Utils` included, must reach |
-| `Luma::System::{Loader, Modules, Paths, Memory, Display, Window, Jobs}` | process level: bootstrap, the loaded modules and their exports, Luma's folders, pattern scan and mid-function hooks, HDR state and luminance, SDR white level, borderless window, the pool background work runs on. No graphics API objects |
+| `Luma::Log` | `Log/Log.{hpp,cpp}`: process-wide log sink (`Info`, `Warn`, `Error`, `Debug`) and asserts (`Utils/Debug.hpp`), reachable from every layer |
+| `Luma::Utils::{Debug, Hash, Strings, Json, Toml, Format, Math}` | stateless leaf helpers: no knowledge of the process, its modules or the hooks |
+| `Luma::System::{Loader, Modules, Paths, Memory, MonitorDisplay, WindowPolicy, Jobs}` | process level: bootstrap, loaded modules and exports, Luma's folders, pattern scan and mid-function hooks, monitor HDR state/luminance/SDR white level (`MonitorDisplay`), borderless window policy (`WindowPolicy`), and the Win32 threadpool + lock-free completion queue (`JobQueue`). No graphics API objects |
 | `Luma::Hooks` (+ `::Input`, `::DeviceProxy`, `::Lifetime`, `::Scope`, `::ThirdPartyModules`, `DepthGuard`) | interception plumbing, nested call tracking included, chains with other hookers and the unhook |
 | `Luma::Handlers` | `Pre<Function>` / `Post<Function>` / `On<Object>Destroyed`, one per hooked native function |
 | `Luma` (`Startup`) | `Luma.hpp`, the one header a game includes; `Luma::Startup::{Initialize, IsInitialized, Unload}`, what `System::Loader` and `Hooks::EntryPoints` call; `Luma::DllMain` |
-| `CB` | the cbuffer structs shared with the shaders, compiled by FXC and by C++ (`Resources/LumaCBuffers.hpp` gives them HLSL's types, a game's file holds only its structs): Luma's `LumaGlobalSettings` and `LumaInstanceData` (`Includes/Core/CBuffers.hlsl`), the game's `LumaGameSettings` and `LumaGameData` (its `Game/GameCBuffers.hlsl`), as 1.0's `cbuffers.h` |
-| `Luma::Settings` | registry, sources (`Define`, `Recipe`, `Binding`), kinds, typed ids (`Settings/Keys.hpp`, the only place Core's keys are written), TOML storage |
-| `Luma::Shaders::{Database, Variants, Files, Compiler, Cache, Defines, Patching}` | everything about shader and pipeline objects, the game's, and the build of Luma's |
+| `CB` | the cbuffer structs shared with the shaders, compiled by FXC and by C++ (`Resources/LumaCBuffers.hpp` gives them HLSL's types, a game's file holds only its structs): Luma's `LumaGlobalSettings` (including `DisplayCompositionSettings`), `LumaInstanceData` (`Includes/Core/CBuffers.hlsl`), and the game's `LumaGameSettings` / `LumaGameData` (`Game/GameCBuffers.hlsl`) |
+| `Luma::Settings` | registry, sources (`Define`, `Recipe`, `Binding`), kinds, typed ids (`Settings/Keys.hpp`, the only place Core's keys are written), TOML storage (including `[Luma.Overlay.Layout]`) |
+| `Luma::Shaders::{Database, Variants, Files, Compiler, Cache, Defines, Patching, Decompiler}` | everything about shader and pipeline objects, DXC/FXC compilation, reflection, disassembly, async decompilation (`cmd_Decompiler.exe` / RenoDX `decomp.exe`), and patching |
 | `Luma::Resources::{Database, LumaCBuffers, Mirrors, Upgrade, Chains, Scaling, Samplers, Geometry, Loading}` | Luma's named resources (its shaders, cbuffers, textures) and everything about the game's textures, buffers, samplers |
 | `Luma::Swapchain` | the real swapchain, the game's back buffers, fullscreen policy, output mode |
-| `Luma::Display` | composition, UI separation, capability spoofing |
+| `Luma::Display` | `DisplayMode`, `DisplayComposition`, `DisplayLevels`, UI separation, capability spoofing (`DXGISpoofing`) |
 | `Luma::Draw` | state save and restore, the bound-state cache, fullscreen passes, copy and scale helpers |
-| `Luma::Frame` | per-frame model: each device's resolutions (output, render, previous render) now; jitter, camera, pass markers later |
+| `Luma::Frame` | `Frame/FrameState`: per-frame model (each device's render/output/swapchain/display resolutions now; jitter, camera, pass markers later) |
 | `Luma::Effects::{SR, SMAA, RCAS, Bloom, GTAO}` | reusable passes |
-| `Luma::Trace::{Capture, Info, DebugDraw, Mcp}` | frame capture and the MCP server |
-| `Luma::UI::{Overlay, Style, Widgets, Icons, Panels}` | section 12 |
+| `Luma::Trace::{Capture, RuntimeStatus, DebugDraw, Mcp}` | frame capture, lightweight overlay summary + full runtime status, GPU debug draw overlay, and the MCP server |
+| `Luma::UI::{Overlay, OverlayWindow, Style, Widgets, Icons, Panels}` | section 13 (`UI/Panels/*Panel.{hpp,cpp}`) |
 | `Luma::Game` | the mod surface (section 8), declared in `Luma.hpp`; `Luma::Game::Registry` is Core's read side of what the game registered |
 | `Luma::ReShade` | section 14 |
 
@@ -90,8 +92,8 @@ The nouns shared across modules. Each has one owner and one definition.
 | Rule, Seed | `Resources::Upgrade`, `Resources::Chains` | what gets a mirror and how |
 | Entry | `Resources::Database` | a named resource any module or shader can resolve |
 | Setting | `Settings` | one typed, persisted, UI-visible value |
-| FrameInfo, PassMarker | `Frame` | what happened this frame |
-| DisplayInfo | `System::Display` | the monitor's HDR state and luminance |
+| FrameInfo, PassMarker | `Frame` (`FrameState`) | what happened this frame |
+| DisplayInfo | `System::MonitorDisplay` | the monitor's HDR state and luminance |
 | Event | `Trace::Capture` | one recorded call of a captured frame |
 
 ## 4. Backends
@@ -115,7 +117,7 @@ The nouns shared across modules. Each has one owner and one definition.
   * API-agnostic files include no `d3d*.h` or `dxgi*.h`.
   * Files for one API are named `<Api><Module>`.
   * `Api` and bytecode kind (`DXBC`, `DXIL`) are enums with room to grow, and shader hashes are plain integers.
-  * DXGI lives in `Swapchain` and `System::Display` only.
+  * DXGI lives in `Swapchain`, `Display/DXGI`, and `System::MonitorDisplay` only.
   * Settings, UI, Trace and `Game::Options` never name an API type. Game callbacks do, per API. A declaration that is about an API's own values (texture upgrade rules name `DXGI_FORMAT`, as 1.0's did) is its own call typed by that format family, shared by every API of the family (DXGI: D3D11 and D3D12), and overloaded for another family when one exists; never an `Options` member, never a `std::variant`.
 
 ## 5. Hooks
@@ -169,7 +171,7 @@ What the 1.0 migration off ReShade established. All of it carries over.
 
 ## 8. Game API
 
-Games include one header, `Luma.hpp`, and implement `Luma::Game::Init()`, which only declares things. Core is compiled with the game (section 16), so it sees the game's cbuffer structs and its `GameDeviceData` as types. `Luma.hpp` holds only `DllMain` and `IsEnabled` and includes the game API, one public header per kind under `Game/`: `Game.hpp` (the declarations made in `Init` and the runtime queries, `RunOriginal`, `UseOriginal` and `BindLumaShader` for the draw events included), `Events.hpp` (Luma's events, the draw events and the `Call` they get included), `Callbacks.hpp` (the native callbacks). `Game/Registry.hpp` is Core's private read side, and `Game/D3D11/D3D11DrawEvents.cpp` (`Game::DrawEvents::D3D11`) is the handlers' way of running the draw events.
+Games include one header, `Luma.hpp`, and implement `Luma::Game::Init()`, which only declares things. Game `Main.cpp` files may use `using namespace Luma;` (never inside `Luma.hpp` or Core headers), and `Luma2.Game.props` defines `LUMA_PROJECT_NAME` from `$(ProjectName)` so `Game::Info::name` and `System::Paths::ResolveRoots` default to the project name automatically. Core is compiled with the game (section 16), so it sees the game's cbuffer structs and its `GameDeviceData` as types. `Luma.hpp` holds only `DllMain` and `IsEnabled` and includes the game API, one public header per kind under `Game/`: `Game.hpp` (the declarations made in `Init`, `Game::Shaders::Defines` and `Game::Resources::Upgrade` re-exports, and the runtime queries, `RunOriginal`, `UseOriginal` and `BindLumaShader` for the draw events included), `Events.hpp` (Luma's events, the draw events and the `Call` they get included), `Callbacks.hpp` (the native callbacks). `Game/Registry.hpp` is Core's private read side, and `Game/D3D11/D3D11DrawEvents.cpp` (`Game::DrawEvents::D3D11`) is the handlers' way of running the draw events.
 
 * **`Game` is only the registration surface.** A declaration's type and storage belong to the module that owns the concept (shader names to `Shaders::Database`, redirects to `Shaders::Files`, defines to `Shaders::Defines`, the Luma cbuffer options to `Resources::LumaCBuffers`, bound-state groups to `Draw`); the `Game::` function forwards to it. `Game/Registry.cpp` keeps only what is the game's own: its info, its events, its callbacks (native and draw), its panels and its device data type.
 * **Calls are grouped by what they are for.** `Game::Shaders::{SetDebugName, RedirectHashes, SetDefine, AddDefine}` for shaders, `Settings::Register` for plain settings, `Game::D3D11::OnShaderDraw` for draw callbacks by shader hash (the draw events themselves are `Events` fields, below), `Game::Frame::{Get, SetRenderResolution}` for the device's resolutions. Lists stay calls.
@@ -261,7 +263,8 @@ struct Setting
    Source source;                // What a change does, see below
    bool (*is_enabled)() = nullptr;
    bool (*is_visible)() = nullptr;
-   Kind kind;                    // Game | Luma | Define | Recipe | Development, set by the call that registered it
+   bool requires_restart = false; // Renders a red Restart tag in UI instead of prose in tooltips
+   Kind kind;                     // Game | Luma | Define | Recipe | Development, set by the call that registered it
 };
 ```
 
@@ -274,14 +277,15 @@ struct Setting
 * **Kinds.** A setting carries the `Kind` its registration call gave it: `Game`, `Luma`, `Define`, `Recipe`, `Development`. The settings view shows Luma's "Luma" and "Overlay" categories first, then the game's categories (and its settings panel), then one Shader Defines section (Auto Compile, then Luma's and the game's defines together), then Recipes, then Luma's other categories; `Development` settings are its last section, "Development Settings", in Development builds (with the game's development panel). Auto Compile keeps its key and place in the file (`[Luma.Shaders]`), it's only drawn with the defines. `Luma.toml` has `[<Category>]` for the game, `[Luma.<Category>]` (`[Luma]` for its Luma category), `[Defines]` keyed by define name (define names are global to the compiler: a name registered twice is refused), `[Recipes]`, `[Development]`.
   * `Recipe{identity, env}`: enables a patch or sets one of its environment values. A change re-patches.
 * **One UI.** A setting is drawn by its value type through `UI::Widgets`, grouped by category. Games don't write ImGui code for settings. A game-drawn panel remains possible for the rare custom view.
-* **One store.** `Luma/Luma.toml`, a table per kind and category (above).
+* **One store.** `Luma/Luma.toml`, a table per kind and category (above). ImGui's window and docking layout is also persisted here under `[Luma.Overlay.Layout]` (`ImGui = "..."`), keeping `io.IniFilename = nullptr` so no `imgui.ini` is written next to the game.
+* **No `"Game default"` enum values.** Per-game defaults are applied via `Settings::SetDefault(...)` from `Game::Options`; the UI's Undo/Reset icon reverts a changed setting back to the mod's default.
 * **Threading.** There is no single render thread: on D3D12, and on D3D11 with deferred contexts, other threads record the next frame while one presents. So:
   * *One writer, at present.* Every change (overlay, MCP, a game's own call) is applied on the presenting thread at the present boundary. That stays the rule: it orders writes and is the closest thing to a frame boundary there is.
   * *Readers never lock.* Scalar values are atomics, readable from any hook on any thread. Strings are read under a lock and never on a per-draw path.
   * *A change is never assumed to land on a frame boundary.* For one frame, command lists recorded before and after the change can both execute. A value that only tunes a pass tolerates that.
   * *A change that creates or destroys objects* (upgrades on or off, output mode, SR, sampler bias) never frees what a recorded command list may still use: the old objects are released by the rule in section 4 (after the lists that bound them finish), and hooks keep working with either state until then.
   * *A change that rebuilds* (defines, recipes) runs as a job (`System::Jobs`) and publishes the new variant atomically.
-  * *Background work is one pool.* Compiling, dumping, creating pipelines and loading files run as `System::Jobs`, on a private Win32 thread pool whose size is the `Luma.Advanced.WorkerThreads` setting (applied at present, like every change). A feature starts no thread of its own, except for a loop that blocks on I/O (the MCP server's pipe). A job's `work` runs on a worker: it reads settings (atomics) and calls no presenting-thread code; it opens a `Hooks::Scope::Guard` before any API call, since `System` can't include `Hooks`. Its `done` runs on the presenting thread at the next present and is where the result is published. Jobs never check `Luma.Enabled`: tracking and queues keep running. FXC is used by one thread at a time (1.0: "apparently FXC isn't thread safe so ideally we should only ever access it from one thread at any given time"): every `Shaders::Compiler` call, and any use of a reflector it returns (`Compiler::Lock`), holds one lock for its duration. The game's shader creation, which reflects, therefore waits for the compile in flight, never for a whole build.
+  * *Background work is one pool.* Compiling, dumping, decompiling, creating pipelines and loading files run as `System::Jobs` (`System/JobQueue`), on a private Win32 thread pool whose size is the `Luma.Advanced.WorkerThreads` setting (applied at present, like every change). Finished jobs move to the presenting thread through a lock-free `moodycamel::ConcurrentQueue` (`Luma2/External/concurrentqueue`) with atomic `queued`, `active`, and progress counters so hot paths (`Queue`, `SetProgress`, `RunFinished`) take no mutexes. A feature starts no thread of its own, except for a loop that blocks on I/O (the MCP server's pipe). A job's `work` runs on a worker: it reads settings (atomics) and calls no presenting-thread code; it opens a `Hooks::Scope::Guard` before any API call, since `System` can't include `Hooks`. Its `done` runs on the presenting thread at the next present and is where the result is published. Jobs never check `Luma.Enabled`: tracking and queues keep running. FXC is used by one thread at a time (1.0: "apparently FXC isn't thread safe so ideally we should only ever access it from one thread at any given time"): every `Shaders::Compiler` call, and any use of a reflector it returns (`Compiler::Lock`), holds one lock for its duration. The game's shader creation, which reflects, therefore waits for the compile in flight, never for a whole build.
 * **Operable through MCP.** `luma_get_settings` and `luma_set_setting` read and write the same registry, so everything the UI can change, an agent can.
 * Dev sliders (1.0's `LumaDevSettings`) are settings with `Visibility::Development`. `luma_dev_values`, `luma_set_dev_value` and `luma_ab` operate on those.
 
@@ -346,8 +350,8 @@ The largest rework from 1.0.
   6. encode for the output mode (cannot be removed, but can pass through);
   7. development views: debug draw of a captured view, 2x zoom, SDR/HDR split.
 
-  The stage choices that 1.0 makes with shader defines (`GAMMA_CORRECTION_TYPE`, `GAMUT_MAPPING_TYPE`, `UI_DRAW_TYPE`...) stay defines, exposed as settings. The on/off switch per stage is added on top.
-* **Display information is backend independent** (`System::Display`): HDR supported and enabled, peak and paper white, SDR white level, turning Windows HDR on, reacting to the window moving to another display.
+  Runtime-switchable composition parameters live in `CB::DisplayCompositionSettings DisplayComposition` (16-byte aligned) inside `CB::LumaGlobalSettings`, avoiding shader recompiles when toggling stages or development views. Most composition stage knobs are Development-only.
+* **Display information is backend independent** (`System::MonitorDisplay`): HDR supported and enabled, peak and paper white, SDR white level, turning Windows HDR on, reacting to the window moving to another display.
 * **Spoofing** (`Display`): what the game is told about the display (HDR capability, color spaces, adapter vendor), so games without an HDR toggle take the path the mod wants.
 
 ## 13. UI language
@@ -357,9 +361,9 @@ One look and one behaviour for every panel. Reference: the 1.0 screenshots show 
 * **`UI/Style`** holds every color, size and spacing as named tokens. No literal colors or pixel sizes in panels.
   * Dark neutral surfaces in three depths (window, panel, control), separated by 1px borders. Simple, not flat: depth and color are part of the language, not decoration added per panel.
   * **Depth.** Section headers and the title bar have a subtle vertical gradient and a 1px highlight on their top edge. Controls are a step lighter than the panel they sit on and lift another step on hover. Popups, tooltips and toasts have a drop shadow. The active tab and the focused control carry an accent underline or outline.
-  * **Color.** One accent (Luma blue) for selection, focus, slider fills, toggles that are on, and primary buttons. Semantic colors: green success, amber warning, red danger or error, violet for Luma-injected things in trace. Each section header has a left accent bar and a tinted icon.
-  * **Icons are tinted, never plain text color by default.** An icon font is one color per glyph, so color comes from the tint: each category has its own icon color from a small fixed palette (Display, Upscaling, Post Processing, Overlay, Advanced, Development...), state icons use the semantic colors, brand marks use the brand's color, and a disabled icon is grey. The palette is tokens in `UI/Style` like everything else.
-  * A changed setting shows it: its reset icon is accent-colored and its label is a step brighter.
+  * **Color.** One accent (Luma blue) for selection, focus, slider fills, toggles that are on, and primary buttons. Semantic colors: green success, amber warning, red danger or error, violet for Luma-injected things in trace; `Tone::Info` uses neutral label text. Section headers use cohesive neutral/muted chrome (not rainbow per-category tints) with a subtle left accent bar and optional category icon (`Widgets::RegisterCategoryIcon`).
+  * **Icons.** Semantic state icons use semantic colors, brand marks use the brand's color, and disabled icons are grey. Every token lives in `UI/Style`.
+  * A changed setting shows it: its reset icon is accent-colored and its label is a step brighter. Settings with `requires_restart = true` show a red `Restart` tag in `SettingRow` rather than prose in tooltips.
   * 4px spacing unit, 4px rounding on controls, 6px on panels. Sizes scale with the font size setting.
 * **`UI/Icons`**: Font Awesome Free, the Solid and Brands fonts, vendored whole under `Luma2/External/Fonts` with their license (the fonts are SIL OFL 1.1, the icons CC BY 4.0) and embedded in the DLL as Windows resources. No subsetting and no generation step: adding an icon is naming its codepoint (IconFontCppHeaders' `IconsFontAwesome6.h` and `IconsFontAwesome6Brands.h`). Icons replace the `"U"`, `"R"`, `"X"` placeholders. An icon-only button always has a tooltip.
 * **`UI/Widgets`** is the only place that calls raw ImGui controls for settings:
@@ -389,15 +393,16 @@ One look and one behaviour for every panel. Reference: the 1.0 screenshots show 
 * **Few options are segmented, many are a dropdown.** Five or fewer choices (an enum setting, the trace's variant picker, a stage's cbuffer slots) are a `Segmented` control showing them all; more are a `Combo`.
 * **A state is said once, where it applies.** A change that needs work to apply (defines while Auto Compile is off) shows one banner with the action, and a tag on each pending row with what it was built with in its tooltip. Nothing is tagged with what a change *would* do.
 * **Layout.**
-  * The window's header (game, version, the API, the Luma switch) and, in Development, the tab bar are pinned at the top; the game's links and the status bar are pinned at the bottom. Only the content between them scrolls.
-  * The window is opaque by default; its background opacity is an Overlay setting.
-  * Release: one window. Settings by category, then an About section like 1.0's About tab (the game's description, its about panel, the credits, what Luma uses, version and build).
-  * Development: adds tabs for Shaders, Trace and Info (Resources, Patches and Log as they're built). Dev-only settings appear in the same settings view, in its Development Settings section, not in a separate tab.
+  * The window's header (game, version, the API, the Luma switch) and the tab bar are pinned at the top; the game's donation/project links (compact single-row) and the status bar are pinned at the bottom across every tab. Only the content between them scrolls.
+  * The window is opaque by default; its background opacity is an Overlay setting. ImGui layout persists in `Luma.toml` under `[Luma.Overlay.Layout]` with a `Reset Layout` button in the `Overlay` tab.
+  * `Publishing` (Release): `Settings` | `Overlay` | `About`. `Luma.Enabled` and `Luma.EnabledKey` stay in `Settings -> General` in all builds (never Development-only).
+  * `Test`: `Settings` | `Overlay` | `Info` (Status + About).
+  * `Development`: `Settings` | `Framework` | `Overlay` | `Development` | `Shaders` | `Patches` | `Resources` | `Trace` | `Info`. Settings tabs include `Expand All` / `Collapse All` controls.
 * **HDR swapchains.** The overlay's colors are sRGB-encoded for an SDR buffer. On an HDR swapchain ImGui's pixel shader linearizes them (sRGB, as Windows shows an SDR swapchain on an HDR display, so the overlay looks the same in every output mode; ReShade used gamma 2.2), scales them to the overlay's paper white (the Overlay "HDR brightness" setting, 203 nits by default, BT.2408's reference white) and encodes them for the swapchain's color space: scRGB (an FP16 buffer with `G10_NONE_P709` or no color space set) or PQ (`G2084_NONE_P2020`, full or studio range, in any format: FP16 can carry PQ). The shader is compiled once; the encoding and paper white are its constants, so the live slider never recompiles. The color space is what the game last set with `SetColorSpace1` (recorded in the swapchain's private data, as 1.0, ReShade and Special K do); other buffers are drawn as they are. Blending happens in the buffer's encoding, as under ReShade, so linear in scRGB. This is what 1.0 got from ReShade's overlay.
-* **Trace list.** A draw or dispatch is one entry with all its stages, labelled by its primary shader (pixel, else vertex, else compute). Its filters (`Trace::Capture::Filter`, shared with MCP's `trace_list`) match any stage: a stage, a hash, a text matching part of a hash or debug name; draws without a pixel shader are hidden unless "Vertex-only draws" is on (MCP's `include_vs`; 1.0 hid vertex shader entries), Luma's passes can be hidden, and "Unique" keeps the first call of each shader. The detail is grouped in sections with the same tables: shaders (a variant tag and the variant picker), the call, output targets, shader resources, unordered access, constant buffers (a slot selector per stage, the selected slot's typed fields or float4 rows, Track), samplers, blend, depth stencil, rasterizer, viewports.
+* **Trace list.** A draw or dispatch is one entry with all its stages, labelled by its primary shader (pixel, else vertex, else compute). Its filters (`Trace::Capture::Filter`, shared with MCP's `trace_list`) match any stage or bound resource name/hash: stage, hash, text, cancelled draws, copies, clears, CPU writes, CPU reads, highlighted/tracked resource, unique, vertex-only, and Luma passes. Rows use semantic coloring (`Colors::Trace::*`) and pink/red highlighting when a resource is tracked from the Trace or Resources panels. CPU accesses (`CpuWrite` / `CpuRead`) carry `Capture::CpuAccess` to distinguish `Map (WriteDiscard)` / `Map (Read)` / `UpdateSubresource`. Any bound view can be inspected live via `Trace::DebugDraw` into display composition, and shaders offer Disassembly (FXC / DXC), async Decompiled HLSL (`cmd_Decompiler.exe` for DXBC, RenoDX `decomp.exe --flatten --do-while` for DXIL), and replacement HLSL (with optional `Inline Includes`). The detail is grouped in sections with the same tables: shaders (a variant tag and the variant picker), the call, output targets, shader resources, unordered access, constant buffers (a slot selector per stage, the selected slot's typed fields or float4 rows, Track), samplers, blend, depth stencil, rasterizer, viewports.
 * **Track.** 1.0's constant buffer tracking: a captured call's slot of a shader is read again every frame (that call's instance of the shader in the frame), its live values shown in place of the captured ones, the words that changed in the last 60 frames highlighted. A copy made on a deferred context is read only once the command list it ended in was executed on the immediate context; until then, or when the call didn't happen in a frame, the last values are shown as stale.
 * **Detached UI (optional, Development first).** ImGui's docking branch multi-viewport lets a panel be dragged out of the game window into its own OS window. Its swapchains are created inside a Luma scope. If it proves fragile with a game's fullscreen handling it stays off for that game.
-* UI code uses ImGui's public API. `imgui_internal.h` is avoided so the panels could be hosted by another ImGui (section 14).
+* UI code uses ImGui's public API; `<imgui_internal.h>` is limited to `UI/Overlay.cpp` for `ImGui::ClearIniSettings()` when resetting persisted layout.
 
 ## 14. Compatibility
 
@@ -419,7 +424,7 @@ Within reason. A tool that needs Luma's design bent around it is dropped.
 
 ## 15. Code style
 
-* **C++23**, MSVC. Structs and free functions in namespaces. `Namespace::Function(object)` over `object.Function()`. No inheritance or virtuals unless a COM interface requires them.
+* **C++23**, MSVC. Structs and free functions in namespaces. `Namespace::Function(object)` over `object.Function()`. No non-COM, non-RAII classes and no inheritance or virtuals unless a COM interface requires them. Module APIs use consistent verb+noun naming (`FindPipeline`, `FindShader`, `FindMirror`, `Record*`, `Get*Name`, `DrawWindow`).
 * **Names.** `PascalCase` functions, types and namespaces. `snake_case` variables. `ALL_CAPS` constants and macros. Fixed-width integer types.
 * **Files.** Every file and folder is `PascalCase`, source and resources alike (`Resources/D3D12/D3D12Mirrors.cpp`, `Luma/Shaders`). A file for one API is `<Api><Module>`, in its feature's `<Api>` folder (`Hooks/D3D11/D3D11Hooks.cpp`, `UI/D3D12/D3D12Renderer.cpp`): no two files share a name anywhere in the project (MSVC object files, search), the folder only groups them. Game folders carry the game's title. Shader files keep their `Name_0xHASH.ps_5_0.hlsl` form.
 * **RAII.** `ComPtr` for every COM reference Luma owns. State tied to a D3D object lives in its private data.
@@ -432,17 +437,10 @@ Within reason. A tool that needs Luma's design bent around it is dropped.
   * One line where a reader would otherwise be surprised: a constraint, an ordering, a measured fact, a 1.0 behaviour kept on purpose.
   * History belongs in commit messages and in section 17.
 * **Templates, not code-generating macros.** What differs between copies of code (a shader stage, an interface version, a vtable) goes in a traits type or a template argument (`Hooks::D3D11::StageTraits`, one detour template per method kind). A macro remains only for what C++ can't express: the C slot table shared with `slots.c` (`Slots.h`), linker directives (`DXGIExports.cpp`), and the build switches and asserts (`DEVELOPMENT`, `ASSERT_ONCE`, `LUMA_UNIMPLEMENTED`).
-* **Formatting is clang-format's job.** `Luma2/.clang-format` is the style: Microsoft base, 3 spaces, braces on their own line except namespaces, no column limit, pointers with the type, includes not sorted.
-
-Suggestions for enforcement, to be adopted in Step 0:
-
-* Pin clang-format 21 (the version CI already uses) and say so in the file's first line.
-* Add to `.clang-format`: `AllowShortIfStatementsOnASingleLine: WithoutElse` to match 1.0's compact guard clauses, `SeparateDefinitionBlocks: Always`, `QualifierAlignment: Left`, `InsertBraces: false`, `KeepEmptyLines: {AtStartOfBlock: false}`, `MaxEmptyLinesToKeep: 1`.
-* Extend `.github/workflows/lint.yml` with a job that checks `Luma2/Source/**` in full (not changed files only) and fails the build, since the tree starts clean.
-* Point the pre-commit hook at `Luma2/Source` with `--style=file` and drop its clang-tidy pass, which has no compile database.
-* Add an `.editorconfig` with the indent and charset so editors agree before clang-format runs.
-* Later, once a compile database exists (`msbuild -t:ClCompile` through a generator, or Clang Power Tools), add `.clang-tidy` with `readability-identifier-naming` to enforce the naming rules, and nothing else at first.
-* Game folders are formatted only when ported. A port commit doesn't mix reformatting with the move: format in a commit of its own.
+* **Automated enforcement.**
+  * Formatting (`Luma2/.clang-format`, Microsoft base, 3 spaces, braces on their own line except namespaces, no column limit, pointers with the type, includes not sorted) covers `Luma2/Source/**` and `Luma2/Templates/**` in `.github/workflows/lint.yml` and `.githooks/pre-commit`.
+  * Static analysis (`Luma2/.clang-tidy`, with `Scripts/Generate-Luma2CompileCommands.ps1`) checks naming conventions and common bugprone patterns.
+  * Architecture & hygiene rules (`Scripts/Check-Luma2Rules.ps1`) check Core header isolation, API-agnostic include boundaries, absence of `Detail`/`Internal` namespaces, unique PascalCase filenames, no ReShade submodule references, no forbidden doc/history comments, and the no-non-RAII-class rule.
 
 ## 16. Build
 
@@ -560,3 +558,8 @@ Add a row whenever 2.0 behaves differently from 1.0 on purpose, or when an impro
 | Key releases | every key message blocked while the overlay is open | a release (or repeat) reaches the game only if its press did; a press of the overlay's own keys isn't seen by the game, nor its release | the key doesn't stick for the game when the overlay opens with it held (ReShade's `0x04` key state) | decided |
 | Windows hooks and `PostMessage` | not hooked | `SetWindowsHookEx` for the mouse and keyboard (and low level) hook types is wrapped so the game's hook doesn't run while the overlay is open; `PostMessage` drops `WM_MOUSEMOVE` meanwhile | what ReShade does | decided |
 | Gamepad | not blocked | not blocked, and not read by the overlay | ReShade doesn't block XInput either (its XInput code only feeds overlay navigation) | idea |
+| Composition settings | shader defines (`GAMMA_CORRECTION_TYPE`, `GAMUT_MAPPING_TYPE`, etc.) | `CB::DisplayCompositionSettings DisplayComposition` (16-byte aligned) inside `CB::LumaGlobalSettings`, runtime-switchable without shader recompilation | avoids recompiles on stage toggles and keeps development knobs out of release builds | decided |
+| Overlay layout & tabs | ReShade/ImGui `imgui.ini`, single dev settings list | ImGui layout saved in `Luma.toml` under `[Luma.Overlay.Layout]`; `Publishing` (`Settings`/`Overlay`/`About`), `Test` (`Settings`/`Overlay`/`Info`), `Development` (`Settings`/`Framework`/`Overlay`/`Development`/`Shaders`/`Patches`/`Resources`/`Trace`/`Info`); `Luma.Enabled` + hotkey stay in `Settings -> General` in all builds; footer links pinned across all tabs | no loose `.ini` next to the game; cleaner separation of user vs framework vs dev settings | decided |
+| Restart-required settings | prose in tooltips | `Settings::Setting::requires_restart` renders a red `Restart` tag in `SettingRow` | consistent visual cue without cluttering tooltips | decided |
+| Background job completion | mutex-guarded finished vector | Win32 threadpool + lock-free `moodycamel::ConcurrentQueue` + atomic counters (`Luma2/External/concurrentqueue`) | zero locks on `Queue`, `SetProgress`, and `RunFinished` hot paths | decided |
+| Shader decompilation | external script / manual | `Shaders::Decompiler` async job + `Luma/Cache/Decomp/` cache running vendored `cmd_Decompiler.exe` (DXBC) or RenoDX `decomp.exe --flatten --do-while` (DXIL), plus dynamic DXC disassembly/reflection | inspect both DXBC and DXIL shaders directly in Trace and Shaders panels | decided |

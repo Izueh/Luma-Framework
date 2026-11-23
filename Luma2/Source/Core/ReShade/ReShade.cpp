@@ -17,16 +17,16 @@
 
 #include "Hooks/DXGI/DXGIHooks.hpp"
 #include "Hooks/DXGI/DXGISwapchainProxy.hpp"
-#include "Hooks/Hooks.hpp"
+#include "Hooks/HookManager.hpp"
 #include "Hooks/InputHooks.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
-#include "Settings/Keys.hpp"
-#include "Settings/Registry.hpp"
+#include "Settings/SettingKeys.hpp"
+#include "Settings/SettingsRegistry.hpp"
 #include "Startup.hpp"
 #include "Swapchain/DXGI/DXGISwapchain.hpp"
 #include "Swapchain/Swapchain.hpp"
 #include "System/Modules.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
 
 namespace Luma {
@@ -44,19 +44,21 @@ constexpr std::array SETTINGS = {
    Settings::Setting{
       .key = Settings::Core::LOAD_RESHADE.key,
       .label = "Load ReShade",
-      .tooltip = "Loads ReShade64.dll when it's next to Luma, so ReShade's effects and add-ons run on top of Luma.\nFrom the game's next start",
+      .tooltip = "Loads ReShade64.dll when it's next to Luma, so ReShade's effects and add-ons run on top of Luma.",
       .category = "ReShade",
       .visibility = Settings::Visibility::Test,
       .default_value = true,
+      .requires_restart = true,
    },
    Settings::Setting{
       .key = Settings::Core::RESHADE_BRIDGE.key,
       .label = "ReShade Bridge",
       .tooltip = "Luma registers as a ReShade add-on, so its display composition runs before ReShade's effects and its overlay after them. "
-                 "Off, ReShade's effects see the image before the composition.\nFrom the game's next start",
+                 "Off, ReShade's effects see the image before the composition.",
       .category = "ReShade",
       .visibility = Settings::Visibility::Test,
       .default_value = true,
+      .requires_restart = true,
    },
 };
 
@@ -205,11 +207,11 @@ void CheckAndLogHookOrder(LoadState state)
    const std::string summary = std::format("the creation exports reach first: {} (ReShade {}, Luma {}, another hooker {}, none {}); Luma's hooks: {} first in their chain, {} chained under another hooker, {} removed by someone else",
       details, reshade_first, luma_first, other_first, unhooked, verification.intact, verification.chained, verification.restored);
    if (state != LoadState::LoadedByLuma)
-      Utils::Log::Info("ReShade: at the first present, {}. ReShade wasn't loaded by Luma, so the intended order (ReShade's hooks outermost, Luma's under them) isn't expected", summary);
+      Log::Info("ReShade: at the first present, {}. ReShade wasn't loaded by Luma, so the intended order (ReShade's hooks outermost, Luma's under them) isn't expected", summary);
    else if (found == HookOrder::ReShadeAboveLuma && verification.restored == 0)
-      Utils::Log::Info("ReShade: at the first present, {}. ReShade's hooks are outermost and Luma's sit under them, as intended", summary);
+      Log::Info("ReShade: at the first present, {}. ReShade's hooks are outermost and Luma's sit under them, as intended", summary);
    else
-      Utils::Log::Warning("ReShade: at the first present, {}. Luma's hooks are not under ReShade's, which is not the intended order: ReShade's hooks should be outermost, with Luma's under them", summary);
+      Log::Warning("ReShade: at the first present, {}. Luma's hooks are not under ReShade's, which is not the intended order: ReShade's hooks should be outermost, with Luma's under them", summary);
 }
 
 int64_t Now()
@@ -238,8 +240,8 @@ void __cdecl OnFinishPresentEvent(void*, ABI::DeviceObject*)
 {
    static std::atomic<bool> warned = false;
    if (Hooks::DXGI::CloseThirdPartyWorkWindowAtFinishPresent() && !warned.exchange(true))
-      Utils::Log::Warning("ReShade bridge: Luma's Present didn't follow ReShade's present event: Luma's present work (up to the display composition) ran at the event, but Luma's overlay wasn't drawn for that frame; "
-                          "the window for ReShade's work was closed when ReShade finished presenting. Logged once.");
+      Log::Warning("ReShade bridge: Luma's Present didn't follow ReShade's present event: Luma's present work (up to the display composition) ran at the event, but Luma's overlay wasn't drawn for that frame; "
+                   "the window for ReShade's work was closed when ReShade finished presenting. Logged once.");
 }
 
 void __cdecl OnBeginEffects(void*, void*, ABI::Handle, ABI::Handle)
@@ -275,7 +277,7 @@ bool __cdecl OnOpenOverlay(void*, bool open, int32_t)
 {
    if (open && Hooks::Input::IsOverlayOpen())
    {
-      Utils::Log::Info("ReShade bridge: ReShade's overlay kept closed, Luma's is open");
+      Log::Info("ReShade bridge: ReShade's overlay kept closed, Luma's is open");
       return true;
    }
    reshade_overlay_open.store(open, std::memory_order_relaxed);
@@ -292,7 +294,7 @@ void RegisterBridge()
    if (!IsSettingOnOrUnregistered(Settings::Core::RESHADE_BRIDGE))
    {
       bridge_state.store(BridgeState::TurnedOff, std::memory_order_relaxed);
-      Utils::Log::Info("ReShade bridge: off, turned off in Luma.toml ({} = false). {}", Settings::Core::RESHADE_BRIDGE.key, FALLBACK);
+      Log::Info("ReShade bridge: off, turned off in Luma.toml ({} = false). {}", Settings::Core::RESHADE_BRIDGE.key, FALLBACK);
       return;
    }
    const HMODULE module = reinterpret_cast<HMODULE>(reshade_module_base);
@@ -301,13 +303,13 @@ void RegisterBridge()
    if (!register_addon || !register_event)
    {
       bridge_state.store(BridgeState::MissingExport, std::memory_order_relaxed);
-      Utils::Log::Warning("ReShade bridge: off, {} has no add-on API (no ReShadeRegisterAddon or ReShadeRegisterEvent). {}", reshade_module_name, FALLBACK);
+      Log::Warning("ReShade bridge: off, {} has no add-on API (no ReShadeRegisterAddon or ReShadeRegisterEvent). {}", reshade_module_name, FALLBACK);
       return;
    }
    if (!register_addon(System::Modules::GetSelf(), ABI::API_VERSION))
    {
       bridge_state.store(BridgeState::Refused, std::memory_order_relaxed);
-      Utils::Log::Warning("ReShade bridge: off, {} refused Luma as an add-on with API version {} (ReShade.log says why: an older ReShade, add-ons disabled, the name taken). {}",
+      Log::Warning("ReShade bridge: off, {} refused Luma as an add-on with API version {} (ReShade.log says why: an older ReShade, add-ons disabled, the name taken). {}",
          reshade_module_name, ABI::API_VERSION, FALLBACK);
       return;
    }
@@ -321,7 +323,7 @@ void RegisterBridge()
    bridge_state.store(BridgeState::On, std::memory_order_relaxed);
    // Its events open and close the windows in which its reads of a Mirror swapchain get the real one
    Hooks::SwapchainProxy::SetReShadeBridged(true);
-   Utils::Log::Info("ReShade bridge: on, Luma registered as an add-on of {} (API version {}, from ReShade v6.8.0's headers)", reshade_module_name, ABI::API_VERSION);
+   Log::Info("ReShade bridge: on, Luma registered as an add-on of {} (API version {}, from ReShade v6.8.0's headers)", reshade_module_name, ABI::API_VERSION);
 }
 } // namespace
 
@@ -335,19 +337,19 @@ void Load()
    if (const HMODULE loaded = FindLoadedReShadeModule())
    {
       RecordReShadeModule(loaded, LoadState::LoadedByAnotherModule);
-      Utils::Log::Info("ReShade: already loaded as {} ({}), Luma doesn't load another: it runs as a proxy or was injected by something else", reshade_module_name,
+      Log::Info("ReShade: already loaded as {} ({}), Luma doesn't load another: it runs as a proxy or was injected by something else", reshade_module_name,
          Utils::Strings::ToUtf8(System::Modules::GetPath(loaded)));
       RegisterBridge();
       return;
    }
 
-   const std::filesystem::path path = System::Modules::SelfDirectory() / FILE_NAME;
+   const std::filesystem::path path = System::Modules::GetSelfDirectory() / FILE_NAME;
    std::error_code error;
    const std::string file = Utils::Strings::ToUtf8(FILE_NAME);
    if (!std::filesystem::is_regular_file(path, error))
    {
       not_loaded_reason = std::format("no {} next to Luma", file);
-      Utils::Log::Info("ReShade: absent (no {} next to Luma)", file);
+      Log::Info("ReShade: absent (no {} next to Luma)", file);
       return;
    }
    // The mode comes from the game's Init and the saved settings, which Startup::Initialize reads when the graphics dll loads. A ReShade
@@ -355,23 +357,23 @@ void Load()
    if (!Startup::IsInitialized())
    {
       not_loaded_reason = std::format("{} next to Luma, not loaded: Luma loaded before the game's graphics dll, the swapchain mode wasn't known", file);
-      Utils::Log::Warning("ReShade: {} not loaded, Luma's dll loaded before the game's graphics dll, so the swapchain mode and Luma's settings aren't "
-                          "known yet, and ReShade can't be loaded in Mirror mode without them",
+      Log::Warning("ReShade: {} not loaded, Luma's dll loaded before the game's graphics dll, so the swapchain mode and Luma's settings aren't "
+                   "known yet, and ReShade can't be loaded in Mirror mode without them",
          Utils::Strings::ToUtf8(path));
       return;
    }
    if (!Settings::Get(Settings::Core::LOAD_RESHADE))
    {
       not_loaded_reason = std::format("{} next to Luma, not loaded: turned off in Luma.toml", file);
-      Utils::Log::Info("ReShade: {} not loaded, turned off in Luma.toml ({} = false)", Utils::Strings::ToUtf8(path), Settings::Core::LOAD_RESHADE.key);
+      Log::Info("ReShade: {} not loaded, turned off in Luma.toml ({} = false)", Utils::Strings::ToUtf8(path), Settings::Core::LOAD_RESHADE.key);
       return;
    }
    // Mirror tells ReShade's own reads from the game's in the proxy the game holds
    if (Swapchain::GetMode() == Swapchain::Mode::Mirror && !Swapchain::Wraps())
    {
       not_loaded_reason = std::format("{} next to Luma, not loaded: the swapchain is in Mirror mode without the swapchain wrapper", file);
-      Utils::Log::Info("ReShade: {} not loaded, the game's swapchain is in Mirror mode without the swapchain wrapper ({} = false), where ReShade would "
-                       "hand the game Luma's real buffers",
+      Log::Info("ReShade: {} not loaded, the game's swapchain is in Mirror mode without the swapchain wrapper ({} = false), where ReShade would "
+                "hand the game Luma's real buffers",
          Utils::Strings::ToUtf8(path), Settings::Core::SWAPCHAIN_WRAP.key);
       return;
    }
@@ -388,11 +390,11 @@ void Load()
    if (!module)
    {
       not_loaded_reason = std::format("{} next to Luma failed to load (error {}), see Luma.log", file, load_error);
-      Utils::Log::Error("ReShade: loading {} failed (error {})", Utils::Strings::ToUtf8(path), load_error);
+      Log::Error("ReShade: loading {} failed (error {})", Utils::Strings::ToUtf8(path), load_error);
       return;
    }
    RecordReShadeModule(module, LoadState::LoadedByLuma);
-   Utils::Log::Info("ReShade: injected by Luma, {} loaded at {}, after Luma's loader notification so its hooks go in on top of Luma's", Utils::Strings::ToUtf8(path),
+   Log::Info("ReShade: injected by Luma, {} loaded at {}, after Luma's loader notification so its hooks go in on top of Luma's", Utils::Strings::ToUtf8(path),
       static_cast<void*>(module));
    // Still in DllMain, as the load: the registration reads ReShade's config and Luma's version resource, nothing waits
    RegisterBridge();
@@ -411,7 +413,7 @@ void FindReShadeLoadedAfterLuma()
    if (!loaded)
       return;
    RecordReShadeModule(loaded, LoadState::LoadedByAnotherModule);
-   Utils::Log::Info("ReShade: loaded after Luma as {} ({}), not by Luma", reshade_module_name, Utils::Strings::ToUtf8(System::Modules::GetPath(loaded)));
+   Log::Info("ReShade: loaded after Luma as {} ({}), not by Luma", reshade_module_name, Utils::Strings::ToUtf8(System::Modules::GetPath(loaded)));
    // Its add-ons may have registered before: their present handlers run before Luma's
    RegisterBridge();
 }
@@ -429,13 +431,13 @@ void CheckHookOrderAtFirstPresent()
    if (state != LoadState::LoadedByAnotherModule || Swapchain::GetMode() != Swapchain::Mode::Mirror)
       return;
    if (!Swapchain::Wraps())
-      Utils::Log::Warning("ReShade: the game's swapchain is in Mirror mode without the swapchain wrapper ({} = false): ReShade's calls can't be told from "
-                          "the game's, so the game may get Luma's real buffers",
+      Log::Warning("ReShade: the game's swapchain is in Mirror mode without the swapchain wrapper ({} = false): ReShade's calls can't be told from "
+                   "the game's, so the game may get Luma's real buffers",
          Settings::Core::SWAPCHAIN_WRAP.key);
    else if (bridge_state.load(std::memory_order_relaxed) != BridgeState::On)
-      Utils::Log::Warning("ReShade: the game's swapchain is in Mirror mode and the bridge is off: ReShade's effects draw on the game's image, before Luma's display composition");
+      Log::Warning("ReShade: the game's swapchain is in Mirror mode and the bridge is off: ReShade's effects draw on the game's image, before Luma's display composition");
    else
-      Utils::Log::Info("ReShade: the game's swapchain is in Mirror mode: ReShade's own reads of it, from {}, get the real buffers, so its effects draw on the composed image", reshade_module_name);
+      Log::Info("ReShade: the game's swapchain is in Mirror mode: ReShade's own reads of it, from {}, get the real buffers, so its effects draw on the composed image", reshade_module_name);
 }
 
 void RecordWherePresentWorkRan(bool at_event)
@@ -445,19 +447,19 @@ void RecordWherePresentWorkRan(bool at_event)
    {
       static std::atomic<bool> logged = false;
       if (!logged.exchange(true))
-         Utils::Log::Info("ReShade bridge: Luma's present work runs at ReShade's present event: ReShade's effects and the add-ons registered after Luma "
-                          "see Luma's composed image, Luma's overlay draws at the proxy's Present after them");
+         Log::Info("ReShade bridge: Luma's present work runs at ReShade's present event: ReShade's effects and the add-ons registered after Luma "
+                   "see Luma's composed image, Luma's overlay draws at the proxy's Present after them");
       return;
    }
    static std::atomic<bool> logged = false;
    if (!IsReShadeLoaded(load_state.load(std::memory_order_acquire)) || logged.load(std::memory_order_relaxed) || logged.exchange(true))
       return;
    if (bridge_state.load(std::memory_order_relaxed) == BridgeState::On)
-      Utils::Log::Info("ReShade bridge: a present without ReShade's present event before it (ReShade skipped the event, or turned its add-ons off): "
-                       "Luma's present work ran at the proxy's Present, before ReShade's effects, for that frame. Logged once.");
+      Log::Info("ReShade bridge: a present without ReShade's present event before it (ReShade skipped the event, or turned its add-ons off): "
+                "Luma's present work ran at the proxy's Present, before ReShade's effects, for that frame. Logged once.");
    else
-      Utils::Log::Info("ReShade: Luma's present work runs at the proxy's Present (the bridge is off): ReShade's effects run before Luma's display composition, "
-                       "Luma's overlay after them");
+      Log::Info("ReShade: Luma's present work runs at the proxy's Present (the bridge is off): ReShade's effects run before Luma's display composition, "
+                "Luma's overlay after them");
 }
 
 bool IsOverlayOpen()

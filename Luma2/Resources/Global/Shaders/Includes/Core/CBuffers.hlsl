@@ -30,6 +30,19 @@ namespace CB
 
 namespace CB
 {
+  // Runtime display composition and pipeline-space settings (32 bytes, 16-byte aligned).
+  struct DisplayCompositionSettings
+  {
+    uint PostProcessSpaceType; // 0 Gamma, 1 Linear, 2 Linear until UI
+    uint VanillaEncodingType; // 0 sRGB, 1 Gamma 2.2
+    uint GammaCorrectionType; // 0 sRGB, 1 Gamma 2.2, 2..4 hybrid modes
+    uint GamutMappingType; // 0 None, 1 Auto, 2 SDR BT.709, 3 HDR BT.2020
+    uint UIDrawType; // 0 Raw, 1 Direct Custom, 2 Direct Inverse, 3 Separate
+    uint EarlyDisplayEncoding; // 0 Off, 1 On
+    uint Stages; // Bitmask of enabled composition stages (Display::Composition::Stage)
+    uint DebugFlags; // Bit 0: 2xZoom, bits 1..3: SplitViewMode (0..4), bit 4: SplitViewNativeImpl
+  };
+
   // Luma global settings (usually, but not necessarily, changed a maximum of once per frame)
   struct LumaGlobalSettings
   {
@@ -68,6 +81,7 @@ namespace CB
 #endif
 
     // NOTE: keep anything before the game settings aligned to 16 bytes (4 floats/ints). This is the only way to match both c++ and hlsl quirks at the same time.
+    CB::DisplayCompositionSettings DisplayComposition;
 
     // This is here to avoid taking too many cbuffer slots for separate buffers. It's at the end to avoid alignment issues with non game specific data in case the game specific includes were missing.
     CB::LumaGameSettings GameSettings; // Custom games setting, with a per game struct.

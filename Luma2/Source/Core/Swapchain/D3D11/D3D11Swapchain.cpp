@@ -4,9 +4,9 @@
 
 #include "Display/D3D11/D3D11Composition.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
-#include "Resources/Mirrors.hpp"
+#include "Resources/ResourceMirrors.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -92,7 +92,7 @@ ComPtr<ID3D11Texture2D> CreateBuffer(ID3D11Device* device, const DXGI::BufferDes
    ComPtr<ID3D11Texture2D> texture;
    if (FAILED(device->CreateTexture2D(&plain_desc, nullptr, &texture)))
    {
-      Utils::Log::Error("Swapchain: the game's D3D11 back buffer couldn't be created ({}x{}, format {})", desc.width, desc.height, uint32_t(desc.format));
+      Log::Error("Swapchain: the game's D3D11 back buffer couldn't be created ({}x{}, format {})", desc.width, desc.height, uint32_t(desc.format));
       return nullptr;
    }
    texture->SetPrivateData(WKPDID_D3DDebugObjectName, sizeof("Luma game back buffer") - 1, "Luma game back buffer");
@@ -115,7 +115,7 @@ bool Compose(IDXGISwapChain* swapchain, ID3D11Device* device, ID3D11Texture2D* g
    if (game_buffer && Resources::Mirrors::IsSwapping())
    {
       ComPtr<ID3D11Texture2D> mirror;
-      if (ID3D11Resource* resource = Resources::Mirrors::D3D11::GetMirror(game_buffer); resource && SUCCEEDED(resource->QueryInterface(IID_PPV_ARGS(&mirror))))
+      if (ID3D11Resource* resource = Resources::Mirrors::D3D11::FindMirror(game_buffer); resource && SUCCEEDED(resource->QueryInterface(IID_PPV_ARGS(&mirror))))
          source = mirror.Get();
    }
    D3D11_TEXTURE2D_DESC source_desc;

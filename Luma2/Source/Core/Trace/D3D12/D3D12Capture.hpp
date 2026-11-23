@@ -7,10 +7,10 @@
 
 #include <d3d12.h>
 
-#include "Luma.hpp"
-#include "Shaders/Stages.hpp"
-#include "Trace/Capture.hpp"
-#include "Trace/Readback.hpp"
+#include "Game/GameEvents.hpp"
+#include "Shaders/ShaderStages.hpp"
+#include "Trace/FrameCapture.hpp"
+#include "Trace/ResourceReadback.hpp"
 
 // Trace capture on D3D12. A command list records what the game sets on it (root signatures and arguments, render targets,
 // viewports, topology), and its calls' events while a capture runs; the events go into the frame when a queue executes the list,
@@ -21,19 +21,19 @@ namespace Trace {
 namespace Capture {
 namespace D3D12 {
 // The list's record, from the game's calls (Luma's own aren't hooked)
-void OnReset(ID3D12GraphicsCommandList* list);
-void OnClearState(ID3D12GraphicsCommandList* list);
-void OnSetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12RootSignature* root_signature);
-void OnSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
+void RecordReset(ID3D12GraphicsCommandList* list);
+void RecordClearState(ID3D12GraphicsCommandList* list);
+void RecordRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12RootSignature* root_signature);
+void RecordRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
    const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil);
-void OnSetRootTable(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_DESCRIPTOR_HANDLE table);
-void OnSetRootDescriptor(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_VIRTUAL_ADDRESS address);
-void OnSetRootConstants(ID3D12GraphicsCommandList* list, bool compute, UINT index, UINT count, const void* values, UINT offset);
-void OnSetViewports(ID3D12GraphicsCommandList* list, UINT count, const D3D12_VIEWPORT* viewports);
-void OnSetScissorRects(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RECT* rects);
-void OnSetTopology(ID3D12GraphicsCommandList* list, D3D12_PRIMITIVE_TOPOLOGY topology);
-void OnSetBlendFactor(ID3D12GraphicsCommandList* list, const FLOAT factor[4]);
-void OnSetStencilRef(ID3D12GraphicsCommandList* list, UINT stencil_ref);
+void RecordRootTable(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_DESCRIPTOR_HANDLE table);
+void RecordRootDescriptor(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_VIRTUAL_ADDRESS address);
+void RecordRootConstants(ID3D12GraphicsCommandList* list, bool compute, UINT index, UINT count, const void* values, UINT offset);
+void RecordViewports(ID3D12GraphicsCommandList* list, UINT count, const D3D12_VIEWPORT* viewports);
+void RecordScissorRects(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RECT* rects);
+void RecordTopology(ID3D12GraphicsCommandList* list, D3D12_PRIMITIVE_TOPOLOGY topology);
+void RecordBlendFactor(ID3D12GraphicsCommandList* list, const FLOAT factor[4]);
+void RecordStencilRef(ID3D12GraphicsCommandList* list, UINT stencil_ref);
 
 struct Recording
 {
@@ -47,9 +47,9 @@ Recording BeginDispatch(ID3D12GraphicsCommandList* list, const Game::D3D12::Disp
 // Kept by the list until a queue executes it
 void End(Recording recording, Outcome outcome = Outcome::Ran);
 // The bundle's events go into the list where it runs
-void OnExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle);
+void RecordExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle);
 // The lists' events go into the frame, in this order
-void OnExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists);
+void RecordExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists);
 
 // While capturing, as the game made the call (before Luma redirects it to mirrors): a copy or a resolve, a view or resource cleared.
 // Kept by the list until a queue executes it, like its draws.
@@ -58,7 +58,7 @@ void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, D3D12_CPU_
 void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* resource, const std::array<float, 4>& values);
 
 // The list's transitions, for the states a readback's barriers start from
-void OnResourceBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers);
+void RecordBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers);
 
 struct BoundView
 {

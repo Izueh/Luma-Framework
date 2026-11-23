@@ -11,13 +11,13 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
-#include "Frame/Frame.hpp"
+#include "Frame/FrameState.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
-#include "Resources/Mirrors.hpp"
-#include "Resources/Samplers.hpp"
-#include "Resources/Upgrade.hpp"
+#include "Resources/ResourceMirrors.hpp"
+#include "Resources/SamplerMirrors.hpp"
+#include "Resources/ResourceUpgrades.hpp"
 #include "Trace/D3D11/D3D11Capture.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
 
@@ -204,9 +204,9 @@ TEST_CASE("Mirrors D3D11: a matching texture gets a mirror, its views mirrored o
    ComPtr<ID3D11Texture2D> texture;
    REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&desc), nullptr, &texture)));
    Resources::Mirrors::D3D11::CreateMirror(device.Get(), desc, nullptr, texture.Get());
-   ID3D11Resource* mirror = Resources::Mirrors::D3D11::GetMirror(texture.Get());
+   ID3D11Resource* mirror = Resources::Mirrors::D3D11::FindMirror(texture.Get());
    REQUIRE(mirror);
-   CHECK(Resources::Mirrors::D3D11::GetOriginal(mirror) == texture.Get());
+   CHECK(Resources::Mirrors::D3D11::FindOriginal(mirror) == texture.Get());
    D3D11_TEXTURE2D_DESC mirror_desc;
    static_cast<ID3D11Texture2D*>(mirror)->GetDesc(&mirror_desc);
    CHECK(mirror_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
@@ -259,7 +259,7 @@ TEST_CASE("Mirrors D3D11: a matching texture gets a mirror, its views mirrored o
    ComPtr<ID3D11Texture2D> plain;
    REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&other), nullptr, &plain)));
    Resources::Mirrors::D3D11::CreateMirror(device.Get(), other, nullptr, plain.Get());
-   CHECK(Resources::Mirrors::D3D11::GetMirror(plain.Get()) == nullptr);
+   CHECK(Resources::Mirrors::D3D11::FindMirror(plain.Get()) == nullptr);
 
    // The mirror and its view go with the game's objects
    bound = {};
@@ -343,9 +343,9 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    ComPtr<ID3D12Resource> texture;
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_RENDER_TARGET, &clear, IID_PPV_ARGS(&texture))));
    Mirrors12::CreateMirror(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, &clear);
-   ID3D12Resource* mirror = Mirrors12::GetMirror(texture.Get());
+   ID3D12Resource* mirror = Mirrors12::FindMirror(texture.Get());
    REQUIRE(mirror);
-   CHECK(Mirrors12::GetOriginal(mirror) == texture.Get());
+   CHECK(Mirrors12::FindOriginal(mirror) == texture.Get());
    CHECK(mirror->GetDesc().Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
    CHECK(Resources::Mirrors::GetStats().mirrors == before.mirrors + 1);
 
@@ -365,7 +365,7 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    const D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
    const D3D12_RENDER_TARGET_VIEW_DESC view = {DXGI_FORMAT_R11G11B10_FLOAT, D3D12_RTV_DIMENSION_TEXTURE2D};
    device->CreateRenderTargetView(texture.Get(), &view, rtv);
-   Mirrors12::OnCreateView(device.Get(), rtv, Mirrors12::ViewKind::RenderTarget, texture.Get(), &view, true);
+   Mirrors12::TrackView(device.Get(), rtv, Mirrors12::ViewKind::RenderTarget, texture.Get(), &view, true);
    const D3D12_CPU_DESCRIPTOR_HANDLE* targets = &rtv;
    BOOL single_range = TRUE;
    const D3D12_CPU_DESCRIPTOR_HANDLE* depth = nullptr;
@@ -384,10 +384,10 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    ComPtr<ID3D12Resource> plain;
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &plain_desc, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, IID_PPV_ARGS(&plain))));
    Mirrors12::CreateMirror(device.Get(), plain.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr);
-   CHECK_FALSE(Mirrors12::GetMirror(plain.Get()));
+   CHECK_FALSE(Mirrors12::FindMirror(plain.Get()));
    const D3D12_CPU_DESCRIPTOR_HANDLE other = {rtv.ptr + device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV)};
    device->CreateRenderTargetView(plain.Get(), nullptr, other);
-   Mirrors12::OnCreateView(device.Get(), other, Mirrors12::ViewKind::RenderTarget, plain.Get(), nullptr, true);
+   Mirrors12::TrackView(device.Get(), other, Mirrors12::ViewKind::RenderTarget, plain.Get(), nullptr, true);
    cleared = other;
    CHECK_FALSE(Mirrors12::SwapHandle(cleared));
 
@@ -402,16 +402,16 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    Mirrors12::TrackHeap(device.Get(), gpu_heap.Get(), gpu_desc);
    const D3D12_CPU_DESCRIPTOR_HANDLE srv = cpu_heap->GetCPUDescriptorHandleForHeapStart();
    device->CreateShaderResourceView(texture.Get(), nullptr, srv);
-   Mirrors12::OnCreateView(device.Get(), srv, Mirrors12::ViewKind::ShaderResource, texture.Get(), nullptr, true);
+   Mirrors12::TrackView(device.Get(), srv, Mirrors12::ViewKind::ShaderResource, texture.Get(), nullptr, true);
    const uint32_t swapped = Mirrors12::GetStats().swapped_copies;
    device->CopyDescriptorsSimple(1, gpu_heap->GetCPUDescriptorHandleForHeapStart(), srv, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-   Mirrors12::OnCopyDescriptors(device.Get(), gpu_heap->GetCPUDescriptorHandleForHeapStart(), srv, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true, true);
+   Mirrors12::SwapCopiedDescriptors(device.Get(), gpu_heap->GetCPUDescriptorHandleForHeapStart(), srv, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true, true);
    CHECK(Mirrors12::GetStats().swapped_copies == swapped + 1);
    // A copy between CPU heaps carries the mirror along
    const D3D12_CPU_DESCRIPTOR_HANDLE staged = {srv.ptr + 2 * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)};
    device->CopyDescriptorsSimple(1, staged, srv, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
    const uint32_t descriptors = Mirrors12::GetStats().descriptors;
-   Mirrors12::OnCopyDescriptors(device.Get(), staged, srv, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true, true);
+   Mirrors12::SwapCopiedDescriptors(device.Get(), staged, srv, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true, true);
    CHECK(Mirrors12::GetStats().descriptors == descriptors + 1);
 
    // Copies between the game's mirrored textures run on the mirrors
@@ -421,7 +421,7 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    ID3D12Resource* copy_destination = second.Get();
    ID3D12Resource* copy_source = texture.Get();
    Mirrors12::SwapCopy(copy_destination, copy_source);
-   CHECK(copy_destination == Mirrors12::GetMirror(second.Get()));
+   CHECK(copy_destination == Mirrors12::FindMirror(second.Get()));
    CHECK(copy_source == mirror);
 
    // The mirrors and their handles go with the game's objects

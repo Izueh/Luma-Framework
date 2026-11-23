@@ -19,17 +19,17 @@
 
 #include <Windows.h>
 
-#include "Hooks/Lifetime.hpp"
+#include "Hooks/ObjectLifetime.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
-#include "Shaders/Container.hpp"
+#include "Shaders/ShaderContainer.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
-#include "Shaders/Variants.hpp"
-#include "System/Jobs.hpp"
+#include "Shaders/ShaderVariants.hpp"
+#include "System/JobQueue.hpp"
 #include "System/Paths.hpp"
 #include "Utils/Hash.hpp"
-#include "Trace/Capture.hpp"
-#include "Utils/Log.hpp"
+#include "Trace/FrameCapture.hpp"
+#include "Log/Log.hpp"
 
 namespace Luma {
 namespace Trace {
@@ -471,7 +471,7 @@ void RecordPipelineLibrary(size_t blob_size, HRESULT result)
    std::scoped_lock lock(mutex);
    libraries_created++;
    library_sizes.push_back(blob_size);
-   Utils::Log::Info("D3D12: the game created a pipeline library from {} bytes (0x{:08X})", blob_size, uint32_t(result));
+   Log::Info("D3D12: the game created a pipeline library from {} bytes (0x{:08X})", blob_size, uint32_t(result));
 }
 
 void RecordLibraryLoad(HRESULT result)

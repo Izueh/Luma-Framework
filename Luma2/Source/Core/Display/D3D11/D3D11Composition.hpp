@@ -2,7 +2,7 @@
 
 #include <d3d11.h>
 
-#include "Display/Composition.hpp"
+#include "Display/DisplayComposition.hpp"
 
 // Display composition on D3D11: Luma's fullscreen pass on the immediate context, the game's state restored after it
 namespace Luma {

@@ -10,7 +10,7 @@
 #include <imgui.h>
 
 #include "UI/Style.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "System/Modules.hpp"
 #include "Utils/Strings.hpp"
 
@@ -67,7 +67,7 @@ void Load()
       const std::span<const std::byte> data = GetResource(name);
       if (data.empty())
       {
-         Utils::Log::Error("UI: font resource {} is missing, icons won't show", Utils::Strings::ToUtf8(name));
+         Log::Error("UI: font resource {} is missing, icons won't show", Utils::Strings::ToUtf8(name));
          continue;
       }
       // ImGui only reads it, but wants a non-const pointer

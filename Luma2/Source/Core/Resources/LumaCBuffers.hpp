@@ -11,9 +11,9 @@
 
 #include "Common/Api.hpp"
 #include "Common/Math.hpp"
-#include "Frame/Frame.hpp"
-#include "Hooks/Functions.hpp"
-#include "Shaders/Compiler.hpp"
+#include "Frame/FrameState.hpp"
+#include "Hooks/HookFunctions.hpp"
+#include "Shaders/ShaderCompiler.hpp"
 
 // The HLSL types the cbuffer structs below are written with, for their C++ side: Core's job, so the game's file holds only its structs
 namespace CB {
@@ -30,8 +30,11 @@ using uint = uint32_t;
 
 // HLSL starts a struct on a new 16 byte register, C++ after the member before it: what comes before a game's part is a multiple
 // of 16 bytes on both sides (CBuffers.hlsl), and a game's part is made of 32 bit scalars and vectors (Game/GameCBuffers.hlsl)
+static_assert(std::is_standard_layout_v<CB::DisplayCompositionSettings> && std::is_trivially_copyable_v<CB::DisplayCompositionSettings>);
+static_assert(sizeof(CB::DisplayCompositionSettings) % 16 == 0, "DisplayCompositionSettings must be a multiple of 16 bytes");
 static_assert(std::is_standard_layout_v<CB::LumaGlobalSettings> && std::is_trivially_copyable_v<CB::LumaGlobalSettings>);
 static_assert(std::is_standard_layout_v<CB::LumaInstanceData> && std::is_trivially_copyable_v<CB::LumaInstanceData>);
+static_assert(offsetof(CB::LumaGlobalSettings, DisplayComposition) % 16 == 0, "LumaSettings' part before DisplayComposition must be a multiple of 16 bytes");
 static_assert(offsetof(CB::LumaGlobalSettings, GameSettings) % 16 == 0, "LumaSettings' part before GameSettings must be a multiple of 16 bytes");
 static_assert(offsetof(CB::LumaInstanceData, GameData) % 16 == 0, "LumaData's part before GameData must be a multiple of 16 bytes");
 static_assert(alignof(CB::LumaGameSettings) == 4 && alignof(CB::LumaGameData) == 4, "A game's cbuffer part has 32 bit members only");
@@ -50,7 +53,7 @@ namespace Resources {
 namespace Database {
 struct CustomData;
 struct WriteTarget;
-}
+} // namespace Database
 
 namespace LumaCBuffers {
 // Core's part and the game's (GameSettings), which the settings registry's bindings write. Written

@@ -10,9 +10,9 @@
 #include <d3d11.h>
 #include <wrl/client.h>
 
-#include "Luma.hpp"
-#include "Shaders/Stages.hpp"
-#include "Trace/Capture.hpp"
+#include "Game/GameEvents.hpp"
+#include "Shaders/ShaderStages.hpp"
+#include "Trace/FrameCapture.hpp"
 
 // Trace capture on D3D11: a call's state from its context, before the game's draw callbacks run
 namespace Luma {
@@ -38,7 +38,7 @@ void End(Recording recording, Outcome outcome = Outcome::Ran);
 // written by the CPU. `name` is the native function's.
 void AddCopy(ID3D11DeviceContext* context, std::string_view name, ID3D11Resource* destination, ID3D11Resource* source, const Copy& copy);
 void AddClear(ID3D11DeviceContext* context, std::string_view name, ID3D11View* view, const std::array<float, 4>& values);
-void AddWrite(ID3D11DeviceContext* context, std::string_view name, ID3D11Resource* resource);
+void AddWrite(ID3D11DeviceContext* context, std::string_view name, ID3D11Resource* resource, const CpuAccess& access = {}, EventType type = EventType::CpuWrite);
 
 // Presenting thread, before Capture::OnPresent: the copies read back into their events
 void ReadBackConstantBuffers();

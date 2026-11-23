@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <array>
 
-#include "Settings/Keys.hpp"
-#include "Settings/Registry.hpp"
-#include "System/Display.hpp"
+#include "Settings/SettingKeys.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "System/MonitorDisplay.hpp"
 
 namespace Luma {
 namespace Display {
@@ -16,10 +16,11 @@ constexpr std::array SETTINGS = {
    Settings::Setting{
       .key = Settings::Core::REPORT_HDR.key,
       .label = "Report HDR to the Game",
-      .tooltip = "Tells the game the display is in HDR (HDR10 color space, presentable HDR swapchains), for games that only offer HDR then",
+      .tooltip = "Tells the game the display is in HDR (HDR10 color space, presentable HDR swapchains), for games that only offer HDR then.",
       .category = "Display",
       .visibility = Settings::Visibility::Test,
       .default_value = false,
+      .requires_restart = true,
    },
 };
 } // namespace

@@ -5,9 +5,10 @@
 #include <cstddef>
 #include <vector>
 
-#include "Shaders/Variants.hpp"
-#include "Trace/Capture.hpp"
-#include "Trace/Track.hpp"
+#include "Shaders/ShaderVariants.hpp"
+#include "Trace/CbufferTracker.hpp"
+#include "Trace/DebugDraw.hpp"
+#include "Trace/FrameCapture.hpp"
 
 using namespace Luma;
 using Shaders::Variants::Choice;
@@ -94,7 +95,7 @@ TEST_CASE("Trace: filters match any stage of a call, vertex only draws are hidde
 
 TEST_CASE("Trace: a tracked slot's reading marks the words that changed since the last")
 {
-   Trace::Track::Set(Trace::Track::Target{.hash = 0x2222ABCD, .stage = ShaderStage::Pixel, .slot = 2});
+   Trace::Track::SetTarget(Trace::Track::Target{.hash = 0x2222ABCD, .stage = ShaderStage::Pixel, .slot = 2});
    CHECK(Trace::Track::IsActive());
    const auto reading = [](std::vector<std::byte> contents) { return Trace::Track::Reading{.contents = std::move(contents)}; };
    Trace::Track::CountCall();
@@ -117,8 +118,45 @@ TEST_CASE("Trace: a tracked slot's reading marks the words that changed since th
    Trace::Track::SetReading(std::nullopt);
    CHECK(Trace::Track::GetReading()->frame == 3);
    CHECK(Trace::Track::GetReading()->stale);
-   Trace::Track::Set(std::nullopt);
+   Trace::Track::SetTarget(std::nullopt);
    CHECK_FALSE(Trace::Track::IsActive());
    CHECK_FALSE(Trace::Track::GetReading());
+}
+
+TEST_CASE("Trace: resource events distinguish Map vs UpdateSubresource, CPU reads, and resource Read/Write/ReadWrite tracking")
+{
+   Event draw_read = {.type = EventType::Draw, .shaders = {{.stage = ShaderStage::Pixel, .hash = 0x1111}}};
+   draw_read.shader_resources.push_back({.slot = 0, .resource = {.id = "0xABCD", .type = "Texture2D", .debug_name = "SceneColor"}});
+
+   Event draw_rw = {.type = EventType::Dispatch, .shaders = {{.stage = ShaderStage::Compute, .hash = 0x2222}}};
+   draw_rw.unordered_access.push_back({.slot = 0, .resource = {.id = "0xABCD", .type = "Texture2D"}});
+
+   Event map_write = {.type = EventType::CpuWrite, .name = "Map", .target = Trace::Capture::Resource{.id = "0xABCD", .type = "Texture2D"}};
+   map_write.cpu_access = {.api_function = "Map", .map_type = "WriteDiscard", .subresource = 0};
+
+   Event map_read = {.type = EventType::CpuRead, .name = "Map", .target = Trace::Capture::Resource{.id = "0xABCD", .type = "Texture2D"}};
+   map_read.cpu_access = {.api_function = "Map", .map_type = "Read", .subresource = 0};
+
+   CHECK(Trace::Capture::GetResourceUsage(draw_read, "0xABCD") == Trace::Capture::ResourceUsage::Read);
+   CHECK(Trace::Capture::GetResourceUsage(draw_rw, "0xABCD") == Trace::Capture::ResourceUsage::ReadWrite);
+   CHECK(Trace::Capture::GetResourceUsage(map_write, "0xABCD") == Trace::Capture::ResourceUsage::Write);
+   CHECK(Trace::Capture::GetResourceUsage(map_read, "0xABCD") == Trace::Capture::ResourceUsage::Read);
+
+   // Text filter matches bound resource names on draw calls too
+   CHECK(Trace::Capture::Matches(draw_read, {.text = "scenecolor"}));
+   // Separate CPU write and CPU read filters
+   CHECK(Trace::Capture::Matches(map_write, {.cpu_writes = true, .cpu_reads = false}));
+   CHECK_FALSE(Trace::Capture::Matches(map_read, {.cpu_writes = true, .cpu_reads = false}));
+   CHECK(Trace::Capture::Matches(map_read, {.cpu_writes = false, .cpu_reads = true}));
+
+   // DebugDraw flag packing matches Luma_DisplayComposition.hlsl bit positions
+   const Trace::DebugDraw::Options opts = {.fullscreen = true, .show_alpha = true, .do_abs = true, .tonemap = true};
+   const uint32_t packed = Trace::DebugDraw::PackFlags(opts, 1u << 13);
+   CHECK((packed & (1u << 0)) != 0);
+   CHECK((packed & (1u << 2)) != 0);
+   CHECK((packed & (1u << 13)) != 0);
+   CHECK((packed & (1u << 15)) != 0);
+   CHECK((packed & (1u << 18)) != 0);
+   CHECK((packed & (1u << 7)) == 0);
 }
 #endif

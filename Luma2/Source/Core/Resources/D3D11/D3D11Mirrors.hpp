@@ -29,9 +29,9 @@ void SwapViews(ID3D11UnorderedAccessView** views, UINT count);
 void SwapView(ID3D11DepthStencilView*& view);
 
 // The mirror of the game's texture, or null. Valid while the texture is.
-ID3D11Resource* GetMirror(ID3D11Resource* resource);
+ID3D11Resource* FindMirror(ID3D11Resource* resource);
 // The game's texture a mirror stands for, or null. Valid while a view of the game's is bound (it holds the texture).
-ID3D11Resource* GetOriginal(ID3D11Resource* mirror);
+ID3D11Resource* FindOriginal(ID3D11Resource* mirror);
 
 // Copies, resolves and clears of a mirrored texture or view, issued on the mirrors while swapping. True: Luma issued the call, the
 // game's doesn't run.
@@ -48,6 +48,9 @@ bool RedirectClearView(ID3D11DeviceContext* context, ID3D11View* view, const FLO
 
 // UpdateSubresource of a mirrored texture: the data converted into its mirror as well (the game's call still writes the original)
 void WriteToMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch);
+// Map/Unmap of a mirrored texture: asserts on CPU reads and converts CPU writes into the mirror at Unmap
+void TrackMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, const D3D11_MAPPED_SUBRESOURCE& mapped);
+void CommitMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource);
 } // namespace D3D11
 } // namespace Mirrors
 } // namespace Resources

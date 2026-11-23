@@ -12,20 +12,21 @@
 #include "Common/Device.hpp"
 #include "Common/Math.hpp"
 #include "Common/ShaderStage.hpp"
+#include "Display/DisplayComposition.hpp"
 #include "Draw/Draw.hpp"
-#include "Frame/Frame.hpp"
-#include "Game/Events.hpp"
-#include "Resources/Bindings.hpp"
+#include "Frame/FrameState.hpp"
+#include "Game/GameEvents.hpp"
+#include "Resources/ResourceBindings.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
-#include "Resources/Samplers.hpp"
-#include "Resources/Textures.hpp"
-#include "Resources/Upgrade.hpp"
-#include "Settings/Keys.hpp"
+#include "Resources/SamplerMirrors.hpp"
+#include "Resources/TextureLoader.hpp"
+#include "Resources/ResourceUpgrades.hpp"
+#include "Settings/SettingKeys.hpp"
 #include "Swapchain/Swapchain.hpp"
-#include "Settings/Registry.hpp"
-#include "Shaders/Defines.hpp"
-#include "Shaders/Patching.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "Shaders/ShaderDefines.hpp"
+#include "Shaders/ShaderPatching.hpp"
 // "name"_h, how Luma's resources and shaders are named in the calls below
 #include "Utils/Hash.hpp"
 
@@ -57,6 +58,8 @@ void SetInfo(const Info& info);
 
 // Shaders. The spans and strings must outlive Luma (static arrays, literals), but AddDefine's.
 namespace Shaders {
+namespace Defines = Luma::Shaders::Defines;
+
 // In the dev tools, and for a draw callback's hash list
 void SetDebugName(std::string_view name, std::span<const uint32_t> hashes);
 // The hashes a "<file_name>_0x########.ps_5_0.hlsl" replacement file stands for
@@ -107,14 +110,18 @@ struct Options
    Luma::Shaders::Patching::Options patching;
    // How Luma presents: Mirror (the game draws to Luma's buffers) or in place, the HDR output mode, borderless
    Luma::Swapchain::Options swapchain;
+   // Default display composition pipeline space and gamma/gamut/UI parameters (written to LumaSettings.DisplayComposition)
+   Luma::Display::Composition::Options composition;
    GameDeviceDataType device_data;
 };
 
 // Once, in Init. A second call is ignored.
 void SetOptions(const Options& options);
 
-// The game's textures Luma upgrades, through mirrors. The rules name DXGI formats, which D3D11 and D3D12 share: one call for both (Guidelines.md section 4). In Init.
+// The game's textures Luma upgrades through mirrors. Rules name DXGI formats shared by D3D11 and D3D12. Called in Init.
 namespace Resources {
+namespace Upgrade = Luma::Resources::Upgrade;
+
 void SetUpgrades(const Luma::Resources::Upgrade::Rules& rules);
 } // namespace Resources
 

@@ -8,53 +8,43 @@
 
 #include "ReShade/ReShade.hpp"
 #include "Draw/Draw.hpp"
-#include "Game/Registry.hpp"
+#include "Game/GameRegistry.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
-#include "Hooks/Hooks.hpp"
+#include "Hooks/HookManager.hpp"
 #include "Hooks/InputHooks.hpp"
-#include "Hooks/Scope.hpp"
+#include "Hooks/HookScope.hpp"
 #include "Luma.hpp"
-#include "Settings/Keys.hpp"
-#include "Settings/Registry.hpp"
-#include "Settings/Storage.hpp"
+#include "Settings/SettingKeys.hpp"
+#include "Settings/SettingsRegistry.hpp"
+#include "Settings/SettingsStorage.hpp"
 #include "Resources/LumaCBuffers.hpp"
-#include "Resources/Mirrors.hpp"
-#include "Resources/Samplers.hpp"
-#include "Resources/Textures.hpp"
-#include "Shaders/Patching.hpp"
+#include "Resources/ResourceMirrors.hpp"
+#include "Resources/SamplerMirrors.hpp"
+#include "Resources/TextureLoader.hpp"
+#include "Shaders/ShaderPatching.hpp"
 #include "Shaders/Shaders.hpp"
-#include "Display/Composition.hpp"
-#include "Display/Levels.hpp"
+#include "Display/DisplayComposition.hpp"
+#include "Display/DisplayMode.hpp"
 #include "Display/DXGI/DXGISpoofing.hpp"
 #include "Swapchain/Swapchain.hpp"
-#include "System/Jobs.hpp"
-#include "System/Loader.hpp"
+#include "System/JobQueue.hpp"
+#include "System/DllLoader.hpp"
 #include "System/Paths.hpp"
 #include "Validation/Validation.hpp"
 #if DEVELOPMENT
-#include "Trace/Capture.hpp"
+#include "Trace/FrameCapture.hpp"
 #include "Trace/D3D12/D3D12Stats.hpp"
 #endif
-#include "Trace/Info.hpp"
-#include "Trace/Mcp.hpp"
-#include "UI/Input.hpp"
+#include "Trace/RuntimeStatus.hpp"
+#include "Trace/McpServer.hpp"
+#include "UI/OverlayInput.hpp"
 #include "UI/Overlay.hpp"
 #include "Utils/Debug.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "System/Modules.hpp"
 #include "Utils/Strings.hpp"
 
 namespace Luma {
-namespace {
-// Settings::Core::ENABLED, read at every bind and draw, set from the setting once it's loaded
-std::atomic<bool> enabled = false;
-} // namespace
-
-bool IsEnabled()
-{
-   return enabled.load(std::memory_order_relaxed);
-}
-
 namespace Startup {
 namespace {
 std::atomic<bool> initialized = false;
@@ -123,9 +113,9 @@ void InstallHooks()
    // A feature hooking a function the game may have a native callback for would run in the middle of the game's work on it
    ASSERT_ONCE_MSG((core & ~GetOwnedFunctions()).none(), "A Core feature hooks a function missing from Startup::GetOwnedFunctions");
    if (const Hooks::D3D11::Functions shared = Game::Registry::GetCallbackFunctions() & GetOwnedFunctions(); shared.any())
-      Utils::Log::Error("Core: {} of the game's native callbacks are for functions Core owns, which have events instead", shared.count());
+      Log::Error("Core: {} of the game's native callbacks are for functions Core owns, which have events instead", shared.count());
    const Hooks::D3D11::Functions functions = core | Game::Registry::GetRequestedFunctions();
-   Utils::Log::Info("Core: {} of {} hookable D3D11 and DXGI functions requested", functions.count(), functions.size());
+   Log::Info("Core: {} of {} hookable D3D11 and DXGI functions requested", functions.count(), functions.size());
    const std::optional<Api> api = Game::Registry::GetInfo().api;
    Hooks::InstallDXGI(functions);
    if (!api || *api == Api::D3D11)
@@ -142,8 +132,8 @@ void Initialize()
       return;
    System::Modules::Pin();
    System::Paths::Initialize();
-   Utils::Log::Open(System::Paths::GetLog());
-   Utils::Log::Info("Luma2 initializing in {}", Utils::Strings::ToUtf8(System::Modules::GetPath(nullptr)));
+   Log::Open(System::Paths::GetLog());
+   Log::Info("Luma2 initializing in {}", Utils::Strings::ToUtf8(System::Modules::GetPath(nullptr)));
    Hooks::ThirdPartyModules::ScanLoadedModules();
 
    // Core's settings first: the game's Init changes their defaults (Settings::SetDefault) and adds its own
@@ -153,16 +143,21 @@ void Initialize()
    Resources::Mirrors::Register();
    Resources::Samplers::Register();
    Swapchain::Register();
-   Display::Levels::Register();
+   Display::DisplayMode::Register();
+   Display::Composition::RegisterSettings();
    Display::Spoofing::DXGI::Register();
    Validation::Register();
    ReShade::Register();
    Game::Init();
    Game::Registry::LogDeclarations();
-   System::Paths::ResolveRoots();
+#ifdef LUMA_PROJECT_NAME
+   System::Paths::ResolveRoots(LUMA_PROJECT_NAME);
+#else
+   System::Paths::ResolveRoots(Game::Registry::GetInfo().name);
+#endif
    // Named from the shader files the game's name finds
    Resources::LumaCBuffers::Register();
-   Display::Composition::Register();
+   Display::Composition::RegisterResources();
    // After Core's cbuffers, whose names a file can't take
    Resources::Textures::Register();
    // The recipes' settings, before the saved values load
@@ -171,19 +166,16 @@ void Initialize()
    UI::Input::Initialize();
    UI::Initialize();
    if (!Settings::Storage::Load(settings_path))
-      Utils::Log::Warning("Core: {} couldn't be read, using default settings", Utils::Strings::ToUtf8(settings_path));
+      Log::Warning("Core: {} couldn't be read, using default settings", Utils::Strings::ToUtf8(settings_path));
    // Written on first boot, so every setting can be edited by hand
    else if (std::error_code error; !std::filesystem::exists(settings_path, error) && !Settings::Storage::Save(settings_path))
-      Utils::Log::Warning("Core: {} couldn't be created", Utils::Strings::ToUtf8(settings_path));
+      Log::Warning("Core: {} couldn't be created", Utils::Strings::ToUtf8(settings_path));
    UI::SaveSettingsTo(settings_path);
    // LumaSettings with what the settings bound to it loaded, for the draws before the first present
    Resources::LumaCBuffers::MarkSettingsDirty();
-   enabled = Settings::Get(Settings::Core::ENABLED);
    System::Jobs::SetThreadCount(uint32_t(Settings::Get(Settings::Core::WORKER_THREADS)));
    Settings::AddChangeListener([](const Settings::Setting& setting, const Settings::Value& value) {
-      if (setting.key == Settings::Core::ENABLED.key)
-         enabled = std::get<bool>(value);
-      else if (setting.key == Settings::Core::WORKER_THREADS.key)
+      if (setting.key == Settings::Core::WORKER_THREADS.key)
          System::Jobs::SetThreadCount(uint32_t(std::get<int32_t>(value)));
    });
 
@@ -234,9 +226,9 @@ void Unload()
    // Initialize pins Luma's dll: only a Luma that never initialized gets here, with just the creation exports hooked
    Hooks::Scope::SetBypass(true);
    if (Hooks::UninstallAll(false).NeedsModule())
-      Utils::Log::Error("Core: too late to keep Luma's dll loaded");
-   Utils::Log::Info("Luma2 unloaded");
-   Utils::Log::Close();
+      Log::Error("Core: too late to keep Luma's dll loaded");
+   Log::Info("Luma2 unloaded");
+   Log::Close();
 }
 } // namespace Startup
 

@@ -6,9 +6,9 @@
 #include <unordered_map>
 #include <utility>
 
-#include "Hooks/Hooks.hpp"
+#include "Hooks/HookManager.hpp"
 #include "System/Modules.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 namespace Luma {
 namespace Hooks {
@@ -75,7 +75,7 @@ void HookMethod(const void* object, size_t index, void* detour, const char* name
    }
    if (hooked_target)
    {
-      Utils::Log::Info("Hooks: {} isn't hooked again at {} in {}, its hook is at {} in {}: only the calls that reach that one are blocked", name,
+      Log::Info("Hooks: {} isn't hooked again at {} in {}, its hook is at {} in {}: only the calls that reach that one are blocked", name,
          static_cast<const void*>(target), System::Modules::GetName(target), static_cast<const void*>(hooked_target), System::Modules::GetName(hooked_target));
       return;
    }

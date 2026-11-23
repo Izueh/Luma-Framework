@@ -5,6 +5,9 @@
 #include <wrl/client.h>
 
 #include "Draw/D3D11/D3D11Draw.hpp"
+#if DEVELOPMENT
+#include "Trace/DebugDraw.hpp"
+#endif
 #include "Utils/DXGI/DXGIFormat.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -39,6 +42,10 @@ bool Compose(ID3D11DeviceContext* context, ID3D11ShaderResourceView* source, ID3
    Draw::D3D11::Save(context, stack);
    constexpr std::array<ID3D11ShaderResourceView*, EXTRA_VIEWS.count> NONE = {};
    context->PSSetShaderResources(EXTRA_VIEWS.first, EXTRA_VIEWS.count, NONE.data());
+   Resources::Database::CustomData custom = pass.custom;
+#if DEVELOPMENT
+   Trace::DebugDraw::BindD3D11(context, custom.custom_data_2, custom.custom_data_3);
+#endif
    SetCurrent(pass);
    const bool drawn = Draw::D3D11::DrawFullscreen(context, {
                                                               .name = "Luma Display Composition",
@@ -46,7 +53,7 @@ bool Compose(ID3D11DeviceContext* context, ID3D11ShaderResourceView* source, ID3
                                                               .pixel_shader = PIXEL_SHADER,
                                                               .source = source,
                                                               .target = view.Get(),
-                                                              .custom = pass.custom,
+                                                              .custom = custom,
                                                               .while_off = true,
                                                            });
    Draw::D3D11::Restore(context, stack);

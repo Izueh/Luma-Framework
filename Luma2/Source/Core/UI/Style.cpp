@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "UI/Icons.hpp"
 
@@ -11,6 +14,12 @@ namespace UI {
 namespace Style {
 namespace {
 float current_scale = 1.f;
+std::vector<std::pair<std::string, const char*>> custom_category_icons;
+
+bool EqualsIgnoreCase(std::string_view a, std::string_view b)
+{
+   return a.size() == b.size() && std::ranges::equal(a, b, [](char x, char y) { return std::tolower(uint8_t(x)) == std::tolower(uint8_t(y)); });
+}
 
 bool Contains(std::string_view text, std::string_view word)
 {
@@ -18,39 +27,69 @@ bool Contains(std::string_view text, std::string_view word)
 }
 } // namespace
 
+void RegisterCategoryIcon(std::string_view category, const char* icon)
+{
+   if (category.empty() || !icon)
+      return;
+   for (auto& [name, existing] : custom_category_icons)
+   {
+      if (EqualsIgnoreCase(name, category))
+      {
+         existing = icon;
+         return;
+      }
+   }
+   custom_category_icons.emplace_back(std::string(category), icon);
+}
+
 Category GetCategory(std::string_view name)
 {
+   for (const auto& [registered, icon] : custom_category_icons)
+   {
+      if (EqualsIgnoreCase(name, registered))
+         return {icon, Colors::TEXT_LABEL};
+   }
+
    struct Entry
    {
       std::string_view word;
-      Category category;
+      const char* icon;
    };
 
    const std::array entries = {
-      Entry{"overlay", {Icons::OVERLAY, Colors::Tints::OVERLAY}},
-      Entry{"luma", {Icons::POWER, Colors::Tints::LUMA}},
-      Entry{"display", {Icons::DISPLAY, Colors::Tints::DISPLAY}},
-      Entry{"hdr", {Icons::HDR, Colors::Tints::DISPLAY}},
-      Entry{"color", {Icons::COLOR, Colors::Tints::DISPLAY}},
-      Entry{"upscal", {Icons::UPSCALING, Colors::Tints::UPSCALING}},
-      Entry{"resolution", {Icons::UPSCALING, Colors::Tints::UPSCALING}},
-      Entry{"post", {Icons::POST_PROCESSING, Colors::Tints::POST_PROCESSING}},
-      Entry{"effect", {Icons::POST_PROCESSING, Colors::Tints::POST_PROCESSING}},
-      Entry{"advanced", {Icons::ADVANCED, Colors::Tints::ADVANCED}},
-      Entry{"develop", {Icons::CONSOLE, Colors::Tints::CONSOLE}},
-      Entry{"debug", {Icons::BUG, Colors::Tints::CONSOLE}},
-      Entry{"credit", {Icons::CREDITS, Colors::Tints::CREDITS}},
-      Entry{"about", {Icons::CREDITS, Colors::Tints::CREDITS}},
-      Entry{"define", {Icons::CODE, Colors::Tints::ADVANCED}},
-      Entry{"status", {Icons::INFO, Colors::Tints::OTHER}},
-      Entry{"info", {Icons::INFO, Colors::Tints::OTHER}},
+      Entry{"overlay", Icons::OVERLAY},
+      Entry{"general", Icons::POWER},
+      Entry{"luma", Icons::POWER},
+      Entry{"swapchain", Icons::DISPLAY},
+      Entry{"composition", Icons::LAYERS},
+      Entry{"display", Icons::DISPLAY},
+      Entry{"hdr", Icons::HDR},
+      Entry{"color", Icons::COLOR},
+      Entry{"reshade", Icons::LAYERS},
+      Entry{"resource", Icons::LAYERS},
+      Entry{"recipe", Icons::PATCH},
+      Entry{"framework", Icons::TOOLS},
+      Entry{"upscal", Icons::UPSCALING},
+      Entry{"resolution", Icons::UPSCALING},
+      Entry{"post", Icons::POST_PROCESSING},
+      Entry{"effect", Icons::POST_PROCESSING},
+      Entry{"advanced", Icons::ADVANCED},
+      Entry{"develop", Icons::CONSOLE},
+      Entry{"validation", Icons::BUG},
+      Entry{"debug", Icons::BUG},
+      Entry{"credit", Icons::CREDITS},
+      Entry{"about", Icons::CREDITS},
+      Entry{"define", Icons::CODE},
+      Entry{"shader", Icons::CODE},
+      Entry{"status", Icons::INFO},
+      Entry{"info", Icons::INFO},
    };
    for (const Entry& entry : entries)
    {
       if (Contains(name, entry.word))
-         return entry.category;
+         return {entry.icon, Colors::TEXT_LABEL};
    }
-   return {Icons::SLIDERS, Colors::Tints::OTHER};
+   return {Icons::SLIDERS, Colors::TEXT_LABEL};
 }
 
 void DrawRaised(ImDrawList* draw_list, ImVec2 min, ImVec2 max, float rounding)
@@ -103,12 +142,12 @@ void Apply(float font_size, float dpi_scale, float opacity)
 
    style.FontSizeBase = font_size;
    style.FontScaleDpi = dpi_scale;
-   style.WindowPadding = ImVec2(unit * 3.f, unit * 3.f);
-   style.FramePadding = ImVec2(unit * 2.f, unit);
-   style.ItemSpacing = ImVec2(unit * 2.f, unit * 2.f);
-   style.ItemInnerSpacing = ImVec2(unit * 1.5f, unit);
-   style.CellPadding = ImVec2(unit * 1.5f, unit);
-   style.IndentSpacing = unit * 4.f;
+   style.WindowPadding = ImVec2(unit * 2.5f, unit * 2.5f);
+   style.FramePadding = ImVec2(unit * 1.75f, unit * 0.75f);
+   style.ItemSpacing = ImVec2(unit * 1.75f, unit * 1.25f);
+   style.ItemInnerSpacing = ImVec2(unit * 1.25f, unit * 0.75f);
+   style.CellPadding = ImVec2(unit * 1.5f, unit * 0.75f);
+   style.IndentSpacing = unit * 3.5f;
    style.ScrollbarSize = unit * 3.5f;
    style.GrabMinSize = unit * 2.5f;
    style.WindowRounding = Scale(Sizes::PANEL_ROUNDING);

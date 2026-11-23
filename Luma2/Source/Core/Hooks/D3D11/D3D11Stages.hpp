@@ -5,7 +5,7 @@
 #include <d3d11_4.h>
 
 #include "Common/ShaderStage.hpp"
-#include "Hooks/Slots.h"
+#include "Hooks/VtableSlots.h"
 
 // What differs between the six shader stages of a D3D11 context: the shader interface and the per-stage methods, their names
 // and vtable slots. One template per method kind then covers every stage.

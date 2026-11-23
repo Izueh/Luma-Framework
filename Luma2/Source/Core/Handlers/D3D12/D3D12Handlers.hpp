@@ -7,7 +7,7 @@
 
 #include <d3d12.h>
 
-#include "Game/Events.hpp"
+#include "Game/GameEvents.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
 #include "Shaders/D3D12/D3D12RootSignatures.hpp"

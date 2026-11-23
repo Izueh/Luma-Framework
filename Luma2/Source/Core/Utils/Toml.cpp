@@ -5,7 +5,7 @@
 
 #include <glaze/toml.hpp>
 
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
 
 namespace Luma {

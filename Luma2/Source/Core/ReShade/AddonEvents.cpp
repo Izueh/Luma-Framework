@@ -12,10 +12,10 @@
 
 #include <Psapi.h>
 
-#include "Hooks/Hooks.hpp"
-#include "Hooks/Scope.hpp"
+#include "Hooks/HookManager.hpp"
+#include "Hooks/HookScope.hpp"
 #include "System/Modules.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
 
 namespace Luma {
@@ -27,7 +27,7 @@ constexpr size_t MAX_ADDON_MODULES = 64;
 
 // ReShade 6.x event handlers take up to 9 pointer/integer/handle args (no floats by value) and return void or bool,
 // so 16 uint64_t params forward all register and stack args verbatim.
-#define LUMA_HANDLER_ARGS_DECL                                                                                                                  \
+#define LUMA_HANDLER_ARGS_DECL                                                                                                                     \
    uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4, uint64_t a5, uint64_t a6, uint64_t a7, uint64_t a8, uint64_t a9, uint64_t a10, \
       uint64_t a11, uint64_t a12, uint64_t a13, uint64_t a14, uint64_t a15
 #define LUMA_HANDLER_ARGS a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11, a12, a13, a14, a15
@@ -260,7 +260,7 @@ Wrapped TryWrap(void* module, uint32_t event, void* callback)
       {
          lock.unlock();
          if (!exhausted_logged.exchange(true))
-            Utils::Log::Warning("ReShade: more than {} add-on event handlers registered, the rest run unwrapped (their calls are seen by Luma's hooks)", SLOT_COUNT);
+            Log::Warning("ReShade: more than {} add-on event handlers registered, the rest run unwrapped (their calls are seen by Luma's hooks)", SLOT_COUNT);
          return {};
       }
       registrations[slot] = {event, callback, owner};
@@ -274,7 +274,7 @@ Wrapped TryWrap(void* module, uint32_t event, void* callback)
    }
    lock.unlock();
    if (log_owner)
-      Utils::Log::Info("ReShade: the event handlers of add-on {} run in a Luma scope: what it creates, binds or draws isn't seen by Luma's hooks",
+      Log::Info("ReShade: the event handlers of add-on {} run in a Luma scope: what it creates, binds or draws isn't seen by Luma's hooks",
          Utils::Strings::ToUtf8(System::Modules::GetPath(owner).filename()));
    return {WRAPPERS[slot], owner};
 }
@@ -366,8 +366,8 @@ void Install(HMODULE reshade, bool registered_before_luma)
    if (!register_event || !register_for_addon || !unregister_event || !unregister_for_addon)
    {
       missing_exports.store(true, std::memory_order_relaxed);
-      Utils::Log::Warning("ReShade: add-on event handlers aren't wrapped, this ReShade doesn't export the registration functions by add-on (ReShadeRegisterEventForAddon...): "
-                          "Luma's hooks see what the add-ons create and draw");
+      Log::Warning("ReShade: add-on event handlers aren't wrapped, this ReShade doesn't export the registration functions by add-on (ReShadeRegisterEventForAddon...): "
+                   "Luma's hooks see what the add-ons create and draw");
       return;
    }
    registered_before.store(registered_before_luma, std::memory_order_relaxed);
@@ -383,8 +383,9 @@ void Install(HMODULE reshade, bool registered_before_luma)
       hooks.push_back({Hooks::AddressTarget{unregister_addon, "ReShadeUnregisterAddon"}, reinterpret_cast<void*>(&UnregisterAddon),
          reinterpret_cast<void**>(&original_unregister_addon)});
    Hooks::Declare(hooks);
+   Hooks::Scope::SetCallerFilter(&IsAddonAddress);
    if (registered_before_luma)
-      Utils::Log::Warning("ReShade: it wasn't loaded by Luma, the add-ons that registered their handlers already aren't wrapped (their calls are seen by Luma's hooks)");
+      Log::Warning("ReShade: it wasn't loaded by Luma, the add-ons that registered their handlers already aren't wrapped (their calls are seen by Luma's hooks)");
 }
 
 void OnModuleLoaded(std::wstring_view name, const void* base, size_t size)

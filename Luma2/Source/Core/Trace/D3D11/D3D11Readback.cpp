@@ -11,13 +11,14 @@
 
 #include <wrl/client.h>
 
+#include "Game/Game.hpp"
 #include "Hooks/D3D11/D3D11Stages.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
-#include "Resources/Mirrors.hpp"
+#include "Resources/ResourceMirrors.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
-#include "Shaders/Database.hpp"
-#include "Trace/Capture.hpp"
-#include "Trace/Readback.hpp"
+#include "Shaders/ShaderDatabase.hpp"
+#include "Trace/FrameCapture.hpp"
+#include "Trace/ResourceReadback.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -299,7 +300,7 @@ bool ReadAfterCall(const Game::D3D11::Call& call, Shaders::StageSet stages, bool
    // The bound view is a mirror's: named after the game's texture, which `original` reads instead
    ComPtr<ID3D11Resource> named = found.resource;
    bool mirrored = false;
-   if (ID3D11Resource* original = found.resource ? Resources::Mirrors::D3D11::GetOriginal(found.resource.Get()) : nullptr)
+   if (ID3D11Resource* original = found.resource ? Resources::Mirrors::D3D11::FindOriginal(found.resource.Get()) : nullptr)
    {
       named = original;
       mirrored = !target->original;
@@ -357,7 +358,7 @@ void ReadBack(IDXGISwapChain* swapchain, ID3D11Device* device)
       if (game_buffer ? FAILED(game_buffer.As(&back_buffer)) : FAILED(swapchain->GetBuffer(0, IID_PPV_ARGS(&back_buffer))))
          return Finish({.error = "the swapchain has no back buffer"});
       // What the game drew is in its buffer's mirror while mirrors are swapped in
-      if (ID3D11Resource* mirror = Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D11::GetMirror(back_buffer.Get()) : nullptr)
+      if (ID3D11Resource* mirror = Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D11::FindMirror(back_buffer.Get()) : nullptr)
          mirror->QueryInterface(IID_PPV_ARGS(back_buffer.ReleaseAndGetAddressOf()));
       Result result = ReadTexture(context.Get(), back_buffer.Get(), DXGI_FORMAT_UNKNOWN, target->mip);
       if (result.texture)

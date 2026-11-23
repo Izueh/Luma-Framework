@@ -1,4 +1,4 @@
-#include "Hooks/Hooks.hpp"
+#include "Hooks/HookManager.hpp"
 
 #include <functional>
 #include <initializer_list>
@@ -8,10 +8,10 @@
 #include <d3d12.h>
 #include <intrin.h>
 
-#include "Game/Events.hpp"
+#include "Game/GameEvents.hpp"
 #include "Handlers/D3D12/D3D12Handlers.hpp"
 #include "Hooks/Detours.hpp"
-#include "Hooks/Slots.h"
+#include "Hooks/VtableSlots.h"
 
 // One vtable for every command list version and kind (direct, compute, bundles): the hooks cover them all. Luma's own lists
 // pass through untouched (Luma scope).

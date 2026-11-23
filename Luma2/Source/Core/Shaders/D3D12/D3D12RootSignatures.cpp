@@ -10,16 +10,16 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 
-#include "Hooks/Lifetime.hpp"
-#include "Hooks/Scope.hpp"
-#include "Resources/Bindings.hpp"
+#include "Hooks/ObjectLifetime.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Resources/ResourceBindings.hpp"
 #include "Resources/LumaCBuffers.hpp"
-#include "Resources/Samplers.hpp"
-#include "Shaders/Container.hpp"
+#include "Resources/SamplerMirrors.hpp"
+#include "Shaders/ShaderContainer.hpp"
 #include "Utils/Hash.hpp"
 #include "System/Modules.hpp"
 #include "Utils/Debug.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -147,22 +147,22 @@ Extended Append(const Desc& desc, D3D_ROOT_SIGNATURE_VERSION version, Desc D3D12
       // A game shader reading a slot Luma binds its own to is a conflict. The mod picks another space (Game::Options::bindings).
       ASSERT_ONCE_MSG(false, std::format("A game root signature uses register space {}, Luma's: pick another in Game::Options::bindings", space));
       if (space != 0)
-         Utils::Log::Warning("D3D12: a root signature uses register space {}, Luma's: not extended, its pipelines get no variants", space);
+         Log::Warning("D3D12: a root signature uses register space {}, Luma's: not extended, its pipelines get no variants", space);
       else
-         Utils::Log::Warning("D3D12: a root signature declares b{} or b{} in space 0: not extended, its pipelines get no variants", options.settings_slot, options.data_slot);
+         Log::Warning("D3D12: a root signature declares b{} or b{} in space 0: not extended, its pipelines get no variants", options.settings_slot, options.data_slot);
       return {};
    }
    if (size + LUMA_SIZE > MAX_SIZE)
    {
       ASSERT_ONCE_MSG(false, "A game root signature has no room for Luma's parameters");
-      Utils::Log::Warning("D3D12: a root signature of {} DWORDs has no room for Luma's {}: not extended, its pipelines get no variants", size, LUMA_SIZE);
+      Log::Warning("D3D12: a root signature of {} DWORDs has no room for Luma's {}: not extended, its pipelines get no variants", size, LUMA_SIZE);
       return {};
    }
 
    // In space 0 the table's registers could be the game's
    const bool table = space != 0 && size + LUMA_SIZE + LUMA_TABLE_SIZE <= MAX_SIZE;
    if (!table && space != 0)
-      Utils::Log::Warning("D3D12: a root signature of {} DWORDs has no room for Luma's texture table: patches that add textures fall back with its pipelines", size);
+      Log::Warning("D3D12: a root signature of {} DWORDs has no room for Luma's texture table: patches that add textures fall back with its pipelines", size);
 
    std::vector<Parameter> parameters(desc.pParameters, desc.pParameters + desc.NumParameters);
    const uint32_t luma_parameter = uint32_t(parameters.size());
@@ -183,7 +183,7 @@ Extended Append(const Desc& desc, D3D_ROOT_SIGNATURE_VERSION version, Desc D3D12
    ComPtr<ID3DBlob> errors;
    if (!serialize || FAILED(serialize(&versioned, &blob, &errors)))
    {
-      Utils::Log::Error("D3D12: an extended root signature couldn't be serialized: {}", errors ? std::string_view(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize()) : "");
+      Log::Error("D3D12: an extended root signature couldn't be serialized: {}", errors ? std::string_view(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize()) : "");
       return {};
    }
    const auto* bytes = static_cast<const uint8_t*>(blob->GetBufferPointer());
@@ -218,7 +218,7 @@ ID3D12RootSignature* GetForBlob(ID3D12Device* device, std::span<const uint8_t> b
       Hooks::Scope::Guard scope;
       if (FAILED(device->CreateRootSignature(0, extended.blob.data(), extended.blob.size(), IID_PPV_ARGS(&root_signature))))
       {
-         Utils::Log::Error("D3D12: an extended root signature for a pipeline couldn't be created");
+         Log::Error("D3D12: an extended root signature for a pipeline couldn't be created");
          return nullptr;
       }
    }
@@ -397,7 +397,7 @@ Extended Extend(std::span<const uint8_t> blob)
    case D3D_ROOT_SIGNATURE_VERSION_1_1: return Append<D3D12_ROOT_SIGNATURE_DESC1, D3D12_ROOT_PARAMETER1>(desc->Desc_1_1, desc->Version, &D3D12_VERSIONED_ROOT_SIGNATURE_DESC::Desc_1_1);
    case D3D_ROOT_SIGNATURE_VERSION_1_2: return Append<D3D12_ROOT_SIGNATURE_DESC2, D3D12_ROOT_PARAMETER1>(desc->Desc_1_2, desc->Version, &D3D12_VERSIONED_ROOT_SIGNATURE_DESC::Desc_1_2);
    default:
-      Utils::Log::Warning("D3D12: a root signature of unknown version {} isn't extended", int(desc->Version));
+      Log::Warning("D3D12: a root signature of unknown version {} isn't extended", int(desc->Version));
       return {};
    }
 }

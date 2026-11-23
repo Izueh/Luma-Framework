@@ -13,7 +13,7 @@
 #include <wrl/client.h>
 
 #include "Common/ShaderStage.hpp"
-#include "Shaders/Database.hpp"
+#include "Shaders/ShaderDatabase.hpp"
 
 // The game's pipelines and root signatures on D3D12, each in its object's private data: a pipeline's shaders are the same
 // Database::Shader as D3D11's (by hash), a root signature's layout is what its extension and trace read.
@@ -111,9 +111,9 @@ struct SubobjectLayout
 
 std::optional<SubobjectLayout> GetSubobjectLayout(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type);
 
-PipelineDesc Describe(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc);
-PipelineDesc Describe(const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc);
-PipelineDesc Describe(const D3D12_PIPELINE_STATE_STREAM_DESC& desc);
+PipelineDesc DescribePipeline(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc);
+PipelineDesc DescribePipeline(const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc);
+PipelineDesc DescribePipeline(const D3D12_PIPELINE_STATE_STREAM_DESC& desc);
 
 // Any thread: `root_signature` was created from the game's `blob`, extended with Luma's parameters from `luma_parameter` on
 // (UINT32_MAX when it wasn't). Null if the blob couldn't be read.
@@ -142,7 +142,7 @@ std::optional<GraphicsState> GetGraphicsState(const DescCopy& desc);
 
 // Any thread: the game created (or loaded) `pipeline` from `desc`, `copy` (null when not copied) its deep copy
 const Pipeline* TrackPipeline(const PipelineDesc& desc, std::shared_ptr<const DescCopy> copy, bool from_library, ID3D12PipelineState* pipeline);
-const Pipeline* Find(ID3D12PipelineState* pipeline);
+const Pipeline* FindPipeline(ID3D12PipelineState* pipeline);
 
 struct Stats
 {

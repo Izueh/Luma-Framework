@@ -10,7 +10,7 @@
 #include <imgui.h>
 #include <backends/imgui_impl_dx11.h>
 
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -68,7 +68,7 @@ bool NewFrame(ID3D11Device* device, const DXGI_SWAP_CHAIN_DESC&)
       device->GetImmediateContext(&immediate_context);
       if (!ImGui_ImplDX11_Init(device, immediate_context.Get()))
       {
-         Utils::Log::Error("UI: ImGui's D3D11 renderer failed to initialize on device {}", static_cast<void*>(device));
+         Log::Error("UI: ImGui's D3D11 renderer failed to initialize on device {}", static_cast<void*>(device));
          return false;
       }
       initialized = true;

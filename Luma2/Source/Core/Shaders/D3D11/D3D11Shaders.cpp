@@ -1,6 +1,6 @@
 #include "Shaders/D3D11/D3D11Shaders.hpp"
 
-#include "Hooks/Scope.hpp"
+#include "Hooks/HookScope.hpp"
 
 using Microsoft::WRL::ComPtr;
 

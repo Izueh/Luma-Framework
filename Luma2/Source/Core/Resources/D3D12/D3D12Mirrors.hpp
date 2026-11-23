@@ -6,7 +6,7 @@
 
 #include <d3d12.h>
 
-// Mirrors on D3D12 (Guidelines.md sections 4 and 6). A texture the upgrade rules match gets a committed mirror at its creation, in its
+// Mirrors on D3D12: a texture the upgrade rules match gets a committed mirror at its creation, in its
 // initial state, held in its private data. Every barrier on the game's texture is given to the mirror too, so the two are always in
 // the same state and either can be used.
 //
@@ -23,8 +23,8 @@ namespace Mirrors {
 namespace D3D12 {
 // The game created `resource`, in `state` (legacy barriers), with `clear` as its optimized clear value (or none)
 void CreateMirror(ID3D12Device* device, ID3D12Resource* resource, D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear);
-ID3D12Resource* GetMirror(ID3D12Resource* resource);
-ID3D12Resource* GetOriginal(ID3D12Resource* mirror);
+ID3D12Resource* FindMirror(ID3D12Resource* resource);
+ID3D12Resource* FindOriginal(ID3D12Resource* mirror);
 // The game released the device: Luma's descriptor heaps on it go
 void ReleaseDeviceObjects(ID3D12Device* device);
 // Whether any mirror or mirrored descriptor exists: nothing on the hot paths does anything until then
@@ -42,12 +42,12 @@ enum class ViewKind : uint8_t
 };
 // The game wrote a view at `destination`: one of a mirrored texture gets the mirror's, any other forgets what the handle had. `swapping`
 // (Mirrors::IsSwapping) is for a view written straight into a shader-visible heap.
-void OnCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, ViewKind kind, ID3D12Resource* resource, const void* desc, bool swapping);
+void TrackView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, ViewKind kind, ID3D12Resource* resource, const void* desc, bool swapping);
 // The same for samplers, `swapping` being Samplers::IsSwapping
-void OnCreateSampler(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, const D3D12_SAMPLER_DESC& desc, bool swapping);
+void TrackSampler(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, const D3D12_SAMPLER_DESC& desc, bool swapping);
 // After the game's copy of `count` descriptors (one run of CopyDescriptors): the destination handles hold what the sources did, and a
 // shader-visible destination gets the mirrors' views (`swap_views`, Mirrors::IsSwapping) and samplers (`swap_samplers`)
-void OnCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type,
+void SwapCopiedDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type,
    bool swap_views, bool swap_samplers);
 
 // The game's barriers with the mirrors' appended: `barriers` itself when none is mirrored, else storage of the calling thread valid

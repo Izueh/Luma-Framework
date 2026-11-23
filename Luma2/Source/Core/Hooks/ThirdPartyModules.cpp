@@ -10,7 +10,7 @@
 #include <Psapi.h>
 
 #include "System/Modules.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
 
 namespace Luma {
@@ -106,7 +106,7 @@ void Classify(std::wstring_view file_name, const void* base, size_t size)
    if (label.empty())
       return;
    const std::string name = Utils::Strings::ToUtf8(file_name);
-   Utils::Log::Info("Overlays: {} ({}) at {}{}", label, name, base, kind == Kind::Tool ? ", a tool: its calls count as the game's" : "");
+   Log::Info("Overlays: {} ({}) at {}{}", label, name, base, kind == Kind::Tool ? ", a tool: its calls count as the game's" : "");
    if (kind == Kind::Overlay)
       Remember(name, base, size);
 }

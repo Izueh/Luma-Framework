@@ -1,6 +1,6 @@
 #include "Shaders/D3D11/D3D11Database.hpp"
 
-#include "Hooks/Lifetime.hpp"
+#include "Hooks/ObjectLifetime.hpp"
 
 namespace Luma {
 namespace Shaders {
@@ -28,7 +28,7 @@ uint32_t TrackShader(ShaderStage stage, std::span<const uint8_t> bytecode, ID3D1
    return shader.hash;
 }
 
-const Shader* Find(ID3D11DeviceChild* object)
+const Shader* FindShader(ID3D11DeviceChild* object)
 {
    const Object* state = Hooks::Lifetime::GetState<Object>(object);
    return state ? state->shader : nullptr;

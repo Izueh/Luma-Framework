@@ -5,9 +5,10 @@
 #include <cstring>
 #include <format>
 
-#include "Shaders/Compiler.hpp"
-#include "Shaders/Database.hpp"
-#include "Shaders/Variants.hpp"
+#include "Resources/ResourceDatabase.hpp"
+#include "Shaders/ShaderCompiler.hpp"
+#include "Shaders/ShaderDatabase.hpp"
+#include "Shaders/ShaderVariants.hpp"
 
 namespace Luma {
 namespace Trace {
@@ -92,21 +93,41 @@ Description FromLayout(std::string source, const Shaders::Compiler::ConstantBuff
 }
 } // namespace
 
-Description Describe(uint32_t hash, uint32_t slot, std::span<const std::byte> data)
+Description Describe(uint32_t hash, uint32_t slot, std::span<const std::byte> data, bool full_raw, std::string_view luma_name)
 {
-   if (const Shaders::Database::Shader* shader = Shaders::Database::Find(hash))
+   if (!full_raw)
    {
-      if (const Shaders::Compiler::ConstantBuffer* layout = FindSlot(shader->reflection.constant_buffer_layouts, slot))
-         return FromLayout("reflection", *layout, data);
-   }
-   // Games strip their reflection data; Luma's variants of the shader declare the cbuffer they read
-   for (const Shaders::Variants::Variant& variant : Shaders::Variants::GetVariants(hash))
-   {
-      if (!variant.compiled)
-         continue;
-      const std::vector<Shaders::Compiler::ConstantBuffer> layouts = Shaders::Compiler::ReflectConstantBuffers(variant.compiled->bytecode);
-      if (const Shaders::Compiler::ConstantBuffer* layout = FindSlot(layouts, slot))
-         return FromLayout("replacement", *layout, data);
+      if (const Shaders::Database::Shader* shader = Shaders::Database::Find(hash))
+      {
+         if (const Shaders::Compiler::ConstantBuffer* layout = FindSlot(shader->reflection.constant_buffer_layouts, slot))
+            return FromLayout("reflection", *layout, data);
+      }
+      // Games strip their reflection data; Luma's variants of the shader declare the cbuffer they read
+      for (const Shaders::Variants::Variant& variant : Shaders::Variants::GetVariants(hash))
+      {
+         if (!variant.compiled)
+            continue;
+         const std::vector<Shaders::Compiler::ConstantBuffer> layouts = Shaders::Compiler::ReflectConstantBuffers(variant.compiled->bytecode);
+         if (const Shaders::Compiler::ConstantBuffer* layout = FindSlot(layouts, slot))
+            return FromLayout("replacement", *layout, data);
+      }
+      // Luma's own cbuffers (LumaSettings, LumaData, LumaComposition): reflect any compiled Core shader that declares it
+      if (!luma_name.empty())
+      {
+         for (uint32_t i = 0; i < Resources::Database::GetCount(); i++)
+         {
+            const Resources::Database::Entry& entry = Resources::Database::Get(i);
+            if (entry.kind != Resources::Database::Kind::Shader)
+               continue;
+            const Resources::Database::ShaderState shader_state = Resources::Database::GetShader(i);
+            if (!shader_state.compiled)
+               continue;
+            const std::vector<Shaders::Compiler::ConstantBuffer> layouts = Shaders::Compiler::ReflectConstantBuffers(shader_state.compiled->bytecode);
+            const auto it = std::ranges::find(layouts, luma_name, &Shaders::Compiler::ConstantBuffer::name);
+            if (it != layouts.end())
+               return FromLayout("reflection", *it, data);
+         }
+      }
    }
    Description description = {"raw", {}, {}};
    for (uint32_t offset = 0; offset < data.size(); offset += REGISTER)

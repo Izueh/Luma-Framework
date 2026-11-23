@@ -43,19 +43,6 @@ inline constexpr ImVec4 DANGER_HOVERED = {0.957f, 0.392f, 0.408f, 1.f};
 // What Luma injected, in trace
 inline constexpr ImVec4 INJECTED = {0.631f, 0.475f, 0.961f, 1.f};
 
-// Icon tints of the category headers: a small fixed palette, one color per kind of category
-namespace Tints {
-inline constexpr ImVec4 LUMA = ACCENT;
-inline constexpr ImVec4 OVERLAY = {0.353f, 0.784f, 0.980f, 1.f};
-inline constexpr ImVec4 DISPLAY = {0.984f, 0.663f, 0.243f, 1.f};
-inline constexpr ImVec4 UPSCALING = {0.243f, 0.835f, 0.710f, 1.f};
-inline constexpr ImVec4 POST_PROCESSING = {0.957f, 0.451f, 0.710f, 1.f};
-inline constexpr ImVec4 ADVANCED = {0.678f, 0.588f, 0.988f, 1.f};
-inline constexpr ImVec4 CONSOLE = {0.620f, 0.875f, 0.322f, 1.f};
-inline constexpr ImVec4 CREDITS = {0.980f, 0.459f, 0.459f, 1.f};
-inline constexpr ImVec4 OTHER = {0.580f, 0.678f, 0.851f, 1.f};
-} // namespace Tints
-
 // Hash chips by shader stage
 namespace Stages {
 inline constexpr ImVec4 VERTEX = {0.353f, 0.784f, 0.980f, 1.f};
@@ -64,6 +51,20 @@ inline constexpr ImVec4 COMPUTE = {0.243f, 0.835f, 0.710f, 1.f};
 // Hull, domain and geometry
 inline constexpr ImVec4 OTHER = {0.984f, 0.663f, 0.243f, 1.f};
 } // namespace Stages
+
+// Semantic trace list row colors
+namespace Trace {
+inline constexpr ImVec4 VERTEX = {0.580f, 0.820f, 0.960f, 1.f};
+inline constexpr ImVec4 PIXEL = {0.902f, 0.914f, 0.933f, 1.f};
+inline constexpr ImVec4 COMPUTE = {0.420f, 0.855f, 0.765f, 1.f};
+inline constexpr ImVec4 REPLACED = {0.340f, 0.800f, 0.470f, 1.f};
+inline constexpr ImVec4 RESOURCE_OP = {0.940f, 0.760f, 0.400f, 1.f};
+inline constexpr ImVec4 PRESENT = {0.820f, 0.880f, 1.000f, 1.f};
+inline constexpr ImVec4 LUMA_PASS = {0.690f, 0.560f, 0.980f, 1.f};
+inline constexpr ImVec4 CANCELLED = {0.880f, 0.480f, 0.360f, 1.f};
+inline constexpr ImVec4 HIGHLIGHT_RW_SINGLE = {0.957f, 0.451f, 0.710f, 1.f}; // Pink: read or write
+inline constexpr ImVec4 HIGHLIGHT_RW_BOTH = {0.960f, 0.290f, 0.310f, 1.f}; // Red: read and write
+} // namespace Trace
 
 // The services' own colors, for their marks on link buttons (GitHub's is its dark-theme white)
 namespace Brands {
@@ -94,6 +95,8 @@ struct Category
 };
 
 Category GetCategory(std::string_view name);
+// Registers a custom icon for a category name (matched case-insensitively before built-in keywords)
+void RegisterCategoryIcon(std::string_view category, const char* icon);
 
 // The gradient and top highlight of raised surfaces
 void DrawRaised(ImDrawList* draw_list, ImVec2 min, ImVec2 max, float rounding);

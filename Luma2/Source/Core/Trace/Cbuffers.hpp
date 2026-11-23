@@ -29,8 +29,9 @@ struct Description
    std::vector<Field> fields;
 };
 
-// `data` bound at `slot` of the shader `hash`
-Description Describe(uint32_t hash, uint32_t slot, std::span<const std::byte> data);
+// `data` bound at `slot` of the shader `hash`. When `full_raw` is true, returns raw float4 rows across all of `data` regardless of reflection.
+// When `luma_name` is non-empty (e.g. "LumaSettings", "LumaData"), falls back to reflecting Core's compiled shaders by cbuffer name.
+Description Describe(uint32_t hash, uint32_t slot, std::span<const std::byte> data, bool full_raw = false, std::string_view luma_name = {});
 } // namespace Cbuffers
 } // namespace Trace
 } // namespace Luma

@@ -97,6 +97,8 @@ struct FullscreenPass
    Resources::Database::CustomData custom;
    // Drawn while Luma is off too: display composition, the only writer of the real back buffer
    bool while_off = false;
+   // State groups saved and restored around the pass
+   StateMask state_mask = FULLSCREEN_PASS;
 };
 
 // Inside a Luma scope. False, drawing nothing, while Luma is off (but `while_off`), a shader isn't compiled or the target isn't a 2D
@@ -104,8 +106,8 @@ struct FullscreenPass
 bool DrawFullscreen(ID3D11DeviceContext* context, const FullscreenPass& pass);
 // `source` into the whole of `target`, at the same size (point, "Luma_Copy_VS/PS") or another one with the same aspect
 // (bilinear, "Luma_Scale_VS/PS")
-bool Copy(ID3D11DeviceContext* context, ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target);
-bool Scale(ID3D11DeviceContext* context, ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target);
+bool Copy(ID3D11DeviceContext* context, ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target, StateMask state_mask = FULLSCREEN_PASS);
+bool Scale(ID3D11DeviceContext* context, ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target, StateMask state_mask = FULLSCREEN_PASS);
 } // namespace D3D11
 } // namespace Draw
 } // namespace Luma

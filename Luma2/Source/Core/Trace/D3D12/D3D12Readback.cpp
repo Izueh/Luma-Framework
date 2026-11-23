@@ -13,12 +13,13 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
+#include "Game/Game.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
-#include "Resources/Mirrors.hpp"
+#include "Resources/ResourceMirrors.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
-#include "Shaders/Database.hpp"
+#include "Shaders/ShaderDatabase.hpp"
 #include "Trace/D3D12/D3D12Capture.hpp"
-#include "Trace/Readback.hpp"
+#include "Trace/ResourceReadback.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -178,7 +179,7 @@ Result ReadBackBuffer(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue, uint
    if (!back_buffer)
       return {.error = "the swapchain has no back buffer"};
    // What the game drew is in its buffer's mirror while mirrors are swapped in (in the same state)
-   if (ID3D12Resource* mirror = Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D12::GetMirror(back_buffer.Get()) : nullptr)
+   if (ID3D12Resource* mirror = Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D12::FindMirror(back_buffer.Get()) : nullptr)
       back_buffer = mirror;
    ComPtr<ID3D12Device> device;
    ComPtr<ID3D12CommandAllocator> allocator;
@@ -227,7 +228,7 @@ bool ReadAfterCall(const Game::D3D12::Call& call, Shaders::StageSet stages, bool
    }
    // A mirrored texture is read from its mirror while the mirrors are swapped in (it's what the call wrote), unless the game's is asked
    // for. The mirror is in the original's state: it gets every barrier the original does.
-   ID3D12Resource* mirror = !target->original && Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D12::GetMirror(view->resource) : nullptr;
+   ID3D12Resource* mirror = !target->original && Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D12::FindMirror(view->resource) : nullptr;
    std::string error;
    std::optional<Copy> copy = RecordCopy(call.list, mirror ? mirror : view->resource, *view->state, target->mip, &error);
    if (!copy)

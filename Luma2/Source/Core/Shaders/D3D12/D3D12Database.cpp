@@ -7,10 +7,10 @@
 #include <type_traits>
 #include <utility>
 
-#include "Hooks/Lifetime.hpp"
+#include "Hooks/ObjectLifetime.hpp"
 #include "Utils/Hash.hpp"
 #include "System/Modules.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -23,6 +23,16 @@ std::atomic<uint32_t> live_pipelines = 0;
 std::atomic<uint32_t> extended_signatures = 0;
 std::atomic<uint32_t> game_signatures = 0;
 
+template <typename Callback>
+void ForEachPipelineShader(const Pipeline& pipeline, Callback callback)
+{
+   for (Shader* shader : pipeline.shaders)
+   {
+      if (shader)
+         callback(*shader);
+   }
+}
+
 // In the private data of each of the game's pipelines
 struct PipelineState
 {
@@ -31,7 +41,7 @@ struct PipelineState
    explicit PipelineState(Pipeline pipeline_) : pipeline(std::move(pipeline_))
    {
       live_pipelines++;
-      ForEachShader([](Shader& shader) { shader.objects++; });
+      ForEachPipelineShader(pipeline, [](Shader& shader) { shader.objects++; });
       if (pipeline.root_layout)
          const_cast<RootLayout*>(pipeline.root_layout)->pipelines++;
    }
@@ -39,23 +49,13 @@ struct PipelineState
    ~PipelineState()
    {
       live_pipelines--;
-      ForEachShader([](Shader& shader) { shader.objects--; });
+      ForEachPipelineShader(pipeline, [](Shader& shader) { shader.objects--; });
       if (pipeline.root_layout)
          const_cast<RootLayout*>(pipeline.root_layout)->pipelines--;
    }
 
    PipelineState(const PipelineState&) = delete;
    PipelineState& operator=(const PipelineState&) = delete;
-
-   template <typename Callback>
-   void ForEachShader(Callback callback)
-   {
-      for (Shader* shader : pipeline.shaders)
-      {
-         if (shader)
-            callback(*shader);
-      }
-   }
 };
 
 std::span<const uint8_t> ToSpan(const D3D12_SHADER_BYTECODE& bytecode)
@@ -163,281 +163,274 @@ bool ReadLayout(std::span<const uint8_t> blob, RootLayout& layout)
    return true;
 }
 
-// Fills a DescCopy: pointed-to data moved into its storage, pointer fields noted so the content hash leaves them out
-class Copier
+constexpr uint64_t FNV_OFFSET = 0xCBF29CE484222325ull;
+constexpr uint64_t FNV_PRIME = 0x100000001B3ull;
+
+// Helpers filling a DescCopy: pointed-to data moved into its storage so the desc stays valid after creation
+template <typename T>
+T& DescAt(DescCopy& copy, size_t offset)
 {
-public:
-   explicit Copier(DescCopy& copy) : copy_(copy) {}
+   return *reinterpret_cast<T*>(copy.bytes.data() + offset);
+}
 
-   template <typename T>
-   T& At(size_t offset)
-   {
-      return *reinterpret_cast<T*>(copy_.bytes.data() + offset);
-   }
-
-   template <typename T>
-   T* Store(const T* data, size_t count)
-   {
-      if (!data || count == 0)
-         return nullptr;
-      auto block = std::make_unique<std::byte[]>(sizeof(T) * count);
-      std::memcpy(block.get(), data, sizeof(T) * count);
-      T* stored = reinterpret_cast<T*>(block.get());
-      copy_.storage.push_back(std::move(block));
-      return stored;
-   }
-
-   const char* StoreString(const char* text) { return text ? Store(text, std::strlen(text) + 1) : nullptr; }
-
-   void Shader(size_t offset, std::optional<ShaderStage> stage)
-   {
-      auto& bytecode = At<D3D12_SHADER_BYTECODE>(offset);
-      bytecode.pShaderBytecode = Store(static_cast<const std::byte*>(bytecode.pShaderBytecode), bytecode.BytecodeLength);
-      if (!bytecode.pShaderBytecode)
-         bytecode.BytecodeLength = 0;
-      if (stage && bytecode.pShaderBytecode)
-         copy_.stages[size_t(*stage)] = offset;
-   }
-
-   void InputLayout(size_t offset)
-   {
-      auto& layout = At<D3D12_INPUT_LAYOUT_DESC>(offset);
-      D3D12_INPUT_ELEMENT_DESC* elements = Store(layout.pInputElementDescs, layout.NumElements);
-      for (UINT i = 0; elements && i < layout.NumElements; i++)
-         elements[i].SemanticName = StoreString(elements[i].SemanticName);
-      layout.pInputElementDescs = elements;
-   }
-
-   void StreamOutput(size_t offset)
-   {
-      auto& output = At<D3D12_STREAM_OUTPUT_DESC>(offset);
-      D3D12_SO_DECLARATION_ENTRY* entries = Store(output.pSODeclaration, output.NumEntries);
-      for (UINT i = 0; entries && i < output.NumEntries; i++)
-         entries[i].SemanticName = StoreString(entries[i].SemanticName);
-      output.pSODeclaration = entries;
-      output.pBufferStrides = Store(output.pBufferStrides, output.NumStrides);
-   }
-
-   // The game's cached blob is for its pipeline, not a variant's
-   void CachedPipeline(size_t offset) { At<D3D12_CACHED_PIPELINE_STATE>(offset) = {}; }
-
-   void ViewInstancing(size_t offset)
-   {
-      auto& instancing = At<D3D12_VIEW_INSTANCING_DESC>(offset);
-      instancing.pViewInstanceLocations = Store(instancing.pViewInstanceLocations, instancing.ViewInstanceCount);
-   }
-
-   void SerializedRootSignature(size_t offset)
-   {
-      auto& serialized = At<D3D12_SERIALIZED_ROOT_SIGNATURE_DESC>(offset);
-      serialized.pSerializedBlob = Store(static_cast<const std::byte*>(serialized.pSerializedBlob), serialized.SerializedBlobSizeInBytes);
-   }
-
-private:
-   DescCopy& copy_;
-};
-
-// The content hash of a copied desc, field by field: structs and streams have padding the game never initializes, so their bytes
-// differ between boots
-class ContentHasher
+template <typename T>
+T* DescStore(DescCopy& copy, const T* data, size_t count)
 {
-public:
-   template <typename T>
-      requires std::is_arithmetic_v<T> || std::is_enum_v<T>
-   void Add(T value)
+   if (!data || count == 0)
+      return nullptr;
+   auto block = std::make_unique<std::byte[]>(sizeof(T) * count);
+   std::memcpy(block.get(), data, sizeof(T) * count);
+   T* stored = reinterpret_cast<T*>(block.get());
+   copy.storage.push_back(std::move(block));
+   return stored;
+}
+
+const char* DescStoreString(DescCopy& copy, const char* text)
+{
+   return text ? DescStore(copy, text, std::strlen(text) + 1) : nullptr;
+}
+
+void CopyShaderBytecode(DescCopy& copy, size_t offset, std::optional<ShaderStage> stage)
+{
+   auto& bytecode = DescAt<D3D12_SHADER_BYTECODE>(copy, offset);
+   bytecode.pShaderBytecode = DescStore(copy, static_cast<const std::byte*>(bytecode.pShaderBytecode), bytecode.BytecodeLength);
+   if (!bytecode.pShaderBytecode)
+      bytecode.BytecodeLength = 0;
+   if (stage && bytecode.pShaderBytecode)
+      copy.stages[size_t(*stage)] = offset;
+}
+
+void CopyInputLayout(DescCopy& copy, size_t offset)
+{
+   auto& layout = DescAt<D3D12_INPUT_LAYOUT_DESC>(copy, offset);
+   D3D12_INPUT_ELEMENT_DESC* elements = DescStore(copy, layout.pInputElementDescs, layout.NumElements);
+   for (UINT i = 0; elements && i < layout.NumElements; i++)
+      elements[i].SemanticName = DescStoreString(copy, elements[i].SemanticName);
+   layout.pInputElementDescs = elements;
+}
+
+void CopyStreamOutput(DescCopy& copy, size_t offset)
+{
+   auto& output = DescAt<D3D12_STREAM_OUTPUT_DESC>(copy, offset);
+   D3D12_SO_DECLARATION_ENTRY* entries = DescStore(copy, output.pSODeclaration, output.NumEntries);
+   for (UINT i = 0; entries && i < output.NumEntries; i++)
+      entries[i].SemanticName = DescStoreString(copy, entries[i].SemanticName);
+   output.pSODeclaration = entries;
+   output.pBufferStrides = DescStore(copy, output.pBufferStrides, output.NumStrides);
+}
+
+// The game's cached blob is for its pipeline, not a variant's
+void ClearCachedPipeline(DescCopy& copy, size_t offset)
+{
+   DescAt<D3D12_CACHED_PIPELINE_STATE>(copy, offset) = {};
+}
+
+void CopyViewInstancing(DescCopy& copy, size_t offset)
+{
+   auto& instancing = DescAt<D3D12_VIEW_INSTANCING_DESC>(copy, offset);
+   instancing.pViewInstanceLocations = DescStore(copy, instancing.pViewInstanceLocations, instancing.ViewInstanceCount);
+}
+
+void CopySerializedRootSignature(DescCopy& copy, size_t offset)
+{
+   auto& serialized = DescAt<D3D12_SERIALIZED_ROOT_SIGNATURE_DESC>(copy, offset);
+   serialized.pSerializedBlob = DescStore(copy, static_cast<const std::byte*>(serialized.pSerializedBlob), serialized.SerializedBlobSizeInBytes);
+}
+
+// Content hash of a copied desc, field by field: structs and streams have padding the game never initializes, so their bytes differ between boots
+void HashBytes(uint64_t& hash, const void* data, size_t size)
+{
+   const auto* bytes = static_cast<const uint8_t*>(data);
+   for (size_t i = 0; i < size; i++)
    {
-      AddBytes(&value, sizeof(value));
+      hash ^= bytes[i];
+      hash *= FNV_PRIME;
    }
+}
 
-   void AddBytes(const void* data, size_t size)
+template <typename T>
+   requires std::is_arithmetic_v<T> || std::is_enum_v<T>
+void HashValue(uint64_t& hash, T value)
+{
+   HashBytes(hash, &value, sizeof(value));
+}
+
+void HashString(uint64_t& hash, const char* text)
+{
+   text ? HashBytes(hash, text, std::strlen(text) + 1) : HashValue(hash, uint8_t(0));
+}
+
+// A struct of 32 bit members only, which has no padding
+template <typename T>
+void HashPacked(uint64_t& hash, const T& value)
+{
+   static_assert(sizeof(T) % 4 == 0);
+   HashBytes(hash, &value, sizeof(T));
+}
+
+// The game's blob: the same signature on every boot
+void HashRootSignature(uint64_t& hash, ID3D12RootSignature* root_signature)
+{
+   const RootLayout* layout = FindRootLayout(root_signature);
+   HashValue(hash, uint32_t(layout ? Utils::Hash::CRC32(layout->blob) : 0));
+}
+
+void HashBlend(uint64_t& hash, const D3D12_BLEND_DESC& desc)
+{
+   HashValue(hash, desc.AlphaToCoverageEnable);
+   HashValue(hash, desc.IndependentBlendEnable);
+   for (const D3D12_RENDER_TARGET_BLEND_DESC& target : desc.RenderTarget)
    {
-      const auto* bytes = static_cast<const uint8_t*>(data);
-      for (size_t i = 0; i < size; i++)
-      {
-         hash_ ^= bytes[i];
-         hash_ *= 0x100000001B3ull;
-      }
+      HashValue(hash, target.BlendEnable);
+      HashValue(hash, target.LogicOpEnable);
+      HashValue(hash, target.SrcBlend);
+      HashValue(hash, target.DestBlend);
+      HashValue(hash, target.BlendOp);
+      HashValue(hash, target.SrcBlendAlpha);
+      HashValue(hash, target.DestBlendAlpha);
+      HashValue(hash, target.BlendOpAlpha);
+      HashValue(hash, target.LogicOp);
+      HashValue(hash, target.RenderTargetWriteMask);
    }
+}
 
-   void AddString(const char* text) { text ? AddBytes(text, std::strlen(text) + 1) : Add(uint8_t(0)); }
-
-   // A struct of 32 bit members only, which has no padding
-   template <typename T>
-   void AddPacked(const T& value)
+template <typename Face>
+void HashStencilFace(uint64_t& hash, const Face& face)
+{
+   HashValue(hash, face.StencilFailOp);
+   HashValue(hash, face.StencilDepthFailOp);
+   HashValue(hash, face.StencilPassOp);
+   HashValue(hash, face.StencilFunc);
+   if constexpr (std::is_same_v<Face, D3D12_DEPTH_STENCILOP_DESC1>)
    {
-      static_assert(sizeof(T) % 4 == 0);
-      AddBytes(&value, sizeof(T));
+      HashValue(hash, face.StencilReadMask);
+      HashValue(hash, face.StencilWriteMask);
    }
+}
 
-   // The game's blob: the same signature on every boot
-   void Add(ID3D12RootSignature* root_signature)
+template <typename Desc>
+void HashDepthStencil(uint64_t& hash, const Desc& desc)
+{
+   HashValue(hash, desc.DepthEnable);
+   HashValue(hash, desc.DepthWriteMask);
+   HashValue(hash, desc.DepthFunc);
+   HashValue(hash, desc.StencilEnable);
+   if constexpr (!std::is_same_v<Desc, D3D12_DEPTH_STENCIL_DESC2>)
    {
-      const RootLayout* layout = FindRootLayout(root_signature);
-      Add(uint32_t(layout ? Utils::Hash::CRC32(layout->blob) : 0));
+      HashValue(hash, desc.StencilReadMask);
+      HashValue(hash, desc.StencilWriteMask);
    }
+   HashStencilFace(hash, desc.FrontFace);
+   HashStencilFace(hash, desc.BackFace);
+   if constexpr (!std::is_same_v<Desc, D3D12_DEPTH_STENCIL_DESC>)
+      HashValue(hash, desc.DepthBoundsTestEnable);
+}
 
-   void Add(const D3D12_BLEND_DESC& desc)
+void HashInputLayout(uint64_t& hash, const D3D12_INPUT_LAYOUT_DESC& desc)
+{
+   HashValue(hash, desc.NumElements);
+   for (UINT i = 0; desc.pInputElementDescs && i < desc.NumElements; i++)
    {
-      Add(desc.AlphaToCoverageEnable);
-      Add(desc.IndependentBlendEnable);
-      for (const D3D12_RENDER_TARGET_BLEND_DESC& target : desc.RenderTarget)
-      {
-         Add(target.BlendEnable);
-         Add(target.LogicOpEnable);
-         Add(target.SrcBlend);
-         Add(target.DestBlend);
-         Add(target.BlendOp);
-         Add(target.SrcBlendAlpha);
-         Add(target.DestBlendAlpha);
-         Add(target.BlendOpAlpha);
-         Add(target.LogicOp);
-         Add(target.RenderTargetWriteMask);
-      }
+      const D3D12_INPUT_ELEMENT_DESC& element = desc.pInputElementDescs[i];
+      HashString(hash, element.SemanticName);
+      HashValue(hash, element.SemanticIndex);
+      HashValue(hash, element.Format);
+      HashValue(hash, element.InputSlot);
+      HashValue(hash, element.AlignedByteOffset);
+      HashValue(hash, element.InputSlotClass);
+      HashValue(hash, element.InstanceDataStepRate);
    }
+}
 
-   template <typename Face>
-   void AddFace(const Face& face)
+void HashStreamOutput(uint64_t& hash, const D3D12_STREAM_OUTPUT_DESC& desc)
+{
+   HashValue(hash, desc.NumEntries);
+   for (UINT i = 0; desc.pSODeclaration && i < desc.NumEntries; i++)
    {
-      Add(face.StencilFailOp);
-      Add(face.StencilDepthFailOp);
-      Add(face.StencilPassOp);
-      Add(face.StencilFunc);
-      if constexpr (std::is_same_v<Face, D3D12_DEPTH_STENCILOP_DESC1>)
-      {
-         Add(face.StencilReadMask);
-         Add(face.StencilWriteMask);
-      }
+      const D3D12_SO_DECLARATION_ENTRY& entry = desc.pSODeclaration[i];
+      HashValue(hash, entry.Stream);
+      HashString(hash, entry.SemanticName);
+      HashValue(hash, entry.SemanticIndex);
+      HashValue(hash, entry.StartComponent);
+      HashValue(hash, entry.ComponentCount);
+      HashValue(hash, entry.OutputSlot);
    }
+   HashValue(hash, desc.NumStrides);
+   if (desc.pBufferStrides)
+      HashBytes(hash, desc.pBufferStrides, sizeof(UINT) * desc.NumStrides);
+   HashValue(hash, desc.RasterizedStream);
+}
 
-   template <typename Desc>
-   void AddDepthStencil(const Desc& desc)
+void HashViewInstancing(uint64_t& hash, const D3D12_VIEW_INSTANCING_DESC& desc)
+{
+   HashValue(hash, desc.ViewInstanceCount);
+   if (desc.pViewInstanceLocations)
+      HashBytes(hash, desc.pViewInstanceLocations, sizeof(D3D12_VIEW_INSTANCE_LOCATION) * desc.ViewInstanceCount);
+   HashValue(hash, desc.Flags);
+}
+
+// A stream subobject's value. Shaders and the cached blob aren't part of the content.
+void HashSubobject(uint64_t& hash, D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type, const std::byte* value)
+{
+   HashValue(hash, type);
+   const auto as = [&]<typename T>() -> const T& { return *reinterpret_cast<const T*>(value); };
+   switch (type)
    {
-      Add(desc.DepthEnable);
-      Add(desc.DepthWriteMask);
-      Add(desc.DepthFunc);
-      Add(desc.StencilEnable);
-      if constexpr (!std::is_same_v<Desc, D3D12_DEPTH_STENCIL_DESC2>)
-      {
-         Add(desc.StencilReadMask);
-         Add(desc.StencilWriteMask);
-      }
-      AddFace(desc.FrontFace);
-      AddFace(desc.BackFace);
-      if constexpr (!std::is_same_v<Desc, D3D12_DEPTH_STENCIL_DESC>)
-         Add(desc.DepthBoundsTestEnable);
-   }
-
-   void Add(const D3D12_INPUT_LAYOUT_DESC& desc)
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE: HashRootSignature(hash, as.operator()<ID3D12RootSignature*>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND: HashBlend(hash, as.operator()<D3D12_BLEND_DESC>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL: HashDepthStencil(hash, as.operator()<D3D12_DEPTH_STENCIL_DESC>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL1: HashDepthStencil(hash, as.operator()<D3D12_DEPTH_STENCIL_DESC1>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL2: HashDepthStencil(hash, as.operator()<D3D12_DEPTH_STENCIL_DESC2>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT: HashInputLayout(hash, as.operator()<D3D12_INPUT_LAYOUT_DESC>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT: HashStreamOutput(hash, as.operator()<D3D12_STREAM_OUTPUT_DESC>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING: HashViewInstancing(hash, as.operator()<D3D12_VIEW_INSTANCING_DESC>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SERIALIZED_ROOT_SIGNATURE:
    {
-      Add(desc.NumElements);
-      for (UINT i = 0; desc.pInputElementDescs && i < desc.NumElements; i++)
-      {
-         const D3D12_INPUT_ELEMENT_DESC& element = desc.pInputElementDescs[i];
-         AddString(element.SemanticName);
-         Add(element.SemanticIndex);
-         Add(element.Format);
-         Add(element.InputSlot);
-         Add(element.AlignedByteOffset);
-         Add(element.InputSlotClass);
-         Add(element.InstanceDataStepRate);
-      }
+      const auto& serialized = as.operator()<D3D12_SERIALIZED_ROOT_SIGNATURE_DESC>();
+      if (serialized.pSerializedBlob)
+         HashBytes(hash, serialized.pSerializedBlob, serialized.SerializedBlobSizeInBytes);
+      break;
    }
-
-   void Add(const D3D12_STREAM_OUTPUT_DESC& desc)
-   {
-      Add(desc.NumEntries);
-      for (UINT i = 0; desc.pSODeclaration && i < desc.NumEntries; i++)
-      {
-         const D3D12_SO_DECLARATION_ENTRY& entry = desc.pSODeclaration[i];
-         Add(entry.Stream);
-         AddString(entry.SemanticName);
-         Add(entry.SemanticIndex);
-         Add(entry.StartComponent);
-         Add(entry.ComponentCount);
-         Add(entry.OutputSlot);
-      }
-      Add(desc.NumStrides);
-      if (desc.pBufferStrides)
-         AddBytes(desc.pBufferStrides, sizeof(UINT) * desc.NumStrides);
-      Add(desc.RasterizedStream);
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK: HashPacked(hash, as.operator()<UINT>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER: HashPacked(hash, as.operator()<D3D12_RASTERIZER_DESC>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER1: HashPacked(hash, as.operator()<D3D12_RASTERIZER_DESC1>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER2: HashPacked(hash, as.operator()<D3D12_RASTERIZER_DESC2>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_IB_STRIP_CUT_VALUE: HashPacked(hash, as.operator()<D3D12_INDEX_BUFFER_STRIP_CUT_VALUE>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY: HashPacked(hash, as.operator()<D3D12_PRIMITIVE_TOPOLOGY_TYPE>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS: HashPacked(hash, as.operator()<D3D12_RT_FORMAT_ARRAY>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT: HashPacked(hash, as.operator()<DXGI_FORMAT>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC: HashPacked(hash, as.operator()<DXGI_SAMPLE_DESC>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_NODE_MASK: HashPacked(hash, as.operator()<UINT>()); break;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_FLAGS: HashPacked(hash, as.operator()<D3D12_PIPELINE_STATE_FLAGS>()); break;
+   default: break; // Shaders, the cached blob
    }
+}
 
-   void Add(const D3D12_VIEW_INSTANCING_DESC& desc)
-   {
-      Add(desc.ViewInstanceCount);
-      if (desc.pViewInstanceLocations)
-         AddBytes(desc.pViewInstanceLocations, sizeof(D3D12_VIEW_INSTANCE_LOCATION) * desc.ViewInstanceCount);
-      Add(desc.Flags);
-   }
+void HashGraphicsDesc(uint64_t& hash, const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc)
+{
+   HashRootSignature(hash, desc.pRootSignature);
+   HashStreamOutput(hash, desc.StreamOutput);
+   HashBlend(hash, desc.BlendState);
+   HashPacked(hash, desc.SampleMask);
+   HashPacked(hash, desc.RasterizerState);
+   HashDepthStencil(hash, desc.DepthStencilState);
+   HashInputLayout(hash, desc.InputLayout);
+   HashValue(hash, desc.IBStripCutValue);
+   HashValue(hash, desc.PrimitiveTopologyType);
+   HashValue(hash, desc.NumRenderTargets);
+   HashBytes(hash, desc.RTVFormats, sizeof(desc.RTVFormats));
+   HashValue(hash, desc.DSVFormat);
+   HashPacked(hash, desc.SampleDesc);
+   HashValue(hash, desc.NodeMask);
+   HashValue(hash, desc.Flags);
+}
 
-   // A stream subobject's value. Shaders and the cached blob aren't part of the content.
-   void AddSubobject(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type, const std::byte* value)
-   {
-      Add(type);
-      const auto as = [&]<typename T>() -> const T& { return *reinterpret_cast<const T*>(value); };
-      switch (type)
-      {
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE: Add(as.operator()<ID3D12RootSignature*>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_BLEND: Add(as.operator()<D3D12_BLEND_DESC>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL: AddDepthStencil(as.operator()<D3D12_DEPTH_STENCIL_DESC>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL1: AddDepthStencil(as.operator()<D3D12_DEPTH_STENCIL_DESC1>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL2: AddDepthStencil(as.operator()<D3D12_DEPTH_STENCIL_DESC2>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT: Add(as.operator()<D3D12_INPUT_LAYOUT_DESC>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT: Add(as.operator()<D3D12_STREAM_OUTPUT_DESC>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING: Add(as.operator()<D3D12_VIEW_INSTANCING_DESC>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SERIALIZED_ROOT_SIGNATURE:
-      {
-         const auto& serialized = as.operator()<D3D12_SERIALIZED_ROOT_SIGNATURE_DESC>();
-         if (serialized.pSerializedBlob)
-            AddBytes(serialized.pSerializedBlob, serialized.SerializedBlobSizeInBytes);
-         break;
-      }
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_MASK: AddPacked(as.operator()<UINT>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER: AddPacked(as.operator()<D3D12_RASTERIZER_DESC>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER1: AddPacked(as.operator()<D3D12_RASTERIZER_DESC1>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RASTERIZER2: AddPacked(as.operator()<D3D12_RASTERIZER_DESC2>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_IB_STRIP_CUT_VALUE: AddPacked(as.operator()<D3D12_INDEX_BUFFER_STRIP_CUT_VALUE>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PRIMITIVE_TOPOLOGY: AddPacked(as.operator()<D3D12_PRIMITIVE_TOPOLOGY_TYPE>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS: AddPacked(as.operator()<D3D12_RT_FORMAT_ARRAY>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT: AddPacked(as.operator()<DXGI_FORMAT>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SAMPLE_DESC: AddPacked(as.operator()<DXGI_SAMPLE_DESC>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_NODE_MASK: AddPacked(as.operator()<UINT>()); break;
-      case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_FLAGS: AddPacked(as.operator()<D3D12_PIPELINE_STATE_FLAGS>()); break;
-      default: break; // Shaders, the cached blob
-      }
-   }
-
-   void Add(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc)
-   {
-      Add(desc.pRootSignature);
-      Add(desc.StreamOutput);
-      Add(desc.BlendState);
-      AddPacked(desc.SampleMask);
-      AddPacked(desc.RasterizerState);
-      AddDepthStencil(desc.DepthStencilState);
-      Add(desc.InputLayout);
-      Add(desc.IBStripCutValue);
-      Add(desc.PrimitiveTopologyType);
-      Add(desc.NumRenderTargets);
-      AddBytes(desc.RTVFormats, sizeof(desc.RTVFormats));
-      Add(desc.DSVFormat);
-      AddPacked(desc.SampleDesc);
-      Add(desc.NodeMask);
-      Add(desc.Flags);
-   }
-
-   void Add(const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc)
-   {
-      Add(desc.pRootSignature);
-      Add(desc.NodeMask);
-      Add(desc.Flags);
-   }
-
-   uint64_t Get() const { return hash_; }
-
-private:
-   uint64_t hash_ = 0xCBF29CE484222325ull;
-};
+void HashComputeDesc(uint64_t& hash, const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc)
+{
+   HashRootSignature(hash, desc.pRootSignature);
+   HashValue(hash, desc.NodeMask);
+   HashValue(hash, desc.Flags);
+}
 
 template <typename Desc>
 void CopyBytes(DescCopy& copy, const Desc& desc)
@@ -488,29 +481,28 @@ std::shared_ptr<const DescCopy> CopyDesc(PipelineKind kind, const void* native)
 {
    auto copy = std::make_shared<DescCopy>();
    copy->kind = kind;
-   Copier copier(*copy);
    switch (kind)
    {
    case PipelineKind::Graphics:
    {
       using Desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC;
       CopyBytes(*copy, *static_cast<const Desc*>(native));
-      copier.Shader(offsetof(Desc, VS), ShaderStage::Vertex);
-      copier.Shader(offsetof(Desc, HS), ShaderStage::Hull);
-      copier.Shader(offsetof(Desc, DS), ShaderStage::Domain);
-      copier.Shader(offsetof(Desc, GS), ShaderStage::Geometry);
-      copier.Shader(offsetof(Desc, PS), ShaderStage::Pixel);
-      copier.StreamOutput(offsetof(Desc, StreamOutput));
-      copier.InputLayout(offsetof(Desc, InputLayout));
-      copier.CachedPipeline(offsetof(Desc, CachedPSO));
+      CopyShaderBytecode(*copy, offsetof(Desc, VS), ShaderStage::Vertex);
+      CopyShaderBytecode(*copy, offsetof(Desc, HS), ShaderStage::Hull);
+      CopyShaderBytecode(*copy, offsetof(Desc, DS), ShaderStage::Domain);
+      CopyShaderBytecode(*copy, offsetof(Desc, GS), ShaderStage::Geometry);
+      CopyShaderBytecode(*copy, offsetof(Desc, PS), ShaderStage::Pixel);
+      CopyStreamOutput(*copy, offsetof(Desc, StreamOutput));
+      CopyInputLayout(*copy, offsetof(Desc, InputLayout));
+      ClearCachedPipeline(*copy, offsetof(Desc, CachedPSO));
       break;
    }
    case PipelineKind::Compute:
    {
       using Desc = D3D12_COMPUTE_PIPELINE_STATE_DESC;
       CopyBytes(*copy, *static_cast<const Desc*>(native));
-      copier.Shader(offsetof(Desc, CS), ShaderStage::Compute);
-      copier.CachedPipeline(offsetof(Desc, CachedPSO));
+      CopyShaderBytecode(*copy, offsetof(Desc, CS), ShaderStage::Compute);
+      ClearCachedPipeline(*copy, offsetof(Desc, CachedPSO));
       break;
    }
    case PipelineKind::Stream:
@@ -531,16 +523,16 @@ std::shared_ptr<const DescCopy> CopyDesc(PipelineKind kind, const void* native)
          const size_t value = offset + layout->value_offset;
          switch (type)
          {
-         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT: copier.InputLayout(value); break;
-         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT: copier.StreamOutput(value); break;
-         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO: copier.CachedPipeline(value); break;
-         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING: copier.ViewInstancing(value); break;
-         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SERIALIZED_ROOT_SIGNATURE: copier.SerializedRootSignature(value); break;
+         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_INPUT_LAYOUT: CopyInputLayout(*copy, value); break;
+         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_STREAM_OUTPUT: CopyStreamOutput(*copy, value); break;
+         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO: ClearCachedPipeline(*copy, value); break;
+         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING: CopyViewInstancing(*copy, value); break;
+         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SERIALIZED_ROOT_SIGNATURE: CopySerializedRootSignature(*copy, value); break;
          case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS:
-         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS: copier.Shader(value, std::nullopt); break;
+         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS: CopyShaderBytecode(*copy, value, std::nullopt); break;
          default:
             if (const std::optional<ShaderStage> stage = GetStage(type))
-               copier.Shader(value, *stage);
+               CopyShaderBytecode(*copy, value, *stage);
             break;
          }
          offset += layout->size;
@@ -548,28 +540,28 @@ std::shared_ptr<const DescCopy> CopyDesc(PipelineKind kind, const void* native)
       break;
    }
    }
-   ContentHasher hasher;
-   hasher.Add(uint8_t(kind));
+   uint64_t hash = FNV_OFFSET;
+   HashValue(hash, uint8_t(kind));
    switch (kind)
    {
-   case PipelineKind::Graphics: hasher.Add(*reinterpret_cast<const D3D12_GRAPHICS_PIPELINE_STATE_DESC*>(copy->bytes.data())); break;
-   case PipelineKind::Compute: hasher.Add(*reinterpret_cast<const D3D12_COMPUTE_PIPELINE_STATE_DESC*>(copy->bytes.data())); break;
+   case PipelineKind::Graphics: HashGraphicsDesc(hash, *reinterpret_cast<const D3D12_GRAPHICS_PIPELINE_STATE_DESC*>(copy->bytes.data())); break;
+   case PipelineKind::Compute: HashComputeDesc(hash, *reinterpret_cast<const D3D12_COMPUTE_PIPELINE_STATE_DESC*>(copy->bytes.data())); break;
    case PipelineKind::Stream:
       for (size_t offset = 0; offset + sizeof(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE) <= copy->bytes.size();)
       {
          D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type;
          std::memcpy(&type, copy->bytes.data() + offset, sizeof(type));
          const SubobjectLayout layout = *GetSubobjectLayout(type);
-         hasher.AddSubobject(type, copy->bytes.data() + offset + layout.value_offset);
+         HashSubobject(hash, type, copy->bytes.data() + offset + layout.value_offset);
          offset += layout.size;
       }
       break;
    }
-   copy->content_hash = hasher.Get();
+   copy->content_hash = hash;
    return copy;
 }
 
-PipelineDesc Describe(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc)
+PipelineDesc DescribePipeline(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc)
 {
    PipelineDesc result{.kind = PipelineKind::Graphics, .root_signature = desc.pRootSignature};
    result.stages[size_t(ShaderStage::Vertex)] = ToSpan(desc.VS);
@@ -580,14 +572,14 @@ PipelineDesc Describe(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc)
    return result;
 }
 
-PipelineDesc Describe(const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc)
+PipelineDesc DescribePipeline(const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc)
 {
    PipelineDesc result{.kind = PipelineKind::Compute, .root_signature = desc.pRootSignature};
    result.stages[size_t(ShaderStage::Compute)] = ToSpan(desc.CS);
    return result;
 }
 
-PipelineDesc Describe(const D3D12_PIPELINE_STATE_STREAM_DESC& desc)
+PipelineDesc DescribePipeline(const D3D12_PIPELINE_STATE_STREAM_DESC& desc)
 {
    PipelineDesc result{.kind = PipelineKind::Stream};
    const auto* bytes = static_cast<const uint8_t*>(desc.pPipelineStateSubobjectStream);
@@ -736,7 +728,7 @@ const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSi
    layout->luma_table = luma_parameter != UINT32_MAX && luma_table;
    if (!ReadLayout(blob, *layout))
    {
-      Utils::Log::Warning("D3D12: root signature {} ({} bytes) couldn't be read", static_cast<void*>(root_signature), blob.size());
+      Log::Warning("D3D12: root signature {} ({} bytes) couldn't be read", static_cast<void*>(root_signature), blob.size());
       return nullptr;
    }
    (luma_parameter != UINT32_MAX ? extended_signatures : game_signatures)++;
@@ -767,7 +759,7 @@ const Pipeline* TrackPipeline(const PipelineDesc& desc, std::shared_ptr<const De
    return state ? &state->pipeline : nullptr;
 }
 
-const Pipeline* Find(ID3D12PipelineState* pipeline)
+const Pipeline* FindPipeline(ID3D12PipelineState* pipeline)
 {
    const PipelineState* state = pipeline ? Hooks::Lifetime::GetState<PipelineState>(pipeline) : nullptr;
    return state ? &state->pipeline : nullptr;

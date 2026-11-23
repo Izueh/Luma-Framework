@@ -1,4 +1,4 @@
-#include "Hooks/Hooks.hpp"
+#include "Hooks/HookManager.hpp"
 
 #include <array>
 #include <atomic>
@@ -12,10 +12,10 @@
 #include "Handlers/D3D11/D3D11Handlers.hpp"
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/DeviceProxy.hpp"
-#include "Hooks/Scope.hpp"
-#include "Hooks/Slots.h"
+#include "Hooks/HookScope.hpp"
+#include "Hooks/VtableSlots.h"
 #include "Hooks/DepthGuard.hpp"
-#include "Utils/Log.hpp"
+#include "Log/Log.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -115,7 +115,7 @@ bool ResolveDeferredContextVtable(ID3D11Device* device)
    ComPtr<ID3D11DeviceContext> deferred_context;
    if (const HRESULT result = device->CreateDeferredContext(0, &deferred_context); FAILED(result))
    {
-      Utils::Log::Info("D3D11: no deferred context (0x{:08X}), deferred context hooks wait for another device", uint32_t(result));
+      Log::Info("D3D11: no deferred context (0x{:08X}), deferred context hooks wait for another device", uint32_t(result));
       return false;
    }
    Vtables::Set(Vtables::Interface::D3D11DeferredContext, deferred_context.Get(), CONTEXT_VERSIONS);
@@ -139,7 +139,7 @@ void ResolveVtables(ID3D11Device* device)
    if (const HRESULT result = device->CreateQuery(&query_desc, &query); SUCCEEDED(result))
       Vtables::Set(Vtables::Interface::D3D11DeviceChild, query.Get(), CHILD_VERSIONS);
    else
-      Utils::Log::Error("D3D11: failed to create a temporary query to read its vtable (0x{:08X})", uint32_t(result));
+      Log::Error("D3D11: failed to create a temporary query to read its vtable (0x{:08X})", uint32_t(result));
 
    InstallPending();
    LogSummary();
@@ -159,7 +159,7 @@ ID3D11Device* OnDeviceCreated(HRESULT result, ID3D11Device** device_pointer, ID3
    if (!device_pointer || !*device_pointer)
    {
       if (context_pointer && *context_pointer)
-         Utils::Log::Warning("D3D11: a device was created for its immediate context only, Luma ignores it");
+         Log::Warning("D3D11: a device was created for its immediate context only, Luma ignores it");
       return nullptr;
    }
    ID3D11Device* device = *device_pointer;
@@ -205,7 +205,7 @@ HRESULT WINAPI CreateDevice(IDXGIAdapter* adapter, D3D_DRIVER_TYPE driver_type, 
          device, feature_level, immediate_context);
       if (FAILED(result) && IsDebugLayerAdded(game_flags, flags))
       {
-         Utils::Log::Warning("D3D11: device creation with the debug layer failed (0x{:08X}), creating it without", uint32_t(result));
+         Log::Warning("D3D11: device creation with the debug layer failed (0x{:08X}), creating it without", uint32_t(result));
          result = original_create_device(adapter, driver_type, software, flags & ~D3D11_CREATE_DEVICE_DEBUG, feature_levels, feature_level_count,
             sdk_version, device, feature_level, immediate_context);
       }
@@ -250,7 +250,7 @@ HRESULT WINAPI CreateDeviceAndSwapChain(IDXGIAdapter* adapter, D3D_DRIVER_TYPE d
          swapchain_desc, swapchain, device, feature_level, immediate_context);
       if (FAILED(result) && IsDebugLayerAdded(game_flags, flags))
       {
-         Utils::Log::Warning("D3D11: device creation with the debug layer failed (0x{:08X}), creating it without", uint32_t(result));
+         Log::Warning("D3D11: device creation with the debug layer failed (0x{:08X}), creating it without", uint32_t(result));
          result = original_create_device_and_swapchain(adapter, driver_type, software, flags & ~D3D11_CREATE_DEVICE_DEBUG, feature_levels,
             feature_level_count, sdk_version, swapchain_desc, swapchain, device, feature_level, immediate_context);
       }
@@ -307,7 +307,7 @@ void ObserveContext(ID3D11DeviceContext* context)
    {
       if (Vtables::Get(variant(i)))
          continue;
-      Utils::Log::Info("D3D11: the context {} has methods no hook covers, hooking them (variant {})", static_cast<const void*>(context), i);
+      Log::Info("D3D11: the context {} has methods no hook covers, hooking them (variant {})", static_cast<const void*>(context), i);
       Vtables::Set(variant(i), context, CONTEXT_VERSIONS);
       DeclareContextVariant(i, installed_functions);
       LogSummary();
@@ -315,7 +315,7 @@ void ObserveContext(ID3D11DeviceContext* context)
    }
    static std::atomic<bool> warned = false;
    if (!warned.exchange(true))
-      Utils::Log::Warning("D3D11: the context {} has methods no hook covers and all {} variants are used, its calls are not seen", static_cast<const void*>(context),
+      Log::Warning("D3D11: the context {} has methods no hook covers and all {} variants are used, its calls are not seen", static_cast<const void*>(context),
          CONTEXT_VARIANT_COUNT);
 }
 
