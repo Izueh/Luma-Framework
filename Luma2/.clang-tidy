@@ -1,0 +1,64 @@
+# Luma 2.0 static analysis & naming rules (use with Scripts/Generate-Luma2CompileCommands.ps1).
+Checks: >
+  -*,
+  readability-identifier-naming,
+  bugprone-branch-clone,
+  bugprone-dangling-handle,
+  bugprone-inaccurate-erase,
+  bugprone-redundant-branch-condition,
+  bugprone-suspicious-semicolon,
+  bugprone-use-after-move,
+  misc-unused-using-decls,
+  modernize-use-nullptr,
+  modernize-use-override
+
+WarningsAsErrors: ''
+HeaderFilterRegex: '^.*Luma2[/\\]Source[/\\](Core|Games|Tests)[/\\].*$'
+ExcludeHeaderFilterRegex: '^.*(External|CBuffers|GameCBuffers|Slots).*$'
+
+CheckOptions:
+  - key: readability-identifier-naming.NamespaceCase
+    value: CamelCase
+  - key: readability-identifier-naming.StructCase
+    value: CamelCase
+  - key: readability-identifier-naming.ClassCase
+    value: CamelCase
+  - key: readability-identifier-naming.EnumCase
+    value: CamelCase
+  - key: readability-identifier-naming.TypedefCase
+    value: CamelCase
+  - key: readability-identifier-naming.TypeAliasCase
+    value: CamelCase
+  - key: readability-identifier-naming.FunctionCase
+    value: CamelCase
+  - key: readability-identifier-naming.MethodCase
+    value: CamelCase
+  - key: readability-identifier-naming.VariableCase
+    value: lower_case
+  - key: readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key: readability-identifier-naming.MemberCase
+    value: lower_case
+  - key: readability-identifier-naming.GlobalConstantCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.StaticConstantCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.ClassConstantCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.ConstexprVariableCase
+    value: UPPER_CASE
+  - key: readability-identifier-naming.MacroDefinitionCase
+    value: UPPER_CASE
+  # Ignore COM/Win32 entry points, HLSL vector value types, doctest macros, and HLSL-shared CB:: identifiers
+  - key: readability-identifier-naming.StructIgnoredRegexp
+    value: '^(int|uint|float)[234]$'
+  - key: readability-identifier-naming.FunctionIgnoredRegexp
+    value: '^(DllMain|main|wmain|WinMain|operator.*)$'
+  - key: readability-identifier-naming.VariableIgnoredRegexp
+    value: '^(cb_luma_.*|IID_.*|GUID_.*|SKID_.*)$'
+  - key: readability-identifier-naming.GlobalConstantIgnoredRegexp
+    value: '^(IID_.*|GUID_.*|SKID_.*|cb_luma_.*)$'
+  - key: readability-identifier-naming.StaticConstantIgnoredRegexp
+    value: '^(IID_.*|GUID_.*|SKID_.*)$'
+  - key: readability-identifier-naming.MacroDefinitionIgnoredRegexp
+    value: '^(WIN32_LEAN_AND_MEAN|NOMINMAX|_CRT_SECURE_NO_WARNINGS|DOCTEST_.*|IMGUI_.*)$'

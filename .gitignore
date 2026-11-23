@@ -28,6 +28,7 @@
 
 # Executables
 *.exe
+!Luma2/External/Decompilers/cmd_Decompiler.exe
 *.out
 *.app
 
@@ -69,3 +70,6 @@ deploy-*.ps1
 
 # Shader disassembly dumps
 *.asm
+
+# Generated compile database for clang-tidy
+compile_commands.json

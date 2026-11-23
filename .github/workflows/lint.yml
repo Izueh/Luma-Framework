@@ -32,14 +32,17 @@ jobs:
 
   # Luma 2.0 started clean: every file is checked, and a difference fails the build
   luma2-format:
-    name: Luma2 format
+    name: Luma2 format and rules
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v5
       - name: Install clang-format 21
         run: pip install "clang-format==21.1.*"
-      - name: Check Luma2/Source
+      - name: Check Luma2/Source and Luma2/Templates formatting
         run: |
           clang-format --version
-          find Luma2/Source \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print0 | xargs -0 clang-format --style=file --dry-run --Werror
+          find Luma2/Source Luma2/Templates -path '*/vcpkg_installed/*' -prune -o \( -name '*.c' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print0 | xargs -0 clang-format --style=file --dry-run --Werror
+      - name: Check Luma2 architectural rules
+        shell: pwsh
+        run: ./Scripts/Check-Luma2Rules.ps1

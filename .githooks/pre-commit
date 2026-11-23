@@ -3,7 +3,7 @@
 # Checks the formatting of the staged Luma2 sources (Luma2/.clang-format), as the CI job does for all of them.
 # clang-tidy isn't run: there's no compile database.
 
-FILES=$(git diff --cached --name-only --diff-filter=ACM -- 'Luma2/Source/*.c' 'Luma2/Source/*.cpp' 'Luma2/Source/*.h' 'Luma2/Source/*.hpp')
+FILES=$(git diff --cached --name-only --diff-filter=ACM -- 'Luma2/Source/*.c' 'Luma2/Source/*.cpp' 'Luma2/Source/*.h' 'Luma2/Source/*.hpp' 'Luma2/Templates/*.c' 'Luma2/Templates/*.cpp' 'Luma2/Templates/*.h' 'Luma2/Templates/*.hpp')
 
 if [ -z "$FILES" ]; then
     exit 0
