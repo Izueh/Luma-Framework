@@ -13,6 +13,11 @@
       <!-- Core's folders, then Global's shaders after the project's own (a game's "Resources\<Game>\Shaders", Tests' stand-in): Core
            includes "Game/GameCBuffers.hlsl" and "Includes/Core/CBuffers.hlsl", the cbuffer structs shared with the shaders -->
       <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory);%(AdditionalIncludeDirectories);$(Luma2Root)Resources\Global\Shaders</AdditionalIncludeDirectories>
+      <!-- "Pch.hpp" is forced into every source and parsed once per project (see its comment for what it holds). Third party code opts out below. -->
+      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeaderFile>Pch.hpp</PrecompiledHeaderFile>
+      <PrecompiledHeaderOutputFile>$(IntDir)Core\Pch.pch</PrecompiledHeaderOutputFile>
+      <ForcedIncludeFiles>Pch.hpp;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
   </ItemDefinitionGroup>
 
@@ -25,15 +30,16 @@
     <LumaDllFolder Condition="'$(LumaDllFolder)' == ''">$(LumaDllName)</LumaDllFolder>
   </PropertyGroup>
 
-  <!-- Object files mirror Core's folders under "Core\" -->
+  <!-- All of Core's object files in one folder, "Core\": one cl.exe call (and /MP pool) compiles every file with the same object folder, so a
+       folder each ran them a folder at a time. Core's file names are unique (Check-Luma2Rules.ps1 rule 4). -->
   <ItemGroup>
     <ClInclude Include="$(MSBuildThisFileDirectory)**\*.hpp;$(MSBuildThisFileDirectory)**\*.h" />
     <!-- The exports of the system dll the project is built as ("LumaDllName"), the others left out -->
     <ClCompile Include="$(MSBuildThisFileDirectory)**\*.cpp;$(MSBuildThisFileDirectory)**\*.c" Exclude="$(MSBuildThisFileDirectory)System\*\*Exports.cpp">
-      <ObjectFileName>$(IntDir)Core\%(RecursiveDir)</ObjectFileName>
+      <ObjectFileName>$(IntDir)Core\</ObjectFileName>
     </ClCompile>
     <ClCompile Include="$(MSBuildThisFileDirectory)System\$(LumaDllFolder)\$(LumaDllFolder)Exports.cpp">
-      <ObjectFileName>$(IntDir)Core\System\</ObjectFileName>
+      <ObjectFileName>$(IntDir)Core\</ObjectFileName>
     </ClCompile>
     <!-- The overlay's fonts -->
     <ResourceCompile Include="$(MSBuildThisFileDirectory)UI\Fonts.rc" />
@@ -72,6 +78,18 @@
       <ObjectFileName>$(IntDir)DirectXTex\</ObjectFileName>
       <AdditionalIncludeDirectories>$(Luma2ExternalDir)DirectXTex\Shim;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+  </ItemGroup>
+
+  <!-- The precompiled header: created by Pch.cpp, not used by the third party code above nor by C files (a C++ header) -->
+  <ItemGroup>
+    <ClCompile Update="$(MSBuildThisFileDirectory)Pch.cpp">
+      <PrecompiledHeader>Create</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
+    </ClCompile>
+    <ClCompile Update="$(LumaExternalDir)**;$(Luma2ExternalDir)**;$(MSBuildThisFileDirectory)**\*.c">
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
+      <ForcedIncludeFiles></ForcedIncludeFiles>
     </ClCompile>
   </ItemGroup>
 </Project>

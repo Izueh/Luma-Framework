@@ -42,6 +42,7 @@ $commonArgs = @(
     "/std:c++latest"
     "/EHsc"
     "/W4"
+    "/FIPch.hpp"
     "/DDEVELOPMENT=1"
     "/DUNICODE"
     "/D_UNICODE"
