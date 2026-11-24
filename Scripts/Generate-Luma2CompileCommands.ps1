@@ -50,6 +50,7 @@ $commonArgs = @(
     "/D_CRT_SECURE_NO_WARNINGS"
     "/DZYDIS_STATIC_BUILD"
     "/DZYCORE_STATIC_BUILD"
+    "/DLUMA_USE_NVAPI=1"
     "/Dglz=luma_glz"
     "/DLUMA_PROJECT_NAME=`"$Game`""
     "/DLUMA_RESOURCES_DIR=L`"$($luma2Root.Replace('\', '/'))/Resources`""

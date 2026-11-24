@@ -21,6 +21,8 @@
          "LumaGpuValidation": D3D12 GPU-based validation too (much slower), implies the debug layer. -->
     <LumaDebugLayer Condition="'$(LumaDebugLayer)'==''">false</LumaDebugLayer>
     <LumaGpuValidation Condition="'$(LumaGpuValidation)'==''">false</LumaGpuValidation>
+    <!-- Links NVIDIA NVAPI (on by default), used to engage HDR10+ Gaming and read the HDR10+ peak brightness on NVIDIA GPUs. Harmless on other GPUs. -->
+    <UseLumaNVAPI Condition="'$(UseLumaNVAPI)'==''">true</UseLumaNVAPI>
 
     <LumaDebugConfiguration>false</LumaDebugConfiguration>
     <LumaDebugConfiguration Condition="'$(Configuration)'=='Development-Debug'">true</LumaDebugConfiguration>
@@ -37,6 +39,7 @@
     <OutDir>$(Luma2Root)Binaries\$(Configuration)\</OutDir>
     <IntDir>$(Luma2Root)Binaries\Intermediate\$(ProjectName)\$(Configuration)\</IntDir>
     <ExternalIncludePath>$(LumaExternalDir)safetyhook\include;$(LumaExternalDir)zydis\include;$(LumaExternalDir)zydis\dependencies\zycore\include;$(Luma2ExternalDir)glaze\include;$(Luma2ExternalDir)imgui;$(Luma2ExternalDir)doctest;$(Luma2ExternalDir)concurrentqueue;$(Luma2ExternalDir)Fonts\FontAwesome;$(Luma2ExternalDir)DirectXTex;$(ExternalIncludePath)</ExternalIncludePath>
+    <ExternalIncludePath Condition="'$(UseLumaNVAPI)'=='true'">$(LumaExternalDir)NVAPI;$(ExternalIncludePath)</ExternalIncludePath>
   </PropertyGroup>
 
   <ItemDefinitionGroup>
@@ -64,6 +67,7 @@
       <PreprocessorDefinitions Condition="'$(Configuration)'=='Test-Release'">TEST=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'!='Publishing-Release' and ('$(LumaDebugLayer)'=='true' or '$(LumaGpuValidation)'=='true')">LUMA_DEBUG_LAYER=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(Configuration)'!='Publishing-Release' and '$(LumaGpuValidation)'=='true'">LUMA_GPU_VALIDATION=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions Condition="'$(UseLumaNVAPI)'=='true'">LUMA_USE_NVAPI=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(LumaDebugConfiguration)'=='true'">_DEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <PreprocessorDefinitions Condition="'$(LumaDebugConfiguration)'=='false'">NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary Condition="'$(LumaDebugConfiguration)'=='true'">MultiThreadedDebugDLL</RuntimeLibrary>
@@ -80,6 +84,10 @@
       <EnableCOMDATFolding Condition="'$(LumaDebugConfiguration)'=='false'">true</EnableCOMDATFolding>
       <OptimizeReferences Condition="'$(LumaDebugConfiguration)'=='false'">true</OptimizeReferences>
       <LinkTimeCodeGeneration Condition="'$(LumaDebugConfiguration)'=='false'">UseLinkTimeCodeGeneration</LinkTimeCodeGeneration>
+      <AdditionalLibraryDirectories Condition="'$(UseLumaNVAPI)'=='true' and '$(Platform)'=='Win32'">$(LumaExternalDir)NVAPI\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories Condition="'$(UseLumaNVAPI)'=='true' and '$(Platform)'!='Win32'">$(LumaExternalDir)NVAPI\amd64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies Condition="'$(UseLumaNVAPI)'=='true' and '$(Platform)'=='Win32'">nvapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies Condition="'$(UseLumaNVAPI)'=='true' and '$(Platform)'!='Win32'">nvapi64.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <ResourceCompile>
       <AdditionalIncludeDirectories>$(Luma2ExternalDir)Fonts\FontAwesome;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>

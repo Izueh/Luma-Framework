@@ -71,5 +71,10 @@ deploy-*.ps1
 # Shader disassembly dumps
 *.asm
 
-# Generated compile database for clang-tidy
+# Clang / clangd cache and generated compile database for clang-tidy
+.cache/
 compile_commands.json
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]
