@@ -14,6 +14,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 
+#include "Display/DisplayMode.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Hooks/HookManager.hpp"
 #include "Settings/SettingKeys.hpp"
@@ -176,6 +177,13 @@ void DrawSection(const SettingsSection& section, std::optional<bool> force_open)
       return;
    if (section.role == SettingsSection::Role::Defines)
       DrawPendingCompile(section);
+   if (section.title == "Display" && Display::DisplayMode::IsHdr() &&
+      Settings::Get(Settings::Core::PAPER_WHITE) > Settings::Get(Settings::Core::PEAK_WHITE))
+   {
+      if (Widgets::Banner(Tone::Warning, "Your Paper White setting is greater than your Peak White setting, the image will either look bad or broken.",
+             "Reset Paper White", "Resets Paper White to its default value"))
+         Settings::Reset(Settings::Core::PAPER_WHITE.key);
+   }
    for (const Settings::Setting* setting : section.settings)
       Widgets::SettingRow(*setting);
    Widgets::EndSection();
@@ -513,6 +521,10 @@ std::vector<SettingsSection> CollectSettingsSections(SettingsTab tab)
       return sections;
    }
 
+   const auto is_framework_dev_category = [](std::string_view category) {
+      return category == "Resources" || category == "Display Composition";
+   };
+
    if (tab == SettingsTab::Development)
    {
       std::vector<SettingsSection> dev;
@@ -520,7 +532,9 @@ std::vector<SettingsSection> CollectSettingsSections(SettingsTab tab)
          if (!IsShown(setting) || setting.kind != Settings::Kind::Development)
             return;
          const std::string_view category = Settings::GetCategory(setting);
-         add(dev, category, Role::Development, category == "Display Composition" || category == "Dev Sliders", &setting);
+         if (is_framework_dev_category(category))
+            return;
+         add(dev, category, Role::Development, category == "Dev Sliders", &setting);
       });
       for (SettingsSection& section : dev)
          append(section);
@@ -550,6 +564,10 @@ std::vector<SettingsSection> CollectSettingsSections(SettingsTab tab)
                defines.settings.insert(defines.settings.begin(), &setting);
             else if (category != "Luma" && category != "Display" && category != "Overlay")
                add(framework, category, Role::Settings, false, &setting);
+         }
+         else if (setting.kind == Settings::Kind::Development && is_framework_dev_category(category))
+         {
+            add(framework, category, Role::Settings, false, &setting);
          }
       });
       if (std::ranges::none_of(defines.settings, [](const Settings::Setting* setting) { return setting->kind == Settings::Kind::Define; }))

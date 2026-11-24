@@ -771,7 +771,7 @@ void ProgressBar(float fraction, std::string_view label)
 }
 
 void ListDetail(std::string_view id, std::span<const ListEntry> entries, size_t& selected, const std::function<void(size_t index)>& detail, float height,
-   const std::function<bool(size_t index)>& visible)
+   const std::function<bool(size_t index)>& visible, const std::function<void(size_t index)>& row_action)
 {
    ImGui::PushID(id.data(), id.data() + id.size());
    std::string& filter = list_filters[ImGui::GetID("Filter")];
@@ -803,10 +803,17 @@ void ListDetail(std::string_view id, std::span<const ListEntry> entries, size_t&
                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4((*entry.color)[0], (*entry.color)[1], (*entry.color)[2], (*entry.color)[3]));
             else if (entry.tone != Tone::Info)
                ImGui::PushStyleColor(ImGuiCol_Text, GetColor(entry.tone));
-            if (ImGui::Selectable(std::format("{}##{}", entry.label, i).c_str(), i == selected))
+            const ImGuiSelectableFlags flags = row_action ? ImGuiSelectableFlags_AllowOverlap : ImGuiSelectableFlags_None;
+            if (ImGui::Selectable(std::format("{}##{}", entry.label, i).c_str(), i == selected, flags))
                selected = i;
             if (tinted)
                ImGui::PopStyleColor();
+            if (row_action)
+            {
+               ImGui::PushID(int(i));
+               row_action(i);
+               ImGui::PopID();
+            }
          }
       }
    }

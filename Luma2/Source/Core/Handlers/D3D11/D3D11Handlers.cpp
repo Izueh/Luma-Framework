@@ -567,10 +567,10 @@ bool RunCall(ID3D11DeviceContext* context, const Call& call)
       skipped = result == Game::DrawResult::None && Trace::Capture::D3D11::IsSkipped(context, stages);
 #endif
       const Shaders::StageSet bound = FulfilAfterEvents(context, stages, events, skipped, before);
-      const bool handled = RestoreGameBuffers(original, bound, result != Game::DrawResult::None || skipped);
+      bool handled = RestoreGameBuffers(original, bound, result != Game::DrawResult::None || skipped);
 #if DEVELOPMENT
       if (Trace::DebugDraw::IsActive())
-         Trace::DebugDraw::CaptureBoundD3D11(context);
+         handled = Trace::DebugDraw::CaptureCallD3D11(original, stages, handled);
 #endif
       return handled;
    };

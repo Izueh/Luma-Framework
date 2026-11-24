@@ -5,13 +5,17 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <format>
 #include <mutex>
 #include <string_view>
 
 #include <wrl/client.h>
 
+#include "Game/Game.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
+#include "Shaders/D3D11/D3D11Variants.hpp"
+#include "Shaders/ShaderDatabase.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -65,12 +69,35 @@ struct D3D12Snapshot
 };
 
 std::atomic<bool> active = false;
+std::atomic<bool> pass_active = false;
 std::atomic<uintptr_t> target_address = 0;
+std::atomic<uint32_t> frame_instance_counter = 0;
 std::mutex mutex;
 std::string target_id;
+std::optional<PassTarget> pass_target;
+ViewMode last_view_mode = ViewMode::RenderTarget;
+uint32_t last_view_slot = 0;
 Options current_options;
 D3D11Snapshot d3d11_snapshot;
 D3D12Snapshot d3d12_snapshot;
+
+std::string_view GetStageName(ShaderStage stage)
+{
+   constexpr std::string_view NAMES[] = {"VS", "HS", "DS", "GS", "PS", "CS"};
+   return NAMES[size_t(stage)];
+}
+
+std::string_view GetModeName(ViewMode mode)
+{
+   switch (mode)
+   {
+   case ViewMode::RenderTarget: return "RTV";
+   case ViewMode::ShaderResource: return "SRV";
+   case ViewMode::UnorderedAccess: return "UAV";
+   case ViewMode::Depth: return "DSV";
+   default: return "Resource";
+   }
+}
 
 uintptr_t ParseAddress(std::string_view text)
 {
@@ -139,6 +166,9 @@ void SetTarget(std::string resource_id)
 {
    const uintptr_t address = ParseAddress(resource_id);
    std::scoped_lock lock(mutex);
+   pass_target.reset();
+   pass_active.store(false, std::memory_order_release);
+   frame_instance_counter.store(0, std::memory_order_relaxed);
    target_id = address ? std::move(resource_id) : std::string();
    target_address.store(address, std::memory_order_release);
    active.store(address != 0, std::memory_order_release);
@@ -152,14 +182,99 @@ std::string GetTarget()
    return target_id;
 }
 
+void SetPassTarget(PassTarget target)
+{
+   std::scoped_lock lock(mutex);
+   const bool prev_depth = pass_target && pass_target->mode == ViewMode::Depth;
+   const bool next_depth = target.mode == ViewMode::Depth;
+   if (next_depth)
+   {
+      current_options.red_only = true;
+      current_options.mip_level = 0;
+   }
+   else
+   {
+      if (prev_depth)
+         current_options.red_only = false;
+      current_options.mip_level = int32_t(target.mip);
+   }
+   last_view_mode = target.mode;
+   last_view_slot = target.slot;
+   target_id.clear();
+   target_address.store(0, std::memory_order_release);
+   pass_target = std::move(target);
+   frame_instance_counter.store(0, std::memory_order_relaxed);
+   pass_active.store(true, std::memory_order_release);
+   active.store(true, std::memory_order_release);
+   d3d11_snapshot = {};
+   d3d12_snapshot = {};
+}
+
+std::optional<PassTarget> GetPassTarget()
+{
+   std::scoped_lock lock(mutex);
+   return pass_target;
+}
+
+bool IsPassTarget(const PassTarget& target)
+{
+   if (!pass_active.load(std::memory_order_relaxed))
+      return false;
+   std::scoped_lock lock(mutex);
+   return pass_target && *pass_target == target;
+}
+
+bool IsSamePass(const PassTarget& target)
+{
+   if (!pass_active.load(std::memory_order_relaxed))
+      return false;
+   std::scoped_lock lock(mutex);
+   return pass_target && pass_target->SamePass(target);
+}
+
+ViewMode GetLastViewMode()
+{
+   std::scoped_lock lock(mutex);
+   return last_view_mode;
+}
+
+uint32_t GetLastViewSlot()
+{
+   std::scoped_lock lock(mutex);
+   return last_view_slot;
+}
+
+std::string DescribeTarget()
+{
+   std::scoped_lock lock(mutex);
+   if (pass_target)
+   {
+      const std::string view = pass_target->mode == ViewMode::Depth ? "DSV" : std::format("{}{}", GetModeName(pass_target->mode), pass_target->slot);
+      if (!pass_target->luma_pass.empty())
+         return std::format("{} #{} ({})", pass_target->luma_pass, pass_target->instance, view);
+      return std::format("{} 0x{:08X} #{} ({})", GetStageName(pass_target->stage), pass_target->hash, pass_target->instance, view);
+   }
+   if (!target_id.empty())
+      return std::format("texture {}", target_id);
+   return {};
+}
+
 void Clear()
 {
    std::scoped_lock lock(mutex);
    target_id.clear();
    target_address.store(0, std::memory_order_release);
+   pass_target.reset();
+   pass_active.store(false, std::memory_order_release);
+   frame_instance_counter.store(0, std::memory_order_relaxed);
    active.store(false, std::memory_order_release);
    d3d11_snapshot = {};
    d3d12_snapshot = {};
+}
+
+void OnPresent()
+{
+   frame_instance_counter.store(0, std::memory_order_relaxed);
 }
 
 Options GetOptions()
@@ -198,10 +313,10 @@ uint32_t PackFlags(const Options& options, uint32_t dimension_bits)
    return flags;
 }
 
-void CaptureD3D11(ID3D11DeviceContext* context, ID3D11Resource* resource)
+namespace {
+void SnapshotD3D11Resource(ID3D11DeviceContext* context, ID3D11Resource* resource)
 {
-   const uintptr_t address = target_address.load(std::memory_order_acquire);
-   if (!context || !MatchesD3D11Target(resource, address))
+   if (!context || !resource)
       return;
    D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
    resource->GetType(&dim);
@@ -384,6 +499,135 @@ void CaptureD3D11(ID3D11DeviceContext* context, ID3D11Resource* resource)
       }
       context->CopyResource(d3d11_snapshot.texture.Get(), resource);
    }
+}
+
+void CaptureViewD3D11(ID3D11DeviceContext* context, const PassTarget& target, bool is_compute)
+{
+   if (!context)
+      return;
+   ComPtr<ID3D11Resource> resource;
+   switch (target.mode)
+   {
+   case ViewMode::RenderTarget:
+   {
+      if (target.slot >= D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT)
+         return;
+      std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> rtvs = {};
+      context->OMGetRenderTargets(UINT(rtvs.size()), rtvs.data(), nullptr);
+      if (rtvs[target.slot])
+         rtvs[target.slot]->GetResource(&resource);
+      for (ID3D11RenderTargetView* rtv : rtvs)
+      {
+         if (rtv)
+            rtv->Release();
+      }
+      break;
+   }
+   case ViewMode::Depth:
+   {
+      ComPtr<ID3D11DepthStencilView> dsv;
+      context->OMGetRenderTargets(0, nullptr, &dsv);
+      if (dsv)
+         dsv->GetResource(&resource);
+      break;
+   }
+   case ViewMode::ShaderResource:
+   {
+      if (target.slot >= D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT)
+         return;
+      ComPtr<ID3D11ShaderResourceView> srv;
+      switch (target.stage)
+      {
+      case ShaderStage::Vertex: context->VSGetShaderResources(target.slot, 1, &srv); break;
+      case ShaderStage::Hull: context->HSGetShaderResources(target.slot, 1, &srv); break;
+      case ShaderStage::Domain: context->DSGetShaderResources(target.slot, 1, &srv); break;
+      case ShaderStage::Geometry: context->GSGetShaderResources(target.slot, 1, &srv); break;
+      case ShaderStage::Compute: context->CSGetShaderResources(target.slot, 1, &srv); break;
+      case ShaderStage::Pixel:
+      default: context->PSGetShaderResources(target.slot, 1, &srv); break;
+      }
+      if (srv)
+         srv->GetResource(&resource);
+      break;
+   }
+   case ViewMode::UnorderedAccess:
+   {
+      if (target.slot >= D3D11_1_UAV_SLOT_COUNT)
+         return;
+      if (is_compute)
+      {
+         ComPtr<ID3D11UnorderedAccessView> uav;
+         context->CSGetUnorderedAccessViews(target.slot, 1, &uav);
+         if (uav)
+            uav->GetResource(&resource);
+      }
+      else
+      {
+         std::array<ID3D11UnorderedAccessView*, D3D11_1_UAV_SLOT_COUNT> uavs = {};
+         context->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, UINT(uavs.size()), uavs.data());
+         if (uavs[target.slot])
+            uavs[target.slot]->GetResource(&resource);
+         for (ID3D11UnorderedAccessView* uav : uavs)
+         {
+            if (uav)
+               uav->Release();
+         }
+      }
+      break;
+   }
+   default: break;
+   }
+   if (resource)
+      SnapshotD3D11Resource(context, resource.Get());
+}
+} // namespace
+
+void CaptureD3D11(ID3D11DeviceContext* context, ID3D11Resource* resource)
+{
+   const uintptr_t address = target_address.load(std::memory_order_acquire);
+   if (!context || !MatchesD3D11Target(resource, address))
+      return;
+   SnapshotD3D11Resource(context, resource);
+}
+
+bool CaptureCallD3D11(const Game::D3D11::Call& call, Shaders::StageSet stages, bool handled)
+{
+   if (!IsActive() || !call.context)
+      return handled;
+   if (!pass_active.load(std::memory_order_acquire))
+   {
+      CaptureBoundD3D11(call.context);
+      return handled;
+   }
+   const std::optional<PassTarget> target = GetPassTarget();
+   if (!target || !target->luma_pass.empty() || !stages.Has(target->stage))
+      return handled;
+   const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(call.context);
+   const Shaders::Database::Shader* shader = bound ? bound->shaders[size_t(target->stage)] : nullptr;
+   if (!shader || shader->hash != target->hash)
+      return handled;
+   if (frame_instance_counter.fetch_add(1, std::memory_order_relaxed) != target->instance)
+      return handled;
+   // For output views (RTV/UAV/DSV), run the draw first so we snapshot what this call wrote
+   if (!handled && target->mode != ViewMode::ShaderResource)
+   {
+      Game::D3D11::RunOriginal(call);
+      handled = true;
+   }
+   CaptureViewD3D11(call.context, *target, call.dispatch != nullptr);
+   return handled;
+}
+
+void CaptureLumaPassD3D11(ID3D11DeviceContext* context, std::string_view pass_name)
+{
+   if (!pass_active.load(std::memory_order_relaxed) || !context)
+      return;
+   const std::optional<PassTarget> target = GetPassTarget();
+   if (!target || target->luma_pass.empty() || target->luma_pass != pass_name)
+      return;
+   if (frame_instance_counter.fetch_add(1, std::memory_order_relaxed) != target->instance)
+      return;
+   CaptureViewD3D11(context, *target, false);
 }
 
 void CaptureBoundD3D11(ID3D11DeviceContext* context)

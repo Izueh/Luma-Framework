@@ -108,9 +108,10 @@ struct ListEntry
 
 // A list on the left (its width can be dragged), the selected entry's detail on the right, drawn by `detail` with the entry's index.
 // `selected` indexes `entries`, kept by the caller (out of range: none). `height` is the panes', 0 for the room left. The list
-// has a text filter on the labels, unless `visible` filters it (the caller draws its own filters then).
+// has a text filter on the labels, unless `visible` filters it (the caller draws its own filters then). Optional `row_action` draws
+// an inline right-aligned action (e.g. a small button) on each row.
 void ListDetail(std::string_view id, std::span<const ListEntry> entries, size_t& selected, const std::function<void(size_t index)>& detail,
-   float height = 0.f, const std::function<bool(size_t index)>& visible = {});
+   float height = 0.f, const std::function<bool(size_t index)>& visible = {}, const std::function<void(size_t index)>& row_action = {});
 
 struct PropertyRow
 {

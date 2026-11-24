@@ -282,6 +282,10 @@ bool IsCapturing();
 // Any thread: captures the frame starting at the next present
 void Request();
 // Presenting thread: ends the frame being captured, starts a requested one
+// Ends any active capture (appending Present and publishing `last`)
+void FinishFrame();
+// Starts capturing if a capture was requested (called after Present/overlay work so the next frame starts cleanly)
+void StartRequestedFrame();
 void AdvanceFrame();
 
 struct Added

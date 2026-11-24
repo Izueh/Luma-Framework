@@ -51,8 +51,9 @@ TEST_CASE("UI: settings tabs split Display/Game/Recipes, Framework, Overlay, and
       {.key = "Recipes.UserRecipe", .category = "Recipes", .visibility = Settings::Visibility::Release, .default_value = true, .source = Settings::Sources::Recipe{"UserRecipe", {}}},
       {.key = "Recipes.DevRecipe", .category = "Recipes", .visibility = Settings::Visibility::Development, .default_value = false, .source = Settings::Sources::Recipe{"DevRecipe", {}}},
    }};
-   const std::array<Setting, 1> dev = {{
+   const std::array<Setting, 2> dev = {{
       {.key = "Luma.Development.Sample", .category = "Display Composition", .visibility = Settings::Visibility::Development, .default_value = false},
+      {.key = "Luma.Development.DebugLayer", .category = "Validation", .visibility = Settings::Visibility::Development, .default_value = false},
    }};
    REQUIRE(Settings::Register(game, Kind::Game));
    REQUIRE(Settings::Register(luma, Kind::Luma));
@@ -85,7 +86,20 @@ TEST_CASE("UI: settings tabs split Display/Game/Recipes, Framework, Overlay, and
    // Overlay tab
    CHECK(GetTitles(UI::SettingsTab::Overlay) == std::vector<std::string_view>{"Overlay"});
 
-   // Framework tab (Advanced + Shader Defines with Auto Compile first + ALL Recipes including dev-only)
+   // Framework tab (Advanced + Display Composition in Dev builds + Shader Defines with Auto Compile first + ALL Recipes including dev-only)
+#if DEVELOPMENT
+   CHECK(GetTitles(UI::SettingsTab::Framework) == std::vector<std::string_view>{"Advanced", "Display Composition", "Shader Defines", "Recipes"});
+   const std::vector<UI::SettingsSection> framework_sections = UI::CollectSettingsSections(UI::SettingsTab::Framework);
+   const UI::SettingsSection& shader_defines = framework_sections[2];
+   CHECK(shader_defines.role == UI::SettingsSection::Role::Defines);
+   REQUIRE(shader_defines.settings.size() == 2);
+   CHECK(shader_defines.settings[0]->key == Settings::Core::AUTO_COMPILE.key);
+   CHECK(shader_defines.settings[1]->key == "Defines.TEST_UI_SECTIONS");
+   CHECK(framework_sections[3].settings.size() == 2);
+
+   // Development tab
+   CHECK(GetTitles(UI::SettingsTab::Development) == std::vector<std::string_view>{"Validation"});
+#else
    CHECK(GetTitles(UI::SettingsTab::Framework) == std::vector<std::string_view>{"Advanced", "Shader Defines", "Recipes"});
    const std::vector<UI::SettingsSection> framework_sections = UI::CollectSettingsSections(UI::SettingsTab::Framework);
    const UI::SettingsSection& shader_defines = framework_sections[1];
@@ -94,10 +108,6 @@ TEST_CASE("UI: settings tabs split Display/Game/Recipes, Framework, Overlay, and
    CHECK(shader_defines.settings[0]->key == Settings::Core::AUTO_COMPILE.key);
    CHECK(shader_defines.settings[1]->key == "Defines.TEST_UI_SECTIONS");
    CHECK(framework_sections[2].settings.size() == 2);
-
-#if DEVELOPMENT
-   // Development tab
-   CHECK(GetTitles(UI::SettingsTab::Development) == std::vector<std::string_view>{"Display Composition"});
 #endif
    Settings::Clear();
 }

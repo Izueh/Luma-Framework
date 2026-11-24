@@ -16,6 +16,7 @@
 #include "Utils/Hash.hpp"
 #include "Log/Log.hpp"
 #if DEVELOPMENT
+#include "Trace/DebugDraw.hpp"
 #include "Trace/FrameCapture.hpp"
 #include "Trace/D3D11/D3D11Capture.hpp"
 #endif
@@ -393,6 +394,8 @@ bool DrawFullscreen(Context* context, const FullscreenPass& pass)
 #endif
    context->Draw(4, 0);
 #if DEVELOPMENT
+   if (Trace::DebugDraw::IsActive())
+      Trace::DebugDraw::CaptureLumaPassD3D11(context, pass.name);
    if (recording)
       Trace::Capture::D3D11::End(std::move(*recording));
 #endif

@@ -72,11 +72,148 @@ bool cb_full_raw = false;
 int32_t inspector_stage = 0;
 int32_t disasm_source = 0; // 0 Original, 1 Patched, 2 Replacement
 int32_t hlsl_source = 0; // 0 Original (decompiled), 1 Patched (decompiled), 2 Replacement (file)
+uint32_t last_hlsl_shader_hash = 0;
 bool hlsl_inline_includes = false;
 std::string cached_disasm_key;
 std::string cached_disasm_text;
 std::string cached_hlsl_key;
 std::string cached_hlsl_text;
+
+std::optional<Trace::DebugDraw::PassTarget> MakeBasePassTarget(const Event& event, size_t index)
+{
+   if (!frame)
+      return std::nullopt;
+   if (event.type == EventType::LumaPass)
+   {
+      uint32_t instance = 0;
+      for (size_t i = 0; i < index && i < frame->events.size(); i++)
+      {
+         if (frame->events[i].type == EventType::LumaPass && frame->events[i].name == event.name)
+            instance++;
+      }
+      return Trace::DebugDraw::PassTarget{.stage = ShaderStage::Pixel, .luma_pass = event.name, .instance = instance};
+   }
+   if (event.type == EventType::Draw || event.type == EventType::Dispatch)
+   {
+      const Trace::Capture::Shader* shader = Trace::Capture::GetPrimaryShader(event);
+      if (!shader || shader->hash == 0 || !shader->luma_shader.empty())
+         return std::nullopt;
+      const uint32_t instance = Trace::Capture::GetInstance(*frame, index, shader->stage, shader->hash);
+      return Trace::DebugDraw::PassTarget{.hash = shader->hash, .stage = shader->stage, .instance = instance};
+   }
+   return std::nullopt;
+}
+
+bool SelectPassDebugDraw(const Event& event, size_t index, bool keep_mode)
+{
+   std::optional<Trace::DebugDraw::PassTarget> target = MakeBasePassTarget(event, index);
+   if (!target)
+      return false;
+
+   const auto has_slot = [&](Trace::DebugDraw::ViewMode mode, uint32_t slot, uint32_t& out_mip) -> bool {
+      switch (mode)
+      {
+      case Trace::DebugDraw::ViewMode::RenderTarget:
+         for (const Trace::Capture::View& v : event.render_targets)
+         {
+            if (v.slot == slot && v.resource.type != "Buffer")
+            {
+               out_mip = v.mip;
+               return true;
+            }
+         }
+         return false;
+      case Trace::DebugDraw::ViewMode::ShaderResource:
+         for (const Trace::Capture::View& v : event.shader_resources)
+         {
+            if (v.slot == slot && v.resource.type != "Buffer")
+            {
+               out_mip = v.mip;
+               return true;
+            }
+         }
+         return false;
+      case Trace::DebugDraw::ViewMode::UnorderedAccess:
+         for (const Trace::Capture::View& v : event.unordered_access)
+         {
+            if (v.slot == slot && v.resource.type != "Buffer")
+            {
+               out_mip = v.mip;
+               return true;
+            }
+         }
+         return false;
+      case Trace::DebugDraw::ViewMode::Depth:
+         out_mip = 0;
+         return event.depth_stencil_view.has_value();
+      default: return false;
+      }
+   };
+
+   const Trace::DebugDraw::ViewMode prev_mode = Trace::DebugDraw::GetLastViewMode();
+   const uint32_t prev_slot = Trace::DebugDraw::GetLastViewSlot();
+   Trace::DebugDraw::ViewMode mode = prev_mode;
+   uint32_t slot = prev_slot;
+   uint32_t mip = 0;
+
+   if (!keep_mode || mode == Trace::DebugDraw::ViewMode::Resource)
+   {
+      mode = target->stage == ShaderStage::Pixel ? Trace::DebugDraw::ViewMode::RenderTarget
+         : target->stage == ShaderStage::Compute ? Trace::DebugDraw::ViewMode::UnorderedAccess
+                                                 : Trace::DebugDraw::ViewMode::ShaderResource;
+      slot = 0;
+   }
+
+   if (!has_slot(mode, slot, mip))
+   {
+      slot = 0;
+      if (!has_slot(mode, slot, mip))
+      {
+         // Fall back across available views like 1.0 (RTV -> DSV -> UAV -> SRV)
+         if (!event.render_targets.empty() && event.render_targets.front().resource.type != "Buffer")
+         {
+            mode = Trace::DebugDraw::ViewMode::RenderTarget;
+            slot = event.render_targets.front().slot;
+            mip = event.render_targets.front().mip;
+         }
+         else if (event.depth_stencil_view)
+         {
+            mode = Trace::DebugDraw::ViewMode::Depth;
+            slot = 0;
+            mip = 0;
+         }
+         else if (!event.unordered_access.empty() && event.unordered_access.front().resource.type != "Buffer")
+         {
+            mode = Trace::DebugDraw::ViewMode::UnorderedAccess;
+            slot = event.unordered_access.front().slot;
+            mip = event.unordered_access.front().mip;
+         }
+         else
+         {
+            bool found = false;
+            for (const Trace::Capture::View& v : event.shader_resources)
+            {
+               if (v.resource.type != "Buffer")
+               {
+                  mode = Trace::DebugDraw::ViewMode::ShaderResource;
+                  slot = v.slot;
+                  mip = v.mip;
+                  found = true;
+                  break;
+               }
+            }
+            if (!found)
+               return false;
+         }
+      }
+   }
+
+   target->mode = mode;
+   target->slot = slot;
+   target->mip = mip;
+   Trace::DebugDraw::SetPassTarget(std::move(*target));
+   return true;
+}
 
 std::array<float, 4> ToColorArray(ImVec4 color)
 {
@@ -263,7 +400,8 @@ struct CardField
    Tone tone = Tone::Info;
 };
 
-void DrawResourceCard(std::string_view badge, std::span<const CardField> fields, const Trace::Capture::Resource& resource, bool allow_debug_draw)
+void DrawResourceCard(std::string_view badge, std::span<const CardField> fields, const Trace::Capture::Resource& resource, bool allow_debug_draw,
+   const std::optional<Trace::DebugDraw::PassTarget>& pass_target = std::nullopt)
 {
    const float unit = Style::Scale(Style::Sizes::UNIT);
    const ImGuiStyle& style = ImGui::GetStyle();
@@ -282,7 +420,7 @@ void DrawResourceCard(std::string_view badge, std::span<const CardField> fields,
    ImGui::BeginGroup();
 
    const bool highlighted = Trace::Capture::GetTrackedResource() == resource.id;
-   const bool debugging = allow_debug_draw && Trace::DebugDraw::GetTarget() == resource.id;
+   const bool debugging = allow_debug_draw && (pass_target ? Trace::DebugDraw::IsPassTarget(*pass_target) : Trace::DebugDraw::GetTarget() == resource.id);
    const std::string hl_label = highlighted ? std::format("{} Unhighlight", Icons::STOP) : std::format("{} Highlight", Icons::TRACK);
    const std::string dd_label = debugging ? std::format("{} Stop", Icons::STOP) : std::format("{} Draw", Icons::DISPLAY);
    const bool can_debug_draw = allow_debug_draw && resource.type != "Buffer";
@@ -342,7 +480,14 @@ void DrawResourceCard(std::string_view badge, std::span<const CardField> fields,
       ImGui::SameLine();
       if (Widgets::Button(dd_label, debugging ? Widgets::ButtonKind::Primary : Widgets::ButtonKind::Secondary,
              "Renders this texture live in the display composition pass"))
-         debugging ? Trace::DebugDraw::Clear() : Trace::DebugDraw::SetTarget(resource.id);
+      {
+         if (debugging)
+            Trace::DebugDraw::Clear();
+         else if (pass_target)
+            Trace::DebugDraw::SetPassTarget(*pass_target);
+         else
+            Trace::DebugDraw::SetTarget(resource.id);
+      }
    }
    ImGui::PopStyleVar();
    const float actions_bottom = ImGui::GetItemRectMax().y;
@@ -384,8 +529,9 @@ void DrawResourceCard(std::string_view badge, std::span<const CardField> fields,
    ImGui::PopID();
 }
 
-void DrawViews(std::string_view slot_prefix, std::span<const Trace::Capture::View> views)
+void DrawViews(const Event& event, size_t index, std::string_view slot_prefix, std::span<const Trace::Capture::View> views, Trace::DebugDraw::ViewMode mode)
 {
+   const std::optional<Trace::DebugDraw::PassTarget> base = MakeBasePassTarget(event, index);
    for (const Trace::Capture::View& view : views)
    {
       const std::string badge = FormatRegister(slot_prefix, view.slot, view.space);
@@ -394,12 +540,20 @@ void DrawViews(std::string_view slot_prefix, std::span<const Trace::Capture::Vie
          {"Size:", GetSize(view)},
          {"Mip:", std::to_string(view.mip)},
       }};
-      DrawResourceCard(badge, fields, view.resource, true);
+      std::optional<Trace::DebugDraw::PassTarget> target = base;
+      if (target)
+      {
+         target->mode = mode;
+         target->slot = view.slot;
+         target->mip = view.mip;
+      }
+      DrawResourceCard(badge, fields, view.resource, true, target);
    }
 }
 
-void DrawTargets(const Event& event)
+void DrawTargets(const Event& event, size_t index)
 {
+   const std::optional<Trace::DebugDraw::PassTarget> base = MakeBasePassTarget(event, index);
    for (const Trace::Capture::View& view : event.render_targets)
    {
       const std::string badge = std::format("RTV{}", view.slot);
@@ -409,7 +563,14 @@ void DrawTargets(const Event& event)
          {"Write:", GetWriteMask(view.write_mask)},
          {"Blend:", view.blend.empty() ? std::string("off") : view.blend},
       }};
-      DrawResourceCard(badge, fields, view.resource, true);
+      std::optional<Trace::DebugDraw::PassTarget> target = base;
+      if (target)
+      {
+         target->mode = Trace::DebugDraw::ViewMode::RenderTarget;
+         target->slot = view.slot;
+         target->mip = view.mip;
+      }
+      DrawResourceCard(badge, fields, view.resource, true, target);
    }
    if (event.depth_stencil_view)
    {
@@ -421,7 +582,14 @@ void DrawTargets(const Event& event)
          {"Size:", GetSize(view)},
          {"Depth:", state},
       }};
-      DrawResourceCard("DSV", fields, view.resource, true);
+      std::optional<Trace::DebugDraw::PassTarget> target = base;
+      if (target)
+      {
+         target->mode = Trace::DebugDraw::ViewMode::Depth;
+         target->slot = 0;
+         target->mip = 0;
+      }
+      DrawResourceCard("DSV", fields, view.resource, true, target);
    }
 }
 
@@ -956,6 +1124,14 @@ void DrawHlslTab(const Event& event)
       Widgets::TextDim("No game shader bound for this event.");
       return;
    }
+   // Auto-default when switching shaders: Replacement (file) -> Patched -> Original
+   if (last_hlsl_shader_hash != shader->hash)
+   {
+      last_hlsl_shader_hash = shader->hash;
+      const bool has_replacement = std::ranges::any_of(shader->variants, [](Shaders::Variants::Source src) { return src == Shaders::Variants::Source::File; });
+      const bool has_patched = std::ranges::any_of(shader->variants, [](Shaders::Variants::Source src) { return src == Shaders::Variants::Source::Patch; });
+      hlsl_source = has_replacement ? 2 : (has_patched ? 1 : 0);
+   }
    constexpr std::array<std::string_view, 3> SOURCES = {"Original", "Patched", "Replacement"};
    Widgets::Segmented("HlslSource", hlsl_source, SOURCES);
 
@@ -1168,11 +1344,6 @@ void DrawEventState(const Event& event, size_t index)
    Widgets::PropertyGrid("Call", rows);
    if (has_no_call)
       return;
-   if ((!event.render_targets.empty() || event.depth_stencil_view) && Widgets::Section("Output Targets"))
-   {
-      DrawTargets(event);
-      Widgets::EndSection();
-   }
    if (!event.constant_buffers.empty() && Widgets::Section("Constant Buffers"))
    {
       DrawConstantBuffers(event, index);
@@ -1180,12 +1351,17 @@ void DrawEventState(const Event& event, size_t index)
    }
    if (!event.shader_resources.empty() && Widgets::Section("Shader Resources"))
    {
-      DrawViews("SRV", event.shader_resources);
+      DrawViews(event, index, "SRV", event.shader_resources, Trace::DebugDraw::ViewMode::ShaderResource);
       Widgets::EndSection();
    }
    if (!event.unordered_access.empty() && Widgets::Section("Unordered Access"))
    {
-      DrawViews("UAV", event.unordered_access);
+      DrawViews(event, index, "UAV", event.unordered_access, Trace::DebugDraw::ViewMode::UnorderedAccess);
+      Widgets::EndSection();
+   }
+   if ((!event.render_targets.empty() || event.depth_stencil_view) && Widgets::Section("Output Targets"))
+   {
+      DrawTargets(event, index);
       Widgets::EndSection();
    }
    if (!event.samplers.empty() && Widgets::Section("Samplers", false))
@@ -1230,6 +1406,11 @@ void DrawEvent(const Event& event, size_t index)
 
 void DrawFilters()
 {
+   ImGui::AlignTextToFramePadding();
+   Widgets::TextDim(Icons::FILTER);
+   ImGui::SetItemTooltip("Trace list filters");
+   ImGui::SameLine();
+   const float icon_width = ImGui::GetItemRectSize().x + ImGui::GetStyle().ItemSpacing.x;
    const float input_width = Style::Scale(Style::Sizes::LIST_WIDTH);
    ImGui::SetNextItemWidth(input_width);
    ImGui::InputTextWithHint("##Filter", std::format("{} Hash, name, or resource", Icons::SEARCH).c_str(), &filter.text);
@@ -1238,7 +1419,7 @@ void DrawFilters()
    ImGui::SetNextItemWidth(Style::Scale(92.f));
    if (Widgets::Combo("StageFilter", stage_filter, STAGES))
       filter.stage = stage_filter == 0 ? std::nullopt : std::optional(ShaderStage(stage_filter - 1));
-   float line_used = input_width + Style::Scale(92.f) + ImGui::GetStyle().ItemSpacing.x;
+   float line_used = icon_width + input_width + Style::Scale(92.f) + ImGui::GetStyle().ItemSpacing.x * 2.f;
    const auto chip = [&](std::string_view label, bool& value, std::string_view tooltip) {
       line_used = Widgets::WrapSameLine(line_used, ImGui::CalcTextSize(label.data(), label.data() + label.size()).x + ImGui::GetStyle().FramePadding.x * 2.f);
       return Widgets::FilterChip(label, value, tooltip);
@@ -1263,14 +1444,18 @@ void DrawDebugDrawBar()
 {
    if (!Trace::DebugDraw::IsActive())
       return;
-   if (Widgets::Banner(Tone::Injected, std::format("Debug Draw active on texture {}", Trace::DebugDraw::GetTarget()), "Stop", "Stops live texture preview"))
+   if (Widgets::Banner(Tone::Injected, std::format("Debug Draw active on {}", Trace::DebugDraw::DescribeTarget()), "Stop", "Stops live texture preview"))
    {
       Trace::DebugDraw::Clear();
       return;
    }
    Trace::DebugDraw::Options opts = Trace::DebugDraw::GetOptions();
    bool changed = false;
-   float line_used = 0.f;
+   ImGui::AlignTextToFramePadding();
+   const std::string debug_label = std::format("{} Debug Draw:", Icons::DISPLAY);
+   Widgets::Text(debug_label, Tone::Injected);
+   ImGui::SetItemTooltip("Display options for the active Debug Draw texture preview");
+   float line_used = ImGui::GetItemRectSize().x;
    const auto flag_chip = [&](std::string_view label, bool& value, std::string_view tooltip) {
       line_used = Widgets::WrapSameLine(line_used, ImGui::CalcTextSize(label.data(), label.data() + label.size()).x + ImGui::GetStyle().FramePadding.x * 2.f);
       changed |= Widgets::FilterChip(label, value, tooltip);
@@ -1294,7 +1479,7 @@ void DrawDebugDrawBar()
       Trace::DebugDraw::SetOptions(opts);
 }
 
-void DrawTracked()
+void DrawTrackedBanners()
 {
    if (const std::string tracked_res = Trace::Capture::GetTrackedResource(); !tracked_res.empty())
    {
@@ -1304,13 +1489,34 @@ void DrawTracked()
          highlighted_only = false;
       }
    }
-   DrawDebugDrawBar();
    const std::optional<Trace::Track::Target> target = Trace::Track::GetTarget();
    if (!target)
       return;
    const std::string text = std::format("Tracking CB{} of {} 0x{:08X} (call {} of it each frame)", target->slot, GetStageName(target->stage), target->hash, target->instance);
    if (Widgets::Banner(Tone::Info, text, "Stop", "Stops reading the slot every frame"))
       Trace::Track::SetTarget(std::nullopt);
+}
+
+void DrawRowAction(size_t index)
+{
+   if (!frame || index >= frame->events.size())
+      return;
+   const Event& event = frame->events[index];
+   const std::optional<Trace::DebugDraw::PassTarget> base = MakeBasePassTarget(event, index);
+   if (!base)
+      return;
+   const bool active = Trace::DebugDraw::IsSamePass(*base);
+   const float btn_w = ImGui::CalcTextSize(Icons::SEARCH).x + ImGui::GetStyle().FramePadding.x * 2.f;
+   const float right_x = ImGui::GetWindowContentRegionMax().x - btn_w;
+   ImGui::SameLine(right_x);
+   ImGui::SetNextItemAllowOverlap();
+   if (active)
+      ImGui::PushStyleColor(ImGuiCol_Button, Style::Colors::ACCENT);
+   if (ImGui::SmallButton(Icons::SEARCH))
+      SelectPassDebugDraw(event, index, true);
+   if (active)
+      ImGui::PopStyleColor();
+   ImGui::SetItemTooltip("Debug Draw this pass (preserves last view mode/slot)");
 }
 } // namespace
 
@@ -1355,11 +1561,15 @@ void DrawTrace()
    {
       Rebuild();
    }
-   DrawTracked();
+   DrawTrackedBanners();
    if (!frame)
+   {
+      DrawDebugDrawBar();
       return;
+   }
    DrawFilters();
-   Widgets::ListDetail("Events", entries, selected, [](size_t index) { DrawEvent(frame->events[index], index); }, 0.f, &IsListed);
+   DrawDebugDrawBar();
+   Widgets::ListDetail("Events", entries, selected, [](size_t index) { DrawEvent(frame->events[index], index); }, 0.f, &IsListed, &DrawRowAction);
 }
 } // namespace Panels
 } // namespace UI

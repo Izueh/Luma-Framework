@@ -215,7 +215,7 @@ void Request()
    requested = true;
 }
 
-void AdvanceFrame()
+void FinishFrame()
 {
    std::scoped_lock lock(mutex);
    if (capturing)
@@ -227,6 +227,11 @@ void AdvanceFrame()
       last = std::move(frame);
       events = {};
    }
+}
+
+void StartRequestedFrame()
+{
+   std::scoped_lock lock(mutex);
    if (requested.exchange(false))
    {
       // Calls that saw the last capture running and were added after it ended
@@ -234,6 +239,12 @@ void AdvanceFrame()
       started++;
       capturing = true;
    }
+}
+
+void AdvanceFrame()
+{
+   FinishFrame();
+   StartRequestedFrame();
 }
 
 Added Add(Event event)

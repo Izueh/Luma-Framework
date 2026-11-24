@@ -2,16 +2,48 @@
 
 #if DEVELOPMENT
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <string_view>
 
 #include <d3d11.h>
 #include <d3d12.h>
+
+#include "Common/ShaderStage.hpp"
+#include "Game/GameEvents.hpp"
+#include "Shaders/ShaderStages.hpp"
 
 // Live texture debug draw: snapshots a selected game texture on the GPU and binds it to Luma_DisplayComposition.hlsl (t2..t8)
 // with CustomData2 (display flags + texture dimension bits) and CustomData3 (mip level). Development builds only.
 namespace Luma {
 namespace Trace {
 namespace DebugDraw {
+enum class ViewMode : uint32_t
+{
+   Resource, // Direct resource address (ResourcesPanel or non-shader events)
+   RenderTarget,
+   ShaderResource,
+   UnorderedAccess,
+   Depth,
+};
+
+struct PassTarget
+{
+   uint32_t hash = 0; // 0 for Luma passes
+   ShaderStage stage = ShaderStage::Pixel;
+   std::string luma_pass; // Non-empty for Luma passes (event.name)
+   uint32_t instance = 0; // 0-based call index of this shader/pass in the frame
+   ViewMode mode = ViewMode::RenderTarget;
+   uint32_t slot = 0;
+   uint32_t mip = 0;
+
+   bool operator==(const PassTarget&) const = default;
+   bool SamePass(const PassTarget& other) const
+   {
+      return hash == other.hash && stage == other.stage && luma_pass == other.luma_pass && instance == other.instance;
+   }
+};
+
 struct Options
 {
    bool fullscreen = false;
@@ -37,9 +69,21 @@ struct Options
 
 // Relaxed atomic check for hot draw paths
 bool IsActive();
+// Direct resource-address targeting (ResourcesPanel, Copy/Clear/CPU events)
 void SetTarget(std::string resource_id);
 std::string GetTarget();
+// Pass + instance + view targeting (matches Luma 1.0 Trace behavior)
+void SetPassTarget(PassTarget target);
+std::optional<PassTarget> GetPassTarget();
+bool IsPassTarget(const PassTarget& target);
+bool IsSamePass(const PassTarget& target);
+// Last view mode/slot used by SetPassTarget (for magnifier quick-browse across passes)
+ViewMode GetLastViewMode();
+uint32_t GetLastViewSlot();
+std::string DescribeTarget();
 void Clear();
+// Resets per-frame instance counter on Present
+void OnPresent();
 
 Options GetOptions();
 void SetOptions(const Options& options);
@@ -49,6 +93,10 @@ uint32_t PackFlags(const Options& options, uint32_t dimension_bits);
 
 // D3D11: snapshots `resource` if its address matches the target (or its mirror)
 void CaptureD3D11(ID3D11DeviceContext* context, ID3D11Resource* resource);
+// D3D11: snapshots the target view on a game draw/dispatch (pass-instance mode or resource-address fallback)
+bool CaptureCallD3D11(const Game::D3D11::Call& call, Shaders::StageSet stages, bool handled);
+// D3D11: snapshots the target view on a Luma pass
+void CaptureLumaPassD3D11(ID3D11DeviceContext* context, std::string_view pass_name);
 // D3D11: scans bound render targets, depth, SRVs and UAVs on `context` and snapshots if any matches
 void CaptureBoundD3D11(ID3D11DeviceContext* context);
 // D3D11: binds the snapshot SRV into t2..t8 and sets CustomData2/CustomData3

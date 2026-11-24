@@ -33,6 +33,7 @@
 #include "Shaders/Shaders.hpp"
 #include "System/JobQueue.hpp"
 #if DEVELOPMENT
+#include "Trace/DebugDraw.hpp"
 #include "Trace/FrameCapture.hpp"
 #include "Trace/D3D11/D3D11Capture.hpp"
 #include "Trace/D3D11/D3D11Readback.hpp"
@@ -409,7 +410,6 @@ void PrePresentWork(IDXGISwapChain* swapchain)
       std::visit(
          Overloaded{
             [&](ID3D11Device* device) {
-               Trace::Capture::D3D11::ReadBackConstantBuffers();
                Trace::Capture::D3D11::ReadBackTracked();
                Trace::Readback::D3D11::ReadBack(swapchain, device);
             },
@@ -422,11 +422,9 @@ void PrePresentWork(IDXGISwapChain* swapchain)
    }
    else
    {
-      Trace::Capture::D3D11::ReadBackConstantBuffers();
       Trace::Capture::D3D11::ReadBackTracked();
    }
    Trace::Readback::OnPresent();
-   Trace::Capture::AdvanceFrame();
 #endif
    Settings::ApplyQueued();
 #if DEVELOPMENT
@@ -475,9 +473,20 @@ void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags, bool
    // What ran since the event passed through untraced: one entry stands for it
    if (present_work_done && Trace::Capture::IsCapturing())
       Trace::Capture::Add({.type = Trace::Capture::EventType::ThirdPartyWork, .name = "ReShade and add-on work at the last present (effects, overlay, present handlers)"});
+   // Finish the captured frame after on_present, Display Composition, and ThirdPartyWork so they appear at the end of the trace
+   if (Trace::Capture::IsCapturing())
+   {
+      Trace::Capture::D3D11::ReadBackConstantBuffers();
+      Trace::Capture::FinishFrame();
+   }
 #endif
    // Last, on top of everything the game, Luma and ReShade drew
    UI::DrawOverlay(swapchain);
+#if DEVELOPMENT
+   // Start any capture requested by the UI or MCP now, so the next frame starts cleanly at its first draw
+   Trace::Capture::StartRequestedFrame();
+   Trace::DebugDraw::OnPresent();
+#endif
    // After the game's on_present and the overlay: what they changed (its settings object, the dev sliders) uploads from
    // the next draw
    Resources::LumaCBuffers::MarkSettingsDirty();
