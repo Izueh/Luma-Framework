@@ -280,7 +280,12 @@ Widgets::ListEntry Describe(const Event& event, size_t index, std::string_view t
    if (event.type == EventType::Present)
       return {std::format("{:>5} Present", index), Tone::Info, ToColorArray(Style::Colors::Trace::PRESENT)};
    if (event.type == EventType::ThirdPartyWork)
-      return {std::format("{:>5} {}", index, event.name), Tone::Info, ToColorArray(Style::Colors::TEXT_DIM)};
+   {
+      if (const Trace::Capture::Shader* shader = Trace::Capture::GetPrimaryShader(event))
+         return {std::format("{:>5} {} 0x{:08X}{}{} [{}]{}", index, GetStageName(shader->stage), shader->hash, shader->name.empty() ? "" : " ", shader->name, event.name, thread),
+            Tone::Info, ToColorArray(Style::Colors::TEXT_DIM)};
+      return {std::format("{:>5} {}{}", index, event.name, thread), Tone::Info, ToColorArray(Style::Colors::TEXT_DIM)};
+   }
    if (event.type == EventType::LumaPass)
       return {std::format("{:>5} {} (Luma){}{}", index, event.name, usage_tag, thread), Tone::Injected, apply_highlight(Style::Colors::Trace::LUMA_PASS)};
 
@@ -1378,7 +1383,7 @@ void DrawEvent(const Event& event, size_t index)
 {
    if (Trace::Capture::IsResourceEvent(event))
       return DrawResourceEvent(event, index);
-   if (event.type == EventType::Present || event.type == EventType::ThirdPartyWork)
+   if (event.type == EventType::Present || (event.type == EventType::ThirdPartyWork && event.shaders.empty()))
       return DrawEventState(event, index);
    if (ImGui::BeginTabBar("EventDetailTabs"))
    {
@@ -1431,6 +1436,7 @@ void DrawFilters()
    chip("CPU Writes", filter.cpu_writes, "Lists Map (write) and UpdateSubresource");
    chip("CPU Reads", filter.cpu_reads, "Lists Map (read)");
    chip("Buffers", filter.buffer_writes, "Also lists CPU reads/writes to buffers (cbuffer uploads, many per frame).");
+   chip("Third-party", filter.third_party, "Lists game draws intercepted by ReShade add-ons and third-party present work.");
    if (!last_tracked_resource.empty())
       chip("Highlighted", highlighted_only, "Only events reading or writing the currently tracked resource");
    if (chip("Threads", show_thread, "Shows each call's thread and deferred context"))

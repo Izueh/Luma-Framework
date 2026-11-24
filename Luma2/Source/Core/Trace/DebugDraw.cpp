@@ -56,6 +56,7 @@ struct D3D11Snapshot
    uint32_t array_size = 0;
    uint32_t sample_count = 1;
    DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+   DXGI_FORMAT srv_format = DXGI_FORMAT_UNKNOWN;
 };
 
 struct D3D12Snapshot
@@ -80,6 +81,18 @@ uint32_t last_view_slot = 0;
 Options current_options;
 D3D11Snapshot d3d11_snapshot;
 D3D12Snapshot d3d12_snapshot;
+bool captured_this_frame = false;
+bool captured_prev_frame = false;
+
+bool IsDisplayCompositionTargetLocked()
+{
+   return pass_target && pass_target->luma_pass == "Luma Display Composition";
+}
+
+bool HasFreshSnapshotLocked()
+{
+   return captured_this_frame || (captured_prev_frame && IsDisplayCompositionTargetLocked());
+}
 
 std::string_view GetStageName(ShaderStage stage)
 {
@@ -166,6 +179,8 @@ void SetTarget(std::string resource_id)
 {
    const uintptr_t address = ParseAddress(resource_id);
    std::scoped_lock lock(mutex);
+   if (pass_target && pass_target->mode == ViewMode::Depth)
+      current_options.red_only = false;
    pass_target.reset();
    pass_active.store(false, std::memory_order_release);
    frame_instance_counter.store(0, std::memory_order_relaxed);
@@ -174,6 +189,8 @@ void SetTarget(std::string resource_id)
    active.store(address != 0, std::memory_order_release);
    d3d11_snapshot = {};
    d3d12_snapshot = {};
+   captured_this_frame = false;
+   captured_prev_frame = false;
 }
 
 std::string GetTarget()
@@ -208,6 +225,8 @@ void SetPassTarget(PassTarget target)
    active.store(true, std::memory_order_release);
    d3d11_snapshot = {};
    d3d12_snapshot = {};
+   captured_this_frame = false;
+   captured_prev_frame = false;
 }
 
 std::optional<PassTarget> GetPassTarget()
@@ -262,6 +281,8 @@ std::string DescribeTarget()
 void Clear()
 {
    std::scoped_lock lock(mutex);
+   if (pass_target && pass_target->mode == ViewMode::Depth)
+      current_options.red_only = false;
    target_id.clear();
    target_address.store(0, std::memory_order_release);
    pass_target.reset();
@@ -270,11 +291,23 @@ void Clear()
    active.store(false, std::memory_order_release);
    d3d11_snapshot = {};
    d3d12_snapshot = {};
+   captured_this_frame = false;
+   captured_prev_frame = false;
 }
 
 void OnPresent()
 {
    frame_instance_counter.store(0, std::memory_order_relaxed);
+   if (!IsActive())
+      return;
+   std::scoped_lock lock(mutex);
+   captured_prev_frame = captured_this_frame;
+   if (!captured_this_frame)
+   {
+      d3d11_snapshot = {};
+      d3d12_snapshot = {};
+   }
+   captured_this_frame = false;
 }
 
 Options GetOptions()
@@ -314,82 +347,136 @@ uint32_t PackFlags(const Options& options, uint32_t dimension_bits)
 }
 
 namespace {
-void SnapshotD3D11Resource(ID3D11DeviceContext* context, ID3D11Resource* resource)
+void ClearD3D11SnapshotLocked()
+{
+   d3d11_snapshot = {};
+   captured_this_frame = false;
+}
+
+bool IsFloatFormat(DXGI_FORMAT format)
+{
+   const Utils::Format::DXGI::Encoding encoding = Utils::Format::DXGI::GetEncoding(format);
+   return encoding == Utils::Format::DXGI::Encoding::SFloat || encoding == Utils::Format::DXGI::Encoding::UFloat;
+}
+
+void SnapshotD3D11Resource(ID3D11DeviceContext* context, ID3D11Resource* resource, DXGI_FORMAT view_format = DXGI_FORMAT_UNKNOWN)
 {
    if (!context || !resource)
+   {
+      std::scoped_lock lock(mutex);
+      ClearD3D11SnapshotLocked();
       return;
+   }
    D3D11_RESOURCE_DIMENSION dim = D3D11_RESOURCE_DIMENSION_UNKNOWN;
    resource->GetType(&dim);
    if (dim == D3D11_RESOURCE_DIMENSION_BUFFER || dim == D3D11_RESOURCE_DIMENSION_UNKNOWN)
+   {
+      std::scoped_lock lock(mutex);
+      ClearD3D11SnapshotLocked();
       return;
+   }
    ComPtr<ID3D11Device> device;
    context->GetDevice(&device);
    if (!device)
       return;
 
    std::scoped_lock lock(mutex);
+   const auto resolve_srv_format = [&](DXGI_FORMAT resource_format, DXGI_FORMAT& fallback) -> DXGI_FORMAT {
+      fallback = GetReadableSrvFormat(resource_format);
+      const DXGI_FORMAT preferred = view_format != DXGI_FORMAT_UNKNOWN ? GetReadableSrvFormat(view_format) : fallback;
+      return preferred != DXGI_FORMAT_UNKNOWN ? preferred : fallback;
+   };
+
    if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE2D)
    {
       ComPtr<ID3D11Texture2D> src;
       if (FAILED(resource->QueryInterface(IID_PPV_ARGS(&src))))
+      {
+         ClearD3D11SnapshotLocked();
          return;
+      }
       D3D11_TEXTURE2D_DESC desc = {};
       src->GetDesc(&desc);
-      const DXGI_FORMAT srv_format = GetReadableSrvFormat(desc.Format);
+      DXGI_FORMAT fallback_srv_format = DXGI_FORMAT_UNKNOWN;
+      DXGI_FORMAT srv_format = resolve_srv_format(desc.Format, fallback_srv_format);
       if (srv_format == DXGI_FORMAT_UNKNOWN)
+      {
+         ClearD3D11SnapshotLocked();
          return;
+      }
       const bool needs_new = !d3d11_snapshot.texture || d3d11_snapshot.device != device.Get() || d3d11_snapshot.dimension != dim ||
          d3d11_snapshot.width != desc.Width || d3d11_snapshot.height != desc.Height || d3d11_snapshot.mips != desc.MipLevels ||
-         d3d11_snapshot.array_size != desc.ArraySize || d3d11_snapshot.sample_count != desc.SampleDesc.Count || d3d11_snapshot.format != desc.Format;
+         d3d11_snapshot.array_size != desc.ArraySize || d3d11_snapshot.sample_count != desc.SampleDesc.Count || d3d11_snapshot.format != desc.Format ||
+         d3d11_snapshot.srv_format != srv_format;
       if (needs_new)
       {
          D3D11_TEXTURE2D_DESC copy_desc = desc;
          copy_desc.Usage = D3D11_USAGE_DEFAULT;
          copy_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
          copy_desc.CPUAccessFlags = 0;
-         copy_desc.MiscFlags &= D3D11_RESOURCE_MISC_TEXTURECUBE;
+         // Strip cube/shared/gen-mips flags (matching 1.0) so cubemaps can be sampled as Texture2DArray
+         copy_desc.MiscFlags = 0;
          if (const DXGI_FORMAT typeless = Utils::Format::DXGI::GetTypeless(desc.Format); typeless != DXGI_FORMAT_UNKNOWN)
             copy_desc.Format = typeless;
          ComPtr<ID3D11Texture2D> copy;
          if (FAILED(device->CreateTexture2D(&copy_desc, nullptr, &copy)))
+         {
+            ClearD3D11SnapshotLocked();
             return;
+         }
          D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {};
          srv_desc.Format = srv_format;
          const bool ms = desc.SampleDesc.Count > 1;
          const bool arr = desc.ArraySize > 1;
+         Slot slot = Slot::Texture2D;
+         uint32_t dim_bits = DIM_BIT_2D;
          if (ms && arr)
          {
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DMSARRAY;
             srv_desc.Texture2DMSArray = {0, desc.ArraySize};
-            d3d11_snapshot.slot = Slot::Texture2DMSArray;
-            d3d11_snapshot.dim_bits = DIM_BIT_2D | DIM_BIT_MS | DIM_BIT_ARRAY;
+            slot = Slot::Texture2DMSArray;
+            dim_bits = DIM_BIT_2D | DIM_BIT_MS | DIM_BIT_ARRAY;
          }
          else if (ms)
          {
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DMS;
-            d3d11_snapshot.slot = Slot::Texture2DMS;
-            d3d11_snapshot.dim_bits = DIM_BIT_2D | DIM_BIT_MS;
+            slot = Slot::Texture2DMS;
+            dim_bits = DIM_BIT_2D | DIM_BIT_MS;
          }
          else if (arr)
          {
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
             srv_desc.Texture2DArray = {0, desc.MipLevels, 0, desc.ArraySize};
-            d3d11_snapshot.slot = Slot::Texture2DArray;
-            d3d11_snapshot.dim_bits = DIM_BIT_2D | DIM_BIT_ARRAY;
+            slot = Slot::Texture2DArray;
+            dim_bits = DIM_BIT_2D | DIM_BIT_ARRAY;
          }
          else
          {
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
             srv_desc.Texture2D = {0, desc.MipLevels};
-            d3d11_snapshot.slot = Slot::Texture2D;
-            d3d11_snapshot.dim_bits = DIM_BIT_2D;
+            slot = Slot::Texture2D;
+            dim_bits = DIM_BIT_2D;
          }
          ComPtr<ID3D11ShaderResourceView> srv;
          if (FAILED(device->CreateShaderResourceView(copy.Get(), &srv_desc, &srv)))
-            return;
+         {
+            if (fallback_srv_format != DXGI_FORMAT_UNKNOWN && fallback_srv_format != srv_format)
+            {
+               srv_desc.Format = fallback_srv_format;
+               srv_format = fallback_srv_format;
+               device->CreateShaderResourceView(copy.Get(), &srv_desc, &srv);
+            }
+            if (!srv)
+            {
+               ClearD3D11SnapshotLocked();
+               return;
+            }
+         }
          d3d11_snapshot.device = device.Get();
          d3d11_snapshot.texture = copy;
          d3d11_snapshot.srv = srv;
+         d3d11_snapshot.slot = slot;
+         d3d11_snapshot.dim_bits = dim_bits;
          d3d11_snapshot.dimension = dim;
          d3d11_snapshot.width = desc.Width;
          d3d11_snapshot.height = desc.Height;
@@ -398,22 +485,31 @@ void SnapshotD3D11Resource(ID3D11DeviceContext* context, ID3D11Resource* resourc
          d3d11_snapshot.array_size = desc.ArraySize;
          d3d11_snapshot.sample_count = desc.SampleDesc.Count;
          d3d11_snapshot.format = desc.Format;
+         d3d11_snapshot.srv_format = srv_format;
       }
       context->CopyResource(d3d11_snapshot.texture.Get(), resource);
+      captured_this_frame = true;
    }
    else if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE3D)
    {
       ComPtr<ID3D11Texture3D> src;
       if (FAILED(resource->QueryInterface(IID_PPV_ARGS(&src))))
+      {
+         ClearD3D11SnapshotLocked();
          return;
+      }
       D3D11_TEXTURE3D_DESC desc = {};
       src->GetDesc(&desc);
-      const DXGI_FORMAT srv_format = GetReadableSrvFormat(desc.Format);
+      DXGI_FORMAT fallback_srv_format = DXGI_FORMAT_UNKNOWN;
+      DXGI_FORMAT srv_format = resolve_srv_format(desc.Format, fallback_srv_format);
       if (srv_format == DXGI_FORMAT_UNKNOWN)
+      {
+         ClearD3D11SnapshotLocked();
          return;
+      }
       const bool needs_new = !d3d11_snapshot.texture || d3d11_snapshot.device != device.Get() || d3d11_snapshot.dimension != dim ||
          d3d11_snapshot.width != desc.Width || d3d11_snapshot.height != desc.Height || d3d11_snapshot.depth != desc.Depth ||
-         d3d11_snapshot.mips != desc.MipLevels || d3d11_snapshot.format != desc.Format;
+         d3d11_snapshot.mips != desc.MipLevels || d3d11_snapshot.format != desc.Format || d3d11_snapshot.srv_format != srv_format;
       if (needs_new)
       {
          D3D11_TEXTURE3D_DESC copy_desc = desc;
@@ -421,13 +517,30 @@ void SnapshotD3D11Resource(ID3D11DeviceContext* context, ID3D11Resource* resourc
          copy_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
          copy_desc.CPUAccessFlags = 0;
          copy_desc.MiscFlags = 0;
+         if (const DXGI_FORMAT typeless = Utils::Format::DXGI::GetTypeless(desc.Format); typeless != DXGI_FORMAT_UNKNOWN)
+            copy_desc.Format = typeless;
          ComPtr<ID3D11Texture3D> copy;
          if (FAILED(device->CreateTexture3D(&copy_desc, nullptr, &copy)))
+         {
+            ClearD3D11SnapshotLocked();
             return;
+         }
          D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {.Format = srv_format, .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE3D, .Texture3D = {0, desc.MipLevels}};
          ComPtr<ID3D11ShaderResourceView> srv;
          if (FAILED(device->CreateShaderResourceView(copy.Get(), &srv_desc, &srv)))
-            return;
+         {
+            if (fallback_srv_format != DXGI_FORMAT_UNKNOWN && fallback_srv_format != srv_format)
+            {
+               srv_desc.Format = fallback_srv_format;
+               srv_format = fallback_srv_format;
+               device->CreateShaderResourceView(copy.Get(), &srv_desc, &srv);
+            }
+            if (!srv)
+            {
+               ClearD3D11SnapshotLocked();
+               return;
+            }
+         }
          d3d11_snapshot.device = device.Get();
          d3d11_snapshot.texture = copy;
          d3d11_snapshot.srv = srv;
@@ -441,22 +554,31 @@ void SnapshotD3D11Resource(ID3D11DeviceContext* context, ID3D11Resource* resourc
          d3d11_snapshot.array_size = 1;
          d3d11_snapshot.sample_count = 1;
          d3d11_snapshot.format = desc.Format;
+         d3d11_snapshot.srv_format = srv_format;
       }
       context->CopyResource(d3d11_snapshot.texture.Get(), resource);
+      captured_this_frame = true;
    }
    else if (dim == D3D11_RESOURCE_DIMENSION_TEXTURE1D)
    {
       ComPtr<ID3D11Texture1D> src;
       if (FAILED(resource->QueryInterface(IID_PPV_ARGS(&src))))
+      {
+         ClearD3D11SnapshotLocked();
          return;
+      }
       D3D11_TEXTURE1D_DESC desc = {};
       src->GetDesc(&desc);
-      const DXGI_FORMAT srv_format = GetReadableSrvFormat(desc.Format);
+      DXGI_FORMAT fallback_srv_format = DXGI_FORMAT_UNKNOWN;
+      DXGI_FORMAT srv_format = resolve_srv_format(desc.Format, fallback_srv_format);
       if (srv_format == DXGI_FORMAT_UNKNOWN)
+      {
+         ClearD3D11SnapshotLocked();
          return;
+      }
       const bool needs_new = !d3d11_snapshot.texture || d3d11_snapshot.device != device.Get() || d3d11_snapshot.dimension != dim ||
          d3d11_snapshot.width != desc.Width || d3d11_snapshot.mips != desc.MipLevels || d3d11_snapshot.array_size != desc.ArraySize ||
-         d3d11_snapshot.format != desc.Format;
+         d3d11_snapshot.format != desc.Format || d3d11_snapshot.srv_format != srv_format;
       if (needs_new)
       {
          D3D11_TEXTURE1D_DESC copy_desc = desc;
@@ -464,30 +586,51 @@ void SnapshotD3D11Resource(ID3D11DeviceContext* context, ID3D11Resource* resourc
          copy_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
          copy_desc.CPUAccessFlags = 0;
          copy_desc.MiscFlags = 0;
+         if (const DXGI_FORMAT typeless = Utils::Format::DXGI::GetTypeless(desc.Format); typeless != DXGI_FORMAT_UNKNOWN)
+            copy_desc.Format = typeless;
          ComPtr<ID3D11Texture1D> copy;
          if (FAILED(device->CreateTexture1D(&copy_desc, nullptr, &copy)))
+         {
+            ClearD3D11SnapshotLocked();
             return;
+         }
          D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {.Format = srv_format};
+         Slot slot = Slot::Texture1D;
+         uint32_t dim_bits = 0;
          if (desc.ArraySize > 1)
          {
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE1DARRAY;
             srv_desc.Texture1DArray = {0, desc.MipLevels, 0, desc.ArraySize};
-            d3d11_snapshot.slot = Slot::Texture1DArray;
-            d3d11_snapshot.dim_bits = DIM_BIT_ARRAY;
+            slot = Slot::Texture1DArray;
+            dim_bits = DIM_BIT_ARRAY;
          }
          else
          {
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE1D;
             srv_desc.Texture1D = {0, desc.MipLevels};
-            d3d11_snapshot.slot = Slot::Texture1D;
-            d3d11_snapshot.dim_bits = 0;
+            slot = Slot::Texture1D;
+            dim_bits = 0;
          }
          ComPtr<ID3D11ShaderResourceView> srv;
          if (FAILED(device->CreateShaderResourceView(copy.Get(), &srv_desc, &srv)))
-            return;
+         {
+            if (fallback_srv_format != DXGI_FORMAT_UNKNOWN && fallback_srv_format != srv_format)
+            {
+               srv_desc.Format = fallback_srv_format;
+               srv_format = fallback_srv_format;
+               device->CreateShaderResourceView(copy.Get(), &srv_desc, &srv);
+            }
+            if (!srv)
+            {
+               ClearD3D11SnapshotLocked();
+               return;
+            }
+         }
          d3d11_snapshot.device = device.Get();
          d3d11_snapshot.texture = copy;
          d3d11_snapshot.srv = srv;
+         d3d11_snapshot.slot = slot;
+         d3d11_snapshot.dim_bits = dim_bits;
          d3d11_snapshot.dimension = dim;
          d3d11_snapshot.width = desc.Width;
          d3d11_snapshot.height = 1;
@@ -496,9 +639,18 @@ void SnapshotD3D11Resource(ID3D11DeviceContext* context, ID3D11Resource* resourc
          d3d11_snapshot.array_size = desc.ArraySize;
          d3d11_snapshot.sample_count = 1;
          d3d11_snapshot.format = desc.Format;
+         d3d11_snapshot.srv_format = srv_format;
       }
       context->CopyResource(d3d11_snapshot.texture.Get(), resource);
+      captured_this_frame = true;
    }
+}
+
+UINT GetMaxUavSlots(ID3D11DeviceContext* context)
+{
+   ComPtr<ID3D11Device> device;
+   context->GetDevice(&device);
+   return device && device->GetFeatureLevel() >= D3D_FEATURE_LEVEL_11_1 ? D3D11_1_UAV_SLOT_COUNT : D3D11_PS_CS_UAV_REGISTER_COUNT;
 }
 
 void CaptureViewD3D11(ID3D11DeviceContext* context, const PassTarget& target, bool is_compute)
@@ -506,16 +658,22 @@ void CaptureViewD3D11(ID3D11DeviceContext* context, const PassTarget& target, bo
    if (!context)
       return;
    ComPtr<ID3D11Resource> resource;
+   DXGI_FORMAT view_format = DXGI_FORMAT_UNKNOWN;
    switch (target.mode)
    {
    case ViewMode::RenderTarget:
    {
       if (target.slot >= D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT)
-         return;
+         break;
       std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> rtvs = {};
       context->OMGetRenderTargets(UINT(rtvs.size()), rtvs.data(), nullptr);
       if (rtvs[target.slot])
+      {
          rtvs[target.slot]->GetResource(&resource);
+         D3D11_RENDER_TARGET_VIEW_DESC desc = {};
+         rtvs[target.slot]->GetDesc(&desc);
+         view_format = desc.Format;
+      }
       for (ID3D11RenderTargetView* rtv : rtvs)
       {
          if (rtv)
@@ -528,13 +686,18 @@ void CaptureViewD3D11(ID3D11DeviceContext* context, const PassTarget& target, bo
       ComPtr<ID3D11DepthStencilView> dsv;
       context->OMGetRenderTargets(0, nullptr, &dsv);
       if (dsv)
+      {
          dsv->GetResource(&resource);
+         D3D11_DEPTH_STENCIL_VIEW_DESC desc = {};
+         dsv->GetDesc(&desc);
+         view_format = desc.Format;
+      }
       break;
    }
    case ViewMode::ShaderResource:
    {
       if (target.slot >= D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT)
-         return;
+         break;
       ComPtr<ID3D11ShaderResourceView> srv;
       switch (target.stage)
       {
@@ -547,38 +710,145 @@ void CaptureViewD3D11(ID3D11DeviceContext* context, const PassTarget& target, bo
       default: context->PSGetShaderResources(target.slot, 1, &srv); break;
       }
       if (srv)
+      {
          srv->GetResource(&resource);
+         D3D11_SHADER_RESOURCE_VIEW_DESC desc = {};
+         srv->GetDesc(&desc);
+         view_format = desc.Format;
+      }
       break;
    }
    case ViewMode::UnorderedAccess:
    {
-      if (target.slot >= D3D11_1_UAV_SLOT_COUNT)
-         return;
+      const UINT max_uavs = GetMaxUavSlots(context);
+      if (target.slot >= max_uavs)
+         break;
+      ComPtr<ID3D11UnorderedAccessView> uav;
       if (is_compute)
-      {
-         ComPtr<ID3D11UnorderedAccessView> uav;
          context->CSGetUnorderedAccessViews(target.slot, 1, &uav);
-         if (uav)
-            uav->GetResource(&resource);
-      }
       else
+         context->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, target.slot, 1, &uav);
+      if (uav)
       {
-         std::array<ID3D11UnorderedAccessView*, D3D11_1_UAV_SLOT_COUNT> uavs = {};
-         context->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, UINT(uavs.size()), uavs.data());
-         if (uavs[target.slot])
-            uavs[target.slot]->GetResource(&resource);
-         for (ID3D11UnorderedAccessView* uav : uavs)
-         {
-            if (uav)
-               uav->Release();
-         }
+         uav->GetResource(&resource);
+         D3D11_UNORDERED_ACCESS_VIEW_DESC desc = {};
+         uav->GetDesc(&desc);
+         view_format = desc.Format;
       }
       break;
    }
    default: break;
    }
-   if (resource)
-      SnapshotD3D11Resource(context, resource.Get());
+   SnapshotD3D11Resource(context, resource.Get(), view_format);
+}
+
+struct MatchedResource
+{
+   ComPtr<ID3D11Resource> resource;
+   DXGI_FORMAT view_format = DXGI_FORMAT_UNKNOWN;
+};
+
+MatchedResource FindBoundOutputD3D11(ID3D11DeviceContext* context, uintptr_t address, bool is_compute)
+{
+   MatchedResource match;
+   if (!is_compute)
+   {
+      std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> rtvs = {};
+      ComPtr<ID3D11DepthStencilView> dsv;
+      context->OMGetRenderTargets(UINT(rtvs.size()), rtvs.data(), &dsv);
+      for (ID3D11RenderTargetView* rtv : rtvs)
+      {
+         if (!match.resource && rtv)
+         {
+            ComPtr<ID3D11Resource> res;
+            rtv->GetResource(&res);
+            if (MatchesD3D11Target(res.Get(), address))
+            {
+               D3D11_RENDER_TARGET_VIEW_DESC desc = {};
+               rtv->GetDesc(&desc);
+               match = {std::move(res), desc.Format};
+            }
+         }
+         if (rtv)
+            rtv->Release();
+      }
+      if (!match.resource && dsv)
+      {
+         ComPtr<ID3D11Resource> res;
+         dsv->GetResource(&res);
+         if (MatchesD3D11Target(res.Get(), address))
+         {
+            D3D11_DEPTH_STENCIL_VIEW_DESC desc = {};
+            dsv->GetDesc(&desc);
+            match = {std::move(res), desc.Format};
+         }
+      }
+   }
+   if (!match.resource)
+   {
+      const UINT max_uavs = GetMaxUavSlots(context);
+      std::array<ID3D11UnorderedAccessView*, D3D11_1_UAV_SLOT_COUNT> uavs = {};
+      if (is_compute)
+         context->CSGetUnorderedAccessViews(0, max_uavs, uavs.data());
+      else
+         context->OMGetRenderTargetsAndUnorderedAccessViews(0, nullptr, nullptr, 0, max_uavs, uavs.data());
+      for (UINT i = 0; i < max_uavs; i++)
+      {
+         if (!match.resource && uavs[i])
+         {
+            ComPtr<ID3D11Resource> res;
+            uavs[i]->GetResource(&res);
+            if (MatchesD3D11Target(res.Get(), address))
+            {
+               D3D11_UNORDERED_ACCESS_VIEW_DESC desc = {};
+               uavs[i]->GetDesc(&desc);
+               match = {std::move(res), desc.Format};
+            }
+         }
+         if (uavs[i])
+            uavs[i]->Release();
+      }
+   }
+   return match;
+}
+
+MatchedResource FindBoundSrvD3D11(ID3D11DeviceContext* context, uintptr_t address, Shaders::StageSet stages)
+{
+   MatchedResource match;
+   std::array<ID3D11ShaderResourceView*, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> srvs = {};
+   const auto scan = [&](ShaderStage stage) {
+      if (match.resource || !stages.Has(stage))
+         return;
+      srvs = {};
+      switch (stage)
+      {
+      case ShaderStage::Vertex: context->VSGetShaderResources(0, UINT(srvs.size()), srvs.data()); break;
+      case ShaderStage::Hull: context->HSGetShaderResources(0, UINT(srvs.size()), srvs.data()); break;
+      case ShaderStage::Domain: context->DSGetShaderResources(0, UINT(srvs.size()), srvs.data()); break;
+      case ShaderStage::Geometry: context->GSGetShaderResources(0, UINT(srvs.size()), srvs.data()); break;
+      case ShaderStage::Pixel: context->PSGetShaderResources(0, UINT(srvs.size()), srvs.data()); break;
+      case ShaderStage::Compute: context->CSGetShaderResources(0, UINT(srvs.size()), srvs.data()); break;
+      }
+      for (ID3D11ShaderResourceView* srv : srvs)
+      {
+         if (!match.resource && srv)
+         {
+            ComPtr<ID3D11Resource> res;
+            srv->GetResource(&res);
+            if (MatchesD3D11Target(res.Get(), address))
+            {
+               D3D11_SHADER_RESOURCE_VIEW_DESC desc = {};
+               srv->GetDesc(&desc);
+               match = {std::move(res), desc.Format};
+            }
+         }
+         if (srv)
+            srv->Release();
+      }
+   };
+   for (const ShaderStage stage : {ShaderStage::Pixel, ShaderStage::Compute, ShaderStage::Vertex, ShaderStage::Geometry, ShaderStage::Hull, ShaderStage::Domain})
+      scan(stage);
+   return match;
 }
 } // namespace
 
@@ -587,6 +857,8 @@ void CaptureD3D11(ID3D11DeviceContext* context, ID3D11Resource* resource)
    const uintptr_t address = target_address.load(std::memory_order_acquire);
    if (!context || !MatchesD3D11Target(resource, address))
       return;
+   if (ID3D11Resource* mirror = Resources::Mirrors::D3D11::FindMirror(resource))
+      resource = mirror;
    SnapshotD3D11Resource(context, resource);
 }
 
@@ -596,7 +868,23 @@ bool CaptureCallD3D11(const Game::D3D11::Call& call, Shaders::StageSet stages, b
       return handled;
    if (!pass_active.load(std::memory_order_acquire))
    {
-      CaptureBoundD3D11(call.context);
+      const uintptr_t address = target_address.load(std::memory_order_acquire);
+      if (!address)
+         return handled;
+      const bool is_compute = call.dispatch != nullptr;
+      if (const MatchedResource output = FindBoundOutputD3D11(call.context, address, is_compute); output.resource)
+      {
+         // Run the draw/dispatch first so we snapshot what this call wrote rather than the previous frame
+         if (!handled)
+         {
+            Game::D3D11::RunOriginal(call);
+            handled = true;
+         }
+         SnapshotD3D11Resource(call.context, output.resource.Get(), output.view_format);
+         return handled;
+      }
+      if (const MatchedResource srv = FindBoundSrvD3D11(call.context, address, stages); srv.resource)
+         SnapshotD3D11Resource(call.context, srv.resource.Get(), srv.view_format);
       return handled;
    }
    const std::optional<PassTarget> target = GetPassTarget();
@@ -634,51 +922,21 @@ void CaptureBoundD3D11(ID3D11DeviceContext* context)
 {
    if (!IsActive() || !context)
       return;
-   const auto check_view = [&](ID3D11View* view) {
-      if (!view)
-         return;
-      ComPtr<ID3D11Resource> resource;
-      view->GetResource(&resource);
-      if (resource)
-         CaptureD3D11(context, resource.Get());
-   };
-   std::array<ID3D11RenderTargetView*, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> rtvs = {};
-   ID3D11DepthStencilView* dsv = nullptr;
-   context->OMGetRenderTargets(UINT(rtvs.size()), rtvs.data(), &dsv);
-   for (ID3D11RenderTargetView* rtv : rtvs)
+   const uintptr_t address = target_address.load(std::memory_order_acquire);
+   if (!address)
+      return;
+   if (const MatchedResource output = FindBoundOutputD3D11(context, address, false); output.resource)
    {
-      check_view(rtv);
-      if (rtv)
-         rtv->Release();
+      SnapshotD3D11Resource(context, output.resource.Get(), output.view_format);
+      return;
    }
-   check_view(dsv);
-   if (dsv)
-      dsv->Release();
-
-   std::array<ID3D11ShaderResourceView*, 32> srvs = {};
-   context->PSGetShaderResources(0, UINT(srvs.size()), srvs.data());
-   for (ID3D11ShaderResourceView* srv : srvs)
+   if (const MatchedResource compute_output = FindBoundOutputD3D11(context, address, true); compute_output.resource)
    {
-      check_view(srv);
-      if (srv)
-         srv->Release();
+      SnapshotD3D11Resource(context, compute_output.resource.Get(), compute_output.view_format);
+      return;
    }
-   srvs = {};
-   context->CSGetShaderResources(0, UINT(srvs.size()), srvs.data());
-   for (ID3D11ShaderResourceView* srv : srvs)
-   {
-      check_view(srv);
-      if (srv)
-         srv->Release();
-   }
-   std::array<ID3D11UnorderedAccessView*, D3D11_1_UAV_SLOT_COUNT> uavs = {};
-   context->CSGetUnorderedAccessViews(0, 8, uavs.data());
-   for (UINT i = 0; i < 8; i++)
-   {
-      check_view(uavs[i]);
-      if (uavs[i])
-         uavs[i]->Release();
-   }
+   if (const MatchedResource srv = FindBoundSrvD3D11(context, address, Shaders::GRAPHICS_STAGES | Shaders::COMPUTE_STAGES); srv.resource)
+      SnapshotD3D11Resource(context, srv.resource.Get(), srv.view_format);
 }
 
 bool BindD3D11(ID3D11DeviceContext* context, uint32_t& custom_data_2, float& custom_data_3)
@@ -686,12 +944,16 @@ bool BindD3D11(ID3D11DeviceContext* context, uint32_t& custom_data_2, float& cus
    if (!IsActive() || !context)
       return false;
    std::scoped_lock lock(mutex);
-   if (!d3d11_snapshot.srv)
+   if (!d3d11_snapshot.srv || !HasFreshSnapshotLocked())
       return false;
    ID3D11ShaderResourceView* srv = d3d11_snapshot.srv.Get();
    context->PSSetShaderResources(UINT(d3d11_snapshot.slot), 1, &srv);
-   custom_data_2 = PackFlags(current_options, d3d11_snapshot.dim_bits);
-   custom_data_3 = float(std::max(current_options.mip_level, 0));
+   Options effective = current_options;
+   // Match 1.0: disable tonemapping when saturating or viewing non-float formats
+   if (effective.do_saturate || !IsFloatFormat(d3d11_snapshot.srv_format))
+      effective.tonemap = false;
+   custom_data_2 = PackFlags(effective, d3d11_snapshot.dim_bits);
+   custom_data_3 = float(std::max(effective.mip_level, 0));
    return true;
 }
 
@@ -699,7 +961,11 @@ void ReleaseD3D11(const ID3D11Device* device)
 {
    std::scoped_lock lock(mutex);
    if (d3d11_snapshot.device == device)
+   {
       d3d11_snapshot = {};
+      captured_this_frame = false;
+      captured_prev_frame = false;
+   }
 }
 
 void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES current_state)
@@ -712,7 +978,12 @@ void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D
       return;
    const DXGI_FORMAT srv_format = GetReadableSrvFormat(desc.Format);
    if (srv_format == DXGI_FORMAT_UNKNOWN)
+   {
+      std::scoped_lock lock(mutex);
+      d3d12_snapshot = {};
+      captured_this_frame = false;
       return;
+   }
    ComPtr<ID3D12Device> device;
    if (FAILED(list->GetDevice(IID_PPV_ARGS(&device))) || !device)
       return;
@@ -720,7 +991,8 @@ void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D
    std::scoped_lock lock(mutex);
    const bool needs_new = !d3d12_snapshot.texture || d3d12_snapshot.device != device.Get() || d3d12_snapshot.desc.Dimension != desc.Dimension ||
       d3d12_snapshot.desc.Width != desc.Width || d3d12_snapshot.desc.Height != desc.Height || d3d12_snapshot.desc.DepthOrArraySize != desc.DepthOrArraySize ||
-      d3d12_snapshot.desc.MipLevels != desc.MipLevels || d3d12_snapshot.desc.SampleDesc.Count != desc.SampleDesc.Count || d3d12_snapshot.desc.Format != desc.Format;
+      d3d12_snapshot.desc.MipLevels != desc.MipLevels || d3d12_snapshot.desc.SampleDesc.Count != desc.SampleDesc.Count || d3d12_snapshot.desc.Format != desc.Format ||
+      d3d12_snapshot.srv_format != srv_format;
    if (needs_new)
    {
       D3D12_RESOURCE_DESC copy_desc = desc;
@@ -728,7 +1000,11 @@ void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D
       const D3D12_HEAP_PROPERTIES heap = {.Type = D3D12_HEAP_TYPE_DEFAULT};
       ComPtr<ID3D12Resource> copy;
       if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &copy_desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&copy))))
+      {
+         d3d12_snapshot = {};
+         captured_this_frame = false;
          return;
+      }
       copy->SetName(L"Luma debug draw snapshot");
       d3d12_snapshot.device = device.Get();
       d3d12_snapshot.texture = copy;
@@ -765,6 +1041,7 @@ void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D
    for (UINT i = 0; i < before_count; i++)
       std::swap(before[i].Transition.StateBefore, before[i].Transition.StateAfter);
    list->ResourceBarrier(before_count, before.data());
+   captured_this_frame = true;
 }
 
 bool BindD3D12(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE table_start, uint32_t view_increment, uint32_t& custom_data_2, float& custom_data_3)
@@ -772,7 +1049,7 @@ bool BindD3D12(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE table_start, ui
    if (!IsActive() || !device)
       return false;
    std::scoped_lock lock(mutex);
-   if (!d3d12_snapshot.texture || d3d12_snapshot.device != device)
+   if (!d3d12_snapshot.texture || d3d12_snapshot.device != device || !HasFreshSnapshotLocked())
       return false;
    D3D12_SHADER_RESOURCE_VIEW_DESC srv_desc = {.Format = d3d12_snapshot.srv_format, .Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING};
    switch (d3d12_snapshot.slot)
@@ -807,8 +1084,11 @@ bool BindD3D12(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE table_start, ui
    }
    const D3D12_CPU_DESCRIPTOR_HANDLE handle = {table_start.ptr + SIZE_T(d3d12_snapshot.slot) * view_increment};
    device->CreateShaderResourceView(d3d12_snapshot.texture.Get(), &srv_desc, handle);
-   custom_data_2 = PackFlags(current_options, d3d12_snapshot.dim_bits);
-   custom_data_3 = float(std::max(current_options.mip_level, 0));
+   Options effective = current_options;
+   if (effective.do_saturate || !IsFloatFormat(d3d12_snapshot.srv_format))
+      effective.tonemap = false;
+   custom_data_2 = PackFlags(effective, d3d12_snapshot.dim_bits);
+   custom_data_3 = float(std::max(effective.mip_level, 0));
    return true;
 }
 
@@ -816,7 +1096,11 @@ void ReleaseD3D12(const ID3D12Device* device)
 {
    std::scoped_lock lock(mutex);
    if (d3d12_snapshot.device == device)
+   {
       d3d12_snapshot = {};
+      captured_this_frame = false;
+      captured_prev_frame = false;
+   }
 }
 } // namespace DebugDraw
 } // namespace Trace

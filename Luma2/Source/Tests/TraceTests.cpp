@@ -149,6 +149,19 @@ TEST_CASE("Trace: resource events distinguish Map vs UpdateSubresource, CPU read
    CHECK_FALSE(Trace::Capture::Matches(map_read, {.cpu_writes = true, .cpu_reads = false}));
    CHECK(Trace::Capture::Matches(map_read, {.cpu_writes = false, .cpu_reads = true}));
 
+   // Third-party intercepted game draws are hidden by default and match shader/text filters when enabled
+   Trace::Capture::Event intercepted;
+   intercepted.type = Trace::Capture::EventType::ThirdPartyWork;
+   intercepted.name = "renodx.addon64 (Draw intercepted)";
+   intercepted.outcome = Trace::Capture::Outcome::Replaced;
+   intercepted.shaders = {{.stage = ShaderStage::Pixel, .hash = 0xFA37EA04, .name = "TAA"}};
+   CHECK_FALSE(Trace::Capture::Matches(intercepted, {}));
+   CHECK(Trace::Capture::Matches(intercepted, {.third_party = true}));
+   CHECK(Trace::Capture::Matches(intercepted, {.hash = 0xFA37EA04, .third_party = true}));
+   CHECK(Trace::Capture::Matches(intercepted, {.text = "TAA", .third_party = true}));
+   CHECK(Trace::Capture::Matches(intercepted, {.text = "renodx", .third_party = true}));
+   CHECK_FALSE(Trace::Capture::Matches(intercepted, {.hash = 0xDEADBEEF, .third_party = true}));
+
    // DebugDraw flag packing matches Luma_DisplayComposition.hlsl bit positions
    const Trace::DebugDraw::Options opts = {.fullscreen = true, .show_alpha = true, .do_abs = true, .tonemap = true};
    const uint32_t packed = Trace::DebugDraw::PackFlags(opts, 1u << 13);
@@ -158,5 +171,16 @@ TEST_CASE("Trace: resource events distinguish Map vs UpdateSubresource, CPU read
    CHECK((packed & (1u << 15)) != 0);
    CHECK((packed & (1u << 18)) != 0);
    CHECK((packed & (1u << 7)) == 0);
+
+   // Depth target enables red_only; switching to SetTarget or Clear resets it
+   Trace::DebugDraw::Clear();
+   Trace::DebugDraw::SetPassTarget({.hash = 0x1234, .stage = ShaderStage::Pixel, .instance = 0, .mode = Trace::DebugDraw::ViewMode::Depth});
+   CHECK(Trace::DebugDraw::IsActive());
+   CHECK(Trace::DebugDraw::GetOptions().red_only);
+   Trace::DebugDraw::SetTarget("0x1000");
+   CHECK(Trace::DebugDraw::IsActive());
+   CHECK_FALSE(Trace::DebugDraw::GetOptions().red_only);
+   Trace::DebugDraw::Clear();
+   CHECK_FALSE(Trace::DebugDraw::IsActive());
 }
 #endif

@@ -254,6 +254,8 @@ struct Filter
    bool cpu_writes = true;
    bool cpu_reads = true;
    bool buffer_writes = false;
+   // ReShade add-on intercepted game draws and third-party present work (hidden by default)
+   bool third_party = false;
 };
 
 enum class ResourceUsage : uint8_t

@@ -1451,6 +1451,7 @@ std::string TraceList(const Request& request)
       .replaced_only = GetBool(request, "replaced_only"),
       .cancelled_only = GetBool(request, "cancelled_only"),
       .buffer_writes = GetBool(request, "include_buffer_writes"),
+      .third_party = GetBool(request, "include_third_party") || (type && *type == "third_party"),
    };
    if (const std::optional<std::string> stage = arg("stage"); stage && !(filter.stage = ParseStage(*stage)))
       return Error("'stage' is VS, HS, DS, GS, PS or CS");
@@ -1461,8 +1462,8 @@ std::string TraceList(const Request& request)
    Replies::TraceList reply;
    // 2.0 records no binding entries yet: include_bindings has nothing to include
    reply.ignored_args = GetIgnoredArgs(request,
-      {"type", "stage", "resource", "variant", "hash", "filter", "include_vs", "include_bindings", "include_buffer_writes", "replaced_only", "cancelled_only", "offset",
-         "limit"});
+      {"type", "stage", "resource", "variant", "hash", "filter", "include_vs", "include_bindings", "include_buffer_writes", "include_third_party", "replaced_only", "cancelled_only",
+         "offset", "limit"});
    reply.total = frame->events.size();
    for (size_t i = 0; i < frame->events.size(); i++)
    {

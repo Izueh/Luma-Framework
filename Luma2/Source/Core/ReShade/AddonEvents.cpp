@@ -14,6 +14,14 @@
 
 #include "Hooks/HookManager.hpp"
 #include "Hooks/HookScope.hpp"
+#include "ReShade/ReShadeABI.hpp"
+#if DEVELOPMENT
+#include <d3d11.h>
+#include "Shaders/D3D11/D3D11Variants.hpp"
+#include "Shaders/ShaderDatabase.hpp"
+#include "Shaders/ShaderStages.hpp"
+#include "Trace/FrameCapture.hpp"
+#endif
 #include "System/Modules.hpp"
 #include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
@@ -38,6 +46,89 @@ using RegisterForAddonFunction = void(__cdecl*)(void* module, uint32_t event, vo
 using UnregisterAddonFunction = void(__cdecl*)(void* module);
 
 std::array<std::atomic<void*>, SLOT_COUNT> handlers = {};
+#if DEVELOPMENT
+std::array<std::atomic<uint32_t>, SLOT_COUNT> slot_events = {};
+std::array<std::string, SLOT_COUNT> slot_owner_names = {};
+
+bool IsDrawOrDispatchEvent(uint32_t event)
+{
+   switch (static_cast<ABI::Event>(event))
+   {
+   case ABI::Event::Draw:
+   case ABI::Event::DrawIndexed:
+   case ABI::Event::Dispatch:
+   case ABI::Event::DrawOrDispatchIndirect:
+   case ABI::Event::DispatchMesh:
+   case ABI::Event::DispatchRays: return true;
+   default: return false;
+   }
+}
+
+std::string_view GetDrawEventName(uint32_t event)
+{
+   switch (static_cast<ABI::Event>(event))
+   {
+   case ABI::Event::Draw: return "Draw";
+   case ABI::Event::DrawIndexed: return "DrawIndexed";
+   case ABI::Event::Dispatch: return "Dispatch";
+   case ABI::Event::DrawOrDispatchIndirect: return "DrawOrDispatchIndirect";
+   case ABI::Event::DispatchMesh: return "DispatchMesh";
+   case ABI::Event::DispatchRays: return "DispatchRays";
+   default: return "Call";
+   }
+}
+
+void CaptureBoundShadersForIntercept(uint32_t event, uint64_t cmd_list_arg, std::vector<Trace::Capture::Shader>& out_shaders, bool& out_deferred)
+{
+   auto* cmd_list = reinterpret_cast<ABI::DeviceObject*>(static_cast<uintptr_t>(cmd_list_arg));
+   if (!cmd_list)
+      return;
+   ABI::Device* device = cmd_list->GetDevice();
+   if (!device || device->GetApi() != ABI::DeviceApi::D3D11)
+      return;
+   auto* context = reinterpret_cast<ID3D11DeviceContext*>(static_cast<uintptr_t>(cmd_list->GetNative()));
+   if (!context)
+      return;
+   out_deferred = context->GetType() == D3D11_DEVICE_CONTEXT_DEFERRED;
+   const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(context);
+   if (!bound)
+      return;
+   const Shaders::StageSet stages = static_cast<ABI::Event>(event) == ABI::Event::Dispatch ? Shaders::COMPUTE_STAGES
+      : static_cast<ABI::Event>(event) == ABI::Event::DrawOrDispatchIndirect               ? (Shaders::GRAPHICS_STAGES | Shaders::COMPUTE_STAGES)
+                                                                                           : Shaders::GRAPHICS_STAGES;
+   for (size_t i = 0; i < bound->shaders.size(); i++)
+   {
+      const ShaderStage stage = ShaderStage(i);
+      const Shaders::Database::Shader* shader = bound->shaders[i];
+      if (!stages.Has(stage) || !shader)
+         continue;
+      Trace::Capture::Shader& recorded = out_shaders.emplace_back(Trace::Capture::Shader{
+         .stage = stage,
+         .hash = shader->hash,
+         .name = std::string(shader->name),
+      });
+      for (const Shaders::Variants::Variant& variant : Shaders::Variants::GetVariants(shader->hash))
+      {
+         if (variant.compiled)
+            recorded.variants.push_back(variant.source);
+      }
+      recorded.forced = shader->forced_variant.load(std::memory_order_relaxed);
+   }
+}
+
+void RecordInterceptedCall(size_t slot, uint32_t event_id, std::vector<Trace::Capture::Shader> shaders, bool deferred)
+{
+   Trace::Capture::Event entry;
+   entry.type = Trace::Capture::EventType::ThirdPartyWork;
+   entry.name = std::format("{} ({} intercepted)", slot_owner_names[slot].empty() ? std::string_view("ReShade add-on") : std::string_view(slot_owner_names[slot]),
+      GetDrawEventName(event_id));
+   entry.outcome = Trace::Capture::Outcome::Replaced;
+   entry.thread = GetCurrentThreadId();
+   entry.deferred = deferred;
+   entry.shaders = std::move(shaders);
+   Trace::Capture::Add(std::move(entry));
+}
+#endif
 
 template <size_t Index>
 uint64_t __cdecl Wrapper(LUMA_HANDLER_ARGS_DECL)
@@ -45,8 +136,26 @@ uint64_t __cdecl Wrapper(LUMA_HANDLER_ARGS_DECL)
    const auto handler = reinterpret_cast<Handler>(handlers[Index].load(std::memory_order_acquire));
    if (!handler)
       return 0;
+#if DEVELOPMENT
+   const uint32_t event_id = slot_events[Index].load(std::memory_order_relaxed);
+   const bool trace_draw = Trace::Capture::IsCapturing() && IsDrawOrDispatchEvent(event_id);
+   std::vector<Trace::Capture::Shader> bound_shaders;
+   bool deferred = false;
+   if (trace_draw)
+      CaptureBoundShadersForIntercept(event_id, a0, bound_shaders, deferred);
+   uint64_t result = 0;
+   {
+      Hooks::Scope::Guard scope;
+      result = handler(LUMA_HANDLER_ARGS);
+   }
+   // ReShade draw/dispatch callbacks return bool (low byte in AL): true means the add-on consumed the game's call
+   if (trace_draw && (result & 0xFFu) != 0)
+      RecordInterceptedCall(Index, event_id, std::move(bound_shaders), deferred);
+   return result;
+#else
    Hooks::Scope::Guard scope;
    return handler(LUMA_HANDLER_ARGS);
+#endif
 }
 
 template <size_t... Index>
@@ -264,6 +373,10 @@ Wrapped TryWrap(void* module, uint32_t event, void* callback)
          return {};
       }
       registrations[slot] = {event, callback, owner};
+#if DEVELOPMENT
+      slot_owner_names[slot] = Utils::Strings::ToUtf8(System::Modules::GetPath(owner).filename());
+      slot_events[slot].store(event, std::memory_order_relaxed);
+#endif
       handlers[slot].store(callback, std::memory_order_release);
       wrapped_count.fetch_add(1, std::memory_order_relaxed);
       if (std::find(logged_owners.begin(), logged_owners.end(), owner) == logged_owners.end())
@@ -290,6 +403,9 @@ Wrapped Release(uint32_t event, void* callback)
       return {};
    const Wrapped found = {WRAPPERS[slot], registrations[slot].owner};
    handlers[slot].store(nullptr, std::memory_order_release);
+#if DEVELOPMENT
+   slot_events[slot].store(0, std::memory_order_relaxed);
+#endif
    registrations[slot] = {};
    wrapped_count.fetch_sub(1, std::memory_order_relaxed);
    return found;
@@ -306,6 +422,9 @@ void ReleaseAllForOwner(HMODULE owner)
       if (registrations[slot].callback && registrations[slot].owner == owner)
       {
          handlers[slot].store(nullptr, std::memory_order_release);
+#if DEVELOPMENT
+         slot_events[slot].store(0, std::memory_order_relaxed);
+#endif
          registrations[slot] = {};
          released++;
       }

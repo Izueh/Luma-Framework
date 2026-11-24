@@ -126,8 +126,27 @@ bool Matches(const Event& event, const Filter& filter)
    };
    const auto matches_resource = [&](const Resource& resource) { return contains(resource.id) || contains(resource.debug_name); };
    const bool has_shader_filter = filter.stage || filter.hash || !filter.text.empty();
-   if (event.type == EventType::Present || event.type == EventType::ThirdPartyWork)
+   if (event.type == EventType::Present)
       return !has_shader_filter && !filter.replaced_only && !filter.cancelled_only;
+   if (event.type == EventType::ThirdPartyWork)
+   {
+      if (!filter.third_party)
+         return false;
+      if (event.shaders.empty())
+         return !filter.stage && !filter.hash && !filter.replaced_only && !filter.cancelled_only && (filter.text.empty() || contains(event.name));
+      const Shader* primary = GetPrimaryShader(event);
+      if (filter.stage && std::ranges::none_of(event.shaders, [&](const Shader& shader) { return shader.stage == *filter.stage; }))
+         return false;
+      if (filter.hash && std::ranges::none_of(event.shaders, [&](const Shader& shader) { return shader.hash == *filter.hash; }))
+         return false;
+      if (filter.replaced_only && (!primary || primary->variants.empty()))
+         return false;
+      if (filter.cancelled_only && event.outcome == Outcome::Ran)
+         return false;
+      if (filter.text.empty() || contains(event.name))
+         return true;
+      return std::ranges::any_of(event.shaders, [&](const Shader& shader) { return contains(std::format("0x{:08X}", shader.hash)) || contains(shader.name); });
+   }
    if (IsResourceEvent(event))
    {
       if (filter.stage || filter.hash || filter.replaced_only || filter.cancelled_only)

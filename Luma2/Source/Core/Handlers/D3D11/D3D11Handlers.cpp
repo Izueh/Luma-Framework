@@ -450,6 +450,8 @@ bool PreCopyResource(ID3D11DeviceContext* context, ID3D11Resource* destination, 
 #if DEVELOPMENT
    if (Trace::Capture::IsCapturing())
       Trace::Capture::D3D11::AddCopy(context, "CopyResource", destination, source, {});
+   if (Trace::DebugDraw::IsActive())
+      Trace::DebugDraw::CaptureD3D11(context, source);
 #endif
    return Resources::Mirrors::IsNeeded() && Resources::Mirrors::D3D11::RedirectCopy(context, destination, source);
 }
@@ -473,6 +475,8 @@ bool PreCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* dest
          copy.source_box = std::array<uint64_t, 6>{box->left, box->top, box->front, box->right, box->bottom, box->back};
       Trace::Capture::D3D11::AddCopy(context, "CopySubresourceRegion", destination, source, copy);
    }
+   if (Trace::DebugDraw::IsActive())
+      Trace::DebugDraw::CaptureD3D11(context, source);
 #endif
    return Resources::Mirrors::IsNeeded() &&
       Resources::Mirrors::D3D11::RedirectCopyRegion(context, destination, destination_subresource, x, y, z, source, source_subresource, box, copy_flags);
@@ -487,6 +491,8 @@ bool PreResolveSubresource(ID3D11DeviceContext* context, ID3D11Resource* destina
    if (Trace::Capture::IsCapturing())
       Trace::Capture::D3D11::AddCopy(context, "ResolveSubresource", destination, source,
          {.kind = Trace::Capture::CopyKind::Resolve, .source_subresource = source_subresource, .destination_subresource = destination_subresource, .resolve_format = uint32_t(format)});
+   if (Trace::DebugDraw::IsActive())
+      Trace::DebugDraw::CaptureD3D11(context, source);
 #endif
    return Resources::Mirrors::IsNeeded() && Resources::Mirrors::D3D11::RedirectResolve(context, destination, destination_subresource, source, source_subresource, format);
 }

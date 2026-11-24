@@ -15,10 +15,16 @@ enum class Event : uint32_t
 {
    InitEffectRuntime = 9, // void (api::effect_runtime* runtime)
    DestroyEffectRuntime = 10, // void (api::effect_runtime* runtime)
+   Draw = 52, // bool (api::command_list* cmd_list, uint32_t vertex_count, uint32_t instance_count, uint32_t first_vertex, uint32_t first_instance)
+   DrawIndexed = 53, // bool (api::command_list* cmd_list, uint32_t index_count, uint32_t instance_count, uint32_t first_index, int32_t vertex_offset, uint32_t first_instance)
+   Dispatch = 54, // bool (api::command_list* cmd_list, uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z)
+   DrawOrDispatchIndirect = 55, // bool (api::command_list* cmd_list, api::indirect_command type, api::resource buffer, uint64_t offset, uint32_t draw_count, uint32_t stride)
    Present = 74, // void (api::command_queue* queue, api::swapchain* swapchain, const api::rect* source_rect, const api::rect* dest_rect, uint32_t dirty_rect_count, const api::rect* dirty_rects)
    ReShadeBeginEffects = 76, // void (api::effect_runtime* runtime, api::command_list* cmd_list, api::resource_view rtv, api::resource_view rtv_srgb)
    ReShadeFinishEffects = 77, // same as ReShadeBeginEffects
    ReShadeOpenOverlay = 86, // bool (api::effect_runtime* runtime, bool open, api::input_source source): true prevents the change
+   DispatchMesh = 89, // bool (api::command_list* cmd_list, uint32_t group_count_x, uint32_t group_count_y, uint32_t group_count_z)
+   DispatchRays = 90, // bool (api::command_list* cmd_list, ...)
    FinishPresent = 100, // void (api::command_queue* queue, api::swapchain* swapchain)
 };
 
