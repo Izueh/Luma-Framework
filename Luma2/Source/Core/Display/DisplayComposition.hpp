@@ -32,7 +32,7 @@ enum class Encoding : uint32_t
 {
    Linear, // scRGB
    Pq, // HDR10
-   Srgb, // SDR on an 8 or 10 bit buffer
+   Srgb, // SDR on an 8 or 10 bit buffer (gamma 2.2 encoded)
 };
 
 // What decides a composition, from the swapchain
@@ -83,6 +83,8 @@ void RegisterResources();
 std::optional<Pass> Plan(const Inputs& inputs);
 // Presenting thread, before drawing `pass`: what its cbuffer is written with
 void SetCurrent(const Pass& pass);
+// Whether Luma is enabled and at least one game shader variant is loaded
+bool IsModActive();
 } // namespace Composition
 } // namespace Display
 } // namespace Luma

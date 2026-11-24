@@ -1,12 +1,22 @@
 #include "System/MonitorDisplay.hpp"
 
+#include <algorithm>
+#include <array>
+#include <cmath>
 #include <optional>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <dxgi1_6.h>
+#include <icm.h>
 #include <wrl/client.h>
+#if LUMA_USE_NVAPI
+#include <nvapi.h>
+#endif
 
 #include "System/Modules.hpp"
+#include "Utils/Strings.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -14,6 +24,52 @@ namespace Luma {
 namespace System {
 namespace Display {
 namespace {
+constexpr auto DISPLAYCONFIG_DEVICE_INFO_SET_SDR_WHITE_LEVEL = DISPLAYCONFIG_DEVICE_INFO_TYPE(0xFFFFFFEE);
+
+struct alignas(4) DisplayConfigSetSdrWhiteLevel
+{
+   DISPLAYCONFIG_DEVICE_INFO_HEADER header;
+   ULONG sdr_white_level;
+   BYTE final_value;
+};
+
+// Luma's own factory, from the system's dxgi.dll: the game's may be a proxy's
+ComPtr<IDXGIFactory1> factory;
+bool first_change_query = true;
+
+IDXGIFactory1* EnsureFactory()
+{
+   if (factory && factory->IsCurrent())
+      return factory.Get();
+   using CreateFactory = HRESULT(WINAPI*)(REFIID, void**);
+   static const auto CREATE = reinterpret_cast<CreateFactory>(Modules::FindExport(Modules::FindSystemModule(L"dxgi.dll"), "CreateDXGIFactory1"));
+   factory.Reset();
+   if (CREATE)
+      CREATE(IID_PPV_ARGS(&factory));
+   return factory.Get();
+}
+
+ComPtr<IDXGIOutput> FindOutput(HMONITOR monitor)
+{
+   if (!monitor)
+      return nullptr;
+   IDXGIFactory1* dxgi_factory = EnsureFactory();
+   if (!dxgi_factory)
+      return nullptr;
+   ComPtr<IDXGIAdapter1> adapter;
+   for (UINT adapter_index = 0; SUCCEEDED(dxgi_factory->EnumAdapters1(adapter_index, adapter.ReleaseAndGetAddressOf())); adapter_index++)
+   {
+      ComPtr<IDXGIOutput> candidate;
+      for (UINT output_index = 0; SUCCEEDED(adapter->EnumOutputs(output_index, candidate.ReleaseAndGetAddressOf())); output_index++)
+      {
+         DXGI_OUTPUT_DESC desc = {};
+         if (SUCCEEDED(candidate->GetDesc(&desc)) && desc.Monitor == monitor)
+            return candidate;
+      }
+   }
+   return nullptr;
+}
+
 // The active path whose source is on the window's monitor
 std::optional<DISPLAYCONFIG_PATH_INFO> FindPath(HMONITOR monitor)
 {
@@ -57,6 +113,92 @@ HMONITOR GetMonitor(HWND window)
 {
    return MonitorFromWindow(window, window ? MONITOR_DEFAULTTONEAREST : MONITOR_DEFAULTTOPRIMARY);
 }
+
+#if LUMA_USE_NVAPI
+bool HasUserHdrColorProfile(const DISPLAYCONFIG_PATH_INFO& path)
+{
+   using GetDisplayDefault = HRESULT(WINAPI*)(WCS_PROFILE_MANAGEMENT_SCOPE, LUID, UINT32, COLORPROFILETYPE, COLORPROFILESUBTYPE, LPWSTR*);
+   using GetDisplayUserScope = HRESULT(WINAPI*)(LUID, UINT32, WCS_PROFILE_MANAGEMENT_SCOPE*);
+   static const HMODULE MSCMS = LoadLibraryExW(L"mscms.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+   static const auto GET_DEFAULT = reinterpret_cast<GetDisplayDefault>(Modules::FindExport(MSCMS, "ColorProfileGetDisplayDefault"));
+   static const auto GET_USER_SCOPE = reinterpret_cast<GetDisplayUserScope>(Modules::FindExport(MSCMS, "ColorProfileGetDisplayUserScope"));
+   if (!GET_DEFAULT || !GET_USER_SCOPE)
+      return false;
+   WCS_PROFILE_MANAGEMENT_SCOPE scope = WCS_PROFILE_MANAGEMENT_SCOPE_SYSTEM_WIDE;
+   if (FAILED(GET_USER_SCOPE(path.targetInfo.adapterId, path.sourceInfo.id, &scope)) || scope != WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER)
+      return false;
+   PWSTR profile_name = nullptr;
+   const HRESULT result = GET_DEFAULT(WCS_PROFILE_MANAGEMENT_SCOPE_CURRENT_USER, path.targetInfo.adapterId, path.sourceInfo.id, CPT_ICC,
+      CPST_EXTENDED_DISPLAY_COLOR_MODE, &profile_name);
+   const bool has_profile = SUCCEEDED(result) && profile_name && profile_name[0] != L'\0';
+   if (profile_name)
+      LocalFree(profile_name);
+   return has_profile;
+}
+
+bool EnsureNvapiInitialized()
+{
+   static const bool INITIALIZED = NvAPI_Initialize() == NVAPI_OK;
+   return INITIALIZED;
+}
+
+NvU32 GetNvapiDisplayId(HMONITOR monitor)
+{
+   if (!monitor || !EnsureNvapiInitialized())
+      return 0;
+   MONITORINFOEXW monitor_info = {};
+   monitor_info.cbSize = sizeof(monitor_info);
+   if (!GetMonitorInfoW(monitor, &monitor_info))
+      return 0;
+   const std::string display_name = Utils::Strings::ToUtf8(monitor_info.szDevice);
+   NvU32 display_id = 0;
+   return NvAPI_DISP_GetDisplayIdByDisplayName(display_name.c_str(), &display_id) == NVAPI_OK ? display_id : 0;
+}
+
+bool GetNvapiHdrCapabilities(NvU32 display_id, NV_HDR_CAPABILITIES& capabilities)
+{
+   if (display_id == 0)
+      return false;
+   for (const NvU32 version : {NV_HDR_CAPABILITIES_VER3, NV_HDR_CAPABILITIES_VER2, NV_HDR_CAPABILITIES_VER1})
+   {
+      capabilities = {};
+      capabilities.version = version;
+      capabilities.driverExpandDefaultHdrParameters = 1;
+      if (NvAPI_Disp_GetHdrCapabilities(display_id, &capabilities) == NVAPI_OK)
+         return true;
+   }
+   return false;
+}
+
+void EngageHdr10PlusGaming(HMONITOR monitor, std::optional<float>& out_hdr10_plus_peak_nits)
+{
+   const NvU32 display_id = GetNvapiDisplayId(monitor);
+   NV_HDR_CAPABILITIES capabilities = {};
+   if (!GetNvapiHdrCapabilities(display_id, capabilities))
+      return;
+   if (capabilities.isHdr10PlusGamingSupported)
+   {
+      // HDR10+ Gaming index-to-nits mapping from Samsung VSVDB specification
+      static constexpr std::array<float, 16> NIT_VALUES = {
+         100.f, 200.f, 300.f, 400.f, 500.f, 600.f, 800.f, 1000.f, 1200.f, 1500.f, 2000.f, 2500.f, 3000.f, 4000.f, 6000.f, 8000.f};
+      const size_t index = capabilities.hdr10plus_vsvdb.peak_luminance_index;
+      if (index < NIT_VALUES.size() && NIT_VALUES[index] > 0.f)
+         out_hdr10_plus_peak_nits = NIT_VALUES[index];
+   }
+   const NV_DISPLAY_OUTPUT_MODE target_mode =
+      capabilities.isHdr10PlusGamingSupported ? NV_DISPLAY_OUTPUT_MODE_HDR10PLUS_GAMING : NV_DISPLAY_OUTPUT_MODE_HDR10;
+   NV_DISPLAY_OUTPUT_MODE current_mode = NV_DISPLAY_OUTPUT_MODE_SDR;
+   if (NvAPI_Disp_GetOutputMode(display_id, &current_mode) == NVAPI_OK && current_mode == target_mode)
+      return;
+   NV_DISPLAY_OUTPUT_MODE requested_mode = target_mode;
+   const NvAPI_Status status = NvAPI_Disp_SetOutputMode(display_id, &requested_mode);
+   if (status != NVAPI_OK && target_mode == NV_DISPLAY_OUTPUT_MODE_HDR10PLUS_GAMING && status != NVAPI_RESOURCE_IN_USE)
+   {
+      requested_mode = NV_DISPLAY_OUTPUT_MODE_HDR10;
+      NvAPI_Disp_SetOutputMode(display_id, &requested_mode);
+   }
+}
+#endif
 } // namespace
 
 Info Query(HWND window, IDXGIOutput* output)
@@ -78,8 +220,8 @@ Info Query(HWND window, IDXGIOutput* output)
       // advanced color, so Windows leaves HDR detection to IDXGIOutput6::GetDesc1 when the 24H2 query isn't available.
       else if (DISPLAYCONFIG_GET_ADVANCED_COLOR_INFO legacy = {}; GetDeviceInfo(*path, DISPLAYCONFIG_DEVICE_INFO_GET_ADVANCED_COLOR_INFO, legacy))
       {
-         static const bool is_wine = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version") != nullptr;
-         if (is_wine)
+         static const bool IS_WINE = GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "wine_get_version") != nullptr;
+         if (IS_WINE)
          {
             info.hdr_supported = legacy.advancedColorSupported && !legacy.advancedColorForceDisabled;
             info.hdr_enabled = legacy.advancedColorEnabled;
@@ -89,35 +231,43 @@ Info Query(HWND window, IDXGIOutput* output)
       if (DISPLAYCONFIG_SDR_WHITE_LEVEL white = {}; GetDeviceInfo(*path, DISPLAYCONFIG_DEVICE_INFO_GET_SDR_WHITE_LEVEL, white))
          info.sdr_white_nits = float(white.SDRWhiteLevel) / 1000.f * SRGB_WHITE_NITS;
    }
+   ComPtr<IDXGIOutput> resolved_output = output;
+   if (!resolved_output)
+      resolved_output = FindOutput(info.monitor);
    ComPtr<IDXGIOutput6> output6;
    DXGI_OUTPUT_DESC1 desc = {};
-   if (output && SUCCEEDED(output->QueryInterface(IID_PPV_ARGS(&output6))) && SUCCEEDED(output6->GetDesc1(&desc)))
+   if (resolved_output && SUCCEEDED(resolved_output->QueryInterface(IID_PPV_ARGS(&output6))) && SUCCEEDED(output6->GetDesc1(&desc)))
    {
       if (!known)
       {
          info.hdr_enabled = desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 || desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709;
          info.hdr_supported |= info.hdr_enabled;
       }
-      // Windows' calibration, kept between SDR and HDR. It can be stale after a display change until the next query.
-      if (desc.MaxLuminance > 0.f)
+      // SDR mode reports ~270 nits: only use MaxLuminance when it reflects an HDR peak
+      if (desc.MaxLuminance >= MIN_PEAK_NITS)
          info.peak_nits = desc.MaxLuminance;
       info.min_nits = desc.MinLuminance;
       info.max_full_frame_nits = desc.MaxFullFrameLuminance > 0.f ? desc.MaxFullFrameLuminance : info.peak_nits;
    }
+#if LUMA_USE_NVAPI
+   // Engage HDR10+ Gaming when HDR is on, and use its VSVDB peak brightness unless the user calibrated a custom HDR ICC profile in Windows
+   if (info.hdr_enabled)
+   {
+      std::optional<float> hdr10_plus_peak_nits;
+      EngageHdr10PlusGaming(info.monitor, hdr10_plus_peak_nits);
+      if (hdr10_plus_peak_nits && *hdr10_plus_peak_nits >= MIN_PEAK_NITS && (!path || !HasUserHdrColorProfile(*path)))
+         info.peak_nits = *hdr10_plus_peak_nits;
+   }
+#endif
    return info;
 }
 
 bool HasChanged()
 {
-   // Luma's own factory, from the system's dxgi.dll: the game's may be a proxy's
-   static ComPtr<IDXGIFactory1> factory;
-   if (factory && factory->IsCurrent())
+   const bool first = std::exchange(first_change_query, false);
+   if (!first && factory && factory->IsCurrent())
       return false;
-   using CreateFactory = HRESULT(WINAPI*)(REFIID, void**);
-   static const auto create = reinterpret_cast<CreateFactory>(Modules::FindExport(Modules::FindSystemModule(L"dxgi.dll"), "CreateDXGIFactory1"));
-   factory.Reset();
-   if (create)
-      create(IID_PPV_ARGS(&factory));
+   EnsureFactory();
    return true;
 }
 
@@ -151,6 +301,18 @@ bool SetHdrEnabled(HWND window, bool enabled)
       return DisplayConfigSetDeviceInfo(&state.header) == ERROR_SUCCESS;
    }
    return false;
+}
+
+bool SetSdrWhiteLevel(HWND window, float nits)
+{
+   const std::optional<DISPLAYCONFIG_PATH_INFO> path = FindPath(GetMonitor(window));
+   if (!path)
+      return false;
+   DisplayConfigSetSdrWhiteLevel state = {};
+   state.header = {DISPLAYCONFIG_DEVICE_INFO_SET_SDR_WHITE_LEVEL, sizeof(state), path->targetInfo.adapterId, path->targetInfo.id};
+   state.sdr_white_level = static_cast<ULONG>(std::round(1000.f * std::clamp(nits, SRGB_WHITE_NITS, MAX_OS_SDR_WHITE_NITS) / SRGB_WHITE_NITS));
+   state.final_value = TRUE;
+   return DisplayConfigSetDeviceInfo(&state.header) == ERROR_SUCCESS;
 }
 } // namespace Display
 } // namespace System

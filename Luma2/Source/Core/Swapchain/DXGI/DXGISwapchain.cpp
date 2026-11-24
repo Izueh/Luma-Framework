@@ -90,6 +90,8 @@ struct State
    // Mirror, ReShade reading the real swapchain: output switches that went through ReShade's wrapper, and whether one couldn't (no more are tried)
    uint32_t reshade_switches = 0;
    bool reshade_switch_stopped = false;
+   // Shader-side SDR fallback when OutputMode wants SDR but the real HDR swapchain can't resize live (InPlace or ReShade-blocked Mirror)
+   bool shader_sdr = false;
 };
 
 std::mutex status_mutex;
@@ -348,22 +350,25 @@ void ReleaseRealBuffers(State& state)
       state.presenter);
 }
 
-void RefreshDisplay(IDXGISwapChain* swapchain, State& state, bool force)
+bool RefreshDisplay(IDXGISwapChain* swapchain, State& state, bool force)
 {
    // Asked again only when something changed: the queries take long enough to hitch a frame
    const HMONITOR monitor = MonitorFromWindow(state.window, MONITOR_DEFAULTTONEAREST);
    const bool changed = System::Display::HasChanged();
    if (!force && !changed && monitor == state.display.monitor)
-      return;
+      return false;
    ComPtr<IDXGIOutput> output;
    swapchain->GetContainingOutput(&output);
    const System::Display::Info display = System::Display::Query(state.window, output.Get());
-   if (display.hdr_enabled != state.display.hdr_enabled || display.monitor != state.display.monitor || force)
+   const bool display_changed = display.hdr_enabled != state.display.hdr_enabled || display.monitor != state.display.monitor ||
+      display.peak_nits != state.display.peak_nits || display.sdr_white_nits != state.display.sdr_white_nits;
+   if (display_changed || force)
    {
       Log::Info("Swapchain: display {} HDR {}{}, peak {:.0f} nits, SDR white {:.0f} nits", static_cast<void*>(display.monitor),
          display.hdr_enabled ? "on" : "off", display.hdr_supported ? "" : " (unsupported)", display.peak_nits, display.sdr_white_nits);
    }
    state.display = display;
+   return display_changed;
 }
 
 // Through ReShade's wrapper: its runtime holds views on the real buffers, which only its own ResizeBuffers lets go of. It sees the game's
@@ -415,28 +420,43 @@ void SwitchOutput(IDXGISwapChain* swapchain, State& state, OutputMode output)
    state.real.output = output;
    state.real.format = format;
    state.switch_failed_logged = false;
+   state.shader_sdr = false;
    ApplyColorSpace(swapchain, state);
-   Display::DisplayMode::ApplyOutputMode(output != OutputMode::Sdr, state.display);
+   Display::DisplayMode::ApplyOutputMode(output != OutputMode::Sdr, state.display, state.window, false);
 }
 
 // At present: Windows HDR for the user's HDR choice, Luma's color space again after the game set its own, and in Mirror the output
-// mode the display wants
-void FollowOutputMode(IDXGISwapChain* swapchain, State& state)
+// mode the display wants (or shader-side SDR when an HDR swapchain can't resize live)
+void FollowOutputMode(IDXGISwapChain* swapchain, State& state, bool display_changed)
 {
    const bool requests_hdr = RequestsHdr();
    if (requests_hdr && !state.hdr_requested && state.display.hdr_supported && !state.display.hdr_enabled)
    {
       Log::Info("Swapchain: turning Windows HDR on for the HDR output picked: {}", System::Display::SetHdrEnabled(state.window, true) ? "done" : "failed");
-      RefreshDisplay(swapchain, state, true);
+      display_changed |= RefreshDisplay(swapchain, state, true);
    }
    state.hdr_requested = requests_hdr;
-   if (std::exchange(state.reapply_color_space, false))
-      ApplyColorSpace(swapchain, state, true);
+   const OutputMode desired = GetOutputMode(state.display.hdr_enabled);
+   bool switched = false;
    if (state.mode == Mode::Mirror && state.real.flip && !state.reshade_switch_stopped)
    {
-      if (const OutputMode output = GetOutputMode(state.display.hdr_enabled); output != state.real.output)
-         SwitchOutput(swapchain, state, output);
+      if (desired != state.real.output)
+      {
+         SwitchOutput(swapchain, state, desired);
+         switched = (state.real.output == desired);
+      }
    }
+   const bool shader_sdr = desired == OutputMode::Sdr && state.real.output != OutputMode::Sdr;
+   const bool shader_sdr_changed = shader_sdr != state.shader_sdr;
+   state.shader_sdr = shader_sdr;
+   if (!switched && (display_changed || shader_sdr_changed))
+   {
+      Display::DisplayMode::ApplyOutputMode(state.real.output != OutputMode::Sdr, state.display, state.window, shader_sdr);
+      if (display_changed)
+         state.reapply_color_space = true;
+   }
+   if (std::exchange(state.reapply_color_space, false) && !switched)
+      ApplyColorSpace(swapchain, state, true);
 }
 
 void UpdateStatus(IDXGISwapChain* swapchain, const State& state)
@@ -552,7 +572,7 @@ void OnCreated(IDXGISwapChain* swapchain, const Presenter& presenter)
    if (ManagesOutput(state->mode))
    {
       ApplyColorSpace(swapchain, *state);
-      Display::DisplayMode::ApplyOutputMode(state->real.output != OutputMode::Sdr, state->display);
+      Display::DisplayMode::ApplyOutputMode(state->real.output != OutputMode::Sdr, state->display, state->window);
    }
    else
    {
@@ -624,7 +644,8 @@ void OnResized(IDXGISwapChain* swapchain, bool succeeded)
       return;
    }
    ApplyColorSpace(swapchain, *state);
-   Display::DisplayMode::ApplyOutputMode(state->real.output != OutputMode::Sdr, state->display);
+   state->shader_sdr = false;
+   Display::DisplayMode::ApplyOutputMode(state->real.output != OutputMode::Sdr, state->display, state->window, false);
    UpdateStatus(swapchain, *state);
 }
 
@@ -758,10 +779,10 @@ void Compose(IDXGISwapChain* swapchain)
       return;
    state->present_thread = GetCurrentThreadId();
    state->composed_this_frame = true;
-   RefreshDisplay(swapchain, *state, false);
+   const bool display_changed = RefreshDisplay(swapchain, *state, false);
    const bool mirror = state->mode == Mode::Mirror;
    if (ManagesOutput(state->mode))
-      FollowOutputMode(swapchain, *state);
+      FollowOutputMode(swapchain, *state, display_changed);
    const bool game_pq = state->game_color_space &&
       (*state->game_color_space == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020 || *state->game_color_space == DXGI_COLOR_SPACE_RGB_STUDIO_G2084_NONE_P2020);
    const Display::Composition::Inputs inputs = {

@@ -1,10 +1,17 @@
 #include <doctest/doctest.h>
 
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
 #include <Windows.h>
 
 #include "Display/DisplayComposition.hpp"
+#include "Display/DisplayMode.hpp"
+#include "Display/DXGI/DXGISpoofing.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
+#include "Settings/SettingsStorage.hpp"
 #include "Swapchain/Swapchain.hpp"
 #include "System/WindowPolicy.hpp"
 
@@ -249,5 +256,166 @@ TEST_CASE("Composition: InPlace SDR passthrough skips unnecessary re-encoding, a
    CHECK(pq_pass->custom.custom_data_1 == 3u);
 
    Display::Composition::SetOptions({});
+   Settings::Clear();
+}
+
+TEST_CASE("DisplayMode: PeakWhite defaults and resets to the display's peak nits, stores 0 at default, and LinkOsWhiteLevel syncs paper white")
+{
+   Settings::Clear();
+   Settings::Storage::Reset();
+   Display::DisplayMode::Register();
+   Display::Composition::RegisterSettings();
+   Display::Composition::SetOptions({.ui_draw_type = 1});
+
+   const std::filesystem::path path = std::filesystem::temp_directory_path() / "luma2_display_mode_test.toml";
+   std::error_code error;
+   std::filesystem::remove(path, error);
+
+   const Settings::Setting* peak_setting = Settings::Find(Settings::Core::PEAK_WHITE.key);
+   REQUIRE(peak_setting);
+   REQUIRE(peak_setting->range.has_value());
+   CHECK(std::get<float>(peak_setting->range->min) == 400.f);
+   CHECK(std::get<float>(peak_setting->range->max) == 10000.f);
+   CHECK(Settings::Get(Settings::Core::PEAK_WHITE) >= 400.f);
+
+   // ApplyOutputMode updates PeakWhite's default and live value to the display's calibrated peak nits
+   const System::Display::Info display_970 = {.hdr_supported = true, .hdr_enabled = true, .peak_nits = 970.f, .sdr_white_nits = 240.f};
+   Display::DisplayMode::ApplyOutputMode(true, display_970);
+   CHECK(Settings::Get(Settings::Core::PEAK_WHITE) == 970.f);
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.PeakWhiteNits == 970.f);
+
+   // User override updates LumaSettings, and Reset restores the display's 970 nits (never 0)
+   REQUIRE(Settings::Set(Settings::Core::PEAK_WHITE, 1200.f));
+   CHECK(Settings::Get(Settings::Core::PEAK_WHITE) == 1200.f);
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.PeakWhiteNits == 1200.f);
+   REQUIRE(Settings::Reset(Settings::Core::PEAK_WHITE.key));
+   CHECK(Settings::Get(Settings::Core::PEAK_WHITE) == 970.f);
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.PeakWhiteNits == 970.f);
+
+   // Saving while at the display's default writes 0 to Luma.toml so future launches and display changes follow the display
+   REQUIRE(Settings::Storage::Save(path));
+   {
+      std::stringstream stream;
+      stream << std::ifstream(path).rdbuf();
+      CHECK(stream.str().find("PeakWhite = 0") != std::string::npos);
+   }
+
+   // Next boot: loading PeakWhite = 0 keeps it at default, and a display with 800 nits peak updates it to 800 nits
+   Settings::Clear();
+   Settings::Storage::Reset();
+   Display::DisplayMode::Register();
+   Display::Composition::RegisterSettings();
+   Display::Composition::SetOptions({.ui_draw_type = 1});
+   REQUIRE(Settings::Storage::Load(path));
+   const System::Display::Info display_800 = {.hdr_supported = true, .hdr_enabled = true, .peak_nits = 800.f, .sdr_white_nits = 240.f};
+   Display::DisplayMode::ApplyOutputMode(true, display_800);
+   CHECK(Settings::Get(Settings::Core::PEAK_WHITE) == 800.f);
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.PeakWhiteNits == 800.f);
+
+   // Saving a customized PeakWhite (1500 nits) persists 1500 across boots and display changes, while Reset returns to 800 nits
+   REQUIRE(Settings::Set(Settings::Core::PEAK_WHITE, 1500.f));
+   REQUIRE(Settings::Set(Settings::Core::LINK_OS_WHITE_LEVEL, true));
+   REQUIRE(Settings::Storage::Save(path));
+
+   Settings::Clear();
+   Settings::Storage::Reset();
+   Display::DisplayMode::Register();
+   Display::Composition::RegisterSettings();
+   Display::Composition::SetOptions({.ui_draw_type = 1});
+   REQUIRE(Settings::Storage::Load(path));
+   Display::DisplayMode::ApplyOutputMode(true, display_800);
+   CHECK(Settings::Get(Settings::Core::PEAK_WHITE) == 1500.f);
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.PeakWhiteNits == 1500.f);
+   // LinkOsWhiteLevel loaded true: initial ApplyOutputMode syncs PaperWhite and UIPaperWhite to display.sdr_white_nits (240 nits) and hides UIPaperWhite
+   CHECK(Settings::Get(Settings::Core::PAPER_WHITE) == 240.f);
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.GamePaperWhiteNits == 240.f);
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.UIPaperWhiteNits == 240.f);
+   const Settings::Setting* ui_paper = Settings::Find(Settings::Core::UI_PAPER_WHITE.key);
+   REQUIRE(ui_paper);
+   REQUIRE(ui_paper->is_visible);
+   CHECK_FALSE(ui_paper->is_visible());
+
+   REQUIRE(Settings::Reset(Settings::Core::PEAK_WHITE.key));
+   CHECK(Settings::Get(Settings::Core::PEAK_WHITE) == 800.f);
+
+   std::filesystem::remove(path, error);
+   Display::Composition::SetOptions({});
+   Settings::Storage::Reset();
+   Settings::Clear();
+}
+
+TEST_CASE("DisplayMode: Display Mode switches HDR/SDR in shaders without changing swapchain, and shader_sdr fallback tracks Windows HDR")
+{
+   Settings::Clear();
+   Display::DisplayMode::Register();
+   const System::Display::Info hdr_display = {.hdr_supported = true, .hdr_enabled = true, .peak_nits = 1000.f, .sdr_white_nits = 200.f};
+   Display::DisplayMode::ApplyOutputMode(true, hdr_display);
+   CHECK(Display::DisplayMode::IsHdr());
+   CHECK(Display::DisplayMode::HasHdrOutput());
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.DisplayMode == 1u);
+
+   // User switches Display Mode to SDR on an HDR swapchain: DisplayMode == 2 aligned to paper white
+   REQUIRE(Settings::Set(Settings::Core::DISPLAY_MODE, Settings::EnumIndex{1}));
+   CHECK_FALSE(Display::DisplayMode::IsHdr());
+   CHECK(Display::DisplayMode::HasHdrOutput());
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.DisplayMode == 2u);
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.PeakWhiteNits == Resources::LumaCBuffers::cb_luma_global_settings.GamePaperWhiteNits);
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.UIPaperWhiteNits == Resources::LumaCBuffers::cb_luma_global_settings.GamePaperWhiteNits);
+
+   // Switching back to HDR restores DisplayMode == 1
+   REQUIRE(Settings::Set(Settings::Core::DISPLAY_MODE, Settings::EnumIndex{0}));
+   CHECK(Display::DisplayMode::IsHdr());
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.DisplayMode == 1u);
+
+   // InPlace fallback when Windows HDR is turned off on an HDR swapchain: DisplayMode == 0 at 80 nits
+   const System::Display::Info sdr_display = {.hdr_supported = true, .hdr_enabled = false, .peak_nits = 270.f, .sdr_white_nits = 80.f};
+   Display::DisplayMode::ApplyOutputMode(true, sdr_display, nullptr, true);
+   CHECK_FALSE(Display::DisplayMode::IsHdr());
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.DisplayMode == 0u);
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.PeakWhiteNits == System::Display::SRGB_WHITE_NITS);
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.GamePaperWhiteNits == System::Display::SRGB_WHITE_NITS);
+
+   Settings::Clear();
+}
+
+TEST_CASE("DXGISpoofing: SpoofSdrDisplay reports SDR output desc and unsupported HDR color spaces")
+{
+   Settings::Clear();
+   Display::Spoofing::DXGI::Register();
+
+   DXGI_OUTPUT_DESC1 desc = {};
+   desc.ColorSpace = DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020;
+   desc.BitsPerColor = 10;
+   desc.MaxLuminance = 1000.f;
+   desc.MaxFullFrameLuminance = 600.f;
+
+   // Default off: untouched
+   Display::Spoofing::DXGI::OnOutputDesc(desc);
+   CHECK(desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+   CHECK(desc.MaxLuminance == 1000.f);
+   UINT support = DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT;
+   Display::Spoofing::DXGI::OnColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, support);
+   CHECK(support == DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT);
+
+   // Enabled: reports SDR G22 P709, 8-bit, <= 80 nits, and clears HDR color space support
+   REQUIRE(Settings::Set(Settings::Core::SPOOF_SDR_DISPLAY, true));
+   Display::Spoofing::DXGI::OnOutputDesc(desc);
+   CHECK(desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+   CHECK(desc.BitsPerColor == 8u);
+   CHECK(desc.MaxLuminance == System::Display::SRGB_WHITE_NITS);
+   CHECK(desc.MaxFullFrameLuminance == System::Display::SRGB_WHITE_NITS);
+
+   UINT pq_support = DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT;
+   Display::Spoofing::DXGI::OnColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, pq_support);
+   CHECK(pq_support == 0u);
+
+   UINT scrgb_support = DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT;
+   Display::Spoofing::DXGI::OnColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, scrgb_support);
+   CHECK(scrgb_support == 0u);
+
+   UINT sdr_support = DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT;
+   Display::Spoofing::DXGI::OnColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, sdr_support);
+   CHECK(sdr_support == DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT);
+
    Settings::Clear();
 }

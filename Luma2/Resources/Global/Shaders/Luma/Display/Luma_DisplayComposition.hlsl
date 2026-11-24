@@ -427,8 +427,9 @@ float4 Compose(float4 pos)
 			// SDR (on SDR)
 			else if (LumaSettings.DisplayMode <= 0)
 			{
-				// The SDR display will (usually) linearize with gamma 2.2, hence applying the usual gamma mismatch, so we don't correct gamma here
-				color.rgb = gamma_sRGB_to_linear(color.rgb, GCT_NONE);
+				// On an 8/10-bit SDR swapchain (OutputEncoding == 2) we encode with gamma 2.2, so decode with gamma 2.2 to pass through.
+				// On scRGB (OutputEncoding == 0), Windows encodes with sRGB while the display decodes with gamma 2.2, so decode with sRGB.
+				color.rgb = (LumaComposition.OutputEncoding == 2) ? gamma_to_linear(color.rgb, GCT_NONE) : gamma_sRGB_to_linear(color.rgb, GCT_NONE);
 			}
 			// HDR (we assume this is the default case for Luma users/devs, this isn't an officially supported case anyway) (we ignore "GAMMA_CORRECTION_RANGE_TYPE" and "VANILLA_ENCODING_TYPE" here, it doesn't matter)
 			else
@@ -514,15 +515,17 @@ float4 Compose(float4 pos)
 	{
 		color.rgb = saturate(color.rgb);
 
+		// 8/10-bit SDR swapchains encode with gamma 2.2 in EncodeOutput; scRGB SDR relies on Windows sRGB encoding
+		const uint sdrTransferFunction = (LumaComposition.OutputEncoding == 2) ? LUT_EXTRAPOLATION_TRANSFER_FUNCTION_GAMMA_2_2 : LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB;
 		if (POST_PROCESS_SPACE_TYPE == 1)
 		{
 			if (HasStage(STAGE_GAMMA))
-				ColorGradingLUTTransferFunctionInOutCorrected(color.rgb, (EARLY_DISPLAY_ENCODING != 0 && GAMMA_CORRECTION_TYPE < 2) ? GAMMA_CORRECTION_TYPE : VANILLA_ENCODING_TYPE, LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB, true);
+				ColorGradingLUTTransferFunctionInOutCorrected(color.rgb, (EARLY_DISPLAY_ENCODING != 0 && GAMMA_CORRECTION_TYPE < 2) ? GAMMA_CORRECTION_TYPE : VANILLA_ENCODING_TYPE, sdrTransferFunction, true);
 		}
 		else
 		{
 			if (HasStage(STAGE_DECODE))
-				color.rgb = ColorGradingLUTTransferFunctionOut(color.rgb, LUT_EXTRAPOLATION_TRANSFER_FUNCTION_SRGB, false);
+				color.rgb = ColorGradingLUTTransferFunctionOut(color.rgb, sdrTransferFunction, false);
 		}
 	}
 	// HDR and SDR in HDR
@@ -573,13 +576,12 @@ float4 Compose(float4 pos)
 		color.rgb *= postLinearizationScale;
 
 		bool gamutMap = HasStage(STAGE_GAMUT);
-#if DEVELOPMENT || TEST // Optionally clip in SDR to properly emulate SDR (dev only)
+		// Clip to SDR range in SDR-on-HDR mode (DisplayMode == 2)
 		if (LumaSettings.DisplayMode >= 2)
 		{
 			color.rgb = saturate(color.rgb);
 			gamutMap = false;
 		}
-#endif
 
 		float aspectRatio = sourceWidth / (float)sourceHeight;
 		bool blackBar = false;
@@ -643,9 +645,9 @@ float4 EncodeOutput(float4 color)
 	{
 		color.rgb = Linear_to_PQ(max(BT709_To_BT2020(color.rgb) * (sRGB_WhiteLevelNits / HDR10_MaxWhiteNits), 0.0), GCT_POSITIVE);
 	}
-	else if (LumaComposition.OutputEncoding == 2) // SDR: what Windows does to scRGB in SDR
+	else if (LumaComposition.OutputEncoding == 2) // SDR: gamma 2.2 for 8/10-bit G22_NONE_P709 buffers
 	{
-		color.rgb = linear_to_sRGB_gamma(saturate(color.rgb), GCT_NONE);
+		color.rgb = linear_to_gamma(saturate(color.rgb), GCT_NONE);
 	}
 	return color;
 }

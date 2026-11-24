@@ -245,7 +245,10 @@ bool Set(std::string_view key, const Value& value)
    Entry* entry = FindEntry(key);
    if (!entry || entry->setting.default_value.index() != value.index())
       return false;
-   const Value clamped_value = Clamp(entry->setting, value);
+   // 0 for PeakWhite is the config sentinel for the display's default peak luminance
+   const float* float_value = std::get_if<float>(&value);
+   const Value effective_value = (key == "Luma.Display.PeakWhite" && float_value && *float_value <= 0.f) ? entry->setting.default_value : value;
+   const Value clamped_value = Clamp(entry->setting, effective_value);
    if (clamped_value == Load(*entry))
       return true;
    Store(*entry, clamped_value);

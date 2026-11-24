@@ -500,15 +500,12 @@ void DrawResourceCard(std::string_view badge, std::span<const CardField> fields,
    Widgets::TextDim("Resource:");
    ImGui::SameLine(0.f, style.ItemInnerSpacing.x);
    const std::string res_desc = DescribeResource(resource);
+   const float res_max_width = std::max(unit * 8.f, card_start.x + avail_width - unit * 2.f - ImGui::GetCursorScreenPos().x);
    ImGui::PushFont(Fonts::GetMonospace(), 0.f);
-   ImGui::PushStyleColor(ImGuiCol_Text, resource.mirror ? Style::Colors::INJECTED : Style::Colors::TEXT);
-   ImGui::PushTextWrapPos(card_start.x + avail_width - unit * 2.f);
-   ImGui::TextUnformatted(res_desc.c_str());
+   Widgets::TextEllipsis(res_desc, res_max_width, resource.mirror ? Tone::Injected : Tone::Info,
+      std::format("Click to copy resource address ({})", resource.id));
    if (ImGui::IsItemClicked())
       ImGui::SetClipboardText(resource.id.c_str());
-   ImGui::SetItemTooltip("Click to copy resource address (%s)", resource.id.c_str());
-   ImGui::PopTextWrapPos();
-   ImGui::PopStyleColor();
    ImGui::PopFont();
 
    ImGui::EndGroup();

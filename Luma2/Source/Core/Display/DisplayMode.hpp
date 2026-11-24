@@ -9,8 +9,9 @@ namespace DisplayMode {
 // Registers the Display white-level settings before Game::Init
 void Register();
 // Presenting thread, when the output mode or the display changes: SDR output is SDR at 80 nits; HDR uses the
-// Display settings, the peak the display's unless the user set one
-void ApplyOutputMode(bool hdr, const System::Display::Info& display);
+// Display settings, the peak the display's unless the user set one. `shader_sdr` forces SDR in shaders when an
+// HDR swapchain cannot switch to an SDR swapchain live (InPlace mode or ReShade blocking resize).
+void ApplyOutputMode(bool hdr, const System::Display::Info& display, HWND window = nullptr, bool shader_sdr = false);
 // Presenting thread: swapchain is in Native mode (Luma does not manage HDR output or white levels)
 void SetUnmanaged();
 // Presenting thread: re-syncs LumaSettings white levels after UI draw type or settings change
@@ -19,8 +20,10 @@ void Refresh();
 void SetGameHdr(bool hdr);
 // Presenting thread, at every present: applies any change from SetGameHdr
 void Update();
-// Whether Luma is currently driving an HDR display mode
+// Whether Luma is currently driving an HDR display mode (DisplayMode == 1)
 bool IsHdr();
+// Whether Luma is managing an HDR swapchain output (HDR or SDR-on-HDR)
+bool HasHdrOutput();
 } // namespace DisplayMode
 } // namespace Display
 } // namespace Luma

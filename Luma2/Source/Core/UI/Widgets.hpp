@@ -150,7 +150,7 @@ void Code(std::string_view text);
 void Text(std::string_view text, Tone tone = Tone::Info);
 void TextDim(std::string_view text);
 // Draws text truncated with "..." if wider than `max_width` (0 = available width), showing the full text in a tooltip on hover
-void TextEllipsis(std::string_view text, float max_width = 0.f, Tone tone = Tone::Info);
+void TextEllipsis(std::string_view text, float max_width = 0.f, Tone tone = Tone::Info, std::string_view tooltip = {});
 
 // A transient message in the corner of the screen, also shown while the overlay is closed. Any thread.
 void Toast(Tone tone, std::string message);

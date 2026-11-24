@@ -129,6 +129,54 @@ void Tooltip(std::string_view text)
    ImGui::EndTooltip();
 }
 
+// Truncates `text` with "..." so it fits within `max_width` pixels without splitting UTF-8 codepoints
+std::string FitWithEllipsis(std::string_view text, float max_width, bool& truncated)
+{
+   truncated = false;
+   if (max_width <= 0.f || ImGui::CalcTextSize(text.data(), text.data() + text.size()).x <= max_width)
+      return std::string(text);
+   truncated = true;
+   const float ellipsis_w = ImGui::CalcTextSize("...").x;
+   if (max_width <= ellipsis_w)
+      return "...";
+   size_t lo = 0;
+   size_t hi = text.size();
+   while (lo < hi)
+   {
+      const size_t mid = (lo + hi + 1) / 2;
+      if (ImGui::CalcTextSize(text.data(), text.data() + mid).x + ellipsis_w <= max_width)
+         lo = mid;
+      else
+         hi = mid - 1;
+   }
+   while (lo > 0 && lo < text.size() && (uint8_t(text[lo]) & 0xC0) == 0x80)
+      lo--;
+   return std::format("{}...", text.substr(0, lo));
+}
+
+void CombinedTooltip(std::string_view full_text, bool truncated, std::string_view extra_tooltip)
+{
+   if (truncated && !extra_tooltip.empty())
+      Tooltip(std::format("{}\n\n{}", full_text, extra_tooltip));
+   else if (truncated)
+      Tooltip(full_text);
+   else
+      Tooltip(extra_tooltip);
+}
+
+void DrawTextEllipsis(std::string_view text, float max_width, std::optional<ImVec4> color, std::string_view extra_tooltip = {})
+{
+   const float limit = max_width > 0.f ? max_width : ImGui::GetContentRegionAvail().x;
+   bool truncated = false;
+   const std::string shown = FitWithEllipsis(text, limit, truncated);
+   if (color)
+      ImGui::PushStyleColor(ImGuiCol_Text, *color);
+   ImGui::TextUnformatted(shown.data(), shown.data() + shown.size());
+   if (color)
+      ImGui::PopStyleColor();
+   CombinedTooltip(text, truncated, extra_tooltip);
+}
+
 // Spaces as wide as an icon and the gap after it: the icon is drawn over them in its own color (a glyph has one color)
 std::string IconRoom(const char* icon)
 {
@@ -324,7 +372,7 @@ void EndTab()
 void Property(std::string_view name, std::string_view value)
 {
    RowLabel(name);
-   ImGui::TextUnformatted(value.data(), value.data() + value.size());
+   DrawTextEllipsis(value, 0.f, std::nullopt);
 }
 
 void Caption(std::string_view text)
@@ -343,7 +391,7 @@ void Paragraph(std::string_view text)
 void ListItem(std::string_view text)
 {
    ImGui::Bullet();
-   ImGui::TextUnformatted(text.data(), text.data() + text.size());
+   DrawTextEllipsis(text, 0.f, std::nullopt);
 }
 
 float GetLinkWidth(std::string_view label, std::string_view url)
@@ -384,11 +432,10 @@ void RowLabel(std::string_view label, std::string_view tooltip, bool emphasized)
 {
    ImGui::AlignTextToFramePadding();
    const float start = ImGui::GetCursorPosX();
-   ImGui::PushStyleColor(ImGuiCol_Text, emphasized ? Style::Colors::TEXT_BRIGHT : Style::Colors::TEXT_LABEL);
-   ImGui::TextUnformatted(label.data(), label.data() + label.size());
-   ImGui::PopStyleColor();
-   Tooltip(tooltip);
-   ImGui::SameLine(start + Style::Scale(Style::Sizes::LABEL_WIDTH));
+   const float label_width = Style::Scale(Style::Sizes::LABEL_WIDTH);
+   const float max_width = std::max(label_width - ImGui::GetStyle().ItemSpacing.x, Style::Scale(Style::Sizes::UNIT * 4.f));
+   DrawTextEllipsis(label, max_width, emphasized ? Style::Colors::TEXT_BRIGHT : Style::Colors::TEXT_LABEL, tooltip);
+   ImGui::SameLine(start + label_width);
 }
 
 bool SettingRow(const Settings::Setting& setting)
@@ -508,29 +555,6 @@ bool Combo(std::string_view id, int32_t& index, std::span<const std::string_view
    return changed;
 }
 
-// Truncates `text` with "..." so it fits within `max_width` pixels
-std::string FitWithEllipsis(std::string_view text, float max_width, bool& truncated)
-{
-   truncated = false;
-   if (max_width <= 0.f || ImGui::CalcTextSize(text.data(), text.data() + text.size()).x <= max_width)
-      return std::string(text);
-   truncated = true;
-   const float ellipsis_w = ImGui::CalcTextSize("...").x;
-   if (max_width <= ellipsis_w)
-      return "...";
-   size_t lo = 0;
-   size_t hi = text.size();
-   while (lo < hi)
-   {
-      const size_t mid = (lo + hi + 1) / 2;
-      if (ImGui::CalcTextSize(text.data(), text.data() + mid).x + ellipsis_w <= max_width)
-         lo = mid;
-      else
-         hi = mid - 1;
-   }
-   return std::format("{}...", text.substr(0, lo));
-}
-
 bool Segmented(std::string_view id, int32_t& index, std::span<const std::string_view> labels, float width)
 {
    if (labels.empty())
@@ -587,7 +611,7 @@ bool Segmented(std::string_view id, int32_t& index, std::span<const std::string_
       const ImVec4 text_color = disabled ? Style::Colors::ICON_DISABLED : (selected ? Style::Colors::TEXT_BRIGHT : Style::Colors::TEXT_LABEL);
       draw_list->AddText(ImVec2(min.x + (segment - text_size.x) * 0.5f, min.y + (height - text_size.y) * 0.5f), ImGui::GetColorU32(text_color), shown.c_str());
       if (truncated && hovered)
-         ImGui::SetTooltip("%.*s", int(label.size()), label.data());
+         Tooltip(label);
       x += segment;
    }
    // One item for the layout and for the caller's tooltip
@@ -804,10 +828,15 @@ void ListDetail(std::string_view id, std::span<const ListEntry> entries, size_t&
             else if (entry.tone != Tone::Info)
                ImGui::PushStyleColor(ImGuiCol_Text, GetColor(entry.tone));
             const ImGuiSelectableFlags flags = row_action ? ImGuiSelectableFlags_AllowOverlap : ImGuiSelectableFlags_None;
-            if (ImGui::Selectable(std::format("{}##{}", entry.label, i).c_str(), i == selected, flags))
+            const float label_limit = std::max(0.f, ImGui::GetContentRegionAvail().x - (row_action ? ImGui::GetFrameHeight() * 2.f : 0.f));
+            bool truncated = false;
+            const std::string shown = FitWithEllipsis(entry.label, label_limit, truncated);
+            if (ImGui::Selectable(std::format("{}###{}", shown, i).c_str(), i == selected, flags))
                selected = i;
             if (tinted)
                ImGui::PopStyleColor();
+            if (truncated)
+               Tooltip(entry.label);
             if (row_action)
             {
                ImGui::PushID(int(i));
@@ -842,21 +871,22 @@ void PropertyGrid(std::string_view id, std::span<const PropertyRow> rows)
       const PropertyRow& row = rows[i];
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
-      ImGui::PushStyleColor(ImGuiCol_Text, Style::Colors::TEXT_LABEL);
-      ImGui::TextUnformatted(row.name.data(), row.name.data() + row.name.size());
-      ImGui::PopStyleColor();
+      DrawTextEllipsis(row.name, 0.f, Style::Colors::TEXT_LABEL);
       ImGui::TableNextColumn();
       ImGui::PushID(int(i));
       ImGui::PushFont(Fonts::GetMonospace(), 0.f);
       if (row.tone != Tone::Info)
          ImGui::PushStyleColor(ImGuiCol_Text, GetColor(row.tone));
-      if (ImGui::Selectable(row.value.empty() ? "-" : row.value.c_str()))
+      const std::string_view value_text = row.value.empty() ? std::string_view("-") : std::string_view(row.value);
+      bool truncated = false;
+      const std::string shown = FitWithEllipsis(value_text, ImGui::GetContentRegionAvail().x, truncated);
+      if (ImGui::Selectable(std::format("{}###Val", shown).c_str()))
          ImGui::SetClipboardText(row.value.c_str());
       if (row.tone != Tone::Info)
          ImGui::PopStyleColor();
       ImGui::PopFont();
+      CombinedTooltip(value_text, truncated, "Click to copy");
       ImGui::PopID();
-      Tooltip("Click to copy");
    }
    ImGui::EndTable();
 }
@@ -902,12 +932,15 @@ void DataTable(std::string_view id, std::span<const TableColumn> columns, std::s
             if (columns[column].monospace)
                ImGui::PushFont(Fonts::GetMonospace(), 0.f);
             ImGui::PushStyleColor(ImGuiCol_Text, cell.tone != Tone::Info ? GetColor(cell.tone) : (column == 0 ? Style::Colors::TEXT_LABEL : Style::Colors::TEXT));
-            if (ImGui::Selectable(cell.text.empty() ? "-" : cell.text.c_str()))
+            const std::string_view cell_text = cell.text.empty() ? std::string_view("-") : std::string_view(cell.text);
+            bool truncated = false;
+            const std::string shown = FitWithEllipsis(cell_text, ImGui::GetContentRegionAvail().x, truncated);
+            if (ImGui::Selectable(std::format("{}###Cell", shown).c_str()))
                ImGui::SetClipboardText(cell.text.c_str());
             ImGui::PopStyleColor();
             if (columns[column].monospace)
                ImGui::PopFont();
-            Tooltip(cell.tooltip.empty() ? std::string_view("Click to copy") : std::string_view(cell.tooltip));
+            CombinedTooltip(cell_text, truncated, cell.tooltip.empty() ? std::string_view("Click to copy") : std::string_view(cell.tooltip));
             ImGui::PopID();
          }
          ImGui::PopID();
@@ -944,31 +977,17 @@ void Code(std::string_view text)
 
 void Text(std::string_view text, Tone tone)
 {
-   if (tone == Tone::Info)
-   {
-      ImGui::TextUnformatted(text.data(), text.data() + text.size());
-      return;
-   }
-   ImGui::PushStyleColor(ImGuiCol_Text, GetColor(tone));
-   ImGui::TextUnformatted(text.data(), text.data() + text.size());
-   ImGui::PopStyleColor();
+   DrawTextEllipsis(text, 0.f, tone == Tone::Info ? std::nullopt : std::optional(GetColor(tone)));
 }
 
 void TextDim(std::string_view text)
 {
-   ImGui::PushStyleColor(ImGuiCol_Text, Style::Colors::TEXT_DIM);
-   ImGui::TextUnformatted(text.data(), text.data() + text.size());
-   ImGui::PopStyleColor();
+   DrawTextEllipsis(text, 0.f, Style::Colors::TEXT_DIM);
 }
 
-void TextEllipsis(std::string_view text, float max_width, Tone tone)
+void TextEllipsis(std::string_view text, float max_width, Tone tone, std::string_view tooltip)
 {
-   const float limit = max_width > 0.f ? max_width : ImGui::GetContentRegionAvail().x;
-   bool truncated = false;
-   const std::string shown = FitWithEllipsis(text, limit, truncated);
-   Text(shown, tone);
-   if (truncated && ImGui::IsItemHovered())
-      ImGui::SetTooltip("%.*s", int(text.size()), text.data());
+   DrawTextEllipsis(text, max_width, tone == Tone::Info ? std::nullopt : std::optional(GetColor(tone)), tooltip);
 }
 
 void Toast(Tone tone, std::string message)
@@ -1052,11 +1071,7 @@ void StatusBar(std::span<const StatusItem> items)
             Tooltip(item.tooltip);
             ImGui::SameLine(0.f, ImGui::GetStyle().ItemInnerSpacing.x);
          }
-         if (item.tone == Tone::Info)
-            TextDim(item.text);
-         else
-            Text(item.text, item.tone);
-         Tooltip(item.tooltip);
+         DrawTextEllipsis(item.text, 0.f, item.tone == Tone::Info ? Style::Colors::TEXT_DIM : GetColor(item.tone), item.tooltip);
          if (item.progress)
          {
             ImGui::SameLine();

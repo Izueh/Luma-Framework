@@ -83,12 +83,6 @@ std::vector<Game::Link> CollectFooterLinks(const Game::Info& info)
    return links;
 }
 
-// ImGui wants null terminated strings
-std::string Terminated(std::string_view text)
-{
-   return std::string(text);
-}
-
 bool IsShown(const Settings::Setting& setting)
 {
    return Settings::IsVisibleInBuild(setting.visibility) && (!setting.is_visible || setting.is_visible());
@@ -103,10 +97,6 @@ void CallPanel(void (*panel)())
 void DrawHeader(const Trace::OverlaySummary& summary)
 {
    const Game::Info& info = Game::Registry::GetInfo();
-   ImGui::AlignTextToFramePadding();
-   ImGui::TextUnformatted(info.name.empty() ? "Luma" : Terminated(info.name).c_str());
-   ImGui::SameLine();
-   Widgets::TextDim(info.version);
 
    // Update captured on/off hotkey if the header keybind button requested one
    uint32_t enabled_key_code = Settings::Get(Settings::Core::ENABLED_KEY).code;
@@ -130,6 +120,13 @@ void DrawHeader(const Trace::OverlaySummary& summary)
    const float toggle_width = ImGui::GetFrameHeight() * 1.8f + ImGui::CalcTextSize(Icons::POWER).x + style.ItemInnerSpacing.x;
    const float api_width = api.empty() ? 0.f : ImGui::CalcTextSize(api.data(), api.data() + api.size()).x + unit * 2.5f;
    const float right_width = api_width + key_width + style.ItemSpacing.x + toggle_width;
+   const float version_width = info.version.empty() ? 0.f : ImGui::CalcTextSize(info.version.data(), info.version.data() + info.version.size()).x + style.ItemSpacing.x;
+   const float title_max_width = std::max(unit * 8.f, ImGui::GetContentRegionAvail().x - right_width - version_width - unit * 2.f);
+
+   ImGui::AlignTextToFramePadding();
+   Widgets::TextEllipsis(info.name.empty() ? std::string_view("Luma") : info.name, title_max_width);
+   ImGui::SameLine();
+   Widgets::TextDim(info.version);
    ImGui::SameLine(std::max(ImGui::GetCursorPosX() + unit * 2.f, ImGui::GetContentRegionMax().x - right_width));
    if (!api.empty())
    {

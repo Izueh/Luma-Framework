@@ -20,9 +20,10 @@ constexpr std::array LUMA_SETTINGS = {
    Settings::Setting{
       .key = Settings::Core::OUTPUT_MODE.key,
       .label = "Output Mode",
-      .tooltip = "What the game is presented as. Switches live in Mirror mode; in In place mode applies on swapchain resize or restart.\n"
+      .tooltip = "What the swapchain presents as. Switches live in Mirror mode (falling back to shader SDR if ReShade blocks resize); "
+                 "in In place mode SDR applies immediately in shaders and the swapchain format updates on resize or restart.\n"
                  "Auto - HDR when Windows has it on for the display (the mod's HDR choice of HDR10 or scRGB), SDR otherwise\n"
-                 "HDR10 - 10 bit PQ, BT.2020\nscRGB - 16 bit float, linear\nSDR - 8 bit sRGB",
+                 "HDR10 - 10 bit PQ, BT.2020\nscRGB - 16 bit float, linear\nSDR - 8 bit gamma 2.2",
       .category = "Display",
       .default_value = Settings::EnumIndex{0},
       .enum_labels = OUTPUT_MODES,

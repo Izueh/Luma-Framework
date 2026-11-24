@@ -63,7 +63,7 @@ constexpr std::array USER_SETTINGS = {
       .default_value = Settings::EnumIndex{1},
       .enum_labels = GAMMA_CORRECTION_LABELS,
       .live = true,
-      .is_visible = [] { return DisplayMode::IsHdr(); },
+      .is_visible = [] { return DisplayMode::HasHdrOutput(); },
    },
 };
 
@@ -243,6 +243,7 @@ void Write(std::span<std::byte> destination, const Resources::Database::CustomDa
    std::scoped_lock lock(current_mutex);
    std::memcpy(destination.data(), &current, sizeof(current));
 }
+} // namespace
 
 // Some of the game's shaders are replaced. Without variants, the mod's pipeline settings don't describe the image.
 bool IsModActive()
@@ -256,7 +257,6 @@ bool IsModActive()
    }
    return Settings::IsEnabled() && Shaders::Variants::IsLoaded() && any;
 }
-} // namespace
 
 void SetOptions(const Options& value)
 {

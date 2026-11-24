@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Log/Log.hpp"
 #include "Utils/Toml.hpp"
@@ -202,7 +203,11 @@ bool Load(const std::filesystem::path& path)
 
 bool Save(const std::filesystem::path& path)
 {
-   ForEach([](const Setting& setting, const Value& value) { GetNode(setting) = WriteValue(setting, value); });
+   ForEach([](const Setting& setting, const Value& value) {
+      // PeakWhite stores 0 when at the display's default so future launches and monitor changes auto-follow the display
+      const bool store_zero_default = setting.key == Core::PEAK_WHITE.key && value == Clamp(setting, setting.default_value);
+      GetNode(setting) = WriteValue(setting, store_zero_default ? Value(0.f) : value);
+   });
    return Utils::Toml::Save(path, document);
 }
 

@@ -23,12 +23,13 @@ inline constexpr Id<float> OVERLAY_OPACITY = {"Luma.Overlay.Opacity"};
 inline constexpr Id<float> OVERLAY_HDR_PAPER_WHITE = {"Luma.Overlay.HdrPaperWhite"};
 // What the real swapchain presents (Swapchain::OutputMode, Auto first): applied at the next present
 inline constexpr Id<Settings::EnumIndex> OUTPUT_MODE = {"Luma.Display.OutputMode"};
-// LumaSettings' white levels in HDR, in nits: a peak of 0 is the display's
+// Shader-driven HDR vs SDR mode on an HDR swapchain (0 HDR, 1 SDR): live, without resizing the swapchain
+inline constexpr Id<Settings::EnumIndex> DISPLAY_MODE = {"Luma.Display.Mode"};
+// LumaSettings' white levels in HDR, in nits: PeakWhite defaults to the display's peak (0 in Luma.toml means default)
 inline constexpr Id<float> PEAK_WHITE = {"Luma.Display.PeakWhite"};
+inline constexpr Id<bool> LINK_OS_WHITE_LEVEL = {"Luma.Display.LinkOsWhiteLevel"};
 inline constexpr Id<float> PAPER_WHITE = {"Luma.Display.PaperWhite"};
 inline constexpr Id<float> UI_PAPER_WHITE = {"Luma.Display.UIPaperWhite"};
-// Test builds: SDR content presented in the HDR display mode
-inline constexpr Id<bool> SDR_ON_HDR = {"Luma.Display.SdrOnHdr"};
 // Display composition pipeline & stage settings (written live to LumaSettings.DisplayComposition)
 inline constexpr Id<Settings::EnumIndex> COMPOSITION_GAMMA_CORRECTION = {"Luma.Display.GammaCorrectionType"};
 inline constexpr Id<Settings::EnumIndex> COMPOSITION_POST_PROCESS_SPACE = {"Luma.Development.Composition.PostProcessSpaceType"};
@@ -48,8 +49,8 @@ inline constexpr std::array<Id<bool>, 6> COMPOSITION_STAGES = {{
    {"Luma.Development.Composition.StageScale"},
    {"Luma.Development.Composition.StageDevelopmentViews"},
 }};
-// Test builds: the game is told the display is in HDR (Display::Spoofing), a game's default
-inline constexpr Id<bool> REPORT_HDR = {"Luma.Display.ReportHdr"};
+// Test builds: the game is told the display is SDR and doesn't support HDR (Display::Spoofing), a game's default
+inline constexpr Id<bool> SPOOF_SDR_DISPLAY = {"Luma.Display.SpoofSdrDisplay"};
 // HDR10 metadata (the display's peak) on an HDR10 swapchain
 inline constexpr Id<bool> HDR_METADATA = {"Luma.Display.HdrMetadata"};
 // Focus-loss messages hidden from the game's window so Alt-Tab doesn't pause it (on by default in Development)
