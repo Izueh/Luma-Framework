@@ -476,6 +476,8 @@ void Luma::Game::Init()
    // Settings::AddChangeListener(&OnSettingChanged);
 
    // Override Core defaults when the game needs non-default behavior:
+   // Settings::SetDefault(Settings::Core::PAPER_WHITE, 250.f);
+   // Settings::SetDefault(Settings::Core::UI_PAPER_WHITE, 250.f);
    // Settings::SetDefault(Settings::Core::REPORT_HDR, true);
    // Settings::SetDefault(Settings::Core::HDR_METADATA, true);
    // Settings::SetDefault(Settings::Core::OUTPUT_MODE, Settings::EnumIndex{1}); // 0 SDR, 1 HDR10, 2 scRGB

@@ -376,6 +376,9 @@ void Luma::Game::Init()
       .range = Range{0, 1},
    });
    Settings::Register(SETTINGS);
+   Settings::SetDefault(Settings::Core::PAPER_WHITE, 250.f);
+   Settings::SetDefault(Settings::Core::UI_PAPER_WHITE, 250.f);
+   Settings::SetDefault(Settings::Core::LINK_OS_WHITE_LEVEL, false);
 
    SetOptions({
       .cbuffers = {
