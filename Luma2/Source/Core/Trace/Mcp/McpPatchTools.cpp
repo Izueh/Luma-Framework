@@ -95,8 +95,8 @@ Replies::PatchShader ToReply(const Shaders::Patching::PatchInfo& info, bool deta
 {
    Replies::PatchShader shader;
    shader.hash = FormatHash(info.hash);
-   if (const std::string_view name = Shaders::Database::GetName(info.hash); !name.empty())
-      shader.name = std::string(name);
+   if (std::string name = Shaders::Database::GetDisplayName(info.hash); !name.empty())
+      shader.name = std::move(name);
    shader.stage = GetStageName(info.stage);
    shader.patched = info.patched;
    shader.method = info.callback ? "callback" : "recipe";

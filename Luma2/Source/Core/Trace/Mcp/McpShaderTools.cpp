@@ -125,7 +125,8 @@ struct ReloadShaders
 namespace {
 std::optional<std::string> GetName(const Shaders::Database::Shader& shader)
 {
-   return shader.name.empty() ? std::nullopt : std::optional(std::string(shader.name));
+   std::string name = Shaders::Database::GetDisplayName(shader.hash);
+   return name.empty() ? std::nullopt : std::optional(std::move(name));
 }
 
 // Replaced while the variants are loaded

@@ -510,7 +510,7 @@ Recording BeginGameCall(ID3D11DeviceContext* context, EventType type, Shaders::S
       Shader& recorded = recording.event.shaders.emplace_back(Shader{
          .stage = stage,
          .hash = shader ? shader->hash : 0,
-         .name = shader ? std::string(shader->name) : std::string(),
+         .name = shader ? Shaders::Database::GetDisplayName(shader->hash) : std::string(),
       });
       if (shader)
       {

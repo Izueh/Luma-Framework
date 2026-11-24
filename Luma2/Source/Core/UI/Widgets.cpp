@@ -830,8 +830,8 @@ void ListDetail(std::string_view id, std::span<const ListEntry> entries, size_t&
             const ImGuiSelectableFlags flags = row_action ? ImGuiSelectableFlags_AllowOverlap : ImGuiSelectableFlags_None;
             const float label_limit = std::max(0.f, ImGui::GetContentRegionAvail().x - (row_action ? ImGui::GetFrameHeight() * 2.f : 0.f));
             bool truncated = false;
-            const std::string shown = FitWithEllipsis(entry.label, label_limit, truncated);
-            if (ImGui::Selectable(std::format("{}###{}", shown, i).c_str(), i == selected, flags))
+            const std::string fitted = FitWithEllipsis(entry.label, label_limit, truncated);
+            if (ImGui::Selectable(std::format("{}###{}", fitted, i).c_str(), i == selected, flags))
                selected = i;
             if (tinted)
                ImGui::PopStyleColor();

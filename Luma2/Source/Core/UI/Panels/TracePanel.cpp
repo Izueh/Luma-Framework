@@ -306,7 +306,11 @@ Widgets::ListEntry Describe(const Event& event, size_t index, std::string_view t
       any_mirror = std::ranges::any_of(event.unordered_access, [](const Trace::Capture::View& view) { return view.resource.mirror.has_value(); });
    std::string label = std::format("{:>5} {}", index, any_mirror ? "^" : "");
    if (shader)
-      label += std::format("{} 0x{:08X}{}{}", GetStageName(shader->stage), shader->hash, shader->name.empty() ? "" : " ", shader->name);
+   {
+      // Live, so a rename shows without a new capture (a Luma pass's shader has no hash to look up)
+      const std::string name = shader->hash != 0 ? Shaders::Database::GetDisplayName(shader->hash) : shader->name;
+      label += std::format("{} 0x{:08X}{}{}", GetStageName(shader->stage), shader->hash, name.empty() ? "" : " ", name);
+   }
    else
       label += event.name;
    if (shader && shader->variant)
@@ -624,11 +628,12 @@ void DrawShader(const Trace::Capture::Shader& shader)
       ImGui::PopID();
       return;
    }
-   Widgets::HashChip(shader.hash, shader.stage, shader.name);
-   if (!shader.name.empty())
+   const std::string display_name = Shaders::Database::GetDisplayName(shader.hash);
+   Widgets::HashChip(shader.hash, shader.stage, display_name);
+   if (!display_name.empty())
    {
       ImGui::SameLine();
-      Widgets::TextDim(shader.name);
+      Widgets::TextDim(display_name);
    }
    ImGui::SameLine();
    if (shader.variant)
@@ -640,6 +645,11 @@ void DrawShader(const Trace::Capture::Shader& shader)
    Shaders::Database::Shader* live = Shaders::Database::Find(shader.hash);
    if (live)
    {
+      Widgets::RowLabel("Custom name");
+      std::string custom_name = display_name;
+      if (Widgets::TextInput("ShaderCustomName", custom_name))
+         Shaders::Database::SetCustomName(shader.hash, std::move(custom_name));
+      ImGui::SetItemTooltip("Names this shader in the trace until the game restarts. Empty goes back to the game's name.");
       Widgets::RowLabel("");
       if (!shader.variants.empty())
       {

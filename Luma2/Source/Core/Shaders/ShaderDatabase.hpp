@@ -71,6 +71,10 @@ void Register();
 void Name(std::string_view name, std::span<const uint32_t> hashes);
 // Empty for a shader the game didn't name
 std::string_view GetName(uint32_t hash);
+// Any thread: the trace's name for a shader, kept for the session. An empty one clears it.
+void SetCustomName(uint32_t hash, std::string name);
+// Any thread: the custom name if set, else the game's (GetName)
+std::string GetDisplayName(uint32_t hash);
 // Any thread: the shader of a hash, null if the game never created it
 Shader* Find(uint32_t hash);
 // Any thread: adds `shader` unless another thread added its hash first, and returns the one kept

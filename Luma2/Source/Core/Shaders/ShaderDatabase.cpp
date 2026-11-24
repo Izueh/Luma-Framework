@@ -62,6 +62,10 @@ struct Names
 // Written while Init runs, read without a lock after
 std::vector<Names> names;
 
+// Never held with another lock
+std::mutex custom_names_mutex;
+std::unordered_map<uint32_t, std::string> custom_names;
+
 #if DEVELOPMENT || TEST
 const std::array SETTINGS = {
    Settings::Setting{
@@ -289,6 +293,26 @@ std::string_view GetName(uint32_t hash)
          return entry.name;
    }
    return {};
+}
+
+void SetCustomName(uint32_t hash, std::string name)
+{
+   std::lock_guard lock(custom_names_mutex);
+   if (name.empty())
+      custom_names.erase(hash);
+   else
+      custom_names[hash] = std::move(name);
+}
+
+std::string GetDisplayName(uint32_t hash)
+{
+   {
+      std::lock_guard lock(custom_names_mutex);
+      const auto it = custom_names.find(hash);
+      if (it != custom_names.end())
+         return it->second;
+   }
+   return std::string(GetName(hash));
 }
 
 Shader* Find(uint32_t hash)

@@ -562,7 +562,7 @@ Recording BeginGameCall(ID3D12GraphicsCommandList* list, EventType type, Shaders
       const Shaders::Database::Shader* shader = bound.tracked ? bound.tracked->shaders[index] : nullptr;
       if (!stages.Has(stage) || !shader)
          continue;
-      Shader& recorded = event.shaders.emplace_back(Shader{.stage = stage, .hash = shader->hash, .name = std::string(shader->name)});
+      Shader& recorded = event.shaders.emplace_back(Shader{.stage = stage, .hash = shader->hash, .name = Shaders::Database::GetDisplayName(shader->hash)});
       for (const Shaders::Variants::Variant& variant : Shaders::Variants::GetVariants(shader->hash))
       {
          if (variant.compiled)
