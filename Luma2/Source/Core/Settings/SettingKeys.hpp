@@ -75,6 +75,10 @@ inline constexpr Id<bool> RESHADE_BRIDGE = {"Luma.ReShade.Bridge"};
 inline constexpr Id<int32_t> WORKER_THREADS = {"Luma.Advanced.WorkerThreads"};
 // Luma's mirrors of the game's textures swapped in (Resources::Mirrors), Development
 inline constexpr Id<bool> UPGRADES = {"Luma.Resources.Upgrades"};
+// Chain propagation mode for indirect texture upgrades (Resources::Chains), Development
+inline constexpr Id<Settings::EnumIndex> CHAINS = {"Luma.Resources.Chains"};
+// Resolution scaling of mirrors and viewports (Resources::Scaling), Development
+inline constexpr Id<bool> SCALING = {"Luma.Resources.Scaling"};
 // Luma's mirrors of the game's samplers swapped in (Resources::Samplers), Development
 inline constexpr Id<bool> SAMPLERS = {"Luma.Resources.Samplers"};
 // Development builds: replaces the sampler LOD bias offset (0 until SR sets one)

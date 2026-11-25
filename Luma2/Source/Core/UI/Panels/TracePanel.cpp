@@ -18,6 +18,7 @@
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 
+#include "Resources/ResourceChains.hpp"
 #include "Shaders/ShaderCompiler.hpp"
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderDecompiler.hpp"
@@ -315,6 +316,12 @@ Widgets::ListEntry Describe(const Event& event, size_t index, std::string_view t
       label += event.name;
    if (shader && shader->variant)
       label += std::format(" [{}]", Shaders::Variants::GetLabel(Shaders::Variants::GetChoice(*shader->variant)));
+   if (Trace::Capture::IsScaledEvent(event))
+      label += " [Scaled]";
+   if (event.chain_seed)
+      label += " [Seed]";
+   if (event.cross_thread_scaling_overlap)
+      label += " [Cross-Thread!]";
    label += usage_tag;
    label += thread;
 
@@ -516,6 +523,36 @@ void DrawResourceCard(std::string_view badge, std::span<const CardField> fields,
    if (ImGui::IsItemClicked())
       ImGui::SetClipboardText(resource.id.c_str());
    ImGui::PopFont();
+
+   // Explicit mirror / scaling / chain origin line when upgraded or pending
+   if (resource.mirror_info)
+   {
+      const Trace::Capture::MirrorInfo& mi = *resource.mirror_info;
+      ImGui::AlignTextToFramePadding();
+      Widgets::TextDim("Mirror:");
+      ImGui::SameLine(0.f, style.ItemInnerSpacing.x);
+      if (mi.pending)
+      {
+         Widgets::Tag("Pending (next frame)", Tone::Warning, "Discovered on a deferred context or D3D12 command list; activates at next present");
+      }
+      else
+      {
+         const std::string mirror_text = mi.is_scaled
+            ? std::format("{} {}x{} ({:.2f}x{:.2f})", Utils::Format::GetName(mi.format), mi.size[0], mi.size[1], mi.scale[0], mi.scale[1])
+            : std::format("{} {}x{}", Utils::Format::GetName(mi.format), mi.size[0], mi.size[1]);
+         ImGui::PushFont(Fonts::GetMonospace(), 0.f);
+         Widgets::Text(mirror_text, Tone::Injected);
+         ImGui::PopFont();
+         ImGui::SameLine(0.f, unit * 1.5f);
+         const std::string origin_tag = mi.origin.shader_hash != 0
+            ? std::format("{} 0x{:08X}", Resources::Chains::GetOriginName(mi.origin.kind), mi.origin.shader_hash)
+            : std::string(Resources::Chains::GetOriginName(mi.origin.kind));
+         Widgets::Tag(origin_tag, mi.is_scaled ? Tone::Success : Tone::Injected,
+            mi.origin.shader_hash != 0 ? "Click to copy seed shader hash" : "How this mirror was created");
+         if (mi.origin.shader_hash != 0 && ImGui::IsItemClicked())
+            ImGui::SetClipboardText(std::format("0x{:08X}", mi.origin.shader_hash).c_str());
+      }
+   }
 
    ImGui::EndGroup();
    const float card_bottom = ImGui::GetItemRectMax().y + unit * 1.5f;
@@ -1028,8 +1065,14 @@ void DrawStates(const Event& event)
       Widgets::PropertyGrid("Rasterizer", rows);
       Widgets::EndSection();
    }
-   if ((!event.viewports.empty() || !event.scissor_rects.empty()) && Widgets::Section("Viewports", false))
+   if ((!event.viewports.empty() || !event.scissor_rects.empty()) && Widgets::Section(event.viewports_scaled || event.scissors_scaled ? "Viewports (Scaled)" : "Viewports", event.viewports_scaled || event.scissors_scaled))
    {
+      if (event.viewports_scaled)
+      {
+         Widgets::Tag("Scaled", Tone::Injected, "Luma rescaled the active viewports for this draw");
+         ImGui::SameLine();
+         Widgets::TextDim("Active (rescaled) viewports:");
+      }
       constexpr std::array<TableColumn, 7> VIEWPORT_COLUMNS = {{{"#", 28.f}, {"X", 0.f}, {"Y", 0.f}, {"Width", 0.f}, {"Height", 0.f}, {"Min depth", 0.f}, {"Max depth", 0.f}}};
       std::vector<TableRow> rows;
       for (size_t i = 0; i < event.viewports.size(); i++)
@@ -1037,12 +1080,25 @@ void DrawStates(const Event& event)
          TableRow& row = rows.emplace_back();
          row.push_back({std::to_string(i)});
          for (const float value : event.viewports[i])
-            row.push_back({std::format("{}", value)});
+            row.push_back({std::format("{}", value), event.viewports_scaled ? Tone::Injected : Tone::Info});
       }
       Widgets::DataTable("Viewports", VIEWPORT_COLUMNS, rows);
+      if (event.viewports_scaled && !event.original_viewports.empty())
+      {
+         Widgets::Caption("Game viewports (before scaling)");
+         std::vector<TableRow> orig_rows;
+         for (size_t i = 0; i < event.original_viewports.size(); i++)
+         {
+            TableRow& row = orig_rows.emplace_back();
+            row.push_back({std::to_string(i)});
+            for (const float value : event.original_viewports[i])
+               row.push_back({std::format("{}", value)});
+         }
+         Widgets::DataTable("OriginalViewports", VIEWPORT_COLUMNS, orig_rows);
+      }
       if (!event.scissor_rects.empty())
       {
-         Widgets::Caption("Scissor rectangles");
+         Widgets::Caption(event.scissors_scaled ? "Active (rescaled) scissor rectangles" : "Scissor rectangles");
          constexpr std::array<TableColumn, 5> SCISSOR_COLUMNS = {{{"#", 28.f}, {"Left", 0.f}, {"Top", 0.f}, {"Right", 0.f}, {"Bottom", 0.f}}};
          std::vector<TableRow> scissors;
          for (size_t i = 0; i < event.scissor_rects.size(); i++)
@@ -1050,9 +1106,22 @@ void DrawStates(const Event& event)
             TableRow& row = scissors.emplace_back();
             row.push_back({std::to_string(i)});
             for (const int32_t value : event.scissor_rects[i])
-               row.push_back({std::to_string(value)});
+               row.push_back({std::to_string(value), event.scissors_scaled ? Tone::Injected : Tone::Info});
          }
          Widgets::DataTable("Scissors", SCISSOR_COLUMNS, scissors);
+         if (event.scissors_scaled && !event.original_scissor_rects.empty())
+         {
+            Widgets::Caption("Game scissor rectangles (before scaling)");
+            std::vector<TableRow> orig_scissors;
+            for (size_t i = 0; i < event.original_scissor_rects.size(); i++)
+            {
+               TableRow& row = orig_scissors.emplace_back();
+               row.push_back({std::to_string(i)});
+               for (const int32_t value : event.original_scissor_rects[i])
+                  row.push_back({std::to_string(value)});
+            }
+            Widgets::DataTable("OriginalScissors", SCISSOR_COLUMNS, orig_scissors);
+         }
       }
       Widgets::EndSection();
    }
@@ -1439,6 +1508,8 @@ void DrawFilters()
    chip("VS-only", filter.include_vertex_only, "Also lists draws without a pixel shader (depth-only passes), by their vertex shader.");
    chip("Luma", filter.luma_passes, "Lists Luma's own passes");
    chip("Replaced", filter.replaced_only, "Only calls whose shader has a variant");
+   chip("Upgraded", filter.upgraded_only, "Only events reading or writing a mirrored resource");
+   chip("Scaled", filter.scaled_only, "Only events with scaled mirrors, rescaled viewports/scissors, or scaled copies");
    chip("Cancelled", filter.cancelled_only, "Only calls skipped or replaced by callbacks or trace actions");
    chip("Unique", unique_only, "Only the first call of each shader");
    chip("Copies", filter.copies, "Lists CopyResource, CopySubresourceRegion, and ResolveSubresource");

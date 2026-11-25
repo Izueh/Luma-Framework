@@ -47,6 +47,9 @@ DXGI_FORMAT GetDepthReadFormat(DXGI_FORMAT format, bool stencil);
 // CopyResource and CopySubresourceRegion accept them together: the same family, or two 8 bit RGBA/BGRA ones. Two
 // formats without a family are compatible only when equal.
 bool AreCopyCompatible(DXGI_FORMAT a, DXGI_FORMAT b);
+bool IsInteger(DXGI_FORMAT format);
+// 4-channel RGBA/BGRA format (or 3-channel RGB when `include_rgb` is true)
+bool IsRgba(DXGI_FORMAT format, bool include_rgb = true);
 
 // CPU data in `from` (rows of `row_pitch` bytes, slices of `depth_pitch`) as R16G16B16A16_FLOAT, tightly packed: what lands in an
 // upgraded texture's mirror (from 8 bit RGBA and BGRA, R10G10B10A2_UNORM and R11G11B10_FLOAT). Empty for a format it can't convert.

@@ -115,14 +115,14 @@ void STDMETHODCALLTYPE SetRootDescriptor(ID3D12GraphicsCommandList* list, UINT i
 void STDMETHODCALLTYPE RSSetViewports(ID3D12GraphicsCommandList* list, UINT count, const D3D12_VIEWPORT* viewports)
 {
    if (Detours::IsGameCall(_ReturnAddress()))
-      Detours::Report(&Handlers::PreSetViewports, list, count, viewports);
+      Detours::Report(&Handlers::PreSetViewports, list, std::ref(count), std::ref(viewports));
    original<&RSSetViewports>(list, count, viewports);
 }
 
 void STDMETHODCALLTYPE RSSetScissorRects(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RECT* rects)
 {
    if (Detours::IsGameCall(_ReturnAddress()))
-      Detours::Report(&Handlers::PreSetScissorRects, list, count, rects);
+      Detours::Report(&Handlers::PreSetScissorRects, list, std::ref(count), std::ref(rects));
    original<&RSSetScissorRects>(list, count, rects);
 }
 
@@ -221,7 +221,7 @@ void STDMETHODCALLTYPE CopyTextureRegion(ID3D12GraphicsCommandList* list, const 
       return original<&CopyTextureRegion>(list, destination, x, y, z, source, box);
    D3D12_TEXTURE_COPY_LOCATION destination_copy = *destination;
    D3D12_TEXTURE_COPY_LOCATION source_copy = *source;
-   if (Detours::Report(&Handlers::PreCopyTextureRegion, list, std::ref(destination_copy), x, y, z, std::ref(source_copy), box))
+   if (Detours::Report(&Handlers::PreCopyTextureRegion, list, std::ref(destination_copy), std::ref(x), std::ref(y), std::ref(z), std::ref(source_copy), std::ref(box)))
       return;
    original<&CopyTextureRegion>(list, &destination_copy, x, y, z, &source_copy, box);
 }
@@ -246,7 +246,7 @@ void STDMETHODCALLTYPE ResolveSubresource(ID3D12GraphicsCommandList* list, ID3D1
 void STDMETHODCALLTYPE ClearRenderTargetView(ID3D12GraphicsCommandList* list, D3D12_CPU_DESCRIPTOR_HANDLE view, const FLOAT color[4], UINT rect_count,
    const D3D12_RECT* rects)
 {
-   if (Detours::IsGameCall(_ReturnAddress()) && Detours::Report(&Handlers::PreClearRenderTargetView, list, std::ref(view), color, rect_count, rects))
+   if (Detours::IsGameCall(_ReturnAddress()) && Detours::Report(&Handlers::PreClearRenderTargetView, list, std::ref(view), color, rect_count, std::ref(rects)))
       return;
    original<&ClearRenderTargetView>(list, view, color, rect_count, rects);
 }
@@ -254,7 +254,8 @@ void STDMETHODCALLTYPE ClearRenderTargetView(ID3D12GraphicsCommandList* list, D3
 void STDMETHODCALLTYPE ClearDepthStencilView(ID3D12GraphicsCommandList* list, D3D12_CPU_DESCRIPTOR_HANDLE view, D3D12_CLEAR_FLAGS flags, FLOAT depth,
    UINT8 stencil, UINT rect_count, const D3D12_RECT* rects)
 {
-   if (Detours::IsGameCall(_ReturnAddress()) && Detours::Report(&Handlers::PreClearDepthStencilView, list, std::ref(view), flags, depth, stencil, rect_count, rects))
+   if (Detours::IsGameCall(_ReturnAddress()) &&
+      Detours::Report(&Handlers::PreClearDepthStencilView, list, std::ref(view), flags, depth, stencil, rect_count, std::ref(rects)))
       return;
    original<&ClearDepthStencilView>(list, view, flags, depth, stencil, rect_count, rects);
 }

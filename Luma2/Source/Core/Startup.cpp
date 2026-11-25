@@ -18,7 +18,9 @@
 #include "Settings/SettingsRegistry.hpp"
 #include "Settings/SettingsStorage.hpp"
 #include "Resources/LumaCBuffers.hpp"
+#include "Resources/ResourceChains.hpp"
 #include "Resources/ResourceMirrors.hpp"
+#include "Resources/ResourceScaling.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Resources/TextureLoader.hpp"
 #include "Shaders/ShaderPatching.hpp"
@@ -79,6 +81,8 @@ Hooks::D3D12::Functions GetCoreD3D12Functions()
 {
    Hooks::D3D12::Functions functions = Shaders::GetD3D12Functions();
    functions |= Resources::Mirrors::GetD3D12Functions();
+   functions |= Resources::Chains::GetD3D12Functions();
+   functions |= Resources::Scaling::GetD3D12Functions();
    functions |= Game::Registry::GetRequestedD3D12Functions();
 #if DEVELOPMENT
    functions |= Trace::Capture::GetD3D12Functions();
@@ -98,6 +102,8 @@ Hooks::D3D11::Functions GetCoreFunctions()
    functions |= Shaders::GetD3D11Functions();
    functions |= Resources::LumaCBuffers::GetD3D11Functions();
    functions |= Resources::Mirrors::GetD3D11Functions();
+   functions |= Resources::Chains::GetD3D11Functions();
+   functions |= Resources::Scaling::GetD3D11Functions();
    functions |= Resources::Samplers::GetD3D11Functions();
    functions |= Luma::Draw::GetD3D11Functions();
 #if DEVELOPMENT
@@ -141,6 +147,8 @@ void Initialize()
    Settings::SetDefault(Settings::Core::WORKER_THREADS, GetDefaultWorkerThreads());
    Shaders::Register();
    Resources::Mirrors::Register();
+   Resources::Chains::Register();
+   Resources::Scaling::Register();
    Resources::Samplers::Register();
    Swapchain::Register();
    Display::DisplayMode::Register();

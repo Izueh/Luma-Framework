@@ -72,7 +72,7 @@ void Register()
 
 bool IsNeeded()
 {
-   return Upgrade::IsNeeded();
+   return Upgrade::IsNeeded() || Chains::IsNeeded() || Scaling::IsNeeded();
 }
 
 bool IsSwapping()

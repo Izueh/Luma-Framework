@@ -14,7 +14,9 @@
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/ObjectLifetime.hpp"
 #include "Resources/ResourceBindings.hpp"
+#include "Resources/ResourceChains.hpp"
 #include "Resources/LumaCBuffers.hpp"
+#include "Resources/ResourceScaling.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Resources/TextureLoader.hpp"
 #include "Resources/ResourceUpgrades.hpp"
@@ -165,6 +167,8 @@ void SetOptions(const Options& options)
    Luma::Resources::Textures::SetOptions(options.textures);
    Luma::Shaders::Patching::SetOptions(options.patching);
    Luma::Resources::Samplers::SetOptions(options.samplers);
+   Luma::Resources::Chains::SetOptions(options.chains);
+   Luma::Resources::Scaling::SetOptions(options.scaling);
    Draw::SetOptions(options.draw);
    Luma::Swapchain::SetOptions(options.swapchain);
    Luma::Display::Composition::SetOptions(options.composition);
@@ -226,6 +230,26 @@ Luma::Frame::Resolutions Frame::Get(Device device)
 void Frame::SetRenderResolution(Device device, Math::uint2 size)
 {
    Luma::Frame::SetRenderResolution(GetUnknown(device), size);
+}
+
+void Resources::Scaling::Begin(Device device)
+{
+   Luma::Resources::Scaling::Begin(GetUnknown(device));
+}
+
+void Resources::Scaling::End(Device device)
+{
+   Luma::Resources::Scaling::End(GetUnknown(device));
+}
+
+bool Resources::Scaling::IsActive(Device device)
+{
+   return Luma::Resources::Scaling::IsActive(GetUnknown(device));
+}
+
+void Resources::Scaling::SetTargetResolution(Device device, Math::uint2 size)
+{
+   Luma::Resources::Scaling::SetTargetResolution(GetUnknown(device), size);
 }
 
 namespace Registry {
@@ -373,6 +397,8 @@ void Reset()
    Luma::Resources::Textures::SetOptions({});
    Luma::Shaders::Patching::SetOptions({});
    Luma::Resources::Samplers::SetOptions({});
+   Luma::Resources::Chains::SetOptions({});
+   Luma::Resources::Scaling::SetOptions({});
    Luma::Resources::Upgrade::SetRules({});
    Luma::Swapchain::SetOptions({});
    Luma::Display::Composition::SetOptions({});

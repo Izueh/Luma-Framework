@@ -9,8 +9,10 @@
 
 #include <imgui.h>
 
+#include "Resources/ResourceChains.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Resources/ResourceMirrors.hpp"
+#include "Resources/ResourceScaling.hpp"
 #include "Resources/ResourceUpgrades.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Trace/DebugDraw.hpp"
@@ -67,12 +69,16 @@ std::string FormatBytes(uint64_t bytes)
 void DrawMirrors()
 {
    const Resources::Mirrors::Stats stats = Resources::Mirrors::GetStats();
-   const std::array<PropertyRow, 4> rows = {{
+   const Resources::Chains::Stats chains = Resources::Chains::GetStats();
+   const Resources::Scaling::Stats scaling = Resources::Scaling::GetStats();
+   const std::array<PropertyRow, 6> rows = {{
       {"Rules", Resources::Upgrade::IsNeeded() ? std::format("{} formats", Resources::Upgrade::GetRules().formats.size()) : std::string("none"),
          Resources::Upgrade::IsNeeded() ? Tone::Info : Tone::Warning},
-      {"Mirrors", std::to_string(stats.mirrors)},
+      {"Mirrors", std::format("{} ({} scaled, {} pooled)", stats.mirrors, scaling.scaled_mirrors, scaling.pool_size)},
       {"Mirrored views", std::to_string(stats.views)},
       {"Mirror memory", FormatBytes(stats.bytes)},
+      {"Chains", std::format("{} ({} seeds, {} direct, {} indirect, {} pending)", Resources::Chains::GetModeName(chains.mode), chains.seeds, chains.direct_propagations, chains.indirect_propagations, chains.deferred_queued)},
+      {"Scaling", std::format("{} ({}, {} invalidations, {} vp, {} blits)", Resources::Scaling::GetModeName(scaling.mode), scaling.active ? "active" : "idle", scaling.invalidations, scaling.viewport_rescales, scaling.scaled_blits)},
    }};
    Widgets::PropertyGrid("MirrorTotals", rows);
 
@@ -86,9 +92,10 @@ void DrawMirrors()
       for (const Resources::Mirrors::Info& info : infos)
       {
          const std::string name = info.debug_name.empty() ? info.original : std::format("{} {}", info.original, info.debug_name);
-         list.push_back({std::format("^ {} ({} -> {}) {}", name, Utils::Format::GetName(info.original_desc.format), Utils::Format::GetName(info.mirror_desc.format),
-                            DescribeSize(info.original_desc)),
-            Tone::Info});
+         const std::string scaled_tag = info.is_scaled ? std::format(" [Scaled {}]", DescribeSize(info.mirror_desc)) : std::string();
+         list.push_back({std::format("^ {} ({} -> {}) {}{}", name, Utils::Format::GetName(info.original_desc.format), Utils::Format::GetName(info.mirror_desc.format),
+                            DescribeSize(info.original_desc), scaled_tag),
+            info.is_scaled ? Tone::Injected : Tone::Info});
       }
       // Expand into remaining viewport height when sections below are collapsed, pushing collapsed headers to the bottom
       const float header_height = ImGui::GetFrameHeightWithSpacing() + Style::Scale(Style::Sizes::UNIT * 2.f);
@@ -112,11 +119,16 @@ void DrawMirrors()
                    debugging ? Widgets::ButtonKind::Primary : Widgets::ButtonKind::Secondary, "Renders a live preview of this texture through display composition"))
                debugging ? Trace::DebugDraw::Clear() : Trace::DebugDraw::SetTarget(info.original);
 
+            const std::string origin_label = info.origin.shader_hash != 0
+               ? std::format("{} 0x{:08X}", Resources::Chains::GetOriginName(info.origin.kind), info.origin.shader_hash)
+               : std::string(Resources::Chains::GetOriginName(info.origin.kind));
             std::vector<PropertyRow> detail = {
                {"Original", info.original},
                {"Original format", std::string(Utils::Format::GetName(info.original_desc.format))},
                {"Mirror format", std::string(Utils::Format::GetName(info.mirror_desc.format)), Tone::Injected},
-               {"Size", DescribeSize(info.original_desc)},
+               {"Original size", DescribeSize(info.original_desc)},
+               {"Mirror size", DescribeSize(info.mirror_desc), info.is_scaled ? Tone::Injected : Tone::Info},
+               {"Origin", origin_label, info.origin.kind == Resources::Chains::OriginKind::Rule ? Tone::Info : Tone::Injected},
                {"Binds", DescribeBinds(info.original_desc)},
                {"Last frame", std::to_string(info.frame)},
             };

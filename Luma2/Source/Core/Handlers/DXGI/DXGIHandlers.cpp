@@ -21,8 +21,10 @@
 #include "Hooks/HookManager.hpp"
 #include "Hooks/HookScope.hpp"
 #include "Settings/SettingsRegistry.hpp"
+#include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
 #include "Resources/D3D11/D3D11Samplers.hpp"
+#include "Resources/ResourceMirrors.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Swapchain/DXGI/DXGISwapchain.hpp"
@@ -449,11 +451,13 @@ void PrePresentWork(IDXGISwapChain* swapchain)
                   Shaders::Variants::D3D11::PublishVariants(device);
                if (Resources::Samplers::IsNeeded())
                   Resources::Samplers::D3D11::RefreshMirrors();
+               if (Resources::Mirrors::IsNeeded())
+                  Resources::Mirrors::D3D11::OnPresent(device);
                Resources::Database::D3D11::UpdateShaderObjects(device);
             },
             [&](ID3D12CommandQueue* queue) {
                Game::Registry::Call(Game::Registry::GetD3D12Events().on_present, swapchain, queue);
-               PresentD3D12();
+               PresentD3D12(queue);
 #if DEVELOPMENT
                Trace::Stats::D3D12::CountFrame();
 #endif

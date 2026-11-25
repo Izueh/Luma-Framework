@@ -69,8 +69,8 @@ void PreSetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12De
 void PreSetRootTable(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_DESCRIPTOR_HANDLE table);
 void PreSetRootDescriptor(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_VIRTUAL_ADDRESS address);
 void PreSetRootConstants(ID3D12GraphicsCommandList* list, bool compute, UINT index, UINT count, const void* values, UINT offset);
-void PreSetViewports(ID3D12GraphicsCommandList* list, UINT count, const D3D12_VIEWPORT* viewports);
-void PreSetScissorRects(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RECT* rects);
+void PreSetViewports(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_VIEWPORT*& viewports);
+void PreSetScissorRects(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_RECT*& rects);
 void PreSetTopology(ID3D12GraphicsCommandList* list, D3D12_PRIMITIVE_TOPOLOGY topology);
 void PreSetBlendFactor(ID3D12GraphicsCommandList* list, const FLOAT factor[4]);
 void PreSetStencilRef(ID3D12GraphicsCommandList* list, UINT stencil_ref);
@@ -81,15 +81,15 @@ std::span<const D3D12_RESOURCE_BARRIER> PreResourceBarrier(ID3D12GraphicsCommand
 
 // Copies and clears: true skips the call. The locations are copies of the game's, which can be edited.
 bool PreCopyResource(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, ID3D12Resource*& source);
-bool PreCopyTextureRegion(ID3D12GraphicsCommandList* list, D3D12_TEXTURE_COPY_LOCATION& destination, UINT x, UINT y, UINT z, D3D12_TEXTURE_COPY_LOCATION& source,
-   const D3D12_BOX* box);
+bool PreCopyTextureRegion(ID3D12GraphicsCommandList* list, D3D12_TEXTURE_COPY_LOCATION& destination, UINT& x, UINT& y, UINT& z, D3D12_TEXTURE_COPY_LOCATION& source,
+   const D3D12_BOX*& box);
 bool PreCopyBufferRegion(ID3D12GraphicsCommandList* list, ID3D12Resource* destination, UINT64 destination_offset, ID3D12Resource* source, UINT64 source_offset,
    UINT64 size);
 bool PreResolveSubresource(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, UINT destination_subresource, ID3D12Resource*& source,
    UINT source_subresource, DXGI_FORMAT& format);
-bool PreClearRenderTargetView(ID3D12GraphicsCommandList* list, D3D12_CPU_DESCRIPTOR_HANDLE& view, const FLOAT color[4], UINT rect_count, const D3D12_RECT* rects);
+bool PreClearRenderTargetView(ID3D12GraphicsCommandList* list, D3D12_CPU_DESCRIPTOR_HANDLE& view, const FLOAT color[4], UINT rect_count, const D3D12_RECT*& rects);
 bool PreClearDepthStencilView(ID3D12GraphicsCommandList* list, D3D12_CPU_DESCRIPTOR_HANDLE& view, D3D12_CLEAR_FLAGS flags, FLOAT depth, UINT8 stencil, UINT rect_count,
-   const D3D12_RECT* rects);
+   const D3D12_RECT*& rects);
 
 // One of the two is set: ClearUnorderedAccessViewUint's or ClearUnorderedAccessViewFloat's
 struct ClearValues
@@ -108,6 +108,6 @@ bool PreExecuteIndirect(ID3D12GraphicsCommandList* list, const Game::D3D12::Indi
 void PreExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle);
 
 // Presenting thread, at a D3D12 present
-void PresentD3D12();
+void PresentD3D12(ID3D12CommandQueue* queue);
 } // namespace Handlers
 } // namespace Luma

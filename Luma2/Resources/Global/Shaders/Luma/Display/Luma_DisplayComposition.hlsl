@@ -342,7 +342,8 @@ float4 Compose(float4 pos)
 	float targetHeight2 = targetHeight1 * DVS5 * 0.5;
 	float mipLevel1 = log2(sourceHeight / targetHeight1);
 	float mipLevel2 = log2(sourceHeight / targetHeight2);
-	float4 color = sourceTexture.Load((int3)pos.xyz);
+	const bool useBilinearScale = HasStage(STAGE_SCALE) && (LumaComposition.SourceScale.x != 1.0 || LumaComposition.SourceScale.y != 1.0);
+	float4 color = useBilinearScale ? sourceTexture.SampleLevel(linearSampler, uv, 0) : sourceTexture.Load((int3)pos.xyz);
 	float4 mipColor1 = 0.0;
 	float4 mipColor2 = 0.0;
 #if 0
@@ -654,7 +655,7 @@ float4 EncodeOutput(float4 color)
 
 float4 main(float4 pos : SV_Position) : SV_Target0
 {
-	// The scale stage: the real buffer can be another size than the game's image (nearest, for now)
+	// The scale stage: the real buffer can be another size than the game's image (bilinear when SourceScale != 1)
 	if (HasStage(STAGE_SCALE))
 		pos.xy = (floor(pos.xy) + 0.5) * LumaComposition.SourceScale;
 	return EncodeOutput(Compose(pos));

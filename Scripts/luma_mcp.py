@@ -132,6 +132,8 @@ TOOLS = [
          "filter": {"type": "string", "description": "Luma 2: part of a shader hash or debug name at any stage of the call, or of a Luma pass name, any case"},
          "resource": {"type": "string", "description": "Resource id (the 'resource' field of luma_trace_get) read or written by the entry"},
          "replaced_only": {"type": "boolean", "description": "Only entries whose shader Luma replaced or patched"},
+         "upgraded_only": {"type": "boolean", "description": "Luma 2: only entries reading or writing an upgraded/mirrored resource"},
+         "scaled_only": {"type": "boolean", "description": "Luma 2: only entries with scaled mirrors, viewports, scissors, or copies"},
          "include_vs": {"type": "boolean", "description": "Also list vertex shader entries (Luma 2: the draws without a pixel shader, e.g. depth only passes)"},
          "include_bindings": {"type": "boolean", "description": "Also list resource binding entries"},
          "include_buffer_writes": {"type": "boolean", "description": "Also list buffer map/update entries"},

@@ -5,6 +5,7 @@
 #include "Settings/SettingsRegistry.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Hooks/HookScope.hpp"
+#include "Resources/D3D12/D3D12Mirrors.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
 
@@ -59,6 +60,14 @@ DrawResult Run(List* list, const Game::D3D12::DispatchCall& dispatch)
 void Game::D3D12::UseOriginal(const Call& call)
 {
    Luma::Shaders::Variants::D3D12::UseOriginal(call.list);
+}
+
+std::optional<D3D12_VIEWPORT> Game::D3D12::GetViewport(ID3D12GraphicsCommandList* list, UINT index)
+{
+   const std::optional<Luma::Resources::Mirrors::D3D12::ListScalingSnapshot> snapshot = Luma::Resources::Mirrors::D3D12::GetListScalingSnapshot(list);
+   if (!snapshot || index >= snapshot->game_viewport_count)
+      return std::nullopt;
+   return snapshot->game_viewports[index];
 }
 
 void Game::D3D12::RunOriginal(const Call& call)

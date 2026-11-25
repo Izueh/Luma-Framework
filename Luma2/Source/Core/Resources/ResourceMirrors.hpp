@@ -9,6 +9,8 @@
 
 #include "Hooks/HookFunctions.hpp"
 #include "Hooks/ObjectLifetime.hpp"
+#include "Resources/ResourceChains.hpp"
+#include "Resources/ResourceScaling.hpp"
 #include "Resources/ResourceUpgrades.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
@@ -44,6 +46,8 @@ struct Info
    std::string debug_name;
    Upgrade::TextureInfo original_desc;
    Upgrade::TextureInfo mirror_desc;
+   Chains::Origin origin = {};
+   bool is_scaled = false;
    uint64_t frame = 0;
 };
 
@@ -58,12 +62,17 @@ struct MirrorState
    OwnedResource mirror;
    Upgrade::TextureInfo original_info;
    Upgrade::TextureInfo info;
+   Chains::Origin origin = {};
    int64_t bytes = 0;
    Resource* original = nullptr;
+   uint64_t generation = 0;
+   bool is_scaled = false;
 
    ~MirrorState()
    {
       CountMirror(-1, -bytes);
+      if (is_scaled)
+         Scaling::CountScaledMirror(-1);
 #if DEVELOPMENT
       RemoveInfo(original);
 #endif
@@ -77,16 +86,21 @@ struct OriginalState
 };
 
 template <typename Resource, typename OwnedResource>
-void AttachMirror(Resource* original, OwnedResource mirror, const Upgrade::TextureInfo& original_info, const Upgrade::TextureInfo& mirror_info)
+void AttachMirror(Resource* original, OwnedResource mirror, const Upgrade::TextureInfo& original_info, const Upgrade::TextureInfo& mirror_info,
+   Chains::Origin origin = {}, uint64_t generation = 0)
 {
    const int64_t bytes = int64_t(EstimateBytes(mirror_info));
+   const bool scaled = mirror_info.width != original_info.width || mirror_info.height != original_info.height;
    Hooks::Lifetime::SetState<OriginalState<Resource>>(mirror.Get(), original);
    // Counted before SetState so a failed attach uncounts on destruction
    CountMirror(1, bytes);
-   if (!Hooks::Lifetime::SetState<MirrorState<Resource, OwnedResource>>(original, std::move(mirror), original_info, mirror_info, bytes, original))
+   if (scaled)
+      Scaling::CountScaledMirror(1);
+   if (!Hooks::Lifetime::SetState<MirrorState<Resource, OwnedResource>>(original, std::move(mirror), original_info, mirror_info, origin, bytes, original,
+          generation, scaled))
       return;
 #if DEVELOPMENT
-   AddInfo(original, {.original = std::format("0x{:X}", reinterpret_cast<uintptr_t>(original)), .original_desc = original_info, .mirror_desc = mirror_info, .frame = Shaders::GetFrame()});
+   AddInfo(original, {.original = std::format("0x{:X}", reinterpret_cast<uintptr_t>(original)), .original_desc = original_info, .mirror_desc = mirror_info, .origin = origin, .is_scaled = scaled, .frame = Shaders::GetFrame()});
 #endif
 }
 

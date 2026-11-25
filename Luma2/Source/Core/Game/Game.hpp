@@ -17,8 +17,10 @@
 #include "Frame/FrameState.hpp"
 #include "Game/GameEvents.hpp"
 #include "Resources/ResourceBindings.hpp"
+#include "Resources/ResourceChains.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
+#include "Resources/ResourceScaling.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Resources/TextureLoader.hpp"
 #include "Resources/ResourceUpgrades.hpp"
@@ -106,6 +108,10 @@ struct Options
    Luma::Resources::Textures::Options textures;
    // The game's anisotropic samplers get Luma's mirrors (16x, SR's LOD bias)
    Luma::Resources::Samplers::Options samplers;
+   // Indirect mirror propagation across copies, draws and shader-hash seeds
+   Luma::Resources::Chains::Options chains;
+   // Resolution scaling for mirrors, viewports, scissors and copies
+   Luma::Resources::Scaling::Options scaling;
    // The game's own bytecode patches (recipes are files in the Recipes folder)
    Luma::Shaders::Patching::Options patching;
    // How Luma presents: Mirror (the game draws to Luma's buffers) or in place, the HDR output mode, borderless
@@ -121,8 +127,19 @@ void SetOptions(const Options& options);
 // The game's textures Luma upgrades through mirrors. Rules name DXGI formats shared by D3D11 and D3D12. Called in Init.
 namespace Resources {
 namespace Upgrade = Luma::Resources::Upgrade;
+namespace Chains = Luma::Resources::Chains;
 
 void SetUpgrades(const Luma::Resources::Upgrade::Rules& rules);
+
+namespace Scaling {
+using Mode = Luma::Resources::Scaling::Mode;
+using Options = Luma::Resources::Scaling::Options;
+
+void Begin(Device device);
+void End(Device device);
+bool IsActive(Device device);
+void SetTargetResolution(Device device, Math::uint2 size);
+} // namespace Scaling
 } // namespace Resources
 
 // Drawn with UI::Widgets. Plain settings go through the registry instead.
@@ -178,6 +195,8 @@ void RunOriginal(const Call& call);
 // D3D12 can't put one stage back: the game's whole pipeline is bound, every stage of the call runs the game's shader, until the
 // game binds another pipeline
 void UseOriginal(const Call& call);
+// The viewport the game last bound at `index` on `list` (requires RSSetViewports hook, e.g. Scaling enabled)
+std::optional<D3D12_VIEWPORT> GetViewport(ID3D12GraphicsCommandList* list, UINT index = 0);
 } // namespace D3D12
 } // namespace Game
 } // namespace Luma

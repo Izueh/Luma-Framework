@@ -16,6 +16,7 @@
 
 #include "Common/ShaderStage.hpp"
 #include "Hooks/HookFunctions.hpp"
+#include "Resources/ResourceChains.hpp"
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderStages.hpp"
 #include "Shaders/ShaderVariants.hpp"
@@ -80,6 +81,16 @@ enum class Outcome : uint8_t
    SkippedByTrace, // The trace's "skip draws" action
 };
 
+struct MirrorInfo
+{
+   uint32_t format = 0; // DXGI_FORMAT of mirror
+   std::array<uint32_t, 4> size = {}; // width, height, depth/layers, mips
+   bool is_scaled = false;
+   std::array<float, 2> scale = {1.f, 1.f};
+   Resources::Chains::Origin origin = {};
+   bool pending = false; // Queued on deferred context / D3D12 list, activates next frame
+};
+
 struct Resource
 {
    std::string id; // The object's address ("0x1F2E3D4C5B60")
@@ -88,8 +99,9 @@ struct Resource
    // Width, height, depth or array size, mips
    std::array<uint32_t, 4> size = {};
    std::string debug_name;
-   // Luma's mirror of it swapped in for the game's (Resources::Mirrors): its format and size
+   // Luma's mirror of it swapped in for the game's (Resources::Mirrors): formatted summary and structured details
    std::optional<std::string> mirror;
+   std::optional<MirrorInfo> mirror_info;
 };
 
 struct View
@@ -212,6 +224,16 @@ struct Event
    Rasterizer rasterizer;
    std::vector<std::array<float, 6>> viewports; // x, y, width, height, min depth, max depth
    std::vector<std::array<int32_t, 4>> scissor_rects; // left, top, right, bottom
+   // Populated when Resources::Scaling rescaled viewports/scissors or a copy, or when Chains touched this call
+   bool viewports_scaled = false;
+   std::vector<std::array<float, 6>> original_viewports;
+   bool scissors_scaled = false;
+   std::vector<std::array<int32_t, 4>> original_scissor_rects;
+   bool copy_scaled = false;
+   std::optional<std::array<uint64_t, 6>> rescaled_source_box;
+   bool chain_seed = false;
+   bool chain_propagated = false;
+   bool cross_thread_scaling_overlap = false;
 
    // Copies, clears and CPU accesses name whole resources, not views: a copy's source and destination, a
    // cleared view's resource, the resource read or written
@@ -248,6 +270,8 @@ struct Filter
    std::string text;
    bool replaced_only = false; // Its primary shader has variants
    bool cancelled_only = false; // A draw callback or the trace skipped or replaced it
+   bool upgraded_only = false; // Touches any mirrored resource
+   bool scaled_only = false; // Has a scaled mirror, rescaled viewports/scissors, or scaled copy
    // Copies, clears, CPU writes and CPU reads; buffer accesses (cbuffer uploads, frequent) only with `buffer_writes`
    bool copies = true;
    bool clears = true;
@@ -267,6 +291,8 @@ enum class ResourceUsage : uint8_t
 };
 
 bool Matches(const Event& event, const Filter& filter);
+bool HasUpgradedResource(const Event& event);
+bool IsScaledEvent(const Event& event);
 // A copy, a clear or a CPU read/write: whole resources, no shader
 bool IsResourceEvent(const Event& event);
 // How `event` accesses the resource identified by `resource_id` (read, write, or both)

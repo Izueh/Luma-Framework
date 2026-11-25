@@ -61,6 +61,13 @@ T* SetState(Object* object, Arguments&&... arguments)
    return attached ? value : nullptr;
 }
 
+template <typename T, typename Object>
+void RemoveState(Object* object)
+{
+   if (object)
+      object->SetPrivateDataInterface(GetStateGuid<T>(), nullptr);
+}
+
 // The same for an object known only as IUnknown (a device of either API): found through the interface that has private data
 void* GetStateOf(IUnknown* object, const GUID& guid);
 bool AttachStateOf(IUnknown* object, const GUID& guid, IUnknown* holder);

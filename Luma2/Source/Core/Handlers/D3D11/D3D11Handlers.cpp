@@ -59,6 +59,8 @@ void ForgetContextState(ID3D11DeviceContext* context)
       Draw::D3D11::ForgetBoundState(context);
    if (IsRestoringGameBuffers())
       Resources::LumaCBuffers::D3D11::ForgetGameBuffers(context);
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::ForgetContextState(context);
 }
 
 // With the game's buffers restored after draws, after Luma's cbuffers were bound on `stages`
@@ -125,6 +127,7 @@ void OnDeviceDestroyed(ID3D11Device* device)
 #endif
          if (Shaders::IsNeeded())
             Shaders::Variants::D3D11::ReleaseVariants(device);
+         Resources::Mirrors::D3D11::ReleaseDeviceObjects(device);
          Resources::Database::D3D11::ReleaseDeviceObjects(device);
       },
       [&] { Validation::D3D11::StopWatchingDevice(device); });
@@ -270,10 +273,10 @@ bool PreSetShader(ID3D11DeviceContext* context, ShaderStage stage, ID3D11DeviceC
    return false;
 }
 
-bool PreSetShaderResources(ID3D11DeviceContext*, ShaderStage, UINT, UINT count, ID3D11ShaderResourceView** views)
+bool PreSetShaderResources(ID3D11DeviceContext* context, ShaderStage stage, UINT start, UINT count, ID3D11ShaderResourceView** views)
 {
    if (Resources::Mirrors::IsNeeded() && Resources::Mirrors::IsSwapping())
-      Resources::Mirrors::D3D11::SwapViews(views, count);
+      Resources::Mirrors::D3D11::SwapViews(context, stage, start, views, count);
    return false;
 }
 
@@ -294,10 +297,10 @@ bool PreSetSamplers(ID3D11DeviceContext*, ShaderStage, UINT, UINT count, ID3D11S
    return false;
 }
 
-bool PreCSSetUnorderedAccessViews(ID3D11DeviceContext*, UINT, UINT count, ID3D11UnorderedAccessView** views, const UINT*)
+bool PreCSSetUnorderedAccessViews(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11UnorderedAccessView** views, const UINT*)
 {
    if (Resources::Mirrors::IsNeeded() && Resources::Mirrors::IsSwapping())
-      Resources::Mirrors::D3D11::SwapViews(views, count);
+      Resources::Mirrors::D3D11::SwapViews(context, ShaderStage::Compute, start, views, count);
    return false;
 }
 
@@ -338,6 +341,8 @@ void PostRSSetViewports(ID3D11DeviceContext* context, UINT count, const D3D11_VI
 {
    if (Draw::GetRecorded().viewports)
       Draw::D3D11::RecordViewports(context, count, viewports);
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::OnBindViewports(context, count, viewports);
    Game::Registry::Call(GameEvents().on_bind_viewports, context, count, viewports);
 }
 
@@ -345,6 +350,8 @@ void PostRSSetScissorRects(ID3D11DeviceContext* context, UINT count, const D3D11
 {
    if (Draw::GetRecorded().viewports)
       Draw::D3D11::RecordScissorRects(context, count, rects);
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::OnBindScissorRects(context, count, rects);
    Game::Registry::Call(GameEvents().on_bind_scissor_rects, context, count, rects);
 }
 
@@ -569,6 +576,8 @@ bool RunCall(ID3D11DeviceContext* context, const Call& call)
    else
       original.draw = &call;
    const auto run_draw = [&](Shaders::StageSet stages, Game::DrawResult& result, bool& skipped) {
+      if (Resources::Mirrors::IsNeeded())
+         Resources::Mirrors::D3D11::PrepareDrawOrDispatch(context, dispatch);
       const Shaders::StageSet before = FulfilBeforeEvents(context, stages);
       const Game::DrawEvents::D3D11::Result events =
          Game::Registry::HasDrawCallbacks<Api::D3D11>() ? Game::DrawEvents::D3D11::Run(context, call) : Game::DrawEvents::D3D11::Result();
@@ -582,6 +591,8 @@ bool RunCall(ID3D11DeviceContext* context, const Call& call)
       if (Trace::DebugDraw::IsActive())
          handled = Trace::DebugDraw::CaptureCallD3D11(original, stages, handled);
 #endif
+      if (Resources::Mirrors::IsNeeded())
+         Resources::Mirrors::D3D11::FinishDrawOrDispatch(context, dispatch);
       return handled;
    };
 #if DEVELOPMENT

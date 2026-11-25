@@ -18,7 +18,9 @@
 #include "Resources/D3D12/D3D12Mirrors.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Resources/ResourceBindings.hpp"
+#include "Resources/ResourceChains.hpp"
 #include "Resources/ResourceMirrors.hpp"
+#include "Resources/ResourceScaling.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
@@ -155,12 +157,37 @@ Status GetStatus()
       .pending = patching.pending,
       .broken_recipes = patching.broken_recipes};
    const Resources::Mirrors::Stats mirrors = Resources::Mirrors::GetStats();
-   status.resources = {.upgrades = Resources::Mirrors::IsNeeded(),
+   const Resources::Chains::Stats chains = Resources::Chains::GetStats();
+   const Resources::Scaling::Stats scaling = Resources::Scaling::GetStats();
+   status.resources = {
+      .upgrades = Resources::Mirrors::IsNeeded(),
       .samplers = Resources::Samplers::IsNeeded(),
       .mirrors = mirrors.mirrors,
       .mirror_mb = mirrors.bytes >> 20,
       .views = mirrors.views,
-      .lod_bias_offset = Resources::Samplers::GetLodBiasOffset()};
+      .lod_bias_offset = Resources::Samplers::GetLodBiasOffset(),
+      .chains = {
+         .mode = std::string(Resources::Chains::GetModeName(chains.mode)),
+         .seeds = chains.seeds,
+         .direct_propagations = chains.direct_propagations,
+         .indirect_propagations = chains.indirect_propagations,
+         .deferred_queued = chains.deferred_queued,
+      },
+      .scaling = {
+         .mode = std::string(Resources::Scaling::GetModeName(scaling.mode)),
+         .active = scaling.active,
+         .activating_thread = scaling.activating_thread,
+         .scaled_mirrors = scaling.scaled_mirrors,
+         .pool_size = scaling.pool_size,
+         .invalidations = scaling.invalidations,
+         .viewport_rescales = scaling.viewport_rescales,
+         .scissor_rescales = scaling.scissor_rescales,
+         .copy_box_rescales = scaling.copy_box_rescales,
+         .clear_rect_rescales = scaling.clear_rect_rescales,
+         .scaled_blits = scaling.scaled_blits,
+         .cross_thread_overlaps = scaling.cross_thread_overlaps,
+      },
+   };
    if (const Swapchain::DXGI::Status output = Swapchain::DXGI::GetStatus(); output.known)
    {
       const CB::LumaGlobalSettings& settings = Resources::LumaCBuffers::cb_luma_global_settings;

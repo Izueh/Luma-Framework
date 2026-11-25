@@ -114,15 +114,31 @@ Resource DescribeOwn(ID3D11Resource* resource)
    return described;
 }
 
-// A mirror is bound in place of the game's texture: described as the game's, with the mirror's format and size
+// A mirror is bound in place of the game's texture: described as the game's, with the mirror's format, size, scale and origin
 Resource DescribeResource(ID3D11Resource* resource)
 {
    ID3D11Resource* original = Resources::Mirrors::D3D11::FindOriginal(resource);
-   if (!original)
-      return DescribeOwn(resource);
-   Resource described = DescribeOwn(original);
-   const Resource mirror = DescribeOwn(resource);
-   described.mirror = std::format("{} {}x{}", Utils::Format::GetName(mirror.format), mirror.size[0], mirror.size[1]);
+   ID3D11Resource* target = original ? original : resource;
+   Resource described = DescribeOwn(target);
+   if (const std::optional<Resources::Mirrors::D3D11::MirrorSummary> summary = Resources::Mirrors::D3D11::FindMirrorSummary(target))
+   {
+      const auto& mi = summary->mirror_info;
+      const auto& oi = summary->original_info;
+      described.mirror_info = MirrorInfo{
+         .format = uint32_t(mi.format),
+         .size = {mi.width, mi.height, mi.depth_or_layers, mi.levels},
+         .is_scaled = summary->is_scaled,
+         .scale = {float(mi.width) / float(std::max(oi.width, 1u)), float(mi.height) / float(std::max(oi.height, 1u))},
+         .origin = summary->origin,
+         .pending = summary->pending,
+      };
+      if (original || !summary->pending)
+      {
+         described.mirror = summary->is_scaled
+            ? std::format("{} {}x{} ({:.2f}x)", Utils::Format::GetName(mi.format), mi.width, mi.height, described.mirror_info->scale[0])
+            : std::format("{} {}x{}", Utils::Format::GetName(mi.format), mi.width, mi.height);
+      }
+   }
    return described;
 }
 
@@ -462,8 +478,33 @@ void DescribeState(Recording& recording, ShaderStage stage, bool recorded)
       std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> rects = {};
       UINT viewport_count = UINT(viewports.size());
       UINT rect_count = UINT(rects.size());
+      const std::optional<Resources::Mirrors::D3D11::ContextScalingSnapshot> scaling = Resources::Mirrors::D3D11::GetContextScalingSnapshot(context);
       const Draw::D3D11::Bound* bound = recorded ? Draw::D3D11::GetBound(context) : nullptr;
-      if (bound)
+      if (scaling && (scaling->viewports_scaled || scaling->scissors_scaled))
+      {
+         // Read live viewports/scissors (Luma's rescaled ones) and keep the game's original values alongside
+         context->RSGetViewports(&viewport_count, viewports.data());
+         context->RSGetScissorRects(&rect_count, rects.data());
+         event.viewports_scaled = scaling->viewports_scaled;
+         if (scaling->viewports_scaled)
+         {
+            for (UINT i = 0; i < scaling->game_viewport_count; i++)
+            {
+               const D3D11_VIEWPORT& vp = scaling->game_viewports[i];
+               event.original_viewports.push_back({vp.TopLeftX, vp.TopLeftY, vp.Width, vp.Height, vp.MinDepth, vp.MaxDepth});
+            }
+         }
+         event.scissors_scaled = scaling->scissors_scaled;
+         if (scaling->scissors_scaled)
+         {
+            for (UINT i = 0; i < scaling->game_scissor_count; i++)
+            {
+               const D3D11_RECT& rc = scaling->game_scissors[i];
+               event.original_scissor_rects.push_back({rc.left, rc.top, rc.right, rc.bottom});
+            }
+         }
+      }
+      else if (bound)
       {
          viewports = bound->viewports;
          viewport_count = bound->viewport_count;
@@ -474,6 +515,12 @@ void DescribeState(Recording& recording, ShaderStage stage, bool recorded)
       {
          context->RSGetViewports(&viewport_count, viewports.data());
          context->RSGetScissorRects(&rect_count, rects.data());
+      }
+      if (scaling)
+      {
+         event.chain_seed = scaling->chain_seed;
+         event.chain_propagated = scaling->chain_propagated;
+         event.cross_thread_scaling_overlap = scaling->cross_thread_overlap;
       }
       for (UINT i = 0; i < viewport_count; i++)
          event.viewports.push_back({viewports[i].TopLeftX, viewports[i].TopLeftY, viewports[i].Width, viewports[i].Height, viewports[i].MinDepth, viewports[i].MaxDepth});

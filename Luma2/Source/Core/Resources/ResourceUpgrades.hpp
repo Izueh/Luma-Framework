@@ -89,7 +89,7 @@ struct Rules
    std::vector<Math::uint2> custom_sizes;
    uint32_t aspect_ratio_pixel_threshold = 1;
    Lut lut;
-   // A size change, a scaled mirror (declared, not applied yet)
+   // A size change, a scaled mirror
    std::vector<CustomDimensions> custom_dimensions;
 };
 
@@ -117,6 +117,7 @@ struct TextureInfo
    bool render_target = false;
    bool unordered_access = false;
    bool depth_stencil = false;
+   bool shader_resource = false;
    bool cube = false;
    bool gpu_only = true;
 
@@ -130,7 +131,10 @@ struct FrameState
    Math::uint2 display = {1, 1};
 };
 
-std::optional<TextureInfo> Match(const TextureInfo& info, const FrameState& state, bool has_initial_data);
+// `allow_writable_sr` enables GPU-only shader resources without initial data (when chain upgrades are active)
+// `force_format_upgrade` skips the format list check (used by shader-hash seeds)
+std::optional<TextureInfo> Match(const TextureInfo& info, const FrameState& state, bool has_initial_data, bool allow_writable_sr = false,
+   bool force_format_upgrade = false, bool* resized_by_custom_dimensions = nullptr);
 DXGI_FORMAT GetBestFormat(const TextureInfo& info);
 enum class ViewKind : uint8_t
 {

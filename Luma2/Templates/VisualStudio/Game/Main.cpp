@@ -210,8 +210,17 @@ Game::DrawResult OnExampleDrawD3D11(const Game::D3D11::Call& call)
    {
       // Custom textures loaded from Resources/<Game>/Textures/ are looked up by filename hash:
       // ID3D11ShaderResourceView* noise = Game::D3D11::GetTexture(device, "fast_noise"_h);
+      Microsoft::WRL::ComPtr<ID3D11Device> device;
+      call.context->GetDevice(&device);
+      if (device && !Game::Resources::Scaling::IsActive(device.Get()))
+      {
+         Game::Resources::Scaling::SetTargetResolution(device.Get(), Game::Frame::Get(device.Get()).output);
+         Game::Resources::Scaling::Begin(device.Get());
+      }
       Game::D3D11::BindLumaShader(call.context, "Luma_Example_PS"_h, {.custom_data_3 = 1.f});
       Game::D3D11::RunOriginal(call);
+      if (device)
+         Game::Resources::Scaling::End(device.Get());
       return Game::DrawResult::Replaced;
    }
    Game::D3D11::UseOriginal(call, ShaderStage::Pixel);
@@ -223,6 +232,7 @@ Game::DrawResult OnExampleDrawD3D12(const Game::D3D12::Call& call)
 {
    if (!RUN_EXAMPLE || call.draw == nullptr)
       return Game::DrawResult::None;
+   (void)Game::D3D12::GetViewport(call.list);
    Game::D3D12::RunOriginal(call);
    Game::D3D12::UseOriginal(call);
    return Game::DrawResult::Skip;
@@ -497,6 +507,8 @@ void Luma::Game::Init()
       // .bindings = {.d3d12_space = 100, .static_samplers = false},
       // .textures = {.load = false},
       // .samplers = {.upgrade = false, .upgrade_comparison = false, .force_upgrade_linear = false},
+      // .chains = {.mode = Resources::Chains::Mode::None, .seeds = {}},
+      // .scaling = {.mode = Resources::Scaling::Mode::Off},
       // .patching = {.patch_sync = nullptr, .patch_async = nullptr},
       .swapchain = {
          .mode = Swapchain::Mode::Mirror, // Mirror, InPlace, or Native

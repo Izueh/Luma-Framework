@@ -14,6 +14,7 @@
 #include <thread>
 #include <vector>
 
+#include "Resources/ResourceChains.hpp"
 #include "Shaders/ShaderVariants.hpp"
 #include "Trace/Cbuffers.hpp"
 #include "Trace/FrameCapture.hpp"
@@ -67,6 +68,11 @@ struct TraceEntry
    std::optional<std::string> rt0;
    std::optional<std::string> depth;
    std::optional<std::string> copy_kind; // A copy other than a whole resource's: region, resolve, buffer_region
+   std::optional<bool> upgraded;
+   std::optional<bool> scaled;
+   std::optional<bool> chain_seed;
+   std::optional<bool> pending_mirror;
+   std::optional<bool> cross_thread_scaling_overlap;
 };
 
 struct TraceList
@@ -122,6 +128,12 @@ struct TraceView
    std::optional<std::string> blend;
    std::optional<uint32_t> space; // D3D12, a register space other than 0
    std::optional<std::string> mirror; // Luma's mirror swapped in: its format and size
+   std::optional<std::string> mirror_format;
+   std::optional<std::array<uint32_t, 4>> mirror_size;
+   std::optional<std::array<float, 2>> mirror_scale;
+   std::optional<std::string> mirror_origin;
+   std::optional<std::string> mirror_origin_shader;
+   std::optional<bool> mirror_pending;
 };
 
 struct TraceDepthStencil
@@ -194,6 +206,12 @@ struct TraceResource
    std::string resource;
    std::optional<std::string> debug_name;
    std::optional<std::string> mirror;
+   std::optional<std::string> mirror_format;
+   std::optional<std::array<uint32_t, 4>> mirror_size;
+   std::optional<std::array<float, 2>> mirror_scale;
+   std::optional<std::string> mirror_origin;
+   std::optional<std::string> mirror_origin_shader;
+   std::optional<bool> mirror_pending;
 };
 
 struct TraceCopy
@@ -236,10 +254,16 @@ struct TraceGet
    std::optional<std::string> rt0;
    std::optional<std::string> depth;
    std::optional<std::string> copy_kind;
+   std::optional<bool> upgraded;
+   std::optional<bool> scaled;
+   std::optional<bool> chain_seed;
+   std::optional<bool> pending_mirror;
+   std::optional<bool> cross_thread_scaling_overlap;
    uint32_t thread = 0;
    std::optional<TraceResource> source;
    std::optional<TraceResource> target;
    std::optional<TraceCopy> copy;
+   std::optional<bool> copy_scaled;
    std::optional<TraceCpuAccess> cpu_access;
    std::optional<std::array<float, 4>> clear_values;
    std::vector<TraceShader> shaders;
@@ -248,8 +272,12 @@ struct TraceGet
    std::optional<TraceRasterizer> rasterizer;
    std::optional<size_t> viewport_count;
    std::optional<std::vector<std::array<float, 6>>> viewports;
+   std::optional<bool> viewports_scaled;
+   std::optional<std::vector<std::array<float, 6>>> original_viewports;
    std::optional<size_t> scissor_count;
    std::optional<std::vector<std::array<int32_t, 4>>> scissor_rects;
+   std::optional<bool> scissors_scaled;
+   std::optional<std::vector<std::array<int32_t, 4>>> original_scissor_rects;
    std::vector<TraceView> rtvs;
    bool alpha_to_coverage = false;
    std::array<float, 4> blend_factor = {};
@@ -373,6 +401,22 @@ void WriteSummary(Reply& reply, const Event& event, size_t index)
    }
    if (event.depth_stencil_view && event.depth_stencil.depth_enable)
       reply.depth = std::format("{}{}", event.depth_stencil.depth_func, event.depth_stencil.depth_write ? " write" : "");
+   if (Capture::HasUpgradedResource(event))
+      reply.upgraded = true;
+   if (Capture::IsScaledEvent(event))
+      reply.scaled = true;
+   if (event.chain_seed)
+      reply.chain_seed = true;
+   const auto has_pending = [](const std::vector<Capture::View>& views) {
+      return std::ranges::any_of(views, [](const Capture::View& view) { return view.resource.mirror_info && view.resource.mirror_info->pending; });
+   };
+   if (has_pending(event.render_targets) || has_pending(event.shader_resources) || has_pending(event.unordered_access) ||
+      (event.depth_stencil_view && event.depth_stencil_view->resource.mirror_info && event.depth_stencil_view->resource.mirror_info->pending) ||
+      (event.source && event.source->mirror_info && event.source->mirror_info->pending) ||
+      (event.target && event.target->mirror_info && event.target->mirror_info->pending))
+      reply.pending_mirror = true;
+   if (event.cross_thread_scaling_overlap)
+      reply.cross_thread_scaling_overlap = true;
 }
 
 bool HasResource(const Event& event, std::string_view id)
@@ -397,6 +441,27 @@ std::shared_ptr<const Capture::Frame> CaptureFrame(std::chrono::steady_clock::ti
    return Capture::GetLast();
 }
 
+template <typename Reply>
+void PopulateMirrorInfo(Reply& reply, const Capture::Resource& resource)
+{
+   reply.mirror = resource.mirror;
+   if (!resource.mirror_info)
+      return;
+   const Capture::MirrorInfo& info = *resource.mirror_info;
+   if (info.pending)
+   {
+      reply.mirror_pending = true;
+      return;
+   }
+   reply.mirror_format = std::string(Utils::Format::GetName(info.format));
+   reply.mirror_size = info.size;
+   if (info.is_scaled)
+      reply.mirror_scale = info.scale;
+   reply.mirror_origin = std::string(Resources::Chains::GetOriginName(info.origin.kind));
+   if (info.origin.shader_hash != 0)
+      reply.mirror_origin_shader = FormatHash(info.origin.shader_hash);
+}
+
 Replies::TraceView ToReply(const Capture::View& view)
 {
    const Capture::Resource& resource = view.resource;
@@ -406,7 +471,7 @@ Replies::TraceView ToReply(const Capture::View& view)
       reply.debug_name = resource.debug_name;
    if (view.space != 0)
       reply.space = view.space;
-   reply.mirror = resource.mirror;
+   PopulateMirrorInfo(reply, resource);
    return reply;
 }
 } // namespace
@@ -507,6 +572,8 @@ std::string TraceList(const Request& request)
       .text = arg("filter").value_or(std::string()),
       .replaced_only = GetBool(request, "replaced_only"),
       .cancelled_only = GetBool(request, "cancelled_only"),
+      .upgraded_only = GetBool(request, "upgraded_only"),
+      .scaled_only = GetBool(request, "scaled_only"),
       .buffer_writes = GetBool(request, "include_buffer_writes"),
       .third_party = GetBool(request, "include_third_party") || (type && *type == "third_party"),
    };
@@ -520,7 +587,7 @@ std::string TraceList(const Request& request)
    // 2.0 records no binding entries yet: include_bindings has nothing to include
    reply.ignored_args = GetIgnoredArgs(request,
       {"type", "stage", "resource", "variant", "hash", "filter", "include_vs", "include_bindings", "include_buffer_writes", "include_third_party", "replaced_only", "cancelled_only",
-         "offset", "limit"});
+         "upgraded_only", "scaled_only", "offset", "limit"});
    reply.total = frame->events.size();
    for (size_t i = 0; i < frame->events.size(); i++)
    {
@@ -555,8 +622,10 @@ std::string TraceGet(const Request& request)
    if (Capture::IsResourceEvent(event))
    {
       const auto to_reply = [](const Capture::Resource& resource) {
-         return Replies::TraceResource{std::string(Utils::Format::GetName(resource.format)), resource.size, resource.type, resource.id,
-            resource.debug_name.empty() ? std::nullopt : std::optional(resource.debug_name), resource.mirror};
+         Replies::TraceResource out{std::string(Utils::Format::GetName(resource.format)), resource.size, resource.type, resource.id,
+            resource.debug_name.empty() ? std::nullopt : std::optional(resource.debug_name)};
+         PopulateMirrorInfo(out, resource);
+         return out;
       };
       if (event.source)
          reply.source = to_reply(*event.source);
@@ -568,6 +637,8 @@ std::string TraceGet(const Request& request)
          reply.copy = Replies::TraceCopy{std::string(KINDS[size_t(copy->kind)]), copy->source_subresource, copy->destination_subresource, copy->destination_offset,
             copy->source_box, copy->kind == Capture::CopyKind::Resolve ? std::optional(std::string(Utils::Format::GetName(copy->resolve_format))) : std::nullopt};
       }
+      if (event.copy_scaled)
+         reply.copy_scaled = true;
       if (const std::optional<Capture::CpuAccess>& access = event.cpu_access)
       {
          reply.cpu_access = Replies::TraceCpuAccess{
@@ -634,8 +705,18 @@ std::string TraceGet(const Request& request)
          rasterizer.slope_scaled_depth_bias, rasterizer.depth_clip, rasterizer.scissor_enable, rasterizer.multisample};
       reply.viewport_count = event.viewports.size();
       reply.viewports = event.viewports;
+      if (event.viewports_scaled)
+      {
+         reply.viewports_scaled = true;
+         reply.original_viewports = event.original_viewports;
+      }
       reply.scissor_count = event.scissor_rects.size();
       reply.scissor_rects = event.scissor_rects;
+      if (event.scissors_scaled)
+      {
+         reply.scissors_scaled = true;
+         reply.original_scissor_rects = event.original_scissor_rects;
+      }
    }
    for (const Capture::View& view : event.render_targets)
    {

@@ -68,6 +68,8 @@ bool RunCall(ID3D12GraphicsCommandList* list, const Call& call)
    Trace::Stats::D3D12::RecordDraw(list, dispatch);
 #endif
    const auto run_draw = [&](Shaders::StageSet stages, Game::DrawResult& result, bool& skipped) {
+      if (Resources::Mirrors::IsNeeded())
+         Resources::Mirrors::D3D12::PrepareDrawOrDispatch(list, dispatch);
       result = Game::Registry::HasDrawCallbacks<Api::D3D12>() ? Game::DrawEvents::D3D12::Run(list, call) : Game::DrawResult::None;
 #if DEVELOPMENT
       skipped = result == Game::DrawResult::None && Trace::Capture::D3D12::IsSkipped(list, stages);
@@ -80,6 +82,8 @@ bool RunCall(ID3D12GraphicsCommandList* list, const Call& call)
          if constexpr (!dispatch)
             Shaders::Variants::D3D12::BindFormatVariant(list);
       }
+      if (Resources::Mirrors::IsNeeded())
+         Resources::Mirrors::D3D12::FinishDrawOrDispatch(list, dispatch);
       return result != Game::DrawResult::None || skipped;
    };
 #if DEVELOPMENT
@@ -144,6 +148,8 @@ void OnDeviceDestroyed(ID3D12Device* device)
 
 void PostExecuteCommandLists(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists)
 {
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D12::CommitExecutedBarriers(count, lists);
    Hooks::Lifetime::D3D12::MoveReferencesToQueue(queue, count, lists);
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordExecute(queue, count, lists);
@@ -368,7 +374,7 @@ void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3
    {
       Shaders::Database::D3D12::TargetFormats formats;
       if (Resources::Mirrors::IsSwapping())
-         Resources::Mirrors::D3D12::SwapRenderTargets(count, render_targets, single_range, depth_stencil, formats);
+         Resources::Mirrors::D3D12::SwapRenderTargets(list, count, render_targets, single_range, depth_stencil, formats);
       Shaders::Variants::D3D12::SetTargetFormats(list, formats);
       // What a converting copy binds back: the targets as they're bound now
       Resources::Mirrors::D3D12::RecordRenderTargets(list, count, render_targets, single_range, depth_stencil);
@@ -409,22 +415,22 @@ void PreSetRootConstants([[maybe_unused]] ID3D12GraphicsCommandList* list, [[may
 #endif
 }
 
-void PreSetViewports(ID3D12GraphicsCommandList* list, UINT count, const D3D12_VIEWPORT* viewports)
+void PreSetViewports(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_VIEWPORT*& viewports)
 {
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D12::RecordViewports(list, count, viewports);
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordViewports(list, count, viewports);
 #endif
-   if (Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D12::RecordViewports(list, count, viewports);
 }
 
-void PreSetScissorRects(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RECT* rects)
+void PreSetScissorRects(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_RECT*& rects)
 {
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D12::RecordScissorRects(list, count, rects);
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordScissorRects(list, count, rects);
 #endif
-   if (Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D12::RecordScissorRects(list, count, rects);
 }
 
 void PreSetTopology(ID3D12GraphicsCommandList* list, D3D12_PRIMITIVE_TOPOLOGY topology)
@@ -463,7 +469,7 @@ std::span<const D3D12_RESOURCE_BARRIER> PreResourceBarrier([[maybe_unused]] ID3D
       }
    }
 #endif
-   return Resources::Mirrors::IsNeeded() ? Resources::Mirrors::D3D12::AddMirrorBarriers(barriers) : barriers;
+   return Resources::Mirrors::IsNeeded() ? Resources::Mirrors::D3D12::AddMirrorBarriers(list, barriers) : barriers;
 }
 
 bool PreCopyResource([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] ID3D12Resource*& destination, [[maybe_unused]] ID3D12Resource*& source)
@@ -472,11 +478,12 @@ bool PreCopyResource([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_u
    if (Trace::Capture::IsCapturing())
       Trace::Capture::D3D12::AddCopy(list, "CopyResource", destination, source, {});
 #endif
-   return Resources::Mirrors::IsSwapping() && Resources::Mirrors::D3D12::SwapCopy(list, destination, source, {.convertible = true, .whole_resource = true});
+   Resources::Mirrors::D3D12::CopyRegion region = {.convertible = true, .whole_resource = true};
+   return Resources::Mirrors::IsSwapping() && Resources::Mirrors::D3D12::SwapCopy(list, destination, source, region);
 }
 
-bool PreCopyTextureRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] D3D12_TEXTURE_COPY_LOCATION& destination, [[maybe_unused]] UINT x,
-   [[maybe_unused]] UINT y, [[maybe_unused]] UINT z, [[maybe_unused]] D3D12_TEXTURE_COPY_LOCATION& source, [[maybe_unused]] const D3D12_BOX* box)
+bool PreCopyTextureRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] D3D12_TEXTURE_COPY_LOCATION& destination, [[maybe_unused]] UINT& x,
+   [[maybe_unused]] UINT& y, [[maybe_unused]] UINT& z, [[maybe_unused]] D3D12_TEXTURE_COPY_LOCATION& source, [[maybe_unused]] const D3D12_BOX*& box)
 {
 #if DEVELOPMENT
    if (Trace::Capture::IsCapturing())
@@ -498,12 +505,20 @@ bool PreCopyTextureRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[ma
       return false;
    // A footprint side is a buffer: never mirrored, never converted
    const bool subresources = destination.Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX && source.Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-   const Resources::Mirrors::D3D12::CopyRegion region = {.convertible = subresources,
+   Resources::Mirrors::D3D12::CopyRegion region = {.convertible = subresources,
       .destination_subresource = subresources ? destination.SubresourceIndex : 0,
       .source_subresource = subresources ? source.SubresourceIndex : 0,
       .offset = {x, y, z},
       .box = box};
-   return Resources::Mirrors::D3D12::SwapCopy(list, destination.pResource, source.pResource, region);
+   const bool handled = Resources::Mirrors::D3D12::SwapCopy(list, destination.pResource, source.pResource, region);
+   if (!handled)
+   {
+      x = region.offset[0];
+      y = region.offset[1];
+      z = region.offset[2];
+      box = region.box;
+   }
+   return handled;
 }
 
 bool PreCopyBufferRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] ID3D12Resource* destination, [[maybe_unused]] UINT64 destination_offset,
@@ -528,27 +543,28 @@ bool PreResolveSubresource([[maybe_unused]] ID3D12GraphicsCommandList* list, [[m
          {.kind = Trace::Capture::CopyKind::Resolve, .source_subresource = source_subresource, .destination_subresource = destination_subresource, .resolve_format = uint32_t(format)});
 #endif
    ID3D12Resource* const game_source = source;
+   Resources::Mirrors::D3D12::CopyRegion region = {};
    if (Resources::Mirrors::IsSwapping())
-      Resources::Mirrors::D3D12::SwapCopy(list, destination, source, {});
+      Resources::Mirrors::D3D12::SwapCopy(list, destination, source, region);
    if (source != game_source)
       format = Resources::Mirrors::GetResolveFormat(format, game_source->GetDesc().Format, source->GetDesc().Format);
    return false;
 }
 
 bool PreClearRenderTargetView([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE& view, [[maybe_unused]] const FLOAT color[4],
-   [[maybe_unused]] UINT rect_count, [[maybe_unused]] const D3D12_RECT* rects)
+   [[maybe_unused]] UINT rect_count, [[maybe_unused]] const D3D12_RECT*& rects)
 {
 #if DEVELOPMENT
    if (Trace::Capture::IsCapturing())
       Trace::Capture::D3D12::AddClear(list, "ClearRenderTargetView", view, {color[0], color[1], color[2], color[3]});
 #endif
    if (Resources::Mirrors::IsSwapping())
-      Resources::Mirrors::D3D12::SwapHandle(view);
+      Resources::Mirrors::D3D12::SwapHandle(view, rect_count, &rects);
    return false;
 }
 
 bool PreClearDepthStencilView([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE& view, [[maybe_unused]] D3D12_CLEAR_FLAGS flags,
-   [[maybe_unused]] FLOAT depth, [[maybe_unused]] UINT8 stencil, [[maybe_unused]] UINT rect_count, [[maybe_unused]] const D3D12_RECT* rects)
+   [[maybe_unused]] FLOAT depth, [[maybe_unused]] UINT8 stencil, [[maybe_unused]] UINT rect_count, [[maybe_unused]] const D3D12_RECT*& rects)
 {
 #if DEVELOPMENT
    if (Trace::Capture::IsCapturing())
@@ -556,7 +572,7 @@ bool PreClearDepthStencilView([[maybe_unused]] ID3D12GraphicsCommandList* list, 
          {(flags & D3D12_CLEAR_FLAG_DEPTH) ? depth : 0.f, (flags & D3D12_CLEAR_FLAG_STENCIL) ? float(stencil) : 0.f, 0.f, 0.f});
 #endif
    if (Resources::Mirrors::IsSwapping())
-      Resources::Mirrors::D3D12::SwapHandle(view);
+      Resources::Mirrors::D3D12::SwapHandle(view, rect_count, &rects);
    return false;
 }
 
@@ -611,8 +627,14 @@ void PreExecuteBundle(ID3D12GraphicsCommandList* list, [[maybe_unused]] ID3D12Gr
    Resources::Database::D3D12::BindForBundle(list);
 }
 
-void PresentD3D12()
+void PresentD3D12(ID3D12CommandQueue* queue)
 {
+   if (Resources::Mirrors::IsNeeded() && queue)
+   {
+      Microsoft::WRL::ComPtr<ID3D12Device> device;
+      if (SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&device))))
+         Resources::Mirrors::D3D12::OnPresent(device.Get());
+   }
    if (!Shaders::IsNeeded())
       return;
    Shaders::Variants::D3D12::UpdateVariants();

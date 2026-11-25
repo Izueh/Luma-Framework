@@ -4,6 +4,7 @@
 #include <optional>
 #include <span>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 #include <d3d11.h>
@@ -22,9 +23,13 @@
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
 #include "Shaders/D3D12/D3D12RootSignatures.hpp"
+#include "Resources/ResourceChains.hpp"
 #include "Resources/ResourceMirrors.hpp"
+#include "Resources/ResourceScaling.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Resources/ResourceUpgrades.hpp"
+#include "Settings/SettingKeys.hpp"
+#include "Settings/SettingsRegistry.hpp"
 #include "Trace/D3D11/D3D11Capture.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
 
@@ -297,13 +302,14 @@ TEST_CASE("Samplers D3D11: a sampler's mirror is made at its creation, and for a
 {
    ComPtr<ID3D11Device> device;
    REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, nullptr)));
+
    struct Bias
    {
       ~Bias() { Resources::Samplers::SetLodBiasOffset(0.f); }
    } bias;
+
    Resources::Samplers::SetLodBiasOffset(-1.f);
-   const D3D11_SAMPLER_DESC desc = {.Filter = D3D11_FILTER_ANISOTROPIC, .AddressU = D3D11_TEXTURE_ADDRESS_WRAP, .AddressV = D3D11_TEXTURE_ADDRESS_WRAP,
-      .AddressW = D3D11_TEXTURE_ADDRESS_WRAP, .MaxAnisotropy = 4, .ComparisonFunc = D3D11_COMPARISON_NEVER, .MaxLOD = D3D11_FLOAT32_MAX};
+   const D3D11_SAMPLER_DESC desc = {.Filter = D3D11_FILTER_ANISOTROPIC, .AddressU = D3D11_TEXTURE_ADDRESS_WRAP, .AddressV = D3D11_TEXTURE_ADDRESS_WRAP, .AddressW = D3D11_TEXTURE_ADDRESS_WRAP, .MaxAnisotropy = 4, .ComparisonFunc = D3D11_COMPARISON_NEVER, .MaxLOD = D3D11_FLOAT32_MAX};
    ComPtr<ID3D11SamplerState> sampler;
    REQUIRE(SUCCEEDED(device->CreateSamplerState(&desc, &sampler)));
    Resources::Samplers::D3D11::TrackSampler(device.Get(), desc, sampler.Get());
@@ -623,7 +629,7 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    // Barriers on the game's texture are given to the mirror
    D3D12_RESOURCE_BARRIER barrier = {D3D12_RESOURCE_BARRIER_TYPE_TRANSITION};
    barrier.Transition = {texture.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE};
-   const std::span<const D3D12_RESOURCE_BARRIER> barriers = Mirrors12::AddMirrorBarriers(std::span(&barrier, 1));
+   const std::span<const D3D12_RESOURCE_BARRIER> barriers = Mirrors12::AddMirrorBarriers(nullptr, std::span(&barrier, 1));
    REQUIRE(barriers.size() == 2);
    CHECK(barriers[0].Transition.pResource == texture.Get());
    CHECK(barriers[1].Transition.pResource == mirror);
@@ -641,7 +647,7 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    BOOL single_range = TRUE;
    const D3D12_CPU_DESCRIPTOR_HANDLE* depth = nullptr;
    Shaders::Database::D3D12::TargetFormats formats;
-   Mirrors12::SwapRenderTargets(1, targets, single_range, depth, formats);
+   Mirrors12::SwapRenderTargets(nullptr, 1, targets, single_range, depth, formats);
    CHECK(targets[0].ptr != rtv.ptr);
    CHECK_FALSE(single_range);
    CHECK(formats.render_targets[0] == DXGI_FORMAT_R16G16B16A16_FLOAT);
@@ -692,7 +698,8 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    Mirrors12::CreateMirror(device.Get(), second.Get(), D3D12_RESOURCE_STATE_COPY_DEST, nullptr, false);
    ID3D12Resource* copy_destination = second.Get();
    ID3D12Resource* copy_source = texture.Get();
-   CHECK_FALSE(Mirrors12::SwapCopy(nullptr, copy_destination, copy_source, {}));
+   Mirrors12::CopyRegion copy_region = {};
+   CHECK_FALSE(Mirrors12::SwapCopy(nullptr, copy_destination, copy_source, copy_region));
    CHECK(copy_destination == Mirrors12::FindMirror(second.Get()));
    CHECK(copy_source == mirror);
 
@@ -746,7 +753,7 @@ TEST_CASE("Mirrors D3D12: a depth mirror swaps at the depth bind with its format
    BOOL single_range = FALSE;
    const D3D12_CPU_DESCRIPTOR_HANDLE* depth = &dsv;
    Shaders::Database::D3D12::TargetFormats formats;
-   Mirrors12::SwapRenderTargets(0, targets, single_range, depth, formats);
+   Mirrors12::SwapRenderTargets(nullptr, 0, targets, single_range, depth, formats);
    REQUIRE(depth);
    CHECK(depth->ptr != dsv.ptr);
    CHECK(formats.depth == DXGI_FORMAT_D32_FLOAT_S8X24_UINT);
@@ -847,4 +854,309 @@ TEST_CASE("Mirrors D3D12: a UAV clear of a mirrored texture clears the mirror th
    texture.Reset();
    Mirrors12::ReleaseDeviceObjects(device.Get());
    Database12::ReleaseDeviceObjects(device.Get());
+}
+
+TEST_CASE("Upgrade: custom_dimensions overrides dimensions, clamps mip count, and respects guards")
+{
+   struct Cleanup
+   {
+      ~Cleanup() { Resources::Upgrade::SetRules({}); }
+   } cleanup;
+
+   Resources::Upgrade::Rules rules;
+   rules.formats = {DXGI_FORMAT_R11G11B10_FLOAT};
+   rules.size_filters = SizeFilters{};
+   rules.custom_dimensions = {
+      {.filter = {1280, 720, 0, 0}, .format = DXGI_FORMAT_R11G11B10_FLOAT, .size = {2560, 1440, 0, 0}},
+      {.filter = {512, 512, 0, 0}, .format = DXGI_FORMAT_UNKNOWN, .size = {128, 128, 0, 0}},
+      {.filter = {256, 256, 0, 1}, .format = DXGI_FORMAT_R11G11B10_FLOAT, .size = {0, 0, 0, 4}},
+   };
+   Resources::Upgrade::SetRules(rules);
+
+   const Resources::Upgrade::FrameState state = {.render = {1280, 720}, .output = {2560, 1440}, .display = {2560, 1440}};
+   TextureInfo tex = Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT);
+   tex.levels = 1;
+   bool resized = false;
+   const std::optional<TextureInfo> matched = Resources::Upgrade::Match(tex, state, false, false, false, &resized);
+   REQUIRE(matched);
+   CHECK(matched->width == 2560);
+   CHECK(matched->height == 1440);
+   CHECK(matched->format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   CHECK(resized);
+
+   // Shrink clamps mip count to max valid mips for 128x128 (8 mips) and preserves format when format isn't in rules.formats
+   TextureInfo shrunk = Target(512, 512, DXGI_FORMAT_R8G8B8A8_UNORM);
+   shrunk.levels = 10;
+   resized = false;
+   const std::optional<TextureInfo> shrunk_result = Resources::Upgrade::Match(shrunk, state, false, false, false, &resized);
+   REQUIRE(shrunk_result);
+   CHECK(shrunk_result->width == 128);
+   CHECK(shrunk_result->height == 128);
+   CHECK(shrunk_result->levels == 8);
+   CHECK(shrunk_result->format == DXGI_FORMAT_R8G8B8A8_UNORM);
+   CHECK(resized);
+
+   // Cube textures cannot change height independently, and UAV textures cannot add MSAA samples
+   TextureInfo cube = Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT);
+   cube.cube = true;
+   resized = false;
+   const std::optional<TextureInfo> cube_match = Resources::Upgrade::Match(cube, state, false, false, false, &resized);
+   CHECK_FALSE(resized);
+   if (cube_match)
+   {
+      CHECK(cube_match->width == 1280);
+      CHECK(cube_match->height == 720);
+   }
+
+   TextureInfo uav_tex = Target(256, 256, DXGI_FORMAT_R11G11B10_FLOAT);
+   uav_tex.unordered_access = true;
+   resized = false;
+   const std::optional<TextureInfo> uav_match = Resources::Upgrade::Match(uav_tex, state, false, false, false, &resized);
+   CHECK_FALSE(resized);
+   if (uav_match)
+      CHECK(uav_match->samples == 1);
+}
+
+TEST_CASE("Chains: seed matching and propagation eligibility")
+{
+   struct Cleanup
+   {
+      ~Cleanup() { Resources::Chains::SetOptions({}); }
+   } cleanup;
+
+   Resources::Chains::Options options;
+   options.mode = Resources::Chains::Mode::DirectAndIndirect;
+   options.seeds = {
+      {0x11223344, {.rtv_slots = {0}, .scale = true}},
+      {0xAABBCCDD, {.uav_slots = {1}, .scale = false}},
+   };
+   Resources::Chains::SetOptions(options);
+
+   CHECK(Resources::Chains::IsNeeded());
+   CHECK(Resources::Chains::HasScaleSeeds());
+   REQUIRE(Resources::Chains::FindSeed(0x11223344));
+   CHECK(Resources::Chains::FindSeed(0x11223344)->scale);
+   CHECK_FALSE(Resources::Chains::FindSeed(0x99887766));
+   REQUIRE(Resources::Chains::FindSeed(0xAABBCCDD));
+   CHECK_FALSE(Resources::Chains::FindSeed(0xAABBCCDD)->scale);
+
+   // Propagation accepts writable GPU-only 2D RGBA/float targets matching aspect ratio, rejects integer/depth/arrays
+   TextureInfo source = Target(1280, 720, DXGI_FORMAT_R16G16B16A16_FLOAT);
+   TextureInfo ok = Target(1280, 720, DXGI_FORMAT_R8G8B8A8_UNORM);
+   CHECK(Resources::Chains::CanPropagate(source, ok));
+   TextureInfo int_tex = Target(1280, 720, DXGI_FORMAT_R8G8B8A8_UINT);
+   CHECK_FALSE(Resources::Chains::CanPropagate(source, int_tex));
+   TextureInfo depth_tex = {.width = 1280, .height = 720, .format = DXGI_FORMAT_R24G8_TYPELESS, .depth_stencil = true};
+   CHECK_FALSE(Resources::Chains::CanPropagate(source, depth_tex));
+   TextureInfo array_tex = ok;
+   array_tex.depth_or_layers = 2;
+   CHECK_FALSE(Resources::Chains::CanPropagate(source, array_tex));
+}
+
+TEST_CASE("Scaling: pure math and thread-affine Begin/End with cross-thread overlap detection")
+{
+   struct Cleanup
+   {
+      ~Cleanup() { Resources::Scaling::SetOptions({}); }
+   } cleanup;
+
+   Resources::Scaling::SetOptions({.mode = Resources::Scaling::Mode::ResourcesAndViewports});
+   const Resources::Upgrade::FrameState state_2x = {.render = {1280, 720}, .output = {2560, 1440}, .display = {2560, 1440}};
+   const Resources::Upgrade::FrameState state_1x = {.render = {2560, 1440}, .output = {2560, 1440}, .display = {2560, 1440}};
+   CHECK(Resources::Scaling::ShouldScaleTexture(Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT), state_2x, true, true));
+   CHECK(Resources::Scaling::ShouldScaleTexture(Target(640, 360, DXGI_FORMAT_R11G11B10_FLOAT), state_2x, true, true));
+   CHECK_FALSE(Resources::Scaling::ShouldScaleTexture(Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT), state_2x, true, false));
+   CHECK_FALSE(Resources::Scaling::ShouldScaleTexture(Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT), state_1x, true, true));
+   CHECK_FALSE(Resources::Scaling::ShouldScaleTexture(Target(256, 256, DXGI_FORMAT_R11G11B10_FLOAT), state_2x, true, true));
+
+   const Math::uint2 scaled = Resources::Scaling::ComputeScaledSize({640, 360}, {1280, 720}, {2560, 1440});
+   CHECK(scaled.x == 1280);
+   CHECK(scaled.y == 720);
+
+   const Resources::Scaling::Viewport vp = Resources::Scaling::RescaleViewport({10.f, 20.f, 1280.f, 720.f, 0.f, 1.f}, {2.f, 2.f});
+   CHECK(vp.x == doctest::Approx(20.f));
+   CHECK(vp.y == doctest::Approx(40.f));
+   CHECK(vp.width == doctest::Approx(2560.f));
+   CHECK(vp.height == doctest::Approx(1440.f));
+
+   const Resources::Scaling::Rect rect = Resources::Scaling::RescaleRect({10, 20, 100, 200}, {2.f, 2.f});
+   CHECK(rect.left == 20);
+   CHECK(rect.top == 40);
+   CHECK(rect.right == 200);
+   CHECK(rect.bottom == 400);
+
+   const Resources::Scaling::Box box = Resources::Scaling::RescaleBox({10, 20, 0, 100, 200, 1}, {2.f, 2.f});
+   CHECK(box.left == 20);
+   CHECK(box.top == 40);
+   CHECK(box.right == 200);
+   CHECK(box.bottom == 400);
+
+   // Thread-affine Begin/End on a real COM device
+   ComPtr<ID3D11Device> device;
+   REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, nullptr)));
+   Resources::Scaling::Begin(device.Get());
+   CHECK(Resources::Scaling::IsActive(device.Get()));
+   CHECK(Resources::Scaling::IsActiveOnCurrentThread(device.Get()));
+   CHECK_FALSE(Resources::Scaling::CheckCrossThreadOverlap(device.Get()));
+
+   bool worker_active_on_thread = true;
+   bool worker_overlap = false;
+   std::thread worker([&] {
+      worker_active_on_thread = Resources::Scaling::IsActiveOnCurrentThread(device.Get());
+      worker_overlap = Resources::Scaling::CheckCrossThreadOverlap(device.Get());
+   });
+   worker.join();
+   CHECK_FALSE(worker_active_on_thread);
+   CHECK(worker_overlap);
+
+   Resources::Scaling::End(device.Get());
+   CHECK_FALSE(Resources::Scaling::IsActive(device.Get()));
+   Resources::Scaling::OnPresent(device.Get());
+}
+
+TEST_CASE("Mirrors D3D11: scaled viewports, invalidation, and recycle pool")
+{
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
+   Frame::CreateDeviceState(device.Get());
+   Frame::SetOutputResolution(device.Get(), {128, 72});
+   Frame::SetRenderResolution(device.Get(), {64, 36});
+   const bool was_enabled = Settings::IsEnabled();
+   if (!Settings::Find(Settings::Core::ENABLED.key))
+   {
+      static constexpr std::array ENABLED_SETTING = {Settings::Setting{.key = Settings::Core::ENABLED.key, .label = "Enabled", .default_value = true}};
+      Settings::Register(ENABLED_SETTING, Settings::Kind::Luma);
+   }
+   Settings::Set(Settings::Core::ENABLED, true);
+
+   struct Cleanup
+   {
+      ID3D11Device* dev;
+      bool prev_enabled;
+
+      ~Cleanup()
+      {
+         Resources::Scaling::End(dev);
+         Resources::Scaling::SetOptions({});
+         Resources::Upgrade::SetRules({});
+         Resources::Mirrors::D3D11::ReleaseDeviceObjects(dev);
+         Settings::Set(Settings::Core::ENABLED, prev_enabled);
+      }
+   } cleanup{device.Get(), was_enabled};
+
+   Resources::Scaling::SetOptions({.mode = Resources::Scaling::Mode::ResourcesAndViewports});
+   Resources::Scaling::SetTargetResolution(device.Get(), {128, 72});
+   Resources::Scaling::Begin(device.Get());
+   Resources::Upgrade::SetRules({
+      .formats = {DXGI_FORMAT_R11G11B10_FLOAT},
+      .size_filters = SizeFilters::RenderResolution,
+      .custom_dimensions = {{.filter = {64, 36, 0, 0}, .format = DXGI_FORMAT_R11G11B10_FLOAT, .size = {128, 72, 0, 0}}},
+   });
+
+   const D3D11_TEXTURE2D_DESC1 desc = {.Width = 64,
+      .Height = 36,
+      .MipLevels = 1,
+      .ArraySize = 1,
+      .Format = DXGI_FORMAT_R11G11B10_FLOAT,
+      .SampleDesc = {1, 0},
+      .Usage = D3D11_USAGE_DEFAULT,
+      .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
+   ComPtr<ID3D11Texture2D> tex;
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&desc), nullptr, &tex)));
+   Resources::Mirrors::D3D11::CreateMirror(device.Get(), desc, nullptr, tex.Get());
+   ID3D11Resource* mirror = Resources::Mirrors::D3D11::FindMirror(tex.Get());
+   REQUIRE(mirror);
+   D3D11_TEXTURE2D_DESC mirror_desc = {};
+   static_cast<ID3D11Texture2D*>(mirror)->GetDesc(&mirror_desc);
+   CHECK(mirror_desc.Width == 128);
+   CHECK(mirror_desc.Height == 72);
+
+   // Viewport rescaling on PrepareDrawOrDispatch when bound to scaled mirror
+   ComPtr<ID3D11RenderTargetView> rtv;
+   REQUIRE(SUCCEEDED(device->CreateRenderTargetView(tex.Get(), nullptr, &rtv)));
+   Resources::Mirrors::D3D11::CreateMirrorView(device.Get(), tex.Get(), nullptr, rtv.Get());
+   ID3D11RenderTargetView* bound_rtv = rtv.Get();
+   Resources::Mirrors::D3D11::SwapViews(&bound_rtv, 1);
+   context->OMSetRenderTargets(1, &bound_rtv, nullptr);
+   const D3D11_VIEWPORT vp = {0.f, 0.f, 64.f, 36.f, 0.f, 1.f};
+   context->RSSetViewports(1, &vp);
+   Resources::Mirrors::D3D11::OnBindViewports(context.Get(), 1, &vp);
+   Resources::Mirrors::D3D11::PrepareDrawOrDispatch(context.Get(), false);
+
+   UINT vp_count = 1;
+   D3D11_VIEWPORT active_vp = {};
+   context->RSGetViewports(&vp_count, &active_vp);
+   CHECK(active_vp.Width == doctest::Approx(128.f));
+   CHECK(active_vp.Height == doctest::Approx(72.f));
+
+   // Invalidation retires scaled mirrors; OnPresent advances retirement and recycles
+   const uint32_t invalidations_before = Resources::Scaling::GetStats().invalidations;
+   Resources::Mirrors::D3D11::InvalidateScaledMirrors(device.Get());
+   CHECK(Resources::Scaling::GetStats().invalidations == invalidations_before + 1);
+   CHECK(Resources::Mirrors::D3D11::FindMirror(tex.Get()) == nullptr);
+   Resources::Mirrors::D3D11::OnPresent(device.Get());
+   Resources::Mirrors::D3D11::OnPresent(device.Get());
+   Resources::Mirrors::D3D11::OnPresent(device.Get());
+   Resources::Mirrors::D3D11::ForgetContextState(context.Get());
+}
+
+TEST_CASE("Mirrors D3D12: ViewportsOnly expansion scales sub-rect viewports and restores on End")
+{
+   namespace Mirrors12 = Resources::Mirrors::D3D12;
+   ComPtr<IDXGIFactory4> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   ComPtr<IDXGIAdapter> adapter;
+   REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
+   ComPtr<ID3D12Device> device;
+   REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
+   Frame::CreateDeviceState(device.Get());
+   Frame::SetOutputResolution(device.Get(), {128, 72});
+   Frame::SetRenderResolution(device.Get(), {64, 36});
+   const bool was_enabled = Settings::IsEnabled();
+   if (!Settings::Find(Settings::Core::ENABLED.key))
+   {
+      static constexpr std::array ENABLED_SETTING = {Settings::Setting{.key = Settings::Core::ENABLED.key, .label = "Enabled", .default_value = true}};
+      Settings::Register(ENABLED_SETTING, Settings::Kind::Luma);
+   }
+   Settings::Set(Settings::Core::ENABLED, true);
+
+   struct Cleanup
+   {
+      ID3D12Device* dev;
+      bool prev_enabled;
+
+      ~Cleanup()
+      {
+         Resources::Scaling::End(dev);
+         Resources::Scaling::SetOptions({});
+         Mirrors12::ReleaseDeviceObjects(dev);
+         Settings::Set(Settings::Core::ENABLED, prev_enabled);
+      }
+   } cleanup{device.Get(), was_enabled};
+
+   Resources::Scaling::SetOptions({.mode = Resources::Scaling::Mode::ViewportsOnly});
+   Resources::Scaling::SetTargetResolution(device.Get(), {128, 72});
+   Resources::Scaling::Begin(device.Get());
+
+   ComPtr<ID3D12CommandAllocator> allocator;
+   ComPtr<ID3D12GraphicsCommandList> list;
+   REQUIRE(SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))));
+   REQUIRE(SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&list))));
+
+   const D3D12_VIEWPORT game_vp = {0.f, 0.f, 64.f, 36.f, 0.f, 1.f};
+   UINT count = 1;
+   const D3D12_VIEWPORT* vps = &game_vp;
+   Mirrors12::RecordViewports(list.Get(), count, vps);
+   REQUIRE(vps != nullptr);
+   CHECK(vps[0].Width == doctest::Approx(128.f));
+   CHECK(vps[0].Height == doctest::Approx(72.f));
+
+   const std::optional<Mirrors12::ListScalingSnapshot> snap = Mirrors12::GetListScalingSnapshot(list.Get());
+   REQUIRE(snap);
+   CHECK(snap->viewports_scaled);
+   CHECK(snap->game_viewport_count == 1);
+   CHECK(snap->game_viewports[0].Width == doctest::Approx(64.f));
+
+   Mirrors12::ForgetListState(list.Get());
 }

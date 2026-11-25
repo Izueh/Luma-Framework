@@ -109,15 +109,84 @@ bool IsLut(const TextureInfo& desc)
    }
    }
 }
+
+uint32_t GetMaxMipLevels(uint32_t width, uint32_t height, uint32_t depth)
+{
+   const uint32_t max_dimension = std::max({width, height, depth, 1u});
+   return uint32_t(std::floor(std::log2(double(max_dimension)))) + 1u;
+}
+
+bool ApplyCustomDimensions(const TextureInfo& desc, bool has_initial_data, TextureInfo& upgraded)
+{
+   if (has_initial_data || rules.custom_dimensions.empty())
+      return false;
+   for (const CustomDimensions& rule : rules.custom_dimensions)
+   {
+      if (rule.format != DXGI_FORMAT_UNKNOWN && rule.format != desc.format)
+         continue;
+      if ((rule.filter.x > 0 && rule.filter.x != desc.width) || (rule.filter.y > 0 && rule.filter.y != desc.height) ||
+         (rule.filter.z > 0 && rule.filter.z != desc.depth_or_layers) || (rule.filter.w > 0 && rule.filter.w != desc.samples))
+         continue;
+
+      const bool wants_width = rule.size.x > 0 && rule.size.x != desc.width;
+      const bool supports_height = (desc.dimension == Dimension::Texture2D || desc.dimension == Dimension::Texture3D) && !desc.cube;
+      const bool wants_height = rule.size.y > 0 && rule.size.y != desc.height;
+      if (wants_height && !supports_height)
+         continue;
+      const bool supports_depth_layers = !desc.cube;
+      const bool wants_depth_layers = rule.size.z > 0 && rule.size.z != desc.depth_or_layers;
+      if (wants_depth_layers && !supports_depth_layers)
+         continue;
+      const bool supports_samples = desc.dimension == Dimension::Texture2D && !desc.cube && !desc.unordered_access && desc.levels == 1;
+      const bool wants_samples = rule.size.w > 0 && rule.size.w != desc.samples;
+      if (wants_samples && !supports_samples)
+         continue;
+
+      bool resized = false;
+      if (wants_width)
+      {
+         upgraded.width = rule.size.x;
+         resized = true;
+      }
+      if (wants_height)
+      {
+         upgraded.height = rule.size.y;
+         resized = true;
+      }
+      if (wants_depth_layers)
+      {
+         upgraded.depth_or_layers = rule.size.z;
+         resized = true;
+      }
+      if (wants_samples)
+      {
+         upgraded.samples = rule.size.w;
+         resized = true;
+      }
+      if (!resized)
+         break;
+
+      if (desc.cube)
+         upgraded.height = upgraded.width;
+
+      if (upgraded.levels > 1)
+      {
+         const bool is_3d = desc.dimension == Dimension::Texture3D;
+         const uint32_t original_max = GetMaxMipLevels(desc.width, desc.height, is_3d ? desc.depth_or_layers : 0);
+         const uint32_t upgraded_max = GetMaxMipLevels(upgraded.width, upgraded.height, is_3d ? upgraded.depth_or_layers : 0);
+         if (desc.levels == original_max || upgraded.levels > upgraded_max)
+            upgraded.levels = upgraded_max;
+      }
+      return true;
+   }
+   return false;
+}
 } // namespace
 
 void SetRules(const Rules& value)
 {
    rules = value;
-   set = !rules.formats.empty() || !rules.depth_formats.empty();
-   // A size change is a scaled mirror, not built yet
-   if (!rules.custom_dimensions.empty())
-      LUMA_UNIMPLEMENTED("Resources::Upgrade custom dimensions (Resources::Scaling)");
+   set = !rules.formats.empty() || !rules.depth_formats.empty() || !rules.custom_dimensions.empty();
 }
 
 const Rules& GetRules()
@@ -130,23 +199,34 @@ bool IsNeeded()
    return set;
 }
 
-std::optional<TextureInfo> Match(const TextureInfo& desc, const FrameState& state, [[maybe_unused]] bool has_initial_data)
+std::optional<TextureInfo> Match(const TextureInfo& desc, const FrameState& state, bool has_initial_data, bool allow_writable_sr, bool force_format_upgrade,
+   bool* resized_by_custom_dimensions)
 {
-   // Only what the GPU writes: render targets and UAVs (writable shader resources need chains, not built yet), and depth
-   const bool color = desc.render_target || desc.unordered_access;
-   if (!set || !desc.gpu_only || (!color && !desc.depth_stencil))
+   if (resized_by_custom_dimensions)
+      *resized_by_custom_dimensions = false;
+   const bool writable_sr = allow_writable_sr && desc.shader_resource && !has_initial_data;
+   const bool color = desc.render_target || desc.unordered_access || writable_sr;
+   if ((!set && !force_format_upgrade) || !desc.gpu_only || (!color && !desc.depth_stencil))
       return std::nullopt;
-   const bool format_matches = desc.depth_stencil ? Contains(rules.depth_formats, desc.format) : Contains(rules.formats, desc.format);
-   if (!format_matches)
-      return std::nullopt;
-   // 2D textures (cubes are 2D arrays of 6) by size, LUTs by their own shape; depth textures never are LUTs
-   bool matches = desc.dimension == Dimension::Texture2D && (desc.depth_or_layers == 1 || desc.cube) && MatchesSize(desc, state);
-   if (!desc.depth_stencil)
-      matches |= IsLut(desc);
-   if (!matches)
-      return std::nullopt;
+
    TextureInfo mirror = desc;
-   mirror.format = GetBestFormat(desc);
+   const bool resized = ApplyCustomDimensions(desc, has_initial_data, mirror);
+   if (resized_by_custom_dimensions)
+      *resized_by_custom_dimensions = resized;
+
+   const bool format_matches =
+      force_format_upgrade || (desc.depth_stencil ? Contains(rules.depth_formats, desc.format) : (color && Contains(rules.formats, desc.format)));
+   if (!format_matches && !resized)
+      return std::nullopt;
+
+   // 2D textures (cubes are 2D arrays of 6) by size, LUTs by their own shape; depth textures never are LUTs
+   bool format_upgrade = format_matches && desc.dimension == Dimension::Texture2D && (desc.depth_or_layers == 1 || desc.cube) && MatchesSize(desc, state);
+   if (format_matches && !desc.depth_stencil)
+      format_upgrade |= IsLut(desc);
+   if (!format_upgrade && !resized)
+      return std::nullopt;
+   if (format_upgrade)
+      mirror.format = GetBestFormat(mirror);
    return mirror;
 }
 

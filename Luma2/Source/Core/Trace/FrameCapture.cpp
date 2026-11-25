@@ -119,8 +119,36 @@ std::string GetTrackedResource()
    return tracked_resource;
 }
 
+bool HasUpgradedResource(const Event& event)
+{
+   const auto any_view = [](const std::vector<View>& views) {
+      return std::ranges::any_of(views, [](const View& v) { return v.resource.mirror.has_value() || v.resource.mirror_info.has_value(); });
+   };
+   return any_view(event.render_targets) || any_view(event.shader_resources) || any_view(event.unordered_access) ||
+      (event.depth_stencil_view && (event.depth_stencil_view->resource.mirror.has_value() || event.depth_stencil_view->resource.mirror_info.has_value())) ||
+      (event.source && (event.source->mirror.has_value() || event.source->mirror_info.has_value())) ||
+      (event.target && (event.target->mirror.has_value() || event.target->mirror_info.has_value()));
+}
+
+bool IsScaledEvent(const Event& event)
+{
+   if (event.viewports_scaled || event.scissors_scaled || event.copy_scaled)
+      return true;
+   const auto any_scaled = [](const std::vector<View>& views) {
+      return std::ranges::any_of(views, [](const View& v) { return v.resource.mirror_info && v.resource.mirror_info->is_scaled; });
+   };
+   return any_scaled(event.render_targets) || any_scaled(event.shader_resources) || any_scaled(event.unordered_access) ||
+      (event.depth_stencil_view && event.depth_stencil_view->resource.mirror_info && event.depth_stencil_view->resource.mirror_info->is_scaled) ||
+      (event.source && event.source->mirror_info && event.source->mirror_info->is_scaled) ||
+      (event.target && event.target->mirror_info && event.target->mirror_info->is_scaled);
+}
+
 bool Matches(const Event& event, const Filter& filter)
 {
+   if (filter.upgraded_only && !HasUpgradedResource(event))
+      return false;
+   if (filter.scaled_only && !IsScaledEvent(event))
+      return false;
    const auto contains = [&](std::string_view text) {
       return !std::ranges::search(text, filter.text, [](char a, char b) { return std::tolower(uint8_t(a)) == std::tolower(uint8_t(b)); }).empty();
    };

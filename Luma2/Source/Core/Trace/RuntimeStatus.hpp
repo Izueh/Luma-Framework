@@ -53,7 +53,32 @@ struct ShadersInfo
    std::string job; // The oldest running job, empty when idle
 };
 
-// Resources::Mirrors and Samplers
+struct ChainsInfo
+{
+   std::string mode;
+   uint32_t seeds = 0;
+   uint32_t direct_propagations = 0;
+   uint32_t indirect_propagations = 0;
+   uint32_t deferred_queued = 0;
+};
+
+struct ScalingInfo
+{
+   std::string mode;
+   bool active = false;
+   uint32_t activating_thread = 0;
+   uint32_t scaled_mirrors = 0;
+   uint32_t pool_size = 0;
+   uint32_t invalidations = 0;
+   uint32_t viewport_rescales = 0;
+   uint32_t scissor_rescales = 0;
+   uint32_t copy_box_rescales = 0;
+   uint32_t clear_rect_rescales = 0;
+   uint32_t scaled_blits = 0;
+   uint32_t cross_thread_overlaps = 0;
+};
+
+// Resources::Mirrors, Samplers, Chains and Scaling
 struct ResourcesInfo
 {
    bool upgrades = false; // Rules exist
@@ -62,6 +87,8 @@ struct ResourcesInfo
    uint64_t mirror_mb = 0;
    uint32_t views = 0;
    float lod_bias_offset = 0.f;
+   ChainsInfo chains;
+   ScalingInfo scaling;
 };
 
 // Swapchain and Display: what the game asked for and what Luma presents, of the swapchain presented last

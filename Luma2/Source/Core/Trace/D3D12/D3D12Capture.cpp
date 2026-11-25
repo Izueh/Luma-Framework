@@ -126,10 +126,27 @@ Resource DescribeResource(ID3D12Resource* resource, uint64_t expected_id)
    described.format = desc.Format;
    described.debug_name = GetD3DDebugName(resource);
    // What the call read or wrote while the mirrors are swapped in
-   if (ID3D12Resource* mirror = Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D12::FindMirror(resource) : nullptr)
+   if (Resources::Mirrors::IsSwapping())
    {
-      const D3D12_RESOURCE_DESC mirror_desc = mirror->GetDesc();
-      described.mirror = std::format("{} {}x{}", Utils::Format::GetName(mirror_desc.Format), uint32_t(mirror_desc.Width), mirror_desc.Height);
+      if (const std::optional<Resources::Mirrors::D3D12::MirrorSummary> summary = Resources::Mirrors::D3D12::FindMirrorSummary(resource))
+      {
+         const auto& mi = summary->mirror_info;
+         const auto& oi = summary->original_info;
+         described.mirror_info = MirrorInfo{
+            .format = uint32_t(mi.format),
+            .size = {mi.width, mi.height, mi.depth_or_layers, mi.levels},
+            .is_scaled = summary->is_scaled,
+            .scale = {float(mi.width) / float(std::max(oi.width, 1u)), float(mi.height) / float(std::max(oi.height, 1u))},
+            .origin = summary->origin,
+            .pending = summary->pending,
+         };
+         if (!summary->pending)
+         {
+            described.mirror = summary->is_scaled
+               ? std::format("{} {}x{} ({:.2f}x)", Utils::Format::GetName(mi.format), mi.width, mi.height, described.mirror_info->scale[0])
+               : std::format("{} {}x{}", Utils::Format::GetName(mi.format), mi.width, mi.height);
+         }
+      }
    }
    return described;
 }
@@ -518,8 +535,31 @@ void AddOutputState(Event& event, ID3D12GraphicsCommandList* list, ListState& st
       event.viewports.push_back({viewport.TopLeftX, viewport.TopLeftY, viewport.Width, viewport.Height, viewport.MinDepth, viewport.MaxDepth});
    for (const D3D12_RECT& rect : state.scissor_rects)
       event.scissor_rects.push_back({rect.left, rect.top, rect.right, rect.bottom});
+   if (const std::optional<Resources::Mirrors::D3D12::ListScalingSnapshot> scaling = Resources::Mirrors::D3D12::GetListScalingSnapshot(list))
+   {
+      event.viewports_scaled = scaling->viewports_scaled;
+      if (scaling->viewports_scaled)
+      {
+         for (UINT i = 0; i < scaling->game_viewport_count; i++)
+         {
+            const D3D12_VIEWPORT& vp = scaling->game_viewports[i];
+            event.original_viewports.push_back({vp.TopLeftX, vp.TopLeftY, vp.Width, vp.Height, vp.MinDepth, vp.MaxDepth});
+         }
+      }
+      event.scissors_scaled = scaling->scissors_scaled;
+      if (scaling->scissors_scaled)
+      {
+         for (UINT i = 0; i < scaling->game_scissor_count; i++)
+         {
+            const D3D12_RECT& rc = scaling->game_scissors[i];
+            event.original_scissor_rects.push_back({rc.left, rc.top, rc.right, rc.bottom});
+         }
+      }
+      event.chain_seed = scaling->chain_seed;
+      event.chain_propagated = scaling->chain_propagated;
+      event.cross_thread_scaling_overlap = scaling->cross_thread_overlap;
+   }
    event.topology = uint32_t(state.topology);
-   (void)list;
 }
 
 // A game call: its shaders from the pipeline bound, its main stage's views

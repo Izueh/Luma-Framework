@@ -680,6 +680,54 @@ std::optional<Converted> ConvertToRgba16Float(const void* data, uint32_t row_pit
    }
    return converted;
 }
+
+bool IsInteger(DXGI_FORMAT format)
+{
+   const Encoding encoding = GetEncoding(format);
+   return encoding == Encoding::Uint || encoding == Encoding::Sint;
+}
+
+bool IsRgba(DXGI_FORMAT format, bool include_rgb)
+{
+   switch (format)
+   {
+   case DXGI_FORMAT_R32G32B32A32_TYPELESS:
+   case DXGI_FORMAT_R32G32B32A32_FLOAT:
+   case DXGI_FORMAT_R32G32B32A32_UINT:
+   case DXGI_FORMAT_R32G32B32A32_SINT:
+   case DXGI_FORMAT_R16G16B16A16_TYPELESS:
+   case DXGI_FORMAT_R16G16B16A16_FLOAT:
+   case DXGI_FORMAT_R16G16B16A16_UNORM:
+   case DXGI_FORMAT_R16G16B16A16_UINT:
+   case DXGI_FORMAT_R16G16B16A16_SNORM:
+   case DXGI_FORMAT_R16G16B16A16_SINT:
+   case DXGI_FORMAT_R10G10B10A2_TYPELESS:
+   case DXGI_FORMAT_R10G10B10A2_UNORM:
+   case DXGI_FORMAT_R10G10B10A2_UINT:
+   case DXGI_FORMAT_R8G8B8A8_TYPELESS:
+   case DXGI_FORMAT_R8G8B8A8_UNORM:
+   case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB:
+   case DXGI_FORMAT_R8G8B8A8_UINT:
+   case DXGI_FORMAT_R8G8B8A8_SNORM:
+   case DXGI_FORMAT_R8G8B8A8_SINT:
+   case DXGI_FORMAT_B8G8R8A8_UNORM:
+   case DXGI_FORMAT_B8G8R8X8_UNORM:
+   case DXGI_FORMAT_B8G8R8A8_TYPELESS:
+   case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
+   case DXGI_FORMAT_B8G8R8X8_TYPELESS:
+   case DXGI_FORMAT_B8G8R8X8_UNORM_SRGB:
+   case DXGI_FORMAT_B5G5R5A1_UNORM:
+   case DXGI_FORMAT_B4G4R4A4_UNORM: return true;
+   case DXGI_FORMAT_R32G32B32_TYPELESS:
+   case DXGI_FORMAT_R32G32B32_FLOAT:
+   case DXGI_FORMAT_R32G32B32_UINT:
+   case DXGI_FORMAT_R32G32B32_SINT:
+   case DXGI_FORMAT_R11G11B10_FLOAT:
+   case DXGI_FORMAT_R9G9B9E5_SHAREDEXP:
+   case DXGI_FORMAT_B5G6R5_UNORM: return include_rgb;
+   default: return false;
+   }
+}
 } // namespace DXGI
 } // namespace Format
 } // namespace Utils
