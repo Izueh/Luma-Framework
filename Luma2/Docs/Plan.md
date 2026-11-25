@@ -904,6 +904,16 @@ G1 (small, protects everything), G2a and G2b (unblock the SSAO noise), G6 (creat
 
 **Decide first:** the design takes the union of what FF7R, FFXV and Core's scale chain do. If FFXV needs something FF7R doesn't (stencil stand-ins, pooling by frame), build the interface for it and the implementation only when FFXV is ported, unless it's trivial.
 
+**Notes (Step 6 built, unit-tested, multi-config verified; not yet verified in-game):**
+* Decided: unified `Resources::Scaling` module (`Mode::ResourcesAndViewports` and `Mode::ViewportsOnly`) + `Resources::Chains` (`Mode::None`/`Direct`/`DirectAndIndirect` + per-shader-hash `Seed` table). FFXV-specific `stencil_stand_in` and `pool_by_frame` are declared in `Scaling::Options` and assert `LUMA_UNIMPLEMENTED` until Step 9.2.
+* Multi-threaded / deferred-context / D3D12 command list lazy chains: creation-time rules (`Upgrade::Rules` & `custom_dimensions`) create mirrors eagerly; D3D11 immediate context materializes chain/seed mirrors immediately (0-frame latency); D3D11 deferred contexts and D3D12 command lists queue `PendingChainMirror` and materialize once at the next `Present` boundary using submission-order committed resource states (`CommitExecutedBarriers`) and CPU descriptor backfill so Frame N stays consistent and Frame N+1 uses persistent mirrors across all threads with zero barrier/descriptor races.
+* Thread-affine `Scaling::Begin/End`: scoped to the activating thread ID (covers D3D11 immediate context and D3D12 single-RHI-thread multi-list engines like UE4/FF7R); concurrent worker threads are isolated and counted/flagged as `cross_thread_overlaps` in Trace and `luma_status`.
+* Invalidation & recycle pool: resolution changes (`ConsumeResolutionChange`) retire scaled mirrors (2 presents on D3D11, 3 presents on D3D12) into a per-device recycle pool keyed by texture desc (120-frame TTL eviction) to avoid allocation stalls on DRS changes.
+* D3D12 bilinear scale blit (`Luma_Scale_Table_PS` with 4-tap `Load` fallback when static samplers are off) handles mismatched-size copies; `Luma_DisplayComposition.hlsl` `StageScale` (G8) now uses `SampleLevel(linearSampler, uv, 0)` when `SourceScale != 1.0`.
+* Inspection: `FrameCapture` records `MirrorInfo` (format, size, scale, origin, pending), active vs. original viewports/scissors, `copy_scaled`, `chain_seed`, `chain_propagated`, `cross_thread_scaling_overlap`; Trace UI adds `Upgraded`/`Scaled` filter chips, `[Scaled]`/`[Seed]`/`[Cross-Thread!]` tags, explicit `Mirror:` + clickable `Origin` tag on resource cards, and side-by-side active/original viewports & scissors; Resources panel & `luma_status` expose `chains` and `scaling` stats; MCP `luma_trace_list`/`luma_trace_get` expose `upgraded_only`/`scaled_only` filters and structured mirror/scaling fields.
+* FF7R: declares `.scaling = {.mode = Resources::Scaling::Mode::ViewportsOnly}`, registers `SHADER_HASHES_TAA` draw callbacks on D3D11 and D3D12 updating render/target resolutions and activating `Scaling::Begin` when `TestEarlyUpscale` (Development) is enabled, and calls `Scaling::End` in `Output_HDR`/`Output_SDR`. VS template synced and verified via `Test-Luma2Template.ps1`.
+* Verified: 148/148 doctest cases (2147 assertions), all 4 FF7R configurations (`Development-Debug`, `Development-Release`, `Test-Release`, `Publishing-Release`), `Test-Luma2Template.ps1`, `Check-Luma2Rules.ps1` (0 violations in Step 6 files), and live in-game in FF7R on both D3D12 and D3D11 (`3840x2160` scRGB Mirror: `luma_status`, `luma_trace_*` mirror/origin metadata, live `Luma.Resources.Chains` and `TestEarlyUpscale` toggles, 0 warnings/errors). Sub-native DRS / 1.0 golden comparison waits for Step 7 SR.
+
 ---
 
 ## Step 7: Super resolution and the complete FF7R
@@ -1006,7 +1016,7 @@ Update when a backend gains or skips something. `—` means `LUMA_UNIMPLEMENTED`
 | MCP readback, goldens | Step 4A | Step 4A (depth, stencil, MSAA —) | 4A |
 | Swapchain output modes, composition (`CB::DisplayCompositionSettings`), spoofing | Step 5 (Mirror, InPlace, Native; HDR10, scRGB, SDR) | Step 5 (Mirror, InPlace, Native; HDR10, scRGB, SDR) | 5 |
 | ReShade guest & bridge | Step 8 (loader + ABI bridge, verified in FF7R Mirror) | Step 8 (loader + ABI bridge, verified in FF7R Mirror) | 8 |
-| Chains and scaling | | | 6 |
+| Chains and scaling | Step 6 (`Resources::Chains`, `Resources::Scaling`, `custom_dimensions`, immediate + deferred-to-Present materialization, recycle pool, Trace/MCP; stencil stand-ins & per-frame pooling —) | Step 6 (`Resources::Chains`, `Resources::Scaling`, `custom_dimensions`, Present-time materialization with committed-state tracking & descriptor backfill, bilinear scale blit, recycle pool, Trace/MCP; stencil stand-ins & per-frame pooling —) | 6 |
 | DLSS, FSR | | | 7 |
 | XeSS | | | 7, where 1.0 has it |
 | Constant capture | | FF7R's per-view globals only | 7 |

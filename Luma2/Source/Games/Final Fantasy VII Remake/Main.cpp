@@ -112,16 +112,41 @@ void OnPresent()
 
 // The game's own HDR option picks its HDR or SDR output pass, and LumaSettings' display mode follows it (Core applies it at the next
 // present). Marking post processing done waits for the frame markers, not built yet.
-Game::DrawResult OnDrawOutputHdr()
+Game::DrawResult OnDrawOutputHdr(Device device)
 {
+   Game::Resources::Scaling::End(device);
    Game::Display::SetHdr(true);
    return Game::DrawResult::None;
 }
 
-Game::DrawResult OnDrawOutputSdr()
+Game::DrawResult OnDrawOutputSdr(Device device)
 {
+   Game::Resources::Scaling::End(device);
    Game::Display::SetHdr(false);
    return Game::DrawResult::None;
+}
+
+void UpdateTaaResolution(Device device, Math::uint2 render_size, Math::uint2 upscaled_size, Math::uint4 viewport_rect)
+{
+   if (render_size.x == 0 || render_size.y == 0 || upscaled_size.x == 0 || upscaled_size.y == 0)
+      return;
+   Game::Frame::SetRenderResolution(device, render_size);
+   Game::Resources::Scaling::SetTargetResolution(device, upscaled_size);
+   if (GameDeviceData* game_device_data = Game::GetGameDeviceData(device))
+   {
+      game_device_data->upscaled_render_resolution = ToFloat(upscaled_size);
+      game_device_data->resolution_scale = float(render_size.x) / float(upscaled_size.x);
+      game_device_data->viewport_rect = viewport_rect;
+      const Math::float2 output_resolution = ToFloat(Game::Frame::Get(device).output);
+      const float can_sharpen = output_resolution == game_device_data->upscaled_render_resolution ? 1.f : 0.f;
+      if (cb_luma_global_settings.GameSettings.can_sharpen != can_sharpen)
+      {
+         cb_luma_global_settings.GameSettings.can_sharpen = can_sharpen;
+         Game::MarkLumaSettingsDirty();
+      }
+   }
+   if (Settings::Get<bool>("TestEarlyUpscale") && (render_size.x < upscaled_size.x || render_size.y < upscaled_size.y))
+      Game::Resources::Scaling::Begin(device);
 }
 
 // The game runs on D3D11 or D3D12 (its -d3d11 and -dx12 switches): the same code from each API's events
@@ -136,26 +161,91 @@ void OnPresent(IDXGISwapChain*, ID3D11Device*)
    ::OnPresent();
 }
 
-Game::DrawResult OnDrawOutputHdr(const Game::D3D11::Call&)
+Game::DrawResult OnDrawTaa(const Game::D3D11::Call& call)
 {
-   return ::OnDrawOutputHdr();
+   Microsoft::WRL::ComPtr<ID3D11Device> device;
+   call.context->GetDevice(&device);
+   if (!device)
+      return Game::DrawResult::None;
+   Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv;
+   call.context->OMGetRenderTargets(1, &rtv, nullptr);
+   Math::uint2 upscaled_size = Game::Frame::Get(device.Get()).output;
+   if (rtv)
+   {
+      Microsoft::WRL::ComPtr<ID3D11Resource> resource;
+      rtv->GetResource(&resource);
+      Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+      if (resource && SUCCEEDED(resource.As(&texture)))
+      {
+         D3D11_TEXTURE2D_DESC desc = {};
+         texture->GetDesc(&desc);
+         upscaled_size = {desc.Width, desc.Height};
+      }
+   }
+   UINT viewport_count = 1;
+   D3D11_VIEWPORT viewport = {};
+   call.context->RSGetViewports(&viewport_count, &viewport);
+   const Math::uint2 render_size = viewport_count > 0 && viewport.Width > 0.f && viewport.Height > 0.f
+      ? Math::uint2{uint32_t(viewport.Width + 0.5f), uint32_t(viewport.Height + 0.5f)}
+      : upscaled_size;
+   const Math::uint4 viewport_rect = viewport_count > 0
+      ? Math::uint4{uint32_t(viewport.TopLeftX + 0.5f), uint32_t(viewport.TopLeftY + 0.5f), uint32_t(viewport.TopLeftX + viewport.Width + 0.5f),
+           uint32_t(viewport.TopLeftY + viewport.Height + 0.5f)}
+      : Math::uint4{0, 0, upscaled_size.x, upscaled_size.y};
+   UpdateTaaResolution(device.Get(), render_size, upscaled_size, viewport_rect);
+   return Game::DrawResult::None;
 }
 
-Game::DrawResult OnDrawOutputSdr(const Game::D3D11::Call&)
+Game::DrawResult OnDrawOutputHdr(const Game::D3D11::Call& call)
 {
-   return ::OnDrawOutputSdr();
+   Microsoft::WRL::ComPtr<ID3D11Device> device;
+   call.context->GetDevice(&device);
+   return ::OnDrawOutputHdr(device.Get());
+}
+
+Game::DrawResult OnDrawOutputSdr(const Game::D3D11::Call& call)
+{
+   Microsoft::WRL::ComPtr<ID3D11Device> device;
+   call.context->GetDevice(&device);
+   return ::OnDrawOutputSdr(device.Get());
 }
 } // namespace D3D11Events
 
 namespace D3D12Events {
-Game::DrawResult OnDrawOutputHdr(const Game::D3D12::Call&)
+Game::DrawResult OnDrawTaa(const Game::D3D12::Call& call)
 {
-   return ::OnDrawOutputHdr();
+   Microsoft::WRL::ComPtr<ID3D12Device> device;
+   if (SUCCEEDED(call.list->GetDevice(IID_PPV_ARGS(&device))))
+   {
+      const Frame::Resolutions resolutions = Game::Frame::Get(device.Get());
+      const Math::uint2 upscaled_size = resolutions.output;
+      const std::optional<D3D12_VIEWPORT> viewport = Game::D3D12::GetViewport(call.list);
+      const Math::uint2 render_size = viewport && viewport->Width > 0.f && viewport->Height > 0.f
+         ? Math::uint2{uint32_t(viewport->Width + 0.5f), uint32_t(viewport->Height + 0.5f)}
+         : resolutions.render;
+      const Math::uint4 viewport_rect = viewport
+         ? Math::uint4{uint32_t(viewport->TopLeftX + 0.5f), uint32_t(viewport->TopLeftY + 0.5f), uint32_t(viewport->TopLeftX + viewport->Width + 0.5f),
+              uint32_t(viewport->TopLeftY + viewport->Height + 0.5f)}
+         : Math::uint4{0, 0, render_size.x, render_size.y};
+      UpdateTaaResolution(device.Get(), render_size, upscaled_size, viewport_rect);
+   }
+   return Game::DrawResult::None;
 }
 
-Game::DrawResult OnDrawOutputSdr(const Game::D3D12::Call&)
+Game::DrawResult OnDrawOutputHdr(const Game::D3D12::Call& call)
 {
-   return ::OnDrawOutputSdr();
+   Microsoft::WRL::ComPtr<ID3D12Device> device;
+   if (SUCCEEDED(call.list->GetDevice(IID_PPV_ARGS(&device))))
+      return ::OnDrawOutputHdr(device.Get());
+   return ::OnDrawOutputHdr(Device{});
+}
+
+Game::DrawResult OnDrawOutputSdr(const Game::D3D12::Call& call)
+{
+   Microsoft::WRL::ComPtr<ID3D12Device> device;
+   if (SUCCEEDED(call.list->GetDevice(IID_PPV_ARGS(&device))))
+      return ::OnDrawOutputSdr(device.Get());
+   return ::OnDrawOutputSdr(Device{});
 }
 
 // The queue's device: the one the game data and resolutions are kept on
@@ -329,6 +419,14 @@ const std::array SETTINGS = {
       .format = "%.0f",
       .source = Binding{&cb_luma_global_settings.GameSettings.flare, [](float value) { return value * 0.02f; }},
    },
+   Setting{
+      .key = "TestEarlyUpscale",
+      .label = "Test Early Upscale Scaling",
+      .tooltip = "Exercises Resources::Scaling viewport expansion from TAA through Output when rendering below output resolution.",
+      .category = "Development",
+      .visibility = Settings::Visibility::Development,
+      .default_value = false,
+   },
 };
 } // namespace
 
@@ -391,6 +489,7 @@ void Luma::Game::Init()
       // The FAST noise texture, which SSAO Temporal and the Dithering Fix recipe read
       .textures = {.load = true},
       .samplers = {.upgrade = true},
+      .scaling = {.mode = Resources::Scaling::Mode::ViewportsOnly},
       .swapchain = {.mode = Swapchain::Mode::Mirror, .hdr_output = Swapchain::OutputMode::Hdr10},
       .composition = {
          .post_process_space = 1,
@@ -419,8 +518,10 @@ void Luma::Game::Init()
       .on_init_swapchain = &D3D12Events::OnInitSwapchain,
       .on_present = &D3D12Events::OnPresent,
    });
+   D3D11::OnShaderDraw(SHADER_HASHES_TAA, &D3D11Events::OnDrawTaa);
    D3D11::OnShaderDraw(SHADER_HASHES_OUTPUT_HDR, &D3D11Events::OnDrawOutputHdr);
    D3D11::OnShaderDraw(SHADER_HASHES_OUTPUT_SDR, &D3D11Events::OnDrawOutputSdr);
+   D3D12::OnShaderDraw(SHADER_HASHES_TAA, &D3D12Events::OnDrawTaa);
    D3D12::OnShaderDraw(SHADER_HASHES_OUTPUT_HDR, &D3D12Events::OnDrawOutputHdr);
    D3D12::OnShaderDraw(SHADER_HASHES_OUTPUT_SDR, &D3D12Events::OnDrawOutputSdr);
    // Not built yet: the TAA callback (then SR), the output pass's TAA gate and post processing marker, DoF and Motion Blur (they need
