@@ -45,7 +45,7 @@ bool Init([[maybe_unused]] State& state, [[maybe_unused]] ID3D11Device* device)
    Deinit(state);
    state.capabilities.initialized = true;
 #if defined(LUMA_USE_FSR) && LUMA_USE_FSR
-   if (!device || device->GetFeatureLevel() <= D3D_FEATURE_LEVEL_11_0)
+   if (!device || device->GetFeatureLevel() < D3D_FEATURE_LEVEL_11_0)
       return false;
    state.context_storage = new FfxFsr3Context();
    state.capabilities.supported = true;
