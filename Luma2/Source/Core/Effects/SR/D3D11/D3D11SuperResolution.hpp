@@ -8,6 +8,7 @@ namespace Luma {
 namespace Effects {
 namespace SR {
 namespace D3D11 {
+void PreCreateDevice(const D3D_FEATURE_LEVEL*& feature_levels, UINT& feature_level_count);
 void CreateDeviceObjects(ID3D11Device* device);
 void ReleaseDeviceObjects(ID3D11Device* device);
 void OnPresent(ID3D11Device* device);

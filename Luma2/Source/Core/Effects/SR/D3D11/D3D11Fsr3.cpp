@@ -45,8 +45,16 @@ bool Init([[maybe_unused]] State& state, [[maybe_unused]] ID3D11Device* device)
    Deinit(state);
    state.capabilities.initialized = true;
 #if defined(LUMA_USE_FSR) && LUMA_USE_FSR
-   if (!device || device->GetFeatureLevel() < D3D_FEATURE_LEVEL_11_0)
+   if (!device)
       return false;
+   {
+      Hooks::Scope::Guard scope;
+      if (device->GetFeatureLevel() < D3D_FEATURE_LEVEL_11_1)
+      {
+         Log::Warning("SR: D3D11 FSR 3 requires feature level 11.1 (device is 0x{:X})", uint32_t(device->GetFeatureLevel()));
+         return false;
+      }
+   }
    state.context_storage = new FfxFsr3Context();
    state.capabilities.supported = true;
    state.capabilities.auto_selectable = true;

@@ -103,9 +103,9 @@ Shaders::StageSet FulfilAfterEvents(ID3D11DeviceContext* context, Shaders::Stage
 
 void PreCreateDevice(UINT& flags, const D3D_FEATURE_LEVEL*& feature_levels, UINT& feature_level_count)
 {
-   (void)feature_levels;
-   (void)feature_level_count;
    flags = Validation::D3D11::GetCreateFlags(flags);
+   if (Effects::SR::IsNeeded())
+      Effects::SR::D3D11::PreCreateDevice(feature_levels, feature_level_count);
 }
 
 void PostCreateDevice(ID3D11Device* device)

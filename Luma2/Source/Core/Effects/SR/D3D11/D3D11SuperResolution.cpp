@@ -4,6 +4,7 @@
 #include <format>
 #include <mutex>
 #include <tuple>
+#include <vector>
 
 #include <wrl/client.h>
 
@@ -132,6 +133,33 @@ ID3D11Resource* EnsureUavOutput(DeviceState& state, ID3D11Device* device, ID3D11
    return state.uav_output_temp.Get();
 }
 } // namespace
+
+void PreCreateDevice([[maybe_unused]] const D3D_FEATURE_LEVEL*& feature_levels, [[maybe_unused]] UINT& feature_level_count)
+{
+#if defined(LUMA_USE_FSR) && LUMA_USE_FSR
+   // Required by FSR 3 on DX11. Only adds 11.1 at the front, never removes the game's levels;
+   // D3D11Hooks hides the raised level from the game via GetFeatureLevel.
+   // A null list doesn't include 11.1.
+   static constexpr D3D_FEATURE_LEVEL default_levels_11_1[] = {
+      D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0,
+      D3D_FEATURE_LEVEL_9_3,  D3D_FEATURE_LEVEL_9_2,  D3D_FEATURE_LEVEL_9_1,
+   };
+   if (!feature_levels || feature_level_count == 0)
+   {
+      feature_levels = default_levels_11_1;
+      feature_level_count = UINT(std::size(default_levels_11_1));
+      return;
+   }
+   if (feature_levels[0] == D3D_FEATURE_LEVEL_11_0)
+   {
+      thread_local std::vector<D3D_FEATURE_LEVEL> levels;
+      levels.assign(feature_levels, feature_levels + feature_level_count);
+      levels.insert(levels.begin(), D3D_FEATURE_LEVEL_11_1);
+      feature_levels = levels.data();
+      feature_level_count = UINT(levels.size());
+   }
+#endif
+}
 
 void CreateDeviceObjects(ID3D11Device* device)
 {
