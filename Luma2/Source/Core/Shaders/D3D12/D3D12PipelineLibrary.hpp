@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -18,6 +19,10 @@ namespace D3D12 {
 Microsoft::WRL::ComPtr<ID3D12PipelineState> Load(ID3D12Device* device, const std::wstring& name, Database::D3D12::PipelineKind kind, const void* desc);
 // Any thread
 void Store(ID3D12Device* device, const std::wstring& name, ID3D12PipelineState* pipeline);
+// Any thread
+void RecordFormats(uint64_t pipeline, const Database::D3D12::TargetFormats& formats);
+// Any thread
+std::vector<Database::D3D12::TargetFormats> GetFormats(ID3D12Device* device, uint64_t pipeline);
 // Presenting thread, at every present: written to disk a few seconds after the last store, on a job
 void Save();
 // The game released the device
@@ -28,6 +33,7 @@ struct Stats
    uint32_t hits = 0;
    uint32_t misses = 0;
    uint32_t stored = 0;
+   uint32_t format_sets = 0;
 };
 
 Stats GetStats();

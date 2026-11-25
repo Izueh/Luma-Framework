@@ -1,11 +1,11 @@
 #pragma once
 
+#include <string>
+
 #include <Windows.h>
 
 struct IDXGIOutput;
 
-// The monitor a window is on: its HDR state and luminance. No graphics API objects but DXGI's output, the one
-// place the peak is known.
 namespace Luma {
 namespace System {
 namespace Display {
@@ -42,6 +42,8 @@ bool HasChanged();
 bool SetHdrEnabled(HWND window, bool enabled);
 // Sets Windows' "SDR content brightness" reference white level (80 to 480 nits) for the display the window is on.
 bool SetSdrWhiteLevel(HWND window, float nits);
+// Any thread
+std::string GetAdapterName(LUID luid);
 } // namespace Display
 } // namespace System
 } // namespace Luma

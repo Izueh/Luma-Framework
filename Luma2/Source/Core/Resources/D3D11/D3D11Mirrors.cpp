@@ -1,5 +1,6 @@
 #include "Resources/D3D11/D3D11Mirrors.hpp"
 
+#include <atomic>
 #include <cstring>
 #include <format>
 #include <optional>
@@ -29,6 +30,8 @@ namespace {
 using namespace Utils::Format::DXGI;
 using OwnedResource = ComPtr<ID3D11Resource>;
 using ResourceMirrorState = MirrorState<ID3D11Resource, OwnedResource>;
+
+std::atomic<uint32_t> unhandled_resolves = 0;
 
 struct ViewState
 {
@@ -505,6 +508,7 @@ bool RedirectResolve(ID3D11DeviceContext* context, ID3D11Resource* destination, 
    const DXGI_FORMAT source_format = GetFormat(plan.source);
    if (GetTypeless(destination_format) != GetTypeless(source_format) || destination_format == DXGI_FORMAT_UNKNOWN)
    {
+      unhandled_resolves++;
       LUMA_UNIMPLEMENTED("Resources::Mirrors resolving between a mirror and a texture of another format");
       return false;
    }
@@ -643,6 +647,11 @@ void CommitMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, 
          return;
       }
    }
+}
+
+uint32_t GetUnhandledResolves()
+{
+   return unhandled_resolves.load();
 }
 } // namespace D3D11
 } // namespace Mirrors

@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -20,12 +21,14 @@
 #include <d3d11shader.h>
 #include <d3d12.h>
 #include <d3dcompiler.h>
+#include <dxgi1_4.h>
 #include <wrl/client.h>
 
 #include "Luma.hpp"
 #include "Shaders/ShaderCache.hpp"
 #include "Shaders/ShaderCompiler.hpp"
 #include "Shaders/ShaderContainer.hpp"
+#include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
 #include "Shaders/D3D12/D3D12RootSignatures.hpp"
 #include "Resources/ResourceBindings.hpp"
 #include "Resources/LumaCBuffers.hpp"
@@ -33,7 +36,9 @@
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderDefines.hpp"
 #include "Shaders/ShaderFiles.hpp"
+#include "Shaders/ShaderInvariants.hpp"
 #include "Shaders/ShaderSignatures.hpp"
+#include "Shaders/Shaders.hpp"
 #include "Shaders/ShaderVariants.hpp"
 #include "Utils/Hash.hpp"
 
@@ -378,6 +383,231 @@ TEST_CASE("Shaders: an extended D3D12 root signature has Luma's cbuffers, then i
    CHECK_FALSE(full.blob.empty());
    CHECK_FALSE(full.table);
 }
+
+TEST_CASE("Shaders: an extended D3D12 root signature has Luma's static samplers after the game's, at every version, when the mod asks")
+{
+   REQUIRE(LoadLibraryW(L"d3d12.dll"));
+   struct StaticSamplers
+   {
+      StaticSamplers() { Resources::Bindings::SetOptions({.static_samplers = true}); }
+      ~StaticSamplers() { Resources::Bindings::SetOptions({}); }
+   } static_samplers;
+   const auto serialize = reinterpret_cast<PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE>(
+      GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12SerializeVersionedRootSignature"));
+   const auto deserializer = reinterpret_cast<PFN_D3D12_CREATE_VERSIONED_ROOT_SIGNATURE_DESERIALIZER>(
+      GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12CreateVersionedRootSignatureDeserializer"));
+   REQUIRE(serialize);
+   REQUIRE(deserializer);
+   const uint32_t space = Resources::Bindings::GetOptions().d3d12_space;
+   // The game's own static sampler, s3 in space 0, stays first and as it was
+   D3D12_STATIC_SAMPLER_DESC game_sampler = {};
+   game_sampler.Filter = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+   game_sampler.AddressU = game_sampler.AddressV = game_sampler.AddressW = D3D12_TEXTURE_ADDRESS_MODE_MIRROR;
+   game_sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+   game_sampler.MaxLOD = D3D12_FLOAT32_MAX;
+   game_sampler.ShaderRegister = 3;
+   D3D12_STATIC_SAMPLER_DESC1 game_sampler1 = {};
+   std::memcpy(&game_sampler1, &game_sampler, sizeof(game_sampler));
+   const auto check = [&](const D3D12_STATIC_SAMPLER_DESC* samplers, UINT count) {
+      REQUIRE(count == 1 + Resources::Bindings::D3D12_STATIC_SAMPLERS);
+      CHECK(samplers[0].ShaderRegister == 3);
+      CHECK(samplers[0].RegisterSpace == 0);
+      CHECK(samplers[0].AddressU == D3D12_TEXTURE_ADDRESS_MODE_MIRROR);
+      for (uint32_t i = 0; i < Resources::Bindings::D3D12_STATIC_SAMPLERS; i++)
+      {
+         CHECK(samplers[1 + i].ShaderRegister == i);
+         CHECK(samplers[1 + i].RegisterSpace == space);
+      }
+      using Resources::Bindings::StaticSampler;
+      CHECK(samplers[1 + uint32_t(StaticSampler::PointClamp)].Filter == D3D12_FILTER_MIN_MAG_MIP_POINT);
+      CHECK(samplers[1 + uint32_t(StaticSampler::PointClamp)].AddressU == D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
+      CHECK(samplers[1 + uint32_t(StaticSampler::LinearWrap)].AddressV == D3D12_TEXTURE_ADDRESS_MODE_WRAP);
+      CHECK(samplers[1 + uint32_t(StaticSampler::AnisotropicWrap)].Filter == D3D12_FILTER_ANISOTROPIC);
+      CHECK(samplers[1 + uint32_t(StaticSampler::AnisotropicWrap)].MaxAnisotropy == 16);
+   };
+   for (const D3D_ROOT_SIGNATURE_VERSION version : {D3D_ROOT_SIGNATURE_VERSION_1_0, D3D_ROOT_SIGNATURE_VERSION_1_1, D3D_ROOT_SIGNATURE_VERSION_1_2})
+   {
+      CAPTURE(int(version));
+      D3D12_VERSIONED_ROOT_SIGNATURE_DESC desc = {.Version = version};
+      if (version == D3D_ROOT_SIGNATURE_VERSION_1_0)
+         desc.Desc_1_0 = {0, nullptr, 1, &game_sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+      else if (version == D3D_ROOT_SIGNATURE_VERSION_1_1)
+         desc.Desc_1_1 = {0, nullptr, 1, &game_sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+      else
+         desc.Desc_1_2 = {0, nullptr, 1, &game_sampler1, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+      Microsoft::WRL::ComPtr<ID3DBlob> blob;
+      if (FAILED(serialize(&desc, &blob, nullptr)))
+      {
+         // Version 1.2 needs a runtime that knows it (an Agility SDK or a recent Windows)
+         MESSAGE("this d3d12.dll can't serialize root signature version ", int(version));
+         continue;
+      }
+      const Shaders::RootSignatures::D3D12::Extended extended = Shaders::RootSignatures::D3D12::Extend(GetBytes(blob.Get()));
+      REQUIRE_FALSE(extended.blob.empty());
+      CHECK(extended.static_samplers);
+      Microsoft::WRL::ComPtr<ID3D12VersionedRootSignatureDeserializer> reader;
+      REQUIRE(SUCCEEDED(deserializer(extended.blob.data(), extended.blob.size(), IID_PPV_ARGS(&reader))));
+      const D3D12_VERSIONED_ROOT_SIGNATURE_DESC* read = reader->GetUnconvertedRootSignatureDesc();
+      REQUIRE(read);
+      CHECK(read->Version == version);
+      if (version == D3D_ROOT_SIGNATURE_VERSION_1_0)
+         check(read->Desc_1_0.pStaticSamplers, read->Desc_1_0.NumStaticSamplers);
+      else if (version == D3D_ROOT_SIGNATURE_VERSION_1_1)
+         check(read->Desc_1_1.pStaticSamplers, read->Desc_1_1.NumStaticSamplers);
+      else
+      {
+         // DESC1 starts as DESC, then its flags
+         std::vector<D3D12_STATIC_SAMPLER_DESC> samplers;
+         for (UINT i = 0; i < read->Desc_1_2.NumStaticSamplers; i++)
+         {
+            CHECK(read->Desc_1_2.pStaticSamplers[i].Flags == D3D12_SAMPLER_FLAG_NONE);
+            samplers.push_back(reinterpret_cast<const D3D12_STATIC_SAMPLER_DESC&>(read->Desc_1_2.pStaticSamplers[i]));
+         }
+         check(samplers.data(), UINT(samplers.size()));
+      }
+   }
+   // Off (the default): none, and no defines for them
+   {
+      Resources::Bindings::SetOptions({});
+      D3D12_VERSIONED_ROOT_SIGNATURE_DESC desc = {.Version = D3D_ROOT_SIGNATURE_VERSION_1_1};
+      desc.Desc_1_1 = {0, nullptr, 1, &game_sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+      Microsoft::WRL::ComPtr<ID3DBlob> blob;
+      REQUIRE(SUCCEEDED(serialize(&desc, &blob, nullptr)));
+      const Shaders::RootSignatures::D3D12::Extended extended = Shaders::RootSignatures::D3D12::Extend(GetBytes(blob.Get()));
+      REQUIRE_FALSE(extended.blob.empty());
+      CHECK_FALSE(extended.static_samplers);
+      const std::vector<Shaders::Compiler::Define> defines = Resources::LumaCBuffers::GetDefines(Api::D3D12);
+      CHECK(std::ranges::none_of(defines, [](const Shaders::Compiler::Define& define) { return define.name == Resources::Bindings::D3D12_STATIC_SAMPLER_DEFINES[0]; }));
+      Resources::Bindings::SetOptions({.static_samplers = true});
+   }
+   // A game sampler in Luma's space is a conflict: not extended (Development asserts once)
+   game_sampler.RegisterSpace = space;
+   D3D12_VERSIONED_ROOT_SIGNATURE_DESC conflict = {.Version = D3D_ROOT_SIGNATURE_VERSION_1_1};
+   conflict.Desc_1_1 = {0, nullptr, 1, &game_sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE};
+   Microsoft::WRL::ComPtr<ID3DBlob> conflict_blob;
+   REQUIRE(SUCCEEDED(serialize(&conflict, &conflict_blob, nullptr)));
+   CHECK(Shaders::RootSignatures::D3D12::Extend(GetBytes(conflict_blob.Get())).blob.empty());
+}
+
+TEST_CASE("Shaders: a D3D12 format set recorded for a pipeline is found again for it, once")
+{
+   Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+   REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
+   Microsoft::WRL::ComPtr<ID3D12Device> device;
+   REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
+   namespace Library = Shaders::PipelineLibrary::D3D12;
+   Shaders::Database::D3D12::TargetFormats formats;
+   formats.render_targets[0] = DXGI_FORMAT_R16G16B16A16_FLOAT;
+   formats.depth = DXGI_FORMAT_D32_FLOAT;
+   constexpr uint64_t PIPELINE = 0x1234567890ABCDEFull;
+   Library::RecordFormats(PIPELINE, formats);
+   Library::RecordFormats(PIPELINE, formats);
+   const std::vector<Shaders::Database::D3D12::TargetFormats> found = Library::GetFormats(device.Get(), PIPELINE);
+   REQUIRE(found.size() == 1);
+   CHECK(found[0] == formats);
+   CHECK(Library::GetFormats(device.Get(), PIPELINE + 1).empty());
+   Library::ReleaseDeviceObjects(device.Get());
+}
+
+TEST_CASE("Shaders: D3D12 builds every DXBC target below SM5.1 as SM5.1 and refuses DXIL ones, D3D11 takes them as they are")
+{
+   CHECK(Shaders::GetTarget("ps_4_0", Api::D3D12) == "ps_5_1");
+   CHECK(Shaders::GetTarget("vs_4_1", Api::D3D12) == "vs_5_1");
+   CHECK(Shaders::GetTarget("cs_5_0", Api::D3D12) == "cs_5_1");
+   CHECK(Shaders::GetTarget("ps_5_1", Api::D3D12) == "ps_5_1");
+   CHECK(Shaders::GetTarget("ps_6_0", Api::D3D12).empty());
+   CHECK(Shaders::GetTarget("cs_6_6", Api::D3D12).empty());
+   CHECK(Shaders::GetTarget("ps_4_0", Api::D3D11) == "ps_4_0");
+   CHECK(Shaders::GetTarget("ps_5_0", Api::D3D11) == "ps_5_0");
+   CHECK(Shaders::GetTarget("ps_6_0", Api::D3D11) == "ps_6_0");
+}
+
+#if DEVELOPMENT || TEST
+namespace {
+std::vector<uint8_t> CompileBytes(std::string_view source, const char* target)
+{
+   Microsoft::WRL::ComPtr<ID3DBlob> blob;
+   Microsoft::WRL::ComPtr<ID3DBlob> errors;
+   const HRESULT result = D3DCompile(source.data(), source.size(), nullptr, nullptr, nullptr, "main", target, 0, 0, &blob, &errors);
+   INFO((errors ? std::string_view(static_cast<const char*>(errors->GetBufferPointer()), errors->GetBufferSize()) : std::string_view()));
+   REQUIRE(SUCCEEDED(result));
+   return {GetBytes(blob.Get()).begin(), GetBytes(blob.Get()).end()};
+}
+} // namespace
+
+TEST_CASE("Shaders: a D3D12 variant is SM5.1 when it reads Luma's, declares Luma's registers in its space and nothing else there")
+{
+   using Shaders::Invariants::CheckD3D12;
+   using Shaders::Invariants::D3D12Rules;
+   const D3D12Rules base = {.space = 100, .settings_slot = 13, .data_slot = 12, .static_samplers = true};
+
+   // SM5.0: fine when it reads nothing of Luma's (a patch that added nothing), not when it does
+   const std::vector<uint8_t> sm50 = CompileBytes("Texture2D t : register(t0); float4 main(float4 p : SV_Position) : SV_Target { return t.Load(int3(p.xy, 0)); }", "ps_5_0");
+   CHECK(CheckD3D12(sm50, base).errors.empty());
+   D3D12Rules reads = base;
+   reads.reads_luma = true;
+   CHECK_FALSE(CheckD3D12(sm50, reads).errors.empty());
+
+   // Luma's cbuffers, its table and its static samplers in its space
+   const std::vector<uint8_t> lumas = CompileBytes(
+      "cbuffer LumaSettings : register(b13, space100) { float4 a; } cbuffer LumaData : register(b12, space100) { float4 b; }"
+      "Texture2D noise : register(t127, space100); SamplerState linear_clamp : register(s1, space100); Texture2D game : register(t0);"
+      "float4 main(float4 p : SV_Position) : SV_Target { return a + b + noise.Sample(linear_clamp, p.xy) + game.Load(int3(p.xy, 0)); }",
+      "ps_5_1");
+   const std::array<uint32_t, 1> noise = {127};
+   reads.texture_slots = noise;
+   CHECK(CheckD3D12(lumas, reads).errors == "");
+   // Static samplers the mod didn't turn on aren't in the root signature
+   D3D12Rules no_samplers = reads;
+   no_samplers.static_samplers = false;
+   CHECK(CheckD3D12(lumas, no_samplers).errors.find("s1 space100") != std::string::npos);
+   // A texture it requests that it doesn't declare in the space
+   const std::array<uint32_t, 1> elsewhere = {126};
+   D3D12Rules missing = reads;
+   missing.texture_slots = elsewhere;
+   CHECK_FALSE(CheckD3D12(lumas, missing).errors.empty());
+   // One of Luma's textures declared in space 0, as a recipe without `space: LUMA_SPACE` adds it
+   const std::vector<uint8_t> space0 = CompileBytes(
+      "Texture2D noise : register(t127); float4 main(float4 p : SV_Position) : SV_Target { return noise.Load(int3(p.xy, 0)); }", "ps_5_1");
+   CHECK(CheckD3D12(space0, reads).errors.find("t127") != std::string::npos);
+
+   // Anything else in Luma's space
+   const std::vector<uint8_t> stranger = CompileBytes(
+      "Texture2D t : register(t3, space100); SamplerState s : register(s7, space100);"
+      "float4 main(float4 p : SV_Position) : SV_Target { return t.Sample(s, p.xy); }",
+      "ps_5_1");
+   const std::string errors = CheckD3D12(stranger, reads).errors;
+   CHECK(errors.find("t3 space100") != std::string::npos);
+   CHECK(errors.find("s7 space100") != std::string::npos);
+}
+
+TEST_CASE("Shaders: a D3D12 variant may declare space 0 registers its original doesn't, with a warning (FF7R's Motion Blur replacements)")
+{
+   using Shaders::Invariants::CheckD3D12;
+   using Shaders::Invariants::D3D12Rules;
+   // Motion Blur's original loads its inputs; the replacement samples them with s0, which the game's root signature binds for the stage
+   const std::vector<uint8_t> original = CompileBytes(
+      "Texture2D color : register(t0); Texture2D velocity : register(t1);"
+      "float4 main(float4 p : SV_Position) : SV_Target { return color.Load(int3(p.xy, 0)) + velocity.Load(int3(p.xy, 0)); }",
+      "ps_5_0");
+   const std::vector<uint8_t> replacement = CompileBytes(
+      "cbuffer LumaSettings : register(b13, space100) { float4 a; } cbuffer LumaData : register(b12, space100) { float4 b; }"
+      "Texture2D color : register(t0); Texture2D velocity : register(t1); SamplerState linear_sampler : register(s0);"
+      "float4 main(float4 p : SV_Position) : SV_Target { return a + b + color.Sample(linear_sampler, p.xy) + velocity.Load(int3(p.xy, 0)); }",
+      "ps_5_1");
+   const Shaders::Container::Bindings original_bindings = Shaders::Container::GetBindings(original);
+   REQUIRE(original_bindings.found);
+   const D3D12Rules rules = {.space = 100, .settings_slot = 13, .data_slot = 12, .reads_luma = true, .original = &original_bindings};
+   const Shaders::Invariants::Findings findings = CheckD3D12(replacement, rules);
+   CHECK(findings.errors.empty());
+   CHECK(findings.warnings.find("s0 space0") != std::string::npos);
+   // What the original declares draws no warning
+   CHECK(CheckD3D12(original, {.space = 100, .original = &original_bindings}).warnings.empty());
+}
+
+#endif
 
 TEST_CASE("Shaders: a Luma file's declaration lines are its programs")
 {

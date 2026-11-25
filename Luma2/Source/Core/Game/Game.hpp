@@ -100,7 +100,7 @@ struct Options
    Luma::Resources::LumaCBuffers::Options cbuffers;
    // The bound-state cache's groups
    Draw::Options draw;
-   // Where Luma's own bindings go (D3D12's register space)
+   // Where Luma's own bindings go (D3D12's register space), and its D3D12 static samplers
    Luma::Resources::Bindings::Options bindings;
    // The .dds files of the Textures folders, as Resources::Database entries
    Luma::Resources::Textures::Options textures;

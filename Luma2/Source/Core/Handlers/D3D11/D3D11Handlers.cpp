@@ -237,7 +237,11 @@ void PreCreateBlendState(ID3D11Device* device, D3D11_BLEND_DESC1& desc)
 void PostCreateBlendState(ID3D11Device*, const D3D11_BLEND_DESC1&, ID3D11BlendState*) {}
 
 // Nothing changes the game's bytecode, which is what Core hashes: shaders are changed through variants
-void PreCreateShader(ID3D11Device*, ShaderStage, const void*&, SIZE_T&) {}
+void PreCreateShader(ID3D11Device* device, ShaderStage stage, const void* bytecode, SIZE_T length, bool stream_output)
+{
+   if (Shaders::IsNeeded() && bytecode && !stream_output)
+      Shaders::Variants::D3D11::CreateVariant(device, Shaders::Database::Track(stage, {static_cast<const uint8_t*>(bytecode), length}));
+}
 
 void PostCreateShader(ID3D11Device* device, ShaderStage stage, const void* bytecode, SIZE_T length, bool stream_output, ID3D11DeviceChild* shader)
 {

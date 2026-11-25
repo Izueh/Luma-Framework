@@ -34,15 +34,15 @@ void PostCreatePipelineLibrary(size_t blob_size, HRESULT result);
 Shaders::RootSignatures::D3D12::Extended PreCreateRootSignature(std::span<const uint8_t> blob);
 // The device refused the extended signature: the game's own is created
 void PostExtendedRootSignatureRefused(HRESULT result);
-// `luma_parameter` is UINT32_MAX for the game's own signature; `luma_table` says Luma's texture table follows its cbuffers
-void PostCreateRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table);
+// `luma_parameter` is UINT32_MAX when unextended
+void PostCreateRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table, bool luma_samplers);
 void PostCreateRootSignatureFromLibrary();
-// CreateStateObject and AddToStateObject
 void PostCreateStateObject();
-// The desc with Luma's tail, none to create the game's (Resources::HeapTail::D3D12)
 std::optional<D3D12_DESCRIPTOR_HEAP_DESC> PreCreateDescriptorHeap(const D3D12_DESCRIPTOR_HEAP_DESC& desc);
-// `desc` is the game's; `with_tail` when the heap was created from PreCreateDescriptorHeap's
-void PostCreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& desc, ID3D12DescriptorHeap* heap, bool with_tail);
+// Returns next fallback desc to try, or nullopt on success or final refusal
+std::optional<D3D12_DESCRIPTOR_HEAP_DESC> PostExtendDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& desc, const D3D12_DESCRIPTOR_HEAP_DESC& extended,
+   HRESULT result);
+void PostCreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& desc, ID3D12DescriptorHeap* heap, uint32_t tail_size);
 // ID3D12DescriptorHeap::GetDesc, for any heap: the size the game asked for, none for a heap without Luma's tail
 std::optional<uint32_t> GetGameHeapSize(ID3D12DescriptorHeap* heap);
 // Every kind of view and samplers, with what was written

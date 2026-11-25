@@ -1,6 +1,8 @@
 #include "Shaders/D3D12/D3D12RootSignatures.hpp"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cstring>
 #include <format>
 #include <mutex>
@@ -31,6 +33,11 @@ namespace {
 constexpr uint32_t MAX_SIZE = 64; // DWORDs
 constexpr uint32_t LUMA_SIZE = LUMA_PARAMETER_COUNT * 2; // Root descriptors are 2 DWORDs
 constexpr uint32_t LUMA_TABLE_SIZE = 1; // A table is 1 DWORD
+static_assert(LUMA_SIZE + LUMA_TABLE_SIZE == LUMA_DWORDS);
+// D3D12's limit of static samplers in one root signature
+constexpr uint32_t MAX_STATIC_SAMPLERS = 2032;
+
+std::atomic<uint32_t> anisotropic_signatures = 0;
 
 template <typename T>
 T GetExport(const char* name)
@@ -119,6 +126,30 @@ Range MakeTextureRange(uint32_t space)
    return range;
 }
 
+template <typename Sampler>
+std::array<Sampler, Resources::Bindings::D3D12_STATIC_SAMPLERS> MakeStaticSamplers(uint32_t space)
+{
+   using Resources::Bindings::StaticSampler;
+   const auto make = [space](StaticSampler which, D3D12_FILTER filter, D3D12_TEXTURE_ADDRESS_MODE address) {
+      Sampler sampler = {};
+      sampler.Filter = filter;
+      sampler.AddressU = sampler.AddressV = sampler.AddressW = address;
+      sampler.MaxAnisotropy = filter == D3D12_FILTER_ANISOTROPIC ? 16 : 1;
+      sampler.ComparisonFunc = D3D12_COMPARISON_FUNC_NEVER;
+      sampler.BorderColor = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+      sampler.MaxLOD = D3D12_FLOAT32_MAX;
+      sampler.ShaderRegister = uint32_t(which);
+      sampler.RegisterSpace = space;
+      sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+      return sampler;
+   };
+   return {make(StaticSampler::PointClamp, D3D12_FILTER_MIN_MAG_MIP_POINT, D3D12_TEXTURE_ADDRESS_MODE_CLAMP),
+      make(StaticSampler::LinearClamp, D3D12_FILTER_MIN_MAG_MIP_LINEAR, D3D12_TEXTURE_ADDRESS_MODE_CLAMP),
+      make(StaticSampler::LinearWrap, D3D12_FILTER_MIN_MAG_MIP_LINEAR, D3D12_TEXTURE_ADDRESS_MODE_WRAP),
+      make(StaticSampler::AnisotropicWrap, D3D12_FILTER_ANISOTROPIC, D3D12_TEXTURE_ADDRESS_MODE_WRAP),
+      make(StaticSampler::PointWrap, D3D12_FILTER_MIN_MAG_MIP_POINT, D3D12_TEXTURE_ADDRESS_MODE_WRAP)};
+}
+
 // `desc` is the game's at its version (D3D12_ROOT_SIGNATURE_DESC, DESC1 or DESC2), with the parameter type of that version
 template <typename Desc, typename Parameter>
 Extended Append(const Desc& desc, D3D_ROOT_SIGNATURE_VERSION version, Desc D3D12_VERSIONED_ROOT_SIGNATURE_DESC::* member)
@@ -141,7 +172,10 @@ Extended Append(const Desc& desc, D3D_ROOT_SIGNATURE_VERSION version, Desc D3D12
       anisotropic |= D3D12_DECODE_IS_ANISOTROPIC_FILTER(desc.pStaticSamplers[i].Filter);
    }
    if (anisotropic && Resources::Samplers::IsNeeded())
+   {
+      anisotropic_signatures++;
       LUMA_UNIMPLEMENTED("Sampler upgrades of anisotropic static samplers in D3D12 root signatures");
+   }
    if (conflict)
    {
       // A game shader reading a slot Luma binds its own to is a conflict. The mod picks another space (Game::Options::bindings).
@@ -175,6 +209,20 @@ Extended Append(const Desc& desc, D3D_ROOT_SIGNATURE_VERSION version, Desc D3D12
    Desc extended_desc = desc;
    extended_desc.NumParameters = UINT(parameters.size());
    extended_desc.pParameters = parameters.data();
+   // After the game's, which keep their order
+   using Sampler = std::remove_cvref_t<decltype(*desc.pStaticSamplers)>;
+   std::vector<Sampler> samplers(desc.pStaticSamplers, desc.pStaticSamplers + desc.NumStaticSamplers);
+   const bool wanted = space != 0 && Resources::Bindings::GetOptions().static_samplers;
+   const bool static_samplers = wanted && samplers.size() + Resources::Bindings::D3D12_STATIC_SAMPLERS <= MAX_STATIC_SAMPLERS;
+   if (static_samplers)
+   {
+      samplers.append_range(MakeStaticSamplers<Sampler>(space));
+      extended_desc.NumStaticSamplers = UINT(samplers.size());
+      extended_desc.pStaticSamplers = samplers.data();
+   }
+   else if (wanted)
+      Log::Warning("D3D12: a root signature with {} static samplers has no room for Luma's {}: shaders sampling with them fall back with its pipelines",
+         desc.NumStaticSamplers, Resources::Bindings::D3D12_STATIC_SAMPLERS);
    D3D12_VERSIONED_ROOT_SIGNATURE_DESC versioned = {.Version = version};
    versioned.*member = extended_desc;
 
@@ -187,7 +235,7 @@ Extended Append(const Desc& desc, D3D_ROOT_SIGNATURE_VERSION version, Desc D3D12
       return {};
    }
    const auto* bytes = static_cast<const uint8_t*>(blob->GetBufferPointer());
-   return {{bytes, bytes + blob->GetBufferSize()}, luma_parameter, table};
+   return {{bytes, bytes + blob->GetBufferSize()}, luma_parameter, table, static_samplers};
 }
 
 // Signatures Luma created for pipelines that brought theirs, in the device's private data. They hold the device: released with
@@ -222,7 +270,7 @@ ID3D12RootSignature* GetForBlob(ID3D12Device* device, std::span<const uint8_t> b
          return nullptr;
       }
    }
-   Database::D3D12::TrackRootSignature(blob, root_signature.Get(), extended.luma_parameter, extended.table);
+   Database::D3D12::TrackRootSignature(blob, root_signature.Get(), extended.luma_parameter, extended.table, extended.static_samplers);
    return created->by_blob.emplace(key, std::move(root_signature)).first->second.Get();
 }
 
@@ -374,6 +422,17 @@ void ReleaseDeviceObjects(ID3D12Device* device)
       std::scoped_lock lock(created->mutex);
       created->by_blob.clear();
    }
+}
+
+uint32_t GetAnisotropicStaticSamplerSignatures()
+{
+   return anisotropic_signatures.load();
+}
+
+std::vector<D3D12_STATIC_SAMPLER_DESC> GetStaticSamplers()
+{
+   const auto samplers = MakeStaticSamplers<D3D12_STATIC_SAMPLER_DESC>(Resources::Bindings::GetOptions().d3d12_space);
+   return {samplers.begin(), samplers.end()};
 }
 
 Extended Extend(std::span<const uint8_t> blob)

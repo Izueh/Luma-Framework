@@ -150,6 +150,26 @@ void Update(Source source, std::vector<Variant> changed, std::span<const uint32_
    generation.fetch_add(1, std::memory_order_release);
 }
 
+void Reject(uint32_t hash, Source source, std::string_view reason)
+{
+   std::scoped_lock publishing(publish_mutex);
+   {
+      std::scoped_lock lock(mutex);
+      const auto it = variants.find(hash);
+      if (it == variants.end())
+         return;
+      for (Variant& variant : it->second)
+      {
+         if (variant.source != source || !variant.compiled)
+            continue;
+         variant.compiled.reset();
+         variant.rejected = true;
+         variant.messages += reason;
+      }
+   }
+   generation.fetch_add(1, std::memory_order_release);
+}
+
 std::vector<Variant> GetVariants(uint32_t hash)
 {
    std::shared_lock lock(mutex);

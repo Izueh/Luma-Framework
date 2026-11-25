@@ -106,11 +106,12 @@ Hooks::D3D12::Functions GetD3D12Functions()
    using enum Hooks::D3D12::Function;
    Hooks::D3D12::Functions functions;
    // Made with the resources, their views by descriptor, swapped at copies into shader-visible heaps, render target binds, copies and
-   // clears; barriers given to the mirrors too; pipelines drawing into them get a format variant at the draw
+   // clears; barriers given to the mirrors too; pipelines drawing into them get a format variant at the draw. A converting copy binds
+   // back the root signature's, the targets' and the fixed state the game set.
    if (IsNeeded())
    {
       for (const Hooks::D3D12::Function function : {CreateResource, CreateDescriptorHeap, CreateView, CopyDescriptors, ResourceBarrier, OMSetRenderTargets, Copy,
-              Clear, Reset, ClearState, SetPipelineState, Draw, ExecuteIndirect})
+              Clear, Reset, ClearState, SetPipelineState, Draw, ExecuteIndirect, SetRootSignature, SetDescriptorHeaps, SetFixedState})
          functions.set(size_t(function));
    }
    // Sampler mirrors the same way as views

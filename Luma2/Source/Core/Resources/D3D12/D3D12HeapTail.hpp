@@ -6,32 +6,48 @@
 
 #include <d3d12.h>
 
-// Luma's descriptors in the game's shader-visible heaps: every shader-visible CBV/SRV/UAV heap the game
-// creates gets TAIL_SIZE more descriptors at its end, which the game never sees (GetDesc answers its own size) and so never writes. Luma
-// writes its views there, valid while the game's heap is bound, so its tables need no heap of their own (a list binds one heap of a
-// type). A heap whose size with the tail would pass the device's limit gets none: Luma's tables can't be bound while it is.
 namespace Luma {
 namespace Resources {
 namespace HeapTail {
 namespace D3D12 {
-inline constexpr uint32_t TAIL_SIZE = 256;
+inline constexpr uint32_t FIXED_SIZE = 256;
+inline constexpr uint32_t RING_BLOCK_SIZE = 64;
+inline constexpr uint32_t RING_BLOCKS = 16;
+inline constexpr uint32_t RING_SIZE = RING_BLOCK_SIZE * RING_BLOCKS;
+inline constexpr uint32_t TAIL_SIZE = FIXED_SIZE + RING_SIZE;
+inline constexpr uint64_t TIER_2_LIMIT = 1000000;
 
-// Before the game's CreateDescriptorHeap: the desc with Luma's tail, none when the heap gets no tail
 std::optional<D3D12_DESCRIPTOR_HEAP_DESC> Extend(const D3D12_DESCRIPTOR_HEAP_DESC& desc);
-// The heap was created from Extend's desc: `game_desc` is what the game asked for
-void Track(ID3D12Device* device, ID3D12DescriptorHeap* heap, const D3D12_DESCRIPTOR_HEAP_DESC& game_desc);
-// The game's size of a heap with a tail, for its GetDesc
+// Returns next fallback desc to try, or nullopt on success or final refusal
+std::optional<D3D12_DESCRIPTOR_HEAP_DESC> RecordExtension(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& game_desc,
+   const D3D12_DESCRIPTOR_HEAP_DESC& extended, HRESULT result);
+void Track(ID3D12Device* device, ID3D12DescriptorHeap* heap, const D3D12_DESCRIPTOR_HEAP_DESC& game_desc, uint32_t tail_size);
 std::optional<uint32_t> GetGameSize(ID3D12DescriptorHeap* heap);
 
-// The GPU handle of `count` descriptors at `offset` in the heap's tail, which `write` fills (CPU handle, increment) the first time
-// `key` is asked for in this heap (a key is one fixed content, say a table layout). Null (ptr 0) for a heap without a tail.
+// `write` runs once per `key` in `heap`; returns null handle if no tail or out of fixed range
 D3D12_GPU_DESCRIPTOR_HANDLE GetRange(ID3D12DescriptorHeap* heap, uint32_t offset, uint32_t count, uint32_t key,
    const std::function<void(D3D12_CPU_DESCRIPTOR_HANDLE start, uint32_t increment)>& write);
 
+struct RingRange
+{
+   D3D12_CPU_DESCRIPTOR_HANDLE cpu = {};
+   D3D12_GPU_DESCRIPTOR_HANDLE gpu = {};
+   uint32_t increment = 0;
+};
+
+// Valid until the list's executions complete
+std::optional<RingRange> AllocateRing(ID3D12GraphicsCommandList* list, ID3D12DescriptorHeap* heap, uint32_t count);
+void ForgetList(ID3D12GraphicsCommandList* list);
+
 struct Stats
 {
-   uint32_t heaps = 0; // With a tail, alive
-   uint32_t refused = 0; // Too big for one
+   uint32_t heaps = 0;
+   uint32_t fixed_only = 0;
+   uint32_t refused = 0;
+   uint32_t over_tier_2 = 0;
+   uint32_t over_tier_2_refused = 0;
+   uint32_t ring_blocks = 0;
+   uint32_t ring_full = 0;
 };
 
 Stats GetStats();

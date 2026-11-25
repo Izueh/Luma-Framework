@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <format>
 #include <optional>
 #include <string>
 #include <utility>
@@ -313,6 +314,19 @@ bool SetSdrWhiteLevel(HWND window, float nits)
    state.sdr_white_level = static_cast<ULONG>(std::round(1000.f * std::clamp(nits, SRGB_WHITE_NITS, MAX_OS_SDR_WHITE_NITS) / SRGB_WHITE_NITS));
    state.final_value = TRUE;
    return DisplayConfigSetDeviceInfo(&state.header) == ERROR_SUCCESS;
+}
+
+std::string GetAdapterName(LUID luid)
+{
+   // A factory of its own: callers aren't on the presenting thread, which owns the shared one
+   using CreateFactory = HRESULT(WINAPI*)(REFIID, void**);
+   static const auto CREATE = reinterpret_cast<CreateFactory>(Modules::FindExport(Modules::FindSystemModule(L"dxgi.dll"), "CreateDXGIFactory1"));
+   ComPtr<IDXGIFactory4> adapters;
+   ComPtr<IDXGIAdapter1> adapter;
+   DXGI_ADAPTER_DESC1 desc = {};
+   if (!CREATE || FAILED(CREATE(IID_PPV_ARGS(&adapters))) || FAILED(adapters->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter))) || FAILED(adapter->GetDesc1(&desc)))
+      return "an unknown adapter";
+   return std::format("{} (vendor 0x{:04X})", Utils::Strings::ToUtf8(desc.Description), desc.VendorId);
 }
 } // namespace Display
 } // namespace System

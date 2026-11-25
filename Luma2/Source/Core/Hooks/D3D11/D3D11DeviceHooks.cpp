@@ -230,7 +230,7 @@ HRESULT CreateShader(ID3D11Device* device, const void* bytecode, SIZE_T length, 
    DepthGuard guard(device_depth);
    if (!Detours::IsGameCall(guard, caller))
       return original<Detour>(device, bytecode, length, linkage, shader);
-   Detours::Report(&Handlers::PreCreateShader, device, Stage, bytecode, length);
+   Detours::Report(&Handlers::PreCreateShader, device, Stage, bytecode, length, false);
    const HRESULT result = original<Detour>(device, bytecode, length, linkage, shader);
    if (SUCCEEDED(result) && shader && *shader)
    {
@@ -278,7 +278,7 @@ HRESULT STDMETHODCALLTYPE CreateGeometryShaderWithStreamOutput(ID3D11Device* dev
    DepthGuard guard(device_depth);
    const bool is_game = Detours::IsGameCall(guard, _ReturnAddress());
    if (is_game)
-      Detours::Report(&Handlers::PreCreateShader, device, ShaderStage::Geometry, bytecode, length);
+      Detours::Report(&Handlers::PreCreateShader, device, ShaderStage::Geometry, bytecode, length, true);
    const HRESULT result = original<&CreateGeometryShaderWithStreamOutput>(device, bytecode, length, entries, entry_count, strides, stride_count,
       rasterized_stream, linkage, shader);
    if (is_game && SUCCEEDED(result) && shader && *shader)

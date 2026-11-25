@@ -2,27 +2,19 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 
 #include <d3d12.h>
 
-// Mirrors on D3D12: a texture the upgrade rules match gets a committed mirror at its creation, in its
-// initial state, held in its private data. Every barrier on the game's texture is given to the mirror too, so the two are always in
-// the same state and either can be used.
-//
-// Views: when the game writes a view of a mirrored texture (anywhere), Luma writes the same view of the mirror into a CPU heap of its
-// own and remembers it for the game's handle; a sampler the rules change gets its mirror the same way. Copies of descriptors carry
-// that along, and a copy into a shader-visible heap is followed by the mirror's view over each mirrored descriptor while swapping: the
-// game's CPU heaps keep the game's views, and a toggle takes effect at the next copy. A view written straight into a shader-visible
-// heap is swapped there at once (it doesn't follow a toggle). Render targets are swapped at OMSetRenderTargets and clears, and the
-// pipeline bound gets a variant with the mirrors' formats at the draw (Shaders::Variants::D3D12). Copies between mirrors run on the
-// mirrors.
+#include "Shaders/D3D12/D3D12Database.hpp"
+
 namespace Luma {
 namespace Resources {
 namespace Mirrors {
 namespace D3D12 {
-// The game created `resource`, in `state` (legacy barriers), with `clear` as its optimized clear value (or none)
-void CreateMirror(ID3D12Device* device, ID3D12Resource* resource, D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear);
+// `state` is nullopt for enhanced-barrier resources
+void CreateMirror(ID3D12Device* device, ID3D12Resource* resource, std::optional<D3D12_RESOURCE_STATES> state, const D3D12_CLEAR_VALUE* clear, bool reserved);
 ID3D12Resource* FindMirror(ID3D12Resource* resource);
 ID3D12Resource* FindOriginal(ID3D12Resource* mirror);
 // The game released the device: Luma's descriptor heaps on it go
@@ -54,30 +46,46 @@ void SwapCopiedDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE des
 // until its next call
 std::span<const D3D12_RESOURCE_BARRIER> AddMirrorBarriers(std::span<const D3D12_RESOURCE_BARRIER> barriers);
 
-// The rest is called while swapping (Mirrors::IsSwapping).
-// OMSetRenderTargets: mirrored targets replaced by their mirrors' views (the handles then point to storage of the
-// calling thread, valid until its next call, and `single_range` is false). `formats` gets each swapped target's format (UNKNOWN for
-// the game's own), for the pipeline's format variant.
+void RecordRootSignature(ID3D12GraphicsCommandList* list, ID3D12RootSignature* root_signature);
+void RecordRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
+   const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil);
+void RecordViewports(ID3D12GraphicsCommandList* list, UINT count, const D3D12_VIEWPORT* viewports);
+void RecordScissorRects(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RECT* rects);
+void RecordTopology(ID3D12GraphicsCommandList* list, D3D12_PRIMITIVE_TOPOLOGY topology);
+void ForgetListState(ID3D12GraphicsCommandList* list);
+
+// Swapped handles point into thread-local storage valid until the next call
 void SwapRenderTargets(UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE*& render_targets, BOOL& single_range, const D3D12_CPU_DESCRIPTOR_HANDLE*& depth_stencil,
-   std::array<DXGI_FORMAT, 8>& formats);
-// A view handle of a mirrored texture (a clear). False when it isn't one.
+   Shaders::Database::D3D12::TargetFormats& formats);
 bool SwapHandle(D3D12_CPU_DESCRIPTOR_HANDLE& handle);
-// CopyResource, CopyTextureRegion's subresources, ResolveSubresource: both sides mirrored are copied between the mirrors. One side
-// mirrored and the other not (a format change, which needs Luma's copy pass) keeps the game's copy and is counted.
-void SwapCopy(ID3D12Resource*& destination, ID3D12Resource*& source);
-// ClearUnorderedAccessView*: a mirrored texture's UAV clear needs the mirror's view in a shader-visible heap (not built yet): counted
-void OnClearUnorderedAccess(ID3D12Resource* resource);
+
+struct CopyRegion
+{
+   bool convertible = false;
+   bool whole_resource = false;
+   UINT destination_subresource = 0;
+   UINT source_subresource = 0;
+   std::array<UINT, 3> offset = {};
+   const D3D12_BOX* box = nullptr;
+};
+
+// Returns true when Luma's copy pass replaced the game's call
+bool SwapCopy(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, ID3D12Resource*& source, const CopyRegion& region);
+void SwapClearUnorderedAccess(ID3D12GraphicsCommandList* list, D3D12_GPU_DESCRIPTOR_HANDLE& gpu, D3D12_CPU_DESCRIPTOR_HANDLE& cpu, ID3D12Resource*& resource);
 
 struct Stats
 {
-   uint32_t descriptors = 0; // Game handles that hold a mirrored view or sampler
-   uint32_t samplers = 0; // Sampler mirrors written
-   uint32_t swapped_copies = 0; // Descriptors swapped at a copy into a shader-visible heap, since the start
-   uint32_t direct_writes = 0; // Views of mirrors written straight into a shader-visible heap
-   uint32_t unhandled_copies = 0; // Copies between a mirror and a texture without one
-   uint32_t unhandled_clears = 0; // UAV clears of mirrored textures
-   uint32_t layout_resources = 0; // Rule-matching textures created with an enhanced barrier layout: not mirrored
-   uint32_t aliasing_barriers = 0; // On mirrored textures
+   uint32_t descriptors = 0;
+   uint32_t samplers = 0;
+   uint32_t swapped_copies = 0;
+   uint32_t direct_writes = 0;
+   uint32_t converted_copies = 0;
+   uint32_t unhandled_copies = 0;
+   uint32_t uav_clears = 0;
+   uint32_t unhandled_clears = 0;
+   uint32_t layout_resources = 0;
+   uint32_t reserved_resources = 0;
+   uint32_t aliasing_barriers = 0;
 };
 
 Stats GetStats();

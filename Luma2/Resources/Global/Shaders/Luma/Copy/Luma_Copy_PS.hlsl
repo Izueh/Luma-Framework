@@ -1,7 +1,11 @@
 // Luma: ps_5_0
 // Luma: ps_5_0 Luma_Copy_RGBMax0_ASat_PS RGB_MAX_0=1 A_SAT=1
 // Luma: ps_5_0 Luma_Copy_RGBMax0_ASat_MS_PS MS=1 RGB_MAX_0=1 A_SAT=1
-#if MS
+// Luma: ps_5_0 Luma_Copy_Table_PS TABLE=1
+#if TABLE && defined(LUMA_TABLE_TEXTURE_INDEX)
+// D3D12: the first register of Luma's table, so the copy runs with the game's root signature
+Texture2D<float4> sourceTexture : register(LUMA_TABLE_TEXTURE_INDEX);
+#elif MS
 Texture2DMS<float4> sourceTexture : register(t0);
 #else
 Texture2D<float4> sourceTexture : register(t0);

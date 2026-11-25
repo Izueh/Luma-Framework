@@ -18,6 +18,7 @@
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderDefines.hpp"
 #include "Shaders/ShaderFiles.hpp"
+#include "Shaders/ShaderInvariants.hpp"
 #include "Shaders/ShaderPatching.hpp"
 #include "System/JobQueue.hpp"
 #include "Shaders/ShaderVariants.hpp"
@@ -117,9 +118,15 @@ std::shared_ptr<const CompiledShader> MakeCompiledShader(Bytecode bytecode)
 }
 
 // Worker thread. From the cache when the preprocessed source was compiled before.
-Result Compile(std::span<const std::filesystem::path> roots, std::string_view file, std::span<const Compiler::Define> defines, std::string_view target,
-   std::string_view entry, BuildInfo& info)
+Result Compile(std::span<const std::filesystem::path> roots, std::string_view file, std::span<const Compiler::Define> defines, std::string_view declared,
+   Api build_api, std::string_view entry, BuildInfo& info)
 {
+   const std::string target = GetTarget(declared, build_api);
+   if (target.empty())
+   {
+      info.failed++;
+      return {nullptr, std::format("target {} is DXIL, which isn't compiled for {} yet: the game's shader runs", declared, GetName(build_api)), true};
+   }
    const Compiler::Preprocessed preprocessed = Compiler::Preprocess(roots, file, defines);
    if (preprocessed.failed)
    {
@@ -186,7 +193,7 @@ Build Run(std::vector<Compiler::Define> defines, Api build_api)
          // The hash being compiled, for a file of several
          std::vector<Compiler::Define> hash_defines = defines;
          hash_defines.push_back({"_" + hash.text, "1"});
-         Result result = Compile(roots, file.path, hash_defines, GetTarget(file.target, build_api), "main", build.info);
+         Result result = Compile(roots, file.path, hash_defines, file.target, build_api, "main", build.info);
          AddMessages(build.info, file.name, result);
          build.replacements.push_back({.hash = hash.value,
             .source = Variants::Source::File,
@@ -212,7 +219,7 @@ Build Run(std::vector<Compiler::Define> defines, Api build_api)
             shader_defines.push_back({std::string(stage), "1"});
          for (const auto& [name, value] : declared.defines)
             shader_defines.push_back({name, value});
-         Result result = Compile(roots, file.path, shader_defines, GetTarget(declared.target, build_api), declared.entry, build.info);
+         Result result = Compile(roots, file.path, shader_defines, declared.target, build_api, declared.entry, build.info);
          AddMessages(build.info, file.name, result);
          build.luma_shaders.push_back({*entry, {std::move(result.compiled), std::move(result.messages), result.failed}});
          System::Jobs::SetProgress(++done, total);
@@ -224,6 +231,20 @@ Build Run(std::vector<Compiler::Define> defines, Api build_api)
 // Presenting thread
 System::Jobs::Outcome Publish(Build build)
 {
+#if DEVELOPMENT || TEST
+   for (Variants::Variant& replacement : build.replacements)
+   {
+      if (!replacement.compiled)
+         continue;
+      if (const std::string errors = Invariants::CheckVariant(replacement.hash, replacement.file, *replacement.compiled); !errors.empty())
+      {
+         replacement.compiled.reset();
+         replacement.rejected = true;
+         replacement.messages += errors;
+         build.info.errors += std::format("{} (0x{:08X}): {}", replacement.file, replacement.hash, errors);
+      }
+   }
+#endif
    Variants::Publish(Variants::Source::File, std::move(build.replacements));
    Resources::Database::PublishShaders(std::move(build.luma_shaders));
    const BuildInfo& info = build.info;
@@ -355,10 +376,17 @@ std::optional<Api> GetApi()
 
 std::string GetTarget(std::string_view target, Api build_api)
 {
-   std::string result(target);
-   if (build_api == Api::D3D12 && result.ends_with("_5_0"))
-      result.back() = '1';
-   return result;
+   if (build_api != Api::D3D12)
+      return std::string(target);
+   // "ps_5_0": the stage, then the model
+   const size_t separator = target.find('_');
+   const std::string_view model = separator != std::string_view::npos ? target.substr(separator + 1) : std::string_view();
+   if (model.starts_with('6'))
+      return {};
+   // SM5.1 names Luma's space; DXBC below it runs in the same pipelines as the game's SM5.0 stages
+   if (model == "4_0" || model == "4_1" || model == "5_0")
+      return std::format("{}_5_1", target.substr(0, separator));
+   return std::string(target);
 }
 
 bool HasReplacementFile(uint32_t hash)

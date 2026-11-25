@@ -1,12 +1,16 @@
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <mutex>
 #include <shared_mutex>
+#include <span>
+#include <unordered_map>
 #include <vector>
 
 #include "Hooks/HookScope.hpp"
@@ -41,9 +45,57 @@ std::atomic<bool> dirty = false;
 std::atomic<int64_t> last_store = 0; // steady_clock ticks
 bool saving = false;
 
+// Lock order: after library.mutex
+std::mutex formats_mutex;
+std::unordered_multimap<uint64_t, Database::D3D12::TargetFormats> format_sets;
+
+struct FormatRecord
+{
+   uint64_t pipeline = 0;
+   Database::D3D12::TargetFormats formats;
+};
+static_assert(std::is_trivially_copyable_v<FormatRecord>);
+
+// Bump when FormatRecord's layout changes
+constexpr uint32_t FORMATS_VERSION = 1;
+
 std::filesystem::path GetPath()
 {
    return System::Paths::GetCache() / L"Pipelines" / L"Library.bin";
+}
+
+std::filesystem::path GetFormatsPath()
+{
+   return System::Paths::GetCache() / L"Pipelines" / L"FormatSets.bin";
+}
+
+void LoadFormats()
+{
+   std::ifstream file(GetFormatsPath(), std::ios::binary);
+   uint32_t version = 0;
+   if (!file.read(reinterpret_cast<char*>(&version), sizeof(version)) || version != FORMATS_VERSION)
+      return;
+   std::scoped_lock lock(formats_mutex);
+   for (FormatRecord record; file.read(reinterpret_cast<char*>(&record), sizeof(record));)
+      format_sets.emplace(record.pipeline, record.formats);
+}
+
+int64_t Now();
+
+// Worker thread
+void WriteAtomically(const std::filesystem::path& path, std::span<const char> bytes)
+{
+   std::error_code error;
+   std::filesystem::create_directories(path.parent_path(), error);
+   std::filesystem::path temporary = path;
+   temporary += L".tmp";
+   {
+      std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+      file.write(bytes.data(), std::streamsize(bytes.size()));
+   }
+   std::filesystem::rename(temporary, path, error);
+   if (error)
+      Log::Error("D3D12: {} couldn't be written ({})", path.filename().string(), error.message());
 }
 
 // Under the unique lock
@@ -79,6 +131,7 @@ void Open(ID3D12Device* device)
       Log::Warning("D3D12: no pipeline library, variant pipelines aren't kept across boots");
       return;
    }
+   LoadFormats();
    Log::Info("D3D12: pipeline library opened ({} bytes)", library.blob.size());
 }
 
@@ -147,6 +200,33 @@ void Store(ID3D12Device* device, const std::wstring& name, ID3D12PipelineState* 
    }
 }
 
+void RecordFormats(uint64_t pipeline, const Database::D3D12::TargetFormats& formats)
+{
+   {
+      std::scoped_lock lock(formats_mutex);
+      const auto [first, last] = format_sets.equal_range(pipeline);
+      if (std::any_of(first, last, [&](const auto& recorded) { return recorded.second == formats; }))
+         return;
+      format_sets.emplace(pipeline, formats);
+   }
+   last_store = Now();
+   dirty = true;
+}
+
+std::vector<Database::D3D12::TargetFormats> GetFormats(ID3D12Device* device, uint64_t pipeline)
+{
+   {
+      std::shared_lock<std::shared_mutex> lock;
+      Get(device, lock);
+   }
+   std::vector<Database::D3D12::TargetFormats> found;
+   std::scoped_lock lock(formats_mutex);
+   const auto [first, last] = format_sets.equal_range(pipeline);
+   for (auto it = first; it != last; ++it)
+      found.push_back(it->second);
+   return found;
+}
+
 void Save()
 {
    if (saving || !dirty || Now() - last_store.load() < std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::seconds(3)).count())
@@ -156,7 +236,19 @@ void Save()
    System::Jobs::Queue(
       "Saving pipelines",
       [] {
-         std::vector<uint8_t> bytes;
+         std::vector<char> formats(sizeof(FORMATS_VERSION));
+         std::memcpy(formats.data(), &FORMATS_VERSION, sizeof(FORMATS_VERSION));
+         {
+            std::scoped_lock lock(formats_mutex);
+            for (const auto& [pipeline, set] : format_sets)
+            {
+               const FormatRecord record = {pipeline, set};
+               const char* bytes = reinterpret_cast<const char*>(&record);
+               formats.insert(formats.end(), bytes, bytes + sizeof(record));
+            }
+         }
+         WriteAtomically(GetFormatsPath(), formats);
+         std::vector<char> bytes;
          {
             // Serialize can't run beside a store
             std::scoped_lock lock(library.mutex);
@@ -170,17 +262,7 @@ void Save()
                return;
             }
          }
-         std::error_code error;
-         std::filesystem::create_directories(GetPath().parent_path(), error);
-         std::filesystem::path temporary = GetPath();
-         temporary += L".tmp";
-         {
-            std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
-            file.write(reinterpret_cast<const char*>(bytes.data()), std::streamsize(bytes.size()));
-         }
-         std::filesystem::rename(temporary, GetPath(), error);
-         if (error)
-            Log::Error("D3D12: the pipeline library couldn't be written ({})", error.message());
+         WriteAtomically(GetPath(), bytes);
       },
       [] {
          saving = false;
@@ -200,7 +282,8 @@ void ReleaseDeviceObjects(ID3D12Device* device)
 
 Stats GetStats()
 {
-   return {hits.load(), misses.load(), stored.load()};
+   std::scoped_lock lock(formats_mutex);
+   return {hits.load(), misses.load(), stored.load(), uint32_t(format_sets.size())};
 }
 } // namespace D3D12
 } // namespace PipelineLibrary

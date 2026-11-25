@@ -22,6 +22,8 @@
 #include "Hooks/HookScope.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
+#include "Resources/D3D11/D3D11Samplers.hpp"
+#include "Resources/SamplerMirrors.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Swapchain/DXGI/DXGISwapchain.hpp"
 #include "Display/DisplayMode.hpp"
@@ -445,6 +447,8 @@ void PrePresentWork(IDXGISwapChain* swapchain)
                Game::Registry::Call(Game::Registry::GetD3D11Events().on_present, swapchain, device);
                if (Shaders::IsNeeded())
                   Shaders::Variants::D3D11::PublishVariants(device);
+               if (Resources::Samplers::IsNeeded())
+                  Resources::Samplers::D3D11::RefreshMirrors();
                Resources::Database::D3D11::UpdateShaderObjects(device);
             },
             [&](ID3D12CommandQueue* queue) {

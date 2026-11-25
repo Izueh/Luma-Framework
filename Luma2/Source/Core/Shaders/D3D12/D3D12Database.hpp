@@ -47,8 +47,8 @@ struct RootLayout
    D3D_ROOT_SIGNATURE_VERSION version = D3D_ROOT_SIGNATURE_VERSION_1_0; // As the game serialized it
    D3D12_ROOT_SIGNATURE_FLAGS flags = D3D12_ROOT_SIGNATURE_FLAG_NONE;
    std::vector<RootParameter> parameters;
-   uint32_t static_samplers = 0;
-   std::vector<D3D12_STATIC_SAMPLER_DESC> static_sampler_descs;
+   uint32_t static_samplers = 0; // The game's
+   std::vector<D3D12_STATIC_SAMPLER_DESC> static_sampler_descs; // The game's, then Luma's in an extended signature
    uint32_t size = 0; // In DWORDs: a table is 1, a root descriptor 2, constants one each
    std::vector<uint8_t> blob; // The game's, what an extension starts from
    std::atomic<uint32_t> pipelines = 0; // Alive, created with it
@@ -76,6 +76,16 @@ struct DescCopy
    std::array<size_t, 6> stages = {SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX};
    // Of everything but the shaders' bytecode and the root signature object, for Luma's pipeline library
    uint64_t content_hash = 0;
+};
+
+// UNKNOWN leaves the pipeline's original format unchanged
+struct TargetFormats
+{
+   std::array<DXGI_FORMAT, 8> render_targets = {};
+   DXGI_FORMAT depth = DXGI_FORMAT_UNKNOWN;
+
+   bool Any() const;
+   friend bool operator==(const TargetFormats&, const TargetFormats&) = default;
 };
 
 struct Pipeline
@@ -115,9 +125,9 @@ PipelineDesc DescribePipeline(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc);
 PipelineDesc DescribePipeline(const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc);
 PipelineDesc DescribePipeline(const D3D12_PIPELINE_STATE_STREAM_DESC& desc);
 
-// Any thread: `root_signature` was created from the game's `blob`, extended with Luma's parameters from `luma_parameter` on
-// (UINT32_MAX when it wasn't). Null if the blob couldn't be read.
-const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table);
+// Any thread; `luma_parameter` is UINT32_MAX when unextended
+const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table,
+   bool luma_samplers = false);
 const RootLayout* FindRootLayout(ID3D12RootSignature* root_signature);
 
 // Any thread: a deep copy of a native desc of `kind` (D3D12_GRAPHICS_PIPELINE_STATE_DESC, D3D12_COMPUTE_PIPELINE_STATE_DESC or
@@ -149,6 +159,8 @@ struct Stats
    uint32_t pipelines = 0; // The game's, alive
    uint32_t extended_signatures = 0; // Created so far
    uint32_t unextended_signatures = 0; // Created as the game's: local, over the size limit, a conflict, refused, or Luma's shaders not needed
+   uint32_t largest_extended_dwords = 0;
+   std::vector<uint32_t> unextended_dwords; // First 64
 };
 
 // Any thread

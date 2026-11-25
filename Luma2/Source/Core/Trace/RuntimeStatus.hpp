@@ -146,34 +146,46 @@ struct D3D12LibraryInfo
    uint32_t hits = 0;
    uint32_t misses = 0;
    uint32_t stored = 0;
+   uint32_t format_sets = 0;
 };
 
-// Resources::Mirrors::D3D12's counters
 struct D3D12MirrorsInfo
 {
-   uint32_t descriptors = 0; // Game CPU handles holding a mirrored view or sampler
+   uint32_t descriptors = 0;
    uint32_t samplers = 0;
-   uint32_t swapped_copies = 0; // Since the start
-   uint32_t direct_writes = 0; // Views of mirrors written straight into shader-visible heaps
+   uint32_t swapped_copies = 0;
+   uint32_t direct_writes = 0;
    uint32_t format_variants = 0;
-   uint32_t unhandled_copies = 0; // Between a mirror and a texture without one: the game's textures copied
-   uint32_t unhandled_clears = 0; // UAV clears of mirrored textures
-   uint32_t layout_resources = 0;
+   uint32_t warmed_format_variants = 0;
+   uint32_t converted_copies = 0;
+   uint32_t unhandled_copies = 0;
+   uint32_t uav_clears = 0;
+   uint32_t unhandled_clears = 0;
    uint32_t aliasing_barriers = 0;
 };
 
 struct D3D12Info
 {
-   uint32_t pipelines = 0; // The game's, alive
+   uint32_t pipelines = 0;
    D3D12VariantsInfo variant_pipelines;
-   D3D12LibraryInfo luma_pipeline_library; // Luma/Cache/Pipelines/Library.bin
+   D3D12LibraryInfo luma_pipeline_library;
    uint32_t extended_root_signatures = 0;
    uint32_t unextended_root_signatures = 0;
-   uint64_t cbuffer_ring_bytes = 0; // Luma's cbuffers' upload memory
-   uint32_t heap_tails = 0; // Shader-visible heaps with Luma's descriptors at their end
+   uint32_t largest_extended_root_signature_dwords = 0;
+   uint32_t luma_root_signature_dwords = 0;
+   std::vector<uint32_t> unextended_root_signature_dwords;
+   uint32_t rejected_variants = 0;
+   uint64_t cbuffer_ring_bytes = 0;
+   uint32_t heap_tails = 0;
    uint32_t heaps_without_tail = 0;
+   uint32_t heap_tails_without_ring = 0;
+   uint32_t heap_tails_over_tier_2 = 0;
+   uint32_t heaps_over_tier_2_refused = 0;
+   uint32_t heap_ring_blocks = 0;
+   uint32_t heap_ring_full = 0;
+   uint32_t view_tables = 0;
    uint32_t luma_textures = 0;
-   uint32_t texture_tables = 0; // Layouts of Luma's texture table
+   uint32_t texture_tables = 0;
    D3D12MirrorsInfo mirrors;
    // Where Luma's cbuffers are: "space100", with the variants compiled as SM5.1
    std::string register_model;
@@ -185,6 +197,16 @@ struct D3D12Info
    std::vector<uint32_t> game_register_spaces;
    uint32_t heap_indexed_shaders = 0;
    uint32_t unbounded_array_shaders = 0;
+};
+
+struct UnimplementedInfo
+{
+   uint32_t enhanced_barrier_resources = 0;
+   uint32_t reserved_resources = 0;
+   uint32_t anisotropic_static_samplers = 0;
+   uint32_t pipelines_without_desc = 0;
+   uint32_t stream_output_variants = 0;
+   uint32_t resolves_between_formats = 0;
 };
 
 struct Status
@@ -214,6 +236,7 @@ struct Status
    JobsInfo jobs;
    ValidationInfo validation;
    std::optional<D3D12Info> d3d12; // Once a D3D12 device was created
+   UnimplementedInfo unimplemented;
    uint64_t virtual_used_mb = 0;
    uint64_t virtual_total_mb = 0;
    uint32_t system_memory_load_percent = 0;
@@ -239,7 +262,7 @@ void RecordPresent();
 
 // Lightweight overlay summary (safe to call every frame in all build configurations)
 OverlaySummary GetOverlaySummary();
-// Gathered on the asking thread
 Status GetStatus();
+std::string DescribeRootSignatures();
 } // namespace Trace
 } // namespace Luma

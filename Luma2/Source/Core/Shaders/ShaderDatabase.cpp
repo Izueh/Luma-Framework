@@ -21,6 +21,7 @@
 #include "Shaders/ShaderCache.hpp"
 #include "Shaders/ShaderCompiler.hpp"
 #include "Settings/SettingsRegistry.hpp"
+#include "Shaders/ShaderInvariants.hpp"
 #include "Shaders/ShaderPatching.hpp"
 #include "Shaders/ShaderSignatures.hpp"
 #include "System/JobQueue.hpp"
@@ -387,8 +388,11 @@ Shader& Track(ShaderStage stage, std::span<const uint8_t> bytecode)
    // Replacements compiled before the game created their original are checked now
    for (const Variants::Variant& variant : Variants::GetVariants(hash))
    {
-      if (variant.compiled)
-         Signatures::Check(hash, kept.stage, kept.signature, variant.compiled->bytecode, variant.file);
+      if (!variant.compiled)
+         continue;
+      Signatures::Check(hash, kept.stage, kept.signature, variant.compiled->bytecode, variant.file);
+      if (const std::string errors = Invariants::CheckVariant(hash, variant.file, *variant.compiled); !errors.empty())
+         Variants::Reject(hash, variant.source, errors);
    }
 #endif
    return kept;

@@ -125,6 +125,7 @@ HRESULT STDMETHODCALLTYPE CreateRootSignature(ID3D12Device* device, UINT node_ma
    const Shaders::RootSignatures::D3D12::Extended extended = Detours::Report(&Handlers::PreCreateRootSignature, game_blob);
    uint32_t luma_parameter = UINT32_MAX;
    bool luma_table = false;
+   bool luma_samplers = false;
    HRESULT result = E_FAIL;
    if (!extended.blob.empty())
    {
@@ -133,6 +134,7 @@ HRESULT STDMETHODCALLTYPE CreateRootSignature(ID3D12Device* device, UINT node_ma
       {
          luma_parameter = extended.luma_parameter;
          luma_table = extended.table;
+         luma_samplers = extended.static_samplers;
       }
       else
          Detours::Report(&Handlers::PostExtendedRootSignatureRefused, result);
@@ -140,7 +142,7 @@ HRESULT STDMETHODCALLTYPE CreateRootSignature(ID3D12Device* device, UINT node_ma
    if (FAILED(result))
       result = original<&CreateRootSignature>(device, node_mask, blob, length, riid, root_signature);
    if (const ComPtr<ID3D12RootSignature> created = GetCreated<ID3D12RootSignature>(result, root_signature))
-      Detours::Report(&Handlers::PostCreateRootSignature, game_blob, created.Get(), luma_parameter, luma_table);
+      Detours::Report(&Handlers::PostCreateRootSignature, game_blob, created.Get(), luma_parameter, luma_table, luma_samplers);
    return result;
 }
 
@@ -172,21 +174,29 @@ HRESULT STDMETHODCALLTYPE AddToStateObject(ID3D12Device7* device, const D3D12_ST
    return result;
 }
 
-// Shader-visible heaps get Luma's tail (Resources::HeapTail::D3D12), which GetDesc hides
+// Shader-visible heaps get Luma's tail (Resources::HeapTail::D3D12), which GetDesc hides: each size the handlers offer is tried in
+// turn, then the game's
 HRESULT STDMETHODCALLTYPE CreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC* desc, REFIID riid, void** heap)
 {
    DepthGuard guard(device_depth);
    if (!Detours::IsGameCall(guard, _ReturnAddress()) || !desc)
       return original<&CreateDescriptorHeap>(device, desc, riid, heap);
-   const std::optional<D3D12_DESCRIPTOR_HEAP_DESC> extended = Detours::Report(&Handlers::PreCreateDescriptorHeap, *desc);
+   std::optional<D3D12_DESCRIPTOR_HEAP_DESC> extended = Detours::Report(&Handlers::PreCreateDescriptorHeap, *desc);
    HRESULT result = E_FAIL;
-   if (extended)
+   uint32_t tail_size = 0;
+   while (extended && FAILED(result))
+   {
       result = original<&CreateDescriptorHeap>(device, &*extended, riid, heap);
-   const bool with_tail = SUCCEEDED(result);
-   if (!with_tail)
+      tail_size = extended->NumDescriptors - desc->NumDescriptors;
+      extended = Detours::Report(&Handlers::PostExtendDescriptorHeap, device, *desc, *extended, result);
+   }
+   if (FAILED(result))
+   {
+      tail_size = 0;
       result = original<&CreateDescriptorHeap>(device, desc, riid, heap);
+   }
    if (const ComPtr<ID3D12DescriptorHeap> created = GetCreated<ID3D12DescriptorHeap>(result, heap))
-      Detours::Report(&Handlers::PostCreateDescriptorHeap, device, *desc, created.Get(), with_tail);
+      Detours::Report(&Handlers::PostCreateDescriptorHeap, device, *desc, created.Get(), tail_size);
    return result;
 }
 

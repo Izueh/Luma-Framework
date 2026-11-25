@@ -386,6 +386,8 @@ void Luma::Game::Init()
          .data_slot = 12,
          .update_luma_instance_data = &UpdateLumaInstanceDataCB,
       },
+      // SSAO Temporal samples its noise with Luma's static samplers on D3D12
+      .bindings = {.static_samplers = true},
       // The FAST noise texture, which SSAO Temporal and the Dithering Fix recipe read
       .textures = {.load = true},
       .samplers = {.upgrade = true},

@@ -62,13 +62,12 @@ struct BoundPipeline
 BoundPipeline GetBoundPipeline(ID3D12GraphicsCommandList* list);
 // Binds the game's pipeline in place of the variant until the game binds another (a draw event's UseOriginal)
 void UseOriginal(ID3D12GraphicsCommandList* list);
-// Presenting thread, at a D3D12 present: pipelines whose choice changed (a publication, a forced choice) are made again
+// Restores the game's bound pipeline after an internal Luma pass on the same list
+void RestorePipeline(ID3D12GraphicsCommandList* list);
+// Presenting thread
 void UpdateVariants();
 
-// Format variants (Resources::Mirrors::D3D12): the list's render targets are mirrors in `formats` (UNKNOWN for the game's own)
-void SetTargetFormats(ID3D12GraphicsCommandList* list, const std::array<DXGI_FORMAT, 8>& formats);
-// Before a draw: a graphics pipeline drawing into mirrors is swapped for its variant with their formats, made on the spot the first
-// time (logged once per pipeline) and kept with the pipeline. Nothing when the targets or the pipeline haven't changed since.
+void SetTargetFormats(ID3D12GraphicsCommandList* list, const Database::D3D12::TargetFormats& formats);
 void BindFormatVariant(ID3D12GraphicsCommandList* list);
 
 struct Stats
@@ -77,7 +76,9 @@ struct Stats
    uint32_t ready = 0;
    uint32_t pending = 0;
    uint32_t failed = 0;
-   uint32_t format_variants = 0; // Made, alive
+   uint32_t format_variants = 0;
+   uint32_t warmed_format_variants = 0;
+   uint32_t draws_without_desc = 0;
 };
 
 // Any thread

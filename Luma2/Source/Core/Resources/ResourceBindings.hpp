@@ -1,24 +1,35 @@
 #pragma once
 
 #include <cstdint>
+#include <iterator>
 
-// Where Luma's own bindings go among the game's registers
 namespace Luma {
 namespace Resources {
 namespace Bindings {
-// Game::Options::bindings: fixed for the process, compiled into every shader
 struct Options
 {
-   // D3D12: the register space of all of Luma's bindings in the game's extended root signatures (its cbuffers now; its views and samplers
-   // once D3D12 passes bind them), declared by SM5.1 variants. A root signature using anything in it is a conflict, asserted in
-   // Development: the mod picks another space. 0 puts them in the game's space 0 at D3D11's slots instead.
-   uint32_t d3d12_space = 100;
+   uint32_t d3d12_space = 100; // 0 falls back to space 0 at D3D11's slots
+   bool static_samplers = false; // Opt-in: alters every extended root signature
 };
 
-// D3D12: Luma's textures in a patch are read from a table in Luma's space covering its top registers, where DXP's `reverse_bind`
-// puts what a recipe adds (t127 down). A patch binding a texture at another register isn't used on D3D12.
+// Top registers of Luma's space, matching DXP's reverse_bind
 inline constexpr uint32_t D3D12_TEXTURE_REGISTERS = 16;
 inline constexpr uint32_t D3D12_FIRST_TEXTURE_REGISTER = 128 - D3D12_TEXTURE_REGISTERS;
+
+// Order matches s0..s4 in Luma's space
+enum class StaticSampler : uint32_t
+{
+   PointClamp,
+   LinearClamp,
+   LinearWrap,
+   AnisotropicWrap,
+   PointWrap,
+};
+
+inline constexpr const char* D3D12_STATIC_SAMPLER_DEFINES[] = {"LUMA_POINT_CLAMP_SAMPLER_INDEX", "LUMA_LINEAR_CLAMP_SAMPLER_INDEX",
+   "LUMA_LINEAR_WRAP_SAMPLER_INDEX", "LUMA_ANISOTROPIC_WRAP_SAMPLER_INDEX", "LUMA_POINT_WRAP_SAMPLER_INDEX"};
+inline constexpr uint32_t D3D12_STATIC_SAMPLERS = uint32_t(std::size(D3D12_STATIC_SAMPLER_DEFINES));
+static_assert(uint32_t(StaticSampler::PointWrap) + 1 == D3D12_STATIC_SAMPLERS);
 
 // Init only (Game::SetOptions)
 void SetOptions(const Options& options);

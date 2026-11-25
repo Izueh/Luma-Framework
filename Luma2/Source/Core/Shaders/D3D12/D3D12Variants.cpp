@@ -10,6 +10,7 @@
 #include <format>
 #include <mutex>
 #include <ranges>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,7 @@
 #include "Hooks/ObjectLifetime.hpp"
 #include "Hooks/HookScope.hpp"
 #include "Settings/SettingsRegistry.hpp"
+#include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceBindings.hpp"
 #include "Resources/ResourceMirrors.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
@@ -38,14 +40,20 @@ namespace Variants {
 namespace D3D12 {
 namespace {
 using Key = std::array<std::shared_ptr<const CompiledShader>, 6>;
+using Database::D3D12::TargetFormats;
+
+// Part of every name in Luma's pipeline library: a change of what a name covers makes old entries unreachable instead of mismatched
+constexpr uint32_t NAME_VERSION = 2;
 
 std::atomic<uint32_t> format_variant_count = 0;
+std::atomic<uint32_t> warmed_count = 0;
+std::atomic<uint32_t> without_desc_count = 0;
 
-// A pipeline with the render target formats of the mirrors it draws into, made from the game's desc or a variant's
+// A pipeline with the formats of the mirrors it draws into, made from the game's desc or a variant's
 struct FormatVariant
 {
    std::shared_ptr<const Built> built; // Null for the game's shaders
-   std::array<DXGI_FORMAT, 8> formats = {};
+   TargetFormats formats;
    Hooks::Lifetime::D3D12::Object object;
 
    FormatVariant() { format_variant_count++; }
@@ -64,6 +72,7 @@ struct Core
    bool compute = false;
    bool extended = false; // Its signature has Luma's parameters: shader variants can run with it
    bool luma_table = false; // Its signature has Luma's texture table
+   uint64_t key = 0; // The game's desc and bytecode, for the format sets recorded across boots
    // What binds take: the variant pipeline (lists hold it until they've executed) and what it was made from
    Hooks::Lifetime::D3D12::Object object;
    std::atomic<std::shared_ptr<const Built>> built;
@@ -93,7 +102,7 @@ struct ListRecord
    ID3D12PipelineState* game = nullptr;
    const Database::D3D12::Pipeline* tracked = nullptr;
    // Format variants: the formats of the mirrors bound as targets (UNKNOWN for the game's own), checked at the next draw when dirty
-   std::array<DXGI_FORMAT, 8> target_formats = {};
+   TargetFormats target_formats;
    bool targets_mirrored = false;
    bool formats_dirty = false;
    bool format_variant_bound = false;
@@ -115,6 +124,26 @@ bool Same(const Key& a, const Key& b)
          return false;
    }
    return true;
+}
+
+// Entries and shaders already reported by ReportUnbound. Never held with another lock.
+std::mutex unbound_mutex;
+std::set<std::pair<uint32_t, uint32_t>> unbound_reported;
+
+void ReportUnbound(uint32_t entry, const Database::Shader* shader)
+{
+   const Resources::Database::Entry& described = Resources::Database::Get(entry);
+   if (described.kind == Resources::Database::Kind::Texture || Resources::LumaCBuffers::GetRootIndex(entry))
+      return;
+   const uint32_t hash = shader ? shader->hash : 0;
+   {
+      std::scoped_lock lock(unbound_mutex);
+      if (!unbound_reported.emplace(entry, hash).second)
+         return;
+   }
+   ASSERT_ONCE_MSG(false, std::format("unimplemented: Resources::Database shaders as D3D12 bindings (\"{}\" requested by 0x{:08X})", described.name, hash));
+   Log::Warning("D3D12: 0x{:08X} requests Luma's \"{}\", which D3D12 doesn't bind yet (Resources::Database shaders as D3D12 bindings): it reads nothing there",
+      hash, described.name);
 }
 
 bool ReadsTextures(const CompiledShader& compiled)
@@ -199,8 +228,7 @@ std::string DescribeStages(const Core& core, const auto& key)
    return text;
 }
 
-// Stable across boots: the desc's contents and every stage's bytecode
-std::wstring GetLibraryName(const Database::D3D12::DescCopy& desc, const std::vector<std::byte>& bytes)
+uint32_t GetStagesHash(const Database::D3D12::DescCopy& desc, const std::vector<std::byte>& bytes)
 {
    uint32_t stages_hash = 0;
    for (const size_t offset : desc.stages)
@@ -211,7 +239,19 @@ std::wstring GetLibraryName(const Database::D3D12::DescCopy& desc, const std::ve
       std::memcpy(&bytecode, bytes.data() + offset, sizeof(bytecode));
       stages_hash = Utils::Hash::CRC32({static_cast<const uint8_t*>(bytecode.pShaderBytecode), bytecode.BytecodeLength}, stages_hash);
    }
-   return std::format(L"Luma{:016X}{:08X}", desc.content_hash, stages_hash);
+   return stages_hash;
+}
+
+// Stable across boots: the desc's contents (Luma's root signature extension included) and every stage's bytecode
+std::wstring GetLibraryName(const Database::D3D12::DescCopy& desc, const std::vector<std::byte>& bytes)
+{
+   return std::format(L"Luma{}_{:016X}{:08X}", NAME_VERSION, desc.content_hash, GetStagesHash(desc, bytes));
+}
+
+std::wstring GetFormatName(const Database::D3D12::DescCopy& desc, const std::vector<std::byte>& bytes, const TargetFormats& formats)
+{
+   return std::format(L"{}F{:08X}D{:02X}", GetLibraryName(desc, bytes),
+      Utils::Hash::CRC32({reinterpret_cast<const uint8_t*>(formats.render_targets.data()), sizeof(formats.render_targets)}), uint32_t(formats.depth));
 }
 
 ComPtr<ID3D12PipelineState> Create(ID3D12Device* device, Database::D3D12::PipelineKind kind, const void* desc)
@@ -235,20 +275,23 @@ ComPtr<ID3D12PipelineState> Create(ID3D12Device* device, Database::D3D12::Pipeli
    return SUCCEEDED(result) ? pipeline : nullptr;
 }
 
-// Where a graphics desc keeps its render target formats: D3D12_GRAPHICS_PIPELINE_STATE_DESC's RTVFormats, or a stream's
-// D3D12_RT_FORMAT_ARRAY. Their offsets in the bytes, none without them.
+// Where a graphics desc keeps its target formats (D3D12_GRAPHICS_PIPELINE_STATE_DESC's fields, or a stream's subobjects): their
+// offsets in the bytes, SIZE_MAX for what it doesn't have
 struct FormatsAt
 {
-   size_t formats = 0; // DXGI_FORMAT[8]
-   size_t count = 0; // UINT
+   size_t formats = SIZE_MAX; // DXGI_FORMAT[8]
+   size_t count = SIZE_MAX; // UINT
+   size_t depth = SIZE_MAX; // DXGI_FORMAT
 };
 
 std::optional<FormatsAt> FindFormats(Database::D3D12::PipelineKind kind, const std::vector<std::byte>& bytes)
 {
+   using Desc = D3D12_GRAPHICS_PIPELINE_STATE_DESC;
    if (kind == Database::D3D12::PipelineKind::Graphics)
-      return FormatsAt{offsetof(D3D12_GRAPHICS_PIPELINE_STATE_DESC, RTVFormats), offsetof(D3D12_GRAPHICS_PIPELINE_STATE_DESC, NumRenderTargets)};
+      return FormatsAt{offsetof(Desc, RTVFormats), offsetof(Desc, NumRenderTargets), offsetof(Desc, DSVFormat)};
    if (kind != Database::D3D12::PipelineKind::Stream)
       return std::nullopt;
+   FormatsAt at;
    size_t offset = 0;
    while (offset + sizeof(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE) <= bytes.size())
    {
@@ -257,32 +300,51 @@ std::optional<FormatsAt> FindFormats(Database::D3D12::PipelineKind kind, const s
       const std::optional<Database::D3D12::SubobjectLayout> layout = Database::D3D12::GetSubobjectLayout(type);
       if (!layout)
          return std::nullopt;
+      const size_t value = offset + layout->value_offset;
       if (type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_RENDER_TARGET_FORMATS)
       {
-         const size_t value = offset + layout->value_offset;
-         return FormatsAt{value + offsetof(D3D12_RT_FORMAT_ARRAY, RTFormats), value + offsetof(D3D12_RT_FORMAT_ARRAY, NumRenderTargets)};
+         at.formats = value + offsetof(D3D12_RT_FORMAT_ARRAY, RTFormats);
+         at.count = value + offsetof(D3D12_RT_FORMAT_ARRAY, NumRenderTargets);
       }
+      else if (type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_DEPTH_STENCIL_FORMAT)
+         at.depth = value;
       offset += layout->size;
    }
-   return std::nullopt;
+   if (at.formats == SIZE_MAX && at.depth == SIZE_MAX)
+      return std::nullopt;
+   return at;
 }
 
 // The formats the pipeline's targets have: its own where the target isn't a mirror. None when they're all its own already.
-std::optional<std::array<DXGI_FORMAT, 8>> GetNeededFormats(const Core& core, const std::array<DXGI_FORMAT, 8>& targets)
+std::optional<TargetFormats> GetNeededFormats(const Core& core, const TargetFormats& targets)
 {
    const std::optional<FormatsAt> at = FindFormats(core.desc->kind, core.desc->bytes);
    if (!at)
       return std::nullopt;
-   std::array<DXGI_FORMAT, 8> formats;
-   UINT count = 0;
-   std::memcpy(formats.data(), core.desc->bytes.data() + at->formats, sizeof(formats));
-   std::memcpy(&count, core.desc->bytes.data() + at->count, sizeof(count));
+   const std::byte* bytes = core.desc->bytes.data();
+   TargetFormats formats;
    bool changed = false;
-   for (UINT i = 0; i < std::min<UINT>(count, 8); i++)
+   if (at->formats != SIZE_MAX)
    {
-      if (targets[i] != DXGI_FORMAT_UNKNOWN && targets[i] != formats[i])
+      UINT count = 0;
+      std::memcpy(formats.render_targets.data(), bytes + at->formats, sizeof(formats.render_targets));
+      std::memcpy(&count, bytes + at->count, sizeof(count));
+      for (UINT i = 0; i < std::min<UINT>(count, 8); i++)
       {
-         formats[i] = targets[i];
+         if (targets.render_targets[i] != DXGI_FORMAT_UNKNOWN && targets.render_targets[i] != formats.render_targets[i])
+         {
+            formats.render_targets[i] = targets.render_targets[i];
+            changed = true;
+         }
+      }
+   }
+   if (at->depth != SIZE_MAX)
+   {
+      std::memcpy(&formats.depth, bytes + at->depth, sizeof(formats.depth));
+      // A pipeline without a depth format doesn't use the depth bound
+      if (targets.depth != DXGI_FORMAT_UNKNOWN && formats.depth != DXGI_FORMAT_UNKNOWN && targets.depth != formats.depth)
+      {
+         formats.depth = targets.depth;
          changed = true;
       }
    }
@@ -293,41 +355,114 @@ ComPtr<ID3D12PipelineState> Create(ID3D12Device* device, Database::D3D12::Pipeli
 std::wstring GetLibraryName(const Database::D3D12::DescCopy& desc, const std::vector<std::byte>& bytes);
 std::vector<std::byte> MakeDesc(const Database::D3D12::DescCopy& desc, const Key& key);
 
-// The pipeline (game's shaders or `built`'s) with `formats`, made the first time. Null if the device refused it.
-FormatVariant* GetFormatVariant(Core& core, const std::shared_ptr<const Built>& built, const std::array<DXGI_FORMAT, 8>& formats)
+std::optional<NativeDesc> MakeFormatDesc(const Core& core, const std::shared_ptr<const Built>& built, const TargetFormats& formats, std::wstring& name)
 {
-   std::scoped_lock lock(core.format_mutex);
+   std::vector<std::byte> bytes = built ? MakeDesc(*core.desc, built->compiled) : core.desc->bytes;
+   const std::optional<FormatsAt> at = FindFormats(core.desc->kind, bytes);
+   if (!at)
+      return std::nullopt;
+   if (at->formats != SIZE_MAX)
+      std::memcpy(bytes.data() + at->formats, formats.render_targets.data(), sizeof(formats.render_targets));
+   if (at->depth != SIZE_MAX)
+      std::memcpy(bytes.data() + at->depth, &formats.depth, sizeof(formats.depth));
+   name = GetFormatName(*core.desc, bytes, formats);
+   return NativeDesc{std::move(bytes)};
+}
+
+FormatVariant* FindFormatVariant(Core& core, const std::shared_ptr<const Built>& built, const TargetFormats& formats)
+{
    for (const std::unique_ptr<FormatVariant>& variant : core.format_variants)
    {
       if (variant->built == built && variant->formats == formats)
-         return variant->object.current.load(std::memory_order_relaxed) ? variant.get() : nullptr;
+         return variant.get();
    }
-   // Variants of shader choices the pipeline doesn't make any more go
-   const std::shared_ptr<const Built> current = core.built.load(std::memory_order_acquire);
-   std::erase_if(core.format_variants, [&](const std::unique_ptr<FormatVariant>& variant) { return variant->built && variant->built != current; });
-   std::vector<std::byte> bytes = built ? MakeDesc(*core.desc, built->compiled) : core.desc->bytes;
-   const FormatsAt at = *FindFormats(core.desc->kind, bytes);
-   std::memcpy(bytes.data() + at.formats, formats.data(), sizeof(formats));
-   NativeDesc native = {std::move(bytes)};
-   const std::wstring name = std::format(L"{}F{:08X}", GetLibraryName(*core.desc, native.bytes),
-      Utils::Hash::CRC32({reinterpret_cast<const uint8_t*>(formats.data()), sizeof(formats)}));
-   ComPtr<ID3D12PipelineState> pipeline = PipelineLibrary::D3D12::Load(core.device.Get(), name, core.desc->kind, GetNativeDesc(native, core.desc->kind));
-   if (!pipeline)
-   {
-      if (!std::exchange(core.format_logged, true))
-         Log::Info("D3D12: the pipeline of {} draws into mirrors: its variant with their formats is made at the draw", DescribeStages(core, Key{}));
-      pipeline = Create(core.device.Get(), core.desc->kind, GetNativeDesc(native, core.desc->kind));
-      if (pipeline)
-         PipelineLibrary::D3D12::Store(core.device.Get(), name, pipeline.Get());
-      else
-         Log::Error("D3D12: the device refused a pipeline with its mirrors' render target formats, the game's runs (wrong formats)");
-   }
+   return nullptr;
+}
+
+FormatVariant* AddFormatVariant(Core& core, const std::shared_ptr<const Built>& built, const TargetFormats& formats, ComPtr<ID3D12PipelineState> pipeline)
+{
    auto variant = std::make_unique<FormatVariant>();
    variant->built = built;
    variant->formats = formats;
    Hooks::Lifetime::D3D12::Replace(variant->object, std::move(pipeline));
    core.format_variants.push_back(std::move(variant));
-   return core.format_variants.back()->object.current.load(std::memory_order_relaxed) ? core.format_variants.back().get() : nullptr;
+   return core.format_variants.back().get();
+}
+
+FormatVariant* GetFormatVariant(Core& core, const std::shared_ptr<const Built>& built, const TargetFormats& formats)
+{
+   std::scoped_lock lock(core.format_mutex);
+   if (FormatVariant* found = FindFormatVariant(core, built, formats))
+      return found->object.current.load(std::memory_order_relaxed) ? found : nullptr;
+   // Drop variants for obsolete shader choices
+   const std::shared_ptr<const Built> current = core.built.load(std::memory_order_acquire);
+   std::erase_if(core.format_variants, [&](const std::unique_ptr<FormatVariant>& variant) { return variant->built && variant->built != current; });
+   std::wstring name;
+   std::optional<NativeDesc> native = MakeFormatDesc(core, built, formats, name);
+   if (!native)
+      return nullptr;
+   ComPtr<ID3D12PipelineState> pipeline = PipelineLibrary::D3D12::Load(core.device.Get(), name, core.desc->kind, GetNativeDesc(*native, core.desc->kind));
+   if (!pipeline)
+   {
+      if (!std::exchange(core.format_logged, true))
+         Log::Info("D3D12: the pipeline of {} draws into mirrors: its variant with their formats is made at the draw", DescribeStages(core, Key{}));
+      pipeline = Create(core.device.Get(), core.desc->kind, GetNativeDesc(*native, core.desc->kind));
+      if (pipeline)
+         PipelineLibrary::D3D12::Store(core.device.Get(), name, pipeline.Get());
+      else
+         Log::Error("D3D12: the device refused a pipeline with its mirrors' target formats, the game's runs (wrong formats)");
+   }
+   if (pipeline)
+      PipelineLibrary::D3D12::RecordFormats(core.key, formats);
+   FormatVariant* variant = AddFormatVariant(core, built, formats, std::move(pipeline));
+   return variant->object.current.load(std::memory_order_relaxed) ? variant : nullptr;
+}
+
+void WarmFormatVariants(const std::shared_ptr<Core>& core)
+{
+   if (core->compute || !Resources::Mirrors::IsNeeded())
+      return;
+   const std::shared_ptr<const Built> built = core->built.load(std::memory_order_acquire);
+   for (const TargetFormats& formats : PipelineLibrary::D3D12::GetFormats(core->device.Get(), core->key))
+   {
+      {
+         std::scoped_lock lock(core->format_mutex);
+         if (FindFormatVariant(*core, built, formats))
+            continue;
+      }
+      std::wstring name;
+      std::optional<NativeDesc> native = MakeFormatDesc(*core, built, formats, name);
+      if (!native)
+         continue;
+      if (ComPtr<ID3D12PipelineState> loaded = PipelineLibrary::D3D12::Load(core->device.Get(), name, core->desc->kind, GetNativeDesc(*native, core->desc->kind)))
+      {
+         std::scoped_lock lock(core->format_mutex);
+         if (!FindFormatVariant(*core, built, formats))
+         {
+            AddFormatVariant(*core, built, formats, std::move(loaded));
+            warmed_count++;
+         }
+         continue;
+      }
+      auto made = std::make_shared<ComPtr<ID3D12PipelineState>>();
+      System::Jobs::Queue(
+         "Creating pipelines",
+         [core, made, native = std::move(*native), name]() mutable {
+            *made = Create(core->device.Get(), core->desc->kind, GetNativeDesc(native, core->desc->kind));
+            if (*made)
+               PipelineLibrary::D3D12::Store(core->device.Get(), name, made->Get());
+         },
+         [core, made, built, formats] {
+            std::scoped_lock lock(core->format_mutex);
+            if (*made && !FindFormatVariant(*core, built, formats))
+            {
+               AddFormatVariant(*core, built, formats, std::move(*made));
+               warmed_count++;
+            }
+            return System::Jobs::Outcome{};
+         },
+         System::Jobs::Priority::Low);
+   }
 }
 
 void Update(const std::shared_ptr<Core>& core);
@@ -359,6 +494,7 @@ void Publish(const std::shared_ptr<Core>& core, Key key, const std::array<Source
             {
                if (!std::ranges::contains(made->entries, request.entry))
                   made->entries.push_back(request.entry);
+               ReportUnbound(request.entry, core->shaders[i]);
             }
          }
          // Luma's textures by register of its table: one layout for the pipeline's stages
@@ -403,6 +539,7 @@ void Publish(const std::shared_ptr<Core>& core, Key key, const std::array<Source
       Hooks::Lifetime::D3D12::Replace(core->object, std::move(pipeline));
       core->built.store(std::move(built), std::memory_order_release);
    }
+   WarmFormatVariants(core);
    if (update_again)
       Update(core);
 }
@@ -488,6 +625,7 @@ void AttachVariants(ID3D12PipelineState* pipeline, const Database::D3D12::Pipeli
    core->luma_table = extended && tracked.root_layout->luma_table;
    for (size_t i = 0; i < tracked.shaders.size(); i++)
       core->shaders[i] = tracked.shaders[i];
+   core->key = tracked.desc->content_hash ^ (uint64_t(GetStagesHash(*tracked.desc, tracked.desc->bytes)) * 0x9E3779B97F4A7C15ull);
    if (FAILED(pipeline->GetDevice(IID_PPV_ARGS(&core->device))) || !Hooks::Lifetime::SetState<Holder>(pipeline, core))
       return;
    {
@@ -495,6 +633,9 @@ void AttachVariants(ID3D12PipelineState* pipeline, const Database::D3D12::Pipeli
       registry.push_back(core);
    }
    Update(core);
+   // Update publishes, and warms, only for a pipeline with a variant
+   if (!core->built.load(std::memory_order_acquire))
+      WarmFormatVariants(core);
 }
 
 void SwapInVariant(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline)
@@ -560,12 +701,25 @@ void UseOriginal(ID3D12GraphicsCommandList* list)
    record->format_variant_bound = false;
 }
 
-void SetTargetFormats(ID3D12GraphicsCommandList* list, const std::array<DXGI_FORMAT, 8>& formats)
+void RestorePipeline(ID3D12GraphicsCommandList* list)
+{
+   ListRecord* record = GetRecord(list);
+   if (!record || !record->game)
+      return;
+   {
+      Hooks::Scope::Guard scope;
+      list->SetPipelineState(record->bound ? static_cast<ID3D12PipelineState*>(record->bound->object) : record->game);
+   }
+   record->format_variant_bound = false;
+   record->formats_dirty = record->targets_mirrored;
+}
+
+void SetTargetFormats(ID3D12GraphicsCommandList* list, const TargetFormats& formats)
 {
    ListRecord* record = GetRecord(list);
    if (!record)
       return;
-   const bool mirrored = std::ranges::any_of(formats, [](DXGI_FORMAT format) { return format != DXGI_FORMAT_UNKNOWN; });
+   const bool mirrored = formats.Any();
    if (!mirrored && !record->targets_mirrored && !record->format_variant_bound)
       return;
    record->target_formats = formats;
@@ -581,7 +735,7 @@ void BindFormatVariant(ID3D12GraphicsCommandList* list)
    record->formats_dirty = false;
    const Holder* holder = record->game ? Hooks::Lifetime::GetState<Holder>(record->game) : nullptr;
    Core* core = holder && !holder->core->compute ? holder->core.get() : nullptr;
-   const std::optional<std::array<DXGI_FORMAT, 8>> formats = core && record->targets_mirrored ? GetNeededFormats(*core, record->target_formats) : std::nullopt;
+   const std::optional<TargetFormats> formats = core && record->targets_mirrored ? GetNeededFormats(*core, record->target_formats) : std::nullopt;
    ID3D12PipelineState* pipeline = nullptr;
    if (formats)
    {
@@ -589,7 +743,10 @@ void BindFormatVariant(ID3D12GraphicsCommandList* list)
          pipeline = static_cast<ID3D12PipelineState*>(Hooks::Lifetime::D3D12::Reference(list, variant->object));
    }
    else if (record->targets_mirrored && !holder && record->game)
+   {
+      without_desc_count++;
       LUMA_UNIMPLEMENTED("Format variants of a pipeline whose desc wasn't copied (made before Luma, or from a state object)");
+   }
    if (pipeline)
    {
       Hooks::Scope::Guard scope;
@@ -644,6 +801,8 @@ Stats GetStats()
    stats.pending = pending_count.load();
    stats.failed = failed_count.load();
    stats.format_variants = format_variant_count.load();
+   stats.warmed_format_variants = warmed_count.load();
+   stats.draws_without_desc = without_desc_count.load();
    return stats;
 }
 } // namespace D3D12

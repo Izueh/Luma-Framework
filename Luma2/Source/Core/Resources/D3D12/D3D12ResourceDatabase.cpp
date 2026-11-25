@@ -38,8 +38,8 @@ namespace D3D12 {
 namespace {
 constexpr uint64_t CHUNK_SIZE = 256 * 1024;
 constexpr uint64_t CBV_ALIGNMENT = D3D12_CONSTANT_BUFFER_DATA_PLACEMENT_ALIGNMENT;
-// Each layout has its own range of the tail
-constexpr uint32_t MAX_TABLES = HeapTail::D3D12::TAIL_SIZE / Bindings::D3D12_TEXTURE_REGISTERS;
+// Each layout has its own range of the tail's fixed section
+constexpr uint32_t MAX_TABLES = HeapTail::D3D12::FIXED_SIZE / Bindings::D3D12_TEXTURE_REGISTERS;
 
 // Registered layouts never change: read without the lock below `table_count`
 std::mutex tables_mutex; // Never held with another
@@ -94,7 +94,24 @@ struct List
    std::array<bool, 2> luma_table = {};
    std::array<UINT64, 2> table_set = {};
    ID3D12DescriptorHeap* heap = nullptr; // The CBV/SRV/UAV heap bound, when it has Luma's tail
+   // The last table of views written into the ring (BindTableViews): reused while the views, the layout and the heap stay
+   TableViews views = {};
+   uint32_t views_table = NO_TABLE;
+   ID3D12DescriptorHeap* views_heap = nullptr;
+   UINT64 views_gpu = 0;
 };
+
+std::atomic<uint32_t> view_tables = 0;
+
+bool Same(const TableViews& a, const TableViews& b)
+{
+   for (size_t i = 0; i < a.size(); i++)
+   {
+      if (a[i].resource != b[i].resource || (a[i].resource && std::memcmp(&a[i].desc, &b[i].desc, sizeof(a[i].desc)) != 0))
+         return false;
+   }
+   return true;
+}
 
 List* GetList(ID3D12GraphicsCommandList* list)
 {
@@ -299,21 +316,51 @@ Texture LoadTexture(ID3D12Device* device, uint32_t index)
    return texture;
 }
 
-// The table's views into the tail range at `start`: a null view where the layout has no texture
-void WriteTable(ID3D12Device* device, const Store& store, const TableLayout& layout, D3D12_CPU_DESCRIPTOR_HANDLE start, uint32_t increment)
+void WriteTable(ID3D12Device* device, const Store& store, const TableLayout* layout, D3D12_CPU_DESCRIPTOR_HANDLE start, uint32_t increment,
+   const TableViews* views = nullptr)
 {
    D3D12_SHADER_RESOURCE_VIEW_DESC null_view = {DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_SRV_DIMENSION_TEXTURE2D, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING};
    null_view.Texture2D.MipLevels = 1;
    Hooks::Scope::Guard scope;
-   for (uint32_t i = 0; i < layout.size(); i++)
+   for (uint32_t i = 0; i < Bindings::D3D12_TEXTURE_REGISTERS; i++)
    {
       const D3D12_CPU_DESCRIPTOR_HANDLE handle = {start.ptr + SIZE_T(i) * increment};
-      const Texture* texture = layout[i] < store.textures.size() ? &store.textures[layout[i]] : nullptr;
+      if (const TableView* view = views ? &(*views)[i] : nullptr; view && view->resource)
+      {
+         device->CreateShaderResourceView(view->resource, view->desc.ViewDimension == D3D12_SRV_DIMENSION_UNKNOWN ? nullptr : &view->desc, handle);
+         continue;
+      }
+      const Texture* texture = layout && (*layout)[i] < store.textures.size() ? &store.textures[(*layout)[i]] : nullptr;
       if (texture && texture->resource)
          device->CreateShaderResourceView(texture->resource.Get(), &texture->view, handle);
       else
          device->CreateShaderResourceView(nullptr, &null_view, handle);
    }
+}
+
+// Sets Luma's table parameter to `gpu`, unless it's set there already
+void SetTable(ID3D12GraphicsCommandList* list, List& state, bool compute, D3D12_GPU_DESCRIPTOR_HANDLE gpu)
+{
+   if (state.table_set[compute] == gpu.ptr)
+      return;
+   const UINT parameter = state.luma_parameter[compute] + Shaders::RootSignatures::D3D12::LUMA_TABLE_PARAMETER;
+   Hooks::Scope::Guard scope;
+   if (compute)
+      list->SetComputeRootDescriptorTable(parameter, gpu);
+   else
+      list->SetGraphicsRootDescriptorTable(parameter, gpu);
+   state.table_set[compute] = gpu.ptr;
+}
+
+// The layout's textures are loaded on this device: a texture the device couldn't load runs the game's shaders (D3D11's UseOriginal)
+bool HasTextures(const Store& store, const TableLayout& layout)
+{
+   for (const uint32_t entry : layout)
+   {
+      if (entry != UINT32_MAX && (entry >= store.textures.size() || !store.textures[entry].resource))
+         return false;
+   }
+   return true;
 }
 
 // Luma's texture table at its parameter of the list's signature: false when it can't be (see BindRequested)
@@ -324,26 +371,14 @@ bool BindTable(ID3D12GraphicsCommandList* list, List& state, bool compute, uint3
    if (table >= table_count.load(std::memory_order_acquire) || !state.luma_table[compute] || !state.heap)
       return false;
    const TableLayout& layout = tables[table];
-   // A texture the device couldn't load: the game's shaders run (D3D11's UseOriginal)
-   for (const uint32_t entry : layout)
-   {
-      if (entry != UINT32_MAX && (entry >= state.store->textures.size() || !state.store->textures[entry].resource))
-         return false;
-   }
+   if (!HasTextures(*state.store, layout))
+      return false;
    auto* device = static_cast<ID3D12Device*>(state.target.device);
    const D3D12_GPU_DESCRIPTOR_HANDLE gpu = HeapTail::D3D12::GetRange(state.heap, table * Bindings::D3D12_TEXTURE_REGISTERS, Bindings::D3D12_TEXTURE_REGISTERS, table,
-      [&](D3D12_CPU_DESCRIPTOR_HANDLE start, uint32_t increment) { WriteTable(device, *state.store, layout, start, increment); });
+      [&](D3D12_CPU_DESCRIPTOR_HANDLE start, uint32_t increment) { WriteTable(device, *state.store, &layout, start, increment); });
    if (!gpu.ptr)
       return false;
-   if (state.table_set[compute] == gpu.ptr)
-      return true;
-   const UINT parameter = state.luma_parameter[compute] + Shaders::RootSignatures::D3D12::LUMA_TABLE_PARAMETER;
-   Hooks::Scope::Guard scope;
-   if (compute)
-      list->SetComputeRootDescriptorTable(parameter, gpu);
-   else
-      list->SetGraphicsRootDescriptorTable(parameter, gpu);
-   state.table_set[compute] = gpu.ptr;
+   SetTable(list, state, compute, gpu);
    return true;
 }
 } // namespace
@@ -422,6 +457,9 @@ void ForgetList(ID3D12GraphicsCommandList* list)
       state->luma_table = {};
       state->table_set = {};
       state->heap = nullptr;
+      // Its ring descriptors are the queues' to free (HeapTail::D3D12::ForgetList)
+      state->views_heap = nullptr;
+      state->views_gpu = 0;
    }
 }
 
@@ -438,6 +476,12 @@ void SetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12Descr
       if (heaps[i] && HeapTail::D3D12::GetGameSize(heaps[i]))
          state->heap = heaps[i];
    }
+}
+
+ID3D12DescriptorHeap* GetBoundHeap(ID3D12GraphicsCommandList* list)
+{
+   const List* state = GetList(list);
+   return state ? state->heap : nullptr;
 }
 
 bool BindRequested(ID3D12GraphicsCommandList* list, bool compute, std::span<const uint32_t> entries, const CustomData& custom, uint32_t table)
@@ -459,12 +503,10 @@ bool BindRequested(ID3D12GraphicsCommandList* list, bool compute, std::span<cons
       // Textures are in the table
       if (Get(entry_index).kind == Kind::Texture)
          continue;
+      // Other kinds were reported when the variant was made
       const std::optional<uint32_t> index = LumaCBuffers::GetRootIndex(entry_index);
       if (!index)
-      {
-         LUMA_UNIMPLEMENTED("Resources::Database shaders as D3D12 bindings");
          continue;
-      }
       UploadEntry(list, *state, *index, Get(entry_index), custom);
       Bind(list, *state, compute, *index);
    }
@@ -481,9 +523,37 @@ void BindForBundle(ID3D12GraphicsCommandList* list)
       BindRequested(list, false, entries);
 }
 
+bool BindTableViews(ID3D12GraphicsCommandList* list, bool compute, uint32_t table, const TableViews& views)
+{
+   List* state = GetList(list);
+   if (!state || !state->store || state->bundle || state->luma_parameter[compute] == UINT32_MAX || !state->luma_table[compute] || !state->heap)
+      return false;
+   const TableLayout* layout = nullptr;
+   if (table != NO_TABLE)
+   {
+      if (table >= table_count.load(std::memory_order_acquire) || !HasTextures(*state->store, tables[table]))
+         return false;
+      layout = &tables[table];
+   }
+   if (state->views_heap != state->heap || state->views_table != table || !Same(state->views, views))
+   {
+      const std::optional<HeapTail::D3D12::RingRange> range = HeapTail::D3D12::AllocateRing(list, state->heap, Bindings::D3D12_TEXTURE_REGISTERS);
+      if (!range)
+         return false;
+      WriteTable(static_cast<ID3D12Device*>(state->target.device), *state->store, layout, range->cpu, range->increment, &views);
+      state->views = views;
+      state->views_table = table;
+      state->views_heap = state->heap;
+      state->views_gpu = range->gpu.ptr;
+      view_tables++;
+   }
+   SetTable(list, *state, compute, {state->views_gpu});
+   return true;
+}
+
 Stats GetStats()
 {
-   return {ring_bytes.load(), chunks.load(), texture_count.load(), table_count.load()};
+   return {ring_bytes.load(), chunks.load(), texture_count.load(), table_count.load(), view_tables.load()};
 }
 } // namespace D3D12
 } // namespace Database

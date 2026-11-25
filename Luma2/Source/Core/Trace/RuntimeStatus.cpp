@@ -12,6 +12,7 @@
 #include "Common/Api.hpp"
 #include "ReShade/ReShade.hpp"
 #include "Game/GameRegistry.hpp"
+#include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
@@ -20,9 +21,12 @@
 #include "Resources/ResourceMirrors.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/SamplerMirrors.hpp"
+#include "Shaders/D3D11/D3D11Variants.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
+#include "Shaders/D3D12/D3D12RootSignatures.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
+#include "Shaders/ShaderInvariants.hpp"
 #include "Hooks/HookManager.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
@@ -201,20 +205,37 @@ Status GetStatus()
       d3d12.pipelines = database.pipelines;
       d3d12.extended_root_signatures = database.extended_signatures;
       d3d12.unextended_root_signatures = database.unextended_signatures;
+      d3d12.largest_extended_root_signature_dwords = database.largest_extended_dwords;
+      d3d12.luma_root_signature_dwords = Shaders::RootSignatures::D3D12::LUMA_DWORDS;
+      d3d12.unextended_root_signature_dwords = database.unextended_dwords;
+#if DEVELOPMENT || TEST
+      d3d12.rejected_variants = Shaders::Invariants::GetRejectedCount();
+#endif
       const Shaders::Variants::D3D12::Stats variants = Shaders::Variants::D3D12::GetStats();
       d3d12.variant_pipelines = {variants.pipelines, variants.ready, variants.pending, variants.failed};
       const Shaders::PipelineLibrary::D3D12::Stats library = Shaders::PipelineLibrary::D3D12::GetStats();
-      d3d12.luma_pipeline_library = {library.hits, library.misses, library.stored};
+      d3d12.luma_pipeline_library = {library.hits, library.misses, library.stored, library.format_sets};
       const Resources::Database::D3D12::Stats resources = Resources::Database::D3D12::GetStats();
       d3d12.cbuffer_ring_bytes = resources.ring_bytes;
       d3d12.luma_textures = resources.textures;
       d3d12.texture_tables = resources.tables;
+      d3d12.view_tables = resources.view_tables;
       const Resources::HeapTail::D3D12::Stats tails = Resources::HeapTail::D3D12::GetStats();
       d3d12.heap_tails = tails.heaps;
       d3d12.heaps_without_tail = tails.refused;
+      d3d12.heap_tails_without_ring = tails.fixed_only;
+      d3d12.heap_tails_over_tier_2 = tails.over_tier_2;
+      d3d12.heaps_over_tier_2_refused = tails.over_tier_2_refused;
+      d3d12.heap_ring_blocks = tails.ring_blocks;
+      d3d12.heap_ring_full = tails.ring_full;
       const Resources::Mirrors::D3D12::Stats mirrored = Resources::Mirrors::D3D12::GetStats();
-      d3d12.mirrors = {mirrored.descriptors, mirrored.samplers, mirrored.swapped_copies, mirrored.direct_writes, variants.format_variants, mirrored.unhandled_copies,
-         mirrored.unhandled_clears, mirrored.layout_resources, mirrored.aliasing_barriers};
+      d3d12.mirrors = {mirrored.descriptors, mirrored.samplers, mirrored.swapped_copies, mirrored.direct_writes, variants.format_variants,
+         variants.warmed_format_variants, mirrored.converted_copies, mirrored.unhandled_copies, mirrored.uav_clears, mirrored.unhandled_clears,
+         mirrored.aliasing_barriers};
+      status.unimplemented.enhanced_barrier_resources = mirrored.layout_resources;
+      status.unimplemented.reserved_resources = mirrored.reserved_resources;
+      status.unimplemented.anisotropic_static_samplers = Shaders::RootSignatures::D3D12::GetAnisotropicStaticSamplerSignatures();
+      status.unimplemented.pipelines_without_desc = variants.draws_without_desc;
       d3d12.register_model = std::format("space{}", Resources::Bindings::GetOptions().d3d12_space);
 #if DEVELOPMENT
       const Resources::Descriptors::D3D12::Stats descriptors = Resources::Descriptors::D3D12::GetStats();
@@ -232,6 +253,8 @@ Status GetStatus()
       d3d12.game_register_spaces.assign(spaces.begin(), spaces.end());
 #endif
    }
+   status.unimplemented.stream_output_variants = Shaders::Variants::D3D11::GetStreamOutputVariants();
+   status.unimplemented.resolves_between_formats = Resources::Mirrors::D3D11::GetUnhandledResolves();
 
    const Validation::Counts validation = Validation::GetCounts();
    status.validation = {Validation::IsDebugLayerOn(), Validation::IsGpuValidationOn(), validation.corruptions, validation.errors, validation.warnings};
@@ -244,6 +267,24 @@ Status GetStatus()
       status.system_memory_load_percent = memory.dwMemoryLoad;
    }
    return status;
+}
+
+std::string DescribeRootSignatures()
+{
+   if (Shaders::GetApi() != Api::D3D12)
+      return {};
+   const Shaders::Database::D3D12::Stats database = Shaders::Database::D3D12::GetStats();
+   std::string text = std::format("D3D12 root signatures: {} extended (largest {} DWORDs, and Luma's {} at most), {} not", database.extended_signatures,
+      database.largest_extended_dwords, Shaders::RootSignatures::D3D12::LUMA_DWORDS, database.unextended_signatures);
+   for (size_t i = 0; i < database.unextended_dwords.size(); i++)
+      text += std::format("{}{}", i == 0 ? " (DWORDs: " : ", ", database.unextended_dwords[i]);
+   if (!database.unextended_dwords.empty())
+      text += ")";
+#if DEVELOPMENT || TEST
+   if (const uint32_t rejected = Shaders::Invariants::GetRejectedCount())
+      text += std::format("; {} variant{} refused by D3D12's invariants", rejected, rejected == 1 ? "" : "s");
+#endif
+   return text;
 }
 } // namespace Trace
 } // namespace Luma

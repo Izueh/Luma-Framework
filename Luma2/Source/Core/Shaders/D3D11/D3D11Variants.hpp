@@ -36,8 +36,8 @@ struct BoundShaders
 
 // The device's variants, empty until its shaders are created
 void CreateVariantStore(ID3D11Device* device);
-// After Database::D3D11::TrackShader: the object finds its hash's variants at bind. A geometry shader made with stream output is
-// never replaced (`stream_output`).
+// Called inside shader creation so driver state armed by the game (e.g. NvAPI extn slot) applies
+void CreateVariant(ID3D11Device* device, const Database::Shader& shader);
 void AttachVariant(ID3D11Device* device, ID3D11DeviceChild* object, bool stream_output);
 // The game binds `shader` (null unbinds): its variant goes in its place while Luma is enabled and the variants are loaded, and
 // the context's record follows
@@ -60,6 +60,7 @@ StageSet BindRequestedResources(ID3D11DeviceContext* context, StageSet stages);
 void PublishVariants(ID3D11Device* device);
 // The game released the device: every variant object is released
 void ReleaseVariants(ID3D11Device* device);
+uint32_t GetStreamOutputVariants();
 } // namespace D3D11
 } // namespace Variants
 } // namespace Shaders

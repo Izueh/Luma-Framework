@@ -14,9 +14,14 @@
 #include "Draw/D3D11/D3D11Draw.hpp"
 #include "Draw/Draw.hpp"
 #include "Frame/FrameState.hpp"
+#include "Hooks/D3D12/D3D12Lifetime.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
+#include "Resources/D3D11/D3D11Samplers.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
+#include "Resources/D3D12/D3D12ResourceDatabase.hpp"
+#include "Shaders/D3D12/D3D12Database.hpp"
+#include "Shaders/D3D12/D3D12RootSignatures.hpp"
 #include "Resources/ResourceMirrors.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Resources/ResourceUpgrades.hpp"
@@ -288,6 +293,40 @@ TEST_CASE("Samplers: mirror desc for anisotropic samplers")
    CHECK(GetMirrorDesc(D3D12_SAMPLER_DESC{.Filter = D3D12_FILTER_ANISOTROPIC, .MipLODBias = -15.f}, -4.f)->MipLODBias == -16.f);
 }
 
+TEST_CASE("Samplers D3D11: a sampler's mirror is made at its creation, and for a new bias at the present, never at a bind")
+{
+   ComPtr<ID3D11Device> device;
+   REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, nullptr)));
+   struct Bias
+   {
+      ~Bias() { Resources::Samplers::SetLodBiasOffset(0.f); }
+   } bias;
+   Resources::Samplers::SetLodBiasOffset(-1.f);
+   const D3D11_SAMPLER_DESC desc = {.Filter = D3D11_FILTER_ANISOTROPIC, .AddressU = D3D11_TEXTURE_ADDRESS_WRAP, .AddressV = D3D11_TEXTURE_ADDRESS_WRAP,
+      .AddressW = D3D11_TEXTURE_ADDRESS_WRAP, .MaxAnisotropy = 4, .ComparisonFunc = D3D11_COMPARISON_NEVER, .MaxLOD = D3D11_FLOAT32_MAX};
+   ComPtr<ID3D11SamplerState> sampler;
+   REQUIRE(SUCCEEDED(device->CreateSamplerState(&desc, &sampler)));
+   Resources::Samplers::D3D11::TrackSampler(device.Get(), desc, sampler.Get());
+   ID3D11SamplerState* bound = sampler.Get();
+   Resources::Samplers::D3D11::SwapSamplers(&bound, 1);
+   REQUIRE(bound != sampler.Get());
+   D3D11_SAMPLER_DESC mirror = {};
+   bound->GetDesc(&mirror);
+   CHECK(mirror.MaxAnisotropy == 16);
+   CHECK(mirror.MipLODBias == -1.f);
+
+   // A new bias: the bind keeps the mirror it had until the present makes the new one
+   Resources::Samplers::SetLodBiasOffset(-2.f);
+   ID3D11SamplerState* before_present = sampler.Get();
+   Resources::Samplers::D3D11::SwapSamplers(&before_present, 1);
+   CHECK(before_present == bound);
+   Resources::Samplers::D3D11::RefreshMirrors();
+   ID3D11SamplerState* after_present = sampler.Get();
+   Resources::Samplers::D3D11::SwapSamplers(&after_present, 1);
+   after_present->GetDesc(&mirror);
+   CHECK(mirror.MipLODBias == -2.f);
+}
+
 TEST_CASE("Mirrors D3D11: a matching texture gets a mirror, its views mirrored ones, CPU writes reach it, and both go with the texture")
 {
    ComPtr<ID3D11Device> device;
@@ -390,15 +429,29 @@ TEST_CASE("Heap tail D3D12: shader-visible heaps get Luma's descriptors after th
    const std::optional<D3D12_DESCRIPTOR_HEAP_DESC> extended = Extend(game_desc);
    REQUIRE(extended);
    CHECK(extended->NumDescriptors == 16 + TAIL_SIZE);
-   // CPU-only heaps and samplers don't get one, nor a heap the tail would take past the device's limit
+   CHECK(TAIL_SIZE == FIXED_SIZE + RING_SIZE);
+   // CPU-only heaps and samplers don't get one. A heap at the tier 2 limit is tried with its tail: the device answers.
    CHECK_FALSE(Extend({D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 16, D3D12_DESCRIPTOR_HEAP_FLAG_NONE}));
    CHECK_FALSE(Extend({D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER, 16, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE}));
-   CHECK_FALSE(Extend({D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1000000, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE}));
+   // Refused with the ring: the fixed section alone is tried next, then nothing
+   const D3D12_DESCRIPTOR_HEAP_DESC large = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1000000, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
+   const D3D12_DESCRIPTOR_HEAP_DESC large_extended = *Extend(large);
+   CHECK(large_extended.NumDescriptors == 1000000 + TAIL_SIZE);
+   const Stats answered = GetStats();
+   const std::optional<D3D12_DESCRIPTOR_HEAP_DESC> fixed = RecordExtension(device.Get(), large, large_extended, E_INVALIDARG);
+   REQUIRE(fixed);
+   CHECK(fixed->NumDescriptors == 1000000 + FIXED_SIZE);
+   CHECK(GetStats().refused == answered.refused);
+   CHECK_FALSE(RecordExtension(device.Get(), large, *fixed, E_INVALIDARG));
+   CHECK(GetStats().refused == answered.refused + 1);
+   CHECK(GetStats().over_tier_2_refused == answered.over_tier_2_refused + 2);
+   CHECK_FALSE(RecordExtension(device.Get(), large, *fixed, S_OK));
+   CHECK(GetStats().fixed_only == answered.fixed_only + 1);
 
    ComPtr<ID3D12DescriptorHeap> heap;
    REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&*extended, IID_PPV_ARGS(&heap))));
    const Stats before = GetStats();
-   Track(device.Get(), heap.Get(), game_desc);
+   Track(device.Get(), heap.Get(), game_desc, TAIL_SIZE);
    CHECK(GetStats().heaps == before.heaps + 1);
    CHECK(GetGameSize(heap.Get()) == 16u);
 
@@ -416,15 +469,128 @@ TEST_CASE("Heap tail D3D12: shader-visible heaps get Luma's descriptors after th
    CHECK(writes == 1);
    GetRange(heap.Get(), 48, 16, 2, write);
    CHECK(writes == 2);
-   // Past the tail, or a heap without one: none
-   CHECK(GetRange(heap.Get(), TAIL_SIZE - 8, 16, 3, write).ptr == 0);
+   // Past the fixed section (the ring is allocated per list), or a heap without a tail: none
+   CHECK(GetRange(heap.Get(), FIXED_SIZE - 8, 16, 3, write).ptr == 0);
    ComPtr<ID3D12DescriptorHeap> plain;
    REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&game_desc, IID_PPV_ARGS(&plain))));
    CHECK_FALSE(GetGameSize(plain.Get()));
    CHECK(GetRange(plain.Get(), 0, 16, 1, write).ptr == 0);
 
+   // A heap with the fixed section alone has no ring
+   D3D12_DESCRIPTOR_HEAP_DESC fixed_desc = game_desc;
+   fixed_desc.NumDescriptors += FIXED_SIZE;
+   ComPtr<ID3D12DescriptorHeap> fixed_heap;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&fixed_desc, IID_PPV_ARGS(&fixed_heap))));
+   Track(device.Get(), fixed_heap.Get(), game_desc, FIXED_SIZE);
+   CHECK(GetRange(fixed_heap.Get(), 0, 16, 1, write).ptr != 0);
+   ComPtr<ID3D12CommandAllocator> allocator;
+   ComPtr<ID3D12GraphicsCommandList> list;
+   REQUIRE(SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))));
+   REQUIRE(SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&list))));
+   CHECK_FALSE(AllocateRing(list.Get(), fixed_heap.Get(), 4));
+
    heap.Reset();
+   fixed_heap.Reset();
    CHECK(GetStats().heaps == before.heaps);
+}
+
+TEST_CASE("Heap tail D3D12: a table of pass views goes into the ring, written again only when it changes, freed once its list executed")
+{
+   namespace Database12 = Resources::Database::D3D12;
+   namespace Tail12 = Resources::HeapTail::D3D12;
+   ComPtr<IDXGIFactory4> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   ComPtr<IDXGIAdapter> adapter;
+   REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
+   ComPtr<ID3D12Device> device;
+   REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
+   Database12::CreateDeviceObjects(device.Get());
+
+   // A game signature with nothing, extended with Luma's table
+   const auto serialize = reinterpret_cast<PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE>(
+      GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12SerializeVersionedRootSignature"));
+   REQUIRE(serialize);
+   D3D12_VERSIONED_ROOT_SIGNATURE_DESC game_signature = {.Version = D3D_ROOT_SIGNATURE_VERSION_1_1};
+   ComPtr<ID3DBlob> game_blob;
+   REQUIRE(SUCCEEDED(serialize(&game_signature, &game_blob, nullptr)));
+   const std::span<const uint8_t> game_bytes(static_cast<const uint8_t*>(game_blob->GetBufferPointer()), game_blob->GetBufferSize());
+   const Shaders::RootSignatures::D3D12::Extended extended = Shaders::RootSignatures::D3D12::Extend(game_bytes);
+   REQUIRE(extended.table);
+   ComPtr<ID3D12RootSignature> root_signature;
+   REQUIRE(SUCCEEDED(device->CreateRootSignature(0, extended.blob.data(), extended.blob.size(), IID_PPV_ARGS(&root_signature))));
+   const Shaders::Database::D3D12::RootLayout* layout =
+      Shaders::Database::D3D12::TrackRootSignature(game_bytes, root_signature.Get(), extended.luma_parameter, extended.table, extended.static_samplers);
+   REQUIRE(layout);
+   // Trace lists Luma's static samplers with the game's (none here), when the mod turned them on
+   CHECK(layout->static_samplers == 0);
+   CHECK(layout->static_sampler_descs.size() == (extended.static_samplers ? Resources::Bindings::D3D12_STATIC_SAMPLERS : 0));
+
+   const D3D12_DESCRIPTOR_HEAP_DESC game_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 16, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
+   const D3D12_DESCRIPTOR_HEAP_DESC heap_desc = *Tail12::Extend(game_desc);
+   ComPtr<ID3D12DescriptorHeap> heap;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&heap))));
+   Tail12::Track(device.Get(), heap.Get(), game_desc, Tail12::TAIL_SIZE);
+
+   const D3D12_COMMAND_QUEUE_DESC queue_desc = {D3D12_COMMAND_LIST_TYPE_DIRECT};
+   ComPtr<ID3D12CommandQueue> queue;
+   ComPtr<ID3D12CommandAllocator> allocator;
+   ComPtr<ID3D12GraphicsCommandList> list;
+   REQUIRE(SUCCEEDED(device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue))));
+   REQUIRE(SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))));
+   REQUIRE(SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&list))));
+   list->SetGraphicsRootSignature(root_signature.Get());
+   Database12::SetRootSignature(list.Get(), false, root_signature.Get());
+   ID3D12DescriptorHeap* const heaps[] = {heap.Get()};
+   list->SetDescriptorHeaps(1, heaps);
+   Database12::SetDescriptorHeaps(list.Get(), 1, heaps);
+
+   const D3D12_HEAP_PROPERTIES default_heap = {D3D12_HEAP_TYPE_DEFAULT};
+   const D3D12_RESOURCE_DESC texture_desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 4, 4, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+      D3D12_RESOURCE_FLAG_NONE};
+   ComPtr<ID3D12Resource> texture;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &texture_desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
+      IID_PPV_ARGS(&texture))));
+
+   const Database12::Stats before = Database12::GetStats();
+   const Tail12::Stats ring_before = Tail12::GetStats();
+   Database12::TableViews views = {};
+   views[15].resource = texture.Get();
+   CHECK(Database12::BindTableViews(list.Get(), false, Database12::NO_TABLE, views));
+   CHECK(Database12::GetStats().view_tables == before.view_tables + 1);
+   CHECK(Tail12::GetStats().ring_blocks == ring_before.ring_blocks + 1);
+   // The same views: the same descriptors
+   CHECK(Database12::BindTableViews(list.Get(), false, Database12::NO_TABLE, views));
+   CHECK(Database12::GetStats().view_tables == before.view_tables + 1);
+   // Another view: written again, from the block the list holds
+   views[15].desc = {DXGI_FORMAT_R8G8B8A8_UNORM, D3D12_SRV_DIMENSION_TEXTURE2D, D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING};
+   views[15].desc.Texture2D.MipLevels = 1;
+   CHECK(Database12::BindTableViews(list.Get(), false, Database12::NO_TABLE, views));
+   CHECK(Database12::GetStats().view_tables == before.view_tables + 2);
+   CHECK(Tail12::GetStats().ring_blocks == ring_before.ring_blocks + 1);
+   // A ring allocation of a heap without a tail: none
+   ComPtr<ID3D12DescriptorHeap> plain;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&game_desc, IID_PPV_ARGS(&plain))));
+   CHECK_FALSE(Tail12::AllocateRing(list.Get(), plain.Get(), 4));
+
+   // Executed and reset: the block is free once the GPU passed the execution
+   REQUIRE(SUCCEEDED(list->Close()));
+   ID3D12CommandList* const lists[] = {list.Get()};
+   queue->ExecuteCommandLists(1, lists);
+   Hooks::Lifetime::D3D12::MoveReferencesToQueue(queue.Get(), 1, lists);
+   ComPtr<ID3D12Fence> fence;
+   REQUIRE(SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))));
+   REQUIRE(SUCCEEDED(queue->Signal(fence.Get(), 1)));
+   const HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+   REQUIRE(SUCCEEDED(fence->SetEventOnCompletion(1, event)));
+   WaitForSingleObject(event, INFINITE);
+   CloseHandle(event);
+   Hooks::Lifetime::D3D12::ForgetReferences(list.Get());
+   Tail12::ForgetList(list.Get());
+   Database12::ForgetList(list.Get());
+   CHECK(Tail12::GetStats().ring_blocks == ring_before.ring_blocks + 1);
+   Hooks::Lifetime::D3D12::MoveReferencesToQueue(queue.Get(), 0, nullptr);
+   CHECK(Tail12::GetStats().ring_blocks == ring_before.ring_blocks);
+   Database12::ReleaseDeviceObjects(device.Get());
 }
 
 TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at render target binds and copies into shader-visible heaps")
@@ -447,7 +613,7 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    const D3D12_CLEAR_VALUE clear = {DXGI_FORMAT_R11G11B10_FLOAT, {0.f, 0.f, 0.f, 1.f}};
    ComPtr<ID3D12Resource> texture;
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_RENDER_TARGET, &clear, IID_PPV_ARGS(&texture))));
-   Mirrors12::CreateMirror(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, &clear);
+   Mirrors12::CreateMirror(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, &clear, false);
    ID3D12Resource* mirror = Mirrors12::FindMirror(texture.Get());
    REQUIRE(mirror);
    CHECK(Mirrors12::FindOriginal(mirror) == texture.Get());
@@ -474,12 +640,13 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    const D3D12_CPU_DESCRIPTOR_HANDLE* targets = &rtv;
    BOOL single_range = TRUE;
    const D3D12_CPU_DESCRIPTOR_HANDLE* depth = nullptr;
-   std::array<DXGI_FORMAT, 8> formats;
+   Shaders::Database::D3D12::TargetFormats formats;
    Mirrors12::SwapRenderTargets(1, targets, single_range, depth, formats);
    CHECK(targets[0].ptr != rtv.ptr);
    CHECK_FALSE(single_range);
-   CHECK(formats[0] == DXGI_FORMAT_R16G16B16A16_FLOAT);
-   CHECK(formats[1] == DXGI_FORMAT_UNKNOWN);
+   CHECK(formats.render_targets[0] == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   CHECK(formats.render_targets[1] == DXGI_FORMAT_UNKNOWN);
+   CHECK(formats.depth == DXGI_FORMAT_UNKNOWN);
    D3D12_CPU_DESCRIPTOR_HANDLE cleared = rtv;
    CHECK(Mirrors12::SwapHandle(cleared));
    CHECK(cleared.ptr == targets[0].ptr);
@@ -488,7 +655,7 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
       D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
    ComPtr<ID3D12Resource> plain;
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &plain_desc, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, IID_PPV_ARGS(&plain))));
-   Mirrors12::CreateMirror(device.Get(), plain.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr);
+   Mirrors12::CreateMirror(device.Get(), plain.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, false);
    CHECK_FALSE(Mirrors12::FindMirror(plain.Get()));
    const D3D12_CPU_DESCRIPTOR_HANDLE other = {rtv.ptr + device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV)};
    device->CreateRenderTargetView(plain.Get(), nullptr, other);
@@ -522,10 +689,10 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    // Copies between the game's mirrored textures run on the mirrors
    ComPtr<ID3D12Resource> second;
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&second))));
-   Mirrors12::CreateMirror(device.Get(), second.Get(), D3D12_RESOURCE_STATE_COPY_DEST, nullptr);
+   Mirrors12::CreateMirror(device.Get(), second.Get(), D3D12_RESOURCE_STATE_COPY_DEST, nullptr, false);
    ID3D12Resource* copy_destination = second.Get();
    ID3D12Resource* copy_source = texture.Get();
-   Mirrors12::SwapCopy(copy_destination, copy_source);
+   CHECK_FALSE(Mirrors12::SwapCopy(nullptr, copy_destination, copy_source, {}));
    CHECK(copy_destination == Mirrors12::FindMirror(second.Get()));
    CHECK(copy_source == mirror);
 
@@ -537,4 +704,147 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    CHECK(Resources::Mirrors::GetStats().mirrors == before.mirrors);
    CHECK(Resources::Mirrors::GetStats().views == before.views);
    Mirrors12::ReleaseDeviceObjects(device.Get());
+}
+
+TEST_CASE("Mirrors D3D12: a depth mirror swaps at the depth bind with its format; reserved and barrier layout textures are counted, not mirrored")
+{
+   namespace Mirrors12 = Resources::Mirrors::D3D12;
+   ComPtr<IDXGIFactory4> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   ComPtr<IDXGIAdapter> adapter;
+   REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
+   ComPtr<ID3D12Device> device;
+   REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
+   Frame::CreateDeviceState(device.Get());
+   Frame::SetOutputResolution(device.Get(), {64, 36});
+   RulesFixture reset_rules;
+   Resources::Upgrade::Rules rules = GetFF7RRules();
+   rules.depth_formats = {DXGI_FORMAT_R24G8_TYPELESS};
+   Resources::Upgrade::SetRules(rules);
+
+   const D3D12_HEAP_PROPERTIES heap = {D3D12_HEAP_TYPE_DEFAULT};
+   const D3D12_RESOURCE_DESC desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 32, 18, 1, 1, DXGI_FORMAT_R24G8_TYPELESS, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+      D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL};
+   D3D12_CLEAR_VALUE clear = {DXGI_FORMAT_D24_UNORM_S8_UINT};
+   clear.DepthStencil = {1.f, 0};
+   ComPtr<ID3D12Resource> texture;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(&texture))));
+   Mirrors12::CreateMirror(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, false);
+   ID3D12Resource* mirror = Mirrors12::FindMirror(texture.Get());
+   REQUIRE(mirror);
+   CHECK(mirror->GetDesc().Format == DXGI_FORMAT_R32G8X24_TYPELESS);
+
+   const D3D12_DESCRIPTOR_HEAP_DESC dsv_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1};
+   ComPtr<ID3D12DescriptorHeap> dsv_heap;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&dsv_desc, IID_PPV_ARGS(&dsv_heap))));
+   Mirrors12::TrackHeap(device.Get(), dsv_heap.Get(), dsv_desc);
+   const D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsv_heap->GetCPUDescriptorHandleForHeapStart();
+   const D3D12_DEPTH_STENCIL_VIEW_DESC view = {DXGI_FORMAT_D24_UNORM_S8_UINT, D3D12_DSV_DIMENSION_TEXTURE2D};
+   device->CreateDepthStencilView(texture.Get(), &view, dsv);
+   Mirrors12::TrackView(device.Get(), dsv, Mirrors12::ViewKind::DepthStencil, texture.Get(), &view, true);
+   const D3D12_CPU_DESCRIPTOR_HANDLE* targets = nullptr;
+   BOOL single_range = FALSE;
+   const D3D12_CPU_DESCRIPTOR_HANDLE* depth = &dsv;
+   Shaders::Database::D3D12::TargetFormats formats;
+   Mirrors12::SwapRenderTargets(0, targets, single_range, depth, formats);
+   REQUIRE(depth);
+   CHECK(depth->ptr != dsv.ptr);
+   CHECK(formats.depth == DXGI_FORMAT_D32_FLOAT_S8X24_UINT);
+   CHECK(formats.Any());
+
+   // A texture the rules match, reserved or with a barrier layout: counted, not mirrored
+   const Mirrors12::Stats counted = Mirrors12::GetStats();
+   ComPtr<ID3D12Resource> other;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(&other))));
+   Mirrors12::CreateMirror(device.Get(), other.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, nullptr, true);
+   Mirrors12::CreateMirror(device.Get(), other.Get(), std::nullopt, nullptr, false);
+   CHECK_FALSE(Mirrors12::FindMirror(other.Get()));
+   CHECK(Mirrors12::GetStats().reserved_resources == counted.reserved_resources + 1);
+   CHECK(Mirrors12::GetStats().layout_resources == counted.layout_resources + 1);
+
+   dsv_heap.Reset();
+   texture.Reset();
+   Mirrors12::ReleaseDeviceObjects(device.Get());
+}
+
+TEST_CASE("Mirrors D3D12: a UAV clear of a mirrored texture clears the mirror through its view in the bound heap's ring")
+{
+   namespace Mirrors12 = Resources::Mirrors::D3D12;
+   namespace Database12 = Resources::Database::D3D12;
+   namespace Tail12 = Resources::HeapTail::D3D12;
+   ComPtr<IDXGIFactory4> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   ComPtr<IDXGIAdapter> adapter;
+   REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
+   ComPtr<ID3D12Device> device;
+   REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
+   Frame::CreateDeviceState(device.Get());
+   Frame::SetOutputResolution(device.Get(), {64, 36});
+   Database12::CreateDeviceObjects(device.Get());
+   RulesFixture rules;
+
+   const D3D12_HEAP_PROPERTIES heap = {D3D12_HEAP_TYPE_DEFAULT};
+   const D3D12_RESOURCE_DESC desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 32, 18, 1, 1, DXGI_FORMAT_R11G11B10_FLOAT, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+      D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
+   ComPtr<ID3D12Resource> texture;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&texture))));
+   Mirrors12::CreateMirror(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, false);
+   ID3D12Resource* mirror = Mirrors12::FindMirror(texture.Get());
+   REQUIRE(mirror);
+
+   // The game's UAV in a CPU heap, and the shader-visible heap it's bound with
+   const D3D12_DESCRIPTOR_HEAP_DESC cpu_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 1};
+   ComPtr<ID3D12DescriptorHeap> cpu_heap;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&cpu_desc, IID_PPV_ARGS(&cpu_heap))));
+   Mirrors12::TrackHeap(device.Get(), cpu_heap.Get(), cpu_desc);
+   const D3D12_CPU_DESCRIPTOR_HANDLE game_cpu = cpu_heap->GetCPUDescriptorHandleForHeapStart();
+   device->CreateUnorderedAccessView(texture.Get(), nullptr, nullptr, game_cpu);
+   Mirrors12::TrackView(device.Get(), game_cpu, Mirrors12::ViewKind::UnorderedAccess, texture.Get(), nullptr, true);
+   const D3D12_DESCRIPTOR_HEAP_DESC game_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 16, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
+   const D3D12_DESCRIPTOR_HEAP_DESC heap_desc = *Tail12::Extend(game_desc);
+   ComPtr<ID3D12DescriptorHeap> visible;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&visible))));
+   Tail12::Track(device.Get(), visible.Get(), game_desc, Tail12::TAIL_SIZE);
+   Mirrors12::TrackHeap(device.Get(), visible.Get(), game_desc);
+   device->CopyDescriptorsSimple(1, visible->GetCPUDescriptorHandleForHeapStart(), game_cpu, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+   ComPtr<ID3D12CommandAllocator> allocator;
+   ComPtr<ID3D12GraphicsCommandList> list;
+   REQUIRE(SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))));
+   REQUIRE(SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&list))));
+   ID3D12DescriptorHeap* const heaps[] = {visible.Get()};
+   list->SetDescriptorHeaps(1, heaps);
+   Database12::SetDescriptorHeaps(list.Get(), 1, heaps);
+
+   const Mirrors12::Stats before = Mirrors12::GetStats();
+   D3D12_GPU_DESCRIPTOR_HANDLE gpu = visible->GetGPUDescriptorHandleForHeapStart();
+   D3D12_CPU_DESCRIPTOR_HANDLE cpu = game_cpu;
+   ID3D12Resource* resource = texture.Get();
+   Mirrors12::SwapClearUnorderedAccess(list.Get(), gpu, cpu, resource);
+   CHECK(resource == mirror);
+   CHECK(cpu.ptr != game_cpu.ptr);
+   const UINT increment = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+   CHECK(gpu.ptr >= visible->GetGPUDescriptorHandleForHeapStart().ptr + UINT64(increment) * (game_desc.NumDescriptors + Tail12::FIXED_SIZE));
+   CHECK(Mirrors12::GetStats().uav_clears == before.uav_clears + 1);
+   const FLOAT values[4] = {1.f, 0.f, 0.f, 1.f};
+   list->ClearUnorderedAccessViewFloat(gpu, cpu, resource, values, 0, nullptr);
+   CHECK(SUCCEEDED(list->Close()));
+
+   // Without a heap with a tail bound: counted, the game's clear runs
+   REQUIRE(SUCCEEDED(list->Reset(allocator.Get(), nullptr)));
+   Hooks::Lifetime::D3D12::ForgetReferences(list.Get());
+   Tail12::ForgetList(list.Get());
+   Database12::ForgetList(list.Get());
+   gpu = visible->GetGPUDescriptorHandleForHeapStart();
+   cpu = game_cpu;
+   resource = texture.Get();
+   Mirrors12::SwapClearUnorderedAccess(list.Get(), gpu, cpu, resource);
+   CHECK(resource == texture.Get());
+   CHECK(Mirrors12::GetStats().unhandled_clears == before.unhandled_clears + 1);
+   CHECK(SUCCEEDED(list->Close()));
+
+   cpu_heap.Reset();
+   texture.Reset();
+   Mirrors12::ReleaseDeviceObjects(device.Get());
+   Database12::ReleaseDeviceObjects(device.Get());
 }

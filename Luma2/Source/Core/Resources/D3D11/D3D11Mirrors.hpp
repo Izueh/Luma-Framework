@@ -51,6 +51,8 @@ void WriteToMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT 
 // Map/Unmap of a mirrored texture: asserts on CPU reads and converts CPU writes into the mirror at Unmap
 void TrackMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, const D3D11_MAPPED_SUBRESOURCE& mapped);
 void CommitMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource);
+// Resolves between a mirror and a texture of another family, which run on the game's textures
+uint32_t GetUnhandledResolves();
 } // namespace D3D11
 } // namespace Mirrors
 } // namespace Resources

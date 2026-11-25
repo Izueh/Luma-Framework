@@ -494,7 +494,7 @@ void Luma::Game::Init()
          // .restore_after_draw = false,
       },
       // .draw = {.viewports = false, .blend = false, .depth = false},
-      // .bindings = {.d3d12_space = 100},
+      // .bindings = {.d3d12_space = 100, .static_samplers = false},
       // .textures = {.load = false},
       // .samplers = {.upgrade = false, .upgrade_comparison = false, .force_upgrade_linear = false},
       // .patching = {.patch_sync = nullptr, .patch_async = nullptr},

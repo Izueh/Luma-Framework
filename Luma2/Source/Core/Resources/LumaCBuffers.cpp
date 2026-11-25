@@ -208,7 +208,12 @@ std::vector<Shaders::Compiler::Define> GetDefines(Api api)
    };
    // D3D12: a shader reading one of Luma's textures by name declares it in Luma's table (t112 to t127 of this space)
    if (api == Api::D3D12 && Bindings::GetOptions().d3d12_space != 0)
+   {
       defines.push_back({"LUMA_TEXTURE_SPACE", std::format("space{}", Bindings::GetOptions().d3d12_space)});
+      defines.push_back({"LUMA_TABLE_TEXTURE_INDEX", std::format("t{}, space{}", Bindings::D3D12_FIRST_TEXTURE_REGISTER, Bindings::GetOptions().d3d12_space)});
+      for (uint32_t i = 0; Bindings::GetOptions().static_samplers && i < Bindings::D3D12_STATIC_SAMPLERS; i++)
+         defines.push_back({Bindings::D3D12_STATIC_SAMPLER_DEFINES[i], std::format("s{}, space{}", i, Bindings::GetOptions().d3d12_space)});
+   }
    return defines;
 }
 

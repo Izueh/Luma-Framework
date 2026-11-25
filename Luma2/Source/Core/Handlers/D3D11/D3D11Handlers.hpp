@@ -53,7 +53,7 @@ void PreCreateBlendState(ID3D11Device* device, D3D11_BLEND_DESC1& desc);
 void PostCreateBlendState(ID3D11Device* device, const D3D11_BLEND_DESC1& desc, ID3D11BlendState* blend_state);
 
 // Shaders of every stage, geometry shaders with stream output included (`stream_output` set for those)
-void PreCreateShader(ID3D11Device* device, ShaderStage stage, const void*& bytecode, SIZE_T& length);
+void PreCreateShader(ID3D11Device* device, ShaderStage stage, const void* bytecode, SIZE_T length, bool stream_output);
 void PostCreateShader(ID3D11Device* device, ShaderStage stage, const void* bytecode, SIZE_T length, bool stream_output, ID3D11DeviceChild* shader);
 void OnShaderDestroyed(ID3D11Device* device, const ID3D11DeviceChild* shader);
 void PostCreateInputLayout(ID3D11Device* device, const D3D11_INPUT_ELEMENT_DESC* elements, UINT count, const void* bytecode, SIZE_T length,

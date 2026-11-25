@@ -17,6 +17,7 @@
 #include "Shaders/ShaderVariants.hpp"
 #include "Shaders/Shaders.hpp"
 #include "System/JobQueue.hpp"
+#include "Trace/RuntimeStatus.hpp"
 #include "UI/Icons.hpp"
 #include "UI/Widgets.hpp"
 
@@ -113,7 +114,9 @@ void DrawReplacement(const Shaders::Variants::Variant& replacement, std::string_
    const Shaders::Database::Shader* shader = Shaders::Database::Find(replacement.hash);
    Widgets::HashChip(replacement.hash, shader ? shader->stage : GetStage(file), shader ? shader->name : std::string_view());
    ImGui::SameLine();
-   if (!shader)
+   if (replacement.rejected)
+      Widgets::Text("not replaced, the game's pipelines can't run it", Tone::Error);
+   else if (!shader)
       Widgets::TextDim("not created by the game yet");
    else if (!replacement.compiled)
       Widgets::Text("not replaced, it didn't compile", Tone::Error);
@@ -176,6 +179,8 @@ void DrawToolbar()
    const System::Jobs::Status status = System::Jobs::GetStatus();
    if (!status.name.empty())
       Widgets::ProgressBar(status.total ? float(status.done) / float(status.total) : -1.f, std::format("{} {}/{}", status.name, status.done, status.total));
+   if (const std::string root_signatures = Trace::DescribeRootSignatures(); !root_signatures.empty())
+      Widgets::TextDim(root_signatures);
 }
 } // namespace
 
@@ -207,7 +212,8 @@ void DrawShaders()
    std::vector<Widgets::ListEntry> list;
    for (const Entry& entry : entries)
    {
-      const bool failed = entry.luma_shader ? entry.luma_shader->state.failed : std::ranges::any_of(entry.replacements, &Shaders::Variants::Variant::failed);
+      const bool failed = entry.luma_shader ? entry.luma_shader->state.failed
+                                            : std::ranges::any_of(entry.replacements, [](const auto& replacement) { return replacement.failed || replacement.rejected; });
       const std::string label = entry.luma_shader ? std::format("{} ({})", entry.luma_shader->entry->name, entry.file) : entry.file;
       list.push_back({label, failed ? Tone::Error : Tone::Info});
    }

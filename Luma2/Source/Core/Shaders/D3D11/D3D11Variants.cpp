@@ -24,6 +24,8 @@ namespace D3D11 {
 namespace {
 constexpr uint16_t NO_SOURCE = 0xF;
 
+std::atomic<uint32_t> stream_output_variants = 0;
+
 // A hash's variant objects, one per source
 struct Variant
 {
@@ -65,7 +67,10 @@ void PublishVariant(ID3D11Device* device, Store& store, Variant& variant)
       const Source source = Source(index);
       std::shared_ptr<const CompiledShader> compiled = GetCompiledShader(hash, source);
       if (compiled && variant.stream_output)
+      {
+         stream_output_variants++;
          LUMA_UNIMPLEMENTED("Shaders::Variants of geometry shaders created with stream output");
+      }
       Shaders::D3D11::Published& published = variant.published[index];
       const bool had_object = published.live != nullptr;
       if (!Shaders::D3D11::Publish(device, variant.shader->stage, published, std::move(compiled), store.retired))
@@ -104,11 +109,35 @@ const Shaders::D3D11::Live* Choose(const Variant& variant, Choice forced, Source
    }
    return nullptr;
 }
+
+// With the store locked: the hash's variant, its objects made the first time
+Variant& FindOrCreate(ID3D11Device* device, Store& store, const Database::Shader& shader, bool& created)
+{
+   std::unique_ptr<Variant>& variant = store.variants[shader.hash];
+   created = !variant;
+   if (created)
+   {
+      variant = std::make_unique<Variant>(&shader);
+      PublishVariant(device, store, *variant);
+   }
+   return *variant;
+}
 } // namespace
 
 void CreateVariantStore(ID3D11Device* device)
 {
    Hooks::Lifetime::SetState<Store>(device);
+}
+
+void CreateVariant(ID3D11Device* device, const Database::Shader& shader)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   if (!store)
+      return;
+   std::scoped_lock lock(store->mutex);
+   bool created = false;
+   if (!store->released)
+      FindOrCreate(device, *store, shader, created);
 }
 
 void AttachVariant(ID3D11Device* device, ID3D11DeviceChild* object, bool stream_output)
@@ -120,19 +149,18 @@ void AttachVariant(ID3D11Device* device, ID3D11DeviceChild* object, bool stream_
    std::scoped_lock lock(store->mutex);
    if (store->released)
       return;
-   std::unique_ptr<Variant>& variant = store->variants[shader->hash];
-   const bool created = !variant;
-   if (created)
-      variant = std::make_unique<Variant>(shader);
+   bool created = false;
+   Variant* variant = &FindOrCreate(device, *store, *shader, created);
    if (stream_output && !variant->stream_output)
    {
       variant->stream_output = true;
       if (!created && std::ranges::any_of(variant->published, [](const Shaders::D3D11::Published& published) { return published.compiled != nullptr; }))
+      {
+         stream_output_variants++;
          LUMA_UNIMPLEMENTED("Shaders::Variants of geometry shaders created with stream output");
+      }
    }
-   if (created)
-      PublishVariant(device, *store, *variant);
-   Hooks::Lifetime::SetState<Binding>(object, variant.get(), stream_output);
+   Hooks::Lifetime::SetState<Binding>(object, variant, stream_output);
 }
 
 void SwapInVariant(ID3D11DeviceContext* context, ShaderStage stage, ID3D11DeviceChild*& shader)
@@ -249,6 +277,11 @@ void PublishVariants(ID3D11Device* device)
    store->generation = generation;
    for (const auto& [hash, variant] : store->variants)
       PublishVariant(device, *store, *variant);
+}
+
+uint32_t GetStreamOutputVariants()
+{
+   return stream_output_variants.load();
 }
 
 void ReleaseVariants(ID3D11Device* device)

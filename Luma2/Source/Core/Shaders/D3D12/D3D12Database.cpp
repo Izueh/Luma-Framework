@@ -3,11 +3,14 @@
 #include <cstddef>
 #include <algorithm>
 #include <cstring>
+#include <mutex>
 #include <optional>
 #include <type_traits>
 #include <utility>
 
 #include "Hooks/ObjectLifetime.hpp"
+#include "Resources/ResourceBindings.hpp"
+#include "Shaders/D3D12/D3D12RootSignatures.hpp"
 #include "Utils/Hash.hpp"
 #include "System/Modules.hpp"
 #include "Log/Log.hpp"
@@ -22,6 +25,11 @@ namespace {
 std::atomic<uint32_t> live_pipelines = 0;
 std::atomic<uint32_t> extended_signatures = 0;
 std::atomic<uint32_t> game_signatures = 0;
+std::atomic<uint32_t> largest_extended = 0;
+// The game's size of each signature left unextended, for the status. Never held with another lock.
+std::mutex unextended_mutex;
+std::vector<uint32_t> unextended_dwords;
+constexpr size_t MAX_UNEXTENDED_LISTED = 64;
 
 template <typename Callback>
 void ForEachPipelineShader(const Pipeline& pipeline, Callback callback)
@@ -268,11 +276,17 @@ void HashPacked(uint64_t& hash, const T& value)
    HashBytes(hash, &value, sizeof(T));
 }
 
-// The game's blob: the same signature on every boot
+// Includes Luma's extension so pipelines cached with a different extension won't collide
 void HashRootSignature(uint64_t& hash, ID3D12RootSignature* root_signature)
 {
    const RootLayout* layout = FindRootLayout(root_signature);
    HashValue(hash, uint32_t(layout ? Utils::Hash::CRC32(layout->blob) : 0));
+   if (!layout)
+      return;
+   HashValue(hash, layout->luma_parameter);
+   HashValue(hash, layout->luma_table);
+   HashValue(hash, uint32_t(layout->static_sampler_descs.size()));
+   HashValue(hash, Resources::Bindings::GetOptions().d3d12_space);
 }
 
 void HashBlend(uint64_t& hash, const D3D12_BLEND_DESC& desc)
@@ -715,7 +729,13 @@ std::optional<GraphicsState> GetGraphicsState(const DescCopy& desc)
    return state;
 }
 
-const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table)
+bool TargetFormats::Any() const
+{
+   return depth != DXGI_FORMAT_UNKNOWN || std::ranges::any_of(render_targets, [](DXGI_FORMAT format) { return format != DXGI_FORMAT_UNKNOWN; });
+}
+
+const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table,
+   bool luma_samplers)
 {
    // The driver returns the same object for the same blob
    if (const RootLayout* existing = FindRootLayout(root_signature))
@@ -731,13 +751,32 @@ const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSi
       Log::Warning("D3D12: root signature {} ({} bytes) couldn't be read", static_cast<void*>(root_signature), blob.size());
       return nullptr;
    }
-   (luma_parameter != UINT32_MAX ? extended_signatures : game_signatures)++;
+   if (luma_parameter != UINT32_MAX && luma_samplers)
+      layout->static_sampler_descs.append_range(RootSignatures::D3D12::GetStaticSamplers());
+   if (luma_parameter != UINT32_MAX)
+   {
+      extended_signatures++;
+      uint32_t largest = largest_extended.load(std::memory_order_relaxed);
+      while (layout->size > largest && !largest_extended.compare_exchange_weak(largest, layout->size, std::memory_order_relaxed))
+      {
+      }
+   }
+   else
+   {
+      game_signatures++;
+      std::scoped_lock lock(unextended_mutex);
+      if (unextended_dwords.size() < MAX_UNEXTENDED_LISTED)
+         unextended_dwords.push_back(layout->size);
+   }
    return layout;
 }
 
 Stats GetStats()
 {
-   return {live_pipelines.load(), extended_signatures.load(), game_signatures.load()};
+   Stats stats = {live_pipelines.load(), extended_signatures.load(), game_signatures.load(), largest_extended.load()};
+   std::scoped_lock lock(unextended_mutex);
+   stats.unextended_dwords = unextended_dwords;
+   return stats;
 }
 
 const RootLayout* FindRootLayout(ID3D12RootSignature* root_signature)

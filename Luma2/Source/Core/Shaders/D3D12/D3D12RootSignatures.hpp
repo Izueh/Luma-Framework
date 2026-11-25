@@ -22,12 +22,14 @@ inline constexpr uint32_t LUMA_PARAMETER_COUNT = 2;
 // Then, when the signature has room and Luma has a space of its own, a table of Luma's textures (Resources::Bindings'
 // D3D12_TEXTURE_REGISTERS SRVs from D3D12_FIRST_TEXTURE_REGISTER, in its space), pointing into the bound heap's tail
 inline constexpr uint32_t LUMA_TABLE_PARAMETER = LUMA_PARAMETER_COUNT; // After the first of Luma's
+inline constexpr uint32_t LUMA_DWORDS = LUMA_PARAMETER_COUNT * 2 + 1;
 
 struct Extended
 {
    std::vector<uint8_t> blob;
-   uint32_t luma_parameter = 0; // The index of the first of Luma's
-   bool table = false; // Luma's texture table is at luma_parameter + LUMA_TABLE_PARAMETER
+   uint32_t luma_parameter = 0;
+   bool table = false;
+   bool static_samplers = false;
 };
 
 // Any thread: the game's serialized root signature with Luma's parameters, at its version. Empty when it can't be extended (over
@@ -45,8 +47,9 @@ struct RewrittenDesc
 
 std::optional<RewrittenDesc> RewritePipelineDesc(ID3D12Device* device, Database::D3D12::PipelineKind kind, const void* desc);
 
-// The game released the device: the signatures created for its pipelines are released
 void ReleaseDeviceObjects(ID3D12Device* device);
+std::vector<D3D12_STATIC_SAMPLER_DESC> GetStaticSamplers();
+uint32_t GetAnisotropicStaticSamplerSignatures();
 } // namespace D3D12
 } // namespace RootSignatures
 } // namespace Shaders

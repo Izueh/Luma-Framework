@@ -42,6 +42,7 @@ struct Variant
    std::shared_ptr<const CompiledShader> compiled;
    std::string messages;
    bool failed = false;
+   bool rejected = false; // Compiled, but failed D3D12 invariants
 };
 
 // What runs for a hash: its variants by priority, or one chosen in trace until cleared (Development builds)
@@ -74,6 +75,8 @@ void Publish(Source source, std::vector<Variant> variants);
 // Any thread, publishers serialized: some hashes' variants of one source, replacing only those hashes' (`removed` lose theirs).
 // For a source that changes a few hashes at a time (patches, as the game creates shaders).
 void Update(Source source, std::vector<Variant> changed, std::span<const uint32_t> removed);
+// Any thread
+void Reject(uint32_t hash, Source source, std::string_view reason);
 // Any thread: the hash's variants, highest priority first
 std::vector<Variant> GetVariants(uint32_t hash);
 // Any thread: null if the hash has no variant of the source that compiled

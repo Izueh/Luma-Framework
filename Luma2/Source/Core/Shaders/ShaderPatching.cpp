@@ -29,6 +29,7 @@
 #include "Shaders/ShaderCache.hpp"
 #include "Shaders/ShaderContainer.hpp"
 #include "Shaders/ShaderDatabase.hpp"
+#include "Shaders/ShaderInvariants.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Shaders/ShaderVariants.hpp"
 #include "System/JobQueue.hpp"
@@ -705,6 +706,18 @@ System::Jobs::Outcome Publish(Job& job)
          if (sync_patched.contains(hash))
             continue;
          const bool considered = outcome.considered;
+#if DEVELOPMENT || TEST
+         if (outcome.compiled)
+         {
+            if (std::string errors = Invariants::CheckVariant(hash, outcome.info.callback ? "the game's bytecode patch" : "a recipe's patch", *outcome.compiled);
+               !errors.empty())
+            {
+               outcome.compiled.reset();
+               outcome.info.patched = false;
+               outcome.info.error = std::move(errors);
+            }
+         }
+#endif
          if (outcome.compiled && loaded)
          {
             std::string file = outcome.info.callback ? "the game's bytecode patch" : "";
@@ -795,6 +808,15 @@ void TrackShader(const Database::Shader& shader)
 #endif
          auto compiled = std::make_shared<CompiledShader>();
          compiled->bytecode = std::move(bytecode);
+#if DEVELOPMENT || TEST
+         if (std::string errors = Invariants::CheckVariant(shader.hash, "the game's bytecode patch", *compiled); !errors.empty())
+         {
+            std::scoped_lock lock(patches_mutex);
+            sync_patched.insert(shader.hash);
+            patches.insert_or_assign(shader.hash, PatchInfo{.hash = shader.hash, .stage = shader.stage, .callback = true, .error = std::move(errors)});
+            return;
+         }
+#endif
          {
             std::scoped_lock lock(patches_mutex);
             sync_patched.insert(shader.hash);
