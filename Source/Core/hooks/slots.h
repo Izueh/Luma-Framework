@@ -105,6 +105,8 @@
    SLOT(ID3D11DeviceContext1, ClearView)                                  \
    SLOT(IDXGIFactory, CreateSwapChain)                                    \
    SLOT(IDXGIFactory2, CreateSwapChainForHwnd)                            \
+   SLOT(IDXGIFactory2, CreateSwapChainForCoreWindow)                      \
+   SLOT(IDXGIFactory2, CreateSwapChainForComposition)                     \
    SLOT(IDXGISwapChain, GetDevice)                                        \
    SLOT(IDXGISwapChain, GetDesc)                                          \
    SLOT(IDXGISwapChain, Present)                                          \
