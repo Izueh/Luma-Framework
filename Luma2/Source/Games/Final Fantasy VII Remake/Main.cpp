@@ -1,25 +1,43 @@
 #include "Luma.hpp"
 
 #include <array>
+#include <atomic>
+#include <cfloat>
 #include <chrono>
+#include <cmath>
+#include <cstddef>
+#include <cstring>
 #include <random>
+#include <span>
 #include <string_view>
 
 #include <wrl/client.h>
 
 using namespace Luma;
 
-// The fields UpdateLumaInstanceDataCB reads. TAA and SR will set them; until then they keep their swapchain values.
 struct Luma::Game::GameDeviceData
 {
    Math::float2 upscaled_render_resolution = {1.f, 1.f};
    float resolution_scale = 1.f;
    Math::uint4 viewport_rect = {0, 0, 1, 1};
+   bool drs_active = false;
+   bool found_per_view_globals = false;
+   bool drew_sr = false;
+   bool is_in_menu = true;
+   uint32_t jitterless_frames_count = 0;
+   Microsoft::WRL::ComPtr<ID3D11SamplerState> linear_sampler;
 };
 
 namespace {
 using Game::cb_luma_global_settings;
 using Game::GameDeviceData;
+
+constexpr float PI = 3.14159265358979323846f;
+constexpr uint32_t CB_PER_VIEW_GLOBAL_SIZE = 4096;
+constexpr uint64_t DECODE_MVS_HASH = "Luma_MotionVec_UE4_Decode"_h;
+constexpr uint64_t COPY_VS_HASH = "Luma_Copy_VS"_h;
+
+std::atomic<bool> can_sharpen_atomic = true;
 
 // The About text and credits
 constexpr std::string_view DESCRIPTION = "Luma for \"Final Fantasy VII Remake\" is developed by Izueh and Pumbo and is open source and free. It adds DLSS and improved HDR "
@@ -57,10 +75,8 @@ constexpr std::array<uint32_t, 1> SHADER_HASHES_TONEMAP = {0xF68D39B5};
 constexpr std::array<uint32_t, 1> SHADER_HASHES_VELOCITY_FLATTEN = {0x4EB2EA5B};
 constexpr std::array<uint32_t, 1> SHADER_HASHES_VELOCITY_GATHER = {0xFEE03685};
 constexpr std::array<uint32_t, 1> SHADER_HASHES_SSAO_TEMPORAL = {0x04BFE575};
-// What "Output_HDR_0x########" and "Output_SDR_0x########" replace
 constexpr std::array<uint32_t, 8> SHADER_HASHES_OUTPUT_HDR = {0xA8EB118F, 0x922A71D1, 0x3A4D858E, 0xD950DA01, 0x5CD12E67, 0x3B489929, 0x8D04181D, 0x6846FF90};
 constexpr std::array<uint32_t, 8> SHADER_HASHES_OUTPUT_SDR = {0x506D5998, 0xF68D39B5, 0xBBB9CE42, 0x51E2B894, 0x803889E8, 0xD96EF76D, 0x5C2D3A71, 0x66162229};
-// Named for debugging only
 constexpr std::array<uint32_t, 1> SHADER_HASHES_DOWNSAMPLE_BLOOM_2 = {0xA77F0B56};
 constexpr std::array<uint32_t, 2> SHADER_HASHES_UPSCALE_BLOOM = {0xD9E87012, 0x46727E9A};
 constexpr std::array<uint32_t, 2> SHADER_HASHES_BLUR_BLOOM = {0xCCD7FA05, 0x69467442};
@@ -73,6 +89,61 @@ Math::float2 ToFloat(Math::uint2 size)
    return {float(size.x), float(size.y)};
 }
 
+// Parses UE4 CBPerViewGlobal (4096 bytes) on both D3D11 (via Map/Unmap) and D3D12 (via ReadBoundCBuffer)
+bool ParsePerViewGlobal(Device device, std::span<const std::byte> bytes)
+{
+   if (bytes.size() < CB_PER_VIEW_GLOBAL_SIZE)
+      return false;
+   GameDeviceData* data = Game::GetGameDeviceData(device);
+   if (!data || data->found_per_view_globals)
+      return false;
+
+   const auto* f = reinterpret_cast<const Math::float4*>(bytes.data());
+   const bool valid_res = f[126].x > 0.f && f[126].y > 0.f && f[125].x > 0.f && f[125].y > 0.f &&
+      f[126].z == 1.f / f[126].x && f[126].w == 1.f / f[126].y && f[125].z == 1.f / f[125].x && f[125].w == 1.f / f[125].y;
+   const bool valid_jitter = std::fabs(f[118].x) <= 1.f && std::fabs(f[118].y) <= 1.f && (std::fabs(f[118].x) > 0.f || std::fabs(f[118].y) > 0.f);
+   if (!valid_res || !valid_jitter)
+      return false;
+
+   data->found_per_view_globals = true;
+   data->jitterless_frames_count = 0;
+   data->is_in_menu = false;
+
+   Math::uint2 render_size = Game::Frame::Get(device).render;
+   if (f[122].x > 0.f && f[122].y > 0.f)
+   {
+      render_size = {uint32_t(f[122].x + 0.5f), uint32_t(f[122].y + 0.5f)};
+      Game::Frame::SetRenderResolution(device, render_size);
+   }
+
+   // Projection matrix rows at float4[24..27]
+   const float m11 = f[25].y;
+   const float m22 = f[26].z;
+   const float m23 = f[26].w;
+   const float m32 = f[27].z;
+   const float m33 = f[27].w;
+   float near_plane = (std::fabs(m22 - m23) > 1e-6f) ? ((m33 - m32) / (m22 - m23)) / 100.f : 0.1f;
+   float vert_fov = (std::fabs(m11) > 1e-3f) ? (std::atan(1.f / m11) * 2.f) : (60.f * (PI / 180.f));
+   if (near_plane < 0.01f || near_plane > 100.f)
+      near_plane = 0.1f;
+   if (vert_fov < (10.f * (PI / 180.f)) || vert_fov > (170.f * (PI / 180.f)))
+      vert_fov = 60.f * (PI / 180.f);
+
+   Game::Frame::Camera camera = Game::Frame::GetCamera(device);
+   camera.jitter_pixels = {f[118].x * float(render_size.x) * 0.5f, f[118].y * float(render_size.y) * -0.5f};
+   camera.vert_fov = vert_fov;
+   camera.near_plane = near_plane;
+   camera.far_plane = FLT_MAX;
+   camera.camera_cut = f[140].y != 0.f;
+   Game::Frame::SetCamera(device, camera);
+   return true;
+}
+
+void OnPerViewGlobalWrite(Device device, std::span<const std::byte> bytes)
+{
+   ParsePerViewGlobal(device, bytes);
+}
+
 // Called at every draw with a Luma shader (LumaData is uploaded when its bytes change)
 void UpdateLumaInstanceDataCB(CB::LumaInstanceData& data, const GameDeviceData& game_device_data, const Frame::Resolutions& resolutions)
 {
@@ -81,107 +152,123 @@ void UpdateLumaInstanceDataCB(CB::LumaInstanceData& data, const GameDeviceData& 
    data.GameData.OutputResolution = {game_device_data.upscaled_render_resolution.x, game_device_data.upscaled_render_resolution.y,
       1.0f / game_device_data.upscaled_render_resolution.x, 1.0f / game_device_data.upscaled_render_resolution.y};
    data.GameData.ResolutionScale = {game_device_data.resolution_scale, 1.0f / game_device_data.resolution_scale};
-   data.GameData.DrewUpscaling = 0; // 0 until SR sets it
+   data.GameData.DrewUpscaling = game_device_data.drew_sr ? 1u : 0u;
    data.GameData.ViewportRect = game_device_data.viewport_rect;
 }
 
-// At creation and after each resize: Core set the device's output resolution from the swapchain before this.
-// Either API's device.
 void OnInitSwapchain(Device device)
 {
    GameDeviceData* game_device_data = Game::GetGameDeviceData(device);
    if (!game_device_data)
       return;
-   // Start from here, we then update it later in case the game rendered with black bars due to forcing a different aspect ratio
-   // from the swapchain buffer
    const Math::float2 output_resolution = ToFloat(Game::Frame::Get(device).output);
    game_device_data->upscaled_render_resolution = output_resolution;
-   // Set where its inputs change (TAA's callback, not built yet, will too), on the presenting thread: published for the draws until
-   // the next present
-   cb_luma_global_settings.GameSettings.can_sharpen = output_resolution == game_device_data->upscaled_render_resolution ? 1.f : 0.f;
+   const bool sharpen_ok = output_resolution == game_device_data->upscaled_render_resolution;
+   can_sharpen_atomic.store(sharpen_ok, std::memory_order_relaxed);
+   cb_luma_global_settings.GameSettings.can_sharpen = sharpen_ok ? 1.f : 0.f;
    Game::MarkLumaSettingsDirty();
 }
 
-// The per frame random value. TAA and SR's per frame work isn't built yet.
-void OnPresent()
+void OnPresent(Device device)
 {
+   if (GameDeviceData* data = Game::GetGameDeviceData(device))
+   {
+      data->found_per_view_globals = false;
+      data->drew_sr = false;
+   }
    static std::mt19937 random_generator(uint32_t(std::chrono::system_clock::now().time_since_epoch().count()));
    static auto random_range = static_cast<float>((std::mt19937::max)() - (std::mt19937::min)());
    cb_luma_global_settings.GameSettings.custom_random = static_cast<float>(random_generator() + (std::mt19937::min)()) / random_range;
 }
 
-// The game's own HDR option picks its HDR or SDR output pass, and LumaSettings' display mode follows it (Core applies it at the next
-// present). Marking post processing done waits for the frame markers, not built yet.
-Game::DrawResult OnDrawOutputHdr(Device device)
+Game::DrawResult OnDrawOutputPass(Device device, bool is_hdr)
 {
+   if (Game::Frame::HasPass(device, Game::Frame::PassMarker::MainPostProcessing) || !Game::Frame::HasPass(device, Game::Frame::PassMarker::Taa))
+      return Game::DrawResult::None;
    Game::Resources::Scaling::End(device);
-   Game::Display::SetHdr(true);
+   Game::Frame::MarkPass(device, Game::Frame::PassMarker::Upscaling);
+   Game::Frame::MarkPass(device, Game::Frame::PassMarker::MainPostProcessing);
+   Game::Display::SetHdr(is_hdr);
    return Game::DrawResult::None;
 }
 
-Game::DrawResult OnDrawOutputSdr(Device device)
+Game::Effects::SR::DrawOverrides PrepareTaaSr(Device device, Math::uint2 render_size, Math::uint2 upscaled_size, Math::uint4 viewport_rect)
 {
-   Game::Resources::Scaling::End(device);
-   Game::Display::SetHdr(false);
-   return Game::DrawResult::None;
-}
-
-void UpdateTaaResolution(Device device, Math::uint2 render_size, Math::uint2 upscaled_size, Math::uint4 viewport_rect)
-{
-   if (render_size.x == 0 || render_size.y == 0 || upscaled_size.x == 0 || upscaled_size.y == 0)
-      return;
    Game::Frame::SetRenderResolution(device, render_size);
    Game::Resources::Scaling::SetTargetResolution(device, upscaled_size);
-   if (GameDeviceData* game_device_data = Game::GetGameDeviceData(device))
+   Game::Effects::SR::DrawOverrides overrides;
+   overrides.output_size = upscaled_size;
+   overrides.render_size = render_size;
+
+   if (GameDeviceData* data = Game::GetGameDeviceData(device))
    {
-      game_device_data->upscaled_render_resolution = ToFloat(upscaled_size);
-      game_device_data->resolution_scale = float(render_size.x) / float(upscaled_size.x);
-      game_device_data->viewport_rect = viewport_rect;
+      data->upscaled_render_resolution = ToFloat(upscaled_size);
+      data->resolution_scale = float(render_size.x) / float(upscaled_size.x);
+      data->viewport_rect = viewport_rect;
+
+      float sr_scale = 1.f;
+      if (!data->drs_active && data->resolution_scale == 1.f)
+         sr_scale = 1.f;
+      else if (data->resolution_scale < 0.5f - FLT_EPSILON)
+      {
+         sr_scale = data->resolution_scale;
+         data->drs_active = true;
+      }
+      else
+      {
+         sr_scale = 1.f / 1.5f;
+         data->drs_active = true;
+      }
+      const double aspect = double(upscaled_size.x) / double(upscaled_size.y);
+      overrides.settings_render_size = Game::Effects::SR::FindClosestIntegerResolutionForAspectRatio(
+         double(upscaled_size.x) * sr_scale, double(upscaled_size.y) * sr_scale, aspect);
+      overrides.dynamic_resolution = data->drs_active;
+
       const Math::float2 output_resolution = ToFloat(Game::Frame::Get(device).output);
-      const float can_sharpen = output_resolution == game_device_data->upscaled_render_resolution ? 1.f : 0.f;
+      const bool sharpen_ok = output_resolution == data->upscaled_render_resolution;
+      can_sharpen_atomic.store(sharpen_ok, std::memory_order_relaxed);
+      const float can_sharpen = sharpen_ok ? 1.f : 0.f;
       if (cb_luma_global_settings.GameSettings.can_sharpen != can_sharpen)
       {
          cb_luma_global_settings.GameSettings.can_sharpen = can_sharpen;
          Game::MarkLumaSettingsDirty();
       }
    }
-   if (Settings::Get<bool>("TestEarlyUpscale") && (render_size.x < upscaled_size.x || render_size.y < upscaled_size.y))
-      Game::Resources::Scaling::Begin(device);
+   return overrides;
 }
 
-// The game runs on D3D11 or D3D12 (its -d3d11 and -dx12 switches): the same code from each API's events
 namespace D3D11Events {
 void OnInitSwapchain(IDXGISwapChain*, ID3D11Device* device, bool)
 {
    ::OnInitSwapchain(device);
 }
 
-void OnPresent(IDXGISwapChain*, ID3D11Device*)
+void OnPresent(IDXGISwapChain*, ID3D11Device* device)
 {
-   ::OnPresent();
+   ::OnPresent(device);
 }
 
 Game::DrawResult OnDrawTaa(const Game::D3D11::Call& call)
 {
    Microsoft::WRL::ComPtr<ID3D11Device> device;
    call.context->GetDevice(&device);
-   if (!device)
+   if (!device || Game::Frame::HasPass(device.Get(), Game::Frame::PassMarker::MainPostProcessing))
       return Game::DrawResult::None;
-   Microsoft::WRL::ComPtr<ID3D11RenderTargetView> rtv;
-   call.context->OMGetRenderTargets(1, &rtv, nullptr);
-   Math::uint2 upscaled_size = Game::Frame::Get(device.Get()).output;
-   if (rtv)
-   {
-      Microsoft::WRL::ComPtr<ID3D11Resource> resource;
-      rtv->GetResource(&resource);
-      Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
-      if (resource && SUCCEEDED(resource.As(&texture)))
-      {
-         D3D11_TEXTURE2D_DESC desc = {};
-         texture->GetDesc(&desc);
-         upscaled_size = {desc.Width, desc.Height};
-      }
-   }
+   Game::Frame::MarkPass(device.Get(), Game::Frame::PassMarker::Taa);
+
+   ID3D11Resource* const output_res = Game::D3D11::TagBoundRTV(call, 0, Game::Resources::Database::Sr::OUTPUT);
+   ID3D11Resource* const depth_res = Game::D3D11::TagBoundSRV(call, ShaderStage::Pixel, 1, Game::Resources::Database::Sr::DEPTH);
+   ID3D11Resource* const color_res = Game::D3D11::TagBoundSRV(call, ShaderStage::Pixel, 2, Game::Resources::Database::Sr::COLOR);
+   if (!output_res || !depth_res || !color_res)
+      return Game::DrawResult::None;
+
+   Microsoft::WRL::ComPtr<ID3D11Texture2D> output_tex;
+   if (FAILED(output_res->QueryInterface(IID_PPV_ARGS(&output_tex))))
+      return Game::DrawResult::None;
+   D3D11_TEXTURE2D_DESC out_desc = {};
+   output_tex->GetDesc(&out_desc);
+   const Math::uint2 upscaled_size = {out_desc.Width, out_desc.Height};
+
    UINT viewport_count = 1;
    D3D11_VIEWPORT viewport = {};
    call.context->RSGetViewports(&viewport_count, &viewport);
@@ -189,10 +276,81 @@ Game::DrawResult OnDrawTaa(const Game::D3D11::Call& call)
       ? Math::uint2{uint32_t(viewport.Width + 0.5f), uint32_t(viewport.Height + 0.5f)}
       : upscaled_size;
    const Math::uint4 viewport_rect = viewport_count > 0
-      ? Math::uint4{uint32_t(viewport.TopLeftX + 0.5f), uint32_t(viewport.TopLeftY + 0.5f), uint32_t(viewport.TopLeftX + viewport.Width + 0.5f),
-           uint32_t(viewport.TopLeftY + viewport.Height + 0.5f)}
+      ? Math::uint4{uint32_t(viewport.TopLeftX + 0.5f), uint32_t(viewport.TopLeftY + 0.5f), upscaled_size.x, upscaled_size.y}
       : Math::uint4{0, 0, upscaled_size.x, upscaled_size.y};
-   UpdateTaaResolution(device.Get(), render_size, upscaled_size, viewport_rect);
+
+   const Game::Effects::SR::DrawOverrides overrides = PrepareTaaSr(device.Get(), render_size, upscaled_size, viewport_rect);
+   if (!Game::Effects::SR::IsActive() || !Game::D3D11::HasLumaShader(device.Get(), DECODE_MVS_HASH) || !Game::D3D11::HasLumaShader(device.Get(), COPY_VS_HASH))
+      return Game::DrawResult::None;
+
+   // Decode UE4 motion vectors into the managed SR_MOTION_VECTORS texture
+   if (!Game::D3D11::EnsureTexture(device.Get(), Game::Resources::Database::Sr::MOTION_VECTORS, upscaled_size.x, upscaled_size.y, DXGI_FORMAT_R16G16_FLOAT,
+          D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE))
+      return Game::DrawResult::None;
+   ID3D11RenderTargetView* const mv_rtv = Game::D3D11::GetRTV(device.Get(), Game::Resources::Database::Sr::MOTION_VECTORS);
+   if (!mv_rtv)
+      return Game::DrawResult::None;
+
+   {
+      Microsoft::WRL::ComPtr<ID3D11RenderTargetView> prev_rtv;
+      Microsoft::WRL::ComPtr<ID3D11DepthStencilView> prev_dsv;
+      Microsoft::WRL::ComPtr<ID3D11VertexShader> prev_vs;
+      Microsoft::WRL::ComPtr<ID3D11PixelShader> prev_ps;
+      D3D11_PRIMITIVE_TOPOLOGY prev_topology = D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED;
+      call.context->OMGetRenderTargets(1, &prev_rtv, &prev_dsv);
+      call.context->VSGetShader(&prev_vs, nullptr, nullptr);
+      call.context->PSGetShader(&prev_ps, nullptr, nullptr);
+      call.context->IAGetPrimitiveTopology(&prev_topology);
+
+      call.context->OMSetRenderTargets(1, &mv_rtv, nullptr);
+      call.context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+      Game::D3D11::BindLumaShader(call.context, COPY_VS_HASH);
+      Game::D3D11::BindLumaShader(call.context, DECODE_MVS_HASH);
+      call.context->Draw(4, 0);
+
+      ID3D11RenderTargetView* restore_rtv = prev_rtv.Get();
+      call.context->OMSetRenderTargets(1, &restore_rtv, prev_dsv.Get());
+      call.context->VSSetShader(prev_vs.Get(), nullptr, 0);
+      call.context->PSSetShader(prev_ps.Get(), nullptr, 0);
+      call.context->IASetPrimitiveTopology(prev_topology);
+   }
+
+   if (Game::Effects::SR::Draw(call, overrides))
+   {
+      if (GameDeviceData* data = Game::GetGameDeviceData(device.Get()))
+      {
+         data->drew_sr = true;
+         if (data->drs_active && data->found_per_view_globals)
+            Game::Resources::Scaling::Begin(device.Get());
+      }
+      Game::Frame::MarkPass(device.Get(), Game::Frame::PassMarker::Upscaling);
+      return Game::DrawResult::Replaced;
+   }
+   return Game::DrawResult::None;
+}
+
+Game::DrawResult OnDrawDofAndMotionBlur(const Game::D3D11::Call& call)
+{
+   Microsoft::WRL::ComPtr<ID3D11Device> device;
+   call.context->GetDevice(&device);
+   if (!device || Game::Frame::HasPass(device.Get(), Game::Frame::PassMarker::MainPostProcessing) || !Game::Frame::HasPass(device.Get(), Game::Frame::PassMarker::Taa))
+      return Game::DrawResult::None;
+   if (GameDeviceData* data = Game::GetGameDeviceData(device.Get()))
+   {
+      if (!data->linear_sampler)
+      {
+         D3D11_SAMPLER_DESC desc = {};
+         desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
+         desc.AddressU = desc.AddressV = desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+         desc.MaxLOD = D3D11_FLOAT32_MAX;
+         device->CreateSamplerState(&desc, &data->linear_sampler);
+      }
+      if (data->linear_sampler)
+      {
+         ID3D11SamplerState* sampler = data->linear_sampler.Get();
+         call.context->PSSetSamplers(0, 1, &sampler);
+      }
+   }
    return Game::DrawResult::None;
 }
 
@@ -200,14 +358,14 @@ Game::DrawResult OnDrawOutputHdr(const Game::D3D11::Call& call)
 {
    Microsoft::WRL::ComPtr<ID3D11Device> device;
    call.context->GetDevice(&device);
-   return ::OnDrawOutputHdr(device.Get());
+   return ::OnDrawOutputPass(device.Get(), true);
 }
 
 Game::DrawResult OnDrawOutputSdr(const Game::D3D11::Call& call)
 {
    Microsoft::WRL::ComPtr<ID3D11Device> device;
    call.context->GetDevice(&device);
-   return ::OnDrawOutputSdr(device.Get());
+   return ::OnDrawOutputPass(device.Get(), false);
 }
 } // namespace D3D11Events
 
@@ -215,19 +373,55 @@ namespace D3D12Events {
 Game::DrawResult OnDrawTaa(const Game::D3D12::Call& call)
 {
    Microsoft::WRL::ComPtr<ID3D12Device> device;
-   if (SUCCEEDED(call.list->GetDevice(IID_PPV_ARGS(&device))))
+   if (FAILED(call.list->GetDevice(IID_PPV_ARGS(&device))) || !device)
+      return Game::DrawResult::None;
+   if (Game::Frame::HasPass(device.Get(), Game::Frame::PassMarker::MainPostProcessing))
+      return Game::DrawResult::None;
+   Game::Frame::MarkPass(device.Get(), Game::Frame::PassMarker::Taa);
+
+   // Read UE4 CBPerViewGlobal (b1, 4096 bytes) synchronously from the mapped upload heap
+   std::array<std::byte, CB_PER_VIEW_GLOBAL_SIZE> cb1_bytes = {};
+   if (Game::D3D12::ReadBoundCBuffer(call, ShaderStage::Pixel, 1, cb1_bytes))
+      ParsePerViewGlobal(device.Get(), cb1_bytes);
+
+   ID3D12Resource* const output_res = Game::D3D12::TagBoundRTV(call, 0, Game::Resources::Database::Sr::OUTPUT);
+   ID3D12Resource* const depth_res = Game::D3D12::TagBoundSRV(call, ShaderStage::Pixel, 1, Game::Resources::Database::Sr::DEPTH);
+   ID3D12Resource* const color_res = Game::D3D12::TagBoundSRV(call, ShaderStage::Pixel, 2, Game::Resources::Database::Sr::COLOR);
+   if (!output_res || !depth_res || !color_res)
+      return Game::DrawResult::None;
+
+   const D3D12_RESOURCE_DESC out_desc = output_res->GetDesc();
+   const Math::uint2 upscaled_size = {uint32_t(out_desc.Width), out_desc.Height};
+   const std::optional<D3D12_VIEWPORT> viewport = Game::D3D12::GetViewport(call.list);
+   const Math::uint2 render_size = viewport && viewport->Width > 0.f && viewport->Height > 0.f
+      ? Math::uint2{uint32_t(viewport->Width + 0.5f), uint32_t(viewport->Height + 0.5f)}
+      : Game::Frame::Get(device.Get()).render;
+   const Math::uint4 viewport_rect = viewport
+      ? Math::uint4{uint32_t(viewport->TopLeftX + 0.5f), uint32_t(viewport->TopLeftY + 0.5f), upscaled_size.x, upscaled_size.y}
+      : Math::uint4{0, 0, upscaled_size.x, upscaled_size.y};
+
+   const Game::Effects::SR::DrawOverrides overrides = PrepareTaaSr(device.Get(), render_size, upscaled_size, viewport_rect);
+   if (!Game::Effects::SR::IsActive())
+      return Game::DrawResult::None;
+
+   if (!Game::D3D12::EnsureTexture(device.Get(), Game::Resources::Database::Sr::MOTION_VECTORS, upscaled_size.x, upscaled_size.y, DXGI_FORMAT_R16G16_FLOAT,
+          D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET))
+      return Game::DrawResult::None;
+
+   if (!Game::D3D12::DrawFullscreenToEntry(call, COPY_VS_HASH, DECODE_MVS_HASH, Game::Resources::Database::Sr::MOTION_VECTORS, DXGI_FORMAT_R16G16_FLOAT,
+          upscaled_size))
+      return Game::DrawResult::None;
+
+   if (Game::Effects::SR::Draw(call, overrides))
    {
-      const Frame::Resolutions resolutions = Game::Frame::Get(device.Get());
-      const Math::uint2 upscaled_size = resolutions.output;
-      const std::optional<D3D12_VIEWPORT> viewport = Game::D3D12::GetViewport(call.list);
-      const Math::uint2 render_size = viewport && viewport->Width > 0.f && viewport->Height > 0.f
-         ? Math::uint2{uint32_t(viewport->Width + 0.5f), uint32_t(viewport->Height + 0.5f)}
-         : resolutions.render;
-      const Math::uint4 viewport_rect = viewport
-         ? Math::uint4{uint32_t(viewport->TopLeftX + 0.5f), uint32_t(viewport->TopLeftY + 0.5f), uint32_t(viewport->TopLeftX + viewport->Width + 0.5f),
-              uint32_t(viewport->TopLeftY + viewport->Height + 0.5f)}
-         : Math::uint4{0, 0, render_size.x, render_size.y};
-      UpdateTaaResolution(device.Get(), render_size, upscaled_size, viewport_rect);
+      if (GameDeviceData* data = Game::GetGameDeviceData(device.Get()))
+      {
+         data->drew_sr = true;
+         if (data->drs_active && data->found_per_view_globals)
+            Game::Resources::Scaling::Begin(device.Get());
+      }
+      Game::Frame::MarkPass(device.Get(), Game::Frame::PassMarker::Upscaling);
+      return Game::DrawResult::Replaced;
    }
    return Game::DrawResult::None;
 }
@@ -236,19 +430,18 @@ Game::DrawResult OnDrawOutputHdr(const Game::D3D12::Call& call)
 {
    Microsoft::WRL::ComPtr<ID3D12Device> device;
    if (SUCCEEDED(call.list->GetDevice(IID_PPV_ARGS(&device))))
-      return ::OnDrawOutputHdr(device.Get());
-   return ::OnDrawOutputHdr(Device{});
+      return ::OnDrawOutputPass(device.Get(), true);
+   return Game::DrawResult::None;
 }
 
 Game::DrawResult OnDrawOutputSdr(const Game::D3D12::Call& call)
 {
    Microsoft::WRL::ComPtr<ID3D12Device> device;
    if (SUCCEEDED(call.list->GetDevice(IID_PPV_ARGS(&device))))
-      return ::OnDrawOutputSdr(device.Get());
-   return ::OnDrawOutputSdr(Device{});
+      return ::OnDrawOutputPass(device.Get(), false);
+   return Game::DrawResult::None;
 }
 
-// The queue's device: the one the game data and resolutions are kept on
 void OnInitSwapchain(IDXGISwapChain*, ID3D12CommandQueue* queue, bool)
 {
    Microsoft::WRL::ComPtr<ID3D12Device> device;
@@ -256,9 +449,11 @@ void OnInitSwapchain(IDXGISwapChain*, ID3D12CommandQueue* queue, bool)
       ::OnInitSwapchain(device.Get());
 }
 
-void OnPresent(IDXGISwapChain*, ID3D12CommandQueue*)
+void OnPresent(IDXGISwapChain*, ID3D12CommandQueue* queue)
 {
-   ::OnPresent();
+   Microsoft::WRL::ComPtr<ID3D12Device> device;
+   if (SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&device))))
+      ::OnPresent(device.Get());
 }
 } // namespace D3D12Events
 
@@ -267,9 +462,23 @@ using Settings::Range;
 using Settings::Setting;
 using Settings::Sources::Binding;
 
+bool IsHdrMode()
+{
+   return cb_luma_global_settings.DisplayMode == 1;
+}
+
+bool IsRcasVisible()
+{
+   return Game::Effects::SR::IsActive();
+}
+
+bool IsRcasEnabled()
+{
+   return Game::Effects::SR::IsActive() && can_sharpen_atomic.load(std::memory_order_relaxed);
+}
+
 constexpr std::array<std::string_view, 2> TONEMAP_TYPES = {"Vanilla", "Neutwo"};
 
-// The settings, with the shipped mod's keys. Sliders print "%.0f" by default.
 const std::array SETTINGS = {
    Setting{
       .key = "FXBloom",
@@ -279,7 +488,7 @@ const std::array SETTINGS = {
       .default_value = 50.f,
       .range = Range{0.f, 100.f},
       .format = "%.0f",
-      .source = Binding{&cb_luma_global_settings.GameSettings.custom_bloom, [](float value) { return value * 0.02f; }}, // Scale down to 0.0-2.0 for the shader
+      .source = Binding{&cb_luma_global_settings.GameSettings.custom_bloom, [](float value) { return value * 0.02f; }},
    },
    Setting{
       .key = "FXVignette",
@@ -310,6 +519,8 @@ const std::array SETTINGS = {
       .range = Range{0.f, 100.f},
       .format = "%.0f",
       .source = Binding{&cb_luma_global_settings.GameSettings.custom_sharpness_strength, [](float value) { return value * 0.01f; }},
+      .is_enabled = &IsRcasEnabled,
+      .is_visible = &IsRcasVisible,
    },
    Setting{
       .key = "FXHDRVideos",
@@ -318,6 +529,7 @@ const std::array SETTINGS = {
       .category = "Post Processing",
       .default_value = true,
       .source = Binding{&cb_luma_global_settings.GameSettings.custom_hdr_videos},
+      .is_visible = &IsHdrMode,
    },
    Setting{
       .key = "TonemapType",
@@ -327,6 +539,8 @@ const std::array SETTINGS = {
       .default_value = EnumIndex{1},
       .enum_labels = TONEMAP_TYPES,
       .source = Binding{&cb_luma_global_settings.GameSettings.tonemap_type},
+      .is_enabled = &IsHdrMode,
+      .is_visible = &IsHdrMode,
    },
    Setting{
       .key = "CustomLUTStrength",
@@ -337,6 +551,7 @@ const std::array SETTINGS = {
       .range = Range{0.f, 100.f},
       .format = "%.0f",
       .source = Binding{&cb_luma_global_settings.GameSettings.custom_lut_strength, [](float value) { return value * 0.01f; }},
+      .is_visible = &IsHdrMode,
    },
    Setting{
       .key = "ColorGradeHueCorrection",
@@ -346,6 +561,7 @@ const std::array SETTINGS = {
       .range = Range{0.f, 1.f},
       .format = "%.2f",
       .source = Binding{&cb_luma_global_settings.GameSettings.hue_correction_strength},
+      .is_visible = &IsHdrMode,
    },
    Setting{
       .key = "ColorGradeExposure",
@@ -355,6 +571,7 @@ const std::array SETTINGS = {
       .range = Range{0.f, 2.f},
       .format = "%.2f",
       .source = Binding{&cb_luma_global_settings.GameSettings.exposure},
+      .is_visible = &IsHdrMode,
    },
    Setting{
       .key = "ColorGradeHighlights",
@@ -364,6 +581,7 @@ const std::array SETTINGS = {
       .range = Range{0.f, 100.f},
       .format = "%.0f",
       .source = Binding{&cb_luma_global_settings.GameSettings.highlights, [](float value) { return value * 0.02f; }},
+      .is_visible = &IsHdrMode,
    },
    Setting{
       .key = "ColorGradeShadows",
@@ -373,6 +591,7 @@ const std::array SETTINGS = {
       .range = Range{0.f, 100.f},
       .format = "%.0f",
       .source = Binding{&cb_luma_global_settings.GameSettings.shadows, [](float value) { return value * 0.02f; }},
+      .is_visible = &IsHdrMode,
    },
    Setting{
       .key = "ColorGradeContrast",
@@ -382,6 +601,7 @@ const std::array SETTINGS = {
       .range = Range{0.f, 100.f},
       .format = "%.0f",
       .source = Binding{&cb_luma_global_settings.GameSettings.contrast, [](float value) { return value * 0.02f; }},
+      .is_visible = &IsHdrMode,
    },
    Setting{
       .key = "ColorGradeSaturation",
@@ -391,6 +611,7 @@ const std::array SETTINGS = {
       .range = Range{0.f, 100.f},
       .format = "%.0f",
       .source = Binding{&cb_luma_global_settings.GameSettings.saturation, [](float value) { return value * 0.02f; }},
+      .is_visible = &IsHdrMode,
    },
    Setting{
       .key = "ColorGradeHighlightSaturation",
@@ -400,6 +621,7 @@ const std::array SETTINGS = {
       .range = Range{0.f, 100.f},
       .format = "%.0f",
       .source = Binding{&cb_luma_global_settings.GameSettings.highlight_saturation, [](float value) { return value * 0.02f; }},
+      .is_visible = &IsHdrMode,
    },
    Setting{
       .key = "ColorGradeBlowout",
@@ -409,6 +631,7 @@ const std::array SETTINGS = {
       .range = Range{0.f, 100.f},
       .format = "%.0f",
       .source = Binding{&cb_luma_global_settings.GameSettings.blowout, [](float value) { return value * 0.02f; }},
+      .is_visible = &IsHdrMode,
    },
    Setting{
       .key = "ColorGradeFlare",
@@ -418,14 +641,7 @@ const std::array SETTINGS = {
       .range = Range{0.f, 100.f},
       .format = "%.0f",
       .source = Binding{&cb_luma_global_settings.GameSettings.flare, [](float value) { return value * 0.02f; }},
-   },
-   Setting{
-      .key = "TestEarlyUpscale",
-      .label = "Test Early Upscale Scaling",
-      .tooltip = "Exercises Resources::Scaling viewport expansion from TAA through Output when rendering below output resolution.",
-      .category = "Development",
-      .visibility = Settings::Visibility::Development,
-      .default_value = false,
+      .is_visible = &IsHdrMode,
    },
 };
 } // namespace
@@ -433,7 +649,7 @@ const std::array SETTINGS = {
 void Luma::Game::Init()
 {
    SetInfo({
-      .version = "2.0.0-stage1",
+      .version = "2.0.0",
       .description = DESCRIPTION,
       .credits = CREDITS,
       .links = LINKS,
@@ -443,12 +659,8 @@ void Luma::Game::Init()
    Shaders::SetDebugName("Title", SHADER_HASHES_TITLE);
    Shaders::SetDebugName("DoF", SHADER_HASHES_DOF);
    Shaders::SetDebugName("Motion Blur", SHADER_HASHES_MOTION_BLUR);
-   // The first bloom downsample pass, at most 50% downscaling: from a 75% render scale it goes to 50%, so the bloom chain isn't
-   // really affected by the render resolution
    Shaders::SetDebugName("Downsample Bloom", SHADER_HASHES_DOWNSAMPLE_BLOOM);
-   // Its result (4x3 or so) is used for bloom, maybe also as a local exposure map
    Shaders::SetDebugName("Downsample Bloom", SHADER_HASHES_DOWNSAMPLE_BLOOM_2);
-   // Several versions (maybe one for DRS)
    Shaders::SetDebugName("Upscale Bloom", SHADER_HASHES_UPSCALE_BLOOM);
    Shaders::SetDebugName("Blur Bloom", SHADER_HASHES_BLUR_BLOOM);
    Shaders::SetDebugName("Apply Bloom", SHADER_HASHES_BLOOM);
@@ -465,7 +677,6 @@ void Luma::Game::Init()
    Shaders::RedirectHashes("Output_HDR", SHADER_HASHES_OUTPUT_HDR);
    Shaders::RedirectHashes("Output_SDR", SHADER_HASHES_OUTPUT_SDR);
 
-   // The game's own shader define
    Shaders::AddDefine({
       .name = "SSAO_ALGORITHM",
       .label = "SSAO Algorithm",
@@ -484,9 +695,7 @@ void Luma::Game::Init()
          .data_slot = 12,
          .update_luma_instance_data = &UpdateLumaInstanceDataCB,
       },
-      // SSAO Temporal samples its noise with Luma's static samplers on D3D12
       .bindings = {.static_samplers = true},
-      // The FAST noise texture, which SSAO Temporal and the Dithering Fix recipe read
       .textures = {.load = true},
       .samplers = {.upgrade = true},
       .scaling = {.mode = Resources::Scaling::Mode::ViewportsOnly},
@@ -498,16 +707,21 @@ void Luma::Game::Init()
          .gamma_correction = 1,
          .ui_draw_type = 1,
       },
+      .sr = {
+         .enable = true,
+         .hdr = true,
+         .inverted_depth = true,
+         .firefly_swatter = true,
+      },
+      .constant_capture = {.enable = true},
       .device_data = GameDeviceDataType::Of<GameDeviceData>(),
    });
-   // Texture upgrades (10 bit unorm and 11 bit float to 16 bit float). 8 bit RGBA and BGRA are probably not needed.
+   Resources::ConstantCapture::RegisterWriteCallback(CB_PER_VIEW_GLOBAL_SIZE, &OnPerViewGlobalWrite);
    Resources::SetUpgrades({
       .formats = {DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R10G10B10A2_TYPELESS, DXGI_FORMAT_R11G11B10_FLOAT},
-      // Upgrade all 16:9 render targets too, because the game defaults to that aspect ratio internally unless mods are applied
       .size_filters = Resources::Upgrade::SizeFilters::SwapchainResolution | Resources::Upgrade::SizeFilters::SwapchainAspectRatio |
          Resources::Upgrade::SizeFilters::CustomAspectRatio,
       .custom_aspect_ratios = {16.f / 9.f},
-      // LUT is 3D 32x
       .lut = {.size = 32, .dimensions = Resources::Upgrade::LutDimensions::_3D},
    });
    SetEvents(D3D11::Events{
@@ -519,14 +733,13 @@ void Luma::Game::Init()
       .on_present = &D3D12Events::OnPresent,
    });
    D3D11::OnShaderDraw(SHADER_HASHES_TAA, &D3D11Events::OnDrawTaa);
+   D3D11::OnShaderDraw(SHADER_HASHES_DOF, &D3D11Events::OnDrawDofAndMotionBlur);
+   D3D11::OnShaderDraw(SHADER_HASHES_MOTION_BLUR, &D3D11Events::OnDrawDofAndMotionBlur);
    D3D11::OnShaderDraw(SHADER_HASHES_OUTPUT_HDR, &D3D11Events::OnDrawOutputHdr);
    D3D11::OnShaderDraw(SHADER_HASHES_OUTPUT_SDR, &D3D11Events::OnDrawOutputSdr);
    D3D12::OnShaderDraw(SHADER_HASHES_TAA, &D3D12Events::OnDrawTaa);
    D3D12::OnShaderDraw(SHADER_HASHES_OUTPUT_HDR, &D3D12Events::OnDrawOutputHdr);
    D3D12::OnShaderDraw(SHADER_HASHES_OUTPUT_SDR, &D3D12Events::OnDrawOutputSdr);
-   // Not built yet: the TAA callback (then SR), the output pass's TAA gate and post processing marker, DoF and Motion Blur (they need
-   // the SR sampler). SSAO Temporal's FAST noise at t6 needs no callback: the replacement reads "fast_noise" by name, which Core binds
-   // on both APIs.
 }
 
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID reserved)

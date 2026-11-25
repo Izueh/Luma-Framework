@@ -22,6 +22,48 @@ std::shared_mutex shaders_mutex;
 std::vector<ShaderState> shaders;
 } // namespace
 
+void RegisterRuntimeDefaults()
+{
+   constexpr Invalidation SR_INVALIDATION = Invalidation::SwapchainResize | Invalidation::RenderResolutionChange;
+
+   struct DefaultEntry
+   {
+      uint64_t hash;
+      std::string_view name;
+   };
+
+   constexpr std::array DEFAULTS = {
+      DefaultEntry{Sr::COLOR, "sr_color"},
+      DefaultEntry{Sr::DEPTH, "sr_depth"},
+      DefaultEntry{Sr::MOTION_VECTORS, "sr_motion_vectors"},
+      DefaultEntry{Sr::OUTPUT, "sr_output"},
+      DefaultEntry{Sr::EXPOSURE, "sr_exposure"},
+      DefaultEntry{Sr::REACTIVE, "sr_reactive"},
+      DefaultEntry{Sr::TRANSPARENCY, "sr_transparency"},
+   };
+   for (const DefaultEntry& entry : DEFAULTS)
+   {
+      Register({
+         .name_hash = entry.hash,
+         .name = std::string(entry.name),
+         .kind = Kind::RuntimeTexture,
+         .owner = Owner::Core,
+         .invalidation = SR_INVALIDATION,
+      });
+   }
+}
+
+std::optional<uint32_t> RegisterRuntimeTexture(std::string_view name, Invalidation invalidation)
+{
+   return Register({
+      .name_hash = Utils::Hash::Name(name),
+      .name = std::string(name),
+      .kind = Kind::RuntimeTexture,
+      .owner = Owner::Game,
+      .invalidation = invalidation,
+   });
+}
+
 std::optional<uint32_t> Register(Entry entry)
 {
    if (const std::optional<uint32_t> existing = Find(entry.name_hash))

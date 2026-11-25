@@ -208,6 +208,14 @@ std::string Answer(const Request& request)
       return Tools::ReadResource(request);
    if (request.tool == "read_cbuffer")
       return Tools::ReadCbuffer(request);
+   if (request.tool == "sr_state")
+      return Tools::SrState(request);
+   if (request.tool == "sr_capture")
+      return Tools::SrCapture(request);
+   if (request.tool == "dev_values")
+      return Tools::DevValues(request);
+   if (request.tool == "set_dev_value")
+      return RunOnRenderThread([request] { return Tools::SetDevValue(request); }, GetTimeout(request));
 #endif
    return Error(std::format("unknown tool '{}' (Luma 2 serves status, get_settings, set_setting, shader_list, shader_state, dump_shader, reload_shaders, dump_stats, "
                             "patch_state, set_recipe, reload_patches, trace_capture, trace_list, trace_get, read_resource and read_cbuffer so far; luma_log, luma_compare"

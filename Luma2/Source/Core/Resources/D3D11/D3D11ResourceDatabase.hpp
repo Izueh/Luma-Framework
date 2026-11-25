@@ -28,6 +28,28 @@ const Shaders::D3D11::Live* GetShader(ID3D11Device* device, uint64_t name_hash);
 
 // Any thread: a texture entry's view on the device, null if it couldn't be loaded (or there's no such entry). Lives as long as the device.
 ID3D11ShaderResourceView* GetTexture(ID3D11Device* device, uint64_t name_hash);
+
+struct TextureCopyOptions
+{
+   DXGI_FORMAT format_override = DXGI_FORMAT_UNKNOWN;
+   UINT extra_bind_flags = 0;
+};
+
+// RuntimeTexture entries: zero-copy per-frame tags (cleared at OnPresent) and persistent managed textures/copies.
+void TagResource(ID3D11Device* device, uint64_t name_hash, ID3D11Resource* resource);
+ID3D11Resource* TagBoundSRV(ID3D11DeviceContext* context, ShaderStage stage, UINT slot, uint64_t name_hash);
+ID3D11Resource* TagBoundRTV(ID3D11DeviceContext* context, UINT slot, uint64_t name_hash);
+ID3D11Resource* TagBoundDSV(ID3D11DeviceContext* context, uint64_t name_hash);
+ID3D11Resource* TagBoundUAV(ID3D11DeviceContext* context, UINT slot, uint64_t name_hash);
+ID3D11Texture2D* CopyBoundSRV(ID3D11DeviceContext* context, ShaderStage stage, UINT slot, uint64_t name_hash, const TextureCopyOptions& options = {});
+ID3D11Texture2D* CopyBoundRTV(ID3D11DeviceContext* context, UINT slot, uint64_t name_hash, const TextureCopyOptions& options = {});
+ID3D11Texture2D* EnsureTexture(ID3D11Device* device, uint64_t name_hash, UINT width, UINT height, DXGI_FORMAT format, UINT bind_flags);
+ID3D11Resource* GetResource(ID3D11Device* device, uint64_t name_hash);
+ID3D11ShaderResourceView* GetSRV(ID3D11Device* device, uint64_t name_hash);
+ID3D11RenderTargetView* GetRTV(ID3D11Device* device, uint64_t name_hash);
+ID3D11UnorderedAccessView* GetUAV(ID3D11Device* device, uint64_t name_hash);
+void OnPresent(ID3D11Device* device);
+void Invalidate(ID3D11Device* device, Invalidation reason);
 // Whether every entry `compiled` requests has an object on the context's device (a texture that failed to load doesn't)
 bool HasRequested(ID3D11DeviceContext* context, const Shaders::CompiledShader& compiled);
 

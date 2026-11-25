@@ -236,6 +236,18 @@ struct UnimplementedInfo
    uint32_t resolves_between_formats = 0;
 };
 
+struct SrInfo
+{
+   bool enabled = false;
+   std::string active_type;
+   bool drew_this_frame = false;
+   uint32_t render_width = 0;
+   uint32_t render_height = 0;
+   uint32_t output_width = 0;
+   uint32_t output_height = 0;
+   std::vector<std::string> supported_backends;
+};
+
 struct Status
 {
    bool ok = true;
@@ -259,6 +271,7 @@ struct Status
    ShadersInfo shaders;
    PatchesInfo patches;
    ResourcesInfo resources;
+   SrInfo sr;
    std::optional<OutputInfo> output; // Once a swapchain presented through Luma
    JobsInfo jobs;
    ValidationInfo validation;

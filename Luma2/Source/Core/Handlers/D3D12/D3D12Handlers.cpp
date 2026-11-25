@@ -5,9 +5,13 @@
 #include <span>
 #include <type_traits>
 
+#include "Effects/SR/D3D12/D3D12SuperResolution.hpp"
+#include "Effects/SR/SuperResolution.hpp"
+#include "Frame/FrameState.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Handlers/Handlers.hpp"
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
+#include "Resources/ConstantCapture.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
 #include "Resources/ResourceMirrors.hpp"
@@ -67,6 +71,13 @@ bool RunCall(ID3D12GraphicsCommandList* list, const Call& call)
 #if DEVELOPMENT
    Trace::Stats::D3D12::RecordDraw(list, dispatch);
 #endif
+#if DEVELOPMENT
+   Game::D3D12::Call original = {.list = list};
+   if constexpr (dispatch)
+      original.dispatch = &call;
+   else
+      original.draw = &call;
+#endif
    const auto run_draw = [&](Shaders::StageSet stages, Game::DrawResult& result, bool& skipped) {
       if (Resources::Mirrors::IsNeeded())
          Resources::Mirrors::D3D12::PrepareDrawOrDispatch(list, dispatch);
@@ -82,16 +93,16 @@ bool RunCall(ID3D12GraphicsCommandList* list, const Call& call)
          if constexpr (!dispatch)
             Shaders::Variants::D3D12::BindFormatVariant(list);
       }
+      bool handled = result != Game::DrawResult::None || skipped;
+#if DEVELOPMENT
+      if (Trace::DebugDraw::IsActive())
+         handled = Trace::DebugDraw::CaptureCallD3D12(original, stages, handled);
+#endif
       if (Resources::Mirrors::IsNeeded())
          Resources::Mirrors::D3D12::FinishDrawOrDispatch(list, dispatch);
-      return result != Game::DrawResult::None || skipped;
+      return handled;
    };
 #if DEVELOPMENT
-   Game::D3D12::Call original = {.list = list};
-   if constexpr (dispatch)
-      original.dispatch = &call;
-   else
-      original.draw = &call;
    return HandleDrawOrDispatch<dispatch>(
       [&] {
          if constexpr (dispatch)
@@ -122,8 +133,10 @@ void PostCreateDevice(ID3D12Device* device)
       device, {},
       [&] { Validation::D3D12::WatchDeviceMessages(device); },
       [&] {
-         if (Shaders::IsNeeded())
+         if (Shaders::IsNeeded() || Effects::SR::IsNeeded())
             Resources::Database::D3D12::CreateDeviceObjects(device);
+         if (Effects::SR::IsNeeded())
+            Effects::SR::D3D12::CreateDeviceObjects(device);
 #if DEVELOPMENT
          Trace::Stats::D3D12::RecordDevice(device);
 #endif
@@ -138,6 +151,7 @@ void OnDeviceDestroyed(ID3D12Device* device)
 #if DEVELOPMENT
          Trace::DebugDraw::ReleaseD3D12(device);
 #endif
+         Effects::SR::D3D12::ReleaseDeviceObjects(device);
          Resources::Database::D3D12::ReleaseDeviceObjects(device);
          Resources::Mirrors::D3D12::ReleaseDeviceObjects(device);
          Shaders::RootSignatures::D3D12::ReleaseDeviceObjects(device);
@@ -252,6 +266,9 @@ void PostCreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_
 #if DEVELOPMENT
    Resources::Descriptors::D3D12::TrackHeap(device, heap, desc);
    Trace::Stats::D3D12::RecordHeap(desc, heap);
+#else
+   if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
+      Resources::Descriptors::D3D12::TrackHeap(device, heap, desc);
 #endif
 }
 
@@ -281,6 +298,9 @@ void PostCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destinatio
 #if DEVELOPMENT
    Resources::Descriptors::D3D12::Write(destination, descriptor);
    Trace::Stats::D3D12::RecordViewWrite(destination);
+#else
+   if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
+      Resources::Descriptors::D3D12::Write(destination, descriptor);
 #endif
 }
 
@@ -291,6 +311,9 @@ void PostCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE desti
 #if DEVELOPMENT
    Resources::Descriptors::D3D12::Copy(destination, source, count);
    Trace::Stats::D3D12::RecordCopy(destination, count);
+#else
+   if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
+      Resources::Descriptors::D3D12::Copy(destination, source, count);
 #endif
 }
 
@@ -300,6 +323,9 @@ void PostCreateResource(ID3D12Device* device, ID3D12Resource* resource, std::opt
       Resources::Mirrors::D3D12::CreateMirror(device, resource, state, clear, reserved);
 #if DEVELOPMENT
    Resources::Descriptors::D3D12::TrackResource(resource);
+#else
+   if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
+      Resources::Descriptors::D3D12::TrackResource(resource);
 #endif
 }
 
@@ -341,6 +367,8 @@ void PreClearState(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeli
 void PreSetPipelineState(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline)
 {
    Shaders::Variants::D3D12::SwapInVariant(list, pipeline);
+   if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
+      Resources::Database::D3D12::SetPipelineState(list, pipeline);
 #if DEVELOPMENT
    Trace::Stats::D3D12::RecordBind(list, Trace::Stats::D3D12::Bind::PipelineState);
 #endif
@@ -379,6 +407,8 @@ void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3
       // What a converting copy binds back: the targets as they're bound now
       Resources::Mirrors::D3D12::RecordRenderTargets(list, count, render_targets, single_range, depth_stencil);
    }
+   if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
+      Resources::Database::D3D12::SetRenderTargets(list, count, render_targets, single_range, depth_stencil);
 }
 
 std::optional<uint32_t> GetGameHeapSize(ID3D12DescriptorHeap* heap)
@@ -392,16 +422,19 @@ void PreSetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12De
    Resources::Database::D3D12::SetDescriptorHeaps(list, count, heaps);
 }
 
-void PreSetRootTable([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] bool compute, [[maybe_unused]] UINT index, [[maybe_unused]] D3D12_GPU_DESCRIPTOR_HANDLE table)
+void PreSetRootTable(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_DESCRIPTOR_HANDLE table)
 {
+   if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
+      Resources::Database::D3D12::SetRootTable(list, compute, index, table);
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordRootTable(list, compute, index, table);
 #endif
 }
 
-void PreSetRootDescriptor([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] bool compute, [[maybe_unused]] UINT index,
-   [[maybe_unused]] D3D12_GPU_VIRTUAL_ADDRESS address)
+void PreSetRootDescriptor(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
 {
+   if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
+      Resources::Database::D3D12::SetRootDescriptor(list, compute, index, address);
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordRootDescriptor(list, compute, index, address);
 #endif
@@ -629,11 +662,18 @@ void PreExecuteBundle(ID3D12GraphicsCommandList* list, [[maybe_unused]] ID3D12Gr
 
 void PresentD3D12(ID3D12CommandQueue* queue)
 {
-   if (Resources::Mirrors::IsNeeded() && queue)
+   if (queue)
    {
       Microsoft::WRL::ComPtr<ID3D12Device> device;
       if (SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&device))))
-         Resources::Mirrors::D3D12::OnPresent(device.Get());
+      {
+         if (Resources::Mirrors::IsNeeded())
+            Resources::Mirrors::D3D12::OnPresent(device.Get());
+         if (Effects::SR::IsNeeded())
+            Effects::SR::D3D12::OnPresent(device.Get());
+         Resources::Database::D3D12::OnPresent(device.Get());
+         Frame::OnPresent(device.Get());
+      }
    }
    if (!Shaders::IsNeeded())
       return;

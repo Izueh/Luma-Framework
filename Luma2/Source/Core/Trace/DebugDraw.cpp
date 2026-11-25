@@ -12,10 +12,14 @@
 #include <wrl/client.h>
 
 #include "Game/Game.hpp"
+#include "Hooks/D3D12/D3D12Lifetime.hpp"
+#include "Hooks/HookScope.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
+#include "Shaders/D3D12/D3D12Variants.hpp"
 #include "Shaders/ShaderDatabase.hpp"
+#include "Trace/D3D12/D3D12Capture.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -918,6 +922,51 @@ void CaptureLumaPassD3D11(ID3D11DeviceContext* context, std::string_view pass_na
    CaptureViewD3D11(context, *target, false);
 }
 
+void CaptureSrPassD3D11(ID3D11DeviceContext* context, std::string_view pass_name, ID3D11Resource* color, ID3D11Resource* depth,
+   ID3D11Resource* motion_vectors, ID3D11Resource* exposure, ID3D11Resource* reactive, ID3D11Resource* transparency, ID3D11Resource* output)
+{
+   if (!IsActive() || !context)
+      return;
+   const std::array<ID3D11Resource*, 6> inputs = {color, depth, motion_vectors, exposure, reactive, transparency};
+   if (pass_active.load(std::memory_order_acquire))
+   {
+      const std::optional<PassTarget> target = GetPassTarget();
+      if (!target || target->luma_pass.empty() || target->luma_pass != pass_name)
+         return;
+      if (frame_instance_counter.fetch_add(1, std::memory_order_relaxed) != target->instance)
+         return;
+      ID3D11Resource* chosen = nullptr;
+      if (target->mode == ViewMode::RenderTarget && target->slot == 0)
+         chosen = output;
+      else if (target->mode == ViewMode::ShaderResource && target->slot < inputs.size())
+         chosen = inputs[target->slot];
+      if (chosen)
+      {
+         Hooks::Scope::Guard scope;
+         SnapshotD3D11Resource(context, chosen);
+      }
+      return;
+   }
+   const uintptr_t address = target_address.load(std::memory_order_acquire);
+   if (!address)
+      return;
+   if (MatchesD3D11Target(output, address))
+   {
+      Hooks::Scope::Guard scope;
+      SnapshotD3D11Resource(context, output);
+      return;
+   }
+   for (ID3D11Resource* res : inputs)
+   {
+      if (MatchesD3D11Target(res, address))
+      {
+         Hooks::Scope::Guard scope;
+         SnapshotD3D11Resource(context, res);
+         return;
+      }
+   }
+}
+
 void CaptureBoundD3D11(ID3D11DeviceContext* context)
 {
    if (!IsActive() || !context)
@@ -968,19 +1017,25 @@ void ReleaseD3D11(const ID3D11Device* device)
    }
 }
 
-void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES current_state)
+namespace {
+Hooks::Lifetime::D3D12::Object d3d12_snapshot_lifetime;
+
+void SnapshotD3D12Resource(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES current_state,
+   DXGI_FORMAT view_format = DXGI_FORMAT_UNKNOWN)
 {
-   const uintptr_t address = target_address.load(std::memory_order_acquire);
-   if (!list || !MatchesD3D12Target(resource, address))
+   if (!list || !resource)
       return;
    const D3D12_RESOURCE_DESC desc = resource->GetDesc();
    if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER || desc.Dimension == D3D12_RESOURCE_DIMENSION_UNKNOWN)
       return;
-   const DXGI_FORMAT srv_format = GetReadableSrvFormat(desc.Format);
+   const DXGI_FORMAT fallback_srv_format = GetReadableSrvFormat(desc.Format);
+   const DXGI_FORMAT preferred = view_format != DXGI_FORMAT_UNKNOWN ? GetReadableSrvFormat(view_format) : fallback_srv_format;
+   const DXGI_FORMAT srv_format = preferred != DXGI_FORMAT_UNKNOWN ? preferred : fallback_srv_format;
    if (srv_format == DXGI_FORMAT_UNKNOWN)
    {
       std::scoped_lock lock(mutex);
       d3d12_snapshot = {};
+      Hooks::Lifetime::D3D12::Replace(d3d12_snapshot_lifetime, nullptr);
       captured_this_frame = false;
       return;
    }
@@ -988,6 +1043,7 @@ void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D
    if (FAILED(list->GetDevice(IID_PPV_ARGS(&device))) || !device)
       return;
 
+   Hooks::Scope::Guard scope;
    std::scoped_lock lock(mutex);
    const bool needs_new = !d3d12_snapshot.texture || d3d12_snapshot.device != device.Get() || d3d12_snapshot.desc.Dimension != desc.Dimension ||
       d3d12_snapshot.desc.Width != desc.Width || d3d12_snapshot.desc.Height != desc.Height || d3d12_snapshot.desc.DepthOrArraySize != desc.DepthOrArraySize ||
@@ -1002,12 +1058,14 @@ void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D
       if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &copy_desc, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr, IID_PPV_ARGS(&copy))))
       {
          d3d12_snapshot = {};
+         Hooks::Lifetime::D3D12::Replace(d3d12_snapshot_lifetime, nullptr);
          captured_this_frame = false;
          return;
       }
       copy->SetName(L"Luma debug draw snapshot");
       d3d12_snapshot.device = device.Get();
       d3d12_snapshot.texture = copy;
+      Hooks::Lifetime::D3D12::Replace(d3d12_snapshot_lifetime, copy);
       d3d12_snapshot.desc = desc;
       d3d12_snapshot.srv_format = srv_format;
       if (desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D)
@@ -1029,6 +1087,7 @@ void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D
       }
    }
 
+   Hooks::Lifetime::D3D12::Reference(list, d3d12_snapshot_lifetime);
    std::array<D3D12_RESOURCE_BARRIER, 2> before = {};
    UINT before_count = 0;
    before[before_count++] = {.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION,
@@ -1042,6 +1101,107 @@ void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D
       std::swap(before[i].Transition.StateBefore, before[i].Transition.StateAfter);
    list->ResourceBarrier(before_count, before.data());
    captured_this_frame = true;
+}
+} // namespace
+
+void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES current_state)
+{
+   const uintptr_t address = target_address.load(std::memory_order_acquire);
+   if (!list || !MatchesD3D12Target(resource, address))
+      return;
+   if (ID3D12Resource* mirror = Resources::Mirrors::D3D12::FindMirror(resource))
+      resource = mirror;
+   SnapshotD3D12Resource(list, resource, current_state);
+}
+
+bool CaptureCallD3D12(const Game::D3D12::Call& call, Shaders::StageSet stages, bool handled)
+{
+   if (!IsActive() || !call.list || !pass_active.load(std::memory_order_acquire))
+      return handled;
+   const std::optional<PassTarget> target = GetPassTarget();
+   if (!target || !target->luma_pass.empty() || !stages.Has(target->stage))
+      return handled;
+   const Shaders::Variants::D3D12::BoundPipeline bound = Shaders::Variants::D3D12::GetBoundPipeline(call.list);
+   const Shaders::Database::Shader* shader = bound.tracked ? bound.tracked->shaders[size_t(target->stage)] : nullptr;
+   if (!shader || shader->hash != target->hash)
+      return handled;
+   if (frame_instance_counter.fetch_add(1, std::memory_order_relaxed) != target->instance)
+      return handled;
+
+   Readback::ViewKind kind = Readback::ViewKind::RenderTarget;
+   D3D12_RESOURCE_STATES default_state = D3D12_RESOURCE_STATE_RENDER_TARGET;
+   switch (target->mode)
+   {
+   case ViewMode::RenderTarget:
+      kind = Readback::ViewKind::RenderTarget;
+      default_state = D3D12_RESOURCE_STATE_RENDER_TARGET;
+      break;
+   case ViewMode::Depth:
+      kind = Readback::ViewKind::Depth;
+      default_state = D3D12_RESOURCE_STATE_DEPTH_WRITE;
+      break;
+   case ViewMode::ShaderResource:
+      kind = Readback::ViewKind::ShaderResource;
+      default_state = target->stage == ShaderStage::Pixel ? D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE : D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+      break;
+   case ViewMode::UnorderedAccess:
+      kind = Readback::ViewKind::UnorderedAccess;
+      default_state = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+      break;
+   default: return handled;
+   }
+
+   if (!handled && target->mode != ViewMode::ShaderResource)
+   {
+      Game::D3D12::RunOriginal(call);
+      handled = true;
+   }
+
+   const std::optional<Capture::D3D12::BoundView> view = Capture::D3D12::FindBoundView(call.list, kind, target->stage, target->slot);
+   if (!view || !view->resource)
+      return handled;
+   ID3D12Resource* resource = view->resource;
+   if (ID3D12Resource* mirror = Resources::Mirrors::D3D12::FindMirror(resource))
+      resource = mirror;
+   SnapshotD3D12Resource(call.list, resource, view->state.value_or(default_state), view->format);
+   return handled;
+}
+
+void CaptureSrPassD3D12(ID3D12GraphicsCommandList* list, std::string_view pass_name, ID3D12Resource* color, ID3D12Resource* depth,
+   ID3D12Resource* motion_vectors, ID3D12Resource* exposure, ID3D12Resource* reactive, ID3D12Resource* transparency, ID3D12Resource* output)
+{
+   if (!IsActive() || !list)
+      return;
+   const std::array<ID3D12Resource*, 6> inputs = {color, depth, motion_vectors, exposure, reactive, transparency};
+   if (pass_active.load(std::memory_order_acquire))
+   {
+      const std::optional<PassTarget> target = GetPassTarget();
+      if (!target || target->luma_pass.empty() || target->luma_pass != pass_name)
+         return;
+      if (frame_instance_counter.fetch_add(1, std::memory_order_relaxed) != target->instance)
+         return;
+      if (target->mode == ViewMode::RenderTarget && target->slot == 0 && output)
+         SnapshotD3D12Resource(list, output, D3D12_RESOURCE_STATE_RENDER_TARGET);
+      else if (target->mode == ViewMode::ShaderResource && target->slot < inputs.size() && inputs[target->slot])
+         SnapshotD3D12Resource(list, inputs[target->slot], D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+      return;
+   }
+   const uintptr_t address = target_address.load(std::memory_order_acquire);
+   if (!address)
+      return;
+   if (MatchesD3D12Target(output, address))
+   {
+      SnapshotD3D12Resource(list, output, D3D12_RESOURCE_STATE_RENDER_TARGET);
+      return;
+   }
+   for (ID3D12Resource* res : inputs)
+   {
+      if (MatchesD3D12Target(res, address))
+      {
+         SnapshotD3D12Resource(list, res, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+         return;
+      }
+   }
 }
 
 bool BindD3D12(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE table_start, uint32_t view_increment, uint32_t& custom_data_2, float& custom_data_3)
@@ -1098,6 +1258,7 @@ void ReleaseD3D12(const ID3D12Device* device)
    if (d3d12_snapshot.device == device)
    {
       d3d12_snapshot = {};
+      Hooks::Lifetime::D3D12::Replace(d3d12_snapshot_lifetime, nullptr);
       captured_this_frame = false;
       captured_prev_frame = false;
    }

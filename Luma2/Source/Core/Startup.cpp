@@ -8,6 +8,7 @@
 
 #include "ReShade/ReShade.hpp"
 #include "Draw/Draw.hpp"
+#include "Effects/SR/SuperResolution.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Hooks/ThirdPartyModules.hpp"
 #include "Hooks/HookManager.hpp"
@@ -17,8 +18,10 @@
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Settings/SettingsStorage.hpp"
+#include "Resources/ConstantCapture.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceChains.hpp"
+#include "Resources/ResourceDatabase.hpp"
 #include "Resources/ResourceMirrors.hpp"
 #include "Resources/ResourceScaling.hpp"
 #include "Resources/SamplerMirrors.hpp"
@@ -83,6 +86,8 @@ Hooks::D3D12::Functions GetCoreD3D12Functions()
    functions |= Resources::Mirrors::GetD3D12Functions();
    functions |= Resources::Chains::GetD3D12Functions();
    functions |= Resources::Scaling::GetD3D12Functions();
+   functions |= Resources::ConstantCapture::GetD3D12Functions();
+   functions |= Effects::SR::GetD3D12Functions();
    functions |= Game::Registry::GetRequestedD3D12Functions();
 #if DEVELOPMENT
    functions |= Trace::Capture::GetD3D12Functions();
@@ -105,6 +110,7 @@ Hooks::D3D11::Functions GetCoreFunctions()
    functions |= Resources::Chains::GetD3D11Functions();
    functions |= Resources::Scaling::GetD3D11Functions();
    functions |= Resources::Samplers::GetD3D11Functions();
+   functions |= Resources::ConstantCapture::GetD3D11Functions();
    functions |= Luma::Draw::GetD3D11Functions();
 #if DEVELOPMENT
    functions |= Trace::Capture::GetD3D11Functions();
@@ -150,6 +156,7 @@ void Initialize()
    Resources::Chains::Register();
    Resources::Scaling::Register();
    Resources::Samplers::Register();
+   Effects::SR::Register();
    Swapchain::Register();
    Display::DisplayMode::Register();
    Display::Composition::RegisterSettings();
@@ -165,6 +172,7 @@ void Initialize()
 #endif
    // Named from the shader files the game's name finds
    Resources::LumaCBuffers::Register();
+   Resources::Database::RegisterRuntimeDefaults();
    Display::Composition::RegisterResources();
    // After Core's cbuffers, whose names a file can't take
    Resources::Textures::Register();

@@ -15,6 +15,7 @@
 #include <imgui_internal.h>
 
 #include "Display/DisplayMode.hpp"
+#include "Effects/SR/SuperResolution.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Hooks/HookManager.hpp"
 #include "Settings/SettingKeys.hpp"
@@ -180,6 +181,31 @@ void DrawSection(const SettingsSection& section, std::optional<bool> force_open)
       if (Widgets::Banner(Tone::Warning, "Your Paper White setting is greater than your Peak White setting, the image will either look bad or broken.",
              "Reset Paper White", "Resets Paper White to its default value"))
          Settings::Reset(Settings::Core::PAPER_WHITE.key);
+   }
+   if (section.title == "Upscaling")
+   {
+      const Effects::SR::RuntimeInfo sr = Effects::SR::GetRuntimeInfo();
+      if (sr.user_type != Effects::SR::UserType::None)
+      {
+         if (sr.drew_this_frame && sr.active_type != Effects::SR::Type::None)
+         {
+            const std::string res = (sr.last_draw.render_width == sr.settings.output_width && sr.last_draw.render_height == sr.settings.output_height)
+               ? std::format("{}x{}", sr.settings.output_width, sr.settings.output_height)
+               : std::format("{}x{} -> {}x{}", sr.last_draw.render_width, sr.last_draw.render_height, sr.settings.output_width, sr.settings.output_height);
+            Widgets::Tag(std::format("{} {} Active ({})", Icons::SUCCESS, Effects::SR::GetTypeName(sr.active_type), res), Tone::Success,
+               "Super Resolution ran on the last frame");
+         }
+         else if (sr.active_type == Effects::SR::Type::None)
+         {
+            Widgets::Tag(std::format("{} Selected backend unavailable on this GPU", Icons::WARNING), Tone::Warning,
+               "The selected upscaler is not supported on this hardware or its runtime DLL failed to initialize");
+         }
+         else
+         {
+            Widgets::Tag(std::format("{} {} Ready (inactive in current scene)", Icons::WARNING, Effects::SR::GetTypeName(sr.active_type)), Tone::Warning,
+               "Super Resolution is initialized but did not draw on the last frame (e.g. menu or unsupported pass)");
+         }
+      }
    }
    for (const Settings::Setting* setting : section.settings)
       Widgets::SettingRow(*setting);
@@ -559,7 +585,7 @@ std::vector<SettingsSection> CollectSettingsSections(SettingsTab tab)
          {
             if (setting.key == Settings::Core::AUTO_COMPILE.key)
                defines.settings.insert(defines.settings.begin(), &setting);
-            else if (category != "Luma" && category != "Display" && category != "Overlay")
+            else if (category != "Luma" && category != "Display" && category != "Overlay" && category != "Upscaling")
                add(framework, category, Role::Settings, false, &setting);
          }
          else if (setting.kind == Settings::Kind::Development && is_framework_dev_category(category))
@@ -576,9 +602,10 @@ std::vector<SettingsSection> CollectSettingsSections(SettingsTab tab)
       return sections;
    }
 
-   // SettingsTab::Settings: Display + Game categories + user/game-exposed Recipes (expanded).
+   // SettingsTab::Settings: Upscaling (matching 1.0's top-of-Settings placement) + Display + Game categories + user/game-exposed Recipes (expanded).
    // Luma.Enabled and Luma.EnabledKey live in the header bar, so no General category is needed.
    // In non-Development builds (no Framework tab), user/test-visible defines and extra framework settings appear under Advanced Settings.
+   SettingsSection upscaling = {"Upscaling", {}, Role::Settings, true};
    SettingsSection display = {"Display", {}, Role::Settings, true};
    std::vector<SettingsSection> game;
    SettingsSection recipes = {"Recipes", {}, Role::Game, true};
@@ -601,7 +628,9 @@ std::vector<SettingsSection> CollectSettingsSections(SettingsTab tab)
       }
       else if (setting.kind == Settings::Kind::Luma)
       {
-         if (category == "Display")
+         if (category == "Upscaling")
+            upscaling.settings.push_back(&setting);
+         else if (category == "Display")
             display.settings.push_back(&setting);
 #if !DEVELOPMENT
          else if (setting.key == Settings::Core::AUTO_COMPILE.key)
@@ -615,6 +644,7 @@ std::vector<SettingsSection> CollectSettingsSections(SettingsTab tab)
          advanced.settings.push_back(&setting);
 #endif
    });
+   append(upscaling);
    append(display);
    for (SettingsSection& section : game)
       append(section);

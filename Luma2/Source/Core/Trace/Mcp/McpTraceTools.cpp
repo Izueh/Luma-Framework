@@ -134,6 +134,7 @@ struct TraceView
    std::optional<std::string> mirror_origin;
    std::optional<std::string> mirror_origin_shader;
    std::optional<bool> mirror_pending;
+   std::optional<std::string> role;
 };
 
 struct TraceDepthStencil
@@ -212,6 +213,7 @@ struct TraceResource
    std::optional<std::string> mirror_origin;
    std::optional<std::string> mirror_origin_shader;
    std::optional<bool> mirror_pending;
+   std::optional<std::string> role;
 };
 
 struct TraceCopy
@@ -232,6 +234,35 @@ struct TraceCpuAccess
    std::optional<std::array<uint32_t, 6>> dest_box;
    uint32_t row_pitch = 0;
    uint32_t depth_pitch = 0;
+};
+
+struct TraceSrInfo
+{
+   std::string backend;
+   std::string provider_version;
+   uint32_t render_width = 0;
+   uint32_t render_height = 0;
+   uint32_t output_width = 0;
+   uint32_t output_height = 0;
+   bool dynamic_resolution = false;
+   bool hdr = false;
+   bool inverted_depth = false;
+   bool auto_exposure = false;
+   bool mvs_jittered = false;
+   bool reset = false;
+   bool succeeded = true;
+   bool copy_back = false;
+   float jitter_x = 0.f;
+   float jitter_y = 0.f;
+   int32_t jitter_phases = 0;
+   float vert_fov = 0.f;
+   float near_plane = 0.f;
+   float far_plane = 0.f;
+   float pre_exposure = 0.f;
+   float mvs_x_scale = 1.f;
+   float mvs_y_scale = 1.f;
+   float sharpness = -1.f;
+   float velocity_factor = 1.f;
 };
 
 // The entry's luma_trace_list fields, then its state
@@ -286,6 +317,7 @@ struct TraceGet
    std::optional<TraceView> dsv;
    std::vector<TraceConstantBuffer> cbs;
    std::vector<TraceSampler> samplers;
+   std::optional<TraceSrInfo> sr;
    std::vector<std::string> ignored_args;
 };
 } // namespace Replies
@@ -471,6 +503,8 @@ Replies::TraceView ToReply(const Capture::View& view)
       reply.debug_name = resource.debug_name;
    if (view.space != 0)
       reply.space = view.space;
+   if (!view.role.empty())
+      reply.role = view.role;
    PopulateMirrorInfo(reply, resource);
    return reply;
 }
@@ -771,6 +805,13 @@ std::string TraceGet(const Request& request)
    for (const Capture::Sampler& sampler : event.samplers)
       reply.samplers.push_back({sampler.slot, sampler.filter, sampler.filter_id, sampler.address_names, sampler.address, sampler.mip_lod_bias,
          sampler.space != 0 ? std::optional<uint32_t>(sampler.space) : std::nullopt});
+   if (event.sr)
+   {
+      const Capture::SrInfo& s = *event.sr;
+      reply.sr = Replies::TraceSrInfo{s.backend, s.provider_version, s.render_width, s.render_height, s.output_width, s.output_height, s.dynamic_resolution,
+         s.hdr, s.inverted_depth, s.auto_exposure, s.mvs_jittered, s.reset, s.succeeded, s.copy_back, s.jitter_x, s.jitter_y, s.jitter_phases, s.vert_fov,
+         s.near_plane, s.far_plane, s.pre_exposure, s.mvs_x_scale, s.mvs_y_scale, s.sharpness, s.velocity_factor};
+   }
    return Utils::Json::Write(reply);
 }
 } // namespace Tools

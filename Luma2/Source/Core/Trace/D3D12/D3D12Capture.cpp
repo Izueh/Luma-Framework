@@ -912,6 +912,52 @@ void End(Recording recording, Outcome outcome)
       state->events.push_back(std::move(recording.event));
 }
 
+void AddSrPass(ID3D12GraphicsCommandList* list, const SrInfo& info, ID3D12Resource* color, ID3D12Resource* depth, ID3D12Resource* motion_vectors,
+   ID3D12Resource* exposure, ID3D12Resource* reactive, ID3D12Resource* transparency, ID3D12Resource* output)
+{
+   ListState* state = GetState(list);
+   if (!state)
+      return;
+   Event event = {.type = EventType::LumaPass, .thread = GetCurrentThreadId(), .name = std::format("Super Resolution ({})", info.backend)};
+   event.outcome = info.succeeded ? Outcome::Ran : Outcome::Skipped;
+   event.sr = info;
+   const auto describe_sr_resource = [](ID3D12Resource* resource) {
+      Resource res = DescribeResource(resource, 0);
+      if (res.type == "Unknown" && resource)
+      {
+         const D3D12_RESOURCE_DESC desc = resource->GetDesc();
+         res.format = uint32_t(desc.Format);
+         res.type = desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE2D ? "Texture2D" : "Resource";
+         res.size = {uint32_t(desc.Width), desc.Height, desc.DepthOrArraySize, desc.MipLevels};
+      }
+      return res;
+   };
+   const auto add_input = [&](uint32_t slot, std::string_view role, ID3D12Resource* resource) {
+      if (!resource)
+         return;
+      Resource res = describe_sr_resource(resource);
+      View view = {.slot = slot, .resource = std::move(res), .format = 0, .role = std::string(role)};
+      view.format = view.resource.format;
+      view.size = {view.resource.size[0], view.resource.size[1], view.resource.size[2]};
+      event.shader_resources.push_back(std::move(view));
+   };
+   add_input(0, "Color", color);
+   add_input(1, "Depth", depth);
+   add_input(2, "Motion Vectors", motion_vectors);
+   add_input(3, "Exposure", exposure);
+   add_input(4, "Reactive", reactive);
+   add_input(5, "Transparency", transparency);
+   if (output)
+   {
+      Resource res = describe_sr_resource(output);
+      View view = {.slot = 0, .resource = std::move(res), .format = 0, .write_mask = 0xF, .role = "Output"};
+      view.format = view.resource.format;
+      view.size = {view.resource.size[0], view.resource.size[1], view.resource.size[2]};
+      event.render_targets.push_back(std::move(view));
+   }
+   state->events.push_back(std::move(event));
+}
+
 void RecordExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle)
 {
    ListState* to = GetState(list);

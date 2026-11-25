@@ -58,10 +58,11 @@ bool Toggle(std::string_view id, bool& value);
 bool Slider(std::string_view id, float& value, float min, float max, std::string_view format = "%.3f");
 bool Slider(std::string_view id, int32_t& value, int32_t min, int32_t max);
 // A dropdown: for many options (more than about five), a Segmented control for fewer
-bool Combo(std::string_view id, int32_t& index, std::span<const std::string_view> labels);
+bool Combo(std::string_view id, int32_t& index, std::span<const std::string_view> labels, bool (*is_option_enabled)(int32_t) = nullptr);
 // A row of mutually exclusive options side by side, the selected one filled in the accent color: for a few options (about five or
 // fewer), a Combo for more. `width` 0 sizes it to its labels, otherwise the segments share it. True when the selection changed.
-bool Segmented(std::string_view id, int32_t& index, std::span<const std::string_view> labels, float width = 0.f);
+bool Segmented(std::string_view id, int32_t& index, std::span<const std::string_view> labels, float width = 0.f,
+   bool (*is_option_enabled)(int32_t) = nullptr);
 // The control SettingRow uses for `count` options: Segmented up to this many, Combo above
 inline constexpr size_t MAX_SEGMENTS = 5;
 // A compact on/off button for list filters, filled in the accent color while on. True when toggled.

@@ -11,6 +11,7 @@
 
 #include "Common/Api.hpp"
 #include "ReShade/ReShade.hpp"
+#include "Effects/SR/SuperResolution.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
@@ -188,6 +189,21 @@ Status GetStatus()
          .cross_thread_overlaps = scaling.cross_thread_overlaps,
       },
    };
+   const Effects::SR::RuntimeInfo sr_info = Effects::SR::GetRuntimeInfo();
+   status.sr = {
+      .enabled = sr_info.enabled,
+      .active_type = std::string(Effects::SR::GetTypeName(sr_info.active_type)),
+      .drew_this_frame = sr_info.drew_this_frame,
+      .render_width = sr_info.last_draw.render_width ? sr_info.last_draw.render_width : sr_info.settings.render_width,
+      .render_height = sr_info.last_draw.render_height ? sr_info.last_draw.render_height : sr_info.settings.render_height,
+      .output_width = sr_info.settings.output_width,
+      .output_height = sr_info.settings.output_height,
+   };
+   for (size_t i = 0; i < Effects::SR::TYPE_COUNT; i++)
+   {
+      if (sr_info.backends[i].supported)
+         status.sr.supported_backends.emplace_back(Effects::SR::GetTypeName(Effects::SR::Type(i)));
+   }
    if (const Swapchain::DXGI::Status output = Swapchain::DXGI::GetStatus(); output.known)
    {
       const CB::LumaGlobalSettings& settings = Resources::LumaCBuffers::cb_luma_global_settings;

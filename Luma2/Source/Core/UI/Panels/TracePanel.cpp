@@ -288,7 +288,27 @@ Widgets::ListEntry Describe(const Event& event, size_t index, std::string_view t
       return {std::format("{:>5} {}{}", index, event.name, thread), Tone::Info, ToColorArray(Style::Colors::TEXT_DIM)};
    }
    if (event.type == EventType::LumaPass)
+   {
+      if (event.sr)
+      {
+         const Trace::Capture::SrInfo& sr = *event.sr;
+         const bool native = sr.render_width == sr.output_width && sr.render_height == sr.output_height;
+         std::string label = std::format("{:>5} {} [{}]", index, event.name,
+            native ? std::format("Native {}x{}", sr.output_width, sr.output_height)
+                   : std::format("{}x{} -> {}x{}", sr.render_width, sr.render_height, sr.output_width, sr.output_height));
+         if (sr.dynamic_resolution)
+            label += " [DRS]";
+         if (sr.reset)
+            label += " [Reset]";
+         if (!sr.succeeded)
+            label += " [Failed]";
+         label += usage_tag;
+         label += thread;
+         return {std::move(label), sr.succeeded ? Tone::Injected : Tone::Error,
+            apply_highlight(sr.succeeded ? Style::Colors::Trace::LUMA_PASS : Style::Colors::DANGER)};
+      }
       return {std::format("{:>5} {} (Luma){}{}", index, event.name, usage_tag, thread), Tone::Injected, apply_highlight(Style::Colors::Trace::LUMA_PASS)};
+   }
 
    // Copy, clear, CPU write or CPU read
    if (Trace::Capture::IsResourceEvent(event))
@@ -577,7 +597,7 @@ void DrawViews(const Event& event, size_t index, std::string_view slot_prefix, s
    const std::optional<Trace::DebugDraw::PassTarget> base = MakeBasePassTarget(event, index);
    for (const Trace::Capture::View& view : views)
    {
-      const std::string badge = FormatRegister(slot_prefix, view.slot, view.space);
+      const std::string badge = view.role.empty() ? FormatRegister(slot_prefix, view.slot, view.space) : view.role;
       const std::array<CardField, 3> fields = {{
          {"Format:", std::string(Utils::Format::GetName(view.format)), view.resource.mirror ? Tone::Injected : Tone::Info},
          {"Size:", GetSize(view)},
@@ -599,7 +619,7 @@ void DrawTargets(const Event& event, size_t index)
    const std::optional<Trace::DebugDraw::PassTarget> base = MakeBasePassTarget(event, index);
    for (const Trace::Capture::View& view : event.render_targets)
    {
-      const std::string badge = std::format("RTV{}", view.slot);
+      const std::string badge = view.role.empty() ? std::format("RTV{}", view.slot) : view.role;
       const std::array<CardField, 4> fields = {{
          {"Format:", std::string(Utils::Format::GetName(view.format)), view.resource.mirror ? Tone::Injected : Tone::Info},
          {"Size:", GetSize(view)},
@@ -1399,16 +1419,36 @@ void DrawEventState(const Event& event, size_t index)
    }
    const bool is_dispatch = event.type == EventType::Dispatch;
    const bool has_no_call = event.type == EventType::Present || event.type == EventType::ThirdPartyWork;
-   Widgets::SubHeader(is_dispatch ? "Dispatch" : event.type == EventType::Present ? "Present"
-         : event.type == EventType::ThirdPartyWork                                ? "Third-Party Work"
-                                                                                  : "Draw");
+   Widgets::SubHeader(event.sr                     ? "Super Resolution"
+         : is_dispatch                             ? "Dispatch"
+         : event.type == EventType::Present        ? "Present"
+         : event.type == EventType::ThirdPartyWork ? "Third-Party Work"
+                                                   : "Draw");
    std::vector<PropertyRow> rows = {
       {"Index", std::to_string(index)},
       {"Function", event.name},
       {"Outcome", std::string(GetOutcomeName(event.outcome)), event.outcome == Outcome::Ran ? Tone::Info : Tone::Warning},
       {"Thread", event.list.empty() ? std::format("{}{}", event.thread, event.deferred ? " (deferred context)" : " (immediate context)") : std::format("{} (command list {}, queue {})", event.thread, event.list, event.queue)},
    };
-   if (is_dispatch)
+   if (event.sr)
+   {
+      const Trace::Capture::SrInfo& sr = *event.sr;
+      const float scale = sr.output_height > 0 ? float(sr.render_height) / float(sr.output_height) : 1.f;
+      rows.push_back({"Backend", sr.provider_version.empty() ? sr.backend : std::format("{} ({})", sr.backend, sr.provider_version), Tone::Injected});
+      rows.push_back({"Resolution", std::format("{}x{} -> {}x{} ({:.2f}x){}", sr.render_width, sr.render_height, sr.output_width, sr.output_height, scale, sr.dynamic_resolution ? " [DRS]" : "")});
+      rows.push_back({"Jitter", std::format("{:.5f}, {:.5f} ({} phases)", sr.jitter_x, sr.jitter_y, sr.jitter_phases)});
+      rows.push_back({"Camera", std::format("FOV {:.4f} rad, Near {:.4g}, Far {:.4g}{}", sr.vert_fov, sr.near_plane, sr.far_plane, sr.inverted_depth ? " (inverted)" : "")});
+      rows.push_back({"Color / Exposure", std::format("{}, Auto Exposure: {}, Pre-Exposure: {:.4g}", sr.hdr ? "HDR" : "LDR", sr.auto_exposure ? "on" : "off", sr.pre_exposure)});
+      rows.push_back({"Motion Vectors", std::format("Scale ({:.4g}, {:.4g}), Jittered: {}", sr.mvs_x_scale, sr.mvs_y_scale, sr.mvs_jittered ? "yes" : "no")});
+      if (sr.sharpness >= 0.f)
+         rows.push_back({"Sharpness", std::format("{:.3f}", sr.sharpness)});
+      if (sr.backend == "FSR 3" || sr.backend == "FSR 4")
+         rows.push_back({"Velocity Factor", std::format("{:.3f}", sr.velocity_factor)});
+      rows.push_back({"Reset History", sr.reset ? "yes" : "no", sr.reset ? Tone::Warning : Tone::Info});
+      if (sr.copy_back)
+         rows.push_back({"Output Staging", "UAV temp + copy back", Tone::Info});
+   }
+   else if (is_dispatch)
       rows.push_back({"Groups", std::format("{} x {} x {}", event.dispatch[0], event.dispatch[1], event.dispatch[2])});
    else if (!has_no_call)
    {

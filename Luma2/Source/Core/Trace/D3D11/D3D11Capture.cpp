@@ -680,6 +680,38 @@ void AddWrite(ID3D11DeviceContext* context, std::string_view name, ID3D11Resourc
    Add(std::move(event));
 }
 
+void AddSrPass(ID3D11DeviceContext* context, const SrInfo& info, ID3D11Resource* color, ID3D11Resource* depth, ID3D11Resource* motion_vectors,
+   ID3D11Resource* exposure, ID3D11Resource* reactive, ID3D11Resource* transparency, ID3D11Resource* output)
+{
+   Event event = MakeResourceEvent(context, EventType::LumaPass, std::format("Super Resolution ({})", info.backend));
+   event.outcome = info.succeeded ? Outcome::Ran : Outcome::Skipped;
+   event.sr = info;
+   const auto add_input = [&](uint32_t slot, std::string_view role, ID3D11Resource* resource) {
+      if (!resource)
+         return;
+      Resource res = DescribeResource(resource);
+      View view = {.slot = slot, .resource = std::move(res), .format = 0, .role = std::string(role)};
+      view.format = view.resource.format;
+      view.size = {view.resource.size[0], view.resource.size[1], view.resource.size[2]};
+      event.shader_resources.push_back(std::move(view));
+   };
+   add_input(0, "Color", color);
+   add_input(1, "Depth", depth);
+   add_input(2, "Motion Vectors", motion_vectors);
+   add_input(3, "Exposure", exposure);
+   add_input(4, "Reactive", reactive);
+   add_input(5, "Transparency", transparency);
+   if (output)
+   {
+      Resource res = DescribeResource(output);
+      View view = {.slot = 0, .resource = std::move(res), .format = 0, .write_mask = 0xF, .role = "Output"};
+      view.format = view.resource.format;
+      view.size = {view.resource.size[0], view.resource.size[1], view.resource.size[2]};
+      event.render_targets.push_back(std::move(view));
+   }
+   Add(std::move(event));
+}
+
 bool IsSkipped(ID3D11DeviceContext* context, Shaders::StageSet stages)
 {
    const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(context);

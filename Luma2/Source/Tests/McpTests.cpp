@@ -34,11 +34,20 @@ TEST_CASE("Mcp: status reports the process, and unknown tools and arguments are 
    REQUIRE(status["ignored_args"].is_array());
    CHECK(status["ignored_args"].get_array().size() == 1);
 
+   Utils::Json::Value sr_state;
+   REQUIRE(Utils::Json::Read(Trace::Mcp::Answer(Trace::Mcp::ParseRequest("sr_state")), sr_state));
+   CHECK(sr_state["ok"].get<bool>());
+   CHECK(sr_state.contains("backends"));
+
+   Utils::Json::Value dev_values;
+   REQUIRE(Utils::Json::Read(Trace::Mcp::Answer(Trace::Mcp::ParseRequest("dev_values")), dev_values));
+   CHECK(dev_values["ok"].get<bool>());
+   CHECK(dev_values.contains("values"));
+
    Utils::Json::Value error;
-   // A tool that isn't served yet
-   REQUIRE(Utils::Json::Read(Trace::Mcp::Answer(Trace::Mcp::ParseRequest("sr_state")), error));
+   REQUIRE(Utils::Json::Read(Trace::Mcp::Answer(Trace::Mcp::ParseRequest("unknown_tool")), error));
    CHECK_FALSE(error["ok"].get<bool>());
-   CHECK(error["error"].get<std::string>().find("sr_state") != std::string::npos);
+   CHECK(error["error"].get<std::string>().find("unknown_tool") != std::string::npos);
 }
 
 TEST_CASE("Mcp: the pipe answers framed requests like Scripts/luma_mcp.py sends them, from several clients")

@@ -56,6 +56,8 @@ void RecordExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* con
 void AddCopy(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* destination, ID3D12Resource* source, const Copy& copy);
 void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, D3D12_CPU_DESCRIPTOR_HANDLE view, const std::array<float, 4>& values);
 void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* resource, const std::array<float, 4>& values);
+void AddSrPass(ID3D12GraphicsCommandList* list, const SrInfo& info, ID3D12Resource* color, ID3D12Resource* depth, ID3D12Resource* motion_vectors,
+   ID3D12Resource* exposure, ID3D12Resource* reactive, ID3D12Resource* transparency, ID3D12Resource* output);
 
 // The list's transitions, for the states a readback's barriers start from
 void RecordBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers);

@@ -12,6 +12,7 @@
 
 #include "Common/ShaderStage.hpp"
 #include "Shaders/Shaders.hpp"
+#include "Utils/Hash.hpp"
 
 struct IUnknown;
 
@@ -34,8 +35,42 @@ enum class Kind : uint8_t
 {
    Shader,
    ConstantBuffer,
-   Texture, // Bound as a shader resource view
+   Texture, // Loaded from disk (.dds), bound as a shader resource view
+   RuntimeTexture, // Tagged from a game pass or lazily created/copied at runtime
 };
+
+enum class Invalidation : uint8_t
+{
+   None = 0,
+   SwapchainResize = 1 << 0,
+   RenderResolutionChange = 1 << 1,
+};
+
+constexpr Invalidation operator|(Invalidation a, Invalidation b)
+{
+   return Invalidation(uint8_t(a) | uint8_t(b));
+}
+
+constexpr Invalidation operator&(Invalidation a, Invalidation b)
+{
+   return Invalidation(uint8_t(a) & uint8_t(b));
+}
+
+constexpr bool HasInvalidation(Invalidation value, Invalidation flag)
+{
+   return (uint8_t(value) & uint8_t(flag)) != 0;
+}
+
+// Well-known RuntimeTexture entry hashes used by Effects::SR and game mods
+namespace Sr {
+inline constexpr uint64_t COLOR = Utils::Hash::Name("sr_color");
+inline constexpr uint64_t DEPTH = Utils::Hash::Name("sr_depth");
+inline constexpr uint64_t MOTION_VECTORS = Utils::Hash::Name("sr_motion_vectors");
+inline constexpr uint64_t OUTPUT = Utils::Hash::Name("sr_output");
+inline constexpr uint64_t EXPOSURE = Utils::Hash::Name("sr_exposure");
+inline constexpr uint64_t REACTIVE = Utils::Hash::Name("sr_reactive");
+inline constexpr uint64_t TRANSPARENCY = Utils::Hash::Name("sr_transparency");
+} // namespace Sr
 
 // Core's entries are read-only: a game registering one of their names is refused
 enum class Owner : uint8_t
@@ -80,6 +115,8 @@ struct Entry
    uint32_t size = 0;
    void (*write)(std::span<std::byte> destination, const CustomData& custom, const WriteTarget& target) = nullptr;
    uint64_t (*get_stamp)() = nullptr;
+   // RuntimeTexture: when Core retires its managed GPU texture
+   Invalidation invalidation = Invalidation::None;
 };
 
 // What a context last uploaded of a constant buffer entry: its stamp, or its bytes for an entry without one
@@ -111,6 +148,10 @@ void UploadIfDirty(const Entry& entry, Upload& upload, std::vector<std::byte>& s
       upload.done = emit([&](std::span<std::byte> destination) { std::ranges::copy(upload.bytes, destination.begin()); });
 }
 
+// Registers Core's built-in RuntimeTexture entries (Sr::COLOR, DEPTH, MOTION_VECTORS, OUTPUT, ...)
+void RegisterRuntimeDefaults();
+// Registers a game-owned RuntimeTexture entry in Init()
+std::optional<uint32_t> RegisterRuntimeTexture(std::string_view name, Invalidation invalidation = Invalidation::SwapchainResize | Invalidation::RenderResolutionChange);
 // Init only, before any device: entries are fixed from then on (a shader file added while the game runs needs a restart).
 // Null for a name already registered. A game's entry with the name of one of Core's is refused, or replaced when it came first.
 std::optional<uint32_t> Register(Entry entry);

@@ -68,12 +68,15 @@ std::string_view GetStageName(ShaderStage stage)
    return NAMES[size_t(stage)];
 }
 
-// Sliders, drags and text apply when the edit ends; toggles, combos and keys at once
+// Text inputs and define/recipe sliders apply when the edit ends (avoids recompiling or re-patching per drag step);
+// numeric sliders apply live while dragging, and Overlay.cpp writes Luma.toml only once editing finishes (!IsAnyItemActive).
 bool IsAppliedOnRelease(const Settings::Setting& setting)
 {
-   if (std::holds_alternative<std::string>(setting.default_value) || std::holds_alternative<float>(setting.default_value))
+   if (std::holds_alternative<std::string>(setting.default_value))
       return true;
-   return std::holds_alternative<int32_t>(setting.default_value) && setting.range;
+   if (std::holds_alternative<Settings::Sources::Define>(setting.source) || std::holds_alternative<Settings::Sources::Recipe>(setting.source))
+      return std::holds_alternative<float>(setting.default_value) || (std::holds_alternative<int32_t>(setting.default_value) && setting.range);
+   return false;
 }
 
 // ImGui wants null terminated strings
@@ -267,8 +270,8 @@ bool DrawControl(const Settings::Setting& setting, Settings::Value& value, float
       else if constexpr (std::is_same_v<T, Settings::EnumIndex>)
       {
          if (setting.enum_labels.size() <= MAX_SEGMENTS)
-            return Segmented(id, typed.value, setting.enum_labels, control_width);
-         return Combo(id, typed.value, setting.enum_labels);
+            return Segmented(id, typed.value, setting.enum_labels, control_width, setting.is_option_enabled);
+         return Combo(id, typed.value, setting.enum_labels, setting.is_option_enabled);
       }
       else if constexpr (std::is_same_v<T, std::string>)
          return TextInput(id, typed);
@@ -536,7 +539,7 @@ bool Slider(std::string_view id, int32_t& value, int32_t min, int32_t max)
    return ImGui::SliderInt(HiddenLabel(id).c_str(), &value, min, max, "%d", ImGuiSliderFlags_AlwaysClamp);
 }
 
-bool Combo(std::string_view id, int32_t& index, std::span<const std::string_view> labels)
+bool Combo(std::string_view id, int32_t& index, std::span<const std::string_view> labels, bool (*is_option_enabled)(int32_t))
 {
    const std::string preview = index >= 0 && size_t(index) < labels.size() ? Terminated(labels[index]) : std::to_string(index);
    bool changed = false;
@@ -544,18 +547,24 @@ bool Combo(std::string_view id, int32_t& index, std::span<const std::string_view
    {
       for (int32_t i = 0; i < int32_t(labels.size()); i++)
       {
-         if (ImGui::Selectable(Terminated(labels[i]).c_str(), i == index))
+         const bool opt_enabled = !is_option_enabled || is_option_enabled(i);
+         if (!opt_enabled)
+            ImGui::PushStyleColor(ImGuiCol_Text, Style::Colors::ICON_DISABLED);
+         const ImGuiSelectableFlags flags = opt_enabled ? ImGuiSelectableFlags_None : ImGuiSelectableFlags_Disabled;
+         if (ImGui::Selectable(Terminated(labels[i]).c_str(), i == index, flags) && opt_enabled)
          {
             changed = i != index;
             index = i;
          }
+         if (!opt_enabled)
+            ImGui::PopStyleColor();
       }
       ImGui::EndCombo();
    }
    return changed;
 }
 
-bool Segmented(std::string_view id, int32_t& index, std::span<const std::string_view> labels, float width)
+bool Segmented(std::string_view id, int32_t& index, std::span<const std::string_view> labels, float width, bool (*is_option_enabled)(int32_t))
 {
    if (labels.empty())
       return false;
@@ -579,15 +588,16 @@ bool Segmented(std::string_view id, int32_t& index, std::span<const std::string_
    float x = start.x;
    for (int32_t i = 0; i < int32_t(labels.size()); i++)
    {
+      const bool opt_enabled = !disabled && (!is_option_enabled || is_option_enabled(i));
       const float segment = widths[size_t(i)];
       ImGui::SetCursorScreenPos(ImVec2(x, start.y));
       ImGui::PushID(i);
-      if (ImGui::InvisibleButton("##Segment", ImVec2(segment, height)) && i != index)
+      if (ImGui::InvisibleButton("##Segment", ImVec2(segment, height)) && opt_enabled && i != index)
       {
          index = i;
          changed = true;
       }
-      const bool hovered = ImGui::IsItemHovered();
+      const bool hovered = opt_enabled && ImGui::IsItemHovered();
       ImGui::PopID();
       const ImVec2 min(x, start.y);
       const ImVec2 max(x + segment, start.y + height);
@@ -608,7 +618,7 @@ bool Segmented(std::string_view id, int32_t& index, std::span<const std::string_
       const float inner_pad = Style::Scale(Style::Sizes::UNIT);
       const std::string shown = FitWithEllipsis(label, segment - inner_pad * 2.f, truncated);
       const ImVec2 text_size = ImGui::CalcTextSize(shown.c_str());
-      const ImVec4 text_color = disabled ? Style::Colors::ICON_DISABLED : (selected ? Style::Colors::TEXT_BRIGHT : Style::Colors::TEXT_LABEL);
+      const ImVec4 text_color = !opt_enabled ? Style::Colors::ICON_DISABLED : (selected ? Style::Colors::TEXT_BRIGHT : Style::Colors::TEXT_LABEL);
       draw_list->AddText(ImVec2(min.x + (segment - text_size.x) * 0.5f, min.y + (height - text_size.y) * 0.5f), ImGui::GetColorU32(text_color), shown.c_str());
       if (truncated && hovered)
          Tooltip(label);

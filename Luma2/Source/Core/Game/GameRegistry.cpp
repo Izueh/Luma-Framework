@@ -11,8 +11,10 @@
 #include <wrl/client.h>
 
 #include "Display/DisplayMode.hpp"
+#include "Effects/SR/SuperResolution.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/ObjectLifetime.hpp"
+#include "Resources/ConstantCapture.hpp"
 #include "Resources/ResourceBindings.hpp"
 #include "Resources/ResourceChains.hpp"
 #include "Resources/LumaCBuffers.hpp"
@@ -172,6 +174,8 @@ void SetOptions(const Options& options)
    Draw::SetOptions(options.draw);
    Luma::Swapchain::SetOptions(options.swapchain);
    Luma::Display::Composition::SetOptions(options.composition);
+   Luma::Effects::SR::SetOptions(options.sr);
+   Luma::Resources::ConstantCapture::SetOptions(options.constant_capture);
    declarations.device_data = options.device_data;
 }
 
@@ -232,6 +236,36 @@ void Frame::SetRenderResolution(Device device, Math::uint2 size)
    Luma::Frame::SetRenderResolution(GetUnknown(device), size);
 }
 
+void Frame::SetCamera(Device device, const Camera& camera)
+{
+   Luma::Frame::SetCamera(GetUnknown(device), camera);
+}
+
+Frame::Camera Frame::GetCamera(Device device)
+{
+   return Luma::Frame::GetCamera(GetUnknown(device));
+}
+
+void Frame::MarkPass(Device device, PassMarker marker)
+{
+   Luma::Frame::MarkPass(GetUnknown(device), marker);
+}
+
+bool Frame::HasPass(Device device, PassMarker marker)
+{
+   return Luma::Frame::HasPass(GetUnknown(device), marker);
+}
+
+void Frame::MarkPass(Device device, uint64_t custom_hash)
+{
+   Luma::Frame::MarkPass(GetUnknown(device), custom_hash);
+}
+
+bool Frame::HasPass(Device device, uint64_t custom_hash)
+{
+   return Luma::Frame::HasPass(GetUnknown(device), custom_hash);
+}
+
 void Resources::Scaling::Begin(Device device)
 {
    Luma::Resources::Scaling::Begin(GetUnknown(device));
@@ -250,6 +284,26 @@ bool Resources::Scaling::IsActive(Device device)
 void Resources::Scaling::SetTargetResolution(Device device, Math::uint2 size)
 {
    Luma::Resources::Scaling::SetTargetResolution(GetUnknown(device), size);
+}
+
+std::optional<uint32_t> Resources::Database::RegisterRuntimeTexture(std::string_view name, Invalidation invalidation)
+{
+   return Luma::Resources::Database::RegisterRuntimeTexture(name, invalidation);
+}
+
+void Resources::ConstantCapture::RegisterWriteCallback(uint32_t byte_size, BufferWriteCallback callback)
+{
+   Luma::Resources::ConstantCapture::RegisterWriteCallback(byte_size, callback);
+}
+
+bool Effects::SR::IsActive()
+{
+   return Luma::Effects::SR::IsActive();
+}
+
+Math::uint2 Effects::SR::FindClosestIntegerResolutionForAspectRatio(double target_width, double target_height, double aspect_ratio)
+{
+   return Luma::Effects::SR::FindClosestIntegerResolutionForAspectRatio(target_width, target_height, aspect_ratio);
 }
 
 namespace Registry {

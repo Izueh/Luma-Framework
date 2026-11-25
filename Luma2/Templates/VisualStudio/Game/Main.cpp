@@ -524,6 +524,8 @@ void Luma::Game::Init()
          .gamut_mapping = 0, // 0 None, 1 Auto, 2 SDR BT.709, 3 HDR BT.2020
          .ui_draw_type = 0, // 0 Raw, 1 Direct Custom, 2 Direct Inverse, 3 Separate
       },
+      // .sr = {.enable = false, .hdr = true, .inverted_depth = false},
+      // .constant_capture = {.enable = false},
       // .device_data = GameDeviceDataType::Of<GameDeviceData>(),
    };
 

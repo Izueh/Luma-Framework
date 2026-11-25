@@ -42,6 +42,9 @@ bool IsThirdPartyWorkOpen();
 // Optional callback identifying third-party add-on return addresses whose direct API calls Luma hooks pass through.
 using CallerFilter = bool (*)(const void* caller);
 void SetCallerFilter(CallerFilter filter);
+// Registers/unregisters a loaded DLL (e.g. NGX, FidelityFX, XeSS) whose internal threads bypass Luma hooks.
+void AddIgnoredModule(void* module_handle);
+void RemoveIgnoredModule(void* module_handle);
 bool IsIgnoredCaller(const void* caller);
 } // namespace Scope
 } // namespace Hooks

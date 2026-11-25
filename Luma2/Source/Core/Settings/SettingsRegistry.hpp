@@ -106,6 +106,7 @@ struct Setting
    bool requires_restart = false;
    bool (*is_enabled)() = nullptr;
    bool (*is_visible)() = nullptr;
+   bool (*is_option_enabled)(int32_t index) = nullptr;
    // Set by the call that registered it
    Kind kind = Kind::Game;
 };

@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <mutex>
@@ -21,8 +22,11 @@
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
 #include "Hooks/ObjectLifetime.hpp"
 #include "Hooks/HookScope.hpp"
+#include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
+#include "Resources/D3D12/D3D12Mirrors.hpp"
 #include "Resources/LumaCBuffers.hpp"
+#include "Resources/ResourceMirrors.hpp"
 #include "Resources/TextureLoader.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
 #include "Shaders/D3D12/D3D12RootSignatures.hpp"
@@ -63,6 +67,19 @@ struct Chunk
    uint64_t used = 0;
 };
 
+struct RuntimeSlot
+{
+   ComPtr<ID3D12Resource> tagged; // Cleared at OnPresent
+   Hooks::Lifetime::D3D12::Object managed;
+   D3D12_RESOURCE_DESC managed_desc = {};
+   D3D12_RESOURCE_STATES managed_state = D3D12_RESOURCE_STATE_COMMON;
+   D3D12_CPU_DESCRIPTOR_HANDLE rtv = {};
+   D3D12_CPU_DESCRIPTOR_HANDLE srv = {};
+   D3D12_CPU_DESCRIPTOR_HANDLE uav = {};
+};
+
+constexpr uint32_t MAX_RUNTIME_SLOTS = 64;
+
 // In the device's private data. Its chunk holds the device: released when the game releases it.
 struct Store
 {
@@ -71,10 +88,30 @@ struct Store
    bool released = false;
    // Per entry (null for other kinds), made before any list records: read without the lock
    std::vector<Texture> textures;
+   // Per entry RuntimeTexture slots and their CPU descriptor heaps
+   std::deque<RuntimeSlot> runtime;
+   ComPtr<ID3D12DescriptorHeap> rtv_heap;
+   ComPtr<ID3D12DescriptorHeap> srv_uav_heap;
+   uint32_t rtv_increment = 0;
+   uint32_t srv_uav_increment = 0;
+   uint32_t next_rtv_slot = 0;
+   uint32_t next_srv_uav_slot = 0;
 };
 
 std::atomic<uint64_t> ring_bytes = 0;
 std::atomic<uint32_t> chunks = 0;
+
+struct RootArg
+{
+   enum class Kind : uint8_t
+   {
+      None,
+      Table,
+      Descriptor,
+   };
+   Kind kind = Kind::None;
+   uint64_t value = 0; // GPU descriptor handle ptr or GPU VA
+};
 
 struct List
 {
@@ -94,6 +131,18 @@ struct List
    std::array<bool, 2> luma_table = {};
    std::array<UINT64, 2> table_set = {};
    ID3D12DescriptorHeap* heap = nullptr; // The CBV/SRV/UAV heap bound, when it has Luma's tail
+   // Full bound state for bound-resource lookup and restoration after SR / custom passes
+   std::array<ID3D12DescriptorHeap*, 2> bound_heaps = {};
+   uint32_t bound_heap_count = 0;
+   std::array<ID3D12RootSignature*, 2> root_signatures = {};
+   std::array<const Shaders::Database::D3D12::RootLayout*, 2> root_layouts = {};
+   std::array<std::vector<RootArg>, 2> root_args;
+   ID3D12PipelineState* pipeline = nullptr;
+   std::array<D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT> rtvs = {};
+   uint32_t rtv_count = 0;
+   bool rtv_single_range = false;
+   bool has_dsv = false;
+   D3D12_CPU_DESCRIPTOR_HANDLE dsv = {};
    // The last table of views written into the ring (BindTableViews): reused while the views, the layout and the heap stay
    TableViews views = {};
    uint32_t views_table = NO_TABLE;
@@ -409,11 +458,19 @@ void CreateDeviceObjects(ID3D12Device* device)
    if (!store)
       return;
    store->textures.resize(GetCount());
+   store->runtime.resize(GetCount());
    for (uint32_t index = 0; index < GetCount(); index++)
    {
       if (Get(index).kind == Kind::Texture)
          store->textures[index] = LoadTexture(device, index);
    }
+   Hooks::Scope::Guard scope;
+   const D3D12_DESCRIPTOR_HEAP_DESC rtv_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_RTV, MAX_RUNTIME_SLOTS, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 0};
+   if (SUCCEEDED(device->CreateDescriptorHeap(&rtv_desc, IID_PPV_ARGS(&store->rtv_heap))))
+      store->rtv_increment = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+   const D3D12_DESCRIPTOR_HEAP_DESC srv_uav_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, MAX_RUNTIME_SLOTS * 2, D3D12_DESCRIPTOR_HEAP_FLAG_NONE, 0};
+   if (SUCCEEDED(device->CreateDescriptorHeap(&srv_uav_desc, IID_PPV_ARGS(&store->srv_uav_heap))))
+      store->srv_uav_increment = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 }
 
 void ReleaseDeviceObjects(ID3D12Device* device)
@@ -429,6 +486,16 @@ void ReleaseDeviceObjects(ID3D12Device* device)
          texture_count -= texture.resource != nullptr;
          texture.resource.Reset();
       }
+      for (RuntimeSlot& slot : store->runtime)
+      {
+         slot.tagged.Reset();
+         Hooks::Lifetime::D3D12::Replace(slot.managed, nullptr);
+         slot.rtv = {};
+         slot.srv = {};
+         slot.uav = {};
+      }
+      store->rtv_heap.Reset();
+      store->srv_uav_heap.Reset();
    }
 }
 
@@ -438,10 +505,70 @@ void SetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12RootS
    if (!state)
       return;
    const Shaders::Database::D3D12::RootLayout* layout = Shaders::Database::D3D12::FindRootLayout(root_signature);
+   state->root_signatures[compute] = root_signature;
+   state->root_layouts[compute] = layout;
+   state->root_args[compute].clear();
    state->luma_parameter[compute] = layout ? layout->luma_parameter : UINT32_MAX;
    state->luma_table[compute] = layout && layout->luma_table;
    state->set[compute] = {};
    state->table_set[compute] = 0;
+}
+
+void SetPipelineState(ID3D12GraphicsCommandList* list, ID3D12PipelineState* pipeline)
+{
+   if (List* state = GetList(list))
+      state->pipeline = pipeline;
+}
+
+void SetRootTable(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_DESCRIPTOR_HANDLE table)
+{
+   List* state = GetList(list);
+   if (!state)
+      return;
+   auto& args = state->root_args[compute];
+   if (index >= args.size())
+      args.resize(size_t(index) + 1);
+   args[index] = {RootArg::Kind::Table, table.ptr};
+}
+
+void SetRootDescriptor(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_VIRTUAL_ADDRESS address)
+{
+   List* state = GetList(list);
+   if (!state)
+      return;
+   auto& args = state->root_args[compute];
+   if (index >= args.size())
+      args.resize(size_t(index) + 1);
+   args[index] = {RootArg::Kind::Descriptor, address};
+}
+
+void SetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
+   const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil)
+{
+   List* state = GetList(list);
+   if (!state)
+      return;
+   state->rtv_count = std::min<UINT>(count, D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT);
+   state->rtv_single_range = single_range != FALSE;
+   state->rtvs = {};
+   if (render_targets && state->rtv_count > 0)
+   {
+      if (state->rtv_single_range)
+      {
+         const UINT increment = state->target.device
+            ? static_cast<ID3D12Device*>(state->target.device)->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV)
+            : 0;
+         for (UINT i = 0; i < state->rtv_count; i++)
+            state->rtvs[i] = {render_targets[0].ptr + SIZE_T(i) * increment};
+      }
+      else
+      {
+         for (UINT i = 0; i < state->rtv_count; i++)
+            state->rtvs[i] = render_targets[i];
+      }
+   }
+   state->has_dsv = depth_stencil != nullptr;
+   state->dsv = depth_stencil ? *depth_stencil : D3D12_CPU_DESCRIPTOR_HANDLE{};
 }
 
 void ForgetList(ID3D12GraphicsCommandList* list)
@@ -457,6 +584,18 @@ void ForgetList(ID3D12GraphicsCommandList* list)
       state->luma_table = {};
       state->table_set = {};
       state->heap = nullptr;
+      state->bound_heaps = {};
+      state->bound_heap_count = 0;
+      state->root_signatures = {};
+      state->root_layouts = {};
+      state->root_args[0].clear();
+      state->root_args[1].clear();
+      state->pipeline = nullptr;
+      state->rtvs = {};
+      state->rtv_count = 0;
+      state->rtv_single_range = false;
+      state->has_dsv = false;
+      state->dsv = {};
       // Its ring descriptors are the queues' to free (HeapTail::D3D12::ForgetList)
       state->views_heap = nullptr;
       state->views_gpu = 0;
@@ -471,10 +610,390 @@ void SetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12Descr
    // Tables set before point into the heaps unbound now
    state->table_set = {};
    state->heap = nullptr;
+   state->bound_heaps = {};
+   state->bound_heap_count = 0;
    for (UINT i = 0; heaps && i < count; i++)
    {
-      if (heaps[i] && HeapTail::D3D12::GetGameSize(heaps[i]))
-         state->heap = heaps[i];
+      if (heaps[i])
+      {
+         if (state->bound_heap_count < state->bound_heaps.size())
+            state->bound_heaps[state->bound_heap_count++] = heaps[i];
+         if (HeapTail::D3D12::GetGameSize(heaps[i]))
+            state->heap = heaps[i];
+      }
+   }
+}
+
+void RestoreListState(ID3D12GraphicsCommandList* list)
+{
+   List* state = GetList(list);
+   if (!state)
+      return;
+   Hooks::Scope::Guard scope;
+   if (state->bound_heap_count > 0)
+      list->SetDescriptorHeaps(state->bound_heap_count, state->bound_heaps.data());
+   for (int compute = 0; compute < 2; compute++)
+   {
+      if (!state->root_signatures[compute])
+         continue;
+      if (compute)
+         list->SetComputeRootSignature(state->root_signatures[compute]);
+      else
+         list->SetGraphicsRootSignature(state->root_signatures[compute]);
+      const Shaders::Database::D3D12::RootLayout* layout = state->root_layouts[compute];
+      const auto& args = state->root_args[compute];
+      for (UINT i = 0; i < args.size(); i++)
+      {
+         if (args[i].kind == RootArg::Kind::Table && args[i].value != 0)
+         {
+            if (compute)
+               list->SetComputeRootDescriptorTable(i, {args[i].value});
+            else
+               list->SetGraphicsRootDescriptorTable(i, {args[i].value});
+         }
+         else if (args[i].kind == RootArg::Kind::Descriptor && args[i].value != 0 && layout && i < layout->parameters.size())
+         {
+            const D3D12_ROOT_PARAMETER_TYPE type = layout->parameters[i].type;
+            if (type == D3D12_ROOT_PARAMETER_TYPE_CBV)
+               compute ? list->SetComputeRootConstantBufferView(i, args[i].value) : list->SetGraphicsRootConstantBufferView(i, args[i].value);
+            else if (type == D3D12_ROOT_PARAMETER_TYPE_SRV)
+               compute ? list->SetComputeRootShaderResourceView(i, args[i].value) : list->SetGraphicsRootShaderResourceView(i, args[i].value);
+            else if (type == D3D12_ROOT_PARAMETER_TYPE_UAV)
+               compute ? list->SetComputeRootUnorderedAccessView(i, args[i].value) : list->SetGraphicsRootUnorderedAccessView(i, args[i].value);
+         }
+      }
+   }
+   state->set = {};
+   state->table_set = {};
+   if (state->pipeline)
+      list->SetPipelineState(state->pipeline);
+   if (state->rtv_count > 0 || state->has_dsv)
+      list->OMSetRenderTargets(state->rtv_count, state->rtv_count > 0 ? state->rtvs.data() : nullptr, FALSE, state->has_dsv ? &state->dsv : nullptr);
+}
+
+namespace {
+bool VisibilityMatches(D3D12_SHADER_VISIBILITY visibility, ShaderStage stage)
+{
+   if (visibility == D3D12_SHADER_VISIBILITY_ALL)
+      return true;
+   switch (stage)
+   {
+   case ShaderStage::Vertex: return visibility == D3D12_SHADER_VISIBILITY_VERTEX;
+   case ShaderStage::Hull: return visibility == D3D12_SHADER_VISIBILITY_HULL;
+   case ShaderStage::Domain: return visibility == D3D12_SHADER_VISIBILITY_DOMAIN;
+   case ShaderStage::Geometry: return visibility == D3D12_SHADER_VISIBILITY_GEOMETRY;
+   case ShaderStage::Pixel: return visibility == D3D12_SHADER_VISIBILITY_PIXEL;
+   case ShaderStage::Compute: return true;
+   }
+   return false;
+}
+
+ID3D12Resource* ResolveActiveResource(ID3D12Resource* resource)
+{
+   if (!resource)
+      return nullptr;
+   if (Mirrors::IsSwapping())
+   {
+      if (ID3D12Resource* mirror = Mirrors::D3D12::FindMirror(resource))
+         return mirror;
+   }
+   return resource;
+}
+} // namespace
+
+ID3D12Resource* FindBoundSRV(ID3D12GraphicsCommandList* list, ShaderStage stage, UINT slot)
+{
+   const List* state = GetList(list);
+   const bool compute = stage == ShaderStage::Compute;
+   if (!state || !state->root_layouts[compute])
+      return nullptr;
+   const auto& params = state->root_layouts[compute]->parameters;
+   const auto& args = state->root_args[compute];
+   for (size_t p = 0; p < params.size() && p < args.size(); p++)
+   {
+      const auto& param = params[p];
+      if (!VisibilityMatches(param.visibility, stage))
+         continue;
+      if (param.type == D3D12_ROOT_PARAMETER_TYPE_SRV && param.space == 0 && param.shader_register == slot && args[p].kind == RootArg::Kind::Descriptor)
+      {
+         if (const std::optional<Descriptors::D3D12::ResourceInfo> info = Descriptors::D3D12::FindBuffer(args[p].value))
+            return ResolveActiveResource(info->resource);
+      }
+      if (param.type == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE && args[p].kind == RootArg::Kind::Table && args[p].value != 0)
+      {
+         for (const auto& range : param.ranges)
+         {
+            if (range.type != D3D12_DESCRIPTOR_RANGE_TYPE_SRV || range.space != 0)
+               continue;
+            if (slot >= range.base_register && (range.count == UINT_MAX || slot < range.base_register + range.count))
+            {
+               const uint32_t descriptor_index = range.offset + (slot - range.base_register);
+               if (const std::optional<Descriptors::D3D12::Descriptor> desc = Descriptors::D3D12::Read({args[p].value}, descriptor_index);
+                  desc && desc->kind == Descriptors::D3D12::Kind::ShaderResource && desc->resource)
+                  return ResolveActiveResource(desc->resource);
+            }
+         }
+      }
+   }
+   return nullptr;
+}
+
+ID3D12Resource* FindBoundRTV(ID3D12GraphicsCommandList* list, UINT slot)
+{
+   const List* state = GetList(list);
+   if (!state || slot >= state->rtv_count)
+      return nullptr;
+   if (const std::optional<Descriptors::D3D12::Descriptor> desc = Descriptors::D3D12::Read(state->rtvs[slot]);
+      desc && desc->kind == Descriptors::D3D12::Kind::RenderTarget && desc->resource)
+      return ResolveActiveResource(desc->resource);
+   return nullptr;
+}
+
+ID3D12Resource* FindBoundDSV(ID3D12GraphicsCommandList* list)
+{
+   const List* state = GetList(list);
+   if (!state || !state->has_dsv)
+      return nullptr;
+   if (const std::optional<Descriptors::D3D12::Descriptor> desc = Descriptors::D3D12::Read(state->dsv);
+      desc && desc->kind == Descriptors::D3D12::Kind::DepthStencil && desc->resource)
+      return ResolveActiveResource(desc->resource);
+   return nullptr;
+}
+
+std::optional<BoundCBuffer> FindBoundCBuffer(ID3D12GraphicsCommandList* list, ShaderStage stage, UINT slot)
+{
+   const List* state = GetList(list);
+   const bool compute = stage == ShaderStage::Compute;
+   if (!state || !state->root_layouts[compute])
+      return std::nullopt;
+   const auto& params = state->root_layouts[compute]->parameters;
+   const auto& args = state->root_args[compute];
+   for (size_t p = 0; p < params.size() && p < args.size(); p++)
+   {
+      const auto& param = params[p];
+      if (!VisibilityMatches(param.visibility, stage))
+         continue;
+      if (param.type == D3D12_ROOT_PARAMETER_TYPE_CBV && param.space == 0 && param.shader_register == slot && args[p].kind == RootArg::Kind::Descriptor &&
+         args[p].value != 0)
+         return BoundCBuffer{args[p].value, 0};
+      if (param.type == D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE && args[p].kind == RootArg::Kind::Table && args[p].value != 0)
+      {
+         for (const auto& range : param.ranges)
+         {
+            if (range.type != D3D12_DESCRIPTOR_RANGE_TYPE_CBV || range.space != 0)
+               continue;
+            if (slot >= range.base_register && (range.count == UINT_MAX || slot < range.base_register + range.count))
+            {
+               const uint32_t descriptor_index = range.offset + (slot - range.base_register);
+               if (const std::optional<Descriptors::D3D12::Descriptor> desc = Descriptors::D3D12::Read({args[p].value}, descriptor_index);
+                  desc && desc->kind == Descriptors::D3D12::Kind::ConstantBuffer && desc->has_desc && desc->desc.constant_buffer.BufferLocation != 0)
+                  return BoundCBuffer{desc->desc.constant_buffer.BufferLocation, desc->desc.constant_buffer.SizeInBytes};
+            }
+         }
+      }
+   }
+   return std::nullopt;
+}
+
+void TagResource(ID3D12Device* device, uint64_t name_hash, ID3D12Resource* resource)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->runtime.size())
+      return;
+   std::scoped_lock lock(store->mutex);
+   if (!store->released)
+      store->runtime[*index].tagged = ResolveActiveResource(resource);
+}
+
+ID3D12Resource* TagBoundSRV(ID3D12GraphicsCommandList* list, ShaderStage stage, UINT slot, uint64_t name_hash)
+{
+   ID3D12Resource* resource = FindBoundSRV(list, stage, slot);
+   if (!resource)
+      return nullptr;
+   ComPtr<ID3D12Device> device;
+   if (SUCCEEDED(list->GetDevice(IID_PPV_ARGS(&device))))
+      TagResource(device.Get(), name_hash, resource);
+   return resource;
+}
+
+ID3D12Resource* TagBoundRTV(ID3D12GraphicsCommandList* list, UINT slot, uint64_t name_hash)
+{
+   ID3D12Resource* resource = FindBoundRTV(list, slot);
+   if (!resource)
+      return nullptr;
+   ComPtr<ID3D12Device> device;
+   if (SUCCEEDED(list->GetDevice(IID_PPV_ARGS(&device))))
+      TagResource(device.Get(), name_hash, resource);
+   return resource;
+}
+
+ID3D12Resource* TagBoundDSV(ID3D12GraphicsCommandList* list, uint64_t name_hash)
+{
+   ID3D12Resource* resource = FindBoundDSV(list);
+   if (!resource)
+      return nullptr;
+   ComPtr<ID3D12Device> device;
+   if (SUCCEEDED(list->GetDevice(IID_PPV_ARGS(&device))))
+      TagResource(device.Get(), name_hash, resource);
+   return resource;
+}
+
+ID3D12Resource* EnsureTexture(ID3D12Device* device, uint64_t name_hash, UINT width, UINT height, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags,
+   D3D12_RESOURCE_STATES initial_state)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->runtime.size() || width == 0 || height == 0 || format == DXGI_FORMAT_UNKNOWN)
+      return nullptr;
+   std::scoped_lock lock(store->mutex);
+   if (store->released)
+      return nullptr;
+   RuntimeSlot& slot = store->runtime[*index];
+   if (slot.managed.object && slot.managed_desc.Width == width && slot.managed_desc.Height == height && slot.managed_desc.Format == format &&
+      (slot.managed_desc.Flags & flags) == flags)
+   {
+      slot.tagged.Reset();
+      return static_cast<ID3D12Resource*>(slot.managed.object.Get());
+   }
+   Hooks::Scope::Guard scope;
+   const D3D12_HEAP_PROPERTIES heap = {D3D12_HEAP_TYPE_DEFAULT};
+   const D3D12_RESOURCE_DESC desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, width, height, 1, 1, format, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN, flags};
+   ComPtr<ID3D12Resource> resource;
+   if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, initial_state, nullptr, IID_PPV_ARGS(&resource))))
+      return nullptr;
+   slot.tagged.Reset();
+   slot.managed_desc = desc;
+   slot.managed_state = initial_state;
+   if ((flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET) != 0 && store->rtv_heap)
+   {
+      if (slot.rtv.ptr == 0 && store->next_rtv_slot < MAX_RUNTIME_SLOTS)
+         slot.rtv = {store->rtv_heap->GetCPUDescriptorHandleForHeapStart().ptr + SIZE_T(store->next_rtv_slot++) * store->rtv_increment};
+      if (slot.rtv.ptr != 0)
+         device->CreateRenderTargetView(resource.Get(), nullptr, slot.rtv);
+   }
+   if (store->srv_uav_heap)
+   {
+      if (slot.srv.ptr == 0 && store->next_srv_uav_slot < MAX_RUNTIME_SLOTS * 2)
+         slot.srv = {store->srv_uav_heap->GetCPUDescriptorHandleForHeapStart().ptr + SIZE_T(store->next_srv_uav_slot++) * store->srv_uav_increment};
+      if (slot.srv.ptr != 0)
+         device->CreateShaderResourceView(resource.Get(), nullptr, slot.srv);
+      if ((flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0)
+      {
+         if (slot.uav.ptr == 0 && store->next_srv_uav_slot < MAX_RUNTIME_SLOTS * 2)
+            slot.uav = {store->srv_uav_heap->GetCPUDescriptorHandleForHeapStart().ptr + SIZE_T(store->next_srv_uav_slot++) * store->srv_uav_increment};
+         if (slot.uav.ptr != 0)
+            device->CreateUnorderedAccessView(resource.Get(), nullptr, nullptr, slot.uav);
+      }
+   }
+   ID3D12Resource* raw = resource.Get();
+   Hooks::Lifetime::D3D12::Replace(slot.managed, std::move(resource));
+   return raw;
+}
+
+ID3D12Resource* GetResource(ID3D12Device* device, uint64_t name_hash)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->runtime.size())
+      return nullptr;
+   std::scoped_lock lock(store->mutex);
+   const RuntimeSlot& slot = store->runtime[*index];
+   return slot.tagged ? slot.tagged.Get() : static_cast<ID3D12Resource*>(slot.managed.object.Get());
+}
+
+ID3D12Resource* ReferenceResource(ID3D12GraphicsCommandList* list, uint64_t name_hash)
+{
+   if (!list)
+      return nullptr;
+   ComPtr<ID3D12Device> device;
+   if (FAILED(list->GetDevice(IID_PPV_ARGS(&device))))
+      return nullptr;
+   Store* store = Hooks::Lifetime::GetState<Store>(device.Get());
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->runtime.size())
+      return nullptr;
+   std::scoped_lock lock(store->mutex);
+   RuntimeSlot& slot = store->runtime[*index];
+   if (slot.tagged)
+      return slot.tagged.Get();
+   return static_cast<ID3D12Resource*>(Hooks::Lifetime::D3D12::Reference(list, slot.managed));
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE GetRTV(ID3D12Device* device, uint64_t name_hash)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->runtime.size())
+      return {};
+   std::scoped_lock lock(store->mutex);
+   return store->runtime[*index].rtv;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE GetSRV(ID3D12Device* device, uint64_t name_hash)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->runtime.size())
+      return {};
+   std::scoped_lock lock(store->mutex);
+   return store->runtime[*index].srv;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE GetUAV(ID3D12Device* device, uint64_t name_hash)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->runtime.size())
+      return {};
+   std::scoped_lock lock(store->mutex);
+   return store->runtime[*index].uav;
+}
+
+D3D12_RESOURCE_STATES GetManagedState(ID3D12Device* device, uint64_t name_hash)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->runtime.size())
+      return D3D12_RESOURCE_STATE_COMMON;
+   std::scoped_lock lock(store->mutex);
+   return store->runtime[*index].managed_state;
+}
+
+void SetManagedState(ID3D12Device* device, uint64_t name_hash, D3D12_RESOURCE_STATES state)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->runtime.size())
+      return;
+   std::scoped_lock lock(store->mutex);
+   store->runtime[*index].managed_state = state;
+}
+
+void OnPresent(ID3D12Device* device)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   if (!store)
+      return;
+   std::scoped_lock lock(store->mutex);
+   for (RuntimeSlot& slot : store->runtime)
+      slot.tagged.Reset();
+}
+
+void Invalidate(ID3D12Device* device, Invalidation reason)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   if (!store || reason == Invalidation::None)
+      return;
+   std::scoped_lock lock(store->mutex);
+   for (uint32_t index = 0; index < store->runtime.size(); index++)
+   {
+      if (Get(index).kind == Kind::RuntimeTexture && HasInvalidation(Get(index).invalidation, reason))
+      {
+         store->runtime[index].tagged.Reset();
+         Hooks::Lifetime::D3D12::Replace(store->runtime[index].managed, nullptr);
+         store->runtime[index].managed_desc = {};
+      }
    }
 }
 

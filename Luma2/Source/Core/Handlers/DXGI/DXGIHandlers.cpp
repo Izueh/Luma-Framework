@@ -16,6 +16,8 @@
 #include <wrl/client.h>
 
 #include "Common/Api.hpp"
+#include "Effects/SR/D3D11/D3D11SuperResolution.hpp"
+#include "Effects/SR/SuperResolution.hpp"
 #include "ReShade/ReShade.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Hooks/HookManager.hpp"
@@ -24,6 +26,7 @@
 #include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
 #include "Resources/D3D11/D3D11Samplers.hpp"
+#include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Resources/ResourceMirrors.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Resources/LumaCBuffers.hpp"
@@ -330,7 +333,17 @@ void PostResizeBuffers(IDXGISwapChain* swapchain, UINT, UINT, UINT, DXGI_FORMAT,
       swapchain->SetPrivateData(COLOR_SPACE_FORMAT_GUID, 0, nullptr);
       Log::Info("DXGI: swapchain {} color space forgotten, its format changed", static_cast<void*>(swapchain));
    }
-   Frame::SetOutputResolution(FindDevice(swapchain), {desc.BufferDesc.Width, desc.BufferDesc.Height});
+   IUnknown* const device = FindDevice(swapchain);
+   Frame::SetOutputResolution(device, {desc.BufferDesc.Width, desc.BufferDesc.Height});
+   std::visit(
+      Overloaded{
+         [](ID3D11Device* d3d11) { Resources::Database::D3D11::Invalidate(d3d11, Resources::Database::Invalidation::SwapchainResize); },
+         [device](ID3D12CommandQueue*) {
+            if (device)
+               Resources::Database::D3D12::Invalidate(static_cast<ID3D12Device*>(device), Resources::Database::Invalidation::SwapchainResize);
+         },
+      },
+      *presenter);
    // The game's buffers again, and the real color space (Luma's, set after the check above)
    Swapchain::DXGI::OnResized(swapchain, true);
    LogOverlays();
@@ -453,6 +466,10 @@ void PrePresentWork(IDXGISwapChain* swapchain)
                   Resources::Samplers::D3D11::RefreshMirrors();
                if (Resources::Mirrors::IsNeeded())
                   Resources::Mirrors::D3D11::OnPresent(device);
+               if (Effects::SR::IsNeeded())
+                  Effects::SR::D3D11::OnPresent(device);
+               Resources::Database::D3D11::OnPresent(device);
+               Frame::OnPresent(device);
                Resources::Database::D3D11::UpdateShaderObjects(device);
             },
             [&](ID3D12CommandQueue* queue) {

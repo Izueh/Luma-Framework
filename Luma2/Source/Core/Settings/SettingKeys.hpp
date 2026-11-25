@@ -84,6 +84,13 @@ inline constexpr Id<bool> SAMPLERS = {"Luma.Resources.Samplers"};
 // Development builds: replaces the sampler LOD bias offset (0 until SR sets one)
 inline constexpr Id<bool> SAMPLERS_CUSTOM_BIAS = {"Luma.Development.Samplers.CustomBias"};
 inline constexpr Id<float> SAMPLERS_BIAS = {"Luma.Development.Samplers.Bias"};
+// Super Resolution settings (Effects::SR)
+inline constexpr Id<Settings::EnumIndex> SR_TYPE = {"Luma.Upscaling.Type"};
+inline constexpr Id<Settings::EnumIndex> SR_DLSS_PRESET = {"Luma.Upscaling.DlssPreset"};
+inline constexpr Id<float> SR_VELOCITY_FACTOR = {"Luma.Upscaling.FsrVelocityFactor"};
+inline constexpr Id<Settings::EnumIndex> SR_AUTO_EXPOSURE = {"Luma.Upscaling.AutoExposure"};
+inline constexpr Id<bool> SR_DEBUG_VIEW = {"Luma.Development.SR.DebugView"};
+inline constexpr Id<float> SR_PRE_EXPOSURE = {"Luma.Development.SR.PreExposure"};
 // Compiles the shaders as soon as a define changes
 inline constexpr Id<bool> AUTO_COMPILE = {"Luma.Shaders.AutoCompile"};
 // Development and Test builds: writes the game's shaders to Luma/Dump

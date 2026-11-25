@@ -18,7 +18,9 @@
 #include "Hooks/D3D11/D3D11Stages.hpp"
 #include "Hooks/ObjectLifetime.hpp"
 #include "Resources/LumaCBuffers.hpp"
+#include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/ResourceDatabase.hpp"
+#include "Resources/ResourceMirrors.hpp"
 #include "Resources/TextureLoader.hpp"
 #include "Utils/Debug.hpp"
 #include "Log/Log.hpp"
@@ -31,11 +33,22 @@ namespace Resources {
 namespace Database {
 namespace D3D11 {
 namespace {
+struct RuntimeSlot
+{
+   ComPtr<ID3D11Resource> tagged; // Cleared at OnPresent
+   ComPtr<ID3D11Texture2D> managed;
+   ComPtr<ID3D11ShaderResourceView> managed_srv;
+   ComPtr<ID3D11RenderTargetView> managed_rtv;
+   ComPtr<ID3D11UnorderedAccessView> managed_uav;
+   D3D11_TEXTURE2D_DESC managed_desc = {};
+};
+
 struct Object
 {
    Shaders::D3D11::Published shader;
    ComPtr<ID3D11Buffer> buffer;
    ComPtr<ID3D11ShaderResourceView> view; // Textures
+   RuntimeSlot runtime; // RuntimeTexture
 };
 
 // In the device's private data. Its objects hold the device: they're released when the game releases it.
@@ -175,6 +188,7 @@ void ReleaseDeviceObjects(ID3D11Device* device)
       Shaders::D3D11::Release(store->objects[index].shader);
       store->objects[index].buffer.Reset();
       store->objects[index].view.Reset();
+      store->objects[index].runtime = {};
    }
    store->retired.lives.clear();
    store->released = true;
@@ -195,7 +209,246 @@ ID3D11ShaderResourceView* GetTexture(ID3D11Device* device, uint64_t name_hash)
    const std::optional<uint32_t> index = Find(name_hash);
    if (!store || !index || *index >= store->count)
       return nullptr;
-   return store->objects[*index].view.Get();
+   const Object& object = store->objects[*index];
+   return object.view ? object.view.Get() : object.runtime.managed_srv.Get();
+}
+
+namespace {
+ID3D11Resource* ResolveActiveResource(ID3D11Resource* resource)
+{
+   if (!resource)
+      return nullptr;
+   if (Mirrors::IsSwapping())
+   {
+      if (ID3D11Resource* mirror = Mirrors::D3D11::FindMirror(resource))
+         return mirror;
+   }
+   return resource;
+}
+
+ID3D11Texture2D* CopyResourceIntoSlot(ID3D11DeviceContext* context, ID3D11Resource* source, uint64_t name_hash, const TextureCopyOptions& options)
+{
+   if (!context || !source)
+      return nullptr;
+   ComPtr<ID3D11Texture2D> source_texture;
+   if (FAILED(source->QueryInterface(IID_PPV_ARGS(&source_texture))))
+      return nullptr;
+   D3D11_TEXTURE2D_DESC desc = {};
+   source_texture->GetDesc(&desc);
+   const DXGI_FORMAT format = options.format_override != DXGI_FORMAT_UNKNOWN ? options.format_override : desc.Format;
+   const UINT bind_flags = D3D11_BIND_SHADER_RESOURCE | options.extra_bind_flags;
+   ComPtr<ID3D11Device> device;
+   context->GetDevice(&device);
+   ID3D11Texture2D* managed = EnsureTexture(device.Get(), name_hash, desc.Width, desc.Height, format, bind_flags);
+   if (!managed)
+      return nullptr;
+   context->CopyResource(managed, source);
+   return managed;
+}
+} // namespace
+
+void TagResource(ID3D11Device* device, uint64_t name_hash, ID3D11Resource* resource)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->count)
+      return;
+   std::scoped_lock lock(store->mutex);
+   if (!store->released)
+      store->objects[*index].runtime.tagged = ResolveActiveResource(resource);
+}
+
+ID3D11Resource* TagBoundSRV(ID3D11DeviceContext* context, ShaderStage stage, UINT slot, uint64_t name_hash)
+{
+   if (!context)
+      return nullptr;
+   ComPtr<ID3D11ShaderResourceView> srv;
+   Hooks::D3D11::WithStage(stage, [&]<ShaderStage Stage>() { (context->*Hooks::D3D11::StageTraits<Stage>::GetShaderResources)(slot, 1, &srv); });
+   if (!srv)
+      return nullptr;
+   ComPtr<ID3D11Resource> resource;
+   srv->GetResource(&resource);
+   ComPtr<ID3D11Device> device;
+   context->GetDevice(&device);
+   TagResource(device.Get(), name_hash, resource.Get());
+   return ResolveActiveResource(resource.Get());
+}
+
+ID3D11Resource* TagBoundRTV(ID3D11DeviceContext* context, UINT slot, uint64_t name_hash)
+{
+   if (!context || slot >= D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT)
+      return nullptr;
+   ComPtr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+   context->OMGetRenderTargets(slot + 1, &rtvs[0], nullptr);
+   if (!rtvs[slot])
+      return nullptr;
+   ComPtr<ID3D11Resource> resource;
+   rtvs[slot]->GetResource(&resource);
+   ComPtr<ID3D11Device> device;
+   context->GetDevice(&device);
+   TagResource(device.Get(), name_hash, resource.Get());
+   return ResolveActiveResource(resource.Get());
+}
+
+ID3D11Resource* TagBoundDSV(ID3D11DeviceContext* context, uint64_t name_hash)
+{
+   if (!context)
+      return nullptr;
+   ComPtr<ID3D11DepthStencilView> dsv;
+   context->OMGetRenderTargets(0, nullptr, &dsv);
+   if (!dsv)
+      return nullptr;
+   ComPtr<ID3D11Resource> resource;
+   dsv->GetResource(&resource);
+   ComPtr<ID3D11Device> device;
+   context->GetDevice(&device);
+   TagResource(device.Get(), name_hash, resource.Get());
+   return ResolveActiveResource(resource.Get());
+}
+
+ID3D11Resource* TagBoundUAV(ID3D11DeviceContext* context, UINT slot, uint64_t name_hash)
+{
+   if (!context)
+      return nullptr;
+   ComPtr<ID3D11UnorderedAccessView> uav;
+   context->CSGetUnorderedAccessViews(slot, 1, &uav);
+   if (!uav)
+      return nullptr;
+   ComPtr<ID3D11Resource> resource;
+   uav->GetResource(&resource);
+   ComPtr<ID3D11Device> device;
+   context->GetDevice(&device);
+   TagResource(device.Get(), name_hash, resource.Get());
+   return ResolveActiveResource(resource.Get());
+}
+
+ID3D11Texture2D* CopyBoundSRV(ID3D11DeviceContext* context, ShaderStage stage, UINT slot, uint64_t name_hash, const TextureCopyOptions& options)
+{
+   if (!context)
+      return nullptr;
+   ComPtr<ID3D11ShaderResourceView> srv;
+   Hooks::D3D11::WithStage(stage, [&]<ShaderStage Stage>() { (context->*Hooks::D3D11::StageTraits<Stage>::GetShaderResources)(slot, 1, &srv); });
+   if (!srv)
+      return nullptr;
+   ComPtr<ID3D11Resource> resource;
+   srv->GetResource(&resource);
+   return CopyResourceIntoSlot(context, ResolveActiveResource(resource.Get()), name_hash, options);
+}
+
+ID3D11Texture2D* CopyBoundRTV(ID3D11DeviceContext* context, UINT slot, uint64_t name_hash, const TextureCopyOptions& options)
+{
+   if (!context || slot >= D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT)
+      return nullptr;
+   ComPtr<ID3D11RenderTargetView> rtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT];
+   context->OMGetRenderTargets(slot + 1, &rtvs[0], nullptr);
+   if (!rtvs[slot])
+      return nullptr;
+   ComPtr<ID3D11Resource> resource;
+   rtvs[slot]->GetResource(&resource);
+   return CopyResourceIntoSlot(context, ResolveActiveResource(resource.Get()), name_hash, options);
+}
+
+ID3D11Texture2D* EnsureTexture(ID3D11Device* device, uint64_t name_hash, UINT width, UINT height, DXGI_FORMAT format, UINT bind_flags)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->count || width == 0 || height == 0 || format == DXGI_FORMAT_UNKNOWN)
+      return nullptr;
+   std::scoped_lock lock(store->mutex);
+   if (store->released)
+      return nullptr;
+   RuntimeSlot& slot = store->objects[*index].runtime;
+   if (slot.managed && slot.managed_desc.Width == width && slot.managed_desc.Height == height && slot.managed_desc.Format == format &&
+      (slot.managed_desc.BindFlags & bind_flags) == bind_flags)
+   {
+      slot.tagged.Reset();
+      return slot.managed.Get();
+   }
+   slot = {};
+   D3D11_TEXTURE2D_DESC desc = {};
+   desc.Width = width;
+   desc.Height = height;
+   desc.MipLevels = 1;
+   desc.ArraySize = 1;
+   desc.Format = format;
+   desc.SampleDesc.Count = 1;
+   desc.Usage = D3D11_USAGE_DEFAULT;
+   desc.BindFlags = bind_flags;
+   if (FAILED(device->CreateTexture2D(&desc, nullptr, &slot.managed)))
+      return nullptr;
+   slot.managed_desc = desc;
+   if ((bind_flags & D3D11_BIND_SHADER_RESOURCE) != 0)
+      device->CreateShaderResourceView(slot.managed.Get(), nullptr, &slot.managed_srv);
+   if ((bind_flags & D3D11_BIND_RENDER_TARGET) != 0)
+      device->CreateRenderTargetView(slot.managed.Get(), nullptr, &slot.managed_rtv);
+   if ((bind_flags & D3D11_BIND_UNORDERED_ACCESS) != 0)
+      device->CreateUnorderedAccessView(slot.managed.Get(), nullptr, &slot.managed_uav);
+   return slot.managed.Get();
+}
+
+ID3D11Resource* GetResource(ID3D11Device* device, uint64_t name_hash)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->count)
+      return nullptr;
+   std::scoped_lock lock(store->mutex);
+   const RuntimeSlot& slot = store->objects[*index].runtime;
+   return slot.tagged ? slot.tagged.Get() : slot.managed.Get();
+}
+
+ID3D11ShaderResourceView* GetSRV(ID3D11Device* device, uint64_t name_hash)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->count)
+      return nullptr;
+   std::scoped_lock lock(store->mutex);
+   const Object& object = store->objects[*index];
+   return object.runtime.managed_srv ? object.runtime.managed_srv.Get() : object.view.Get();
+}
+
+ID3D11RenderTargetView* GetRTV(ID3D11Device* device, uint64_t name_hash)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->count)
+      return nullptr;
+   std::scoped_lock lock(store->mutex);
+   return store->objects[*index].runtime.managed_rtv.Get();
+}
+
+ID3D11UnorderedAccessView* GetUAV(ID3D11Device* device, uint64_t name_hash)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   const std::optional<uint32_t> index = Find(name_hash);
+   if (!store || !index || *index >= store->count)
+      return nullptr;
+   std::scoped_lock lock(store->mutex);
+   return store->objects[*index].runtime.managed_uav.Get();
+}
+
+void OnPresent(ID3D11Device* device)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   if (!store)
+      return;
+   std::scoped_lock lock(store->mutex);
+   for (uint32_t index = 0; index < store->count; index++)
+      store->objects[index].runtime.tagged.Reset();
+}
+
+void Invalidate(ID3D11Device* device, Invalidation reason)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   if (!store || reason == Invalidation::None)
+      return;
+   std::scoped_lock lock(store->mutex);
+   for (uint32_t index = 0; index < store->count; index++)
+   {
+      if (Get(index).kind == Kind::RuntimeTexture && HasInvalidation(Get(index).invalidation, reason))
+         store->objects[index].runtime = {};
+   }
 }
 
 bool HasRequested(ID3D11DeviceContext* context, const Shaders::CompiledShader& compiled)

@@ -115,6 +115,7 @@ struct View
    std::string blend;
    uint8_t write_mask = 0;
    uint32_t space = 0; // D3D12's register space, after the slot
+   std::string role; // Semantic label for injected passes (e.g. "Color", "Depth", "Motion Vectors", "Output")
 };
 
 struct Sampler
@@ -186,6 +187,35 @@ struct Rasterizer
    bool multisample = false;
 };
 
+struct SrInfo
+{
+   std::string backend; // "DLSS", "FSR 3", "FSR 4", "XeSS"
+   std::string provider_version;
+   uint32_t render_width = 0;
+   uint32_t render_height = 0;
+   uint32_t output_width = 0;
+   uint32_t output_height = 0;
+   bool dynamic_resolution = false;
+   bool hdr = false;
+   bool inverted_depth = false;
+   bool auto_exposure = false;
+   bool mvs_jittered = false;
+   bool reset = false;
+   bool succeeded = true;
+   bool copy_back = false;
+   float jitter_x = 0.f;
+   float jitter_y = 0.f;
+   int32_t jitter_phases = 0;
+   float vert_fov = 0.f;
+   float near_plane = 0.f;
+   float far_plane = 0.f;
+   float pre_exposure = 0.f;
+   float mvs_x_scale = 1.f;
+   float mvs_y_scale = 1.f;
+   float sharpness = -1.f;
+   float velocity_factor = 1.f;
+};
+
 struct Event
 {
    EventType type = EventType::Draw;
@@ -243,6 +273,8 @@ struct Event
    std::optional<CpuAccess> cpu_access;
    // A clear's color, or depth and stencil
    std::array<float, 4> clear_values = {};
+   // Super resolution pass details (EventType::LumaPass)
+   std::optional<SrInfo> sr;
 };
 
 struct Frame

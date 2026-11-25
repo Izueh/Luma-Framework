@@ -7,9 +7,12 @@
 #include "Settings/SettingsRegistry.hpp"
 #include "Draw/D3D11/D3D11Draw.hpp"
 #include "Draw/Draw.hpp"
+#include "Effects/SR/D3D11/D3D11SuperResolution.hpp"
+#include "Effects/SR/SuperResolution.hpp"
 #include "Game/D3D11/D3D11DrawEvents.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Handlers/Handlers.hpp"
+#include "Resources/D3D11/D3D11ConstantCapture.hpp"
 #include "Resources/D3D11/D3D11LumaCBuffers.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D11/D3D11Samplers.hpp"
@@ -114,6 +117,8 @@ void PostCreateDevice(ID3D11Device* device)
          if (Shaders::IsNeeded())
             Shaders::Variants::D3D11::CreateVariantStore(device);
          Resources::Database::D3D11::CreateDeviceObjects(device);
+         if (Effects::SR::IsNeeded())
+            Effects::SR::D3D11::CreateDeviceObjects(device);
       });
 }
 
@@ -125,6 +130,7 @@ void OnDeviceDestroyed(ID3D11Device* device)
 #if DEVELOPMENT
          Trace::DebugDraw::ReleaseD3D11(device);
 #endif
+         Effects::SR::D3D11::ReleaseDeviceObjects(device);
          if (Shaders::IsNeeded())
             Shaders::Variants::D3D11::ReleaseVariants(device);
          Resources::Mirrors::D3D11::ReleaseDeviceObjects(device);
@@ -414,11 +420,13 @@ void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subres
 #endif
    if (Resources::Mirrors::IsNeeded())
       Resources::Mirrors::D3D11::TrackMappedMirror(context, resource, subresource, type, mapped);
+   Resources::ConstantCapture::D3D11::OnMap(context, resource, type, mapped.pData);
    Game::Registry::Call(GameEvents().on_map, context, resource, subresource, type, flags, mapped);
 }
 
 bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource)
 {
+   Resources::ConstantCapture::D3D11::OnUnmap(context, resource);
    if (Resources::Mirrors::IsNeeded())
       Resources::Mirrors::D3D11::CommitMappedMirror(context, resource, subresource);
    return Game::Registry::Call(GameEvents().on_unmap, context, resource, subresource);
@@ -448,6 +456,7 @@ bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource
       Trace::Capture::D3D11::AddWrite(context, "UpdateSubresource", resource, access, Trace::Capture::EventType::CpuWrite);
    }
 #endif
+   Resources::ConstantCapture::D3D11::OnUpdateSubresource(context, resource, data);
    // Into the mirror too, whether it's swapped in or not; the game's call still writes the original
    if (Resources::Mirrors::IsNeeded())
       Resources::Mirrors::D3D11::WriteToMirror(context, resource, subresource, box, data, row_pitch, depth_pitch);

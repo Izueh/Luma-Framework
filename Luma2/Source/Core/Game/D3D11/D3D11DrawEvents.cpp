@@ -6,6 +6,7 @@
 #include <wrl/client.h>
 
 #include "Settings/SettingsRegistry.hpp"
+#include "Effects/SR/D3D11/D3D11SuperResolution.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Hooks/HookFunctions.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
@@ -86,9 +87,76 @@ void Game::D3D11::BindLumaShader(ID3D11DeviceContext* context, uint64_t name_has
       running->luma_stages.Set(stage);
 }
 
+bool Game::D3D11::HasLumaShader(ID3D11Device* device, uint64_t name_hash)
+{
+   const Luma::Shaders::D3D11::Live* shader = Luma::Resources::Database::D3D11::GetShader(device, name_hash);
+   return shader && shader->object;
+}
+
 ID3D11ShaderResourceView* Game::D3D11::GetTexture(ID3D11Device* device, uint64_t name_hash)
 {
    return Luma::Resources::Database::D3D11::GetTexture(device, name_hash);
+}
+
+ID3D11Resource* Game::D3D11::TagBoundSRV(const Call& call, ShaderStage stage, UINT slot, uint64_t name_hash)
+{
+   return Luma::Resources::Database::D3D11::TagBoundSRV(call.context, stage, slot, name_hash);
+}
+
+ID3D11Resource* Game::D3D11::TagBoundRTV(const Call& call, UINT slot, uint64_t name_hash)
+{
+   return Luma::Resources::Database::D3D11::TagBoundRTV(call.context, slot, name_hash);
+}
+
+ID3D11Resource* Game::D3D11::TagBoundDSV(const Call& call, uint64_t name_hash)
+{
+   return Luma::Resources::Database::D3D11::TagBoundDSV(call.context, name_hash);
+}
+
+ID3D11Resource* Game::D3D11::TagBoundUAV(const Call& call, UINT slot, uint64_t name_hash)
+{
+   return Luma::Resources::Database::D3D11::TagBoundUAV(call.context, slot, name_hash);
+}
+
+ID3D11Texture2D* Game::D3D11::CopyBoundSRV(const Call& call, ShaderStage stage, UINT slot, uint64_t name_hash, DXGI_FORMAT format_override,
+   UINT extra_bind_flags)
+{
+   return Luma::Resources::Database::D3D11::CopyBoundSRV(call.context, stage, slot, name_hash, {format_override, extra_bind_flags});
+}
+
+ID3D11Texture2D* Game::D3D11::CopyBoundRTV(const Call& call, UINT slot, uint64_t name_hash, DXGI_FORMAT format_override, UINT extra_bind_flags)
+{
+   return Luma::Resources::Database::D3D11::CopyBoundRTV(call.context, slot, name_hash, {format_override, extra_bind_flags});
+}
+
+ID3D11Texture2D* Game::D3D11::EnsureTexture(ID3D11Device* device, uint64_t name_hash, UINT width, UINT height, DXGI_FORMAT format, UINT bind_flags)
+{
+   return Luma::Resources::Database::D3D11::EnsureTexture(device, name_hash, width, height, format, bind_flags);
+}
+
+ID3D11Resource* Game::D3D11::GetResource(ID3D11Device* device, uint64_t name_hash)
+{
+   return Luma::Resources::Database::D3D11::GetResource(device, name_hash);
+}
+
+ID3D11RenderTargetView* Game::D3D11::GetRTV(ID3D11Device* device, uint64_t name_hash)
+{
+   return Luma::Resources::Database::D3D11::GetRTV(device, name_hash);
+}
+
+ID3D11ShaderResourceView* Game::D3D11::GetSRV(ID3D11Device* device, uint64_t name_hash)
+{
+   return Luma::Resources::Database::D3D11::GetSRV(device, name_hash);
+}
+
+ID3D11UnorderedAccessView* Game::D3D11::GetUAV(ID3D11Device* device, uint64_t name_hash)
+{
+   return Luma::Resources::Database::D3D11::GetUAV(device, name_hash);
+}
+
+bool Game::Effects::SR::Draw(const Game::D3D11::Call& call, const DrawOverrides& overrides)
+{
+   return Luma::Effects::SR::D3D11::Draw(call.context, overrides);
 }
 
 void Game::D3D11::UseOriginal(const Call& call, ShaderStage stage)

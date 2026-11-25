@@ -60,6 +60,12 @@ std::string TraceGet(const Request& request);
 // McpReadbackTools.cpp
 std::string ReadResource(const Request& request);
 std::string ReadCbuffer(const Request& request);
+// McpSrTools.cpp
+std::string SrState(const Request& request);
+std::string SrCapture(const Request& request);
+// McpDevTools.cpp
+std::string DevValues(const Request& request);
+std::string SetDevValue(const Request& request);
 } // namespace Tools
 } // namespace Mcp
 } // namespace Trace

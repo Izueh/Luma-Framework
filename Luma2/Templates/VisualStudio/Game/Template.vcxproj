@@ -10,6 +10,11 @@
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <!-- Enable DXP shader patching recipes (requires vcpkg restore on first build) -->
     <UseLumaDXP>false</UseLumaDXP>
+    <!-- Optional Super Resolution SDKs -->
+    <UseLumaNGX>false</UseLumaNGX>
+    <UseLumaFSR>false</UseLumaFSR>
+    <UseLumaFSR4>false</UseLumaFSR4>
+    <UseLumaXeSS>false</UseLumaXeSS>
     <!-- Override output DLL name (default: dxgi) -->
     <!-- <LumaDllName>dxgi</LumaDllName> -->
     <!-- Set <LumaGameDir> in an untracked <ProjectName>.vcxproj.user file to auto-deploy builds -->

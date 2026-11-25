@@ -39,6 +39,8 @@ void End(Recording recording, Outcome outcome = Outcome::Ran);
 void AddCopy(ID3D11DeviceContext* context, std::string_view name, ID3D11Resource* destination, ID3D11Resource* source, const Copy& copy);
 void AddClear(ID3D11DeviceContext* context, std::string_view name, ID3D11View* view, const std::array<float, 4>& values);
 void AddWrite(ID3D11DeviceContext* context, std::string_view name, ID3D11Resource* resource, const CpuAccess& access = {}, EventType type = EventType::CpuWrite);
+void AddSrPass(ID3D11DeviceContext* context, const SrInfo& info, ID3D11Resource* color, ID3D11Resource* depth, ID3D11Resource* motion_vectors,
+   ID3D11Resource* exposure, ID3D11Resource* reactive, ID3D11Resource* transparency, ID3D11Resource* output);
 
 // Presenting thread, before Capture::OnPresent: the copies read back into their events
 void ReadBackConstantBuffers();

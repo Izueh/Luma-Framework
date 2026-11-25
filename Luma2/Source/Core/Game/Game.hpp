@@ -14,8 +14,10 @@
 #include "Common/ShaderStage.hpp"
 #include "Display/DisplayComposition.hpp"
 #include "Draw/Draw.hpp"
+#include "Effects/SR/SuperResolution.hpp"
 #include "Frame/FrameState.hpp"
 #include "Game/GameEvents.hpp"
+#include "Resources/ConstantCapture.hpp"
 #include "Resources/ResourceBindings.hpp"
 #include "Resources/ResourceChains.hpp"
 #include "Resources/LumaCBuffers.hpp"
@@ -118,6 +120,10 @@ struct Options
    Luma::Swapchain::Options swapchain;
    // Default display composition pipeline space and gamma/gamut/UI parameters (written to LumaSettings.DisplayComposition)
    Luma::Display::Composition::Options composition;
+   // Super Resolution (DLSS, FSR 3, FSR 4, XeSS)
+   Luma::Effects::SR::Options sr;
+   // Constant buffer capture (D3D11 Map/Unmap/UpdateSubresource, D3D12 upload heap read)
+   Luma::Resources::ConstantCapture::Options constant_capture;
    GameDeviceDataType device_data;
 };
 
@@ -140,7 +146,32 @@ void End(Device device);
 bool IsActive(Device device);
 void SetTargetResolution(Device device, Math::uint2 size);
 } // namespace Scaling
+
+namespace Database {
+namespace Sr = Luma::Resources::Database::Sr;
+using Invalidation = Luma::Resources::Database::Invalidation;
+
+std::optional<uint32_t> RegisterRuntimeTexture(std::string_view name,
+   Invalidation invalidation = Invalidation::SwapchainResize | Invalidation::RenderResolutionChange);
+} // namespace Database
+
+namespace ConstantCapture {
+using BufferWriteCallback = Luma::Resources::ConstantCapture::BufferWriteCallback;
+void RegisterWriteCallback(uint32_t byte_size, BufferWriteCallback callback);
+} // namespace ConstantCapture
 } // namespace Resources
+
+namespace Effects {
+namespace SR {
+using DrawOverrides = Luma::Effects::SR::DrawOverrides;
+using Type = Luma::Effects::SR::Type;
+
+bool IsActive();
+bool Draw(const Game::D3D11::Call& call, const DrawOverrides& overrides = {});
+bool Draw(const Game::D3D12::Call& call, const DrawOverrides& overrides = {});
+Math::uint2 FindClosestIntegerResolutionForAspectRatio(double target_width, double target_height, double aspect_ratio);
+} // namespace SR
+} // namespace Effects
 
 // Drawn with UI::Widgets. Plain settings go through the registry instead.
 struct Panels
@@ -168,11 +199,20 @@ namespace Display {
 void SetHdr(bool hdr);
 } // namespace Display
 
-// The device's resolutions (Luma::Frame). Any thread, the device or the game's proxy of it.
+// The device's resolutions, camera, and pass markers (Luma::Frame). Any thread, the device or the game's proxy of it.
 namespace Frame {
+using Camera = Luma::Frame::Camera;
+using PassMarker = Luma::Frame::PassMarker;
+
 Luma::Frame::Resolutions Get(Device device);
 // What the game renders the scene at, from its SR or TAA path: the output's until set, and again after a resize
 void SetRenderResolution(Device device, Math::uint2 size);
+void SetCamera(Device device, const Camera& camera);
+Camera GetCamera(Device device);
+void MarkPass(Device device, PassMarker marker);
+bool HasPass(Device device, PassMarker marker);
+void MarkPass(Device device, uint64_t custom_hash);
+bool HasPass(Device device, uint64_t custom_hash);
 } // namespace Frame
 
 // For the draw events (Events::on_variant_draw, on_draw_or_dispatch, OnShaderDraw), inside a Luma scope
@@ -183,12 +223,27 @@ void RunOriginal(const Call& call);
 void UseOriginal(const Call& call, ShaderStage stage);
 // With the resources the shader requests. From a draw event, Core then binds no variant's requests for that call.
 void BindLumaShader(ID3D11DeviceContext* context, uint64_t name_hash, const Luma::Resources::Database::CustomData& custom = {});
+bool HasLumaShader(ID3D11Device* device, uint64_t name_hash);
 // A texture of the Textures folders (Options::textures), by its file's name: "fast_noise"_h. Null if it didn't load. Lives as long
 // as the device.
 ID3D11ShaderResourceView* GetTexture(ID3D11Device* device, uint64_t name_hash);
+// RuntimeTexture Resource Database helpers
+ID3D11Resource* TagBoundSRV(const Call& call, ShaderStage stage, UINT slot, uint64_t name_hash);
+ID3D11Resource* TagBoundRTV(const Call& call, UINT slot, uint64_t name_hash);
+ID3D11Resource* TagBoundDSV(const Call& call, uint64_t name_hash);
+ID3D11Resource* TagBoundUAV(const Call& call, UINT slot, uint64_t name_hash);
+ID3D11Texture2D* CopyBoundSRV(const Call& call, ShaderStage stage, UINT slot, uint64_t name_hash, DXGI_FORMAT format_override = DXGI_FORMAT_UNKNOWN,
+   UINT extra_bind_flags = 0);
+ID3D11Texture2D* CopyBoundRTV(const Call& call, UINT slot, uint64_t name_hash, DXGI_FORMAT format_override = DXGI_FORMAT_UNKNOWN,
+   UINT extra_bind_flags = 0);
+ID3D11Texture2D* EnsureTexture(ID3D11Device* device, uint64_t name_hash, UINT width, UINT height, DXGI_FORMAT format, UINT bind_flags);
+ID3D11Resource* GetResource(ID3D11Device* device, uint64_t name_hash);
+ID3D11RenderTargetView* GetRTV(ID3D11Device* device, uint64_t name_hash);
+ID3D11ShaderResourceView* GetSRV(ID3D11Device* device, uint64_t name_hash);
+ID3D11UnorderedAccessView* GetUAV(ID3D11Device* device, uint64_t name_hash);
 } // namespace D3D11
 
-// For the D3D12 draw events, inside a Luma scope. A draw event can't bind Luma's own shaders on D3D12 yet.
+// For the D3D12 draw events, inside a Luma scope.
 namespace D3D12 {
 // The game's call on its list, with what the list has bound now (Luma's cbuffers for the variant bound included)
 void RunOriginal(const Call& call);
@@ -197,6 +252,18 @@ void RunOriginal(const Call& call);
 void UseOriginal(const Call& call);
 // The viewport the game last bound at `index` on `list` (requires RSSetViewports hook, e.g. Scaling enabled)
 std::optional<D3D12_VIEWPORT> GetViewport(ID3D12GraphicsCommandList* list, UINT index = 0);
+// RuntimeTexture Resource Database helpers
+ID3D12Resource* TagBoundSRV(const Call& call, ShaderStage stage, UINT slot, uint64_t name_hash);
+ID3D12Resource* TagBoundRTV(const Call& call, UINT slot, uint64_t name_hash);
+ID3D12Resource* TagBoundDSV(const Call& call, uint64_t name_hash);
+ID3D12Resource* EnsureTexture(ID3D12Device* device, uint64_t name_hash, UINT width, UINT height, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags);
+ID3D12Resource* GetResource(ID3D12Device* device, uint64_t name_hash);
+D3D12_CPU_DESCRIPTOR_HANDLE GetRTV(ID3D12Device* device, uint64_t name_hash);
+// Reads a constant buffer bound at `slot` (space 0) of `stage` directly from its mapped upload heap
+bool ReadBoundCBuffer(const Call& call, ShaderStage stage, UINT slot, std::span<std::byte> destination);
+// Draws a fullscreen quad using Luma's compiled VS/PS into a RuntimeTexture entry (using the game's bound extended root signature and bindings)
+bool DrawFullscreenToEntry(const Call& call, uint64_t vertex_shader_hash, uint64_t pixel_shader_hash, uint64_t target_entry_hash, DXGI_FORMAT target_format,
+   Math::uint2 viewport_size);
 } // namespace D3D12
 } // namespace Game
 } // namespace Luma
