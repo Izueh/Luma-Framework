@@ -38,6 +38,10 @@ using CreateDXGIFactory2Function = HRESULT(WINAPI*)(UINT flags, REFIID riid, voi
 using CreateSwapChainFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** swapchain);
 using CreateSwapChainForHwndFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2* factory, IUnknown* device, HWND hwnd, const DXGI_SWAP_CHAIN_DESC1* desc,
    const DXGI_SWAP_CHAIN_FULLSCREEN_DESC* fullscreen_desc, IDXGIOutput* output, IDXGISwapChain1** swapchain);
+using CreateSwapChainForCoreWindowFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2* factory, IUnknown* device, IUnknown* window, const DXGI_SWAP_CHAIN_DESC1* desc,
+   IDXGIOutput* output, IDXGISwapChain1** swapchain);
+using CreateSwapChainForCompositionFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGIFactory2* factory, IUnknown* device, const DXGI_SWAP_CHAIN_DESC1* desc, IDXGIOutput* output,
+   IDXGISwapChain1** swapchain);
 using GetDeviceFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapchain, REFIID riid, void** device);
 using GetDescFunction = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain* swapchain, DXGI_SWAP_CHAIN_DESC* desc);
 using GetDesc1Function = HRESULT(STDMETHODCALLTYPE*)(IDXGISwapChain1* swapchain, DXGI_SWAP_CHAIN_DESC1* desc);
@@ -60,6 +64,8 @@ CreateDXGIFactoryFunction original_create_factory1 = nullptr;
 CreateDXGIFactory2Function original_create_factory2 = nullptr;
 CreateSwapChainFunction original_create_swapchain = nullptr;
 CreateSwapChainForHwndFunction original_create_swapchain_for_hwnd = nullptr;
+CreateSwapChainForCoreWindowFunction original_create_swapchain_for_core_window = nullptr;
+CreateSwapChainForCompositionFunction original_create_swapchain_for_composition = nullptr;
 GetDeviceFunction original_get_device = nullptr;
 GetDescFunction original_get_desc = nullptr;
 GetDesc1Function original_get_desc1 = nullptr;
@@ -319,6 +325,16 @@ bool ShouldWrap(IDXGISwapChain* swapchain)
    return Handlers::ShouldWrapSwapChain(swapchain);
 }
 
+// What runs inside the swapchain's own calls isn't the game's: DXGI, and the overlays hooked into them (Steam draws its overlay inside
+// Present, with its own resources Luma never tracked). Nor is the device DXGI creates on the display's GPU when the game renders on
+// another one. ReShade didn't see these either ("g_in_dxgi_runtime").
+template <typename Function, typename... Args>
+HRESULT CallRuntime(Function function, Args... args)
+{
+   Scope::Guard scope;
+   return function(args...);
+}
+
 // D3D11 games pass their device's proxy, which DXGI must not see (D3D12 games pass a queue, never proxied)
 HRESULT STDMETHODCALLTYPE CreateSwapChain(IDXGIFactory* factory, IUnknown* device, DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** swapchain)
 {
@@ -334,7 +350,7 @@ HRESULT STDMETHODCALLTYPE CreateSwapChain(IDXGIFactory* factory, IUnknown* devic
       Handlers::PreCreateSwapChain(device, game_desc);
       desc = &game_desc;
    }
-   const HRESULT result = original_create_swapchain(factory, device, desc, swapchain);
+   const HRESULT result = CallRuntime(original_create_swapchain, factory, device, desc, swapchain);
    if (guard.IsOutermost())
    {
       ReportSwapchain(result, swapchain ? *swapchain : nullptr, device, requested);
@@ -366,7 +382,7 @@ HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IDXGIFactory2* factory, IUnknow
       if (fullscreen_desc || !game_fullscreen_desc.Windowed)
          fullscreen_desc = &game_fullscreen_desc;
    }
-   const HRESULT result = original_create_swapchain_for_hwnd(factory, device, hwnd, desc, fullscreen_desc, output, swapchain);
+   const HRESULT result = CallRuntime(original_create_swapchain_for_hwnd, factory, device, hwnd, desc, fullscreen_desc, output, swapchain);
    if (guard.IsOutermost())
    {
       ReportSwapchain(result, swapchain ? *swapchain : nullptr, device, requested);
@@ -374,6 +390,19 @@ HRESULT STDMETHODCALLTYPE CreateSwapChainForHwnd(IDXGIFactory2* factory, IUnknow
          SwapchainProxy::Wrap(swapchain);
    }
    return result;
+}
+
+// Luma doesn't handle these swapchains, but DXGI can still create its own device inside them
+HRESULT STDMETHODCALLTYPE CreateSwapChainForCoreWindow(IDXGIFactory2* factory, IUnknown* device, IUnknown* window, const DXGI_SWAP_CHAIN_DESC1* desc, IDXGIOutput* output,
+   IDXGISwapChain1** swapchain)
+{
+   return CallRuntime(original_create_swapchain_for_core_window, factory, DeviceProxy::Unwrap(device), window, desc, output, swapchain);
+}
+
+HRESULT STDMETHODCALLTYPE CreateSwapChainForComposition(IDXGIFactory2* factory, IUnknown* device, const DXGI_SWAP_CHAIN_DESC1* desc, IDXGIOutput* output,
+   IDXGISwapChain1** swapchain)
+{
+   return CallRuntime(original_create_swapchain_for_composition, factory, DeviceProxy::Unwrap(device), desc, output, swapchain);
 }
 
 // The game sees what it asked for, not what Luma changed (see "GameSwapchainDesc"). Luma's own calls, inside a scope, see the real one.
@@ -442,15 +471,6 @@ void ObserveImmediateContext(IDXGISwapChain* swapchain)
    ComPtr<ID3D11DeviceContext> context;
    device->GetImmediateContext(&context);
    ObserveContext(context.Get());
-}
-
-// What runs inside the swapchain's own calls isn't the game's: DXGI, and the overlays hooked into them (Steam draws its overlay inside
-// Present, with its own resources Luma never tracked). ReShade didn't see these either ("g_in_dxgi_runtime").
-template <typename Function, typename... Args>
-HRESULT CallRuntime(Function function, Args... args)
-{
-   Scope::Guard scope;
-   return function(args...);
 }
 
 // DXGI_PRESENT_TEST only checks whether the swapchain could present. A proxied swapchain's is handled by its proxy (PresentForGame): one
@@ -810,6 +830,10 @@ void InstallDXGI(const DXGI::Functions& functions)
          reinterpret_cast<void*>(&CreateSwapChain), reinterpret_cast<void**>(&original_create_swapchain)},
       Hook{VtableTarget{Vtables::Interface::DXGIFactory, LumaSlot_IDXGIFactory2_CreateSwapChainForHwnd, "IDXGIFactory2::CreateSwapChainForHwnd", __uuidof(IDXGIFactory2)},
          reinterpret_cast<void*>(&CreateSwapChainForHwnd), reinterpret_cast<void**>(&original_create_swapchain_for_hwnd)},
+      Hook{VtableTarget{Vtables::Interface::DXGIFactory, LumaSlot_IDXGIFactory2_CreateSwapChainForCoreWindow, "IDXGIFactory2::CreateSwapChainForCoreWindow", __uuidof(IDXGIFactory2)},
+         reinterpret_cast<void*>(&CreateSwapChainForCoreWindow), reinterpret_cast<void**>(&original_create_swapchain_for_core_window)},
+      Hook{VtableTarget{Vtables::Interface::DXGIFactory, LumaSlot_IDXGIFactory2_CreateSwapChainForComposition, "IDXGIFactory2::CreateSwapChainForComposition", __uuidof(IDXGIFactory2)},
+         reinterpret_cast<void*>(&CreateSwapChainForComposition), reinterpret_cast<void**>(&original_create_swapchain_for_composition)},
       Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_GetDevice, "IDXGISwapChain::GetDevice"},
          reinterpret_cast<void*>(&GetDevice), reinterpret_cast<void**>(&original_get_device)},
       Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_GetDesc, "IDXGISwapChain::GetDesc"},

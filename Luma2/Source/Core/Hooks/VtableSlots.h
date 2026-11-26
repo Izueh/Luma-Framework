@@ -152,6 +152,8 @@
    SLOT(ID3D12GraphicsCommandList, ExecuteBundle)                       \
    SLOT(IDXGIFactory, CreateSwapChain)                                  \
    SLOT(IDXGIFactory2, CreateSwapChainForHwnd)                          \
+   SLOT(IDXGIFactory2, CreateSwapChainForCoreWindow)                    \
+   SLOT(IDXGIFactory2, CreateSwapChainForComposition)                   \
    SLOT(IDXGISwapChain, GetDevice)                                      \
    SLOT(IDXGISwapChain, GetDesc)                                        \
    SLOT(IDXGISwapChain, GetBuffer)                                      \

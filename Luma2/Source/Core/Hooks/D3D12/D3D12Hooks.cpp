@@ -178,7 +178,12 @@ HRESULT WINAPI CreateDevice(IUnknown* adapter, D3D_FEATURE_LEVEL minimum_feature
    DepthGuard guard(create_depth);
    if (guard.IsOutermost() && !Scope::IsActive())
       Handlers::PreCreateDevice();
-   const HRESULT result = original_create_device(adapter, minimum_feature_level, riid, device);
+   HRESULT result;
+   {
+      // What the runtime does inside this isn't the game's
+      Scope::Guard scope;
+      result = original_create_device(adapter, minimum_feature_level, riid, device);
+   }
    if (guard.IsOutermost())
       OnDeviceCreated(result, riid, device);
    return result;
