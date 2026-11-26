@@ -26,6 +26,7 @@
 #include "Shaders/D3D12/D3D12Variants.hpp"
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderVariants.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Trace/StateNames.hpp"
 #include "Trace/CbufferTracker.hpp"
 #include "Utils/Strings.hpp"
@@ -595,6 +596,9 @@ Recording BeginGameCall(ID3D12GraphicsCommandList* list, EventType type, Shaders
       return recording;
    const bool compute = type == EventType::Dispatch;
    const Shaders::Variants::D3D12::BoundPipeline bound = Shaders::Variants::D3D12::GetBoundPipeline(list);
+   Microsoft::WRL::ComPtr<ID3D12Device> device;
+   list->GetDevice(IID_PPV_ARGS(&device));
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetStore(device.Get());
    ShaderStage main_stage = compute ? ShaderStage::Compute : ShaderStage::Vertex;
    for (uint32_t index = 0; index <= uint32_t(ShaderStage::Compute); index++)
    {
@@ -603,7 +607,7 @@ Recording BeginGameCall(ID3D12GraphicsCommandList* list, EventType type, Shaders
       if (!stages.Has(stage) || !shader)
          continue;
       Shader& recorded = event.shaders.emplace_back(Shader{.stage = stage, .hash = shader->hash, .name = Shaders::Database::GetDisplayName(shader->hash)});
-      for (const Shaders::Variants::Variant& variant : Shaders::Variants::GetVariants(shader->hash))
+      for (const Shaders::Variants::Variant& variant : store ? Shaders::Variants::GetVariants(*store, shader->hash) : std::vector<Shaders::Variants::Variant>())
       {
          if (variant.compiled)
             recorded.variants.push_back(variant.source);

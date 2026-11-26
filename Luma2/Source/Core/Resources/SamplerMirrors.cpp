@@ -4,6 +4,7 @@
 #include <array>
 #include <atomic>
 
+#include "Hooks/ObjectLifetime.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 
@@ -13,10 +14,23 @@ namespace Samplers {
 namespace {
 Options options;
 std::atomic<bool> swapping = true;
-std::atomic<float> sr_offset = 0.f;
 std::atomic<bool> custom_bias = false;
 std::atomic<float> custom_offset = 0.f;
+// Of the custom offset; each device's own adds to it
 std::atomic<uint32_t> generation = 0;
+std::atomic<float> shown_offset = 0.f;
+
+// In the device's private data
+struct DeviceBias
+{
+   std::atomic<float> sr_offset = 0.f;
+   std::atomic<uint32_t> generation = 0;
+};
+
+DeviceBias* FindBias(IUnknown* device)
+{
+   return device ? Hooks::Lifetime::GetStateOf<DeviceBias>(device) : nullptr;
+}
 
 constexpr std::array SETTINGS = {
    Settings::Setting{
@@ -109,20 +123,33 @@ Hooks::D3D11::Functions GetD3D11Functions()
    return functions;
 }
 
-float GetLodBiasOffset()
+float GetLodBiasOffset(IUnknown* device)
 {
-   return custom_bias.load(std::memory_order_relaxed) ? custom_offset.load(std::memory_order_relaxed) : sr_offset.load(std::memory_order_relaxed);
+   if (custom_bias.load(std::memory_order_relaxed))
+      return custom_offset.load(std::memory_order_relaxed);
+   const DeviceBias* bias = FindBias(device);
+   return bias ? bias->sr_offset.load(std::memory_order_relaxed) : 0.f;
 }
 
-uint32_t GetGeneration()
+uint32_t GetGeneration(IUnknown* device)
 {
-   return generation.load(std::memory_order_relaxed);
+   const DeviceBias* bias = FindBias(device);
+   return generation.load(std::memory_order_relaxed) + (bias ? bias->generation.load(std::memory_order_relaxed) : 0);
 }
 
-void SetLodBiasOffset(float offset)
+void SetLodBiasOffset(IUnknown* device, float offset)
 {
-   if (sr_offset.exchange(offset) != offset)
-      Bump();
+   shown_offset.store(offset, std::memory_order_relaxed);
+   DeviceBias* bias = FindBias(device);
+   if (!bias && offset != 0.f && device)
+      bias = Hooks::Lifetime::SetStateOf<DeviceBias>(device);
+   if (bias && bias->sr_offset.exchange(offset) != offset)
+      bias->generation.fetch_add(1, std::memory_order_relaxed);
+}
+
+float GetShownLodBiasOffset()
+{
+   return custom_bias.load(std::memory_order_relaxed) ? custom_offset.load(std::memory_order_relaxed) : shown_offset.load(std::memory_order_relaxed);
 }
 } // namespace Samplers
 } // namespace Resources

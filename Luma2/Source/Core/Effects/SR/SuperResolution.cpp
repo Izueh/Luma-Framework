@@ -7,9 +7,13 @@
 #include <mutex>
 #include <string_view>
 
+#include "Resources/LumaCBuffers.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
+#if DEVELOPMENT
+#include "Trace/FrameCapture.hpp"
+#endif
 
 namespace Luma {
 namespace Effects {
@@ -299,13 +303,117 @@ bool IsActive()
    return options.enable && GetUserType() != UserType::None && GetRuntimeInfo().active_type != Type::None;
 }
 
-void UpdateSamplerLodBias(Type active_type, bool taa_detected, uint32_t render_height, uint32_t output_height)
+void UpdateSamplerLodBias(IUnknown* device, Type active_type, bool taa_detected, uint32_t render_height, uint32_t output_height)
 {
    if (active_type != Type::None && taa_detected && render_height > 0 && output_height > 0)
-      Resources::Samplers::SetLodBiasOffset(GetMipLODBias(active_type, float(render_height), float(output_height)));
+      Resources::Samplers::SetLodBiasOffset(device, GetMipLODBias(active_type, float(render_height), float(output_height)));
    else
-      Resources::Samplers::SetLodBiasOffset(0.f);
+      Resources::Samplers::SetLodBiasOffset(device, 0.f);
 }
+
+void PublishRecord(const Record& record)
+{
+   PublishRuntimeInfo({.enabled = IsNeeded(),
+      .user_type = GetUserType(),
+      .active_type = record.active_type,
+      .drew_this_frame = record.drew_this_frame,
+      .backends = record.capabilities,
+      .settings = record.last_settings,
+      .last_draw = record.last_draw,
+      .jitter_phases = record.last_jitter_phases});
+}
+
+void ChooseActiveType(Record& record)
+{
+   record.active_type = ResolveActiveType(GetUserType(), record.capabilities);
+   PublishRecord(record);
+}
+
+void UpdateAtPresent(Record& record, IUnknown* device)
+{
+   const Type next_type = ResolveActiveType(GetUserType(), record.capabilities);
+   if (next_type != record.active_type)
+   {
+      record.active_type = next_type;
+      record.force_reset = true;
+   }
+   const uint32_t sr_type_value = uint32_t(record.active_type == Type::None ? -1 : int32_t(record.active_type));
+   if (Resources::LumaCBuffers::cb_luma_global_settings.SRType != sr_type_value)
+   {
+      Resources::LumaCBuffers::cb_luma_global_settings.SRType = sr_type_value;
+      Resources::LumaCBuffers::MarkSettingsDirty();
+   }
+   const Frame::Resolutions resolutions = Frame::Get(device);
+   UpdateSamplerLodBias(device, record.active_type, Frame::HasPass(device, Frame::PassMarker::Taa), resolutions.render.y, resolutions.output.y);
+   // Before the draw is forgotten: the dev tools see the frame that just ended
+   PublishRecord(record);
+   record.drew_this_frame = false;
+}
+
+std::optional<Prepared> PrepareDraw(const Record& record, IUnknown* device, const DrawOverrides& overrides)
+{
+   if (record.active_type == Type::None || record.active_type == Type::Count)
+      return std::nullopt;
+   const Frame::Resolutions resolutions = Frame::Get(device);
+   Prepared prepared = {BuildSettingsData(GetOptions(), resolutions, overrides),
+      BuildDrawParams(resolutions, Frame::GetCamera(device), Frame::GetTiming(device), overrides)};
+   prepared.params.reset |= record.force_reset;
+   const uint32_t min_res = record.capabilities[size_t(record.active_type)].min_resolution;
+   if (prepared.settings.output_width < min_res || prepared.settings.output_height < min_res || prepared.params.render_width < min_res ||
+      prepared.params.render_height < min_res)
+      return std::nullopt;
+   return prepared;
+}
+
+void FinishDraw(Record& record, IUnknown* device, const Prepared& prepared, bool succeeded)
+{
+   if (!succeeded)
+   {
+      record.force_reset = true;
+      return;
+   }
+   record.force_reset = false;
+   record.drew_this_frame = true;
+   record.last_settings = prepared.settings;
+   record.last_draw = prepared.params;
+   Frame::MarkPass(device, Frame::PassMarker::Sr);
+   PublishRecord(record);
+}
+
+#if DEVELOPMENT
+Trace::Capture::SrInfo DescribeDraw(const Record& record, const Prepared& prepared, bool succeeded, bool copy_back)
+{
+   const SettingsData& settings = prepared.settings;
+   const DrawParams& params = prepared.params;
+   return {
+      .backend = std::string(GetTypeName(record.active_type)),
+      .provider_version = record.capabilities[size_t(record.active_type)].provider_version,
+      .render_width = params.render_width,
+      .render_height = params.render_height,
+      .output_width = settings.output_width,
+      .output_height = settings.output_height,
+      .dynamic_resolution = settings.dynamic_resolution,
+      .hdr = settings.hdr,
+      .inverted_depth = settings.inverted_depth,
+      .auto_exposure = settings.auto_exposure,
+      .mvs_jittered = settings.mvs_jittered,
+      .reset = params.reset,
+      .succeeded = succeeded,
+      .copy_back = copy_back,
+      .jitter_x = params.jitter_x,
+      .jitter_y = params.jitter_y,
+      .jitter_phases = record.last_jitter_phases,
+      .vert_fov = params.vert_fov,
+      .near_plane = params.near_plane,
+      .far_plane = params.far_plane,
+      .pre_exposure = params.pre_exposure,
+      .mvs_x_scale = settings.mvs_x_scale,
+      .mvs_y_scale = settings.mvs_y_scale,
+      .sharpness = params.user_sharpness,
+      .velocity_factor = params.fsr_velocity_factor,
+   };
+}
+#endif
 } // namespace SR
 } // namespace Effects
 } // namespace Luma

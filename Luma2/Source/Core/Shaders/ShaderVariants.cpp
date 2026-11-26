@@ -10,19 +10,20 @@
 
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderSignatures.hpp"
+#include "Shaders/ShaderStore.hpp"
 
 namespace Luma {
 namespace Shaders {
 namespace Variants {
 namespace {
 std::atomic<bool> loaded = true;
-std::atomic<uint64_t> generation = 0;
-// Serializes publishers (files on the presenting thread, patches from their jobs). Lock order: before `mutex`.
-std::mutex publish_mutex;
-// Written by a publisher, read by shader creations on any thread. Never held with another lock but `publish_mutex`.
-std::shared_mutex mutex;
-// Highest priority first
-std::unordered_map<uint32_t, std::vector<Variant>> variants;
+std::atomic<uint64_t> any_generation = 0;
+
+void BumpGeneration(State& state)
+{
+   state.generation.fetch_add(1, std::memory_order_release);
+   any_generation.fetch_add(1, std::memory_order_release);
+}
 } // namespace
 
 std::string_view GetName(Source source)
@@ -58,14 +59,15 @@ size_t FindChoice(std::span<const Choice> choices, Choice choice)
    return it != choices.end() ? size_t(it - choices.begin()) : 0;
 }
 
-void Publish(Source source, std::vector<Variant> published)
+void Publish(Store& store, Source source, std::vector<Variant> published)
 {
+   State& state = store.variants;
    // Two publishers copying the same map would each drop the other's change
-   std::scoped_lock publishing(publish_mutex);
+   std::scoped_lock publishing(state.publish_mutex);
    std::unordered_map<uint32_t, std::vector<Variant>> next;
    {
-      std::shared_lock lock(mutex);
-      next = variants;
+      std::shared_lock lock(state.mutex);
+      next = state.by_hash;
    }
    // The source's variants go, keeping what they compiled to for the new ones
    std::unordered_map<uint32_t, std::shared_ptr<const CompiledShader>> previous;
@@ -105,22 +107,23 @@ void Publish(Source source, std::vector<Variant> published)
    }
 #endif
    {
-      std::scoped_lock lock(mutex);
-      variants.swap(next);
+      std::scoped_lock lock(state.mutex);
+      state.by_hash.swap(next);
    }
-   generation.fetch_add(1, std::memory_order_release);
+   BumpGeneration(state);
 }
 
-void Update(Source source, std::vector<Variant> changed, std::span<const uint32_t> removed)
+void Update(Store& store, Source source, std::vector<Variant> changed, std::span<const uint32_t> removed)
 {
    if (changed.empty() && removed.empty())
       return;
-   std::scoped_lock publishing(publish_mutex);
+   State& state = store.variants;
+   std::scoped_lock publishing(state.publish_mutex);
    {
-      std::scoped_lock lock(mutex);
+      std::scoped_lock lock(state.mutex);
       const auto drop = [&](uint32_t hash) -> std::shared_ptr<const CompiledShader> {
-         const auto it = variants.find(hash);
-         if (it == variants.end())
+         const auto it = state.by_hash.find(hash);
+         if (it == state.by_hash.end())
             return nullptr;
          std::shared_ptr<const CompiledShader> previous;
          for (const Variant& variant : it->second)
@@ -130,7 +133,7 @@ void Update(Source source, std::vector<Variant> changed, std::span<const uint32_
          }
          std::erase_if(it->second, [source](const Variant& variant) { return variant.source == source; });
          if (it->second.empty())
-            variants.erase(it);
+            state.by_hash.erase(it);
          return previous;
       };
       for (const uint32_t hash : removed)
@@ -142,21 +145,22 @@ void Update(Source source, std::vector<Variant> changed, std::span<const uint32_
          if (const std::shared_ptr<const CompiledShader> previous = drop(variant.hash);
             previous && (variant.failed || (variant.compiled && variant.compiled->bytecode == previous->bytecode && variant.compiled->requests == previous->requests)))
             variant.compiled = previous;
-         std::vector<Variant>& list = variants[variant.hash];
+         std::vector<Variant>& list = state.by_hash[variant.hash];
          list.push_back(std::move(variant));
          std::ranges::stable_sort(list, std::ranges::greater(), &Variant::priority);
       }
    }
-   generation.fetch_add(1, std::memory_order_release);
+   BumpGeneration(state);
 }
 
-void Reject(uint32_t hash, Source source, std::string_view reason)
+void Reject(Store& store, uint32_t hash, Source source, std::string_view reason)
 {
-   std::scoped_lock publishing(publish_mutex);
+   State& state = store.variants;
+   std::scoped_lock publishing(state.publish_mutex);
    {
-      std::scoped_lock lock(mutex);
-      const auto it = variants.find(hash);
-      if (it == variants.end())
+      std::scoped_lock lock(state.mutex);
+      const auto it = state.by_hash.find(hash);
+      if (it == state.by_hash.end())
          return;
       for (Variant& variant : it->second)
       {
@@ -167,50 +171,57 @@ void Reject(uint32_t hash, Source source, std::string_view reason)
          variant.messages += reason;
       }
    }
-   generation.fetch_add(1, std::memory_order_release);
+   BumpGeneration(state);
 }
 
-std::vector<Variant> GetVariants(uint32_t hash)
+std::vector<Variant> GetVariants(const Store& store, uint32_t hash)
 {
-   std::shared_lock lock(mutex);
-   const auto it = variants.find(hash);
-   return it != variants.end() ? it->second : std::vector<Variant>();
+   std::shared_lock lock(store.variants.mutex);
+   const auto it = store.variants.by_hash.find(hash);
+   return it != store.variants.by_hash.end() ? it->second : std::vector<Variant>();
 }
 
-std::shared_ptr<const CompiledShader> GetCompiledShader(uint32_t hash, Source source)
+std::shared_ptr<const CompiledShader> GetCompiledShader(const Store& store, uint32_t hash, Source source)
 {
-   std::shared_lock lock(mutex);
-   const auto it = variants.find(hash);
-   if (it == variants.end())
+   std::shared_lock lock(store.variants.mutex);
+   const auto it = store.variants.by_hash.find(hash);
+   if (it == store.variants.by_hash.end())
       return nullptr;
    const auto variant = std::ranges::find(it->second, source, &Variant::source);
    return variant != it->second.end() ? variant->compiled : nullptr;
 }
 
-bool HasVariant(uint32_t hash)
+bool HasVariant(const Store& store, uint32_t hash)
 {
-   std::shared_lock lock(mutex);
-   const auto it = variants.find(hash);
-   return it != variants.end() && std::ranges::any_of(it->second, [](const Variant& variant) { return variant.compiled != nullptr; });
+   std::shared_lock lock(store.variants.mutex);
+   const auto it = store.variants.by_hash.find(hash);
+   return it != store.variants.by_hash.end() && std::ranges::any_of(it->second, [](const Variant& variant) { return variant.compiled != nullptr; });
 }
 
-std::vector<Variant> GetAll()
+std::vector<Variant> GetAll(const Store& store)
 {
-   std::shared_lock lock(mutex);
+   std::shared_lock lock(store.variants.mutex);
    std::vector<Variant> list;
-   for (const auto& [hash, hash_variants] : variants)
+   for (const auto& [hash, hash_variants] : store.variants.by_hash)
       list.append_range(hash_variants);
    return list;
 }
 
 void MarkChoiceChanged()
 {
-   generation.fetch_add(1, std::memory_order_release);
+   for (const std::shared_ptr<Store>& store : GetStores())
+      store->variants.generation.fetch_add(1, std::memory_order_release);
+   any_generation.fetch_add(1, std::memory_order_release);
 }
 
-uint64_t GetGeneration()
+uint64_t GetGeneration(const Store& store)
 {
-   return generation.load(std::memory_order_acquire);
+   return store.variants.generation.load(std::memory_order_acquire);
+}
+
+uint64_t GetAnyGeneration()
+{
+   return any_generation.load(std::memory_order_acquire);
 }
 
 void SetLoaded(bool value)

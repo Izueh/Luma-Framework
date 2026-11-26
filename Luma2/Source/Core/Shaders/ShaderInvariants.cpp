@@ -126,9 +126,9 @@ Findings CheckD3D12(std::span<const uint8_t> bytecode, const D3D12Rules& rules)
    return findings;
 }
 
-std::string CheckVariant(uint32_t hash, std::string_view source, const CompiledShader& compiled)
+std::string CheckVariant(Api api, uint32_t hash, std::string_view source, const CompiledShader& compiled)
 {
-   if (GetApi() != Api::D3D12)
+   if (api != Api::D3D12)
       return {};
    std::vector<uint32_t> textures;
    for (const Request& request : compiled.requests)

@@ -31,7 +31,7 @@ struct Findings
 
 Findings CheckD3D12(std::span<const uint8_t> bytecode, const D3D12Rules& rules);
 // Any thread; returns errors (empty if valid or not D3D12)
-std::string CheckVariant(uint32_t hash, std::string_view source, const CompiledShader& compiled);
+std::string CheckVariant(Api api, uint32_t hash, std::string_view source, const CompiledShader& compiled);
 uint32_t GetRejectedCount();
 } // namespace Invariants
 } // namespace Shaders

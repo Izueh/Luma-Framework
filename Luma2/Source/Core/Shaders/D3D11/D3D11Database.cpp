@@ -21,9 +21,9 @@ struct Object
 };
 } // namespace
 
-uint32_t TrackShader(ShaderStage stage, std::span<const uint8_t> bytecode, ID3D11DeviceChild* object)
+uint32_t TrackShader(ID3D11Device* device, ShaderStage stage, std::span<const uint8_t> bytecode, ID3D11DeviceChild* object)
 {
-   Shader& shader = Track(stage, bytecode);
+   Shader& shader = Track(GetStore(device).get(), stage, bytecode);
    Hooks::Lifetime::SetState<Object>(object, &shader);
    return shader.hash;
 }

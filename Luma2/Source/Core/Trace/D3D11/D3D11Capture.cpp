@@ -19,6 +19,7 @@
 #include "Shaders/D3D11/D3D11Variants.hpp"
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderVariants.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Trace/StateNames.hpp"
 #include "Trace/CbufferTracker.hpp"
 
@@ -545,6 +546,9 @@ Recording BeginGameCall(ID3D11DeviceContext* context, EventType type, Shaders::S
 {
    Recording recording = {.event = {.type = type}, .context = context};
    const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(context);
+   ComPtr<ID3D11Device> device;
+   context->GetDevice(&device);
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetStore(device.Get());
    ComPtr<ID3D11DeviceContext1> context1;
    context->QueryInterface(IID_PPV_ARGS(&context1));
    ShaderStage main_stage = type == EventType::Dispatch ? ShaderStage::Compute : ShaderStage::Vertex;
@@ -561,7 +565,7 @@ Recording BeginGameCall(ID3D11DeviceContext* context, EventType type, Shaders::S
       });
       if (shader)
       {
-         for (const Shaders::Variants::Variant& variant : Shaders::Variants::GetVariants(shader->hash))
+         for (const Shaders::Variants::Variant& variant : store ? Shaders::Variants::GetVariants(*store, shader->hash) : std::vector<Shaders::Variants::Variant>())
          {
             if (variant.compiled)
                recorded.variants.push_back(variant.source);

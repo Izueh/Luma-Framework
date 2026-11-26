@@ -88,6 +88,13 @@ T* SetStateOf(IUnknown* object, Arguments&&... arguments)
    return attached ? value : nullptr;
 }
 
+template <typename T>
+void RemoveStateOf(IUnknown* object)
+{
+   if (object)
+      AttachStateOf(object, GetStateGuid<T>(), nullptr);
+}
+
 // How many states have been destroyed so far: a state pointer remembered with this count is valid while it hasn't changed
 uint64_t GetDestroyedCount();
 

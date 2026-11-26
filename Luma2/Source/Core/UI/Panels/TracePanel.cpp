@@ -23,6 +23,7 @@
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderDecompiler.hpp"
 #include "Shaders/ShaderVariants.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Trace/CbufferTracker.hpp"
 #include "Trace/Cbuffers.hpp"
 #include "Trace/DebugDraw.hpp"
@@ -45,6 +46,13 @@ using Widgets::TableCell;
 using Widgets::TableColumn;
 using Widgets::TableRow;
 using Widgets::Tone;
+
+// The presenting device's variant of a shader, as the trace shows the frame it captured
+std::shared_ptr<const Shaders::CompiledShader> GetShownCompiledShader(uint32_t hash, Shaders::Variants::Source source)
+{
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetShownStore();
+   return store ? Shaders::Variants::GetCompiledShader(*store, hash, source) : nullptr;
+}
 
 // Words that changed this many frames ago or less are highlighted in a tracked cbuffer
 constexpr uint64_t RECENT_CHANGE_FRAMES = 60;
@@ -1193,13 +1201,13 @@ void DrawDisassemblyTab(const Event& event)
          bytecode = live->bytecode;
       else if (disasm_source == 1)
       {
-         variant = Shaders::Variants::GetCompiledShader(shader->hash, Shaders::Variants::Source::Patch);
+         variant = GetShownCompiledShader(shader->hash, Shaders::Variants::Source::Patch);
          if (variant)
             bytecode = variant->bytecode;
       }
       else if (disasm_source == 2)
       {
-         variant = Shaders::Variants::GetCompiledShader(shader->hash, Shaders::Variants::Source::File);
+         variant = GetShownCompiledShader(shader->hash, Shaders::Variants::Source::File);
          if (variant)
             bytecode = variant->bytecode;
       }
@@ -1239,7 +1247,8 @@ void DrawHlslTab(const Event& event)
    if (hlsl_source == 2)
    {
       std::optional<Shaders::Variants::Variant> replacement;
-      for (Shaders::Variants::Variant& variant : Shaders::Variants::GetAll())
+      const std::shared_ptr<Shaders::Store> store = Shaders::GetShownStore();
+      for (Shaders::Variants::Variant& variant : store ? Shaders::Variants::GetAll(*store) : std::vector<Shaders::Variants::Variant>())
       {
          if (variant.hash == shader->hash && variant.source == Shaders::Variants::Source::File)
          {
@@ -1286,7 +1295,7 @@ void DrawHlslTab(const Event& event)
          bytes = live->bytecode;
       else if (hlsl_source == 1)
       {
-         if (const auto variant = Shaders::Variants::GetCompiledShader(shader->hash, Shaders::Variants::Source::Patch))
+         if (const auto variant = GetShownCompiledShader(shader->hash, Shaders::Variants::Source::Patch))
             bytes = variant->bytecode;
       }
       if (!bytes.empty())

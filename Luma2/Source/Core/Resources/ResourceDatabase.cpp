@@ -6,6 +6,7 @@
 #include <mutex>
 #include <shared_mutex>
 
+#include "Shaders/ShaderStore.hpp"
 #include "Utils/Debug.hpp"
 #include "Log/Log.hpp"
 
@@ -15,11 +16,6 @@ namespace Database {
 namespace {
 // Written while Core initializes, read without a lock after. A deque: Get's references stay valid.
 std::deque<Entry> entries;
-
-std::atomic<uint64_t> generation = 0;
-// Written on the presenting thread, read by device creations and the dev tools on any. Never held with another lock.
-std::shared_mutex shaders_mutex;
-std::vector<ShaderState> shaders;
 } // namespace
 
 void RegisterRuntimeDefaults()
@@ -86,8 +82,6 @@ std::optional<uint32_t> Register(Entry entry)
       return std::nullopt;
    }
    entries.push_back(std::move(entry));
-   std::scoped_lock lock(shaders_mutex);
-   shaders.resize(entries.size());
    return uint32_t(entries.size() - 1);
 }
 
@@ -121,32 +115,34 @@ bool ReplaceIfChanged(Upload& upload, std::vector<std::byte>& written)
    return true;
 }
 
-void PublishShaders(std::vector<std::pair<uint32_t, ShaderState>> published)
+void PublishShaders(Shaders::Store& store, std::vector<std::pair<uint32_t, ShaderState>> published)
 {
+   ShaderStates& shaders = store.luma_shaders;
    {
-      std::scoped_lock lock(shaders_mutex);
+      std::scoped_lock lock(shaders.mutex);
       for (auto& [index, state] : published)
       {
-         ASSERT_ONCE(index < shaders.size());
-         ShaderState& current = shaders[index];
+         ASSERT_ONCE(index < shaders.by_entry.size());
+         ShaderState& current = shaders.by_entry[index];
          // The same bytes as before are the same compiled shader: nothing is recreated from it
          if (current.compiled && (state.failed || (state.compiled && state.compiled->bytecode == current.compiled->bytecode)))
             state.compiled = current.compiled;
          current = std::move(state);
       }
    }
-   generation.fetch_add(1, std::memory_order_release);
+   shaders.generation.fetch_add(1, std::memory_order_release);
 }
 
-ShaderState GetShader(uint32_t index)
+ShaderState GetShader(const Shaders::Store& store, uint32_t index)
 {
-   std::shared_lock lock(shaders_mutex);
-   return index < shaders.size() ? shaders[index] : ShaderState();
+   const ShaderStates& shaders = store.luma_shaders;
+   std::shared_lock lock(shaders.mutex);
+   return index < shaders.by_entry.size() ? shaders.by_entry[index] : ShaderState();
 }
 
-uint64_t GetGeneration()
+uint64_t GetGeneration(const Shaders::Store& store)
 {
-   return generation.load(std::memory_order_acquire);
+   return store.luma_shaders.generation.load(std::memory_order_acquire);
 }
 } // namespace Database
 } // namespace Resources

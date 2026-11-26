@@ -20,7 +20,7 @@ Hooks::D3D12::Functions GetD3D12Functions();
 
 void RecordDevice(ID3D12Device* device);
 void RecordRootSignature(const Shaders::Database::D3D12::RootLayout& layout);
-void RecordPipeline(const Shaders::Database::D3D12::Pipeline& pipeline, const Shaders::Database::D3D12::PipelineDesc& desc);
+void RecordPipeline(ID3D12Device* device, const Shaders::Database::D3D12::Pipeline& pipeline, const Shaders::Database::D3D12::PipelineDesc& desc);
 void RecordPipelineLibrary(size_t blob_size, HRESULT result);
 void RecordLibraryLoad(HRESULT result);
 void RecordHeap(const D3D12_DESCRIPTOR_HEAP_DESC& desc, ID3D12DescriptorHeap* heap);

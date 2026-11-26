@@ -179,7 +179,7 @@ std::optional<Shaders::RootSignatures::D3D12::RewrittenDesc> PreCreatePipelineSt
    return Shaders::RootSignatures::D3D12::RewritePipelineDesc(device, kind, desc);
 }
 
-void PostCreatePipelineState(PipelineKind kind, const void* desc, bool from_library, ID3D12PipelineState* pipeline)
+void PostCreatePipelineState(ID3D12Device* device, PipelineKind kind, const void* desc, bool from_library, ID3D12PipelineState* pipeline)
 {
    if (!Shaders::IsNeeded())
       return;
@@ -187,12 +187,12 @@ void PostCreatePipelineState(PipelineKind kind, const void* desc, bool from_libr
    std::shared_ptr<const Shaders::Database::D3D12::DescCopy> copy;
    if (Shaders::Variants::D3D12::NeedsDescCopy(described))
       copy = Shaders::Database::D3D12::CopyDesc(kind, desc);
-   const Shaders::Database::D3D12::Pipeline* tracked = Shaders::Database::D3D12::TrackPipeline(described, std::move(copy), from_library, pipeline);
+   const Shaders::Database::D3D12::Pipeline* tracked = Shaders::Database::D3D12::TrackPipeline(device, described, std::move(copy), from_library, pipeline);
    if (!tracked)
       return;
    Shaders::Variants::D3D12::AttachVariants(pipeline, *tracked);
 #if DEVELOPMENT
-   Trace::Stats::D3D12::RecordPipeline(*tracked, described);
+   Trace::Stats::D3D12::RecordPipeline(device, *tracked, described);
 #endif
 }
 

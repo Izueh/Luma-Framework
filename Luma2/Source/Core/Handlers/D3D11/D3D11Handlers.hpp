@@ -109,5 +109,8 @@ void PostFinishCommandList(ID3D11DeviceContext* context, BOOL restore, ID3D11Com
 void OnCommandListDestroyed(ID3D11Device* device, const ID3D11CommandList* list);
 bool PreExecuteCommandList(ID3D11DeviceContext* context, ID3D11CommandList* list, BOOL restore);
 bool PreFlush(ID3D11DeviceContext* context);
+
+// Presenting thread, at a D3D11 present, after the game's on_present
+void PresentD3D11(ID3D11Device* device);
 } // namespace Handlers
 } // namespace Luma

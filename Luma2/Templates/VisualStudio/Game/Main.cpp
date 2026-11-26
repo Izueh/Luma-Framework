@@ -475,7 +475,6 @@ void Luma::Game::Init()
       .description = DESCRIPTION,
       .credits = CREDITS,
       .links = LINKS,
-      // .api = Api::D3D11, // Restrict to D3D11 or D3D12 (unset handles both)
    });
 
    // Shaders::SetDebugName("Tonemap", SHADER_HASHES_TONEMAP);
@@ -527,6 +526,7 @@ void Luma::Game::Init()
       // .sr = {.enable = false, .hdr = true, .inverted_depth = false},
       // .constant_capture = {.enable = false},
       // .device_data = GameDeviceDataType::Of<GameDeviceData>(),
+      // .supported_apis = {Api::D3D11}, // Only the APIs the game uses (both by default)
    };
 
    Examples::Register(options);

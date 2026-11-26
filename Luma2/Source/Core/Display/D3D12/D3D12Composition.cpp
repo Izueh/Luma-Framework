@@ -12,6 +12,7 @@
 #include "Game/Game.hpp"
 #include "Resources/ResourceBindings.hpp"
 #include "Resources/ResourceDatabase.hpp"
+#include "Shaders/ShaderStore.hpp"
 #if DEVELOPMENT
 #include "Trace/DebugDraw.hpp"
 #endif
@@ -155,18 +156,19 @@ bool CreatePipeline(Renderer& renderer, Pipeline& pipeline)
    return true;
 }
 
-std::shared_ptr<const Shaders::CompiledShader> GetCompiled(uint64_t name_hash)
+std::shared_ptr<const Shaders::CompiledShader> GetCompiled(ID3D12Device* device, uint64_t name_hash)
 {
    const std::optional<uint32_t> index = Resources::Database::Find(name_hash);
-   return index ? Resources::Database::GetShader(*index).compiled : nullptr;
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetStore(device);
+   return index && store ? Resources::Database::GetShader(*store, *index).compiled : nullptr;
 }
 
 // The pipeline for the shaders published now and `format`, made again when either changed (a reload is rare: its old one goes once
 // the queue is idle)
 const Pipeline* GetPipeline(Renderer& renderer, DXGI_FORMAT format)
 {
-   std::shared_ptr<const Shaders::CompiledShader> vertex_shader = GetCompiled(VERTEX_SHADER);
-   std::shared_ptr<const Shaders::CompiledShader> pixel_shader = GetCompiled(PIXEL_SHADER);
+   std::shared_ptr<const Shaders::CompiledShader> vertex_shader = GetCompiled(renderer.device.Get(), VERTEX_SHADER);
+   std::shared_ptr<const Shaders::CompiledShader> pixel_shader = GetCompiled(renderer.device.Get(), PIXEL_SHADER);
    if (!vertex_shader || !pixel_shader)
       return nullptr;
    Pipeline& pipeline = renderer.pipeline;

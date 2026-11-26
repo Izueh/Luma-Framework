@@ -26,7 +26,7 @@ void PostExecuteCommandLists(ID3D12CommandQueue* queue, UINT count, ID3D12Comman
 // signature that comes with the pipeline, for its extended one), the Post one gets the desc used.
 std::optional<Shaders::RootSignatures::D3D12::RewrittenDesc> PreCreatePipelineState(ID3D12Device* device, Shaders::Database::D3D12::PipelineKind kind,
    const void* desc);
-void PostCreatePipelineState(Shaders::Database::D3D12::PipelineKind kind, const void* desc, bool from_library, ID3D12PipelineState* pipeline);
+void PostCreatePipelineState(ID3D12Device* device, Shaders::Database::D3D12::PipelineKind kind, const void* desc, bool from_library, ID3D12PipelineState* pipeline);
 // Any load from the game's pipeline library, before PostCreatePipelineState for one that succeeded
 void PostLoadPipeline(HRESULT result);
 void PostCreatePipelineLibrary(size_t blob_size, HRESULT result);

@@ -15,6 +15,7 @@
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderDecompiler.hpp"
 #include "Shaders/ShaderVariants.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Shaders/Shaders.hpp"
 #include "System/JobQueue.hpp"
 #include "Trace/RuntimeStatus.hpp"
@@ -188,9 +189,15 @@ void DrawShaders()
 {
    DrawToolbar();
 
-   // Replacements grouped by file, then the custom shaders
+   // Replacements grouped by file, then the custom shaders, as the presenting device has them
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetShownStore();
+   if (!store)
+   {
+      Widgets::TextDim("No device yet.");
+      return;
+   }
    std::map<std::string, Entry> files;
-   for (Shaders::Variants::Variant& replacement : Shaders::Variants::GetAll())
+   for (Shaders::Variants::Variant& replacement : Shaders::Variants::GetAll(*store))
    {
       if (replacement.source != Shaders::Variants::Source::File)
          continue;
@@ -202,7 +209,7 @@ void DrawShaders()
    for (uint32_t index = 0; index < Resources::Database::GetCount(); index++)
    {
       if (const Resources::Database::Entry& entry = Resources::Database::Get(index); entry.kind == Resources::Database::Kind::Shader)
-         luma_shaders.push_back({&entry, Resources::Database::GetShader(index)});
+         luma_shaders.push_back({&entry, Resources::Database::GetShader(*store, index)});
    }
    std::vector<Entry> entries;
    for (auto& [file, entry] : files)
@@ -262,7 +269,7 @@ void DrawShaders()
    std::vector<const Shaders::Database::Shader*> replaced;
    for (const Shaders::Database::Shader* shader : Shaders::Database::GetShaders())
    {
-      if (shader->objects && Shaders::Variants::GetCompiledShader(shader->hash, Shaders::Variants::Source::File))
+      if (shader->objects && Shaders::Variants::GetCompiledShader(*store, shader->hash, Shaders::Variants::Source::File))
          replaced.push_back(shader);
    }
    std::ranges::sort(replaced, [](const auto* a, const auto* b) { return std::pair(a->stage, a->hash) < std::pair(b->stage, b->hash); });

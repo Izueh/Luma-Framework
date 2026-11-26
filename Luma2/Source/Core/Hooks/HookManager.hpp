@@ -63,7 +63,7 @@ struct Counts
 };
 
 // Swapchain creation is always hooked (the device proxy needs it), `functions` adds the others
-void InstallDXGI(const D3D11::Functions& functions);
+void InstallDXGI(const DXGI::Functions& functions);
 void InstallD3D11(const D3D11::Functions& functions);
 void InstallD3D12(const D3D12::Functions& functions);
 // Called by InstallD3D11

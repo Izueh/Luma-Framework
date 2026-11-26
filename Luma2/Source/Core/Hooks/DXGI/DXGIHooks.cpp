@@ -763,7 +763,7 @@ HRESULT PresentForGame(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags
 }
 } // namespace DXGI
 
-void InstallDXGI(const D3D11::Functions& functions)
+void InstallDXGI(const DXGI::Functions& functions)
 {
    std::vector<Hook> hooks = {
       Hook{ExportTarget{L"dxgi.dll", "CreateDXGIFactory"}, reinterpret_cast<void*>(&CreateFactory), reinterpret_cast<void**>(&original_create_factory)},
@@ -798,19 +798,19 @@ void InstallDXGI(const D3D11::Functions& functions)
       Hook{VtableTarget{Vtables::Interface::DXGIOutput, LumaSlot_IDXGIOutput6_GetDesc1, "IDXGIOutput6::GetDesc1", __uuidof(IDXGIOutput6)},
          reinterpret_cast<void*>(&GetOutputDesc1), reinterpret_cast<void**>(&original_get_output_desc1)},
    };
-   if (functions.test(size_t(D3D11::Function::SetFullscreenState)))
+   if (functions.test(size_t(DXGI::Function::SetFullscreenState)))
    {
       hooks.push_back(Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_SetFullscreenState, "IDXGISwapChain::SetFullscreenState"},
          reinterpret_cast<void*>(&SetFullscreenState), reinterpret_cast<void**>(&original_set_fullscreen_state)});
    }
-   if (functions.test(size_t(D3D11::Function::ResizeBuffers)))
+   if (functions.test(size_t(DXGI::Function::ResizeBuffers)))
    {
       hooks.push_back(Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_ResizeBuffers, "IDXGISwapChain::ResizeBuffers"},
          reinterpret_cast<void*>(&ResizeBuffers), reinterpret_cast<void**>(&original_resize_buffers)});
       hooks.push_back(Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain3_ResizeBuffers1, "IDXGISwapChain3::ResizeBuffers1", __uuidof(IDXGISwapChain3)},
          reinterpret_cast<void*>(&ResizeBuffers1), reinterpret_cast<void**>(&original_resize_buffers1)});
    }
-   if (functions.test(size_t(D3D11::Function::Present)))
+   if (functions.test(size_t(DXGI::Function::Present)))
    {
       hooks.push_back(Hook{VtableTarget{Vtables::Interface::DXGISwapChain, LumaSlot_IDXGISwapChain_Present, "IDXGISwapChain::Present"},
          reinterpret_cast<void*>(&Present), reinterpret_cast<void**>(&original_present)});

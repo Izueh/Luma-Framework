@@ -12,6 +12,13 @@
 #include "Common/Math.hpp"
 #include "Frame/FrameState.hpp"
 #include "Hooks/HookFunctions.hpp"
+#include "Resources/ResourceDatabase.hpp"
+
+#if DEVELOPMENT
+namespace Luma::Trace::Capture {
+struct SrInfo;
+}
+#endif
 
 namespace Luma {
 namespace Effects {
@@ -191,6 +198,61 @@ constexpr float HaltonSequence(uint32_t index, uint32_t base)
    return result - 0.5f;
 }
 
+// A device's choice of provider and what its draws did, the same on both APIs. Each API keeps its providers' states and native
+// resources itself.
+struct Record
+{
+   std::array<Capabilities, TYPE_COUNT> capabilities = {};
+   Type active_type = Type::None;
+   bool drew_this_frame = false;
+   // A provider change or a failed draw: the next draw that succeeds starts the provider's history again
+   bool force_reset = false;
+   SettingsData last_settings;
+   DrawParams last_draw;
+   int last_jitter_phases = GetDefaultJitterPhases();
+};
+
+struct Prepared
+{
+   SettingsData settings;
+   DrawParams params;
+};
+
+// Each input by its Resources::Database key, in this order, through `resolve(key)`
+template <typename Resource, typename Resolve>
+DrawInputs<Resource> GatherInputs(Resolve&& resolve)
+{
+   namespace Keys = Resources::Database::Sr;
+   DrawInputs<Resource> inputs;
+   inputs.source_color = resolve(Keys::COLOR);
+   inputs.depth_buffer = resolve(Keys::DEPTH);
+   inputs.motion_vectors = resolve(Keys::MOTION_VECTORS);
+   inputs.output_color = resolve(Keys::OUTPUT);
+   inputs.exposure = resolve(Keys::EXPOSURE);
+   inputs.bias_mask = resolve(Keys::REACTIVE);
+   inputs.transparency_alpha = resolve(Keys::TRANSPARENCY);
+   return inputs;
+}
+
+template <typename Resource>
+bool HasRequiredInputs(const DrawInputs<Resource>& inputs)
+{
+   return inputs.source_color && inputs.depth_buffer && inputs.motion_vectors && inputs.output_color;
+}
+
+void PublishRecord(const Record& record);
+// Once the providers are initialized
+void ChooseActiveType(Record& record);
+// At the device's present: the user's choice applied, SRType and the sampler LOD bias set, the record published, the frame's draw
+// forgotten
+void UpdateAtPresent(Record& record, IUnknown* device);
+// Empty without an active provider, or below its minimum size
+std::optional<Prepared> PrepareDraw(const Record& record, IUnknown* device, const DrawOverrides& overrides);
+void FinishDraw(Record& record, IUnknown* device, const Prepared& prepared, bool succeeded);
+#if DEVELOPMENT
+Trace::Capture::SrInfo DescribeDraw(const Record& record, const Prepared& prepared, bool succeeded, bool copy_back);
+#endif
+
 float GetMipLODBias(float render_height, float output_height);
 float GetMipLODBias(Type type, float render_height, float output_height);
 Math::uint2 FindClosestIntegerResolutionForAspectRatio(double target_width, double target_height, double aspect_ratio);
@@ -220,7 +282,7 @@ RuntimeInfo GetRuntimeInfo();
 bool IsActive();
 
 // Updates sampler LOD bias offset from current SR type and resolutions (unless Development custom bias is active)
-void UpdateSamplerLodBias(Type active_type, bool taa_detected, uint32_t render_height, uint32_t output_height);
+void UpdateSamplerLodBias(IUnknown* device, Type active_type, bool taa_detected, uint32_t render_height, uint32_t output_height);
 } // namespace SR
 } // namespace Effects
 } // namespace Luma

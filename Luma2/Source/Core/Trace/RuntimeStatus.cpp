@@ -35,6 +35,7 @@
 #include "Hooks/ThirdPartyModules.hpp"
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderPatching.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "System/JobQueue.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Swapchain/DXGI/DXGISwapchain.hpp"
@@ -57,6 +58,11 @@ std::atomic<uint64_t> frame_count = 0;
 // Never held with another lock
 std::mutex mutex;
 std::vector<SwapchainInfo> swapchains;
+
+bool HasD3D12Device()
+{
+   return std::ranges::any_of(Shaders::GetStores(), [](const std::shared_ptr<Shaders::Store>& store) { return store->api == Api::D3D12; });
+}
 } // namespace
 
 void SetSwapchain(SwapchainInfo info)
@@ -94,7 +100,7 @@ OverlaySummary GetOverlaySummary()
    const Hooks::Counts hooks = Hooks::GetCounts();
    summary.hooks_installed = hooks.installed;
    summary.hooks_failed = hooks.failed;
-   const Shaders::Patching::Status patches = Shaders::Patching::GetStatus();
+   const Shaders::Patching::Status patches = Shaders::Patching::GetStatus(Shaders::GetShownStore().get());
    summary.broken_recipes = patches.broken_recipes;
    summary.failed_patches = patches.failed;
    const Validation::Counts validation = Validation::GetCounts();
@@ -143,11 +149,31 @@ Status GetStatus()
       .present_overlay = present.overlay};
    status.reshade = {ReShade::DescribeLoadState(), ReShade::DescribeBridge(), ReShade::DescribeMirrorSwapchainView()};
 
+   for (const Api api : {Api::D3D11, Api::D3D12})
+   {
+      if (Game::Registry::GetSupportedApis().Has(api))
+         status.supported_apis.emplace_back(GetName(api));
+   }
+   const std::shared_ptr<Shaders::Store> shown = Shaders::GetShownStore();
+   for (const std::shared_ptr<Shaders::Store>& store : Shaders::GetStores())
+   {
+      const Shaders::BuildInfo build = Shaders::GetLastBuild(*store);
+      status.devices.push_back({.api = std::string(GetName(store->api)),
+         .shown = store == shown,
+         .shaders = {.build = build.id,
+            .compiled = build.compiled,
+            .cached = build.cached,
+            .failed = build.failed,
+            .patched = Shaders::Patching::GetStatus(store.get()).patched}});
+   }
    status.shaders.loaded = Shaders::Variants::IsLoaded();
-   for (const Shaders::Database::Shader* shader : Shaders::Database::GetShaders())
-      status.shaders.replaced += shader->objects && Shaders::Variants::HasVariant(shader->hash);
+   if (shown)
+   {
+      for (const Shaders::Database::Shader* shader : Shaders::Database::GetShaders())
+         status.shaders.replaced += shader->objects && Shaders::Variants::HasVariant(*shown, shader->hash);
+   }
    status.shaders.has_compilation_errors = Shaders::GetLastBuild().failed != 0;
-   const Shaders::Patching::Status patching = Shaders::Patching::GetStatus();
+   const Shaders::Patching::Status patching = Shaders::Patching::GetStatus(Shaders::GetShownStore().get());
    status.patches = {.needed = patching.needed,
       .loaded = patching.loaded,
       .running = patching.running,
@@ -166,7 +192,7 @@ Status GetStatus()
       .mirrors = mirrors.mirrors,
       .mirror_mb = mirrors.bytes >> 20,
       .views = mirrors.views,
-      .lod_bias_offset = Resources::Samplers::GetLodBiasOffset(),
+      .lod_bias_offset = Resources::Samplers::GetShownLodBiasOffset(),
       .chains = {
          .mode = std::string(Resources::Chains::GetModeName(chains.mode)),
          .seeds = chains.seeds,
@@ -241,7 +267,7 @@ Status GetStatus()
    status.shaders.job = jobs.name;
    status.jobs = {jobs.threads, jobs.running, jobs.queued};
 
-   if (Shaders::GetApi() == Api::D3D12)
+   if (HasD3D12Device())
    {
       D3D12Info& d3d12 = status.d3d12.emplace();
       const Shaders::Database::D3D12::Stats database = Shaders::Database::D3D12::GetStats();
@@ -314,7 +340,7 @@ Status GetStatus()
 
 std::string DescribeRootSignatures()
 {
-   if (Shaders::GetApi() != Api::D3D12)
+   if (!HasD3D12Device())
       return {};
    const Shaders::Database::D3D12::Stats database = Shaders::Database::D3D12::GetStats();
    std::string text = std::format("D3D12 root signatures: {} extended (largest {} DWORDs, and Luma's {} at most), {} not", database.extended_signatures,

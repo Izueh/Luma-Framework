@@ -1,10 +1,12 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <span>
 #include <string>
 #include <utility>
@@ -167,12 +169,20 @@ struct ShaderState
    bool failed = false;
 };
 
+// A device's compiled Luma shaders (Shaders::Store), by entry. Never held with another lock.
+struct ShaderStates
+{
+   mutable std::shared_mutex mutex;
+   std::vector<ShaderState> by_entry = std::vector<ShaderState>(GetCount());
+   std::atomic<uint64_t> generation = 0;
+};
+
 // Presenting thread: a build's shaders, by entry. Equal bytes keep the compiled shader they had, so no object is recreated.
-void PublishShaders(std::vector<std::pair<uint32_t, ShaderState>> shaders);
+void PublishShaders(Shaders::Store& store, std::vector<std::pair<uint32_t, ShaderState>> shaders);
 // Any thread
-ShaderState GetShader(uint32_t index);
-// Any thread: changes with every publication
-uint64_t GetGeneration();
+ShaderState GetShader(const Shaders::Store& store, uint32_t index);
+// Any thread: changes with every publication to the store
+uint64_t GetGeneration(const Shaders::Store& store);
 } // namespace Database
 } // namespace Resources
 } // namespace Luma

@@ -51,8 +51,6 @@ struct Info
    std::string_view description;
    std::span<const std::string_view> credits;
    std::span<const Link> links;
-   // The only API the game uses: the other one's hooks are never installed. Unset, Luma handles both.
-   std::optional<Api> api;
 };
 
 // Implemented by the game. Under the loader lock: declarations only (no dll loads, threads or API objects).
@@ -125,6 +123,8 @@ struct Options
    // Constant buffer capture (D3D11 Map/Unmap/UpdateSubresource, D3D12 upload heap read)
    Luma::Resources::ConstantCapture::Options constant_capture;
    GameDeviceDataType device_data;
+   // Only these APIs are hooked: a device or swapchain of another is left to the game
+   ApiSet supported_apis = {Api::D3D11, Api::D3D12};
 };
 
 // Once, in Init. A second call is ignored.

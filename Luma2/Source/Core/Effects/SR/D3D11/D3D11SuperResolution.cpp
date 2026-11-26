@@ -3,7 +3,6 @@
 #include <array>
 #include <format>
 #include <mutex>
-#include <tuple>
 #include <vector>
 
 #include <wrl/client.h>
@@ -33,19 +32,28 @@ namespace Effects {
 namespace SR {
 namespace D3D11 {
 namespace {
-using BackendTuple = std::tuple<Dlss::State, Fsr3::State, Fsr4::State, XeSS::State>;
+struct Backends
+{
+   Dlss::State dlss;
+   Fsr3::State fsr3;
+   Fsr4::State fsr4;
+   XeSS::State xess;
+};
 
+// False for no provider
 template <typename Fn>
-decltype(auto) VisitBackend(BackendTuple& backends, Type type, Fn&& fn)
+bool VisitBackend(Backends& backends, Type type, Fn&& fn)
 {
    switch (type)
    {
-   case Type::Dlss: return fn(std::get<0>(backends));
-   case Type::Fsr3: return fn(std::get<1>(backends));
-   case Type::Fsr4: return fn(std::get<2>(backends));
-   case Type::XeSS: return fn(std::get<3>(backends));
-   default: return fn(std::get<0>(backends));
+   case Type::Dlss: return fn(backends.dlss);
+   case Type::Fsr3: return fn(backends.fsr3);
+   case Type::Fsr4: return fn(backends.fsr4);
+   case Type::XeSS: return fn(backends.xess);
+   case Type::None:
+   case Type::Count: return false;
    }
+   return false;
 }
 
 struct DeviceState
@@ -56,38 +64,18 @@ struct DeviceState
 #if defined(LUMA_USE_D3D12_INTEROP) && LUMA_USE_D3D12_INTEROP
    D3D12Interop::Context interop;
 #endif
-   BackendTuple backends;
-   std::array<Capabilities, TYPE_COUNT> capabilities = {};
-   Type active_type = Type::None;
-   bool drew_this_frame = false;
-   bool force_reset = false;
-   SettingsData last_settings;
-   DrawParams last_draw;
-   int last_jitter_phases = GetDefaultJitterPhases();
+   Backends backends;
+   Record record;
    ComPtr<ID3D11Texture2D> uav_output_temp;
    D3D11_TEXTURE2D_DESC uav_output_desc = {};
 };
 
 void RefreshCapabilities(DeviceState& state)
 {
-   state.capabilities[size_t(Type::Dlss)] = std::get<0>(state.backends).capabilities;
-   state.capabilities[size_t(Type::Fsr3)] = std::get<1>(state.backends).capabilities;
-   state.capabilities[size_t(Type::Fsr4)] = std::get<2>(state.backends).capabilities;
-   state.capabilities[size_t(Type::XeSS)] = std::get<3>(state.backends).capabilities;
-}
-
-void PublishState(const DeviceState& state)
-{
-   RuntimeInfo info;
-   info.enabled = IsNeeded();
-   info.user_type = GetUserType();
-   info.active_type = state.active_type;
-   info.drew_this_frame = state.drew_this_frame;
-   info.backends = state.capabilities;
-   info.settings = state.last_settings;
-   info.last_draw = state.last_draw;
-   info.jitter_phases = state.last_jitter_phases;
-   PublishRuntimeInfo(info);
+   state.record.capabilities[size_t(Type::Dlss)] = state.backends.dlss.capabilities;
+   state.record.capabilities[size_t(Type::Fsr3)] = state.backends.fsr3.capabilities;
+   state.record.capabilities[size_t(Type::Fsr4)] = state.backends.fsr4.capabilities;
+   state.record.capabilities[size_t(Type::XeSS)] = state.backends.xess.capabilities;
 }
 
 void EnsureInitialized(DeviceState& state, ID3D11Device* device)
@@ -95,18 +83,17 @@ void EnsureInitialized(DeviceState& state, ID3D11Device* device)
    if (state.initialized || state.released || !device)
       return;
    state.initialized = true;
-   Dlss::Init(std::get<0>(state.backends), device);
-   Fsr3::Init(std::get<1>(state.backends), device);
+   Dlss::Init(state.backends.dlss, device);
+   Fsr3::Init(state.backends.fsr3, device);
 #if defined(LUMA_USE_D3D12_INTEROP) && LUMA_USE_D3D12_INTEROP
-   Fsr4::Init(std::get<2>(state.backends), device, &state.interop);
-   XeSS::Init(std::get<3>(state.backends), device, &state.interop);
+   Fsr4::Init(state.backends.fsr4, device, &state.interop);
+   XeSS::Init(state.backends.xess, device, &state.interop);
 #else
-   Fsr4::Init(std::get<2>(state.backends), device, nullptr);
-   XeSS::Init(std::get<3>(state.backends), device, nullptr);
+   Fsr4::Init(state.backends.fsr4, device, nullptr);
+   XeSS::Init(state.backends.xess, device, nullptr);
 #endif
    RefreshCapabilities(state);
-   state.active_type = ResolveActiveType(GetUserType(), state.capabilities);
-   PublishState(state);
+   ChooseActiveType(state.record);
 }
 
 ID3D11Resource* EnsureUavOutput(DeviceState& state, ID3D11Device* device, ID3D11Resource* output_resource, bool& needs_copy_back)
@@ -176,10 +163,10 @@ void ReleaseDeviceObjects(ID3D11Device* device)
    std::scoped_lock lock(state->mutex);
    state->released = true;
    state->uav_output_temp.Reset();
-   Dlss::Deinit(std::get<0>(state->backends));
-   Fsr3::Deinit(std::get<1>(state->backends));
-   Fsr4::Deinit(std::get<2>(state->backends));
-   XeSS::Deinit(std::get<3>(state->backends));
+   Dlss::Deinit(state->backends.dlss);
+   Fsr3::Deinit(state->backends.fsr3);
+   Fsr4::Deinit(state->backends.fsr4);
+   XeSS::Deinit(state->backends.xess);
 #if defined(LUMA_USE_D3D12_INTEROP) && LUMA_USE_D3D12_INTEROP
    if (state->interop.initialized && D3D12Interop::WaitForIdle(state->interop))
       D3D12Interop::Deinit(state->interop);
@@ -195,22 +182,7 @@ void OnPresent(ID3D11Device* device)
    if (state->released)
       return;
    EnsureInitialized(*state, device);
-   const Type next_type = ResolveActiveType(GetUserType(), state->capabilities);
-   if (next_type != state->active_type)
-   {
-      state->active_type = next_type;
-      state->force_reset = true;
-   }
-   const uint32_t sr_type_value = uint32_t(state->active_type == Type::None ? -1 : int32_t(state->active_type));
-   if (Resources::LumaCBuffers::cb_luma_global_settings.SRType != sr_type_value)
-   {
-      Resources::LumaCBuffers::cb_luma_global_settings.SRType = sr_type_value;
-      Resources::LumaCBuffers::MarkSettingsDirty();
-   }
-   const Frame::Resolutions res = Frame::Get(device);
-   UpdateSamplerLodBias(state->active_type, Frame::HasPass(device, Frame::PassMarker::Taa), res.render.y, res.output.y);
-   PublishState(*state);
-   state->drew_this_frame = false;
+   UpdateAtPresent(state->record, device);
 }
 
 bool Draw(ID3D11DeviceContext* context, const DrawOverrides& overrides)
@@ -227,33 +199,15 @@ bool Draw(ID3D11DeviceContext* context, const DrawOverrides& overrides)
    if (state->released)
       return false;
    EnsureInitialized(*state, device.Get());
-   if (state->active_type == Type::None)
+   Record& record = state->record;
+   if (record.active_type == Type::None)
       return false;
 
-   DrawInputs<ID3D11Resource> inputs;
-   inputs.source_color = Resources::Database::D3D11::GetResource(device.Get(), Resources::Database::Sr::COLOR);
-   inputs.depth_buffer = Resources::Database::D3D11::GetResource(device.Get(), Resources::Database::Sr::DEPTH);
-   inputs.motion_vectors = Resources::Database::D3D11::GetResource(device.Get(), Resources::Database::Sr::MOTION_VECTORS);
-   inputs.output_color = Resources::Database::D3D11::GetResource(device.Get(), Resources::Database::Sr::OUTPUT);
-   inputs.exposure = Resources::Database::D3D11::GetResource(device.Get(), Resources::Database::Sr::EXPOSURE);
-   inputs.bias_mask = Resources::Database::D3D11::GetResource(device.Get(), Resources::Database::Sr::REACTIVE);
-   inputs.transparency_alpha = Resources::Database::D3D11::GetResource(device.Get(), Resources::Database::Sr::TRANSPARENCY);
-   if (!inputs.source_color || !inputs.depth_buffer || !inputs.motion_vectors || !inputs.output_color)
+   DrawInputs<ID3D11Resource> inputs = GatherInputs<ID3D11Resource>([&](uint64_t key) { return Resources::Database::D3D11::GetResource(device.Get(), key); });
+   if (!HasRequiredInputs(inputs))
       return false;
-
-   const Frame::Resolutions resolutions = Frame::Get(device.Get());
-   const Frame::Camera camera = Frame::GetCamera(device.Get());
-   const Frame::Timing timing = Frame::GetTiming(device.Get());
-   const SettingsData settings = BuildSettingsData(GetOptions(), resolutions, overrides);
-   DrawParams params = BuildDrawParams(resolutions, camera, timing, overrides);
-   if (state->force_reset)
-   {
-      params.reset = true;
-      state->force_reset = false;
-   }
-
-   const uint32_t min_res = state->capabilities[size_t(state->active_type)].min_resolution;
-   if (settings.output_width < min_res || settings.output_height < min_res || params.render_width < min_res || params.render_height < min_res)
+   const std::optional<Prepared> prepared = PrepareDraw(record, device.Get(), overrides);
+   if (!prepared)
       return false;
 
    ID3D11Resource* const final_output = inputs.output_color;
@@ -268,68 +222,29 @@ bool Draw(ID3D11DeviceContext* context, const DrawOverrides& overrides)
    Luma::Draw::D3D11::Save(context, gfx_stack);
    Luma::Draw::D3D11::Save(context, cs_stack);
 
-   bool ok = VisitBackend(state->backends, state->active_type, [&](auto& backend) {
-      if (!UpdateSettings(backend, context, settings))
+   const bool ok = VisitBackend(state->backends, record.active_type, [&](auto& backend) {
+      if (!UpdateSettings(backend, context, prepared->settings))
          return false;
-      state->last_jitter_phases = GetJitterPhases(backend);
-      return Evaluate(backend, context, inputs, params);
+      record.last_jitter_phases = GetJitterPhases(backend);
+      return Evaluate(backend, context, inputs, prepared->params);
    });
 
    Luma::Draw::D3D11::Restore(context, gfx_stack);
    Luma::Draw::D3D11::Restore(context, cs_stack);
 
-   if (ok)
-   {
-      if (needs_copy_back)
-         context->CopyResource(final_output, inputs.output_color);
-      state->drew_this_frame = true;
-      state->last_settings = settings;
-      state->last_draw = params;
-      Frame::MarkPass(device.Get(), Frame::PassMarker::Sr);
-      PublishState(*state);
-   }
-   else
-   {
-      state->force_reset = true;
-   }
+   if (ok && needs_copy_back)
+      context->CopyResource(final_output, inputs.output_color);
+   FinishDraw(record, device.Get(), *prepared, ok);
 #if DEVELOPMENT
    if (Trace::DebugDraw::IsActive())
    {
-      Trace::DebugDraw::CaptureSrPassD3D11(context, std::format("Super Resolution ({})", GetTypeName(state->active_type)), inputs.source_color,
+      Trace::DebugDraw::CaptureSrPassD3D11(context, std::format("Super Resolution ({})", GetTypeName(record.active_type)), inputs.source_color,
          inputs.depth_buffer, inputs.motion_vectors, inputs.exposure, inputs.bias_mask, inputs.transparency_alpha, final_output);
    }
    if (Trace::Capture::IsCapturing())
    {
-      const Capabilities& cap = state->capabilities[size_t(state->active_type)];
-      Trace::Capture::SrInfo sr_info = {
-         .backend = std::string(GetTypeName(state->active_type)),
-         .provider_version = cap.provider_version,
-         .render_width = params.render_width,
-         .render_height = params.render_height,
-         .output_width = settings.output_width,
-         .output_height = settings.output_height,
-         .dynamic_resolution = settings.dynamic_resolution,
-         .hdr = settings.hdr,
-         .inverted_depth = settings.inverted_depth,
-         .auto_exposure = settings.auto_exposure,
-         .mvs_jittered = settings.mvs_jittered,
-         .reset = params.reset,
-         .succeeded = ok,
-         .copy_back = needs_copy_back,
-         .jitter_x = params.jitter_x,
-         .jitter_y = params.jitter_y,
-         .jitter_phases = state->last_jitter_phases,
-         .vert_fov = params.vert_fov,
-         .near_plane = params.near_plane,
-         .far_plane = params.far_plane,
-         .pre_exposure = params.pre_exposure,
-         .mvs_x_scale = settings.mvs_x_scale,
-         .mvs_y_scale = settings.mvs_y_scale,
-         .sharpness = params.user_sharpness,
-         .velocity_factor = params.fsr_velocity_factor,
-      };
-      Trace::Capture::D3D11::AddSrPass(context, sr_info, inputs.source_color, inputs.depth_buffer, inputs.motion_vectors, inputs.exposure, inputs.bias_mask,
-         inputs.transparency_alpha, final_output);
+      Trace::Capture::D3D11::AddSrPass(context, DescribeDraw(record, *prepared, ok, needs_copy_back), inputs.source_color, inputs.depth_buffer,
+         inputs.motion_vectors, inputs.exposure, inputs.bias_mask, inputs.transparency_alpha, final_output);
    }
 #endif
    return ok;
@@ -341,7 +256,7 @@ Type GetActiveType(ID3D11Device* device)
    if (!state)
       return Type::None;
    std::scoped_lock lock(state->mutex);
-   return state->active_type;
+   return state->record.active_type;
 }
 
 int GetJitterPhases(ID3D11Device* device)
@@ -350,7 +265,7 @@ int GetJitterPhases(ID3D11Device* device)
    if (!state)
       return GetDefaultJitterPhases();
    std::scoped_lock lock(state->mutex);
-   return state->last_jitter_phases;
+   return state->record.last_jitter_phases;
 }
 } // namespace D3D11
 } // namespace SR

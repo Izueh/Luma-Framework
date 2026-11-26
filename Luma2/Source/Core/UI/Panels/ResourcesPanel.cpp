@@ -169,7 +169,7 @@ void DrawResources()
       const std::array<PropertyRow, 3> rows = {{
          {"Upgrade", Resources::Samplers::IsNeeded() ? "on (Game::Options::samplers)" : "off", Resources::Samplers::IsNeeded() ? Tone::Info : Tone::Warning},
          {"Swapped", Resources::Samplers::IsSwapping() ? "yes" : "no"},
-         {"LOD bias offset", std::format("{:.2f}", Resources::Samplers::GetLodBiasOffset())},
+         {"LOD bias offset", std::format("{:.2f}", Resources::Samplers::GetShownLodBiasOffset())},
       }};
       Widgets::PropertyGrid("Samplers", rows);
       Widgets::EndSection();

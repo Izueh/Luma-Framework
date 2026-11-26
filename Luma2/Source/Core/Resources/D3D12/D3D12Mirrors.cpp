@@ -24,6 +24,7 @@
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Resources/ResourceChains.hpp"
 #include "Resources/ResourceDatabase.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Resources/ResourceMirrors.hpp"
 #include "Resources/ResourceScaling.hpp"
 #include "Resources/ResourceUpgrades.hpp"
@@ -419,11 +420,11 @@ D3D12_DESCRIPTOR_HEAP_TYPE GetHeapType(ViewKind kind)
 
 void RefreshSampler(Slot& slot)
 {
-   const uint32_t generation = Samplers::GetGeneration();
+   const uint32_t generation = Samplers::GetGeneration(slot.device);
    if (slot.generation == generation)
       return;
    slot.generation = generation;
-   const D3D12_SAMPLER_DESC mirror = Samplers::GetMirrorDesc(slot.game_sampler).value_or(slot.game_sampler);
+   const D3D12_SAMPLER_DESC mirror = Samplers::GetMirrorDesc(slot.game_sampler, Samplers::GetLodBiasOffset(slot.device)).value_or(slot.game_sampler);
    Hooks::Scope::Guard scope;
    slot.device->CreateSampler(&mirror, {SIZE_T(slot.handle)});
 }
@@ -698,17 +699,18 @@ CopyState* GetOrCreateCopyState(ID3D12Device* device)
    return Hooks::Lifetime::SetState<CopyState>(device);
 }
 
-std::shared_ptr<const Shaders::CompiledShader> GetCompiled(uint64_t name_hash)
+std::shared_ptr<const Shaders::CompiledShader> GetCompiled(ID3D12Device* device, uint64_t name_hash)
 {
    const std::optional<uint32_t> index = Database::Find(name_hash);
-   return index ? Database::GetShader(*index).compiled : nullptr;
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetStore(device);
+   return index && store ? Database::GetShader(*store, *index).compiled : nullptr;
 }
 
 ID3D12PipelineState* GetCopyPipeline(ID3D12GraphicsCommandList* list, ID3D12Device* device, CopyState& copy, ID3D12RootSignature* root_signature, DXGI_FORMAT format,
    bool scale)
 {
-   std::shared_ptr<const Shaders::CompiledShader> vertex_shader = GetCompiled(scale ? "Luma_Scale_VS"_h : "Luma_Copy_VS"_h);
-   std::shared_ptr<const Shaders::CompiledShader> pixel_shader = GetCompiled(scale ? "Luma_Scale_Table_PS"_h : "Luma_Copy_Table_PS"_h);
+   std::shared_ptr<const Shaders::CompiledShader> vertex_shader = GetCompiled(device, scale ? "Luma_Scale_VS"_h : "Luma_Copy_VS"_h);
+   std::shared_ptr<const Shaders::CompiledShader> pixel_shader = GetCompiled(device, scale ? "Luma_Scale_Table_PS"_h : "Luma_Copy_Table_PS"_h);
    if (!vertex_shader || !pixel_shader)
       return nullptr;
    std::scoped_lock lock(copy.mutex);
@@ -1209,7 +1211,7 @@ void TrackView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, Vi
 
 void TrackSampler(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, const D3D12_SAMPLER_DESC& desc, bool swapping)
 {
-   const std::optional<D3D12_SAMPLER_DESC> mirror = Samplers::GetMirrorDesc(desc);
+   const std::optional<D3D12_SAMPLER_DESC> mirror = Samplers::GetMirrorDesc(desc, Samplers::GetLodBiasOffset(device));
    if (!mirror)
       return Forget(destination.ptr);
    if (IsShaderVisible(destination.ptr))
@@ -1227,7 +1229,7 @@ void TrackSampler(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination,
       return Forget(destination.ptr);
    slot->sampler = true;
    slot->game_sampler = desc;
-   slot->generation = Samplers::GetGeneration();
+   slot->generation = Samplers::GetGeneration(device);
    sampler_count++;
    {
       Hooks::Scope::Guard scope;

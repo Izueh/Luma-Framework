@@ -1,11 +1,10 @@
 #pragma once
 
+#include <bitset>
+#include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include <string_view>
-#include <variant>
-
-struct ID3D11Device;
-struct ID3D12CommandQueue;
 
 namespace Luma {
 enum class Api : uint8_t
@@ -14,26 +13,36 @@ enum class Api : uint8_t
    D3D12,
 };
 
+inline constexpr size_t API_COUNT = 2;
+
 constexpr std::string_view GetName(Api api)
 {
-   return api == Api::D3D11 ? "D3D11" : "D3D12";
+   switch (api)
+   {
+   case Api::D3D11: return "D3D11";
+   case Api::D3D12: return "D3D12";
+   }
+   return "unknown";
 }
 
-using Presenter = std::variant<ID3D11Device*, ID3D12CommandQueue*>;
+struct ApiSet
+{
+   std::bitset<API_COUNT> bits;
+
+   constexpr ApiSet() = default;
+
+   constexpr ApiSet(std::initializer_list<Api> apis)
+   {
+      for (const Api api : apis)
+         bits.set(size_t(api));
+   }
+
+   constexpr bool Has(Api api) const { return bits.test(size_t(api)); }
+};
 
 template <typename... Fs>
 struct Overloaded : Fs...
 {
    using Fs::operator()...;
 };
-
-constexpr Api GetApi(const Presenter& presenter)
-{
-   return std::visit(
-      Overloaded{
-         [](ID3D11Device*) { return Api::D3D11; },
-         [](ID3D12CommandQueue*) { return Api::D3D12; },
-      },
-      presenter);
-}
 } // namespace Luma

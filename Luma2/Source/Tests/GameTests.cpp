@@ -46,7 +46,8 @@ Game::DrawResult OnOtherDraw(const Game::D3D11::Call&) { return Game::DrawResult
 
 void TestInit()
 {
-   Game::SetInfo({.name = "Test Game", .version = "1.2", .credits = CREDITS, .links = LINKS, .api = Api::D3D12});
+   Game::SetInfo({.name = "Test Game", .version = "1.2", .credits = CREDITS, .links = LINKS});
+   Game::SetOptions({.supported_apis = {Api::D3D12}});
    Settings::Register(SETTINGS);
    Game::SetEvents(Game::D3D12::Events{.on_init_device = &OnDeviceCreated, .on_destroy_device = &OnDeviceDestroyed});
    Game::SetEvents(Game::D3D11::Events{.on_init_device = &OnDeviceCreated11});
@@ -78,7 +79,8 @@ TEST_CASE("Game: Init sets the info, settings and callbacks")
    CHECK(Game::Registry::GetInfo().version == "1.2");
    CHECK(Game::Registry::GetInfo().links.size() == 1);
    CHECK(Settings::Get<int32_t>("GameTestValue") == 3);
-   CHECK(Game::Registry::GetInfo().api == Api::D3D12);
+   CHECK(Game::Registry::GetSupportedApis().Has(Api::D3D12));
+   CHECK_FALSE(Game::Registry::GetSupportedApis().Has(Api::D3D11));
 
    int storage = 0;
    auto* device = reinterpret_cast<ID3D12Device*>(&storage);

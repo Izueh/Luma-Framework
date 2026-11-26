@@ -151,7 +151,7 @@ struct GraphicsState
 std::optional<GraphicsState> GetGraphicsState(const DescCopy& desc);
 
 // Any thread: the game created (or loaded) `pipeline` from `desc`, `copy` (null when not copied) its deep copy
-const Pipeline* TrackPipeline(const PipelineDesc& desc, std::shared_ptr<const DescCopy> copy, bool from_library, ID3D12PipelineState* pipeline);
+const Pipeline* TrackPipeline(ID3D12Device* device, const PipelineDesc& desc, std::shared_ptr<const DescCopy> copy, bool from_library, ID3D12PipelineState* pipeline);
 const Pipeline* FindPipeline(ID3D12PipelineState* pipeline);
 
 struct Stats

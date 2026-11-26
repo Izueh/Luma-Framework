@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "Game/GameRegistry.hpp"
+#include "Hooks/ObjectLifetime.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Settings/SettingKeys.hpp"
@@ -20,6 +21,7 @@
 #include "Shaders/ShaderFiles.hpp"
 #include "Shaders/ShaderInvariants.hpp"
 #include "Shaders/ShaderPatching.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "System/JobQueue.hpp"
 #include "Shaders/ShaderVariants.hpp"
 #include "System/Paths.hpp"
@@ -31,22 +33,24 @@ namespace Shaders {
 namespace {
 std::atomic<uint64_t> frame = 0;
 
-// Presenting thread
-bool started = false;
 // Decided by Start, before the hooks
+bool started = false;
 bool needed = false;
-bool building = false;
-bool reload_pending = false;
-// Any thread sets it (a device's creation), the presenting thread builds for it
-std::atomic<int32_t> api = -1;
-// The API the shaders were last built for (presenting thread)
-std::optional<Api> built_api;
+bool builds = false;
 // Replacement file hashes, added by each scan. Never held with another lock.
 std::mutex replaced_mutex;
 std::unordered_set<uint32_t> replaced;
-// Written on the presenting thread. Never held with another lock.
-std::mutex last_build_mutex;
-BuildInfo last_build;
+
+// In the device's private data: the store dies with the device
+struct StoreHolder
+{
+   std::shared_ptr<Store> store;
+};
+
+// Live devices' stores, for what applies to all of them (a define change) and for the dev tools. Never held with another lock.
+std::mutex stores_mutex;
+std::vector<std::weak_ptr<Store>> stores;
+std::weak_ptr<Store> shown;
 
 struct Build
 {
@@ -171,8 +175,8 @@ void AddReplaced(const std::vector<Files::File>& files)
    }
 }
 
-// Worker thread
-Build Run(std::vector<Compiler::Define> defines, Api build_api)
+// Worker thread. Stops when the device is released.
+Build Run(std::vector<Compiler::Define> defines, Api build_api, const std::weak_ptr<Store>& store)
 {
    const std::span<const std::filesystem::path> roots = System::Paths::GetShaderRoots();
    const std::vector<Files::File> files = Files::Scan(roots);
@@ -190,6 +194,8 @@ Build Run(std::vector<Compiler::Define> defines, Api build_api)
          continue;
       for (const Files::Hash& hash : file.hashes)
       {
+         if (store.expired())
+            return build;
          // The hash being compiled, for a file of several
          std::vector<Compiler::Define> hash_defines = defines;
          hash_defines.push_back({"_" + hash.text, "1"});
@@ -214,6 +220,8 @@ Build Run(std::vector<Compiler::Define> defines, Api build_api)
          const std::optional<uint32_t> entry = Resources::Database::Find(Utils::Hash::Name(declared.name));
          if (!entry)
             continue;
+         if (store.expired())
+            return build;
          std::vector<Compiler::Define> shader_defines = defines;
          if (const std::string_view stage = GetStageDefine(GetStage(declared.target)); !stage.empty())
             shader_defines.push_back({std::string(stage), "1"});
@@ -228,15 +236,18 @@ Build Run(std::vector<Compiler::Define> defines, Api build_api)
    return build;
 }
 
+void StartBuild(const std::shared_ptr<Store>& store);
+
 // Presenting thread
-System::Jobs::Outcome Publish(Build build)
+System::Jobs::Outcome Publish(const std::shared_ptr<Store>& alive, Build build, const std::vector<Compiler::Define>& compiled_defines)
 {
+   Store& store = *alive;
 #if DEVELOPMENT || TEST
    for (Variants::Variant& replacement : build.replacements)
    {
       if (!replacement.compiled)
          continue;
-      if (const std::string errors = Invariants::CheckVariant(replacement.hash, replacement.file, *replacement.compiled); !errors.empty())
+      if (const std::string errors = Invariants::CheckVariant(store.api, replacement.hash, replacement.file, *replacement.compiled); !errors.empty())
       {
          replacement.compiled.reset();
          replacement.rejected = true;
@@ -245,26 +256,61 @@ System::Jobs::Outcome Publish(Build build)
       }
    }
 #endif
-   Variants::Publish(Variants::Source::File, std::move(build.replacements));
-   Resources::Database::PublishShaders(std::move(build.luma_shaders));
+   Defines::SetCompiled(compiled_defines);
+   Variants::Publish(store, Variants::Source::File, std::move(build.replacements));
+   Resources::Database::PublishShaders(store, std::move(build.luma_shaders));
    const BuildInfo& info = build.info;
-   Log::Info("Shaders: {} compiled, {} from the cache, {} failed", info.compiled, info.cached, info.failed);
+   Log::Info("Shaders: {} compiled, {} from the cache, {} failed for {}", info.compiled, info.cached, info.failed, GetName(store.api));
    if (!info.errors.empty())
       Log::Warning("Shaders: {}", info.errors);
    System::Jobs::Outcome outcome = {info.failed != 0, info.failed ? std::format("{} shader{} failed to compile", info.failed, info.failed == 1 ? "" : "s") : std::format("Shaders ready: {} compiled, {} from the cache", info.compiled, info.cached)};
    {
-      std::scoped_lock lock(last_build_mutex);
-      build.info.id = last_build.id + 1;
-      last_build = std::move(build.info);
+      std::scoped_lock lock(store.last_build_mutex);
+      build.info.id = store.last_build.id + 1;
+      store.last_build = std::move(build.info);
    }
 
-   building = false;
-   if (reload_pending)
+   store.building = false;
+   if (store.reload_pending)
    {
-      reload_pending = false;
-      Reload();
+      store.reload_pending = false;
+      StartBuild(alive);
    }
    return outcome;
+}
+
+// The presenting thread, or a creation before the store is shared
+void StartBuild(const std::shared_ptr<Store>& shared)
+{
+   Store& store = *shared;
+   if (store.building)
+   {
+      store.reload_pending = true;
+      return;
+   }
+   store.building = true;
+   auto build = std::make_shared<Build>();
+   std::vector<Compiler::Define> defines = Defines::Collect();
+   std::vector<Compiler::Define> compiled_defines = defines;
+   // The registers of Luma's cbuffers depend on the API, and D3D12 has its own (LUMA_TEXTURE_SPACE)
+   for (const Compiler::Define& register_define : Resources::LumaCBuffers::GetDefines(store.api))
+   {
+      const auto it = std::ranges::find(defines, register_define.name, &Compiler::Define::name);
+      if (it != defines.end())
+         it->value = register_define.value;
+      else
+         defines.push_back(register_define);
+   }
+   // "#if _D3D12" in shaders of games that run on both APIs
+   defines.push_back({"_D3D11", store.api == Api::D3D11 ? "1" : "0"});
+   defines.push_back({"_D3D12", store.api == Api::D3D12 ? "1" : "0"});
+   std::weak_ptr<Store> weak = shared;
+   System::Jobs::Queue(
+      "Compiling shaders", [build, defines = std::move(defines), api = store.api, weak] { *build = Run(defines, api, weak); },
+      [build, compiled_defines = std::move(compiled_defines), weak] {
+         const std::shared_ptr<Store> alive = weak.lock();
+         return alive ? Publish(alive, std::move(*build), compiled_defines) : System::Jobs::Outcome{};
+      });
 }
 
 void OnSettingChanged(const Settings::Setting& setting, const Settings::Value& value)
@@ -290,8 +336,6 @@ void Start()
    std::vector<std::string> overridden;
    const std::vector<Files::File> files = Files::Scan(System::Paths::GetShaderRoots(), &overridden);
    AddReplaced(files);
-   if (const std::optional<Api> declared = Game::Registry::GetInfo().api)
-      SetApi(*declared);
 #if DEVELOPMENT
    // The documented override (a game's file replacing a shared one), logged so it's never by accident
    for (const std::string& path : overridden)
@@ -317,8 +361,7 @@ void Start()
       std::ranges::any_of(files, [](const Files::File& file) { return file.kind == Files::Kind::Replacement; });
 #endif
    started = true;
-   if (needed || any_program)
-      Reload();
+   builds = needed || any_program;
 }
 
 bool IsNeeded()
@@ -361,17 +404,52 @@ Hooks::D3D12::Functions GetD3D12Functions()
    return functions;
 }
 
-void SetApi(Api set)
+void CreateStore(IUnknown* device, Api api)
 {
-   int32_t expected = -1;
-   if (!api.compare_exchange_strong(expected, int32_t(set)) && expected != int32_t(set))
-      Log::Warning("Shaders: a {} device after a {} one, the shaders stay built for {}", GetName(set), GetName(Api(expected)), GetName(Api(expected)));
+   auto store = std::make_shared<Store>(api);
+   if (!Hooks::Lifetime::SetStateOf<StoreHolder>(device, store))
+      return;
+   if (started && builds)
+      StartBuild(store);
+   std::scoped_lock lock(stores_mutex);
+   std::erase_if(stores, [](const std::weak_ptr<Store>& weak) { return weak.expired(); });
+   stores.push_back(store);
 }
 
-std::optional<Api> GetApi()
+void DestroyStore(IUnknown* device)
 {
-   const int32_t value = api.load(std::memory_order_acquire);
-   return value < 0 ? std::nullopt : std::optional(Api(value));
+   Hooks::Lifetime::RemoveStateOf<StoreHolder>(device);
+   std::scoped_lock lock(stores_mutex);
+   std::erase_if(stores, [](const std::weak_ptr<Store>& weak) { return weak.expired(); });
+}
+
+std::shared_ptr<Store> GetStore(IUnknown* device)
+{
+   const StoreHolder* holder = device ? Hooks::Lifetime::GetStateOf<StoreHolder>(device) : nullptr;
+   return holder ? holder->store : nullptr;
+}
+
+std::vector<std::shared_ptr<Store>> GetStores()
+{
+   std::vector<std::shared_ptr<Store>> live;
+   std::scoped_lock lock(stores_mutex);
+   for (const std::weak_ptr<Store>& weak : stores)
+   {
+      if (std::shared_ptr<Store> store = weak.lock())
+         live.push_back(std::move(store));
+   }
+   return live;
+}
+
+std::shared_ptr<Store> GetShownStore()
+{
+   {
+      std::scoped_lock lock(stores_mutex);
+      if (std::shared_ptr<Store> store = shown.lock())
+         return store;
+   }
+   std::vector<std::shared_ptr<Store>> live = GetStores();
+   return live.empty() ? nullptr : live.front();
 }
 
 std::string GetTarget(std::string_view target, Api build_api)
@@ -397,38 +475,10 @@ bool HasReplacementFile(uint32_t hash)
 
 void Reload()
 {
-   const std::optional<Api> build_api = GetApi();
-   // Built at the first present after a device says which API (CountFrame)
-   if (!build_api)
-   {
-      reload_pending = true;
+   if (!builds)
       return;
-   }
-   if (building)
-   {
-      reload_pending = true;
-      return;
-   }
-   building = true;
-   built_api = build_api;
-   std::vector<Compiler::Define> defines = Defines::Collect();
-   Defines::SetCompiled(defines);
-   // The registers of Luma's cbuffers depend on the API, and D3D12 has its own (LUMA_TEXTURE_SPACE)
-   for (const Compiler::Define& register_define : Resources::LumaCBuffers::GetDefines(*build_api))
-   {
-      const auto it = std::ranges::find(defines, register_define.name, &Compiler::Define::name);
-      if (it != defines.end())
-         it->value = register_define.value;
-      else
-         defines.push_back(register_define);
-   }
-   // "#if _D3D12" in shaders of games that run on both APIs
-   defines.push_back({"_D3D11", *build_api == Api::D3D11 ? "1" : "0"});
-   defines.push_back({"_D3D12", *build_api == Api::D3D12 ? "1" : "0"});
-   auto build = std::make_shared<Build>();
-   System::Jobs::Queue(
-      "Compiling shaders", [build, defines = std::move(defines), build_api = *build_api] { *build = Run(defines, build_api); },
-      [build] { return Publish(std::move(*build)); });
+   for (const std::shared_ptr<Store>& store : GetStores())
+      StartBuild(store);
 }
 
 void Unload()
@@ -444,13 +494,12 @@ void Load()
    Reload();
 }
 
-void CountFrame()
+void CountFrame(IUnknown* device)
 {
-   // A build that waited for the API
-   if (started && !building && reload_pending && GetApi())
+   if (std::shared_ptr<Store> store = GetStore(device))
    {
-      reload_pending = false;
-      Reload();
+      std::scoped_lock lock(stores_mutex);
+      shown = store;
    }
    frame.fetch_add(1, std::memory_order_release);
 }
@@ -460,10 +509,16 @@ uint64_t GetFrame()
    return frame.load(std::memory_order_acquire);
 }
 
+BuildInfo GetLastBuild(const Store& store)
+{
+   std::scoped_lock lock(store.last_build_mutex);
+   return store.last_build;
+}
+
 BuildInfo GetLastBuild()
 {
-   std::scoped_lock lock(last_build_mutex);
-   return last_build;
+   const std::shared_ptr<Store> store = GetShownStore();
+   return store ? GetLastBuild(*store) : BuildInfo();
 }
 } // namespace Shaders
 } // namespace Luma

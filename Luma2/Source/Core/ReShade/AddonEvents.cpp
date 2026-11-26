@@ -19,6 +19,7 @@
 #include <d3d11.h>
 #include "Shaders/D3D11/D3D11Variants.hpp"
 #include "Shaders/ShaderDatabase.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Shaders/ShaderStages.hpp"
 #include "Trace/FrameCapture.hpp"
 #endif
@@ -96,6 +97,7 @@ void CaptureBoundShadersForIntercept(uint32_t event, uint64_t cmd_list_arg, std:
    const Shaders::StageSet stages = static_cast<ABI::Event>(event) == ABI::Event::Dispatch ? Shaders::COMPUTE_STAGES
       : static_cast<ABI::Event>(event) == ABI::Event::DrawOrDispatchIndirect               ? (Shaders::GRAPHICS_STAGES | Shaders::COMPUTE_STAGES)
                                                                                            : Shaders::GRAPHICS_STAGES;
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetShownStore();
    for (size_t i = 0; i < bound->shaders.size(); i++)
    {
       const ShaderStage stage = ShaderStage(i);
@@ -107,7 +109,7 @@ void CaptureBoundShadersForIntercept(uint32_t event, uint64_t cmd_list_arg, std:
          .hash = shader->hash,
          .name = std::string(shader->name),
       });
-      for (const Shaders::Variants::Variant& variant : Shaders::Variants::GetVariants(shader->hash))
+      for (const Shaders::Variants::Variant& variant : store ? Shaders::Variants::GetVariants(*store, shader->hash) : std::vector<Shaders::Variants::Variant>())
       {
          if (variant.compiled)
             recorded.variants.push_back(variant.source);

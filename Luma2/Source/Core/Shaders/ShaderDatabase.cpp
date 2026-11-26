@@ -24,6 +24,7 @@
 #include "Shaders/ShaderInvariants.hpp"
 #include "Shaders/ShaderPatching.hpp"
 #include "Shaders/ShaderSignatures.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "System/JobQueue.hpp"
 #include "System/Paths.hpp"
 #include "Utils/Debug.hpp"
@@ -355,9 +356,9 @@ void CheckLumaSpace(const Shader& shader)
 } // namespace
 #endif
 
-Shader& Track(ShaderStage stage, std::span<const uint8_t> bytecode)
+namespace {
+Shader& FindOrAdd(ShaderStage stage, std::span<const uint8_t> bytecode, uint32_t hash)
 {
-   const uint32_t hash = Utils::Hash::CRC32(bytecode);
    if (Shader* shader = Find(hash))
       return *shader;
    auto added = std::make_unique<Shader>();
@@ -379,20 +380,27 @@ Shader& Track(ShaderStage stage, std::span<const uint8_t> bytecode)
    added->bindings = Container::GetBindings(bytecode);
    CheckLumaSpace(*added);
 #endif
-   const Shader* const tracked = added.get();
-   Shader& kept = Add(std::move(added));
-   // Once per hash, by the thread whose shader was kept: the game's sync patch runs in this creation call
-   if (&kept == tracked)
-      Patching::TrackShader(kept);
+   return Add(std::move(added));
+}
+} // namespace
+
+Shader& Track(Store* store, ShaderStage stage, std::span<const uint8_t> bytecode)
+{
+   const uint32_t hash = Utils::Hash::CRC32(bytecode);
+   Shader& kept = FindOrAdd(stage, bytecode, hash);
+   if (!store)
+      return kept;
+   // The game's sync patch runs in this creation call
+   Patching::TrackShader(*store, kept);
 #if DEVELOPMENT
    // Replacements compiled before the game created their original are checked now
-   for (const Variants::Variant& variant : Variants::GetVariants(hash))
+   for (const Variants::Variant& variant : Variants::GetVariants(*store, hash))
    {
       if (!variant.compiled)
          continue;
       Signatures::Check(hash, kept.stage, kept.signature, variant.compiled->bytecode, variant.file);
-      if (const std::string errors = Invariants::CheckVariant(hash, variant.file, *variant.compiled); !errors.empty())
-         Variants::Reject(hash, variant.source, errors);
+      if (const std::string errors = Invariants::CheckVariant(store->api, hash, variant.file, *variant.compiled); !errors.empty())
+         Variants::Reject(*store, hash, variant.source, errors);
    }
 #endif
    return kept;

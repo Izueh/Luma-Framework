@@ -9,6 +9,7 @@
 #include "Shaders/ShaderCompiler.hpp"
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderVariants.hpp"
+#include "Shaders/ShaderStore.hpp"
 
 namespace Luma {
 namespace Trace {
@@ -103,7 +104,8 @@ Description Describe(uint32_t hash, uint32_t slot, std::span<const std::byte> da
             return FromLayout("reflection", *layout, data);
       }
       // Games strip their reflection data; Luma's variants of the shader declare the cbuffer they read
-      for (const Shaders::Variants::Variant& variant : Shaders::Variants::GetVariants(hash))
+      const std::shared_ptr<Shaders::Store> store = Shaders::GetShownStore();
+      for (const Shaders::Variants::Variant& variant : store ? Shaders::Variants::GetVariants(*store, hash) : std::vector<Shaders::Variants::Variant>())
       {
          if (!variant.compiled)
             continue;
@@ -112,14 +114,14 @@ Description Describe(uint32_t hash, uint32_t slot, std::span<const std::byte> da
             return FromLayout("replacement", *layout, data);
       }
       // Luma's own cbuffers (LumaSettings, LumaData, LumaComposition): reflect any compiled Core shader that declares it
-      if (!luma_name.empty())
+      if (!luma_name.empty() && store)
       {
          for (uint32_t i = 0; i < Resources::Database::GetCount(); i++)
          {
             const Resources::Database::Entry& entry = Resources::Database::Get(i);
             if (entry.kind != Resources::Database::Kind::Shader)
                continue;
-            const Resources::Database::ShaderState shader_state = Resources::Database::GetShader(i);
+            const Resources::Database::ShaderState shader_state = Resources::Database::GetShader(*store, i);
             if (!shader_state.compiled)
                continue;
             const std::vector<Shaders::Compiler::ConstantBuffer> layouts = Shaders::Compiler::ReflectConstantBuffers(shader_state.compiled->bytecode);

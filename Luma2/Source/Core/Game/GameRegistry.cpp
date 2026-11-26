@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <format>
 #include <initializer_list>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <variant>
@@ -39,6 +40,7 @@ struct Declarations
    D3D11::Callbacks d3d11_callbacks;
    Panels panels;
    GameDeviceDataType device_data;
+   ApiSet supported_apis = {Api::D3D11, Api::D3D12};
    bool options_set = false;
    std::unordered_map<uint32_t, D3D11::DrawCallback> draw_callbacks;
    std::unordered_map<uint32_t, D3D12::DrawCallback> d3d12_draw_callbacks;
@@ -75,12 +77,12 @@ void AttachGameDeviceData(Device* device)
    Hooks::Lifetime::SetState<DeviceData>(device, declarations.device_data.create(), declarations.device_data.destroy);
 }
 
-template <typename Callback>
-void Request(Hooks::D3D11::Functions& functions, Callback callback, std::initializer_list<Hooks::D3D11::Function> required)
+template <typename Functions, typename Callback, typename Function>
+void Request(Functions& functions, Callback callback, std::initializer_list<Function> required)
 {
    if (!callback)
       return;
-   for (const Hooks::D3D11::Function function : required)
+   for (const Function function : required)
       functions.set(size_t(function));
 }
 
@@ -177,6 +179,7 @@ void SetOptions(const Options& options)
    Luma::Effects::SR::SetOptions(options.sr);
    Luma::Resources::ConstantCapture::SetOptions(options.constant_capture);
    declarations.device_data = options.device_data;
+   declarations.supported_apis = options.supported_apis;
 }
 
 void Display::SetHdr(bool hdr)
@@ -327,6 +330,11 @@ const D3D11::Callbacks& GetD3D11Callbacks()
    return declarations.d3d11_callbacks;
 }
 
+ApiSet GetSupportedApis()
+{
+   return declarations.supported_apis;
+}
+
 const Panels& GetPanels()
 {
    return declarations.panels;
@@ -383,19 +391,28 @@ Hooks::D3D11::Functions GetCallbackFunctions()
    return functions;
 }
 
-Hooks::D3D11::Functions GetRequestedFunctions()
+Hooks::DXGI::Functions GetRequestedDXGIFunctions()
 {
-   using enum Hooks::D3D11::Function;
+   using enum Hooks::DXGI::Function;
    const D3D11::Events& d3d11 = declarations.d3d11_events;
    const D3D12::Events& d3d12 = declarations.d3d12_events;
-   // Device and swapchain creation and destruction are always hooked
-   Hooks::D3D11::Functions functions = GetCallbackFunctions();
+   // Swapchain creation and destruction are always hooked
+   Hooks::DXGI::Functions functions;
    Request(functions, d3d11.on_create_swapchain, {ResizeBuffers});
    Request(functions, d3d12.on_create_swapchain, {ResizeBuffers});
    Request(functions, d3d11.on_init_swapchain, {ResizeBuffers});
    Request(functions, d3d12.on_init_swapchain, {ResizeBuffers});
    Request(functions, d3d11.on_present, {Present});
    Request(functions, d3d12.on_present, {Present});
+   return functions;
+}
+
+Hooks::D3D11::Functions GetRequestedFunctions()
+{
+   using enum Hooks::D3D11::Function;
+   const D3D11::Events& d3d11 = declarations.d3d11_events;
+   // Device creation and destruction are always hooked
+   Hooks::D3D11::Functions functions = GetCallbackFunctions();
    Request(functions, d3d11.on_create_shader,
       {CreateVertexShader, CreateHullShader, CreateDomainShader, CreateGeometryShader, CreateGeometryShaderWithStreamOutput, CreatePixelShader, CreateComputeShader});
    Request(functions, d3d11.on_create_buffer, {CreateBuffer});
@@ -438,9 +455,16 @@ Hooks::D3D11::Functions GetRequestedFunctions()
 void LogDeclarations()
 {
    const Info& info = declarations.info;
-   Log::Info("Game: {} {} set {} D3D11 and {} D3D12 events, {} D3D11 callbacks{}", info.name.empty() ? "(unnamed game)" : info.name,
+   const ApiSet apis = declarations.supported_apis;
+   std::string used;
+   for (const Api api : {Api::D3D11, Api::D3D12})
+   {
+      if (apis.Has(api))
+         used += std::format("{}{}", used.empty() ? "" : " and ", GetName(api));
+   }
+   Log::Info("Game: {} {} set {} D3D11 and {} D3D12 events, {} D3D11 callbacks, uses {}", info.name.empty() ? "(unnamed game)" : info.name,
       info.version, CountCallbacks(declarations.d3d11_events), CountCallbacks(declarations.d3d12_events), CountCallbacks(declarations.d3d11_callbacks),
-      info.api ? std::format(", and uses {} only", GetName(*info.api)) : "");
+      used.empty() ? "no API" : used);
 }
 
 void Reset()

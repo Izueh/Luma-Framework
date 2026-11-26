@@ -17,6 +17,7 @@
 #include <DDSTextureLoader11.h>
 
 #include "Shaders/ShaderContainer.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Shaders/ShaderVariants.hpp"
 #include "System/MemoryScan.hpp"
 
@@ -91,6 +92,7 @@ TEST_CASE("Patching: memory patterns, with wildcards")
 TEST_CASE("Patching: patches are variants below files, updated a few hashes at a time")
 {
    using namespace Shaders::Variants;
+   Shaders::Store store(Api::D3D11);
    constexpr uint32_t FILE_AND_PATCH = 0xFEED0001;
    constexpr uint32_t PATCH_ONLY = 0xFEED0002;
    const auto compiled = [](uint8_t byte) {
@@ -98,33 +100,33 @@ TEST_CASE("Patching: patches are variants below files, updated a few hashes at a
       shader->bytecode = {byte, byte, byte, byte};
       return std::shared_ptr<const Shaders::CompiledShader>(std::move(shader));
    };
-   const std::vector<Variant> before = GetVariants(FILE_AND_PATCH);
-   Publish(Source::File, {{.hash = FILE_AND_PATCH, .source = Source::File, .priority = FILE_PRIORITY, .compiled = compiled(1)}});
-   const uint64_t generation = GetGeneration();
-   Update(Source::Patch,
+   const std::vector<Variant> before = GetVariants(store, FILE_AND_PATCH);
+   Publish(store, Source::File, {{.hash = FILE_AND_PATCH, .source = Source::File, .priority = FILE_PRIORITY, .compiled = compiled(1)}});
+   const uint64_t generation = GetGeneration(store);
+   Update(store, Source::Patch,
       {{.hash = FILE_AND_PATCH, .priority = PATCH_PRIORITY, .compiled = compiled(2)}, {.hash = PATCH_ONLY, .priority = PATCH_PRIORITY, .compiled = compiled(3)}}, {});
-   CHECK(GetGeneration() != generation);
-   std::vector<Variant> variants = GetVariants(FILE_AND_PATCH);
+   CHECK(GetGeneration(store) != generation);
+   std::vector<Variant> variants = GetVariants(store, FILE_AND_PATCH);
    REQUIRE(variants.size() == 2);
    // A file wins over a patch
    CHECK(variants[0].source == Source::File);
    CHECK(variants[1].source == Source::Patch);
-   REQUIRE(GetCompiledShader(PATCH_ONLY, Source::Patch));
+   REQUIRE(GetCompiledShader(store, PATCH_ONLY, Source::Patch));
 
    // The same bytes again keep the compiled shader they had: nothing is recreated
-   const std::shared_ptr<const Shaders::CompiledShader> kept = GetCompiledShader(PATCH_ONLY, Source::Patch);
-   Update(Source::Patch, {{.hash = PATCH_ONLY, .priority = PATCH_PRIORITY, .compiled = compiled(3)}}, {});
-   CHECK(GetCompiledShader(PATCH_ONLY, Source::Patch) == kept);
+   const std::shared_ptr<const Shaders::CompiledShader> kept = GetCompiledShader(store, PATCH_ONLY, Source::Patch);
+   Update(store, Source::Patch, {{.hash = PATCH_ONLY, .priority = PATCH_PRIORITY, .compiled = compiled(3)}}, {});
+   CHECK(GetCompiledShader(store, PATCH_ONLY, Source::Patch) == kept);
 
    // Removing one hash's patch leaves the others and the files
    const std::array<uint32_t, 1> removed = {PATCH_ONLY};
-   Update(Source::Patch, {}, removed);
-   CHECK(!HasVariant(PATCH_ONLY));
-   CHECK(GetVariants(FILE_AND_PATCH).size() == 2);
+   Update(store, Source::Patch, {}, removed);
+   CHECK(!HasVariant(store, PATCH_ONLY));
+   CHECK(GetVariants(store, FILE_AND_PATCH).size() == 2);
    const std::array<uint32_t, 1> all = {FILE_AND_PATCH};
-   Update(Source::Patch, {}, all);
-   Publish(Source::File, {});
-   CHECK(GetVariants(FILE_AND_PATCH).size() == before.size());
+   Update(store, Source::Patch, {}, all);
+   Publish(store, Source::File, {});
+   CHECK(GetVariants(store, FILE_AND_PATCH).size() == before.size());
 }
 
 #ifdef LUMA_RESOURCES_DIR

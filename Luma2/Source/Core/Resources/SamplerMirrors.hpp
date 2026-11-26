@@ -6,6 +6,8 @@
 
 #include "Hooks/HookFunctions.hpp"
 
+struct IUnknown;
+
 namespace Luma {
 namespace Resources {
 namespace Samplers {
@@ -23,13 +25,18 @@ bool IsNeeded();
 bool IsSwapping();
 Hooks::D3D11::Functions GetD3D11Functions();
 
-float GetLodBiasOffset();
-uint32_t GetGeneration();
-void SetLodBiasOffset(float offset);
+// Any thread: the device's offset (its super resolution's, or the Development custom one)
+float GetLodBiasOffset(IUnknown* device);
+// Any thread: changes with the device's offset and with the custom one
+uint32_t GetGeneration(IUnknown* device);
+// Presenting thread, at the device's present
+void SetLodBiasOffset(IUnknown* device, float offset);
+// For the dev tools: the offset of the device that presented last
+float GetShownLodBiasOffset();
 
 // Works directly on native D3D11_SAMPLER_DESC and D3D12_SAMPLER_DESC
 template <typename D3DSamplerDesc>
-std::optional<D3DSamplerDesc> GetMirrorDesc(const D3DSamplerDesc& desc, float offset = GetLodBiasOffset())
+std::optional<D3DSamplerDesc> GetMirrorDesc(const D3DSamplerDesc& desc, float offset)
 {
    constexpr uint32_t FILTER_MIN_MAG_MIP_LINEAR = 0x15;
    constexpr uint32_t FILTER_ANISOTROPIC = 0x55;

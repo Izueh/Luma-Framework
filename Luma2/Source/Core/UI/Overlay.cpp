@@ -3,26 +3,20 @@
 #include <array>
 #include <atomic>
 #include <iterator>
-#include <mutex>
 #include <optional>
 #include <utility>
-#include <variant>
 
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <backends/imgui_impl_win32.h>
 
 #include "ReShade/ReShade.hpp"
-#include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/InputHooks.hpp"
 #include "Hooks/HookScope.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Settings/SettingsStorage.hpp"
 #include "System/JobQueue.hpp"
-#include "UI/D3D11/D3D11Renderer.hpp"
-#include "UI/D3D12/D3D12Renderer.hpp"
-#include "UI/OverlayEncoding.hpp"
 #include "UI/OverlayInput.hpp"
 #include "UI/Icons.hpp"
 #include "UI/OverlayWindow.hpp"
@@ -37,13 +31,9 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hwnd, UINT mes
 namespace Luma {
 namespace UI {
 namespace {
-// Weak: the overlay detaches when the swapchain or its device goes
-struct Attachment
+struct Window
 {
-   HWND window = nullptr;
-   IDXGISwapChain* swapchain = nullptr;
-   Presenter presenter;
-   const void* device = nullptr;
+   HWND hwnd = nullptr;
    float dpi_scale = 1.f;
 };
 
@@ -79,11 +69,11 @@ constexpr std::array SETTINGS = {
    },
 };
 
-// Guards the attachment and every ImGui call. Recursive: releasing the mouse capture in ImGui's message handler sends
+// Guards the window and every ImGui call. Recursive: releasing the mouse capture in ImGui's message handler sends
 // WM_CAPTURECHANGED back into the window procedure.
 std::recursive_mutex mutex;
 // ImGui has a context exactly while this is set
-std::optional<Attachment> attached;
+std::optional<Window> window;
 
 std::atomic<bool> open = false;
 
@@ -102,119 +92,21 @@ void ToastJobReport()
    Widgets::Toast(report.outcome.failed ? Widgets::Tone::Error : Widgets::Tone::Success, std::move(report.outcome.message));
 }
 
-// With the lock held
-bool Attach(IDXGISwapChain* swapchain, Presenter presenter, const void* device)
-{
-   DXGI_SWAP_CHAIN_DESC desc = {};
-   if (FAILED(swapchain->GetDesc(&desc)) || !desc.OutputWindow)
-      return false;
-   ImGui::CreateContext();
-   ImGuiIO& io = ImGui::GetIO();
-   io.IniFilename = nullptr; // Persisted in Luma.toml instead of imgui.ini next to the game
-   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
-   if (const std::string layout = Settings::Storage::GetOverlayLayout(); !layout.empty())
-      ImGui::LoadIniSettingsFromMemory(layout.data(), layout.size());
-   Fonts::Load();
-   ImGui_ImplWin32_Init(desc.OutputWindow);
-
-   attached = Attachment{desc.OutputWindow, swapchain, presenter, device, ImGui_ImplWin32_GetDpiScaleForHwnd(desc.OutputWindow)};
-   Input::Attach(desc.OutputWindow);
-   Log::Info("UI: overlay attached to swapchain {} (window {})", static_cast<void*>(swapchain), static_cast<void*>(desc.OutputWindow));
-   return true;
-}
-
-// With the lock held. ImGui's docking branch destroys the platform windows when a renderer shuts down, so a renderer is
-// only recreated with a new context: detached, then attached again.
-void Detach()
-{
-   if (!attached)
-      return;
-   if (ImGui::GetCurrentContext() && ImGui::GetIO().WantSaveIniSettings)
-   {
-      size_t size = 0;
-      const char* ini = ImGui::SaveIniSettingsToMemory(&size);
-      Settings::Storage::SetOverlayLayout(ini && size ? std::string_view(ini, size) : std::string_view());
-      ImGui::GetIO().WantSaveIniSettings = false;
-      settings_changed = true;
-   }
-   D3D11::Shutdown();
-   D3D12::Shutdown();
-   ImGui_ImplWin32_Shutdown();
-   ImGui::DestroyContext();
-   Input::Detach(attached->window);
-   Log::Info("UI: overlay detached from swapchain {}", static_cast<void*>(attached->swapchain));
-   attached.reset();
-}
-
-// Between the renderer's NewFrame and Render
-void BuildFrame(const DXGI_SWAP_CHAIN_DESC& desc)
-{
-   ImGui_ImplWin32_NewFrame();
-   ImGuiIO& io = ImGui::GetIO();
-   // The back buffer may not have the window's size (stretched by DXGI): ImGui works in window coordinates
-   if (io.DisplaySize.x > 0.f && io.DisplaySize.y > 0.f)
-      io.DisplayFramebufferScale = ImVec2(float(desc.BufferDesc.Width) / io.DisplaySize.x, float(desc.BufferDesc.Height) / io.DisplaySize.y);
-   // Games often hide the cursor
-   io.MouseDrawCursor = open;
-   Style::Apply(Settings::Get(Settings::Core::OVERLAY_FONT_SIZE), attached->dpi_scale, Settings::Get(Settings::Core::OVERLAY_OPACITY) / 100.f);
-   ImGui::NewFrame();
-   if (open)
-      DrawWindow();
-   Widgets::DrawToasts();
-   ImGui::Render();
-}
-
-// Each API's renderer, by what presents (Presenter's types)
-template <typename T>
-struct Renderer;
-
-template <>
-struct Renderer<ID3D11Device>
-{
-   static constexpr auto NeedsRecreation = &D3D11::NeedsRecreation;
-   static constexpr auto NewFrame = &D3D11::NewFrame;
-   static constexpr auto Render = &D3D11::Render;
-};
-
-template <>
-struct Renderer<ID3D12CommandQueue>
-{
-   static constexpr auto NeedsRecreation = &D3D12::NeedsRecreation;
-   static constexpr auto NewFrame = &D3D12::NewFrame;
-   static constexpr auto Render = &D3D12::Render;
-};
-
-// How the overlay is written to the swapchain's buffer
-Encoding::Output GetOutput(IDXGISwapChain* swapchain, const DXGI_SWAP_CHAIN_DESC& desc)
-{
-   return {Encoding::GetKind(desc.BufferDesc.Format, Handlers::GetColorSpace(swapchain)), Settings::Get(Settings::Core::OVERLAY_HDR_PAPER_WHITE)};
-}
-
-// Whether a frame was drawn
-template <typename T>
-bool Draw(IDXGISwapChain* swapchain, T* presenter, const DXGI_SWAP_CHAIN_DESC& desc)
-{
-   using Traits = Renderer<T>;
-   // A new format or buffer count needs new renderer objects, and with them a new context (see Detach)
-   if (Traits::NeedsRecreation(desc))
-   {
-      const void* device = attached->device;
-      Detach();
-      if (!Attach(swapchain, presenter, device))
-         return false;
-   }
-   if (!Traits::NewFrame(presenter, desc))
-      return false;
-   BuildFrame(desc);
-   Traits::Render(presenter, swapchain, ImGui::GetDrawData(), GetOutput(swapchain, desc));
-   return true;
-}
-
 void SaveSettings()
 {
    settings_changed = false;
    if (!Settings::Storage::Save(settings_path))
       Log::Warning("UI: settings couldn't be saved to {}", Utils::Strings::ToUtf8(settings_path));
+}
+
+// With the lock held
+void SaveLayout()
+{
+   size_t size = 0;
+   const char* ini = ImGui::SaveIniSettingsToMemory(&size);
+   Settings::Storage::SetOverlayLayout(ini && size ? std::string_view(ini, size) : std::string_view());
+   ImGui::GetIO().WantSaveIniSettings = false;
+   settings_changed = true;
 }
 } // namespace
 
@@ -229,65 +121,77 @@ void SaveSettingsTo(const std::filesystem::path& path)
    Settings::AddChangeListener([](const Settings::Setting&, const Settings::Value&) { settings_changed = true; });
 }
 
-void AttachOverlay(IDXGISwapChain* swapchain, const Presenter& presenter, const void* device)
+std::unique_lock<std::recursive_mutex> Lock()
 {
-   std::scoped_lock lock(mutex);
-   if (!attached)
-      Attach(swapchain, presenter, device);
+   return std::unique_lock(mutex);
 }
 
-void DrawOverlay(IDXGISwapChain* swapchain)
+bool AttachWindow(HWND hwnd)
+{
+   if (window || !hwnd)
+      return false;
+   ImGui::CreateContext();
+   ImGuiIO& io = ImGui::GetIO();
+   io.IniFilename = nullptr; // Persisted in Luma.toml instead of imgui.ini next to the game
+   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
+   if (const std::string layout = Settings::Storage::GetOverlayLayout(); !layout.empty())
+      ImGui::LoadIniSettingsFromMemory(layout.data(), layout.size());
+   Fonts::Load();
+   ImGui_ImplWin32_Init(hwnd);
+   window = Window{hwnd, ImGui_ImplWin32_GetDpiScaleForHwnd(hwnd)};
+   Input::Attach(hwnd);
+   return true;
+}
+
+void DetachWindow()
+{
+   if (!window)
+      return;
+   if (ImGui::GetCurrentContext() && ImGui::GetIO().WantSaveIniSettings)
+      SaveLayout();
+   ImGui_ImplWin32_Shutdown();
+   ImGui::DestroyContext();
+   Input::Detach(window->hwnd);
+   window.reset();
+}
+
+bool BeginPresent()
 {
    ToastJobReport();
    // Toasts are drawn while the overlay is closed too
-   if (!open && !Widgets::HasToasts())
-   {
-      if (settings_changed)
-         SaveSettings();
-      return;
-   }
-
-   Hooks::Scope::Guard scope;
-   std::scoped_lock lock(mutex);
-   if (!attached || attached->swapchain != swapchain)
-      return;
-   Input::ApplyCapturedKey();
-
-   DXGI_SWAP_CHAIN_DESC desc = {};
-   if (FAILED(swapchain->GetDesc(&desc)))
-      return;
-   // A copy: drawing may attach again
-   const bool drawn = std::visit([&](auto* presenter) { return Draw(swapchain, presenter, desc); }, Presenter(attached->presenter));
-   if (drawn && ImGui::GetCurrentContext())
-   {
-      ImGuiIO& io = ImGui::GetIO();
-      if (io.WantSaveIniSettings && !ImGui::IsAnyItemActive() && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
-      {
-         size_t size = 0;
-         const char* ini = ImGui::SaveIniSettingsToMemory(&size);
-         Settings::Storage::SetOverlayLayout(ini && size ? std::string_view(ini, size) : std::string_view());
-         io.WantSaveIniSettings = false;
-         settings_changed = true;
-      }
-   }
-   // Saved once an edit is done (not on every step of a slider drag)
-   if (drawn && settings_changed && !ImGui::IsAnyItemActive())
+   if (open || Widgets::HasToasts())
+      return true;
+   if (settings_changed)
       SaveSettings();
+   return false;
 }
 
-void DetachFromSwapchain(const void* swapchain)
+void BuildFrame(Extent extent)
 {
-   std::scoped_lock lock(mutex);
-   if (attached && swapchain == attached->swapchain)
-      Detach();
+   ImGui_ImplWin32_NewFrame();
+   ImGuiIO& io = ImGui::GetIO();
+   // The back buffer may not have the window's size (stretched by DXGI): ImGui works in window coordinates
+   if (io.DisplaySize.x > 0.f && io.DisplaySize.y > 0.f)
+      io.DisplayFramebufferScale = ImVec2(float(extent.width) / io.DisplaySize.x, float(extent.height) / io.DisplaySize.y);
+   // Games often hide the cursor
+   io.MouseDrawCursor = open;
+   Style::Apply(Settings::Get(Settings::Core::OVERLAY_FONT_SIZE), window->dpi_scale, Settings::Get(Settings::Core::OVERLAY_OPACITY) / 100.f);
+   ImGui::NewFrame();
+   if (open)
+      DrawWindow();
+   Widgets::DrawToasts();
+   ImGui::Render();
 }
 
-void DetachFromDevice(const void* device)
+void EndFrame()
 {
-   Hooks::Scope::Guard scope;
-   std::scoped_lock lock(mutex);
-   if (attached && device == attached->device)
-      Detach();
+   if (!ImGui::GetCurrentContext())
+      return;
+   if (ImGui::GetIO().WantSaveIniSettings && !ImGui::IsAnyItemActive() && !ImGui::IsMouseDown(ImGuiMouseButton_Left))
+      SaveLayout();
+   // Saved once an edit is done (not on every step of a slider drag)
+   if (settings_changed && !ImGui::IsAnyItemActive())
+      SaveSettings();
 }
 
 void OnWindowMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
@@ -295,7 +199,7 @@ void OnWindowMessage(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
    // ImGui reads modifier keys, which the input hooks would hide from it
    Hooks::Scope::Guard scope;
    std::scoped_lock lock(mutex);
-   if (attached)
+   if (window)
       ImGui_ImplWin32_WndProcHandler(hwnd, message, wparam, lparam);
 }
 
@@ -303,7 +207,7 @@ void OnRawMouse(USHORT button_flags, USHORT button_data)
 {
    Hooks::Scope::Guard scope;
    std::scoped_lock lock(mutex);
-   if (!attached || button_flags == 0)
+   if (!window || button_flags == 0)
       return;
 
    struct ButtonFlags
@@ -360,24 +264,18 @@ void SetOpen(bool value)
       return;
    // ImGui stops getting messages, so keys held now would stay down for it
    std::scoped_lock lock(mutex);
-   if (attached)
+   if (window)
    {
       ImGui::GetIO().ClearInputKeys();
       ImGui::GetIO().ClearInputMouse();
    }
 }
 
-const void* GetSwapchain()
-{
-   std::scoped_lock lock(mutex);
-   return attached ? attached->swapchain : nullptr;
-}
-
 void ResetLayout()
 {
    std::scoped_lock lock(mutex);
    Settings::Storage::SetOverlayLayout({});
-   if (attached && ImGui::GetCurrentContext())
+   if (window && ImGui::GetCurrentContext())
    {
       ImGui::ClearIniSettings();
       ImGui::GetIO().WantSaveIniSettings = false;

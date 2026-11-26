@@ -28,6 +28,7 @@
 #include "Shaders/ShaderCache.hpp"
 #include "Shaders/ShaderCompiler.hpp"
 #include "Shaders/ShaderContainer.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
 #include "Shaders/D3D12/D3D12RootSignatures.hpp"
 #include "Resources/ResourceBindings.hpp"
@@ -877,34 +878,35 @@ TEST_CASE("Resources: a context uploads a cbuffer without a stamp when what it w
 TEST_CASE("Shaders: a hash's variants, by source and priority")
 {
    using namespace Shaders::Variants;
+   Shaders::Store store(Api::D3D11);
    constexpr uint32_t HASH = 0x7E57AB1E;
    auto compiled = std::make_shared<Shaders::CompiledShader>();
    compiled->bytecode = {1, 2, 3};
-   Publish(Source::File, {{.hash = HASH, .file = "Test_0x7E57AB1E.ps_5_0.hlsl", .compiled = compiled}});
-   CHECK(HasVariant(HASH));
-   CHECK(GetCompiledShader(HASH, Source::File) == compiled);
-   CHECK_FALSE(GetCompiledShader(HASH, Source::Patch));
-   REQUIRE(GetVariants(HASH).size() == 1);
-   CHECK(GetVariants(HASH)[0].source == Source::File);
+   Publish(store, Source::File, {{.hash = HASH, .file = "Test_0x7E57AB1E.ps_5_0.hlsl", .compiled = compiled}});
+   CHECK(HasVariant(store, HASH));
+   CHECK(GetCompiledShader(store, HASH, Source::File) == compiled);
+   CHECK_FALSE(GetCompiledShader(store, HASH, Source::Patch));
+   REQUIRE(GetVariants(store, HASH).size() == 1);
+   CHECK(GetVariants(store, HASH)[0].source == Source::File);
 
    // A failed build keeps the last version that compiled, equal bytes keep the same compiled shader
-   Publish(Source::File, {{.hash = HASH, .compiled = nullptr, .failed = true}});
-   CHECK(GetCompiledShader(HASH, Source::File) == compiled);
+   Publish(store, Source::File, {{.hash = HASH, .compiled = nullptr, .failed = true}});
+   CHECK(GetCompiledShader(store, HASH, Source::File) == compiled);
    auto same = std::make_shared<Shaders::CompiledShader>();
    same->bytecode = compiled->bytecode;
-   Publish(Source::File, {{.hash = HASH, .compiled = same}});
-   CHECK(GetCompiledShader(HASH, Source::File) == compiled);
+   Publish(store, Source::File, {{.hash = HASH, .compiled = same}});
+   CHECK(GetCompiledShader(store, HASH, Source::File) == compiled);
 
    // Another source's publication keeps this one's; a higher priority comes first
-   Publish(Source::Patch, {{.hash = HASH, .priority = FILE_PRIORITY + 1, .compiled = same}});
-   REQUIRE(GetVariants(HASH).size() == 2);
-   CHECK(GetVariants(HASH)[0].source == Source::Patch);
+   Publish(store, Source::Patch, {{.hash = HASH, .priority = FILE_PRIORITY + 1, .compiled = same}});
+   REQUIRE(GetVariants(store, HASH).size() == 2);
+   CHECK(GetVariants(store, HASH)[0].source == Source::Patch);
    CHECK(GetName(GetChoice(Source::Patch)) == "patch");
 
-   Publish(Source::File, {});
-   Publish(Source::Patch, {});
-   CHECK_FALSE(HasVariant(HASH));
-   CHECK(GetVariants(HASH).empty());
+   Publish(store, Source::File, {});
+   Publish(store, Source::Patch, {});
+   CHECK_FALSE(HasVariant(store, HASH));
+   CHECK(GetVariants(store, HASH).empty());
 }
 
 TEST_CASE("Compiler: FXC is used by one thread at a time")

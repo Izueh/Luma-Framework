@@ -14,6 +14,7 @@
 #include "Shaders/ShaderCompiler.hpp"
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderVariants.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Shaders/Shaders.hpp"
 #include "System/JobQueue.hpp"
 #include "System/Paths.hpp"
@@ -84,6 +85,7 @@ struct Replaced
 struct ShaderStates
 {
    bool ok = true;
+   std::optional<std::string> api;
    std::string compilation_errors;
    bool loaded = true;
    std::vector<Replaced> replaced;
@@ -93,6 +95,7 @@ struct ShaderStates
 struct ShaderState
 {
    bool ok = true;
+   std::optional<std::string> api;
    std::string hash;
    std::optional<std::string> name;
    std::optional<std::string> stage; // Unset if the game never created it
@@ -132,7 +135,8 @@ std::optional<std::string> GetName(const Shaders::Database::Shader& shader)
 // Replaced while the variants are loaded
 bool IsReplaced(uint32_t hash)
 {
-   return Shaders::Variants::IsLoaded() && Shaders::Variants::HasVariant(hash);
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetShownStore();
+   return Shaders::Variants::IsLoaded() && store && Shaders::Variants::HasVariant(*store, hash);
 }
 
 template <size_t N>
@@ -203,7 +207,8 @@ std::string ShaderList(const Request& request)
 
 std::string ShaderState(const Request& request)
 {
-   const std::vector<Shaders::Variants::Variant> replacements = Shaders::Variants::GetAll();
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetShownStore();
+   const std::vector<Shaders::Variants::Variant> replacements = store ? Shaders::Variants::GetAll(*store) : std::vector<Shaders::Variants::Variant>();
    const auto find_replacement = [&](uint32_t hash) { return std::ranges::find(replacements, hash, &Shaders::Variants::Variant::hash); };
    if (request.args.contains("hash"))
    {
@@ -211,6 +216,8 @@ std::string ShaderState(const Request& request)
       if (!hash)
          return Error("'hash' is a shader hash, like 0x12345678");
       Replies::ShaderState reply;
+      if (store)
+         reply.api = std::string(GetName(store->api));
       reply.ignored_args = GetIgnoredArgs(request, {"hash", "disasm", "variant"});
       reply.hash = FormatHash(*hash);
       Shaders::Database::Shader* shader = Shaders::Database::Find(*hash);
@@ -234,7 +241,7 @@ std::string ShaderState(const Request& request)
          reply.pipelines = shader->objects;
          reply.forced = Shaders::Variants::GetName(shader->forced_variant.load());
       }
-      for (const Shaders::Variants::Variant& variant : Shaders::Variants::GetVariants(*hash))
+      for (const Shaders::Variants::Variant& variant : store ? Shaders::Variants::GetVariants(*store, *hash) : std::vector<Shaders::Variants::Variant>())
       {
          if (variant.compiled)
             reply.variants.emplace_back(Shaders::Variants::GetName(variant.source));
@@ -252,6 +259,8 @@ std::string ShaderState(const Request& request)
       return Utils::Json::Write(reply);
    }
    Replies::ShaderStates reply;
+   if (store)
+      reply.api = std::string(GetName(store->api));
    reply.ignored_args = GetIgnoredArgs(request, {"hash", "disasm", "variant"});
    reply.compilation_errors = Shaders::GetLastBuild().errors;
    reply.loaded = Shaders::Variants::IsLoaded();

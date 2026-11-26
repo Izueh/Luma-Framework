@@ -10,6 +10,7 @@
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Shaders/ShaderVariants.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Utils/Debug.hpp"
 
 namespace Luma {
@@ -248,12 +249,17 @@ void Write(std::span<std::byte> destination, const Resources::Database::CustomDa
 // Some of the game's shaders are replaced. Without variants, the mod's pipeline settings don't describe the image.
 bool IsModActive()
 {
+   static const Shaders::Store* checked = nullptr;
    static uint64_t generation = UINT64_MAX;
    static bool any = false;
-   if (const uint64_t now = Shaders::Variants::GetGeneration(); now != generation)
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetShownStore();
+   if (!store)
+      return false;
+   if (const uint64_t now = Shaders::Variants::GetGeneration(*store); store.get() != checked || now != generation)
    {
+      checked = store.get();
       generation = now;
-      any = !Shaders::Variants::GetAll().empty();
+      any = !Shaders::Variants::GetAll(*store).empty();
    }
    return Settings::IsEnabled() && Shaders::Variants::IsLoaded() && any;
 }

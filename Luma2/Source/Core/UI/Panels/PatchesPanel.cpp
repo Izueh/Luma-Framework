@@ -12,6 +12,7 @@
 #include "Settings/SettingsRegistry.hpp"
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderPatching.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "UI/Widgets.hpp"
 
 namespace Luma {
@@ -89,7 +90,7 @@ void DrawPatch(const Shaders::Patching::PatchInfo& patch)
 
 void DrawPatches()
 {
-   const Shaders::Patching::Status status = Shaders::Patching::GetStatus();
+   const Shaders::Patching::Status status = Shaders::Patching::GetStatus(Shaders::GetShownStore().get());
    if (!status.needed)
    {
       Widgets::TextDim("No recipes in the Recipes folder and no bytecode patch from the game: nothing is patched.");
@@ -98,7 +99,7 @@ void DrawPatches()
    DrawToolbar(status);
 
    static bool shaders_open = true;
-   const std::vector<Shaders::Patching::RecipeInfo> recipes = Shaders::Patching::GetRecipes();
+   const std::vector<Shaders::Patching::RecipeInfo> recipes = Shaders::Patching::GetRecipes(Shaders::GetShownStore().get());
    if (Widgets::Section("Recipes"))
    {
       std::vector<Widgets::ListEntry> list;
@@ -112,7 +113,8 @@ void DrawPatches()
       Widgets::EndSection();
    }
 
-   std::vector<Shaders::Patching::PatchInfo> patches = Shaders::Patching::GetPatches();
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetShownStore();
+   std::vector<Shaders::Patching::PatchInfo> patches = store ? Shaders::Patching::GetPatches(*store) : std::vector<Shaders::Patching::PatchInfo>();
    if (!show_unmatched)
       std::erase_if(patches, [](const Shaders::Patching::PatchInfo& patch) { return !patch.patched && patch.error.empty(); });
    std::ranges::sort(patches, [](const auto& a, const auto& b) { return std::tuple(a.error.empty(), a.stage, a.hash) < std::tuple(b.error.empty(), b.stage, b.hash); });

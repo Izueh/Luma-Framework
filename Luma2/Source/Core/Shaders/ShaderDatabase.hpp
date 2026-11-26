@@ -79,9 +79,9 @@ std::string GetDisplayName(uint32_t hash);
 Shader* Find(uint32_t hash);
 // Any thread: adds `shader` unless another thread added its hash first, and returns the one kept
 Shader& Add(std::unique_ptr<Shader> shader);
-// Any thread: the shader of `bytecode`, added (and reflected in Development) the first time its hash is seen. Each API attaches
-// its objects to it.
-Shader& Track(ShaderStage stage, std::span<const uint8_t> bytecode);
+// Any thread: the shader of `bytecode`, added (and reflected in Development) the first time its hash is seen, and patched for the
+// device of `store` the first time it creates it. Each API attaches its objects to it.
+Shader& Track(Store* store, ShaderStage stage, std::span<const uint8_t> bytecode);
 // Any thread
 std::vector<const Shader*> GetShaders();
 

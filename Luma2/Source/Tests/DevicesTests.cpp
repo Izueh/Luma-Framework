@@ -1,9 +1,11 @@
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <sstream>
 #include <thread>
 #include <variant>
@@ -24,8 +26,10 @@
 #include "Hooks/HookScope.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Settings/SettingsRegistry.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Trace/RuntimeStatus.hpp"
 #include "UI/OverlayInput.hpp"
+#include "UI/DXGI/DXGIOverlay.hpp"
 #include "UI/Overlay.hpp"
 #include "Validation/D3D11/D3D11Validation.hpp"
 #include "Validation/D3D12/D3D12Validation.hpp"
@@ -60,11 +64,9 @@ void InstallHooks()
       LoadLibraryW(L"d3d12.dll");
       // What Core requests for itself
       Hooks::D3D11::Functions functions;
-      for (const Hooks::D3D11::Function function : {Hooks::D3D11::Function::Present, Hooks::D3D11::Function::ResizeBuffers, Hooks::D3D11::Function::SetFullscreenState})
-         functions.set(size_t(function));
       // The bound-state cache's viewports, for the ReShade tests
       functions.set(size_t(Hooks::D3D11::Function::RSSetViewports));
-      Hooks::InstallDXGI(functions);
+      Hooks::InstallDXGI(Hooks::DXGI::Functions().set());
       Hooks::InstallD3D11(functions);
       Hooks::InstallD3D12({});
       // The overlay sees the game's input on its message queue
@@ -491,6 +493,29 @@ TEST_CASE("Frame D3D11: a device's resolutions change together, and move LumaSet
    CHECK(Frame::Get(device.Get()).render.y == 90);
 }
 
+TEST_CASE("Shaders D3D11: each device has its own store, built for its API, and the store goes with the device")
+{
+   InstallHooks();
+   ComPtr<ID3D11Device> first;
+   ComPtr<ID3D11DeviceContext> first_context;
+   CreateD3D11Device(first, first_context);
+   ComPtr<ID3D11Device> second;
+   ComPtr<ID3D11DeviceContext> second_context;
+   CreateD3D11Device(second, second_context);
+   const std::shared_ptr<Shaders::Store> second_store = Shaders::GetStore(second.Get());
+   std::weak_ptr<Shaders::Store> first_store = Shaders::GetStore(first.Get());
+   REQUIRE(second_store);
+   REQUIRE_FALSE(first_store.expired());
+   CHECK(first_store.lock() != second_store);
+   CHECK(second_store->api == Api::D3D11);
+   CHECK(std::ranges::contains(Shaders::GetStores(), second_store));
+
+   first_context.Reset();
+   first.Reset();
+   CHECK(first_store.expired());
+   CHECK(std::ranges::contains(Shaders::GetStores(), second_store));
+}
+
 TEST_CASE("D3D11: work still reads objects released right after it was recorded (so D3D11 never needs deferred release)")
 {
    InstallHooks();
@@ -836,9 +861,9 @@ TEST_CASE("Overlay D3D11: attaches to the game's swapchain, toggles, blocks inpu
    ComPtr<ID3D11InfoQueue> info_queue;
    device.As(&info_queue);
 
-   // Attached when the swapchain is created, closed
-   CHECK(UI::GetSwapchain() == swapchain.Get());
+   // Attached at its first present, closed
    swapchain->Present(0, 0);
+   CHECK(UI::DXGI::GetSwapchain() == swapchain.Get());
    CHECK_FALSE(window.IsSubclassed());
    window.Key('A');
    window.Mouse();
@@ -891,10 +916,10 @@ TEST_CASE("Overlay D3D11: attaches to the game's swapchain, toggles, blocks inpu
    constants.Reset();
    immediate_context.Reset();
    device.Reset();
-   CHECK_FALSE(UI::GetSwapchain());
+   CHECK_FALSE(UI::DXGI::GetSwapchain());
    CHECK_FALSE(window.IsSubclassed());
    swapchain->Present(0, 0);
-   CHECK_FALSE(UI::GetSwapchain());
+   CHECK_FALSE(UI::DXGI::GetSwapchain());
    swapchain.Reset();
    Settings::Reset(Settings::Core::OVERLAY_KEY.key);
 }
@@ -924,8 +949,8 @@ TEST_CASE("Overlay D3D12: draws on the swapchain's queue, survives resizes, and 
    ComPtr<IDXGISwapChain1> swapchain;
    REQUIRE(SUCCEEDED(factory->CreateSwapChainForHwnd(queue.Get(), window.hwnd, &desc, nullptr, nullptr, &swapchain)));
 
-   CHECK(UI::GetSwapchain() == swapchain.Get());
    swapchain->Present(0, 0);
+   CHECK(UI::DXGI::GetSwapchain() == swapchain.Get());
    window.Key(VK_INSERT);
    REQUIRE(UI::IsOpen());
    for (int i = 0; i < 5; i++)
@@ -950,7 +975,7 @@ TEST_CASE("Overlay D3D12: draws on the swapchain's queue, survives resizes, and 
    queue->Signal(fence.Get(), 2);
    CHECK(WaitFor([&] { return fence->GetCompletedValue() >= 2; }));
    swapchain.Reset();
-   CHECK_FALSE(UI::GetSwapchain());
+   CHECK_FALSE(UI::DXGI::GetSwapchain());
    CHECK_FALSE(window.IsSubclassed());
    fence.Reset();
    queue.Reset();
@@ -1032,7 +1057,7 @@ TEST_CASE("Hooks: bypassed, the game's devices, swapchains and presents reach no
       swapchain->Present(0, 0);
       REQUIRE(SUCCEEDED(swapchain->ResizeBuffers(0, 400, 200, DXGI_FORMAT_UNKNOWN, 0)));
       swapchain->Present(0, 0);
-      CHECK(UI::GetSwapchain() == nullptr);
+      CHECK(UI::DXGI::GetSwapchain() == nullptr);
 
       // A factory's swapchain, and D3D12's device and submissions
       ComPtr<IDXGIFactory2> factory;
@@ -1298,10 +1323,10 @@ TEST_CASE("Overlay D3D11 Native: a swapchain asked without render target usage g
    const DXGI_USAGE usage = GetRealDesc(swapchain.Get()).BufferUsage;
    CHECK((usage & DXGI_USAGE_RENDER_TARGET_OUTPUT) != 0);
    CHECK((usage & DXGI_USAGE_UNORDERED_ACCESS) != 0);
-   CHECK(UI::GetSwapchain() == swapchain.Get());
    UI::SetOpen(true);
    for (int i = 0; i < 2; i++)
       CHECK(SUCCEEDED(swapchain->Present(0, 0)));
+   CHECK(UI::DXGI::GetSwapchain() == swapchain.Get());
    UI::SetOpen(false);
    ComPtr<ID3D11InfoQueue> info_queue;
    if (SUCCEEDED(device.As(&info_queue)))

@@ -249,7 +249,7 @@ void PostCreateBlendState(ID3D11Device*, const D3D11_BLEND_DESC1&, ID3D11BlendSt
 void PreCreateShader(ID3D11Device* device, ShaderStage stage, const void* bytecode, SIZE_T length, bool stream_output)
 {
    if (Shaders::IsNeeded() && bytecode && !stream_output)
-      Shaders::Variants::D3D11::CreateVariant(device, Shaders::Database::Track(stage, {static_cast<const uint8_t*>(bytecode), length}));
+      Shaders::Variants::D3D11::CreateVariant(device, Shaders::Database::Track(Shaders::GetStore(device).get(), stage, {static_cast<const uint8_t*>(bytecode), length}));
 }
 
 void PostCreateShader(ID3D11Device* device, ShaderStage stage, const void* bytecode, SIZE_T length, bool stream_output, ID3D11DeviceChild* shader)
@@ -259,7 +259,7 @@ void PostCreateShader(ID3D11Device* device, ShaderStage stage, const void* bytec
    // The database first: the variant is found by the shader's hash
    if (Shaders::IsNeeded())
    {
-      hash = Shaders::Database::D3D11::TrackShader(stage, code, shader);
+      hash = Shaders::Database::D3D11::TrackShader(device, stage, code, shader);
       Shaders::Variants::D3D11::AttachVariant(device, shader, stream_output);
    }
    if (const auto on_create_shader = GameEvents().on_create_shader)
@@ -679,6 +679,21 @@ bool PreExecuteCommandList(ID3D11DeviceContext* context, ID3D11CommandList* list
 bool PreFlush(ID3D11DeviceContext*)
 {
    return false;
+}
+
+void PresentD3D11(ID3D11Device* device)
+{
+   if (Shaders::IsNeeded())
+      Shaders::Variants::D3D11::PublishVariants(device);
+   if (Resources::Samplers::IsNeeded())
+      Resources::Samplers::D3D11::RefreshMirrors(device);
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::OnPresent(device);
+   if (Effects::SR::IsNeeded())
+      Effects::SR::D3D11::OnPresent(device);
+   Resources::Database::D3D11::OnPresent(device);
+   Frame::OnPresent(device);
+   Resources::Database::D3D11::UpdateShaderObjects(device);
 }
 } // namespace Handlers
 } // namespace Luma

@@ -65,7 +65,7 @@ HRESULT CreatePipeline(ID3D12Device* device, bool from_library, const Desc* desc
    if (from_library)
       Handlers::PostLoadPipeline(result);
    if (const ComPtr<ID3D12PipelineState> created = GetCreated<ID3D12PipelineState>(result, pipeline))
-      Handlers::PostCreatePipelineState(GetKind<Desc>(), final_desc, from_library, created.Get());
+      Handlers::PostCreatePipelineState(device, GetKind<Desc>(), final_desc, from_library, created.Get());
    return result;
 }
 

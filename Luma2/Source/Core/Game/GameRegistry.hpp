@@ -18,6 +18,7 @@ const D3D11::Events& GetD3D11Events();
 const D3D12::Events& GetD3D12Events();
 const D3D11::Callbacks& GetD3D11Callbacks();
 const Panels& GetPanels();
+ApiSet GetSupportedApis();
 // Null if the game set none for the hash (OnShaderDraw)
 D3D11::DrawCallback FindDrawCallback(uint32_t hash);
 // Any draw event: OnShaderDraw, on_variant_draw or on_draw_or_dispatch
@@ -28,6 +29,7 @@ bool HasD3D12DrawCallbacks();
 Hooks::D3D12::Functions GetRequestedD3D12Functions();
 
 // The native functions the game's events and callbacks need hooked
+Hooks::DXGI::Functions GetRequestedDXGIFunctions();
 Hooks::D3D11::Functions GetRequestedFunctions();
 // Those of its native callbacks alone, which must not include one Core owns (Startup::GetOwnedFunctions)
 Hooks::D3D11::Functions GetCallbackFunctions();
@@ -54,7 +56,10 @@ const auto& GetEvents()
    if constexpr (api == Api::D3D11)
       return GetD3D11Events();
    else
+   {
+      static_assert(api == Api::D3D12);
       return GetD3D12Events();
+   }
 }
 
 template <Api api>
@@ -63,7 +68,10 @@ auto FindDrawCallback(uint32_t hash)
    if constexpr (api == Api::D3D11)
       return FindDrawCallback(hash);
    else
+   {
+      static_assert(api == Api::D3D12);
       return FindD3D12DrawCallback(hash);
+   }
 }
 
 template <Api api>
@@ -72,7 +80,10 @@ bool HasDrawCallbacks()
    if constexpr (api == Api::D3D11)
       return HasDrawCallbacks();
    else
+   {
+      static_assert(api == Api::D3D12);
       return HasD3D12DrawCallbacks();
+   }
 }
 
 template <Api api, typename Call, typename RefreshVariantStagesFn>

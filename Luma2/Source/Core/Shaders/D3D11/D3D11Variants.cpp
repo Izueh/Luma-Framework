@@ -12,6 +12,7 @@
 #include "Settings/SettingsRegistry.hpp"
 #include "Shaders/D3D11/D3D11Database.hpp"
 #include "Shaders/D3D11/D3D11Shaders.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Shaders/ShaderVariants.hpp"
 #include "Utils/Debug.hpp"
 #include "Utils/Hash.hpp"
@@ -43,6 +44,7 @@ struct Variant
 // they're released when the game releases it (ReleaseVariants), which breaks the cycle.
 struct Store
 {
+   std::shared_ptr<Shaders::Store> shaders;
    // Lock order: before Variants' publication lock (GetCompiledShader)
    std::mutex mutex;
    std::unordered_map<uint32_t, std::unique_ptr<Variant>> variants;
@@ -65,7 +67,7 @@ void PublishVariant(ID3D11Device* device, Store& store, Variant& variant)
    for (size_t index = 0; index < SOURCE_COUNT; index++)
    {
       const Source source = Source(index);
-      std::shared_ptr<const CompiledShader> compiled = GetCompiledShader(hash, source);
+      std::shared_ptr<const CompiledShader> compiled = GetCompiledShader(*store.shaders, hash, source);
       if (compiled && variant.stream_output)
       {
          stream_output_variants++;
@@ -80,7 +82,7 @@ void PublishVariant(ID3D11Device* device, Store& store, Variant& variant)
    }
    uint16_t order = NO_SOURCE;
    uint32_t shift = 0;
-   for (const Variants::Variant& published : GetVariants(hash))
+   for (const Variants::Variant& published : GetVariants(*store.shaders, hash))
    {
       if (!published.compiled)
          continue;
@@ -126,7 +128,11 @@ Variant& FindOrCreate(ID3D11Device* device, Store& store, const Database::Shader
 
 void CreateVariantStore(ID3D11Device* device)
 {
-   Hooks::Lifetime::SetState<Store>(device);
+   std::shared_ptr<Shaders::Store> shaders = GetStore(device);
+   if (!shaders)
+      return;
+   if (Store* store = Hooks::Lifetime::SetState<Store>(device))
+      store->shaders = std::move(shaders);
 }
 
 void CreateVariant(ID3D11Device* device, const Database::Shader& shader)
@@ -271,7 +277,7 @@ void PublishVariants(ID3D11Device* device)
    if (store->released)
       return;
    Shaders::D3D11::ReleaseRetired(store->retired);
-   const uint64_t generation = GetGeneration();
+   const uint64_t generation = GetGeneration(*store->shaders);
    if (store->generation == generation)
       return;
    store->generation = generation;
@@ -297,6 +303,7 @@ void ReleaseVariants(ID3D11Device* device)
       variant->order.store(NO_SOURCE, std::memory_order_release);
    }
    store->retired.lives.clear();
+   store->shaders.reset();
    store->released = true;
 }
 } // namespace D3D11

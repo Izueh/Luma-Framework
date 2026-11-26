@@ -27,6 +27,7 @@
 #include "Resources/ResourceDatabase.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
 #include "Shaders/ShaderPatching.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "System/JobQueue.hpp"
 #include "Utils/Hash.hpp"
 #include "Utils/Debug.hpp"
@@ -65,6 +66,9 @@ struct FormatVariant
 // outlive the pipeline.
 struct Core
 {
+   std::shared_ptr<Store> store;
+   // Of the device's variants, when this last chose (presenting thread)
+   uint64_t applied_generation = 0;
    std::shared_ptr<const Database::D3D12::DescCopy> desc;
    std::array<const Database::Shader*, 6> shaders = {};
    ComPtr<ID3D12RootSignature> root_signature; // The desc names it
@@ -113,8 +117,8 @@ std::mutex registry_mutex;
 std::vector<std::weak_ptr<Core>> registry;
 std::atomic<uint32_t> pending_count = 0;
 std::atomic<uint32_t> failed_count = 0;
-// Presenting thread
-uint64_t applied_generation = UINT64_MAX;
+// Every device's variant generations added up (presenting thread): nothing to choose again while it holds
+uint64_t applied_generations = UINT64_MAX;
 
 bool Same(const Key& a, const Key& b)
 {
@@ -169,7 +173,7 @@ Key Choose(const Core& core, std::array<Source, 6>& sources)
 #endif
       if (forced == Choice::Original)
          continue;
-      for (const Variant& variant : GetVariants(shader->hash))
+      for (const Variant& variant : GetVariants(*core.store, shader->hash))
       {
          if (!variant.compiled || (forced != Choice::Auto && GetChoice(variant.source) != forced))
             continue;
@@ -626,8 +630,12 @@ void AttachVariants(ID3D12PipelineState* pipeline, const Database::D3D12::Pipeli
    for (size_t i = 0; i < tracked.shaders.size(); i++)
       core->shaders[i] = tracked.shaders[i];
    core->key = tracked.desc->content_hash ^ (uint64_t(GetStagesHash(*tracked.desc, tracked.desc->bytes)) * 0x9E3779B97F4A7C15ull);
-   if (FAILED(pipeline->GetDevice(IID_PPV_ARGS(&core->device))) || !Hooks::Lifetime::SetState<Holder>(pipeline, core))
+   if (FAILED(pipeline->GetDevice(IID_PPV_ARGS(&core->device))))
       return;
+   core->store = GetStore(core->device.Get());
+   if (!core->store || !Hooks::Lifetime::SetState<Holder>(pipeline, core))
+      return;
+   core->applied_generation = GetGeneration(*core->store);
    {
       std::scoped_lock lock(registry_mutex);
       registry.push_back(core);
@@ -764,10 +772,10 @@ void BindFormatVariant(ID3D12GraphicsCommandList* list)
 
 void UpdateVariants()
 {
-   const uint64_t generation = GetGeneration();
-   if (generation == applied_generation)
+   const uint64_t any_generation = GetAnyGeneration();
+   if (any_generation == applied_generations)
       return;
-   applied_generation = generation;
+   applied_generations = any_generation;
    std::vector<std::shared_ptr<Core>> cores;
    {
       std::scoped_lock lock(registry_mutex);
@@ -780,7 +788,13 @@ void UpdateVariants()
       });
    }
    for (const std::shared_ptr<Core>& core : cores)
+   {
+      const uint64_t generation = GetGeneration(*core->store);
+      if (generation == core->applied_generation)
+         continue;
+      core->applied_generation = generation;
       Update(core);
+   }
 }
 
 Stats GetStats()

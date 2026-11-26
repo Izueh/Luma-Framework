@@ -45,6 +45,23 @@ struct HooksInfo
    std::string present_overlay;
 };
 
+struct DeviceShadersInfo
+{
+   uint64_t build = 0; // Its finished builds, 0 before the first
+   uint32_t compiled = 0;
+   uint32_t cached = 0;
+   uint32_t failed = 0;
+   uint32_t patched = 0;
+};
+
+struct DeviceInfo
+{
+   std::string api;
+   bool shown = false; // The one the overlay, trace and the other tools show
+   DeviceShadersInfo shaders;
+};
+
+// The shown device's
 struct ShadersInfo
 {
    bool loaded = true; // False after "Unload Shaders"
@@ -264,6 +281,8 @@ struct Status
    int64_t ms_since_present = -1; // -1 before the first present
    uint64_t frame_count = 0;
    std::vector<SwapchainInfo> swapchains;
+   std::vector<std::string> supported_apis; // Game::Options::supported_apis
+   std::vector<DeviceInfo> devices;
    bool overlay_open = false;
    CountsInfo counts;
    HooksInfo hooks;

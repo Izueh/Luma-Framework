@@ -7,7 +7,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
-#include "Common/Api.hpp"
+#include "Swapchain/DXGI/DXGIPresenter.hpp"
 #include "Hooks/DXGI/DXGISwapchainProxy.hpp"
 #include "Swapchain/Swapchain.hpp"
 

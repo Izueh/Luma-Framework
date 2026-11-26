@@ -22,6 +22,7 @@
 #include "Resources/ResourceDatabase.hpp"
 #include "Resources/ResourceMirrors.hpp"
 #include "Resources/TextureLoader.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Utils/Debug.hpp"
 #include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
@@ -54,6 +55,8 @@ struct Object
 // In the device's private data. Its objects hold the device: they're released when the game releases it.
 struct Store
 {
+   // Null for a device created inside Luma's scope: Luma's shaders aren't made on it
+   std::shared_ptr<Shaders::Store> shaders;
    // One per entry, the entries being fixed before any device
    uint32_t count = 0;
    std::unique_ptr<Object[]> objects;
@@ -98,14 +101,16 @@ ComPtr<ID3D11ShaderResourceView> LoadTexture(ID3D11Device* device, uint32_t inde
 // With the store locked
 void UpdateShaders(ID3D11Device* device, Store& store)
 {
-   const uint64_t generation = GetGeneration();
+   if (!store.shaders)
+      return;
+   const uint64_t generation = GetGeneration(*store.shaders);
    if (store.generation == generation)
       return;
    store.generation = generation;
    for (uint32_t index = 0; index < store.count; index++)
    {
       const Entry& entry = Get(index);
-      if (entry.kind == Kind::Shader && !Shaders::D3D11::Publish(device, entry.stage, store.objects[index].shader, Database::GetShader(index).compiled, store.retired))
+      if (entry.kind == Kind::Shader && !Shaders::D3D11::Publish(device, entry.stage, store.objects[index].shader, Database::GetShader(*store.shaders, index).compiled, store.retired))
          Log::Error("Resources: the device refused shader \"{}\"", entry.name);
    }
 }
@@ -153,6 +158,7 @@ void CreateDeviceObjects(ID3D11Device* device)
    if (!store)
       return;
    std::scoped_lock lock(store->mutex);
+   store->shaders = Shaders::GetStore(device);
    store->count = GetCount();
    store->objects = std::make_unique<Object[]>(store->count);
    for (uint32_t index = 0; index < store->count; index++)
@@ -191,6 +197,7 @@ void ReleaseDeviceObjects(ID3D11Device* device)
       store->objects[index].runtime = {};
    }
    store->retired.lives.clear();
+   store->shaders.reset();
    store->released = true;
 }
 

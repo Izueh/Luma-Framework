@@ -5,16 +5,25 @@
 
 namespace Luma {
 namespace Hooks {
-namespace D3D11 {
-// The native functions whose hooks Core or the game need. A versioned variant (UpdateSubresource1, ResizeBuffers1...) is
-// hooked with its base function.
+namespace DXGI {
+// The swapchain functions hooked on request. Creation and the game's view of the swapchain are always hooked.
 enum class Function : uint32_t
 {
-   // IDXGISwapChain
    Present,
    ResizeBuffers,
    SetFullscreenState,
 
+   Count,
+};
+
+using Functions = std::bitset<size_t(Function::Count)>;
+} // namespace DXGI
+
+namespace D3D11 {
+// The native functions whose hooks Core or the game need. A versioned variant (UpdateSubresource1...) is
+// hooked with its base function.
+enum class Function : uint32_t
+{
    // ID3D11Device
    CreateBuffer,
    CreateTexture1D,

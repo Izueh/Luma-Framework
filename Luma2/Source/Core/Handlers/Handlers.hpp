@@ -16,7 +16,7 @@
 #include "Trace/ResourceReadback.hpp"
 #include "Trace/CbufferTracker.hpp"
 #endif
-#include "UI/Overlay.hpp"
+#include "UI/DXGI/DXGIOverlay.hpp"
 #include "Log/Log.hpp"
 
 namespace Luma {
@@ -31,7 +31,7 @@ void HandlePostCreateDevice(Device* device, std::string_view details, StartValid
       Log::Info("{}: device {} created ({}, {} live)", GetName(api), static_cast<void*>(device), details, Hooks::DeviceProxy::GetCount());
    Game::Registry::CreateDeviceData(device);
    Frame::CreateDeviceState(device);
-   Shaders::SetApi(api);
+   Shaders::CreateStore(device, api);
    create_core_objects();
    Game::Registry::Call(Game::Registry::GetEvents<api>().on_init_device, device);
 }
@@ -41,9 +41,10 @@ void HandleOnDeviceDestroyed(Device* device, ReleaseCoreFn&& release_core_object
 {
    Log::Info("{}: device {} released by the game ({} live)", GetName(api), static_cast<void*>(device), Hooks::DeviceProxy::GetCount());
    Game::Registry::Call(Game::Registry::GetEvents<api>().on_destroy_device, device);
-   UI::DetachFromDevice(device);
+   UI::DXGI::DetachFromDevice(device);
    ForgetSwapchains(device);
    release_core_objects();
+   Shaders::DestroyStore(device);
    stop_validation();
 }
 

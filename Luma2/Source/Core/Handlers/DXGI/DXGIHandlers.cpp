@@ -1,4 +1,5 @@
 #include "Handlers/DXGI/DXGIHandlers.hpp"
+#include "Handlers/D3D11/D3D11Handlers.hpp"
 #include "Handlers/D3D12/D3D12Handlers.hpp"
 
 #include <algorithm>
@@ -52,7 +53,7 @@
 #endif
 #include "Trace/RuntimeStatus.hpp"
 #include "Trace/McpServer.hpp"
-#include "UI/Overlay.hpp"
+#include "UI/DXGI/DXGIOverlay.hpp"
 #include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
 #include "Validation/D3D11/D3D11Validation.hpp"
@@ -63,6 +64,9 @@ using Microsoft::WRL::ComPtr;
 namespace Luma {
 namespace Handlers {
 namespace {
+using Swapchain::DXGI::GetApi;
+using Swapchain::DXGI::Presenter;
+
 struct KnownSwapchain
 {
    const void* swapchain;
@@ -154,26 +158,32 @@ std::string_view GetColorSpaceName(DXGI_COLOR_SPACE_TYPE color_space)
    }
 }
 
-Api GetCreatorApi(IUnknown* creator)
+// Empty for a creator that isn't a device or queue of an API the game uses: its swapchain is left alone
+std::optional<Api> GetCreatorApi(IUnknown* creator)
 {
-   if (!creator)
-      return Api::D3D11;
-   const std::optional<Presenter> presenter = GetPresenter(creator);
-   return presenter ? GetApi(*presenter) : Api::D3D12;
+   const std::optional<Presenter> presenter = creator ? GetPresenter(creator) : std::nullopt;
+   if (!presenter || !Game::Registry::GetSupportedApis().Has(GetApi(*presenter)))
+      return std::nullopt;
+   return GetApi(*presenter);
 }
 
 bool HasCreateSwapchainEvent(Api api)
 {
-   return api == Api::D3D11 ? Game::Registry::GetD3D11Events().on_create_swapchain != nullptr
-                            : Game::Registry::GetD3D12Events().on_create_swapchain != nullptr;
+   switch (api)
+   {
+   case Api::D3D11: return Game::Registry::GetD3D11Events().on_create_swapchain != nullptr;
+   case Api::D3D12: return Game::Registry::GetD3D12Events().on_create_swapchain != nullptr;
+   }
+   return false;
 }
 
 void ReportCreateSwapchain(Api api, Game::SwapchainDesc& desc)
 {
-   if (api == Api::D3D11)
-      Game::Registry::Call(Game::Registry::GetD3D11Events().on_create_swapchain, desc);
-   else
-      Game::Registry::Call(Game::Registry::GetD3D12Events().on_create_swapchain, desc);
+   switch (api)
+   {
+   case Api::D3D11: Game::Registry::Call(Game::Registry::GetD3D11Events().on_create_swapchain, desc); break;
+   case Api::D3D12: Game::Registry::Call(Game::Registry::GetD3D12Events().on_create_swapchain, desc); break;
+   }
 }
 
 void ReportInitSwapchain(IDXGISwapChain* swapchain, const Presenter& presenter, bool resize)
@@ -201,10 +211,13 @@ void ReportInitSwapchain(IDXGISwapChain* swapchain, const Presenter& presenter, 
 
 void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc)
 {
-   if (const Api api = GetCreatorApi(creator); HasCreateSwapchainEvent(api))
+   const std::optional<Api> api = GetCreatorApi(creator);
+   if (!api)
+      return;
+   if (HasCreateSwapchainEvent(*api))
    {
       Game::SwapchainDesc reported = {desc.BufferDesc.Format, desc.BufferCount, desc.Flags, desc.SwapEffect, desc.SampleDesc.Count, desc.Windowed != FALSE};
-      ReportCreateSwapchain(api, reported);
+      ReportCreateSwapchain(*api, reported);
       desc.BufferDesc.Format = reported.format;
       desc.BufferCount = reported.buffer_count;
       desc.Flags = reported.flags;
@@ -217,10 +230,13 @@ void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc)
 
 void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND hwnd)
 {
-   if (const Api api = GetCreatorApi(creator); HasCreateSwapchainEvent(api))
+   const std::optional<Api> api = GetCreatorApi(creator);
+   if (!api)
+      return;
+   if (HasCreateSwapchainEvent(*api))
    {
       Game::SwapchainDesc reported = {desc.Format, desc.BufferCount, desc.Flags, desc.SwapEffect, desc.SampleDesc.Count, fullscreen_desc.Windowed != FALSE};
-      ReportCreateSwapchain(api, reported);
+      ReportCreateSwapchain(*api, reported);
       desc.Format = reported.format;
       desc.BufferCount = reported.buffer_count;
       desc.Flags = reported.flags;
@@ -235,10 +251,12 @@ void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
 {
    ReShade::FindReShadeLoadedAfterLuma();
    const std::optional<Presenter> presenter = GetPresenter(creator);
-   if (!presenter)
+   if (!presenter || !GetCreatorApi(creator))
    {
-      Log::Warning("DXGI: swapchain {} was created with {}, which is neither a D3D11 device nor a D3D12 queue", static_cast<void*>(swapchain),
-         static_cast<void*>(creator));
+      static std::atomic<bool> logged = false;
+      if (!logged.exchange(true))
+         Log::Warning("DXGI: swapchain {} was created with {}, not a device or queue of an API the game uses: left alone", static_cast<void*>(swapchain),
+            static_cast<void*>(creator));
       return;
    }
    const void* device = std::visit(
@@ -260,7 +278,6 @@ void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
    // Its state and the game's buffers (whose upgrade rules match the output resolution), before anything asks for them
    Swapchain::DXGI::OnCreated(swapchain, *presenter);
    LogOverlays();
-   UI::AttachOverlay(swapchain, *presenter, device);
    ReportInitSwapchain(swapchain, *presenter, false);
 }
 
@@ -281,7 +298,7 @@ Hooks::SwapchainProxy::ReShadeSwapchainView GetReShadeSwapchainView(IDXGISwapCha
 
 void OnSwapChainDestroyed(const IDXGISwapChain* swapchain)
 {
-   UI::DetachFromSwapchain(swapchain);
+   UI::DXGI::DetachFromSwapchain(swapchain);
    Trace::RemoveSwapchain(swapchain);
    {
       std::scoped_lock lock(known_mutex);
@@ -417,30 +434,26 @@ std::optional<DXGI_COLOR_SPACE_TYPE> GetColorSpace(IDXGISwapChain* swapchain)
 
 void PrePresentWork(IDXGISwapChain* swapchain)
 {
+   const std::optional<Presenter> presenter = FindPresenter(swapchain);
+   if (!presenter)
+      return;
    Trace::RecordPresent();
    Hooks::VerifyOnPresent();
    // After the hooks were verified, whose counts it logs
    ReShade::CheckHookOrderAtFirstPresent();
 #if DEVELOPMENT
-   if (const std::optional<Presenter> presenting = FindPresenter(swapchain))
-   {
-      std::visit(
-         Overloaded{
-            [&](ID3D11Device* device) {
-               Trace::Capture::D3D11::ReadBackTracked();
-               Trace::Readback::D3D11::ReadBack(swapchain, device);
-            },
-            [&](ID3D12CommandQueue* queue) {
-               Trace::Capture::D3D12::ReadBackTracked();
-               Trace::Readback::D3D12::ReadBack(swapchain, queue);
-            },
+   std::visit(
+      Overloaded{
+         [&](ID3D11Device* device) {
+            Trace::Capture::D3D11::ReadBackTracked();
+            Trace::Readback::D3D11::ReadBack(swapchain, device);
          },
-         *presenting);
-   }
-   else
-   {
-      Trace::Capture::D3D11::ReadBackTracked();
-   }
+         [&](ID3D12CommandQueue* queue) {
+            Trace::Capture::D3D12::ReadBackTracked();
+            Trace::Readback::D3D12::ReadBack(swapchain, queue);
+         },
+      },
+      *presenter);
    Trace::Readback::OnPresent();
 #endif
    Settings::ApplyQueued();
@@ -453,35 +466,22 @@ void PrePresentWork(IDXGISwapChain* swapchain)
       Shaders::Database::QueueDumps();
 #endif
    Shaders::Patching::OnPresent();
-   Shaders::CountFrame();
-   if (const std::optional<Presenter> presenter = FindPresenter(swapchain))
-   {
-      std::visit(
-         Overloaded{
-            [&](ID3D11Device* device) {
-               Game::Registry::Call(Game::Registry::GetD3D11Events().on_present, swapchain, device);
-               if (Shaders::IsNeeded())
-                  Shaders::Variants::D3D11::PublishVariants(device);
-               if (Resources::Samplers::IsNeeded())
-                  Resources::Samplers::D3D11::RefreshMirrors();
-               if (Resources::Mirrors::IsNeeded())
-                  Resources::Mirrors::D3D11::OnPresent(device);
-               if (Effects::SR::IsNeeded())
-                  Effects::SR::D3D11::OnPresent(device);
-               Resources::Database::D3D11::OnPresent(device);
-               Frame::OnPresent(device);
-               Resources::Database::D3D11::UpdateShaderObjects(device);
-            },
-            [&](ID3D12CommandQueue* queue) {
-               Game::Registry::Call(Game::Registry::GetD3D12Events().on_present, swapchain, queue);
-               PresentD3D12(queue);
-#if DEVELOPMENT
-               Trace::Stats::D3D12::CountFrame();
-#endif
-            },
+   Shaders::CountFrame(FindDevice(swapchain));
+   std::visit(
+      Overloaded{
+         [&](ID3D11Device* device) {
+            Game::Registry::Call(Game::Registry::GetD3D11Events().on_present, swapchain, device);
+            PresentD3D11(device);
          },
-         *presenter);
-   }
+         [&](ID3D12CommandQueue* queue) {
+            Game::Registry::Call(Game::Registry::GetD3D12Events().on_present, swapchain, queue);
+            PresentD3D12(queue);
+#if DEVELOPMENT
+            Trace::Stats::D3D12::CountFrame();
+#endif
+         },
+      },
+      *presenter);
    // A switch of the game's own HDR option this frame, then the game's image into the real buffer, once the game's frame is done (its
    // on_present included)
    Display::DisplayMode::Update();
@@ -490,6 +490,9 @@ void PrePresentWork(IDXGISwapChain* swapchain)
 
 void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags, bool present_work_done)
 {
+   const std::optional<Presenter> presenter = FindPresenter(swapchain);
+   if (!presenter)
+      return;
    flags = Swapchain::DXGI::GetPresentFlags(swapchain, sync_interval, flags);
    if (!present_work_done)
       PrePresentWork(swapchain);
@@ -505,8 +508,9 @@ void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags, bool
       Trace::Capture::FinishFrame();
    }
 #endif
+   UI::DXGI::AttachOverlay(swapchain, *presenter, FindDevice(swapchain));
    // Last, on top of everything the game, Luma and ReShade drew
-   UI::DrawOverlay(swapchain);
+   UI::DXGI::DrawOverlay(swapchain);
 #if DEVELOPMENT
    // Start any capture requested by the UI or MCP now, so the next frame starts cleanly at its first draw
    Trace::Capture::StartRequestedFrame();

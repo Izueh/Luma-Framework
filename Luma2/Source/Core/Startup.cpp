@@ -96,14 +96,16 @@ Hooks::D3D12::Functions GetCoreD3D12Functions()
    return functions;
 }
 
+// The overlay, trace and the swapchain log
+Hooks::DXGI::Functions GetCoreDXGIFunctions()
+{
+   return Hooks::DXGI::Functions().set();
+}
+
 // What Core's own features need hooked this run, each feature asked once
 Hooks::D3D11::Functions GetCoreFunctions()
 {
-   using enum Hooks::D3D11::Function;
    Hooks::D3D11::Functions functions;
-   // The overlay, trace and the swapchain log
-   for (const Hooks::D3D11::Function function : {Present, ResizeBuffers, SetFullscreenState})
-      functions.set(size_t(function));
    functions |= Shaders::GetD3D11Functions();
    functions |= Resources::LumaCBuffers::GetD3D11Functions();
    functions |= Resources::Mirrors::GetD3D11Functions();
@@ -127,12 +129,12 @@ void InstallHooks()
    if (const Hooks::D3D11::Functions shared = Game::Registry::GetCallbackFunctions() & GetOwnedFunctions(); shared.any())
       Log::Error("Core: {} of the game's native callbacks are for functions Core owns, which have events instead", shared.count());
    const Hooks::D3D11::Functions functions = core | Game::Registry::GetRequestedFunctions();
-   Log::Info("Core: {} of {} hookable D3D11 and DXGI functions requested", functions.count(), functions.size());
-   const std::optional<Api> api = Game::Registry::GetInfo().api;
-   Hooks::InstallDXGI(functions);
-   if (!api || *api == Api::D3D11)
+   Log::Info("Core: {} of {} hookable D3D11 functions requested", functions.count(), functions.size());
+   const ApiSet apis = Game::Registry::GetSupportedApis();
+   Hooks::InstallDXGI(GetCoreDXGIFunctions() | Game::Registry::GetRequestedDXGIFunctions());
+   if (apis.Has(Api::D3D11))
       Hooks::InstallD3D11(functions);
-   if (!api || *api == Api::D3D12)
+   if (apis.Has(Api::D3D12))
       Hooks::InstallD3D12(GetCoreD3D12Functions());
    Hooks::Input::Install();
 }
@@ -207,8 +209,6 @@ Hooks::D3D11::Functions GetOwnedFunctions()
    using enum Hooks::D3D11::Function;
    Hooks::D3D11::Functions functions;
    for (const Hooks::D3D11::Function function : {
-           // The overlay, trace and the swapchain log
-           Present, ResizeBuffers, SetFullscreenState,
            // Shaders: the database, the variants
            CreateVertexShader, CreateHullShader, CreateDomainShader, CreateGeometryShader, CreateGeometryShaderWithStreamOutput, CreatePixelShader,
            CreateComputeShader, VSSetShader, HSSetShader, DSSetShader, GSSetShader, PSSetShader, CSSetShader,

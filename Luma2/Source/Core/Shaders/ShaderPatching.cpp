@@ -31,6 +31,7 @@
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderInvariants.hpp"
 #include "Shaders/Shaders.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Shaders/ShaderVariants.hpp"
 #include "System/JobQueue.hpp"
 #include "System/Paths.hpp"
@@ -67,22 +68,6 @@ Options options;
 // Decided by Register
 bool needed = false;
 std::atomic<bool> loaded = true;
-
-// Written on the presenting thread, read by the dev tools on any
-std::atomic<bool> running = false;
-// Presenting thread
-bool patch_all = false;
-
-// Lock order: never held with another lock
-std::mutex pending_mutex;
-std::vector<const Database::Shader*> pending;
-
-// What each shader's patch came to. Lock order: never held with another lock.
-std::mutex patches_mutex;
-std::map<uint32_t, PatchInfo> patches;
-// Patched in their creation call (Options::patch_sync): a job doesn't touch them (the game's bytecode patch wins)
-std::unordered_set<uint32_t> sync_patched;
-std::atomic<uint64_t> generation = 0;
 
 #if DEVELOPMENT || TEST
 std::string GetDumpName(const Database::Shader& shader)
@@ -380,8 +365,8 @@ void RegisterSettings(Recipe& recipe)
    }
 }
 
-// Presenting thread: the enabled recipes and their environment as set now
-Chain MakeChain()
+// Presenting thread: the enabled recipes and their environment as set now, for a device of `api`
+Chain MakeChain(Api api)
 {
    Chain chain;
    std::scoped_lock lock(recipes_mutex);
@@ -404,7 +389,7 @@ Chain MakeChain()
       // key, so the two APIs never share a cache entry.
       if (recipe.luma_space)
       {
-         const int32_t space = GetApi() == Api::D3D12 ? int32_t(Resources::Bindings::GetOptions().d3d12_space) : 0;
+         const int32_t space = api == Api::D3D12 ? int32_t(Resources::Bindings::GetOptions().d3d12_space) : 0;
          const dxp::PrimitiveValue value = FromSetting(Settings::Value(space), *recipe.luma_space);
          link.options.SetEnv(std::string(LUMA_SPACE), value);
          link.key += std::format(";{}={}", LUMA_SPACE, ToText(value));
@@ -575,12 +560,13 @@ struct Outcome
 
 struct Job
 {
+   std::weak_ptr<Store> store;
+   Api api = Api::D3D11;
    std::vector<const Database::Shader*> shaders;
    bool all = false;
 #if LUMA_USE_DXP
    Chain chain;
 #endif
-   bool d3d12 = false;
    std::vector<Outcome> outcomes;
 };
 
@@ -676,7 +662,7 @@ Outcome Patch(const Database::Shader& shader, const Job& job)
    if (bytecode.empty())
       return outcome;
    std::vector<Request> requests;
-   if (!info.error.empty() || !ResolveBindings(info, requests, job.d3d12))
+   if (!info.error.empty() || !ResolveBindings(info, requests, job.api == Api::D3D12))
       return outcome;
 #if DEVELOPMENT || TEST
    if (!info.cached)
@@ -691,25 +677,26 @@ Outcome Patch(const Database::Shader& shader, const Job& job)
 }
 
 // Presenting thread
-System::Jobs::Outcome Publish(Job& job)
+System::Jobs::Outcome Publish(Store& store, Job& job)
 {
+   State& state = store.patching;
    std::vector<Variants::Variant> changed;
    std::vector<uint32_t> removed;
    uint32_t patched = 0;
    uint32_t cached = 0;
    uint32_t failed = 0;
    {
-      std::scoped_lock lock(patches_mutex);
+      std::scoped_lock lock(state.patches_mutex);
       for (Outcome& outcome : job.outcomes)
       {
          const uint32_t hash = outcome.info.hash;
-         if (sync_patched.contains(hash))
+         if (state.sync_patched.contains(hash))
             continue;
          const bool considered = outcome.considered;
 #if DEVELOPMENT || TEST
          if (outcome.compiled)
          {
-            if (std::string errors = Invariants::CheckVariant(hash, outcome.info.callback ? "the game's bytecode patch" : "a recipe's patch", *outcome.compiled);
+            if (std::string errors = Invariants::CheckVariant(store.api, hash, outcome.info.callback ? "the game's bytecode patch" : "a recipe's patch", *outcome.compiled);
                !errors.empty())
             {
                outcome.compiled.reset();
@@ -733,14 +720,14 @@ System::Jobs::Outcome Publish(Job& job)
             failed += !outcome.info.error.empty();
          }
          if (considered)
-            patches.insert_or_assign(hash, std::move(outcome.info));
+            state.patches.insert_or_assign(hash, std::move(outcome.info));
          else
-            patches.erase(hash);
+            state.patches.erase(hash);
       }
    }
-   Variants::Update(Variants::Source::Patch, std::move(changed), removed);
-   generation.fetch_add(1, std::memory_order_release);
-   running = false;
+   Variants::Update(store, Variants::Source::Patch, std::move(changed), removed);
+   state.generation.fetch_add(1, std::memory_order_release);
+   state.running = false;
    if (failed)
       return {true, std::format("{} shader patch{} failed, see the Patches tab", failed, failed == 1 ? "" : "es")};
    // A job for shaders the game just created has nothing to say: only a job patching everything again reports
@@ -749,10 +736,68 @@ System::Jobs::Outcome Publish(Job& job)
    return {false, std::format("Patches ready: {} shader{} patched, {} from the cache", patched, patched == 1 ? "" : "s", cached)};
 }
 
+void PatchAllAgain()
+{
+   for (const std::shared_ptr<Store>& store : GetStores())
+      store->patching.patch_all = true;
+}
+
 void OnSettingChanged(const Settings::Setting& setting, const Settings::Value&)
 {
    if (std::holds_alternative<Settings::Sources::Recipe>(setting.source))
-      patch_all = true;
+      PatchAllAgain();
+}
+
+// Presenting thread
+void QueueJob(const std::shared_ptr<Store>& store)
+{
+   State& state = store->patching;
+   if (state.running)
+      return;
+   auto job = std::make_shared<Job>();
+   job->store = store;
+   job->api = store->api;
+   job->all = state.patch_all.exchange(false, std::memory_order_acq_rel);
+   {
+      std::scoped_lock lock(state.shaders_mutex);
+      if (job->all)
+      {
+         state.pending.clear();
+         job->shaders = state.created;
+      }
+      else
+         job->shaders.swap(state.pending);
+   }
+   if (job->shaders.empty())
+      return;
+#if LUMA_USE_DXP
+   job->chain = MakeChain(store->api);
+#endif
+   state.running = true;
+   System::Jobs::Queue(
+      "Patching shaders",
+      [job] {
+#if LUMA_USE_DXP
+         LoadIndex();
+#endif
+         const uint32_t total = uint32_t(job->shaders.size());
+         System::Jobs::SetProgress(0, total);
+         job->outcomes.reserve(total);
+         for (const Database::Shader* shader : job->shaders)
+         {
+            if (job->store.expired())
+               break;
+            job->outcomes.push_back(Patch(*shader, *job));
+            System::Jobs::SetProgress(uint32_t(job->outcomes.size()), total);
+         }
+#if LUMA_USE_DXP
+         SaveIndex();
+#endif
+      },
+      [job] {
+         const std::shared_ptr<Store> store = job->store.lock();
+         return store ? Publish(*store, *job) : System::Jobs::Outcome{};
+      });
 }
 } // namespace
 
@@ -794,10 +839,17 @@ bool IsNeeded()
    return needed;
 }
 
-void TrackShader(const Database::Shader& shader)
+void TrackShader(Store& store, const Database::Shader& shader)
 {
    if (!needed || shader.bytecode.empty())
       return;
+   State& state = store.patching;
+   {
+      std::scoped_lock lock(state.shaders_mutex);
+      if (!state.created_hashes.insert(shader.hash).second)
+         return;
+      state.created.push_back(&shader);
+   }
    if (options.patch_sync && loaded)
    {
       std::vector<uint8_t> bytecode = RunCallback(options.patch_sync, shader);
@@ -809,73 +861,34 @@ void TrackShader(const Database::Shader& shader)
          auto compiled = std::make_shared<CompiledShader>();
          compiled->bytecode = std::move(bytecode);
 #if DEVELOPMENT || TEST
-         if (std::string errors = Invariants::CheckVariant(shader.hash, "the game's bytecode patch", *compiled); !errors.empty())
+         if (std::string errors = Invariants::CheckVariant(store.api, shader.hash, "the game's bytecode patch", *compiled); !errors.empty())
          {
-            std::scoped_lock lock(patches_mutex);
-            sync_patched.insert(shader.hash);
-            patches.insert_or_assign(shader.hash, PatchInfo{.hash = shader.hash, .stage = shader.stage, .callback = true, .error = std::move(errors)});
+            std::scoped_lock lock(state.patches_mutex);
+            state.sync_patched.insert(shader.hash);
+            state.patches.insert_or_assign(shader.hash, PatchInfo{.hash = shader.hash, .stage = shader.stage, .callback = true, .error = std::move(errors)});
             return;
          }
 #endif
          {
-            std::scoped_lock lock(patches_mutex);
-            sync_patched.insert(shader.hash);
-            patches.insert_or_assign(shader.hash, PatchInfo{.hash = shader.hash, .stage = shader.stage, .patched = true, .callback = true});
+            std::scoped_lock lock(state.patches_mutex);
+            state.sync_patched.insert(shader.hash);
+            state.patches.insert_or_assign(shader.hash, PatchInfo{.hash = shader.hash, .stage = shader.stage, .patched = true, .callback = true});
          }
          // Now, in the creation call: the variant is there when the object attaches to its hash's variants
-         Variants::Update(Variants::Source::Patch, {MakeVariant(shader.hash, "the game's bytecode patch", std::move(compiled))}, {});
+         Variants::Update(store, Variants::Source::Patch, {MakeVariant(shader.hash, "the game's bytecode patch", std::move(compiled))}, {});
          return;
       }
    }
-   std::scoped_lock lock(pending_mutex);
-   pending.push_back(&shader);
+   std::scoped_lock lock(state.shaders_mutex);
+   state.pending.push_back(&shader);
 }
 
 void OnPresent()
 {
-   if (!needed || running || !loaded)
+   if (!needed || !loaded)
       return;
-   auto job = std::make_shared<Job>();
-   job->all = patch_all;
-   if (patch_all)
-   {
-      patch_all = false;
-      std::scoped_lock lock(pending_mutex);
-      pending.clear();
-      for (const Database::Shader* shader : Database::GetShaders())
-         job->shaders.push_back(shader);
-   }
-   else
-   {
-      std::scoped_lock lock(pending_mutex);
-      job->shaders.swap(pending);
-   }
-   if (job->shaders.empty())
-      return;
-#if LUMA_USE_DXP
-   job->chain = MakeChain();
-#endif
-   job->d3d12 = GetApi() == Api::D3D12;
-   running = true;
-   System::Jobs::Queue(
-      "Patching shaders",
-      [job] {
-#if LUMA_USE_DXP
-         LoadIndex();
-#endif
-         const uint32_t total = uint32_t(job->shaders.size());
-         System::Jobs::SetProgress(0, total);
-         job->outcomes.reserve(total);
-         for (const Database::Shader* shader : job->shaders)
-         {
-            job->outcomes.push_back(Patch(*shader, *job));
-            System::Jobs::SetProgress(uint32_t(job->outcomes.size()), total);
-         }
-#if LUMA_USE_DXP
-         SaveIndex();
-#endif
-      },
-      [job] { return Publish(*job); });
+   for (const std::shared_ptr<Store>& store : GetStores())
+      QueueJob(store);
 }
 
 void Reload()
@@ -896,7 +909,7 @@ void Reload()
          Log::Warning("Shaders: recipe {} is new, restart the game to load it", recipe.identity);
    }
 #endif
-   patch_all = true;
+   PatchAllAgain();
    Log::Info("Shaders: reloading the patches");
 }
 
@@ -906,22 +919,26 @@ void SetLoaded(bool value)
       return;
    if (value)
    {
-      patch_all = true;
+      PatchAllAgain();
       Log::Info("Shaders: patches loaded");
       return;
    }
-   std::vector<uint32_t> removed;
+   for (const std::shared_ptr<Store>& store : GetStores())
    {
-      std::scoped_lock lock(patches_mutex);
-      for (auto& [hash, info] : patches)
+      State& state = store->patching;
+      std::vector<uint32_t> removed;
       {
-         removed.push_back(hash);
-         info.patched = false;
+         std::scoped_lock lock(state.patches_mutex);
+         for (auto& [hash, info] : state.patches)
+         {
+            removed.push_back(hash);
+            info.patched = false;
+         }
+         state.sync_patched.clear();
       }
-      sync_patched.clear();
+      Variants::Update(*store, Variants::Source::Patch, {}, removed);
+      state.generation.fetch_add(1, std::memory_order_release);
    }
-   Variants::Update(Variants::Source::Patch, {}, removed);
-   generation.fetch_add(1, std::memory_order_release);
    Log::Info("Shaders: patches unloaded");
 }
 
@@ -930,9 +947,9 @@ bool IsLoaded()
    return loaded.load(std::memory_order_acquire);
 }
 
-Status GetStatus()
+Status GetStatus(const Store* store)
 {
-   Status status = {.needed = needed, .loaded = loaded, .running = running, .generation = generation.load(std::memory_order_acquire)};
+   Status status = {.needed = needed, .loaded = loaded};
 #if LUMA_USE_DXP
    {
       std::scoped_lock lock(recipes_mutex);
@@ -940,13 +957,18 @@ Status GetStatus()
       status.broken_recipes = uint32_t(std::ranges::count_if(recipes, [](const Recipe& recipe) { return !recipe.error.empty(); }));
    }
 #endif
+   if (!store)
+      return status;
+   const State& state = store->patching;
+   status.running = state.running;
+   status.generation = state.generation.load(std::memory_order_acquire);
    {
-      std::scoped_lock lock(pending_mutex);
-      status.pending = uint32_t(pending.size());
+      std::scoped_lock lock(state.shaders_mutex);
+      status.pending = uint32_t(state.pending.size());
    }
-   std::scoped_lock lock(patches_mutex);
-   status.shaders = uint32_t(patches.size());
-   for (const auto& [hash, info] : patches)
+   std::scoped_lock lock(state.patches_mutex);
+   status.shaders = uint32_t(state.patches.size());
+   for (const auto& [hash, info] : state.patches)
    {
       if (info.patched)
          status.patched++;
@@ -958,7 +980,7 @@ Status GetStatus()
    return status;
 }
 
-std::vector<RecipeInfo> GetRecipes()
+std::vector<RecipeInfo> GetRecipes([[maybe_unused]] const Store* store)
 {
    std::vector<RecipeInfo> list;
 #if LUMA_USE_DXP
@@ -983,8 +1005,10 @@ std::vector<RecipeInfo> GetRecipes()
          }
       }
    }
-   std::scoped_lock lock(patches_mutex);
-   for (const auto& [hash, patch] : patches)
+   if (!store)
+      return list;
+   std::scoped_lock lock(store->patching.patches_mutex);
+   for (const auto& [hash, patch] : store->patching.patches)
    {
       for (const std::string& identity : patch.recipes)
       {
@@ -996,21 +1020,21 @@ std::vector<RecipeInfo> GetRecipes()
    return list;
 }
 
-std::vector<PatchInfo> GetPatches()
+std::vector<PatchInfo> GetPatches(const Store& store)
 {
-   std::scoped_lock lock(patches_mutex);
+   std::scoped_lock lock(store.patching.patches_mutex);
    std::vector<PatchInfo> list;
-   list.reserve(patches.size());
-   for (const auto& [hash, info] : patches)
+   list.reserve(store.patching.patches.size());
+   for (const auto& [hash, info] : store.patching.patches)
       list.push_back(info);
    return list;
 }
 
-std::optional<PatchInfo> FindPatch(uint32_t hash)
+std::optional<PatchInfo> FindPatch(const Store& store, uint32_t hash)
 {
-   std::scoped_lock lock(patches_mutex);
-   const auto it = patches.find(hash);
-   return it != patches.end() ? std::optional(it->second) : std::nullopt;
+   std::scoped_lock lock(store.patching.patches_mutex);
+   const auto it = store.patching.patches.find(hash);
+   return it != store.patching.patches.end() ? std::optional(it->second) : std::nullopt;
 }
 } // namespace Patching
 } // namespace Shaders

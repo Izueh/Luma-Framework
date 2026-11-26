@@ -11,6 +11,7 @@
 #include "Settings/SettingsRegistry.hpp"
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderPatching.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "Utils/Json.hpp"
 
 namespace Luma {
@@ -117,7 +118,7 @@ std::optional<std::string> WaitForPatches(uint64_t previous_generation, uint32_t
    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout);
    while (true)
    {
-      const Shaders::Patching::Status status = Shaders::Patching::GetStatus();
+      const Shaders::Patching::Status status = Shaders::Patching::GetStatus(Shaders::GetShownStore().get());
       if (status.generation != previous_generation && !status.running)
          return std::nullopt;
       if (std::chrono::steady_clock::now() > deadline)
@@ -133,7 +134,7 @@ std::string PatchState(const Request& request)
 {
    Replies::PatchState reply;
    reply.ignored_args = GetIgnoredArgs(request, {"hash", "include_unmatched"});
-   const Shaders::Patching::Status status = Shaders::Patching::GetStatus();
+   const Shaders::Patching::Status status = Shaders::Patching::GetStatus(Shaders::GetShownStore().get());
    reply.needed = status.needed;
    reply.loaded = status.loaded;
    reply.running = status.running;
@@ -142,7 +143,7 @@ std::string PatchState(const Request& request)
    reply.failed = status.failed;
    reply.pending = status.pending;
    reply.broken_recipes = status.broken_recipes;
-   for (Shaders::Patching::RecipeInfo& recipe : Shaders::Patching::GetRecipes())
+   for (Shaders::Patching::RecipeInfo& recipe : Shaders::Patching::GetRecipes(Shaders::GetShownStore().get()))
    {
       Replies::PatchRecipe& info = reply.recipes.emplace_back();
       info.identity = std::move(recipe.identity);
@@ -165,14 +166,16 @@ std::string PatchState(const Request& request)
       const std::optional<uint32_t> hash = GetHash(request);
       if (!hash)
          return Error("'hash' is a shader hash, like 0x12345678");
-      const std::optional<Shaders::Patching::PatchInfo> info = Shaders::Patching::FindPatch(*hash);
+      const std::shared_ptr<Shaders::Store> store = Shaders::GetShownStore();
+      const std::optional<Shaders::Patching::PatchInfo> info = store ? Shaders::Patching::FindPatch(*store, *hash) : std::nullopt;
       if (!info)
          return Error(std::format("no patch was tried on {} (no recipe for its stage, or the game didn't create it)", FormatHash(*hash)));
       reply.shaders.push_back(ToReply(*info, true));
       return Utils::Json::Write(reply);
    }
    const bool include_unmatched = GetBool(request, "include_unmatched");
-   for (const Shaders::Patching::PatchInfo& info : Shaders::Patching::GetPatches())
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetShownStore();
+   for (const Shaders::Patching::PatchInfo& info : store ? Shaders::Patching::GetPatches(*store) : std::vector<Shaders::Patching::PatchInfo>())
    {
       if (info.patched || !info.error.empty() || include_unmatched)
          reply.shaders.push_back(ToReply(info, false));
@@ -186,12 +189,12 @@ std::string SetRecipe(const Request& request)
    const auto identity = request.args.find("identity");
    if (identity == request.args.end())
       return Error("set_recipe takes the 'identity' of a recipe (see luma_patch_state)");
-   const uint64_t previous_generation = Shaders::Patching::GetStatus().generation;
+   const uint64_t previous_generation = Shaders::Patching::GetStatus(Shaders::GetShownStore().get()).generation;
    const uint32_t timeout = GetTimeout(request);
    constexpr std::string_view UNCHANGED = "unchanged";
    const std::string answer = RunOnRenderThread(
       [request, identity = identity->second, UNCHANGED]() -> std::string {
-         const std::vector<Shaders::Patching::RecipeInfo> recipes = Shaders::Patching::GetRecipes();
+         const std::vector<Shaders::Patching::RecipeInfo> recipes = Shaders::Patching::GetRecipes(Shaders::GetShownStore().get());
          const auto recipe = std::ranges::find(recipes, identity, &Shaders::Patching::RecipeInfo::identity);
          if (recipe == recipes.end())
             return Error(std::format("no recipe '{}' (see luma_patch_state)", identity));
@@ -241,7 +244,7 @@ std::string ReloadPatches(const Request& request)
 {
    const bool unload = GetBool(request, "unload");
    const uint32_t timeout = GetTimeout(request);
-   const uint64_t previous_generation = Shaders::Patching::GetStatus().generation;
+   const uint64_t previous_generation = Shaders::Patching::GetStatus(Shaders::GetShownStore().get()).generation;
    const std::string requested = RunOnRenderThread(
       [unload] {
          if (unload)
@@ -261,7 +264,7 @@ std::string ReloadPatches(const Request& request)
       if (std::optional<std::string> error = WaitForPatches(previous_generation, timeout))
          return *error;
    }
-   const Shaders::Patching::Status status = Shaders::Patching::GetStatus();
+   const Shaders::Patching::Status status = Shaders::Patching::GetStatus(Shaders::GetShownStore().get());
    Replies::ReloadPatches reply;
    reply.loaded = status.loaded;
    reply.patched = status.patched;

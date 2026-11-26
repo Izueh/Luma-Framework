@@ -15,6 +15,7 @@
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
+#include "Shaders/ShaderStore.hpp"
 
 // Inside Luma::Game, `Shaders` and `Frame` are the game API's namespaces: Core's are named with Luma::
 namespace Luma {
@@ -162,8 +163,11 @@ bool Game::D3D12::DrawFullscreenToEntry(const Call& call, uint64_t vertex_shader
    const std::optional<uint32_t> ps_entry = Luma::Resources::Database::Find(pixel_shader_hash);
    if (!vs_entry || !ps_entry)
       return false;
-   const Luma::Resources::Database::ShaderState vs_state = Luma::Resources::Database::GetShader(*vs_entry);
-   const Luma::Resources::Database::ShaderState ps_state = Luma::Resources::Database::GetShader(*ps_entry);
+   const std::shared_ptr<Luma::Shaders::Store> store = Luma::Shaders::GetStore(device.Get());
+   if (!store)
+      return false;
+   const Luma::Resources::Database::ShaderState vs_state = Luma::Resources::Database::GetShader(*store, *vs_entry);
+   const Luma::Resources::Database::ShaderState ps_state = Luma::Resources::Database::GetShader(*store, *ps_entry);
    if (!vs_state.compiled || !ps_state.compiled || vs_state.compiled->bytecode.empty() || ps_state.compiled->bytecode.empty())
       return false;
 
@@ -176,7 +180,7 @@ bool Game::D3D12::DrawFullscreenToEntry(const Call& call, uint64_t vertex_shader
    if (!cache)
       return false;
 
-   const FullscreenPsoKey key = {root_sig, vertex_shader_hash, pixel_shader_hash, target_format, Luma::Resources::Database::GetGeneration()};
+   const FullscreenPsoKey key = {root_sig, vertex_shader_hash, pixel_shader_hash, target_format, Luma::Resources::Database::GetGeneration(*store)};
    Microsoft::WRL::ComPtr<ID3D12PipelineState> pso;
    {
       std::scoped_lock lock(cache->mutex);

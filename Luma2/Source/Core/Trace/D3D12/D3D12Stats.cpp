@@ -25,6 +25,7 @@
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
 #include "Shaders/ShaderVariants.hpp"
+#include "Shaders/ShaderStore.hpp"
 #include "System/JobQueue.hpp"
 #include "System/Paths.hpp"
 #include "Utils/Hash.hpp"
@@ -300,8 +301,11 @@ std::string DescribeShaders()
    std::string found;
    std::string missing;
    std::set<uint32_t> replaced;
-   for (const Shaders::Variants::Variant& variant : Shaders::Variants::GetAll())
-      replaced.insert(variant.hash);
+   for (const std::shared_ptr<Shaders::Store>& store : Shaders::GetStores())
+   {
+      for (const Shaders::Variants::Variant& variant : Shaders::Variants::GetAll(*store))
+         replaced.insert(variant.hash);
+   }
    for (const uint32_t hash : replaced)
    {
       std::string& list = Shaders::Database::Find(hash) ? found : missing;
@@ -429,12 +433,13 @@ void RecordRootSignature(const RootLayout& layout)
    root_by_layout[&layout] = crc;
 }
 
-void RecordPipeline(const Pipeline& pipeline, const PipelineDesc& desc)
+void RecordPipeline(ID3D12Device* device, const Pipeline& pipeline, const PipelineDesc& desc)
 {
+   const std::shared_ptr<Shaders::Store> store = Shaders::GetStore(device);
    std::vector<uint32_t> replaced;
    for (const Shaders::Database::Shader* shader : pipeline.shaders)
    {
-      if (shader && Shaders::Variants::HasVariant(shader->hash))
+      if (shader && store && Shaders::Variants::HasVariant(*store, shader->hash))
          replaced.push_back(shader->hash);
    }
    const bool compute = !desc.stages[size_t(ShaderStage::Compute)].empty();

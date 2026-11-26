@@ -305,10 +305,11 @@ TEST_CASE("Samplers D3D11: a sampler's mirror is made at its creation, and for a
 
    struct Bias
    {
-      ~Bias() { Resources::Samplers::SetLodBiasOffset(0.f); }
-   } bias;
+      ID3D11Device* device;
+      ~Bias() { Resources::Samplers::SetLodBiasOffset(device, 0.f); }
+   } bias{device.Get()};
 
-   Resources::Samplers::SetLodBiasOffset(-1.f);
+   Resources::Samplers::SetLodBiasOffset(device.Get(), -1.f);
    const D3D11_SAMPLER_DESC desc = {.Filter = D3D11_FILTER_ANISOTROPIC, .AddressU = D3D11_TEXTURE_ADDRESS_WRAP, .AddressV = D3D11_TEXTURE_ADDRESS_WRAP, .AddressW = D3D11_TEXTURE_ADDRESS_WRAP, .MaxAnisotropy = 4, .ComparisonFunc = D3D11_COMPARISON_NEVER, .MaxLOD = D3D11_FLOAT32_MAX};
    ComPtr<ID3D11SamplerState> sampler;
    REQUIRE(SUCCEEDED(device->CreateSamplerState(&desc, &sampler)));
@@ -322,11 +323,11 @@ TEST_CASE("Samplers D3D11: a sampler's mirror is made at its creation, and for a
    CHECK(mirror.MipLODBias == -1.f);
 
    // A new bias: the bind keeps the mirror it had until the present makes the new one
-   Resources::Samplers::SetLodBiasOffset(-2.f);
+   Resources::Samplers::SetLodBiasOffset(device.Get(), -2.f);
    ID3D11SamplerState* before_present = sampler.Get();
    Resources::Samplers::D3D11::SwapSamplers(&before_present, 1);
    CHECK(before_present == bound);
-   Resources::Samplers::D3D11::RefreshMirrors();
+   Resources::Samplers::D3D11::RefreshMirrors(device.Get());
    ID3D11SamplerState* after_present = sampler.Get();
    Resources::Samplers::D3D11::SwapSamplers(&after_present, 1);
    after_present->GetDesc(&mirror);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string_view>
 #include <string>
@@ -9,11 +10,15 @@
 #include "Common/Api.hpp"
 #include "Hooks/HookFunctions.hpp"
 
+struct IUnknown;
+
 // Game shaders replaced by files, Luma's own shaders, their defines. One feature with one need decision: Core asks
 // GetD3D11Functions once.
 namespace Luma {
 namespace Shaders {
 using Bytecode = std::vector<uint8_t>;
+
+struct Store;
 
 // A resource a compiled shader reads from Luma: a Resources::Database entry, at a register of its stage. Known from its
 // reflection (a cbuffer named like an entry); patches add theirs from their recipe.
@@ -47,25 +52,31 @@ Hooks::D3D11::Functions GetD3D11Functions();
 // and their requests). None if it isn't needed.
 Hooks::D3D12::Functions GetD3D12Functions();
 
-// Any thread, at each device's creation: the build compiles for the API of the first device (D3D12: SM5.1, Luma's cbuffers in
-// their own register space). Until one is known, a game that didn't declare its API (Game::Info::api) builds nothing.
-void SetApi(Api api);
-// The API the shaders are built for, once known
-std::optional<Api> GetApi();
+// Any thread, at each device's creation, before its first shader: its store, built for its API (D3D12: SM5.1, Luma's cbuffers in
+// their own register space) from now on
+void CreateStore(IUnknown* device, Api api);
+// Any thread, when the game releases the device: detaches the store so in-flight jobs stop even if another ref keeps the COM device alive
+void DestroyStore(IUnknown* device);
+// Null for a device created inside Luma's scope
+std::shared_ptr<Store> GetStore(IUnknown* device);
+// Any thread: every live device's
+std::vector<std::shared_ptr<Store>> GetStores();
+// Any thread, for the dev tools: the store of the device that presented last, else of a live one. Null before any device.
+std::shared_ptr<Store> GetShownStore();
 // On D3D12 upgrades <5.1 to 5.1 and returns empty for 6.x (DXIL unsupported)
 std::string GetTarget(std::string_view target, Api api);
 // Hashes with a replacement file, from the scans so far
 bool HasReplacementFile(uint32_t hash);
 
-// Presenting thread: compiles what changed (from the cache when it can) and publishes the result at a later present
+// Presenting thread: every device's store compiles what changed (from the cache when it can) and publishes at a later present
 void Reload();
 // Presenting thread: replaced shaders back to the game's, their objects kept for Load()
 void Unload();
 // Presenting thread: replaced shaders on again, and a reload
 void Load();
 
-// Presenting thread, at the present boundary
-void CountFrame();
+// Presenting thread, at the present boundary of `device`'s swapchain
+void CountFrame(IUnknown* device);
 // Presents so far
 uint64_t GetFrame();
 
@@ -80,6 +91,8 @@ struct BuildInfo
 };
 
 // Any thread
+BuildInfo GetLastBuild(const Store& store);
+// The shown store's, empty before any device
 BuildInfo GetLastBuild();
 } // namespace Shaders
 } // namespace Luma

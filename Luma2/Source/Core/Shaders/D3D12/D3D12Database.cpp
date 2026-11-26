@@ -784,15 +784,16 @@ const RootLayout* FindRootLayout(ID3D12RootSignature* root_signature)
    return root_signature ? Hooks::Lifetime::GetState<RootLayout>(root_signature) : nullptr;
 }
 
-const Pipeline* TrackPipeline(const PipelineDesc& desc, std::shared_ptr<const DescCopy> copy, bool from_library, ID3D12PipelineState* pipeline)
+const Pipeline* TrackPipeline(ID3D12Device* device, const PipelineDesc& desc, std::shared_ptr<const DescCopy> copy, bool from_library, ID3D12PipelineState* pipeline)
 {
+   const std::shared_ptr<Store> store = GetStore(device);
    Pipeline tracked{.kind = desc.kind, .from_library = from_library, .root_signature = desc.root_signature, .desc = std::move(copy)};
    tracked.root_layout = FindRootLayout(desc.root_signature);
    tracked.embedded_root_signature = !desc.root_signature;
    for (size_t i = 0; i < desc.stages.size(); i++)
    {
       if (!desc.stages[i].empty())
-         tracked.shaders[i] = &Track(ShaderStage(i), desc.stages[i]);
+         tracked.shaders[i] = &Track(store.get(), ShaderStage(i), desc.stages[i]);
    }
    const PipelineState* state = Hooks::Lifetime::SetState<PipelineState>(pipeline, std::move(tracked));
    return state ? &state->pipeline : nullptr;
