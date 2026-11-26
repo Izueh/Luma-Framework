@@ -335,18 +335,24 @@ template <auto Detour, typename... Args>
 void ReportDraw(const void* caller, ID3D11DeviceContext* context, const Handlers::DrawCall& draw, Args... args)
 {
    DepthGuard guard(context_depth);
-   if (Detours::IsGameCall(guard, caller) && Detours::Report(&Handlers::PreDraw, context, draw))
-      return;
-   original<Detour>(context, args...);
+   const bool game_call = Detours::IsGameCall(guard, caller);
+   const bool handled = game_call && Detours::Report(&Handlers::PreDraw, context, draw);
+   if (!handled)
+      original<Detour>(context, args...);
+   if (game_call)
+      Detours::Report(&Handlers::PostDraw, context);
 }
 
 template <auto Detour, typename... Args>
 void ReportDispatch(const void* caller, ID3D11DeviceContext* context, const Handlers::DispatchCall& dispatch, Args... args)
 {
    DepthGuard guard(context_depth);
-   if (Detours::IsGameCall(guard, caller) && Detours::Report(&Handlers::PreDispatch, context, dispatch))
-      return;
-   original<Detour>(context, args...);
+   const bool game_call = Detours::IsGameCall(guard, caller);
+   const bool handled = game_call && Detours::Report(&Handlers::PreDispatch, context, dispatch);
+   if (!handled)
+      original<Detour>(context, args...);
+   if (game_call)
+      Detours::Report(&Handlers::PostDispatch, context);
 }
 
 using Function = D3D11::Function;

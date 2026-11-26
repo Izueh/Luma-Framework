@@ -85,14 +85,16 @@ struct Events
    void (*on_create_swapchain)(SwapchainDesc& desc) = nullptr;
    // At the end of a creation and of each resize, the device's output resolution already set
    void (*on_init_swapchain)(IDXGISwapChain* swapchain, ID3D11Device* device, bool resize) = nullptr;
-   // After Core's frame work, before the overlay is drawn and LumaSettings published. Reset per frame state here.
+   // Before per-device present work, display update, composition, overlay, and LumaSettings publication,
+   // so the callback can contribute to the frame being composed and reset per-frame state.
    void (*on_present)(IDXGISwapChain* swapchain, ID3D11Device* device) = nullptr;
 
    // After Core tracked it. `hash` is the game's bytecode's: shaders are changed through variants, never here.
    void (*on_create_shader)(ID3D11Device* device, ShaderStage stage, uint32_t hash, std::span<const uint8_t> bytecode, ID3D11DeviceChild* shader) = nullptr;
 
    // Resources and views (Core's mirrors and trace hook them). An on_create_* runs before Core and may edit the desc (Core
-   // sees the edit), an on_init_* after Core with the created object. Objects are always the game's, never Luma's mirrors.
+   // sees the edit), an on_init_* after Core with the effective object (Luma's mirror if Core replaced it while swapping, else
+   // the game's original). Use Game::D3D11::FindMirror / FindOriginal / GetViewResource / GetResourceViews to translate between them.
    void (*on_create_buffer)(ID3D11Device* device, D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA*& initial_data) = nullptr;
    void (*on_init_buffer)(ID3D11Device* device, const D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Buffer* buffer) = nullptr;
    void (*on_create_texture_2d)(ID3D11Device* device, D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA*& initial_data) = nullptr;
@@ -108,14 +110,14 @@ struct Events
    // Before Core's sampler mirror: may edit the desc
    void (*on_create_sampler_state)(ID3D11Device* device, D3D11_SAMPLER_DESC& desc) = nullptr;
 
-   // Render target binds, before Core swaps in mirrors: may edit the arrays (copies of the game's; null when the game keeps the bound
-   // ones, D3D11_KEEP_*). True skips the bind.
+   // Render target binds, after Core swaps in mirrors (so the event sees the effective views): may edit the arrays (copies of the game's;
+   // null when the game keeps the bound ones, D3D11_KEEP_*). True skips the bind.
    bool (*on_bind_render_targets)(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views, ID3D11DepthStencilView*& depth_stencil) = nullptr;
    bool (*on_bind_render_targets_and_unordered_access_views)(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views,
       ID3D11DepthStencilView*& depth_stencil, UINT uav_start, UINT uav_count, ID3D11UnorderedAccessView** uavs, const UINT* initial_counts) = nullptr;
 
-   // CPU writes, copies and clears, before Core redirects them to mirrors (on_map and on_unmapped after the call). True skips the
-   // call.
+   // CPU writes, copies and clears (on_map and on_unmapped after the call). Copies, resolves and clears receive the effective
+   // (mirror-resolved) resources/views while swapping, before Core issues its redirected call. True skips the call.
    void (*on_map)(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped) = nullptr;
    bool (*on_unmap)(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource) = nullptr;
    // After the original returned (the mapped memory is gone)

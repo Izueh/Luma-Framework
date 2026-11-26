@@ -4,12 +4,13 @@
 
 #include <dxgi1_6.h>
 
+#include "Common/Api.hpp"
 #include "Hooks/DXGI/DXGISwapchainProxy.hpp"
 
 // See D3D11Handlers.hpp. `creator` is the real D3D11 device or a D3D12 command queue.
 namespace Luma {
 namespace Handlers {
-void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc);
+void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc, std::optional<Api> known_api = std::nullopt);
 void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND hwnd);
 // An overlay asked the game's proxy for a buffer or the index: it gets the real ones, composed first on the presenting thread
 void OnOverlayBufferRequest(IDXGISwapChain* swapchain);

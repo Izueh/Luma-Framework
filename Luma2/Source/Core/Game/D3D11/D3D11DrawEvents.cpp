@@ -9,6 +9,7 @@
 #include "Effects/SR/D3D11/D3D11SuperResolution.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Hooks/HookFunctions.hpp"
+#include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
@@ -152,6 +153,36 @@ ID3D11ShaderResourceView* Game::D3D11::GetSRV(ID3D11Device* device, uint64_t nam
 ID3D11UnorderedAccessView* Game::D3D11::GetUAV(ID3D11Device* device, uint64_t name_hash)
 {
    return Luma::Resources::Database::D3D11::GetUAV(device, name_hash);
+}
+
+ID3D11Resource* Game::D3D11::FindMirror(ID3D11Resource* resource)
+{
+   return Luma::Resources::Mirrors::D3D11::FindMirror(resource);
+}
+
+ID3D11Resource* Game::D3D11::FindOriginal(ID3D11Resource* mirror)
+{
+   return Luma::Resources::Mirrors::D3D11::FindOriginal(mirror);
+}
+
+ID3D11View* Game::D3D11::FindMirrorView(ID3D11View* view)
+{
+   return Luma::Resources::Mirrors::D3D11::FindMirrorView(view);
+}
+
+ID3D11View* Game::D3D11::FindOriginalView(ID3D11View* mirror_view)
+{
+   return Luma::Resources::Mirrors::D3D11::FindOriginalView(mirror_view);
+}
+
+ID3D11Resource* Game::D3D11::GetViewResource(ID3D11View* view)
+{
+   return Luma::Resources::Mirrors::D3D11::GetViewResource(view);
+}
+
+std::vector<ID3D11View*> Game::D3D11::GetResourceViews(ID3D11Resource* resource)
+{
+   return Luma::Resources::Mirrors::D3D11::GetResourceViews(resource);
 }
 
 bool Game::Effects::SR::Draw(const Game::D3D11::Call& call, const DrawOverrides& overrides)

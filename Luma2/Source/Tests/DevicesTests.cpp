@@ -213,6 +213,7 @@ uint64_t CountErrors(InfoQueue* info_queue, int error_severity)
 // A game whose callbacks create an object on the device and release it when the device is destroyed
 uint32_t created_calls = 0;
 uint32_t destroyed_calls = 0;
+uint32_t swapchain_pre_create_calls = 0;
 uint32_t swapchain_created_calls = 0;
 uint32_t devices_known_at_swapchain = 0;
 uint32_t swapchain_resized_calls = 0;
@@ -252,6 +253,11 @@ void OnDeviceDestroyed(ID3D11Device* device)
    game_object.Reset();
 }
 
+void OnCreateSwapchain(Game::SwapchainDesc&)
+{
+   swapchain_pre_create_calls++;
+}
+
 template <typename Presenter>
 void OnInitSwapchain(IDXGISwapChain*, Presenter* presenter, bool resize)
 {
@@ -280,17 +286,20 @@ struct GameCallbacks
       Game::SetEvents(Game::D3D11::Events{
          .on_init_device = static_cast<void (*)(ID3D11Device*)>(&OnDeviceCreated),
          .on_destroy_device = static_cast<void (*)(ID3D11Device*)>(&OnDeviceDestroyed),
+         .on_create_swapchain = &OnCreateSwapchain,
          .on_init_swapchain = &OnInitSwapchain<ID3D11Device>,
          .on_present = &OnPresent<ID3D11Device>,
       });
       Game::SetEvents(Game::D3D12::Events{
          .on_init_device = static_cast<void (*)(ID3D12Device*)>(&OnDeviceCreated),
          .on_destroy_device = static_cast<void (*)(ID3D12Device*)>(&OnDeviceDestroyed),
+         .on_create_swapchain = &OnCreateSwapchain,
          .on_init_swapchain = &OnInitSwapchain<ID3D12CommandQueue>,
          .on_present = &OnPresent<ID3D12CommandQueue>,
       });
       created_calls = 0;
       destroyed_calls = 0;
+      swapchain_pre_create_calls = 0;
       swapchain_created_calls = 0;
       devices_known_at_swapchain = 0;
       swapchain_resized_calls = 0;
@@ -585,6 +594,7 @@ TEST_CASE("Swapchain D3D11: created with the device, presented and resized")
    REQUIRE(SUCCEEDED(D3D11CreateDeviceAndSwapChain(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, GetD3D11Flags(), nullptr, 0, D3D11_SDK_VERSION, &desc, &swapchain, &device,
       nullptr, &immediate_context)));
    CHECK(created_calls == 1);
+   CHECK(swapchain_pre_create_calls == 1);
    CHECK(swapchain_created_calls == 1);
    CHECK(devices_known_at_swapchain == 1);
    CHECK(callback_presenter == Real(device));

@@ -19,10 +19,14 @@ using BufferWriteCallback = void (*)(Device device, std::span<const std::byte> b
 
 void SetOptions(const Options& options);
 const Options& GetOptions();
-// Registers a D3D11 CPU write observer for constant buffers of `byte_size` (0 matches any size). Init only.
+// Registers a CPU write observer for constant buffers of `byte_size` (0 matches any size). Init only.
 void RegisterWriteCallback(uint32_t byte_size, BufferWriteCallback callback);
 bool HasWriteCallbacks();
 void DispatchWrite(Device device, uint32_t byte_size, std::span<const std::byte> bytes);
+// Stops further cbuffer write dispatches until the next Present (once a mod found its cbuffer for the frame).
+void PauseForFrame();
+bool IsPausedForFrame();
+void OnPresent();
 
 bool IsNeeded();
 Hooks::D3D11::Functions GetD3D11Functions();

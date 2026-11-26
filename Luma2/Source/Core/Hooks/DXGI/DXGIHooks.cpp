@@ -110,10 +110,11 @@ const std::array SWAPCHAIN_VERSIONS = {
    Vtables::GetVersion<IDXGISwapChain4>("IDXGISwapChain4", LumaMethodCount_IDXGISwapChain4),
 };
 
-// What the game asked for when it created or resized a swapchain. Luma changes it (flip model, more buffers, flags, a float format, samples,
-// windowed), and the game keeps seeing all of what it asked for through "GetDesc" and "GetDesc1", as with ReShade (inside a Luma scope, Luma
-// sees the real swapchain). A game that compares it with what it wants recreates its swapchain on any difference (dgVoodoo does, every frame),
-// and one that passes it back to "ResizeBuffers" would resize the swapchain to Luma's own format.
+// What the game asked for when it created or resized a swapchain. Luma changes it (flip model, more buffers, flags, a float format,
+// no refresh rate, samples, windowed), and the game keeps seeing all of what it asked for through "GetDesc" and "GetDesc1", as with
+// ReShade (inside a Luma scope, Luma sees the real swapchain). A game that compares it with what it wants recreates its swapchain on
+// any difference (dgVoodoo does, every frame, over the refresh rate), and one that passes it back to "ResizeBuffers" would resize
+// the swapchain to Luma's own format.
 struct GameSwapchainDesc
 {
    DXGI_SWAP_CHAIN_DESC desc = {}; // As "CreateSwapChain" takes it. A zero width or height stands for the swapchain's real one.
@@ -122,6 +123,28 @@ struct GameSwapchainDesc
    DXGI_ALPHA_MODE alpha_mode = DXGI_ALPHA_MODE_UNSPECIFIED;
    BOOL stereo = FALSE;
 };
+
+struct PresentRetryState
+{
+   bool was_still_drawing = false;
+};
+
+bool WasStillDrawing(IDXGISwapChain* swapchain)
+{
+   Scope::Guard scope;
+   const PresentRetryState* state = Lifetime::GetState<PresentRetryState>(swapchain);
+   return state && state->was_still_drawing;
+}
+
+void RecordPresentResult(IDXGISwapChain* swapchain, HRESULT result)
+{
+   Scope::Guard scope;
+   const bool still_drawing = result == DXGI_ERROR_WAS_STILL_DRAWING;
+   if (PresentRetryState* state = Lifetime::GetState<PresentRetryState>(swapchain))
+      state->was_still_drawing = still_drawing;
+   else if (still_drawing)
+      Lifetime::SetState<PresentRetryState>(swapchain, true);
+}
 
 // A call is the game's when its proxy forwards it, or on a swapchain the game holds itself (no proxy). Anyone else calling a proxied
 // swapchain's real object (an overlay, a capture tool) sees the real swapchain.
@@ -478,12 +501,17 @@ HRESULT STDMETHODCALLTYPE Present(IDXGISwapChain* swapchain, UINT sync_interval,
    DXGI::CloseThirdPartyWorkWindowAtPresent();
    DepthGuard guard(present_depth);
    const bool is_game = IsGamePresent(guard, flags, swapchain);
-   if (is_game)
+   // After DXGI_PRESENT_DO_NOT_WAIT returns DXGI_ERROR_WAS_STILL_DRAWING, the game retries the same frame:
+   // skip Luma's per-frame work, composition, and overlay so they do not run twice on one frame.
+   const bool retrying = is_game && WasStillDrawing(swapchain);
+   if (is_game && !retrying)
    {
       NoteCaller(_ReturnAddress());
       HandleGamePresent(swapchain, sync_interval, flags);
    }
    const HRESULT result = CallRuntime(original_present, swapchain, sync_interval, flags);
+   if (is_game)
+      RecordPresentResult(swapchain, result);
    if (is_game && SUCCEEDED(result))
    {
       Scope::Guard scope;
@@ -497,17 +525,23 @@ HRESULT STDMETHODCALLTYPE Present1(IDXGISwapChain1* swapchain, UINT sync_interva
    DXGI::CloseThirdPartyWorkWindowAtPresent();
    DepthGuard guard(present_depth);
    const bool is_game = IsGamePresent(guard, flags, swapchain);
+   const bool retrying = is_game && WasStillDrawing(swapchain);
    // Composition writes the whole buffer: the game's dirty rects and scroll don't describe it
    const DXGI_PRESENT_PARAMETERS whole = {};
    if (is_game)
    {
-      NoteCaller(_ReturnAddress());
-      HandleGamePresent(swapchain, sync_interval, flags);
+      if (!retrying)
+      {
+         NoteCaller(_ReturnAddress());
+         HandleGamePresent(swapchain, sync_interval, flags);
+      }
       Scope::Guard scope;
       if (Handlers::ComposesWholeBuffer(swapchain))
          parameters = &whole;
    }
    const HRESULT result = CallRuntime(original_present1, swapchain, sync_interval, flags, parameters);
+   if (is_game)
+      RecordPresentResult(swapchain, result);
    if (is_game && SUCCEEDED(result))
    {
       Scope::Guard scope;
@@ -693,14 +727,15 @@ bool PresentPrologue(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags)
       present_work_swapchain = nullptr;
       return false;
    }
-   HandleGamePresent(swapchain, sync_interval, flags);
+   if (!WasStillDrawing(swapchain))
+      HandleGamePresent(swapchain, sync_interval, flags);
    return true;
 }
 
 bool RunPresentWorkAtEvent(IDXGISwapChain* swapchain)
 {
    // Only where a Luma Present follows (the proxy's, or the hook's) to draw the overlay and close the window
-   if (!swapchain || Scope::IsActive() || (!SwapchainProxy::HasProxy(swapchain) && !original_present))
+   if (!swapchain || Scope::IsActive() || WasStillDrawing(swapchain) || (!SwapchainProxy::HasProxy(swapchain) && !original_present))
       return false;
    {
       Scope::Guard scope;
@@ -754,6 +789,8 @@ HRESULT PresentForGame(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags
       else
          result = swapchain->Present(sync_interval, flags);
    }
+   if (is_game)
+      RecordPresentResult(swapchain, result);
    if (is_game && SUCCEEDED(result))
    {
       Scope::Guard scope;

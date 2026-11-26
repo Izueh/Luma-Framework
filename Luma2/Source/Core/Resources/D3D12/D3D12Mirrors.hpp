@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <vector>
 
 #include <d3d12.h>
 
@@ -41,6 +42,11 @@ struct ListScalingSnapshot
 void CreateMirror(ID3D12Device* device, ID3D12Resource* resource, std::optional<D3D12_RESOURCE_STATES> state, const D3D12_CLEAR_VALUE* clear, bool reserved);
 ID3D12Resource* FindMirror(ID3D12Resource* resource);
 ID3D12Resource* FindOriginal(ID3D12Resource* mirror);
+ID3D12Resource* GetEffectiveResource(ID3D12Resource* resource);
+D3D12_CPU_DESCRIPTOR_HANDLE FindMirrorHandle(D3D12_CPU_DESCRIPTOR_HANDLE handle);
+D3D12_CPU_DESCRIPTOR_HANDLE FindOriginalHandle(D3D12_CPU_DESCRIPTOR_HANDLE mirror_handle);
+ID3D12Resource* GetDescriptorResource(D3D12_CPU_DESCRIPTOR_HANDLE handle);
+std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> GetResourceDescriptors(ID3D12Resource* resource);
 std::optional<MirrorSummary> FindMirrorSummary(ID3D12Resource* resource);
 std::optional<ListScalingSnapshot> GetListScalingSnapshot(ID3D12GraphicsCommandList* list);
 // The game released the device: Luma's descriptor heaps and pools on it go
@@ -105,6 +111,9 @@ struct CopyRegion
 
 // Returns true when Luma's copy/scale pass replaced the game's call
 bool SwapCopy(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, ID3D12Resource*& source, CopyRegion& region, bool* out_scaled = nullptr);
+// Returns true when Luma's resolve+convert pass replaced the game's ResolveSubresource call
+bool SwapResolve(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, UINT destination_subresource, ID3D12Resource*& source,
+   UINT source_subresource, DXGI_FORMAT& format);
 void SwapClearUnorderedAccess(ID3D12GraphicsCommandList* list, D3D12_GPU_DESCRIPTOR_HANDLE& gpu, D3D12_CPU_DESCRIPTOR_HANDLE& cpu, ID3D12Resource*& resource);
 
 struct Stats

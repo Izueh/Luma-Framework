@@ -144,6 +144,9 @@ struct ConstantBuffer
    // The contents are the bound range only (D3D12, whose buffers are often large rings), not the whole buffer
    bool contents_ranged = false;
    uint32_t space = 0;
+   // D3D12 backing heap type ("Upload", "Default", "GpuUpload", "Custom") and bound CBV slice size in bytes
+   std::string heap_type;
+   uint32_t view_size = 0;
    // Non-empty when this slot is bound to a Luma constant buffer (e.g. "LumaSettings", "LumaData")
    std::string luma_name;
 };

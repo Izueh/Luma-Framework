@@ -106,6 +106,7 @@ bool ParsePerViewGlobal(Device device, std::span<const std::byte> bytes)
       return false;
 
    data->found_per_view_globals = true;
+   Game::Resources::ConstantCapture::PauseForFrame();
    data->jitterless_frames_count = 0;
    data->is_in_menu = false;
 

@@ -9,15 +9,26 @@
 
 #include <d3d11.h>
 #include <d3d12.h>
+#include <d3dcompiler.h>
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
 #include "Draw/D3D11/D3D11Draw.hpp"
 #include "Draw/Draw.hpp"
 #include "Frame/FrameState.hpp"
+#include "Game/Game.hpp"
+#include "Game/GameRegistry.hpp"
+#include "Handlers/D3D11/D3D11Handlers.hpp"
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
+#include "Resources/D3D11/D3D11ResourceDatabase.hpp"
 #include "Resources/D3D11/D3D11Samplers.hpp"
+#include "Resources/ResourceDatabase.hpp"
+#include "Shaders/Shaders.hpp"
+#include "Resources/ConstantCapture.hpp"
+#include "Resources/D3D11/D3D11ConstantCapture.hpp"
+#include "Resources/D3D12/D3D12ConstantCapture.hpp"
+#include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
@@ -306,6 +317,7 @@ TEST_CASE("Samplers D3D11: a sampler's mirror is made at its creation, and for a
    struct Bias
    {
       ID3D11Device* device;
+
       ~Bias() { Resources::Samplers::SetLodBiasOffset(device, 0.f); }
    } bias{device.Get()};
 
@@ -375,6 +387,19 @@ TEST_CASE("Mirrors D3D11: a matching texture gets a mirror, its views mirrored o
    Resources::Mirrors::D3D11::SwapViews(bound.data(), UINT(bound.size()));
    REQUIRE(bound[0] != view.Get());
    CHECK(bound[1] == nullptr);
+   // Bidirectional mirror/original view helpers and view<->resource mappings
+   CHECK(Resources::Mirrors::D3D11::FindMirrorView(view.Get()) == bound[0]);
+   CHECK(Resources::Mirrors::D3D11::FindOriginalView(bound[0]) == view.Get());
+   CHECK(Game::D3D11::FindMirror(view.Get()) == bound[0]);
+   CHECK(Game::D3D11::FindOriginal(bound[0]) == view.Get());
+   CHECK(Game::D3D11::GetViewResource(view.Get()) == texture.Get());
+   CHECK(Game::D3D11::GetViewResource(bound[0]) == mirror);
+   const std::vector<ID3D11View*> orig_views = Game::D3D11::GetResourceViews(texture.Get());
+   CHECK(orig_views.size() == 1);
+   CHECK(orig_views[0] == view.Get());
+   const std::vector<ID3D11View*> mirror_views = Game::D3D11::GetResourceViews(mirror);
+   CHECK(mirror_views.size() == 1);
+   CHECK(mirror_views[0] == bound[0]);
    ComPtr<ID3D11Resource> bound_resource;
    bound[0]->GetResource(&bound_resource);
    CHECK(bound_resource.Get() == mirror);
@@ -1160,4 +1185,450 @@ TEST_CASE("Mirrors D3D12: ViewportsOnly expansion scales sub-rect viewports and 
    CHECK(snap->game_viewports[0].Width == doctest::Approx(64.f));
 
    Mirrors12::ForgetListState(list.Get());
+}
+
+TEST_CASE("D3D11 handlers: depth-only bind, Unmap order, and mirror visibility in game events")
+{
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
+   Frame::CreateDeviceState(device.Get());
+   Frame::SetOutputResolution(device.Get(), {64, 36});
+   RulesFixture rules;
+   const bool was_enabled = Settings::IsEnabled();
+   if (!Settings::Find(Settings::Core::ENABLED.key))
+   {
+      static constexpr std::array ENABLED_SETTING = {Settings::Setting{.key = Settings::Core::ENABLED.key, .label = "Enabled", .default_value = true}};
+      Settings::Register(ENABLED_SETTING, Settings::Kind::Luma);
+   }
+   Settings::Set(Settings::Core::ENABLED, true);
+
+   struct Cleanup
+   {
+      bool prev_enabled;
+
+      ~Cleanup()
+      {
+         Game::SetEvents(Game::D3D11::Events{});
+         Settings::Set(Settings::Core::ENABLED, prev_enabled);
+      }
+   } cleanup{was_enabled};
+
+   const D3D11_TEXTURE2D_DESC1 color_desc = {.Width = 32, .Height = 18, .MipLevels = 1, .ArraySize = 1, .Format = DXGI_FORMAT_R11G11B10_FLOAT, .SampleDesc = {1, 0}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
+   ComPtr<ID3D11Texture2D> color_tex;
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&color_desc), nullptr, &color_tex)));
+   ID3D11Texture2D* init_seen_tex = nullptr;
+   ID3D11RenderTargetView* clear_seen_rtv = nullptr;
+   ID3D11Resource* copy_seen_dst = nullptr;
+   ID3D11Resource* copy_seen_src = nullptr;
+   bool unmap_skip = false;
+   bool unmap_saw_event_first = false;
+   static ID3D11Texture2D** s_init_seen_tex = nullptr;
+   static ID3D11RenderTargetView** s_clear_seen_rtv = nullptr;
+   static ID3D11Resource** s_copy_seen_dst = nullptr;
+   static ID3D11Resource** s_copy_seen_src = nullptr;
+   static bool* s_unmap_skip = nullptr;
+   static bool* s_unmap_saw_event_first = nullptr;
+   static uint32_t* s_mapped_ptr = nullptr;
+   s_init_seen_tex = &init_seen_tex;
+   s_clear_seen_rtv = &clear_seen_rtv;
+   s_copy_seen_dst = &copy_seen_dst;
+   s_copy_seen_src = &copy_seen_src;
+   s_unmap_skip = &unmap_skip;
+   s_unmap_saw_event_first = &unmap_saw_event_first;
+
+   Game::D3D11::Events events = {};
+   events.on_init_texture_2d = [](ID3D11Device*, const D3D11_TEXTURE2D_DESC1&, const D3D11_SUBRESOURCE_DATA*, ID3D11Texture2D* tex) {
+      *s_init_seen_tex = tex;
+   };
+   events.on_clear_render_target_view = [](ID3D11DeviceContext*, ID3D11RenderTargetView* rtv, const FLOAT[4]) {
+      *s_clear_seen_rtv = rtv;
+      return false;
+   };
+   events.on_copy_resource = [](ID3D11DeviceContext*, ID3D11Resource* dst, ID3D11Resource* src) {
+      *s_copy_seen_dst = dst;
+      *s_copy_seen_src = src;
+      return false;
+   };
+   events.on_unmap = [](ID3D11DeviceContext*, ID3D11Resource*, UINT) {
+      if (s_mapped_ptr)
+         *s_mapped_ptr = 0x3C0u | (0x3C0u << 11) | (0x1E0u << 22); // write 1.0 in R11G11B10 before Core reads pData
+      *s_unmap_saw_event_first = true;
+      return *s_unmap_skip;
+   };
+   Game::SetEvents(events);
+
+   Handlers::PostCreateTexture2D(device.Get(), color_desc, nullptr, color_tex.Get());
+   ID3D11Resource* color_mirror = Resources::Mirrors::D3D11::FindMirror(color_tex.Get());
+   REQUIRE(color_mirror);
+   CHECK(init_seen_tex == color_mirror);
+
+   ComPtr<ID3D11RenderTargetView> color_rtv;
+   const D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {.Format = DXGI_FORMAT_R11G11B10_FLOAT, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D};
+   REQUIRE(SUCCEEDED(device->CreateRenderTargetView(color_tex.Get(), &rtv_desc, &color_rtv)));
+   D3D11_RENDER_TARGET_VIEW_DESC1 rtv_desc1 = {};
+   std::memcpy(&rtv_desc1, &rtv_desc, sizeof(rtv_desc));
+   Handlers::PostCreateRenderTargetView(device.Get(), color_tex.Get(), &rtv_desc1, color_rtv.Get());
+   ID3D11RenderTargetView* mirror_rtv = Resources::Mirrors::D3D11::FindMirrorView(color_rtv.Get());
+   REQUIRE(mirror_rtv);
+
+   const FLOAT clear_color[4] = {0.f, 0.f, 0.f, 1.f};
+   CHECK(Handlers::PreClearRenderTargetView(context.Get(), color_rtv.Get(), clear_color));
+   CHECK(clear_seen_rtv == mirror_rtv);
+
+   // Copy event sees the effective mirror resource
+   ComPtr<ID3D11Texture2D> other_tex;
+   D3D11_TEXTURE2D_DESC other_desc = {.Width = 32, .Height = 18, .MipLevels = 1, .ArraySize = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {1, 0}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(&other_desc, nullptr, &other_tex)));
+   Handlers::PreCopyResource(context.Get(), other_tex.Get(), color_tex.Get());
+   CHECK(copy_seen_dst == other_tex.Get());
+   CHECK(copy_seen_src == color_mirror);
+
+   // Depth-only combined bind: D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL must preserve the DSV untouched.
+   ID3D11DepthStencilView* dsv_keep = reinterpret_cast<ID3D11DepthStencilView*>(0x1234);
+   CHECK_FALSE(Handlers::PreOMSetRenderTargetsAndUnorderedAccessViews(context.Get(), D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL, nullptr, dsv_keep, 0,
+      D3D11_KEEP_UNORDERED_ACCESS_VIEWS, nullptr, nullptr));
+   CHECK(dsv_keep == reinterpret_cast<ID3D11DepthStencilView*>(0x1234));
+
+   // PreUnmap ordering: on_unmap edits mapped bytes before CommitMappedMirror reads them
+   std::vector<uint32_t> fake_mapped(32 * 18, 0u);
+   s_mapped_ptr = fake_mapped.data();
+   D3D11_MAPPED_SUBRESOURCE mapped = {.pData = fake_mapped.data(), .RowPitch = 32 * 4, .DepthPitch = 32 * 18 * 4};
+   Resources::Mirrors::D3D11::TrackMappedMirror(context.Get(), color_tex.Get(), 0, D3D11_MAP_WRITE_DISCARD, mapped);
+   unmap_skip = false;
+   CHECK_FALSE(Handlers::PreUnmap(context.Get(), color_tex.Get(), 0));
+   CHECK(unmap_saw_event_first);
+   // Verify the mirror received the value written by on_unmap (pixel 0,0 should be 1.0f == 0x3C00)
+   D3D11_TEXTURE2D_DESC staging_desc = {};
+   static_cast<ID3D11Texture2D*>(color_mirror)->GetDesc(&staging_desc);
+   staging_desc.Usage = D3D11_USAGE_STAGING;
+   staging_desc.BindFlags = 0;
+   staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+   staging_desc.MiscFlags = 0;
+   ComPtr<ID3D11Texture2D> staging;
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(&staging_desc, nullptr, &staging)));
+   context->CopyResource(staging.Get(), color_mirror);
+   D3D11_MAPPED_SUBRESOURCE readback = {};
+   REQUIRE(SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &readback)));
+   uint16_t texel[4] = {};
+   std::memcpy(texel, readback.pData, sizeof(texel));
+   context->Unmap(staging.Get(), 0);
+   CHECK(texel[0] == 0x3C00);
+
+   // When on_unmap returns true, CommitMappedMirror must NOT read pData (pass invalid pointer to prove it's discarded safely)
+   s_mapped_ptr = nullptr;
+   D3D11_MAPPED_SUBRESOURCE invalid_mapped = {.pData = reinterpret_cast<void*>(0x1), .RowPitch = 32 * 4, .DepthPitch = 32 * 18 * 4};
+   Resources::Mirrors::D3D11::TrackMappedMirror(context.Get(), color_tex.Get(), 0, D3D11_MAP_WRITE_DISCARD, invalid_mapped);
+   unmap_skip = true;
+   CHECK(Handlers::PreUnmap(context.Get(), color_tex.Get(), 0));
+}
+
+TEST_CASE("Mirrors D3D11: partial-region converting copy and cross-format MSAA resolve")
+{
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
+   Frame::CreateDeviceState(device.Get());
+   Frame::SetOutputResolution(device.Get(), {64, 36});
+
+   auto ensure_shader = [](std::string_view name, ShaderStage stage) -> uint32_t {
+      const uint64_t hash = Utils::Hash::Name(name);
+      if (const std::optional<uint32_t> existing = Resources::Database::Find(hash))
+         return *existing;
+      const std::optional<uint32_t> added =
+         Resources::Database::Register({.name_hash = hash, .name = std::string(name), .kind = Resources::Database::Kind::Shader, .stage = stage});
+      REQUIRE(added);
+      return *added;
+   };
+   const uint32_t vs_idx = ensure_shader("Luma_Copy_VS", ShaderStage::Vertex);
+   const uint32_t ps_idx = ensure_shader("Luma_Copy_PS", ShaderStage::Pixel);
+
+   constexpr const char* VS_SRC =
+      "float4 main(uint id : SV_VertexID) : SV_Position {\n"
+      "  float2 uv = float2((id << 1) & 2, id & 2);\n"
+      "  return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);\n"
+      "}\n";
+   constexpr const char* PS_SRC =
+      "Texture2D t0 : register(t0);\n"
+      "float4 main(float4 pos : SV_Position) : SV_Target { return t0.Load(int3(pos.xy, 0)); }\n";
+   ComPtr<ID3DBlob> vs_blob, ps_blob;
+   REQUIRE(SUCCEEDED(D3DCompile(VS_SRC, std::strlen(VS_SRC), nullptr, nullptr, nullptr, "main", "vs_5_0", 0, 0, &vs_blob, nullptr)));
+   REQUIRE(SUCCEEDED(D3DCompile(PS_SRC, std::strlen(PS_SRC), nullptr, nullptr, nullptr, "main", "ps_5_0", 0, 0, &ps_blob, nullptr)));
+   auto make_compiled = [](ID3DBlob* blob) {
+      auto c = std::make_shared<Shaders::CompiledShader>();
+      const auto* bytes = static_cast<const uint8_t*>(blob->GetBufferPointer());
+      c->bytecode.assign(bytes, bytes + blob->GetBufferSize());
+      return c;
+   };
+
+   Shaders::CreateStore(device.Get(), Api::D3D11);
+   Resources::Database::D3D11::CreateDeviceObjects(device.Get());
+   Resources::Database::PublishShaders(*Shaders::GetStore(device.Get()),
+      {{vs_idx, {.compiled = make_compiled(vs_blob.Get())}},
+         {ps_idx, {.compiled = make_compiled(ps_blob.Get())}}});
+   Resources::Database::D3D11::UpdateShaderObjects(device.Get());
+
+   RulesFixture rules;
+   const bool was_enabled = Settings::IsEnabled();
+   if (!Settings::Find(Settings::Core::ENABLED.key))
+   {
+      static constexpr std::array ENABLED_SETTING = {Settings::Setting{.key = Settings::Core::ENABLED.key, .label = "Enabled", .default_value = true}};
+      Settings::Register(ENABLED_SETTING, Settings::Kind::Luma);
+   }
+   Settings::Set(Settings::Core::ENABLED, true);
+
+   struct Cleanup
+   {
+      ID3D11Device* dev;
+      bool prev_enabled;
+
+      ~Cleanup()
+      {
+         Resources::Database::D3D11::ReleaseDeviceObjects(dev);
+         Shaders::DestroyStore(dev);
+         Settings::Set(Settings::Core::ENABLED, prev_enabled);
+      }
+   } cleanup{device.Get(), was_enabled};
+
+   // Partial-region converting copy: R11G11B10 (mirrored to R16G16B16A16F) -> R8G8B8A8_UNORM sub-box at offset (4, 4)
+   const D3D11_TEXTURE2D_DESC1 src_desc = {.Width = 32, .Height = 18, .MipLevels = 1, .ArraySize = 1, .Format = DXGI_FORMAT_R11G11B10_FLOAT, .SampleDesc = {1, 0}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
+   ComPtr<ID3D11Texture2D> src_tex;
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&src_desc), nullptr, &src_tex)));
+   Resources::Mirrors::D3D11::CreateMirror(device.Get(), src_desc, nullptr, src_tex.Get());
+   REQUIRE(Resources::Mirrors::D3D11::FindMirror(src_tex.Get()));
+
+   const D3D11_TEXTURE2D_DESC dst_desc = {.Width = 32, .Height = 18, .MipLevels = 1, .ArraySize = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {1, 0}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
+   ComPtr<ID3D11Texture2D> dst_tex;
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(&dst_desc, nullptr, &dst_tex)));
+
+   // Copy a 4x4 region to (4, 4)
+   const D3D11_BOX box = {0, 0, 0, 4, 4, 1};
+   CHECK(Resources::Mirrors::D3D11::RedirectCopyRegion(context.Get(), dst_tex.Get(), 0, 4, 4, 0, src_tex.Get(), 0, &box, 0));
+
+   // Cross-format MSAA resolve: 4x MSAA R11G11B10 (mirrored to 4x MSAA R16G16B16A16F) -> 1x R8G8B8A8_UNORM
+   const D3D11_TEXTURE2D_DESC1 msaa_desc = {.Width = 32, .Height = 18, .MipLevels = 1, .ArraySize = 1, .Format = DXGI_FORMAT_R11G11B10_FLOAT, .SampleDesc = {4, 0}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
+   ComPtr<ID3D11Texture2D> msaa_tex;
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&msaa_desc), nullptr, &msaa_tex)));
+   Resources::Mirrors::D3D11::CreateMirror(device.Get(), msaa_desc, nullptr, msaa_tex.Get());
+   REQUIRE(Resources::Mirrors::D3D11::FindMirror(msaa_tex.Get()));
+
+   const uint32_t unhandled_before = Resources::Mirrors::D3D11::GetUnhandledResolves();
+   CHECK(Resources::Mirrors::D3D11::RedirectResolve(context.Get(), dst_tex.Get(), 0, msaa_tex.Get(), 0, DXGI_FORMAT_R11G11B10_FLOAT));
+   CHECK(Resources::Mirrors::D3D11::GetUnhandledResolves() == unhandled_before);
+}
+
+TEST_CASE("D3D12 parity: mirror/descriptor helpers")
+{
+   namespace Mirrors12 = Resources::Mirrors::D3D12;
+   ComPtr<IDXGIFactory4> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   ComPtr<IDXGIAdapter> adapter;
+   REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
+   ComPtr<ID3D12Device> device;
+   REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
+   Frame::CreateDeviceState(device.Get());
+   Frame::SetOutputResolution(device.Get(), {64, 36});
+   RulesFixture rules;
+
+   struct Cleanup
+   {
+      ID3D12Device* dev;
+
+      ~Cleanup() { Mirrors12::ReleaseDeviceObjects(dev); }
+   } cleanup{device.Get()};
+
+   // Bidirectional D3D12 mirror/original and descriptor/resource helpers
+   const D3D12_HEAP_PROPERTIES default_heap = {.Type = D3D12_HEAP_TYPE_DEFAULT};
+   const D3D12_RESOURCE_DESC tex_desc = {
+      .Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D,
+      .Width = 32,
+      .Height = 18,
+      .DepthOrArraySize = 1,
+      .MipLevels = 1,
+      .Format = DXGI_FORMAT_R11G11B10_FLOAT,
+      .SampleDesc = {1, 0},
+      .Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
+   };
+   ComPtr<ID3D12Resource> tex;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &tex_desc, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, IID_PPV_ARGS(&tex))));
+   Mirrors12::CreateMirror(device.Get(), tex.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, false);
+   ID3D12Resource* mirror = Game::D3D12::FindMirror(tex.Get());
+   REQUIRE(mirror);
+   CHECK(Game::D3D12::FindOriginal(mirror) == tex.Get());
+
+   const D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV, .NumDescriptors = 2};
+   ComPtr<ID3D12DescriptorHeap> rtv_heap;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&rtv_heap))));
+   Mirrors12::TrackHeap(device.Get(), rtv_heap.Get(), rtv_heap_desc);
+   const D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+   device->CreateRenderTargetView(tex.Get(), nullptr, rtv);
+   Mirrors12::TrackView(device.Get(), rtv, Mirrors12::ViewKind::RenderTarget, tex.Get(), nullptr, true);
+
+   const D3D12_CPU_DESCRIPTOR_HANDLE mirror_rtv = Game::D3D12::FindMirrorHandle(rtv);
+   REQUIRE(mirror_rtv.ptr != 0);
+   CHECK(Game::D3D12::FindOriginalHandle(mirror_rtv).ptr == rtv.ptr);
+   CHECK(Game::D3D12::GetDescriptorResource(rtv) == tex.Get());
+   CHECK(Game::D3D12::GetDescriptorResource(mirror_rtv) == mirror);
+   const std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> orig_descs = Game::D3D12::GetResourceDescriptors(tex.Get());
+   CHECK(orig_descs.size() == 1);
+   CHECK(orig_descs[0].ptr == rtv.ptr);
+   const std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> mirror_descs = Game::D3D12::GetResourceDescriptors(mirror);
+   CHECK(mirror_descs.size() == 1);
+   CHECK(mirror_descs[0].ptr == mirror_rtv.ptr);
+}
+
+TEST_CASE("Mirrors D3D12: same-family and cross-format MSAA SwapResolve")
+{
+   namespace Mirrors12 = Resources::Mirrors::D3D12;
+   namespace Database12 = Resources::Database::D3D12;
+   namespace Tail12 = Resources::HeapTail::D3D12;
+   ComPtr<IDXGIFactory4> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   ComPtr<IDXGIAdapter> adapter;
+   REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
+   ComPtr<ID3D12Device> device;
+   REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
+   Frame::CreateDeviceState(device.Get());
+   Frame::SetOutputResolution(device.Get(), {64, 36});
+   Database12::CreateDeviceObjects(device.Get());
+   RulesFixture rules;
+
+   // Publish Luma_Copy_VS and Luma_Copy_Table_PS (reading t0, space100) for ConvertingCopy
+   auto ensure_shader = [](std::string_view name, ShaderStage stage) -> uint32_t {
+      const uint64_t hash = Utils::Hash::Name(name);
+      if (const std::optional<uint32_t> existing = Resources::Database::Find(hash))
+         return *existing;
+      const std::optional<uint32_t> added =
+         Resources::Database::Register({.name_hash = hash, .name = std::string(name), .kind = Resources::Database::Kind::Shader, .stage = stage});
+      REQUIRE(added);
+      return *added;
+   };
+   const uint32_t vs_idx = ensure_shader("Luma_Copy_VS", ShaderStage::Vertex);
+   const uint32_t ps_idx = ensure_shader("Luma_Copy_Table_PS", ShaderStage::Pixel);
+
+   constexpr const char* VS_SRC =
+      "float4 main(uint id : SV_VertexID) : SV_Position {\n"
+      "  float2 uv = float2((id << 1) & 2, id & 2);\n"
+      "  return float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);\n"
+      "}\n";
+   constexpr const char* PS_SRC =
+      "Texture2D t0 : register(t112, space100);\n"
+      "float4 main(float4 pos : SV_Position) : SV_Target { return t0.Load(int3(pos.xy, 0)); }\n";
+   ComPtr<ID3DBlob> vs_blob, ps_blob;
+   REQUIRE(SUCCEEDED(D3DCompile(VS_SRC, std::strlen(VS_SRC), nullptr, nullptr, nullptr, "main", "vs_5_0", 0, 0, &vs_blob, nullptr)));
+   REQUIRE(SUCCEEDED(D3DCompile(PS_SRC, std::strlen(PS_SRC), nullptr, nullptr, nullptr, "main", "ps_5_1", 0, 0, &ps_blob, nullptr)));
+   auto make_compiled = [](ID3DBlob* blob) {
+      auto c = std::make_shared<Shaders::CompiledShader>();
+      const auto* bytes = static_cast<const uint8_t*>(blob->GetBufferPointer());
+      c->bytecode.assign(bytes, bytes + blob->GetBufferSize());
+      return c;
+   };
+   Shaders::CreateStore(device.Get(), Api::D3D12);
+   Resources::Database::PublishShaders(*Shaders::GetStore(device.Get()),
+      {{vs_idx, {.compiled = make_compiled(vs_blob.Get())}},
+         {ps_idx, {.compiled = make_compiled(ps_blob.Get())}}});
+
+   struct Cleanup
+   {
+      ID3D12Device* dev;
+
+      ~Cleanup()
+      {
+         Mirrors12::ReleaseDeviceObjects(dev);
+         Database12::ReleaseDeviceObjects(dev);
+         Shaders::DestroyStore(dev);
+      }
+   } cleanup{device.Get()};
+
+   // Extended root signature + shader-visible heap with tail (required by ConvertingCopy)
+   const auto serialize = reinterpret_cast<PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE>(
+      GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12SerializeVersionedRootSignature"));
+   REQUIRE(serialize);
+   D3D12_VERSIONED_ROOT_SIGNATURE_DESC game_signature = {.Version = D3D_ROOT_SIGNATURE_VERSION_1_1};
+   ComPtr<ID3DBlob> game_blob;
+   REQUIRE(SUCCEEDED(serialize(&game_signature, &game_blob, nullptr)));
+   const std::span<const uint8_t> game_bytes(static_cast<const uint8_t*>(game_blob->GetBufferPointer()), game_blob->GetBufferSize());
+   const Shaders::RootSignatures::D3D12::Extended extended = Shaders::RootSignatures::D3D12::Extend(game_bytes);
+   REQUIRE(extended.table);
+   ComPtr<ID3D12RootSignature> root_signature;
+   REQUIRE(SUCCEEDED(device->CreateRootSignature(0, extended.blob.data(), extended.blob.size(), IID_PPV_ARGS(&root_signature))));
+   REQUIRE(Shaders::Database::D3D12::TrackRootSignature(game_bytes, root_signature.Get(), extended.luma_parameter, extended.table, extended.static_samplers));
+
+   const D3D12_DESCRIPTOR_HEAP_DESC game_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 16, D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE};
+   const D3D12_DESCRIPTOR_HEAP_DESC heap_desc = *Tail12::Extend(game_desc);
+   ComPtr<ID3D12DescriptorHeap> heap;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&heap_desc, IID_PPV_ARGS(&heap))));
+   Tail12::Track(device.Get(), heap.Get(), game_desc, Tail12::TAIL_SIZE);
+
+   const D3D12_COMMAND_QUEUE_DESC queue_desc = {D3D12_COMMAND_LIST_TYPE_DIRECT};
+   ComPtr<ID3D12CommandQueue> queue;
+   ComPtr<ID3D12CommandAllocator> allocator;
+   ComPtr<ID3D12GraphicsCommandList> list;
+   REQUIRE(SUCCEEDED(device->CreateCommandQueue(&queue_desc, IID_PPV_ARGS(&queue))));
+   REQUIRE(SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))));
+   REQUIRE(SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&list))));
+   list->SetGraphicsRootSignature(root_signature.Get());
+   Database12::SetRootSignature(list.Get(), false, root_signature.Get());
+   Mirrors12::RecordRootSignature(list.Get(), root_signature.Get());
+   ID3D12DescriptorHeap* const heaps[] = {heap.Get()};
+   list->SetDescriptorHeaps(1, heaps);
+   Database12::SetDescriptorHeaps(list.Get(), 1, heaps);
+
+   const D3D12_HEAP_PROPERTIES default_heap = {.Type = D3D12_HEAP_TYPE_DEFAULT};
+   const D3D12_RESOURCE_DESC msaa_desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 32, 18, 1, 1, DXGI_FORMAT_R11G11B10_FLOAT, {4, 0},
+      D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
+   const D3D12_RESOURCE_DESC same_dst_desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 32, 18, 1, 1, DXGI_FORMAT_R11G11B10_FLOAT, {1, 0},
+      D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
+   const D3D12_RESOURCE_DESC cross_dst_desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 32, 18, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0},
+      D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
+
+   ComPtr<ID3D12Resource> msaa_src, same_dst, cross_dst;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &msaa_desc, D3D12_RESOURCE_STATE_RESOLVE_SOURCE, nullptr, IID_PPV_ARGS(&msaa_src))));
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &same_dst_desc, D3D12_RESOURCE_STATE_RESOLVE_DEST, nullptr, IID_PPV_ARGS(&same_dst))));
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &cross_dst_desc, D3D12_RESOURCE_STATE_RESOLVE_DEST, nullptr, IID_PPV_ARGS(&cross_dst))));
+
+   Mirrors12::CreateMirror(device.Get(), msaa_src.Get(), D3D12_RESOURCE_STATE_RESOLVE_SOURCE, nullptr, false);
+   Mirrors12::CreateMirror(device.Get(), same_dst.Get(), D3D12_RESOURCE_STATE_RESOLVE_DEST, nullptr, false);
+   ID3D12Resource* msaa_mirror = Mirrors12::FindMirror(msaa_src.Get());
+   ID3D12Resource* same_mirror = Mirrors12::FindMirror(same_dst.Get());
+   REQUIRE(msaa_mirror);
+   REQUIRE(same_mirror);
+   CHECK_FALSE(Mirrors12::FindMirror(cross_dst.Get()));
+
+   // 1. Same-family resolve: both upgraded to R16G16B16A16_FLOAT -> swaps resources + format, returns false
+   ID3D12Resource* dst_arg = same_dst.Get();
+   ID3D12Resource* src_arg = msaa_src.Get();
+   DXGI_FORMAT fmt = DXGI_FORMAT_R11G11B10_FLOAT;
+   CHECK_FALSE(Mirrors12::SwapResolve(list.Get(), dst_arg, 0, src_arg, 0, fmt));
+   CHECK(dst_arg == same_mirror);
+   CHECK(src_arg == msaa_mirror);
+   CHECK(fmt == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   list->ResolveSubresource(dst_arg, 0, src_arg, 0, fmt);
+
+   // 2. Cross-family resolve: R16G16B16A16_FLOAT MSAA mirror -> unmirrored R8G8B8A8_UNORM -> handled via temp resolve + ConvertingCopy
+   const Mirrors12::Stats before = Mirrors12::GetStats();
+   dst_arg = cross_dst.Get();
+   src_arg = msaa_src.Get();
+   fmt = DXGI_FORMAT_R11G11B10_FLOAT;
+   CHECK(Mirrors12::SwapResolve(list.Get(), dst_arg, 0, src_arg, 0, fmt));
+   CHECK(Mirrors12::GetStats().converted_copies == before.converted_copies + 1);
+   CHECK(Mirrors12::GetStats().unhandled_copies == before.unhandled_copies);
+
+   // Execute on WARP queue to verify valid barriers, resolve, blit, and lifetime cleanup
+   REQUIRE(SUCCEEDED(list->Close()));
+   ID3D12CommandList* const lists[] = {list.Get()};
+   queue->ExecuteCommandLists(1, lists);
+   Hooks::Lifetime::D3D12::MoveReferencesToQueue(queue.Get(), 1, lists);
+   ComPtr<ID3D12Fence> fence;
+   REQUIRE(SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))));
+   REQUIRE(SUCCEEDED(queue->Signal(fence.Get(), 1)));
+   const HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+   REQUIRE(SUCCEEDED(fence->SetEventOnCompletion(1, event)));
+   WaitForSingleObject(event, INFINITE);
+   CloseHandle(event);
+   Hooks::Lifetime::D3D12::ForgetReferences(list.Get());
+   Mirrors12::ForgetListState(list.Get());
+   Tail12::ForgetList(list.Get());
+   Database12::ForgetList(list.Get());
+   Hooks::Lifetime::D3D12::MoveReferencesToQueue(queue.Get(), 0, nullptr);
 }

@@ -4,11 +4,13 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <vector>
 
 #include <d3d11_4.h>
 
 #include "Common/ShaderStage.hpp"
 #include "Resources/ResourceChains.hpp"
+#include "Resources/ResourceMirrors.hpp"
 #include "Resources/ResourceUpgrades.hpp"
 
 // Resources::Mirrors on D3D11. A texture the rules match gets a mirror at its creation, held in the texture's
@@ -74,9 +76,38 @@ void OnPresent(ID3D11Device* device);
 void InvalidateScaledMirrors(ID3D11Device* device);
 void ReleaseDeviceObjects(ID3D11Device* device);
 
-// Queries
+// Queries and bidirectional mirror/original + view/resource lookups
 ID3D11Resource* FindMirror(ID3D11Resource* resource);
 ID3D11Resource* FindOriginal(ID3D11Resource* mirror);
+ID3D11Resource* GetEffectiveResource(ID3D11Resource* resource);
+ID3D11View* FindMirrorView(ID3D11View* view);
+ID3D11ShaderResourceView* FindMirrorView(ID3D11ShaderResourceView* view);
+ID3D11RenderTargetView* FindMirrorView(ID3D11RenderTargetView* view);
+ID3D11UnorderedAccessView* FindMirrorView(ID3D11UnorderedAccessView* view);
+ID3D11DepthStencilView* FindMirrorView(ID3D11DepthStencilView* view);
+ID3D11View* FindOriginalView(ID3D11View* mirror_view);
+
+template <typename View>
+View* FindOriginalView(View* mirror_view)
+{
+   return static_cast<View*>(FindOriginalView(static_cast<ID3D11View*>(mirror_view)));
+}
+
+template <typename View>
+View* GetEffectiveView(View* view)
+{
+   if (!view || !IsSwapping())
+      return view;
+   if (View* mirror = FindMirrorView(view))
+      return mirror;
+   return view;
+}
+
+void TrackView(ID3D11Resource* resource, ID3D11View* view);
+ID3D11Resource* GetViewResource(ID3D11View* view);
+std::vector<ID3D11View*> GetResourceViews(ID3D11Resource* resource);
+// Propagates direct chains when swapping and resolves copy/resolve targets to their effective resources
+void PrepareCopyTargets(ID3D11DeviceContext* context, ID3D11Resource*& destination, ID3D11Resource*& source);
 std::optional<MirrorSummary> FindMirrorSummary(ID3D11Resource* resource);
 std::optional<ContextScalingSnapshot> GetContextScalingSnapshot(ID3D11DeviceContext* context);
 
@@ -98,6 +129,7 @@ void WriteToMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT 
 // Map/Unmap of a mirrored texture: asserts on CPU reads and converts CPU writes into the mirror at Unmap
 void TrackMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, const D3D11_MAPPED_SUBRESOURCE& mapped);
 void CommitMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource);
+void DiscardMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource);
 // Resolves between a mirror and a texture of another family, which run on the game's textures
 uint32_t GetUnhandledResolves();
 } // namespace D3D11

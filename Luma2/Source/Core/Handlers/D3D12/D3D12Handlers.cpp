@@ -98,8 +98,6 @@ bool RunCall(ID3D12GraphicsCommandList* list, const Call& call)
       if (Trace::DebugDraw::IsActive())
          handled = Trace::DebugDraw::CaptureCallD3D12(original, stages, handled);
 #endif
-      if (Resources::Mirrors::IsNeeded())
-         Resources::Mirrors::D3D12::FinishDrawOrDispatch(list, dispatch);
       return handled;
    };
 #if DEVELOPMENT
@@ -567,21 +565,16 @@ bool PreCopyBufferRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[may
    return false;
 }
 
-bool PreResolveSubresource([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] ID3D12Resource*& destination, [[maybe_unused]] UINT destination_subresource,
-   [[maybe_unused]] ID3D12Resource*& source, [[maybe_unused]] UINT source_subresource, [[maybe_unused]] DXGI_FORMAT& format)
+bool PreResolveSubresource(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, UINT destination_subresource, ID3D12Resource*& source,
+   UINT source_subresource, DXGI_FORMAT& format)
 {
 #if DEVELOPMENT
    if (Trace::Capture::IsCapturing())
       Trace::Capture::D3D12::AddCopy(list, "ResolveSubresource", destination, source,
          {.kind = Trace::Capture::CopyKind::Resolve, .source_subresource = source_subresource, .destination_subresource = destination_subresource, .resolve_format = uint32_t(format)});
 #endif
-   ID3D12Resource* const game_source = source;
-   Resources::Mirrors::D3D12::CopyRegion region = {};
-   if (Resources::Mirrors::IsSwapping())
-      Resources::Mirrors::D3D12::SwapCopy(list, destination, source, region);
-   if (source != game_source)
-      format = Resources::Mirrors::GetResolveFormat(format, game_source->GetDesc().Format, source->GetDesc().Format);
-   return false;
+   return Resources::Mirrors::IsSwapping() &&
+      Resources::Mirrors::D3D12::SwapResolve(list, destination, destination_subresource, source, source_subresource, format);
 }
 
 bool PreClearRenderTargetView([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE& view, [[maybe_unused]] const FLOAT color[4],
@@ -631,9 +624,21 @@ bool PreDraw(ID3D12GraphicsCommandList* list, const Game::D3D12::DrawCall& draw)
    return RunCall(list, draw);
 }
 
+void PostDraw(ID3D12GraphicsCommandList* list)
+{
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D12::FinishDrawOrDispatch(list, false);
+}
+
 bool PreDispatch(ID3D12GraphicsCommandList* list, const Game::D3D12::DispatchCall& dispatch)
 {
    return RunCall(list, dispatch);
+}
+
+void PostDispatch(ID3D12GraphicsCommandList* list)
+{
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D12::FinishDrawOrDispatch(list, true);
 }
 
 // Its draws or dispatches use the pipeline bound: a draw or a dispatch by the pipeline's kind. A command signature changes only the
@@ -647,6 +652,15 @@ bool PreExecuteIndirect(ID3D12GraphicsCommandList* list, const Game::D3D12::Indi
    if (bound.tracked && bound.tracked->shaders[size_t(ShaderStage::Compute)])
       return RunCall(list, Game::D3D12::DispatchCall{.indirect_call = true, .indirect = arguments});
    return RunCall(list, Game::D3D12::DrawCall{.function = Game::D3D12::DrawFunction::ExecuteIndirect, .indirect = arguments});
+}
+
+void PostExecuteIndirect(ID3D12GraphicsCommandList* list)
+{
+   if (!Resources::Mirrors::IsNeeded())
+      return;
+   const Shaders::Variants::D3D12::BoundPipeline bound = Shaders::Variants::D3D12::GetBoundPipeline(list);
+   const bool is_dispatch = bound.tracked && bound.tracked->shaders[size_t(ShaderStage::Compute)];
+   Resources::Mirrors::D3D12::FinishDrawOrDispatch(list, is_dispatch);
 }
 
 // A bundle inherits the list's root arguments: Luma's cbuffers are bound for the variants it may bind
@@ -672,6 +686,7 @@ void PresentD3D12(ID3D12CommandQueue* queue)
          if (Effects::SR::IsNeeded())
             Effects::SR::D3D12::OnPresent(device.Get());
          Resources::Database::D3D12::OnPresent(device.Get());
+         Resources::ConstantCapture::OnPresent();
          Frame::OnPresent(device.Get());
       }
    }

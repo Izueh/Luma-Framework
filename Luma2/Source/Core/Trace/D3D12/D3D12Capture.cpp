@@ -350,6 +350,19 @@ std::vector<std::byte> CopyContents(const std::byte* source, size_t size)
    return std::vector<std::byte>(source, source + size);
 }
 
+std::string GetHeapTypeName(D3D12_HEAP_TYPE type)
+{
+   switch (type)
+   {
+   case D3D12_HEAP_TYPE_DEFAULT: return "Default";
+   case D3D12_HEAP_TYPE_UPLOAD: return "Upload";
+   case D3D12_HEAP_TYPE_READBACK: return "Readback";
+   case D3D12_HEAP_TYPE_CUSTOM: return "Custom";
+   case D3D12_HEAP_TYPE_GPU_UPLOAD: return "GpuUpload";
+   default: return std::to_string(uint32_t(type));
+   }
+}
+
 // A cbuffer at a GPU address, `size` bytes when the binding says (a CBV), otherwise what the shader declares
 ConstantBuffer DescribeConstantBuffer(ShaderStage stage, uint32_t slot, uint32_t space, D3D12_GPU_VIRTUAL_ADDRESS address, uint32_t size, uint32_t declared)
 {
@@ -359,15 +372,18 @@ ConstantBuffer DescribeConstantBuffer(ShaderStage stage, uint32_t slot, uint32_t
    {
       buffer.id = std::format("0x{:X} (GPU address)", address);
       buffer.size = size;
+      buffer.view_size = size;
       return buffer;
    }
    buffer.id = GetObjectId(info->resource);
    buffer.size = uint32_t(info->desc.Width);
+   buffer.heap_type = GetHeapTypeName(info->heap_type);
    const uint64_t offset = address - info->address;
    const uint64_t available = info->desc.Width - offset;
    const uint64_t bound = std::min<uint64_t>(size ? size : declared ? declared
                                                                     : MAX_CONSTANT_BUFFER_BYTES,
       available);
+   buffer.view_size = uint32_t(bound);
    buffer.first_constant = uint32_t(offset / 16);
    buffer.constant_count = uint32_t((bound + 15) / 16);
    if (info->mapped)

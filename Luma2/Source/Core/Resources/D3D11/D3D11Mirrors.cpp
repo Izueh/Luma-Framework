@@ -117,6 +117,67 @@ struct ViewState
    ~ViewState() { CountView(-1); }
 };
 
+struct OriginalViewState
+{
+   ID3D11View* original = nullptr;
+};
+
+struct ResourceViewList
+{
+   std::mutex mutex; // Never held with another
+   ID3D11Resource* resource = nullptr;
+   std::vector<ID3D11View*> views;
+};
+
+struct ResourceViewsState
+{
+   std::shared_ptr<ResourceViewList> list;
+
+   ~ResourceViewsState()
+   {
+      if (!list)
+         return;
+      std::scoped_lock lock(list->mutex);
+      list->resource = nullptr;
+      list->views.clear();
+   }
+};
+
+struct ViewResourceState
+{
+   std::shared_ptr<ResourceViewList> list;
+   ID3D11View* view = nullptr;
+
+   ~ViewResourceState()
+   {
+      if (!list || !view)
+         return;
+      std::scoped_lock lock(list->mutex);
+      std::erase(list->views, view);
+   }
+};
+
+void RegisterViewResource(ID3D11Resource* resource, ID3D11View* view)
+{
+   if (!resource || !view)
+      return;
+   ResourceViewsState* res_state = Hooks::Lifetime::GetState<ResourceViewsState>(resource);
+   if (!res_state)
+   {
+      auto list = std::make_shared<ResourceViewList>();
+      list->resource = resource;
+      res_state = Hooks::Lifetime::SetState<ResourceViewsState>(resource, std::move(list));
+   }
+   if (!res_state || !res_state->list)
+      return;
+   {
+      std::scoped_lock lock(res_state->list->mutex);
+      if (std::ranges::find(res_state->list->views, view) == res_state->list->views.end())
+         res_state->list->views.push_back(view);
+   }
+   Hooks::Lifetime::SetState<ViewResourceState>(view, res_state->list, view);
+}
+
 struct ContextChainState
 {
    std::array<bool, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> ps_srvs_upgraded = {};
@@ -495,6 +556,8 @@ View* CreateMirroredView(ID3D11Device* device, ID3D11Resource* resource, const D
       return nullptr;
    }
    View* raw = static_cast<View*>(mirror_view.Get());
+   Hooks::Lifetime::SetState<OriginalViewState>(mirror_view.Get(), static_cast<ID3D11View*>(view));
+   RegisterViewResource(state->mirror.Get(), mirror_view.Get());
    CountView(1);
    Hooks::Lifetime::SetState<ViewState>(view, std::move(mirror_view), state->mirror.Get(), state->generation);
    return raw;
@@ -505,9 +568,8 @@ View* CreateMirrorViewLazily(View* view)
 {
    if (!view)
       return nullptr;
-   ComPtr<ID3D11Resource> resource;
-   view->GetResource(&resource);
-   const ResourceMirrorState* state = FindMirrorState<OwnedResource>(resource.Get());
+   ID3D11Resource* resource = GetViewResource(view);
+   const ResourceMirrorState* state = FindMirrorState<OwnedResource>(resource);
    if (!state)
       return nullptr;
    ComPtr<ID3D11Device> device;
@@ -518,25 +580,25 @@ View* CreateMirrorViewLazily(View* view)
    {
       D3D11_SHADER_RESOURCE_VIEW_DESC desc;
       view->GetDesc(&desc);
-      return CreateMirroredView(device.Get(), resource.Get(), &desc, view);
+      return CreateMirroredView(device.Get(), resource, &desc, view);
    }
    else if constexpr (std::is_same_v<View, ID3D11RenderTargetView>)
    {
       D3D11_RENDER_TARGET_VIEW_DESC desc;
       view->GetDesc(&desc);
-      return CreateMirroredView(device.Get(), resource.Get(), &desc, view);
+      return CreateMirroredView(device.Get(), resource, &desc, view);
    }
    else if constexpr (std::is_same_v<View, ID3D11UnorderedAccessView>)
    {
       D3D11_UNORDERED_ACCESS_VIEW_DESC desc;
       view->GetDesc(&desc);
-      return CreateMirroredView(device.Get(), resource.Get(), &desc, view);
+      return CreateMirroredView(device.Get(), resource, &desc, view);
    }
    else if constexpr (std::is_same_v<View, ID3D11DepthStencilView>)
    {
       D3D11_DEPTH_STENCIL_VIEW_DESC desc;
       view->GetDesc(&desc);
-      return CreateMirroredView(device.Get(), resource.Get(), &desc, view);
+      return CreateMirroredView(device.Get(), resource, &desc, view);
    }
    else
    {
@@ -545,7 +607,7 @@ View* CreateMirrorViewLazily(View* view)
 }
 
 template <typename View>
-View* FindMirrorView(View* view)
+View* FindMirrorViewImpl(View* view)
 {
    if (!view)
       return nullptr;
@@ -555,9 +617,8 @@ View* FindMirrorView(View* view)
       // Verify the underlying mirror wasn't invalidated/recreated (only possible when scaling is active)
       if (!Scaling::IsNeeded())
          return static_cast<View*>(state->mirror.Get());
-      ComPtr<ID3D11Resource> resource;
-      view->GetResource(&resource);
-      const ResourceMirrorState* mirror = FindMirrorState<OwnedResource>(resource.Get());
+      ID3D11Resource* resource = GetViewResource(view);
+      const ResourceMirrorState* mirror = FindMirrorState<OwnedResource>(resource);
       if (mirror && mirror->mirror.Get() == state->mirror_resource && mirror->generation == state->generation)
          return static_cast<View*>(state->mirror.Get());
       if (!mirror)
@@ -577,7 +638,7 @@ bool Swap(View** views, UINT count)
    bool any = false;
    for (UINT i = 0; i < count; i++)
    {
-      if (View* mirror = FindMirrorView(views[i]))
+      if (View* mirror = FindMirrorViewImpl(views[i]))
       {
          views[i] = mirror;
          any = true;
@@ -586,6 +647,9 @@ bool Swap(View** views, UINT count)
    return any;
 }
 
+// A native CopyResource/CopySubresourceRegion reinterprets raw bits within a compatible typeless format family,
+// whereas a shader blit converts values or scales pixels. We use non-sRGB views here so the shader performs a
+// raw-value copy without applying hardware sRGB decode/encode.
 DXGI_FORMAT GetRawFormat(DXGI_FORMAT format)
 {
    switch (format)
@@ -597,9 +661,13 @@ DXGI_FORMAT GetRawFormat(DXGI_FORMAT format)
    }
 }
 
-ComPtr<ID3D11Texture2D> CreateProxy(ID3D11Device* device, const D3D11_TEXTURE2D_DESC& desc, UINT bind)
+ComPtr<ID3D11Texture2D> CreateProxy(ID3D11Device* device, const D3D11_TEXTURE2D_DESC& desc, UINT bind, UINT width = 0, UINT height = 0)
 {
    D3D11_TEXTURE2D_DESC proxy = desc;
+   if (width > 0)
+      proxy.Width = width;
+   if (height > 0)
+      proxy.Height = height;
    proxy.MipLevels = 1;
    proxy.ArraySize = 1;
    proxy.SampleDesc = {1, 0};
@@ -612,8 +680,13 @@ ComPtr<ID3D11Texture2D> CreateProxy(ID3D11Device* device, const D3D11_TEXTURE2D_
    return texture;
 }
 
-bool ConvertingCopy(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source, bool* out_scaled = nullptr)
+// Converts and/or scales a 2D texture subresource (or partial region) through a shader blit.
+// Resolves MSAA sources first into a single-sample temporary because a standard 2D SRV blit cannot sample MSAA directly.
+bool ConvertingCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, UINT x, UINT y, UINT z,
+   ID3D11Resource* source, UINT source_subresource, const D3D11_BOX* box, bool* out_scaled = nullptr, DXGI_FORMAT resolve_format = DXGI_FORMAT_UNKNOWN)
 {
+   if (z != 0)
+      return false;
    ComPtr<ID3D11Texture2D> source_texture;
    ComPtr<ID3D11Texture2D> destination_texture;
    if (FAILED(source->QueryInterface(IID_PPV_ARGS(&source_texture))) || FAILED(destination->QueryInterface(IID_PPV_ARGS(&destination_texture))))
@@ -622,43 +695,119 @@ bool ConvertingCopy(ID3D11DeviceContext* context, ID3D11Resource* destination, I
    D3D11_TEXTURE2D_DESC destination_desc;
    source_texture->GetDesc(&source_desc);
    destination_texture->GetDesc(&destination_desc);
-   if (destination_desc.SampleDesc.Count != 1 || source_desc.MipLevels != 1 || destination_desc.MipLevels != 1 || source_desc.ArraySize != 1 ||
-      destination_desc.ArraySize != 1)
+   if (destination_desc.SampleDesc.Count != 1)
       return false;
+   const UINT src_mips = std::max(source_desc.MipLevels, 1u);
+   const UINT dst_mips = std::max(destination_desc.MipLevels, 1u);
+   const UINT src_mip = source_subresource % src_mips;
+   const UINT src_slice = source_subresource / src_mips;
+   const UINT dst_mip = destination_subresource % dst_mips;
+   const UINT dst_slice = destination_subresource / dst_mips;
+   if (src_slice >= source_desc.ArraySize || dst_slice >= destination_desc.ArraySize)
+      return false;
+   const UINT src_w = MipSize(source_desc.Width, src_mip);
+   const UINT src_h = MipSize(source_desc.Height, src_mip);
+   const UINT dst_w = MipSize(destination_desc.Width, dst_mip);
+   const UINT dst_h = MipSize(destination_desc.Height, dst_mip);
+   D3D11_BOX src_box = {0, 0, 0, src_w, src_h, 1};
+   if (box)
+   {
+      if (box->left >= box->right || box->top >= box->bottom || box->front >= box->back || box->right > src_w || box->bottom > src_h || box->back > 1)
+         return false;
+      src_box = *box;
+   }
+   const UINT copy_w = src_box.right - src_box.left;
+   const UINT copy_h = src_box.bottom - src_box.top;
+   const bool full_src_box = src_box.left == 0 && src_box.top == 0 && src_box.front == 0 && copy_w == src_w && copy_h == src_h;
+   const bool full_dst = x == 0 && y == 0 && full_src_box;
+   if (!full_dst && (x + copy_w > dst_w || y + copy_h > dst_h))
+      return false;
+
    ComPtr<ID3D11Device> device;
    context->GetDevice(&device);
    ComPtr<ID3D11Texture2D> read = source_texture;
+   UINT read_mip = src_mip;
+   UINT read_slice = src_slice;
+   UINT read_array_size = source_desc.ArraySize;
    if (source_desc.SampleDesc.Count > 1)
    {
+      // Resolve MSAA source first (must be a non-typeless format compatible with the source texture's family)
       D3D11_TEXTURE2D_DESC resolved_desc = source_desc;
-      resolved_desc.Format = GetRawFormat(source_desc.Format);
-      read = CreateProxy(device.Get(), resolved_desc, D3D11_BIND_SHADER_RESOURCE);
+      resolved_desc.Format = resolve_format != DXGI_FORMAT_UNKNOWN ? resolve_format : GetRawFormat(source_desc.Format);
+      read = CreateProxy(device.Get(), resolved_desc, D3D11_BIND_SHADER_RESOURCE, src_w, src_h);
       if (!read)
          return false;
-      context->ResolveSubresource(read.Get(), 0, source_texture.Get(), 0, resolved_desc.Format);
+      context->ResolveSubresource(read.Get(), 0, source_texture.Get(), source_subresource, resolved_desc.Format);
+      read_mip = 0;
+      read_slice = 0;
+      read_array_size = 1;
+      if (!full_src_box)
+      {
+         ComPtr<ID3D11Texture2D> cropped = CreateProxy(device.Get(), resolved_desc, D3D11_BIND_SHADER_RESOURCE, copy_w, copy_h);
+         if (!cropped)
+            return false;
+         context->CopySubresourceRegion(cropped.Get(), 0, 0, 0, 0, read.Get(), 0, &src_box);
+         read = std::move(cropped);
+      }
    }
-   else if (!(source_desc.BindFlags & D3D11_BIND_SHADER_RESOURCE))
+   else if (!full_src_box || !(source_desc.BindFlags & D3D11_BIND_SHADER_RESOURCE))
    {
-      read = CreateProxy(device.Get(), source_desc, D3D11_BIND_SHADER_RESOURCE);
+      read = CreateProxy(device.Get(), source_desc, D3D11_BIND_SHADER_RESOURCE, copy_w, copy_h);
       if (!read)
          return false;
-      context->CopyResource(read.Get(), source_texture.Get());
+      context->CopySubresourceRegion(read.Get(), 0, 0, 0, 0, source_texture.Get(), source_subresource, &src_box);
+      read_mip = 0;
+      read_slice = 0;
+      read_array_size = 1;
    }
+
+   const UINT target_w = full_dst ? dst_w : copy_w;
+   const UINT target_h = full_dst ? dst_h : copy_h;
+   const bool direct_rtv = full_dst && (destination_desc.BindFlags & D3D11_BIND_RENDER_TARGET) != 0;
    ComPtr<ID3D11Texture2D> write = destination_texture;
-   if (!(destination_desc.BindFlags & D3D11_BIND_RENDER_TARGET))
+   UINT write_mip = dst_mip;
+   UINT write_slice = dst_slice;
+   UINT write_array_size = destination_desc.ArraySize;
+   if (!direct_rtv)
    {
-      write = CreateProxy(device.Get(), destination_desc, D3D11_BIND_RENDER_TARGET);
+      write = CreateProxy(device.Get(), destination_desc, D3D11_BIND_RENDER_TARGET, target_w, target_h);
       if (!write)
          return false;
+      write_mip = 0;
+      write_slice = 0;
+      write_array_size = 1;
    }
-   D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {.Format = GetRawFormat(source_desc.Format), .ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D};
-   srv_desc.Texture2D = {0, 1};
-   D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {.Format = GetRawFormat(destination_desc.Format), .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D};
+
+   D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc = {.Format = GetRawFormat(source_desc.Format)};
+   if (read_array_size > 1)
+   {
+      srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2DARRAY;
+      srv_desc.Texture2DArray = {read_mip, 1, read_slice, 1};
+   }
+   else
+   {
+      srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+      srv_desc.Texture2D = {read_mip, 1};
+   }
+
+   D3D11_RENDER_TARGET_VIEW_DESC rtv_desc = {.Format = GetRawFormat(destination_desc.Format)};
+   if (write_array_size > 1)
+   {
+      rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2DARRAY;
+      rtv_desc.Texture2DArray = {write_mip, write_slice, 1};
+   }
+   else
+   {
+      rtv_desc.ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D;
+      rtv_desc.Texture2D = {write_mip};
+   }
+
    ComPtr<ID3D11ShaderResourceView> srv;
    ComPtr<ID3D11RenderTargetView> rtv;
    if (FAILED(device->CreateShaderResourceView(read.Get(), &srv_desc, &srv)) || FAILED(device->CreateRenderTargetView(write.Get(), &rtv_desc, &rtv)))
       return false;
-   const bool same_size = source_desc.Width == destination_desc.Width && source_desc.Height == destination_desc.Height;
+
+   const bool same_size = copy_w == target_w && copy_h == target_h;
    if (!(same_size ? Draw::D3D11::Copy(context, srv.Get(), rtv.Get(), Draw::FULL_GRAPHICS) : Draw::D3D11::Scale(context, srv.Get(), rtv.Get(), Draw::FULL_GRAPHICS)))
       return false;
    if (!same_size)
@@ -668,20 +817,13 @@ bool ConvertingCopy(ID3D11DeviceContext* context, ID3D11Resource* destination, I
          *out_scaled = true;
    }
    if (write != destination_texture)
-      context->CopyResource(destination_texture.Get(), write.Get());
+      context->CopySubresourceRegion(destination_texture.Get(), destination_subresource, x, y, 0, write.Get(), 0, nullptr);
    return true;
 }
 
-bool IsFullTexture2DBox(ID3D11Resource* resource, const D3D11_BOX* box)
+bool ConvertingCopy(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source, bool* out_scaled = nullptr)
 {
-   if (!box)
-      return true;
-   ComPtr<ID3D11Texture2D> texture;
-   if (!resource || FAILED(resource->QueryInterface(IID_PPV_ARGS(&texture))))
-      return false;
-   D3D11_TEXTURE2D_DESC desc;
-   texture->GetDesc(&desc);
-   return box->left == 0 && box->top == 0 && box->front == 0 && box->right == desc.Width && box->bottom == desc.Height && box->back == 1;
+   return ConvertingCopySubresourceRegion(context, destination, 0, 0, 0, 0, source, 0, nullptr, out_scaled);
 }
 
 DXGI_FORMAT GetFormat(ID3D11Resource* resource)
@@ -916,21 +1058,25 @@ void CreateMirror(ID3D11Device* device, const D3D11_TEXTURE3D_DESC1& desc, const
 
 void CreateMirrorView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_SHADER_RESOURCE_VIEW_DESC1* desc, ID3D11ShaderResourceView* view)
 {
+   RegisterViewResource(resource, view);
    CreateMirroredView(device, resource, desc, view);
 }
 
 void CreateMirrorView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_RENDER_TARGET_VIEW_DESC1* desc, ID3D11RenderTargetView* view)
 {
+   RegisterViewResource(resource, view);
    CreateMirroredView(device, resource, desc, view);
 }
 
 void CreateMirrorView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_UNORDERED_ACCESS_VIEW_DESC1* desc, ID3D11UnorderedAccessView* view)
 {
+   RegisterViewResource(resource, view);
    CreateMirroredView(device, resource, desc, view);
 }
 
 void CreateMirrorView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_DEPTH_STENCIL_VIEW_DESC* desc, ID3D11DepthStencilView* view)
 {
+   RegisterViewResource(resource, view);
    CreateMirroredView(device, resource, desc, view);
 }
 
@@ -1492,6 +1638,109 @@ ID3D11Resource* FindOriginal(ID3D11Resource* mirror)
    return Mirrors::FindOriginal(mirror);
 }
 
+ID3D11Resource* GetEffectiveResource(ID3D11Resource* resource)
+{
+   if (!resource || !IsSwapping())
+      return resource;
+   if (ID3D11Resource* mirror = FindMirror(resource))
+      return mirror;
+   return resource;
+}
+
+ID3D11ShaderResourceView* FindMirrorView(ID3D11ShaderResourceView* view)
+{
+   return FindMirrorViewImpl(view);
+}
+
+ID3D11RenderTargetView* FindMirrorView(ID3D11RenderTargetView* view)
+{
+   return FindMirrorViewImpl(view);
+}
+
+ID3D11UnorderedAccessView* FindMirrorView(ID3D11UnorderedAccessView* view)
+{
+   return FindMirrorViewImpl(view);
+}
+
+ID3D11DepthStencilView* FindMirrorView(ID3D11DepthStencilView* view)
+{
+   return FindMirrorViewImpl(view);
+}
+
+ID3D11View* FindMirrorView(ID3D11View* view)
+{
+   if (!view)
+      return nullptr;
+   if (!Scaling::IsNeeded())
+   {
+      if (const ViewState* state = Hooks::Lifetime::GetState<ViewState>(view))
+         return state->mirror.Get();
+      if (!Chains::IsNeeded())
+         return nullptr;
+   }
+   ComPtr<ID3D11ShaderResourceView> srv;
+   if (SUCCEEDED(view->QueryInterface(IID_PPV_ARGS(&srv))))
+      return FindMirrorViewImpl(srv.Get());
+   ComPtr<ID3D11RenderTargetView> rtv;
+   if (SUCCEEDED(view->QueryInterface(IID_PPV_ARGS(&rtv))))
+      return FindMirrorViewImpl(rtv.Get());
+   ComPtr<ID3D11UnorderedAccessView> uav;
+   if (SUCCEEDED(view->QueryInterface(IID_PPV_ARGS(&uav))))
+      return FindMirrorViewImpl(uav.Get());
+   ComPtr<ID3D11DepthStencilView> dsv;
+   if (SUCCEEDED(view->QueryInterface(IID_PPV_ARGS(&dsv))))
+      return FindMirrorViewImpl(dsv.Get());
+   return nullptr;
+}
+
+ID3D11View* FindOriginalView(ID3D11View* mirror_view)
+{
+   if (!mirror_view || !HasAnyMirrors())
+      return nullptr;
+   const OriginalViewState* state = Hooks::Lifetime::GetState<OriginalViewState>(mirror_view);
+   return state ? state->original : nullptr;
+}
+
+void TrackView(ID3D11Resource* resource, ID3D11View* view)
+{
+   RegisterViewResource(resource, view);
+}
+
+ID3D11Resource* GetViewResource(ID3D11View* view)
+{
+   if (!view)
+      return nullptr;
+   if (const ViewResourceState* state = Hooks::Lifetime::GetState<ViewResourceState>(view); state && state->list)
+   {
+      std::scoped_lock lock(state->list->mutex);
+      if (state->list->resource)
+         return state->list->resource;
+   }
+   ComPtr<ID3D11Resource> resource;
+   view->GetResource(&resource);
+   return resource.Get();
+}
+
+std::vector<ID3D11View*> GetResourceViews(ID3D11Resource* resource)
+{
+   if (!resource)
+      return {};
+   const ResourceViewsState* state = Hooks::Lifetime::GetState<ResourceViewsState>(resource);
+   if (!state || !state->list)
+      return {};
+   std::scoped_lock lock(state->list->mutex);
+   return state->list->views;
+}
+
+void PrepareCopyTargets(ID3D11DeviceContext* context, ID3D11Resource*& destination, ID3D11Resource*& source)
+{
+   if (!IsSwapping())
+      return;
+   TryPropagateDirectChain(context, destination, source);
+   destination = GetEffectiveResource(destination);
+   source = GetEffectiveResource(source);
+}
+
 std::optional<MirrorSummary> FindMirrorSummary(ID3D11Resource* resource)
 {
    if (!resource)
@@ -1592,10 +1841,9 @@ bool RedirectCopyRegion(ID3D11DeviceContext* context, ID3D11Resource* destinatio
          context->CopySubresourceRegion(plan.destination, destination_subresource, x, y, z, plan.source, source_subresource, use_box);
       return true;
    }
-   if (IsFullTexture2DBox(source, box) && x == 0 && y == 0 && z == 0 && destination_subresource == 0 && source_subresource == 0 &&
-      ConvertingCopy(context, plan.destination, plan.source, out_scaled))
+   if (ConvertingCopySubresourceRegion(context, plan.destination, destination_subresource, x, y, z, plan.source, source_subresource, box, out_scaled))
       return true;
-   ASSERT_ONCE_MSG(false, "A region copy between a mirror and a texture of another format isn't converted: the game's textures are copied, the mirror is stale");
+   ASSERT_ONCE_MSG(false, "A region copy between a mirror and a texture of another format couldn't be converted: the game's textures are copied, the mirror is stale");
    return false;
 }
 
@@ -1610,10 +1858,17 @@ bool RedirectResolve(ID3D11DeviceContext* context, ID3D11Resource* destination, 
       return false;
    const DXGI_FORMAT destination_format = GetFormat(plan.destination);
    const DXGI_FORMAT source_format = GetFormat(plan.source);
+   // ResolveSubresource requires source and destination to share the same typeless format family (stricter than CopyResource,
+   // which allows cross-family copies of equal-bit-size formats). When a mirror crosses families, resolve into a temporary
+   // single-sample texture of the source's family and blit-convert into the destination.
    if (GetTypeless(destination_format) != GetTypeless(source_format) || destination_format == DXGI_FORMAT_UNKNOWN)
    {
+      const DXGI_FORMAT resolve_format = GetResolveFormat(format, GetFormat(source), source_format);
+      if (ConvertingCopySubresourceRegion(context, plan.destination, destination_subresource, 0, 0, 0, plan.source, source_subresource, nullptr, nullptr,
+             resolve_format))
+         return true;
       unhandled_resolves++;
-      LUMA_UNIMPLEMENTED("Resources::Mirrors resolving between a mirror and a texture of another format");
+      ASSERT_ONCE_MSG(false, "Resolving between a mirror and a texture of another format failed to convert: the game's textures are resolved");
       return false;
    }
    const DXGI_FORMAT resolve_format = GetResolveFormat(format, GetFormat(source), destination_format);
@@ -1677,9 +1932,8 @@ bool RedirectClearView(ID3D11DeviceContext* context, ID3D11View* view, const FLO
    const D3D11_RECT* use_rects = rects;
    if (rects && rect_count > 0)
    {
-      ComPtr<ID3D11Resource> res;
-      view->GetResource(&res);
-      if (const ResourceMirrorState* state = FindMirrorState<OwnedResource>(res.Get()); state && state->is_scaled)
+      ID3D11Resource* res = GetViewResource(view);
+      if (const ResourceMirrorState* state = FindMirrorState<OwnedResource>(res); state && state->is_scaled)
       {
          const Math::float2 scale = {
             float(state->info.width) / float(std::max(state->original_info.width, 1u)),
@@ -1744,6 +1998,7 @@ void TrackMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, U
    }
 }
 
+// Must run while the game's Map() pointer (mapped.pData) is still valid, before the native Unmap() invalidates it.
 void CommitMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource)
 {
    MappedMirrors* state = Hooks::Lifetime::GetState<MappedMirrors>(context);
@@ -1756,6 +2011,22 @@ void CommitMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, 
          const D3D11_MAPPED_SUBRESOURCE mapped = state->entries[i].mapped;
          state->entries.erase(state->entries.begin() + ptrdiff_t(i));
          WriteToMirror(context, resource, subresource, nullptr, mapped.pData, mapped.RowPitch, mapped.DepthPitch);
+         return;
+      }
+   }
+}
+
+// Discards a tracked mapping without reading mapped.pData (used when a game event took ownership of Unmap).
+void DiscardMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource)
+{
+   MappedMirrors* state = Hooks::Lifetime::GetState<MappedMirrors>(context);
+   if (!state || state->entries.empty())
+      return;
+   for (size_t i = 0; i < state->entries.size(); i++)
+   {
+      if (state->entries[i].resource == resource && state->entries[i].subresource == subresource)
+      {
+         state->entries.erase(state->entries.begin() + ptrdiff_t(i));
          return;
       }
    }

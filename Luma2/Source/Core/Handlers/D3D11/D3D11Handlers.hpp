@@ -100,7 +100,9 @@ bool PreClearUnorderedAccessViewFloat(ID3D11DeviceContext* context, ID3D11Unorde
 bool PreClearView(ID3D11DeviceContext* context, ID3D11View* view, const FLOAT color[4], const D3D11_RECT* rects, UINT rect_count);
 
 bool PreDraw(ID3D11DeviceContext* context, const DrawCall& draw);
+void PostDraw(ID3D11DeviceContext* context);
 bool PreDispatch(ID3D11DeviceContext* context, const DispatchCall& dispatch);
+void PostDispatch(ID3D11DeviceContext* context);
 
 // Deferred contexts
 void PostCreateDeferredContext(ID3D11Device* device, ID3D11DeviceContext* context);

@@ -58,7 +58,9 @@ bool IsDebugLayerAdded(UINT game_flags, UINT flags)
    return (flags & D3D11_CREATE_DEVICE_DEBUG) && !(game_flags & D3D11_CREATE_DEVICE_DEBUG);
 }
 
-// The level the game gets when it passes no list
+// A null or empty feature-level list defaults to 11.0 (not 11.1) in D3D11, so SR negotiation must supply an
+// explicit list to request 11.1. HideRaisedFeatureLevel then preserves the highest level the game asked for
+// (11.0 when null) so raising to 11.1 does not alter the game's own feature-level branches.
 D3D_FEATURE_LEVEL GetGameFeatureLevel(const D3D_FEATURE_LEVEL* feature_levels, UINT feature_level_count)
 {
    return (feature_levels && feature_level_count > 0) ? feature_levels[0] : D3D_FEATURE_LEVEL_11_0;
@@ -237,14 +239,15 @@ HRESULT WINAPI CreateDeviceAndSwapChain(IDXGIAdapter* adapter, D3D_DRIVER_TYPE d
          requested_swapchain_desc = *swapchain_desc;
          has_requested_swapchain_desc = true;
          game_swapchain_desc = *swapchain_desc;
-         // The device doesn't exist yet: the game's D3D11 callback is the only one this can be
-         Handlers::PreCreateSwapChain(nullptr, game_swapchain_desc);
+         // The device doesn't exist yet: pass Api::D3D11 explicitly because creator is null here
+         Handlers::PreCreateSwapChain(nullptr, game_swapchain_desc, Api::D3D11);
          swapchain_desc = &game_swapchain_desc;
       }
    }
    HRESULT result;
    {
-      // What the runtime does inside this isn't the game's: it creates the swapchain before Luma has seen the device
+      // Suppress nested IDXGIFactory::CreateSwapChain handling: the runtime creates the swapchain internally
+      // before Luma has seen or initialized the device. We report the device first below, then the swapchain.
       Scope::Guard scope;
       result = original_create_device_and_swapchain(adapter, driver_type, software, flags, feature_levels, feature_level_count, sdk_version,
          swapchain_desc, swapchain, device, feature_level, immediate_context);

@@ -150,45 +150,60 @@ void STDMETHODCALLTYPE OMSetStencilRef(ID3D12GraphicsCommandList* list, UINT ste
 // Draws and dispatches: the handler may skip the game's call (a draw event, the trace)
 void STDMETHODCALLTYPE DrawInstanced(ID3D12GraphicsCommandList* list, UINT vertex_count, UINT instance_count, UINT start_vertex, UINT start_instance)
 {
-   if (Detours::IsGameCall(_ReturnAddress()) &&
+   const bool game_call = Detours::IsGameCall(_ReturnAddress());
+   const bool handled = game_call &&
       Detours::Report(&Handlers::PreDraw, list,
-         Game::D3D12::DrawCall{.function = DrawFunction::DrawInstanced, .vertex_or_index_count = vertex_count, .instance_count = instance_count, .start_vertex_or_index = start_vertex, .start_instance = start_instance}))
-      return;
-   original<&DrawInstanced>(list, vertex_count, instance_count, start_vertex, start_instance);
+         Game::D3D12::DrawCall{.function = DrawFunction::DrawInstanced, .vertex_or_index_count = vertex_count, .instance_count = instance_count, .start_vertex_or_index = start_vertex, .start_instance = start_instance});
+   if (!handled)
+      original<&DrawInstanced>(list, vertex_count, instance_count, start_vertex, start_instance);
+   if (game_call)
+      Detours::Report(&Handlers::PostDraw, list);
 }
 
 void STDMETHODCALLTYPE DrawIndexedInstanced(ID3D12GraphicsCommandList* list, UINT index_count, UINT instance_count, UINT start_index, INT base_vertex,
    UINT start_instance)
 {
-   if (Detours::IsGameCall(_ReturnAddress()) &&
+   const bool game_call = Detours::IsGameCall(_ReturnAddress());
+   const bool handled = game_call &&
       Detours::Report(&Handlers::PreDraw, list,
-         Game::D3D12::DrawCall{.function = DrawFunction::DrawIndexedInstanced, .vertex_or_index_count = index_count, .instance_count = instance_count, .start_vertex_or_index = start_index, .base_vertex = base_vertex, .start_instance = start_instance}))
-      return;
-   original<&DrawIndexedInstanced>(list, index_count, instance_count, start_index, base_vertex, start_instance);
+         Game::D3D12::DrawCall{.function = DrawFunction::DrawIndexedInstanced, .vertex_or_index_count = index_count, .instance_count = instance_count, .start_vertex_or_index = start_index, .base_vertex = base_vertex, .start_instance = start_instance});
+   if (!handled)
+      original<&DrawIndexedInstanced>(list, index_count, instance_count, start_index, base_vertex, start_instance);
+   if (game_call)
+      Detours::Report(&Handlers::PostDraw, list);
 }
 
 void STDMETHODCALLTYPE DispatchMesh(ID3D12GraphicsCommandList6* list, UINT x, UINT y, UINT z)
 {
-   if (Detours::IsGameCall(_ReturnAddress()) &&
-      Detours::Report(&Handlers::PreDraw, static_cast<ID3D12GraphicsCommandList*>(list), Game::D3D12::DrawCall{.function = DrawFunction::DispatchMesh, .mesh_groups = {x, y, z}}))
-      return;
-   original<&DispatchMesh>(list, x, y, z);
+   const bool game_call = Detours::IsGameCall(_ReturnAddress());
+   const bool handled = game_call &&
+      Detours::Report(&Handlers::PreDraw, static_cast<ID3D12GraphicsCommandList*>(list), Game::D3D12::DrawCall{.function = DrawFunction::DispatchMesh, .mesh_groups = {x, y, z}});
+   if (!handled)
+      original<&DispatchMesh>(list, x, y, z);
+   if (game_call)
+      Detours::Report(&Handlers::PostDraw, static_cast<ID3D12GraphicsCommandList*>(list));
 }
 
 void STDMETHODCALLTYPE Dispatch(ID3D12GraphicsCommandList* list, UINT x, UINT y, UINT z)
 {
-   if (Detours::IsGameCall(_ReturnAddress()) && Detours::Report(&Handlers::PreDispatch, list, Game::D3D12::DispatchCall{.x = x, .y = y, .z = z}))
-      return;
-   original<&Dispatch>(list, x, y, z);
+   const bool game_call = Detours::IsGameCall(_ReturnAddress());
+   const bool handled = game_call && Detours::Report(&Handlers::PreDispatch, list, Game::D3D12::DispatchCall{.x = x, .y = y, .z = z});
+   if (!handled)
+      original<&Dispatch>(list, x, y, z);
+   if (game_call)
+      Detours::Report(&Handlers::PostDispatch, list);
 }
 
 void STDMETHODCALLTYPE ExecuteIndirect(ID3D12GraphicsCommandList* list, ID3D12CommandSignature* signature, UINT max_count, ID3D12Resource* arguments,
    UINT64 arguments_offset, ID3D12Resource* count_buffer, UINT64 count_offset)
 {
-   if (Detours::IsGameCall(_ReturnAddress()) &&
-      Detours::Report(&Handlers::PreExecuteIndirect, list, Game::D3D12::IndirectArguments{signature, max_count, arguments, arguments_offset, count_buffer, count_offset}))
-      return;
-   original<&ExecuteIndirect>(list, signature, max_count, arguments, arguments_offset, count_buffer, count_offset);
+   const bool game_call = Detours::IsGameCall(_ReturnAddress());
+   const bool handled = game_call &&
+      Detours::Report(&Handlers::PreExecuteIndirect, list, Game::D3D12::IndirectArguments{signature, max_count, arguments, arguments_offset, count_buffer, count_offset});
+   if (!handled)
+      original<&ExecuteIndirect>(list, signature, max_count, arguments, arguments_offset, count_buffer, count_offset);
+   if (game_call)
+      Detours::Report(&Handlers::PostExecuteIndirect, list);
 }
 
 void STDMETHODCALLTYPE ExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle)

@@ -102,9 +102,12 @@ bool PreClearUnorderedAccessView(ID3D12GraphicsCommandList* list, D3D12_GPU_DESC
    ClearValues values, UINT rect_count, const D3D12_RECT* rects);
 
 bool PreDraw(ID3D12GraphicsCommandList* list, const Game::D3D12::DrawCall& draw);
+void PostDraw(ID3D12GraphicsCommandList* list);
 bool PreDispatch(ID3D12GraphicsCommandList* list, const Game::D3D12::DispatchCall& dispatch);
+void PostDispatch(ID3D12GraphicsCommandList* list);
 // A draw or a dispatch by the pipeline bound
 bool PreExecuteIndirect(ID3D12GraphicsCommandList* list, const Game::D3D12::IndirectArguments& arguments);
+void PostExecuteIndirect(ID3D12GraphicsCommandList* list);
 void PreExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle);
 
 // Presenting thread, at a D3D12 present

@@ -113,6 +113,36 @@ bool Game::D3D12::ReadBoundCBuffer(const Call& call, ShaderStage stage, UINT slo
    return Luma::Resources::ConstantCapture::D3D12::ReadBoundCBuffer(call.list, stage, slot, destination);
 }
 
+ID3D12Resource* Game::D3D12::FindMirror(ID3D12Resource* resource)
+{
+   return Luma::Resources::Mirrors::D3D12::FindMirror(resource);
+}
+
+ID3D12Resource* Game::D3D12::FindOriginal(ID3D12Resource* mirror)
+{
+   return Luma::Resources::Mirrors::D3D12::FindOriginal(mirror);
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE Game::D3D12::FindMirrorHandle(D3D12_CPU_DESCRIPTOR_HANDLE handle)
+{
+   return Luma::Resources::Mirrors::D3D12::FindMirrorHandle(handle);
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE Game::D3D12::FindOriginalHandle(D3D12_CPU_DESCRIPTOR_HANDLE mirror_handle)
+{
+   return Luma::Resources::Mirrors::D3D12::FindOriginalHandle(mirror_handle);
+}
+
+ID3D12Resource* Game::D3D12::GetDescriptorResource(D3D12_CPU_DESCRIPTOR_HANDLE handle)
+{
+   return Luma::Resources::Mirrors::D3D12::GetDescriptorResource(handle);
+}
+
+std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> Game::D3D12::GetResourceDescriptors(ID3D12Resource* resource)
+{
+   return Luma::Resources::Mirrors::D3D12::GetResourceDescriptors(resource);
+}
+
 namespace {
 struct FullscreenPsoKey
 {

@@ -12,6 +12,8 @@
 #include "Game/D3D11/D3D11DrawEvents.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Handlers/Handlers.hpp"
+#include "Hooks/HookScope.hpp"
+#include "Hooks/ObjectLifetime.hpp"
 #include "Resources/D3D11/D3D11ConstantCapture.hpp"
 #include "Resources/D3D11/D3D11LumaCBuffers.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
@@ -99,6 +101,30 @@ Shaders::StageSet FulfilAfterEvents(ID3D11DeviceContext* context, Shaders::Stage
       return before;
    return Shaders::Variants::D3D11::BindRequestedResources(context, stages - before) | before;
 }
+
+void OnTrackedMirrorResourceDestroyed(IUnknown* device, const IUnknown* resource)
+{
+   Hooks::Scope::Guard scope;
+   OnResourceDestroyed(static_cast<ID3D11Device*>(device), static_cast<const ID3D11Resource*>(resource));
+}
+
+void OnTrackedMirrorViewDestroyed(IUnknown* device, const IUnknown* view)
+{
+   Hooks::Scope::Guard scope;
+   OnViewDestroyed(static_cast<ID3D11Device*>(device), static_cast<const ID3D11View*>(view));
+}
+
+void TrackMirrorResourceDestruction(ID3D11Device* device, ID3D11Resource* original)
+{
+   if (ID3D11Resource* mirror = Resources::Mirrors::D3D11::FindMirror(original))
+      Hooks::Lifetime::Track(mirror, device, &OnTrackedMirrorResourceDestroyed);
+}
+
+void TrackMirrorViewDestruction(ID3D11Device* device, ID3D11View* original)
+{
+   if (ID3D11View* mirror = Resources::Mirrors::D3D11::FindMirrorView(original))
+      Hooks::Lifetime::Track(mirror, device, &OnTrackedMirrorViewDestroyed);
+}
 } // namespace
 
 void PreCreateDevice(UINT& flags, const D3D_FEATURE_LEVEL*& feature_levels, UINT& feature_level_count)
@@ -154,7 +180,10 @@ void PreCreateTexture1D(ID3D11Device*, D3D11_TEXTURE1D_DESC&, const D3D11_SUBRES
 void PostCreateTexture1D(ID3D11Device* device, const D3D11_TEXTURE1D_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture1D* texture)
 {
    if (Resources::Mirrors::IsNeeded())
+   {
       Resources::Mirrors::D3D11::CreateMirror(device, desc, initial_data, texture);
+      TrackMirrorResourceDestruction(device, texture);
+   }
 }
 
 void PreCreateTexture2D(ID3D11Device* device, D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA*& initial_data)
@@ -164,9 +193,14 @@ void PreCreateTexture2D(ID3D11Device* device, D3D11_TEXTURE2D_DESC1& desc, const
 
 void PostCreateTexture2D(ID3D11Device* device, const D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture2D* texture)
 {
+   ID3D11Texture2D* effective = texture;
    if (Resources::Mirrors::IsNeeded())
+   {
       Resources::Mirrors::D3D11::CreateMirror(device, desc, initial_data, texture);
-   Game::Registry::Call(GameEvents().on_init_texture_2d, device, desc, initial_data, texture);
+      TrackMirrorResourceDestruction(device, texture);
+      effective = static_cast<ID3D11Texture2D*>(Resources::Mirrors::D3D11::GetEffectiveResource(texture));
+   }
+   Game::Registry::Call(GameEvents().on_init_texture_2d, device, desc, initial_data, effective);
 }
 
 void PreCreateTexture3D(ID3D11Device*, D3D11_TEXTURE3D_DESC1&, const D3D11_SUBRESOURCE_DATA*&) {}
@@ -174,7 +208,10 @@ void PreCreateTexture3D(ID3D11Device*, D3D11_TEXTURE3D_DESC1&, const D3D11_SUBRE
 void PostCreateTexture3D(ID3D11Device* device, const D3D11_TEXTURE3D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture3D* texture)
 {
    if (Resources::Mirrors::IsNeeded())
+   {
       Resources::Mirrors::D3D11::CreateMirror(device, desc, initial_data, texture);
+      TrackMirrorResourceDestruction(device, texture);
+   }
 }
 
 void PostOpenSharedResource(ID3D11Device*, ID3D11Resource*) {}
@@ -188,36 +225,80 @@ void PreCreateShaderResourceView(ID3D11Device*, ID3D11Resource*, std::optional<D
 
 void PostCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_SHADER_RESOURCE_VIEW_DESC1* desc, ID3D11ShaderResourceView* view)
 {
+   ID3D11Resource* effective_resource = resource;
+   ID3D11ShaderResourceView* effective_view = view;
    if (Resources::Mirrors::IsNeeded())
+   {
       Resources::Mirrors::D3D11::CreateMirrorView(device, resource, desc, view);
-   Game::Registry::Call(GameEvents().on_init_shader_resource_view, device, resource, desc, view);
+      TrackMirrorViewDestruction(device, view);
+      effective_resource = Resources::Mirrors::D3D11::GetEffectiveResource(resource);
+      effective_view = Resources::Mirrors::D3D11::GetEffectiveView(view);
+   }
+   else
+   {
+      Resources::Mirrors::D3D11::TrackView(resource, view);
+   }
+   Game::Registry::Call(GameEvents().on_init_shader_resource_view, device, effective_resource, desc, effective_view);
 }
 
 void PreCreateRenderTargetView(ID3D11Device*, ID3D11Resource*, std::optional<D3D11_RENDER_TARGET_VIEW_DESC1>&) {}
 
 void PostCreateRenderTargetView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_RENDER_TARGET_VIEW_DESC1* desc, ID3D11RenderTargetView* view)
 {
+   ID3D11Resource* effective_resource = resource;
+   ID3D11RenderTargetView* effective_view = view;
    if (Resources::Mirrors::IsNeeded())
+   {
       Resources::Mirrors::D3D11::CreateMirrorView(device, resource, desc, view);
-   Game::Registry::Call(GameEvents().on_init_render_target_view, device, resource, desc, view);
+      TrackMirrorViewDestruction(device, view);
+      effective_resource = Resources::Mirrors::D3D11::GetEffectiveResource(resource);
+      effective_view = Resources::Mirrors::D3D11::GetEffectiveView(view);
+   }
+   else
+   {
+      Resources::Mirrors::D3D11::TrackView(resource, view);
+   }
+   Game::Registry::Call(GameEvents().on_init_render_target_view, device, effective_resource, desc, effective_view);
 }
 
 void PreCreateUnorderedAccessView(ID3D11Device*, ID3D11Resource*, std::optional<D3D11_UNORDERED_ACCESS_VIEW_DESC1>&) {}
 
 void PostCreateUnorderedAccessView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_UNORDERED_ACCESS_VIEW_DESC1* desc, ID3D11UnorderedAccessView* view)
 {
+   ID3D11Resource* effective_resource = resource;
+   ID3D11UnorderedAccessView* effective_view = view;
    if (Resources::Mirrors::IsNeeded())
+   {
       Resources::Mirrors::D3D11::CreateMirrorView(device, resource, desc, view);
-   Game::Registry::Call(GameEvents().on_init_unordered_access_view, device, resource, desc, view);
+      TrackMirrorViewDestruction(device, view);
+      effective_resource = Resources::Mirrors::D3D11::GetEffectiveResource(resource);
+      effective_view = Resources::Mirrors::D3D11::GetEffectiveView(view);
+   }
+   else
+   {
+      Resources::Mirrors::D3D11::TrackView(resource, view);
+   }
+   Game::Registry::Call(GameEvents().on_init_unordered_access_view, device, effective_resource, desc, effective_view);
 }
 
 void PreCreateDepthStencilView(ID3D11Device*, ID3D11Resource*, std::optional<D3D11_DEPTH_STENCIL_VIEW_DESC>&) {}
 
 void PostCreateDepthStencilView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_DEPTH_STENCIL_VIEW_DESC* desc, ID3D11DepthStencilView* view)
 {
+   ID3D11Resource* effective_resource = resource;
+   ID3D11DepthStencilView* effective_view = view;
    if (Resources::Mirrors::IsNeeded())
+   {
       Resources::Mirrors::D3D11::CreateMirrorView(device, resource, desc, view);
-   Game::Registry::Call(GameEvents().on_init_depth_stencil_view, device, resource, desc, view);
+      TrackMirrorViewDestruction(device, view);
+      effective_resource = Resources::Mirrors::D3D11::GetEffectiveResource(resource);
+      effective_view = Resources::Mirrors::D3D11::GetEffectiveView(view);
+   }
+   else
+   {
+      Resources::Mirrors::D3D11::TrackView(resource, view);
+   }
+   Game::Registry::Call(GameEvents().on_init_depth_stencil_view, device, effective_resource, desc, effective_view);
 }
 
 void OnViewDestroyed(ID3D11Device* device, const ID3D11View* view)
@@ -310,37 +391,37 @@ bool PreCSSetUnorderedAccessViews(ID3D11DeviceContext* context, UINT start, UINT
    return false;
 }
 
-// The game's event first: Core swaps in the mirrors of what it binds in the end
+// Core swaps mirrors first so the game's event sees the effective views (matching draw-time OMGetRenderTargets)
 bool PreOMSetRenderTargets(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views, ID3D11DepthStencilView*& depth_stencil)
 {
-   if (Game::Registry::Call(GameEvents().on_bind_render_targets, context, count, views, depth_stencil))
-      return true;
    if (Resources::Mirrors::IsNeeded() && Resources::Mirrors::IsSwapping())
    {
-      Resources::Mirrors::D3D11::SwapViews(views, count);
+      if (views)
+         Resources::Mirrors::D3D11::SwapViews(views, count);
       Resources::Mirrors::D3D11::SwapView(depth_stencil);
    }
-   return false;
+   return Game::Registry::Call(GameEvents().on_bind_render_targets, context, count, views, depth_stencil);
 }
 
 bool PreOMSetRenderTargetsAndUnorderedAccessViews(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views,
    ID3D11DepthStencilView*& depth_stencil, UINT uav_start, UINT uav_count, ID3D11UnorderedAccessView** uavs, const UINT* initial_counts)
 {
-   if (Game::Registry::Call(GameEvents().on_bind_render_targets_and_unordered_access_views, context, count, views, depth_stencil, uav_start, uav_count, uavs,
-          initial_counts))
-      return true;
    if (Resources::Mirrors::IsNeeded() && Resources::Mirrors::IsSwapping())
    {
-      // Null arrays (and D3D11_KEEP_* counts) keep what's bound
-      if (views && count != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
+      // D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL preserves both RTVs and the DSV.
+      // By contrast, count == 0 with views == nullptr unbinds RTVs while still binding a supplied DSV (depth-only pass),
+      // so depth_stencil must be swapped independently of whether `views` is null.
+      if (count != D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL)
       {
-         Resources::Mirrors::D3D11::SwapViews(views, count);
+         if (views)
+            Resources::Mirrors::D3D11::SwapViews(views, count);
          Resources::Mirrors::D3D11::SwapView(depth_stencil);
       }
       if (uavs && uav_count != D3D11_KEEP_UNORDERED_ACCESS_VIEWS)
-         Resources::Mirrors::D3D11::SwapViews(uavs, uav_count);
+         Resources::Mirrors::D3D11::SwapViews(context, ShaderStage::Pixel, uav_start, uavs, uav_count);
    }
-   return false;
+   return Game::Registry::Call(GameEvents().on_bind_render_targets_and_unordered_access_views, context, count, views, depth_stencil, uav_start, uav_count, uavs,
+      initial_counts);
 }
 
 void PostRSSetViewports(ID3D11DeviceContext* context, UINT count, const D3D11_VIEWPORT* viewports)
@@ -424,12 +505,22 @@ void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subres
    Game::Registry::Call(GameEvents().on_map, context, resource, subresource, type, flags, mapped);
 }
 
+// Both the game's on_unmap and Core's constant capture / mapped mirror commit must finish while the Map() pointer (pData)
+// is still valid, before native Unmap() invalidates it. on_unmap runs first so any edits it makes to mapped bytes are seen
+// by Core; if it returns true (takes ownership of Unmap), Core discards its tracked entries without reading pData.
 bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource)
 {
+   if (Game::Registry::Call(GameEvents().on_unmap, context, resource, subresource))
+   {
+      Resources::ConstantCapture::D3D11::DiscardMapped(context, resource);
+      if (Resources::Mirrors::IsNeeded())
+         Resources::Mirrors::D3D11::DiscardMappedMirror(context, resource, subresource);
+      return true;
+   }
    Resources::ConstantCapture::D3D11::OnUnmap(context, resource);
    if (Resources::Mirrors::IsNeeded())
       Resources::Mirrors::D3D11::CommitMappedMirror(context, resource, subresource);
-   return Game::Registry::Call(GameEvents().on_unmap, context, resource, subresource);
+   return false;
 }
 
 void PostUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource)
@@ -465,7 +556,11 @@ bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource
 
 bool PreCopyResource(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source)
 {
-   if (Game::Registry::Call(GameEvents().on_copy_resource, context, destination, source))
+   ID3D11Resource* effective_dst = destination;
+   ID3D11Resource* effective_src = source;
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::PrepareCopyTargets(context, effective_dst, effective_src);
+   if (Game::Registry::Call(GameEvents().on_copy_resource, context, effective_dst, effective_src))
       return true;
 #if DEVELOPMENT
    if (Trace::Capture::IsCapturing())
@@ -479,8 +574,12 @@ bool PreCopyResource(ID3D11DeviceContext* context, ID3D11Resource* destination, 
 bool PreCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, UINT x, UINT y, UINT z,
    ID3D11Resource* source, UINT source_subresource, const D3D11_BOX* box, UINT copy_flags)
 {
-   if (Game::Registry::Call(GameEvents().on_copy_subresource_region, context, destination, destination_subresource, x, y, z, source, source_subresource, box,
-          copy_flags))
+   ID3D11Resource* effective_dst = destination;
+   ID3D11Resource* effective_src = source;
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::PrepareCopyTargets(context, effective_dst, effective_src);
+   if (Game::Registry::Call(GameEvents().on_copy_subresource_region, context, effective_dst, destination_subresource, x, y, z, effective_src,
+          source_subresource, box, copy_flags))
       return true;
 #if DEVELOPMENT
    if (Trace::Capture::IsCapturing())
@@ -505,7 +604,11 @@ bool PreCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* dest
 bool PreResolveSubresource(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, ID3D11Resource* source,
    UINT source_subresource, DXGI_FORMAT format)
 {
-   if (Game::Registry::Call(GameEvents().on_resolve_subresource, context, destination, destination_subresource, source, source_subresource, format))
+   ID3D11Resource* effective_dst = destination;
+   ID3D11Resource* effective_src = source;
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::PrepareCopyTargets(context, effective_dst, effective_src);
+   if (Game::Registry::Call(GameEvents().on_resolve_subresource, context, effective_dst, destination_subresource, effective_src, source_subresource, format))
       return true;
 #if DEVELOPMENT
    if (Trace::Capture::IsCapturing())
@@ -519,7 +622,8 @@ bool PreResolveSubresource(ID3D11DeviceContext* context, ID3D11Resource* destina
 
 bool PreClearRenderTargetView(ID3D11DeviceContext* context, ID3D11RenderTargetView* view, const FLOAT color[4])
 {
-   if (Game::Registry::Call(GameEvents().on_clear_render_target_view, context, view, color))
+   ID3D11RenderTargetView* effective_view = Resources::Mirrors::IsNeeded() ? Resources::Mirrors::D3D11::GetEffectiveView(view) : view;
+   if (Game::Registry::Call(GameEvents().on_clear_render_target_view, context, effective_view, color))
       return true;
 #if DEVELOPMENT
    if (Trace::Capture::IsCapturing())
@@ -566,7 +670,8 @@ bool PreClearUnorderedAccessViewFloat([[maybe_unused]] ID3D11DeviceContext* cont
 
 bool PreClearView(ID3D11DeviceContext* context, ID3D11View* view, const FLOAT color[4], const D3D11_RECT* rects, UINT rect_count)
 {
-   if (Game::Registry::Call(GameEvents().on_clear_view, context, view, color, rects, rect_count))
+   ID3D11View* effective_view = Resources::Mirrors::IsNeeded() ? Resources::Mirrors::D3D11::GetEffectiveView(view) : view;
+   if (Game::Registry::Call(GameEvents().on_clear_view, context, effective_view, color, rects, rect_count))
       return true;
 #if DEVELOPMENT
    if (Trace::Capture::IsCapturing())
@@ -600,8 +705,6 @@ bool RunCall(ID3D11DeviceContext* context, const Call& call)
       if (Trace::DebugDraw::IsActive())
          handled = Trace::DebugDraw::CaptureCallD3D11(original, stages, handled);
 #endif
-      if (Resources::Mirrors::IsNeeded())
-         Resources::Mirrors::D3D11::FinishDrawOrDispatch(context, dispatch);
       return handled;
    };
 #if DEVELOPMENT
@@ -628,9 +731,21 @@ bool PreDraw(ID3D11DeviceContext* context, const DrawCall& draw)
    return RunCall(context, draw);
 }
 
+void PostDraw(ID3D11DeviceContext* context)
+{
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::FinishDrawOrDispatch(context, false);
+}
+
 bool PreDispatch(ID3D11DeviceContext* context, const DispatchCall& dispatch)
 {
    return RunCall(context, dispatch);
+}
+
+void PostDispatch(ID3D11DeviceContext* context)
+{
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::FinishDrawOrDispatch(context, true);
 }
 
 void PostCreateDeferredContext(ID3D11Device* device, ID3D11DeviceContext* context)
@@ -692,6 +807,7 @@ void PresentD3D11(ID3D11Device* device)
    if (Effects::SR::IsNeeded())
       Effects::SR::D3D11::OnPresent(device);
    Resources::Database::D3D11::OnPresent(device);
+   Resources::ConstantCapture::OnPresent();
    Frame::OnPresent(device);
    Resources::Database::D3D11::UpdateShaderObjects(device);
 }

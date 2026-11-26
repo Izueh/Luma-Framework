@@ -15,8 +15,8 @@ Behaviour that differs for the same feature. Verdict: **intended** (decided, Gui
 | Sampler mirrors | made at `OnInitSampler` 7172 for the current offset, all made again when the offset changes | made at creation; for a new offset at the next present, binds keep the old mirror until then | `Resources/D3D11/D3D11Samplers.cpp` | intended (G6) |
 | Sampler mirror desc | Publishing: modes 3 to 5; a mirror even when nothing changes | mode 4 only; no mirror when the desc would be equal | `Resources/SamplerMirrors.hpp` `GetMirrorDesc` | intended (Step 4 notes) |
 | Copy compatibility | R11G11B10 and R9G9B9E5 counted compatible | same typeless family or two 8 bit RGBA/BGRA | `Utils/DXGI/DXGIFormat.cpp` | intended (§17) |
-| Region copies between formats | converted (`OnCopyResource_Internal` 8304) | converted only for a whole single subresource, else asserts and copies the originals | `Resources/D3D11/D3D11Mirrors.cpp` | to check |
-| Resolve between families | resolved through a converted temporary (8435) | `LUMA_UNIMPLEMENTED`, counted (`unimplemented.resolves_between_formats`) | `D3D11Mirrors.cpp` `RedirectResolve` | to check (Persona and Prey candidates) |
+| Region copies between formats | converted (`OnCopyResource_Internal` 8304) | converted for 2D subresources and partial regions via shader blit | `Resources/D3D11/D3D11Mirrors.cpp` | parity restored |
+| Resolve between families | resolved through a converted temporary (8435) | resolved into a temporary single-sample texture and blit-converted | `D3D11Mirrors.cpp` `RedirectResolve` | parity restored |
 | CPU uploads into mirrors | 8 bit RGBA/BGRA to RGBA16F | also R10G10B10A2 and R11G11B10, pitches kept | `Utils/DXGI/DXGIFormat.cpp` | intended (§17) |
 | `Map` of upgraded textures | handled per region (8003) | not handled: matched textures are GPU-only | `D3D11Mirrors.cpp` | to check (a game mapping a staging-like RT) |
 | Writes while upgrades are off | n/a (no runtime toggle) | render targets written while off leave a stale mirror until rewritten | `D3D11Mirrors.cpp` | intended (Step 4 B) |

@@ -1,5 +1,6 @@
 #include "Resources/ConstantCapture.hpp"
 
+#include <atomic>
 #include <vector>
 
 namespace Luma {
@@ -14,6 +15,7 @@ struct RegisteredCallback
 
 Options options;
 std::vector<RegisteredCallback> write_callbacks;
+std::atomic<bool> paused_for_frame = false;
 } // namespace
 
 void SetOptions(const Options& value)
@@ -44,6 +46,21 @@ void DispatchWrite(Device device, uint32_t byte_size, std::span<const std::byte>
       if (entry.byte_size == 0 || entry.byte_size == byte_size)
          entry.callback(device, bytes);
    }
+}
+
+void PauseForFrame()
+{
+   paused_for_frame.store(true, std::memory_order_relaxed);
+}
+
+bool IsPausedForFrame()
+{
+   return paused_for_frame.load(std::memory_order_relaxed);
+}
+
+void OnPresent()
+{
+   paused_for_frame.store(false, std::memory_order_relaxed);
 }
 
 bool IsNeeded()

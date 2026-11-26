@@ -209,9 +209,12 @@ void ReportInitSwapchain(IDXGISwapChain* swapchain, const Presenter& presenter, 
 }
 } // namespace
 
-void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc)
+void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc, std::optional<Api> known_api)
 {
-   const std::optional<Api> api = GetCreatorApi(creator);
+   // D3D11CreateDeviceAndSwapChain creates the device and swapchain together so `creator` is null,
+   // but the caller already knows it is D3D11 and passes `known_api`.
+   const std::optional<Api> api =
+      (known_api && Game::Registry::GetSupportedApis().Has(*known_api)) ? known_api : GetCreatorApi(creator);
    if (!api)
       return;
    if (HasCreateSwapchainEvent(*api))

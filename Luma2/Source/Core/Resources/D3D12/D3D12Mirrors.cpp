@@ -20,6 +20,7 @@
 #include "Hooks/HookScope.hpp"
 #include "Hooks/ObjectLifetime.hpp"
 #include "Log/Log.hpp"
+#include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Resources/D3D12/D3D12HeapTail.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
 #include "Resources/ResourceChains.hpp"
@@ -184,6 +185,7 @@ struct Slot
 // Game CPU handles (not shader-visible) to the mirror's descriptor they stand for
 std::shared_mutex handles_mutex; // Before pools->mutex
 std::map<uint64_t, std::shared_ptr<Slot>> handles;
+std::unordered_map<uint64_t, uint64_t> mirror_to_original_handle;
 
 // Tracked CPU views of unmirrored 2D textures (only populated when Chains::IsNeeded()), for backfill on lazy mirror creation
 struct TrackedUnmirroredView
@@ -434,14 +436,24 @@ void Forget(uint64_t handle)
    if (entry_count.load(std::memory_order_relaxed) == 0)
       return;
    std::unique_lock lock(handles_mutex);
-   if (handles.erase(handle))
+   if (const auto it = handles.find(handle); it != handles.end())
+   {
+      if (it->second)
+         mirror_to_original_handle.erase(it->second->handle);
+      handles.erase(it);
       entry_count--;
+   }
 }
 
 void Remember(uint64_t handle, std::shared_ptr<Slot> slot)
 {
    std::unique_lock lock(handles_mutex);
+   const uint64_t mirror_handle = slot ? slot->handle : 0;
+   if (const auto it = handles.find(handle); it != handles.end() && it->second)
+      mirror_to_original_handle.erase(it->second->handle);
    auto [it, added] = handles.insert_or_assign(handle, std::move(slot));
+   if (mirror_handle)
+      mirror_to_original_handle[mirror_handle] = handle;
    entry_count += added;
 }
 
@@ -961,6 +973,88 @@ ID3D12Resource* FindMirror(ID3D12Resource* resource)
 ID3D12Resource* FindOriginal(ID3D12Resource* mirror)
 {
    return Mirrors::FindOriginal(mirror);
+}
+
+ID3D12Resource* GetEffectiveResource(ID3D12Resource* resource)
+{
+   if (!resource || !IsSwapping())
+      return resource;
+   if (ID3D12Resource* mirror = FindMirror(resource))
+      return mirror;
+   return resource;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE FindMirrorHandle(D3D12_CPU_DESCRIPTOR_HANDLE handle)
+{
+   if (!handle.ptr)
+      return {0};
+   if (const std::shared_ptr<Slot> slot = Find(handle.ptr); slot && !slot->sampler)
+      return {SIZE_T(slot->handle)};
+   return {0};
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE FindOriginalHandle(D3D12_CPU_DESCRIPTOR_HANDLE mirror_handle)
+{
+   if (!mirror_handle.ptr || entry_count.load(std::memory_order_relaxed) == 0)
+      return {0};
+   std::shared_lock lock(handles_mutex);
+   const auto it = mirror_to_original_handle.find(mirror_handle.ptr);
+   return it != mirror_to_original_handle.end() ? D3D12_CPU_DESCRIPTOR_HANDLE{SIZE_T(it->second)} : D3D12_CPU_DESCRIPTOR_HANDLE{0};
+}
+
+ID3D12Resource* GetDescriptorResource(D3D12_CPU_DESCRIPTOR_HANDLE handle)
+{
+   if (!handle.ptr)
+      return nullptr;
+   if (entry_count.load(std::memory_order_relaxed) != 0)
+   {
+      std::shared_lock lock(handles_mutex);
+      if (const auto it = handles.find(handle.ptr); it != handles.end() && it->second && !it->second->sampler)
+         return it->second->original_resource;
+      if (const auto rev = mirror_to_original_handle.find(handle.ptr); rev != mirror_to_original_handle.end())
+      {
+         if (const auto it = handles.find(rev->second); it != handles.end() && it->second && !it->second->sampler)
+            return FindMirror(it->second->original_resource);
+      }
+   }
+   {
+      std::scoped_lock lock(unmirrored_views_mutex);
+      if (const auto it = unmirrored_by_handle.find(handle.ptr); it != unmirrored_by_handle.end())
+         return it->second.resource;
+   }
+   if (const std::optional<Descriptors::D3D12::Descriptor> desc = Descriptors::D3D12::Read(handle))
+      return desc->resource;
+   return nullptr;
+}
+
+std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> GetResourceDescriptors(ID3D12Resource* resource)
+{
+   std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> result;
+   if (!resource)
+      return result;
+   ID3D12Resource* original = FindOriginal(resource);
+   const bool query_mirror = original != nullptr;
+   ID3D12Resource* match_original = query_mirror ? original : resource;
+   if (entry_count.load(std::memory_order_relaxed) != 0)
+   {
+      std::shared_lock lock(handles_mutex);
+      for (const auto& [game_handle, slot] : handles)
+      {
+         if (!slot || slot->sampler || slot->original_resource != match_original)
+            continue;
+         result.push_back({SIZE_T(query_mirror ? slot->handle : game_handle)});
+      }
+   }
+   if (!query_mirror)
+   {
+      std::scoped_lock lock(unmirrored_views_mutex);
+      if (const auto it = unmirrored_by_resource.find(resource); it != unmirrored_by_resource.end())
+      {
+         for (uint64_t h : it->second)
+            result.push_back({SIZE_T(h)});
+      }
+   }
+   return result;
 }
 
 std::optional<MirrorSummary> FindMirrorSummary(ID3D12Resource* resource)
@@ -1510,6 +1604,81 @@ bool SwapCopy(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, ID3
       Log::Warning("Mirrors: a copy between a {} mirror and a {} texture without one couldn't run through Luma's copy pass on D3D12, the game's textures are copied",
          Utils::Format::GetName(GetFormat(plan.destination_mirrored ? plan.destination : plan.source)),
          Utils::Format::GetName(GetFormat(plan.destination_mirrored ? source : destination)));
+   return false;
+}
+
+bool SwapResolve(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, UINT destination_subresource, ID3D12Resource*& source,
+   UINT source_subresource, DXGI_FORMAT& format)
+{
+   if (!list || !destination || !source)
+      return false;
+   TryQueueDirectChain(list, destination, source);
+   const CopyPlan<ID3D12Resource> plan = PlanCopy(destination, source, &FindMirror, &GetFormat);
+   if (plan.action == CopyAction::Original)
+      return false;
+   const DXGI_FORMAT dst_format = GetFormat(plan.destination);
+   const DXGI_FORMAT src_format = GetFormat(plan.source);
+   const bool same_family = Utils::Format::DXGI::GetTypeless(dst_format) == Utils::Format::DXGI::GetTypeless(src_format) && dst_format != DXGI_FORMAT_UNKNOWN;
+   if (same_family && SameDimensions2D(plan.destination, plan.source))
+   {
+      if (plan.source != source)
+         format = GetResolveFormat(format, GetFormat(source), src_format);
+      destination = plan.destination;
+      source = plan.source;
+      return false;
+   }
+   // Cross-family MSAA resolve: resolve plan.source into a temporary single-sample texture of its own family,
+   // then blit-convert into plan.destination via ConvertingCopy.
+   ComPtr<ID3D12Device> device;
+   if (FAILED(list->GetDevice(IID_PPV_ARGS(&device))) || !device)
+      return false;
+   const D3D12_RESOURCE_DESC src_desc = plan.source->GetDesc();
+   if (src_desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || src_desc.SampleDesc.Count <= 1 || source_subresource >= src_desc.MipLevels)
+      return false;
+   const DXGI_FORMAT resolve_format = GetResolveFormat(format, GetFormat(source), src_format);
+   if (resolve_format == DXGI_FORMAT_UNKNOWN)
+      return false;
+   D3D12_RESOURCE_DESC temp_desc = src_desc;
+   temp_desc.Alignment = 0;
+   temp_desc.Width = std::max<UINT64>(src_desc.Width >> source_subresource, 1);
+   temp_desc.Height = std::max<UINT>(src_desc.Height >> source_subresource, 1);
+   temp_desc.DepthOrArraySize = 1;
+   temp_desc.MipLevels = 1;
+   temp_desc.Format = resolve_format;
+   temp_desc.SampleDesc = {1, 0};
+   temp_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
+   const D3D12_HEAP_PROPERTIES heap = {.Type = D3D12_HEAP_TYPE_DEFAULT};
+   ComPtr<ID3D12Resource> resolved;
+   {
+      Hooks::Scope::Guard scope;
+      if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &temp_desc, D3D12_RESOURCE_STATE_RESOLVE_DEST, nullptr, IID_PPV_ARGS(&resolved))) ||
+         !resolved)
+         return false;
+      Hooks::Lifetime::D3D12::Object temp_holder;
+      Hooks::Lifetime::D3D12::Replace(temp_holder, resolved);
+      Hooks::Lifetime::D3D12::Reference(list, temp_holder);
+      list->ResolveSubresource(resolved.Get(), 0, plan.source, source_subresource, resolve_format);
+      const D3D12_RESOURCE_BARRIER to_copy[] = {
+         Transition(resolved.Get(), 0, D3D12_RESOURCE_STATE_RESOLVE_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE),
+         Transition(plan.destination, destination_subresource, D3D12_RESOURCE_STATE_RESOLVE_DEST, D3D12_RESOURCE_STATE_COPY_DEST),
+      };
+      list->ResourceBarrier(UINT(std::size(to_copy)), to_copy);
+   }
+   const CopyRegion region = {.convertible = true, .destination_subresource = destination_subresource, .source_subresource = 0};
+   const bool ok = ConvertingCopy(list, plan.destination, resolved.Get(), region, nullptr);
+   {
+      Hooks::Scope::Guard scope;
+      const D3D12_RESOURCE_BARRIER back = Transition(plan.destination, destination_subresource, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_RESOLVE_DEST);
+      list->ResourceBarrier(1, &back);
+   }
+   if (ok)
+   {
+      converted_copies++;
+      return true;
+   }
+   if (unhandled_copies++ == 0)
+      Log::Warning("Mirrors: a cross-format resolve between {} and {} couldn't run through Luma's copy pass on D3D12, the game's textures are resolved",
+         Utils::Format::GetName(src_format), Utils::Format::GetName(dst_format));
    return false;
 }
 

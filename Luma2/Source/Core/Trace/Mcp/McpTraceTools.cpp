@@ -185,6 +185,8 @@ struct TraceConstantBuffer
    std::optional<std::vector<TraceField>> fields;
    std::optional<bool> fields_truncated;
    std::optional<uint32_t> space;
+   std::optional<std::string> heap_type;
+   std::optional<uint32_t> view_size;
 };
 
 struct TraceSampler
@@ -779,6 +781,10 @@ std::string TraceGet(const Request& request)
       }
       if (buffer.space != 0)
          entry.space = buffer.space;
+      if (!buffer.heap_type.empty())
+         entry.heap_type = buffer.heap_type;
+      if (buffer.view_size != 0)
+         entry.view_size = buffer.view_size;
       if (buffer.contents.empty())
          continue;
       std::span<const std::byte> contents = buffer.contents;

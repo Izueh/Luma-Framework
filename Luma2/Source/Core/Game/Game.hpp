@@ -5,6 +5,7 @@
 #include <span>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <Windows.h>
 
@@ -158,6 +159,8 @@ std::optional<uint32_t> RegisterRuntimeTexture(std::string_view name,
 namespace ConstantCapture {
 using BufferWriteCallback = Luma::Resources::ConstantCapture::BufferWriteCallback;
 void RegisterWriteCallback(uint32_t byte_size, BufferWriteCallback callback);
+
+inline void PauseForFrame() { Luma::Resources::ConstantCapture::PauseForFrame(); }
 } // namespace ConstantCapture
 } // namespace Resources
 
@@ -241,6 +244,28 @@ ID3D11Resource* GetResource(ID3D11Device* device, uint64_t name_hash);
 ID3D11RenderTargetView* GetRTV(ID3D11Device* device, uint64_t name_hash);
 ID3D11ShaderResourceView* GetSRV(ID3D11Device* device, uint64_t name_hash);
 ID3D11UnorderedAccessView* GetUAV(ID3D11Device* device, uint64_t name_hash);
+// Mirror/original and view/resource helpers (null if the object has no mirror or is not a mirror)
+ID3D11Resource* FindMirror(ID3D11Resource* resource);
+ID3D11Resource* FindOriginal(ID3D11Resource* mirror);
+ID3D11View* FindMirrorView(ID3D11View* view);
+ID3D11View* FindOriginalView(ID3D11View* mirror_view);
+
+template <typename View>
+   requires std::derived_from<View, ID3D11View>
+View* FindMirror(View* view)
+{
+   return static_cast<View*>(FindMirrorView(view));
+}
+
+template <typename View>
+   requires std::derived_from<View, ID3D11View>
+View* FindOriginal(View* mirror_view)
+{
+   return static_cast<View*>(FindOriginalView(mirror_view));
+}
+
+ID3D11Resource* GetViewResource(ID3D11View* view);
+std::vector<ID3D11View*> GetResourceViews(ID3D11Resource* resource);
 } // namespace D3D11
 
 // For the D3D12 draw events, inside a Luma scope.
@@ -264,6 +289,13 @@ bool ReadBoundCBuffer(const Call& call, ShaderStage stage, UINT slot, std::span<
 // Draws a fullscreen quad using Luma's compiled VS/PS into a RuntimeTexture entry (using the game's bound extended root signature and bindings)
 bool DrawFullscreenToEntry(const Call& call, uint64_t vertex_shader_hash, uint64_t pixel_shader_hash, uint64_t target_entry_hash, DXGI_FORMAT target_format,
    Math::uint2 viewport_size);
+// Mirror/original and descriptor/resource helpers (null / {0} if the object has no mirror or is not tracked)
+ID3D12Resource* FindMirror(ID3D12Resource* resource);
+ID3D12Resource* FindOriginal(ID3D12Resource* mirror);
+D3D12_CPU_DESCRIPTOR_HANDLE FindMirrorHandle(D3D12_CPU_DESCRIPTOR_HANDLE handle);
+D3D12_CPU_DESCRIPTOR_HANDLE FindOriginalHandle(D3D12_CPU_DESCRIPTOR_HANDLE mirror_handle);
+ID3D12Resource* GetDescriptorResource(D3D12_CPU_DESCRIPTOR_HANDLE handle);
+std::vector<D3D12_CPU_DESCRIPTOR_HANDLE> GetResourceDescriptors(ID3D12Resource* resource);
 } // namespace D3D12
 } // namespace Game
 } // namespace Luma
