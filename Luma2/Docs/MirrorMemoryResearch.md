@@ -89,9 +89,9 @@ Suggested order: **C on D3D12 first** (no view objects, barriers already rewritt
 ## Research step (before building)
 
 1. Query, on the owner's GPUs and both APIs: the tiled tier, `FORMAT_SUPPORT2_TILED` for every format FF7R's rules upgrade, tiled MSAA quality levels, depth formats.
-2. Prototype B for FF7R's creation-time mirrors on D3D12 (committed render targets only), Development only, behind a setting.
-3. Measure: VRAM before and after (the Info tab, `luma_status`), and count misses (a debug counter on reads from a virtual original that has no mirror swapped in).
-4. Check that `GetDesc` of the original is unchanged on both APIs, that no clone of a virtual original is created without memory, and whether FF7R ever calls `GetHeapProperties` on one.
+2. Audit the D3D12 boundary list of C against `Hooks/VtableSlots.h` and the game's middleware, then prototype C for FF7R's creation-time mirrors on D3D12 (committed render targets only), Development only, behind a setting. B is the fallback for a resource C can't cover.
+3. Measure: VRAM before and after (the Info tab, `luma_status`), and with C, any crash in the runtime names the boundary that's missing.
+4. Check what FF7R calls on its render targets that Luma doesn't hook yet (a Development counter on proxies reaching an unhooked path is impossible, so: an API trace of one frame and the loading of a level), and whether it calls `GetHeapProperties`, `MakeResident` or `Evict` on them.
 5. Captures in PIX and RenderDoc with the prototype on, noting what fails (fixing tools is later).
 
 ## Sources
