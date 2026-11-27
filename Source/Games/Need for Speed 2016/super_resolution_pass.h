@@ -105,7 +105,7 @@ inline bool SuperResolutionPass::UpdateSettings(SR::SuperResolutionImpl& sr, SR:
    settings.mvs_x_scale = -0.5f * float(render_size.width);
    settings.mvs_y_scale = 0.5f * float(render_size.height);
    settings.auto_exposure = true;
-   settings.render_preset = 0;
+   settings.render_preset = dlss_render_preset; // Picked in Luma's menu
    return sr.UpdateSettings(instance, context, settings);
 }
 
