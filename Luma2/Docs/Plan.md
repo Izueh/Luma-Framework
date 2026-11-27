@@ -974,13 +974,13 @@ Parts, in order. Each is one brief:
 
 | Part | What | Needs the game |
 |---|---|---|
-| 8A | Release UI audit against 1.0 FF7R (next) | yes |
-| 8B | 1.0 FLIP goldens (Step 7 debt) | yes, 1.0 and 2.0 builds |
+| 8A | Release UI audit against 1.0 FF7R (built) | yes |
+| 8B | 1.0 FLIP goldens (Step 7 debt, next) | yes, 1.0 and 2.0 builds |
 | 8C | Overlays matrix, Present order policy | yes, owner's session |
 | 8D | RenderDoc, OptiScale | yes |
 | 8E | Detached UI (ImGui multi-viewport) | yes |
 
-### 8A: Release UI audit against 1.0 FF7R (next)
+### 8A: Release UI audit against 1.0 FF7R
 
 **Goal:** what a FF7R user sees in a Publishing build matches 1.0: the settings, the About tab, and the warnings 1.0 showed users, as toasts.
 
@@ -1017,6 +1017,31 @@ Parts, in order. Each is one brief:
 * FF7R credits list ReShade again.
 * Verified: 158/158 doctest cases (Development-Release; the Tests project builds only in Development, as before: MCP is Development-only), FF7R and Trails in the Sky in Development-Release, Test-Release and Publishing-Release, `Test-Luma2Template.ps1`, `Check-Luma2Rules.ps1` (only the existing `ReShade/AddonEvents.cpp` `<d3d11.h>` violation).
 * Not verified: the Verify list above, in the game.
+
+### 8B: 1.0 goldens (Step 7 debt)
+
+**Goal:** FF7R's image on 2.0 measured against 1.0 on D3D11, then D3D12 against D3D11: the goldens Steps 1 to 7 left open, captured once and compared with FLIP.
+
+**Read first:** Part A of Step 4 (the goldens plan), the Step 5 and Step 7 Verify lists, `Scripts/luma_mcp.py` (`luma_read_resource`, `luma_compare`, `luma_golden`: baselines in `%LUMA_BASELINES%`, else `%LOCALAPPDATA%\luma-mcp\baselines`, as `<case>/<backend>`).
+
+**Decide first:**
+* **Reference build: 1.0 at `5788b1c6`** (Step 1's choice). Checked 2026-11-26: it contains every 1.0 FF7R change on `upstream`, so nothing newer exists. Built in its own worktree, Development-Release (MCP), never deployed by the build (`LUMA_*` cleared), packaged with that commit's `Scripts/package.ps1`.
+* **One output mode for both: scRGB.** 1.0's Development build forces scRGB (Publishing is HDR10), so 2.0 is set to scRGB for the HDR cases; SDR is a second case on both.
+* **SR off for the image goldens** (the game's TAA, as 1.0 with SR None), render scale 100%, so the cases don't depend on jitter. DLSS inputs are compared separately with `luma_sr_capture` (Step 7 Verify), not as a FLIP case.
+* **Scene:** one save, camera still, game paused where it can be, settings written into the notes. Each capture taken twice for the noise floor; `max_flip` set from it.
+
+**Cases** (a `luma_golden` case each, backends `d3d11-1.0`, `d3d11`, `d3d12`):
+* `ff7r-tonemap-input`, `ff7r-tonemap-output`, `ff7r-lut`: from the trace entry of `Output_HDR` (1.0's hashes) and its inputs.
+* `ff7r-final-scrgb`, `ff7r-final-sdr`: the swapchain (`view=swapchain`).
+* `ff7r-bloom`, `ff7r-dof`: the bloom apply and DoF outputs (Step 6's Verify).
+
+**Steps:**
+1. The agent builds 1.0 at `5788b1c6` and packages it to a scratch folder.
+2. The owner swaps it into the game (`dxgi.dll` and `Luma/` beside it; 2.0's `Luma/Shaders` and `Luma/Luma.toml` aren't read by 1.0) and runs `-dx11` at the save. The agent captures every case over MCP and accepts them as `d3d11-1.0`.
+3. The owner puts the 2.0 Development-Release build back. The agent captures the same cases on `-dx11` and on D3D12 and runs `luma_golden` against `d3d11-1.0`, and D3D12 against `d3d11`.
+4. A case above its noise floor is a finding: the FLIP heat map, the trace of the pass, the cause. Fix what's a 2.0 bug; record what's intended in section 17.
+
+**Verify (once):** every case within its threshold on D3D11 against 1.0, and D3D12 within the D3D11 threshold against D3D11, or each difference explained in the notes.
 
 **Notes (hook manager hardening, `plans/hook-manager-hardening.md` Phases 0 to 3, done before this step, not verified in a game):**
 * Luma initializes in the loader notification, as 1.0 does. `System::Modules::FindExport` never loads a dll, so the hook manager is safe under the loader lock.
