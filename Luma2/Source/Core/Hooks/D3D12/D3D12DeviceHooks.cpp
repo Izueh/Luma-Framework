@@ -226,6 +226,20 @@ void ReportView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, K
    Detours::Report(&Handlers::PostCreateView, device, destination, descriptor);
 }
 
+// A view of a texture upgraded in place: in its format (each view desc starts with its format)
+template <typename Desc>
+const Desc* PrepareView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, Kind kind, ID3D12Resource* resource, const Desc* desc, Desc& storage, const void* caller)
+{
+   if (!Detours::IsGameCall(caller))
+      return desc;
+   const DXGI_FORMAT format = Detours::Report(&Handlers::PreCreateView, device, destination, kind, resource, desc ? desc->Format : DXGI_FORMAT_UNKNOWN, desc != nullptr);
+   if (format == DXGI_FORMAT_UNKNOWN || !desc)
+      return desc;
+   storage = *desc;
+   storage.Format = format;
+   return &storage;
+}
+
 void STDMETHODCALLTYPE CreateConstantBufferView(ID3D12Device* device, const D3D12_CONSTANT_BUFFER_VIEW_DESC* desc, D3D12_CPU_DESCRIPTOR_HANDLE destination)
 {
    original<&CreateConstantBufferView>(device, desc, destination);
@@ -235,28 +249,32 @@ void STDMETHODCALLTYPE CreateConstantBufferView(ID3D12Device* device, const D3D1
 void STDMETHODCALLTYPE CreateShaderResourceView(ID3D12Device* device, ID3D12Resource* resource, const D3D12_SHADER_RESOURCE_VIEW_DESC* desc,
    D3D12_CPU_DESCRIPTOR_HANDLE destination)
 {
-   original<&CreateShaderResourceView>(device, resource, desc, destination);
+   D3D12_SHADER_RESOURCE_VIEW_DESC storage;
+   original<&CreateShaderResourceView>(device, resource, PrepareView(device, destination, Kind::ShaderResource, resource, desc, storage, _ReturnAddress()), destination);
    ReportView(device, destination, Kind::ShaderResource, resource, desc, sizeof(*desc), _ReturnAddress());
 }
 
 void STDMETHODCALLTYPE CreateUnorderedAccessView(ID3D12Device* device, ID3D12Resource* resource, ID3D12Resource* counter,
    const D3D12_UNORDERED_ACCESS_VIEW_DESC* desc, D3D12_CPU_DESCRIPTOR_HANDLE destination)
 {
-   original<&CreateUnorderedAccessView>(device, resource, counter, desc, destination);
+   D3D12_UNORDERED_ACCESS_VIEW_DESC storage;
+   original<&CreateUnorderedAccessView>(device, resource, counter, PrepareView(device, destination, Kind::UnorderedAccess, resource, desc, storage, _ReturnAddress()), destination);
    ReportView(device, destination, Kind::UnorderedAccess, resource, desc, sizeof(*desc), _ReturnAddress());
 }
 
 void STDMETHODCALLTYPE CreateRenderTargetView(ID3D12Device* device, ID3D12Resource* resource, const D3D12_RENDER_TARGET_VIEW_DESC* desc,
    D3D12_CPU_DESCRIPTOR_HANDLE destination)
 {
-   original<&CreateRenderTargetView>(device, resource, desc, destination);
+   D3D12_RENDER_TARGET_VIEW_DESC storage;
+   original<&CreateRenderTargetView>(device, resource, PrepareView(device, destination, Kind::RenderTarget, resource, desc, storage, _ReturnAddress()), destination);
    ReportView(device, destination, Kind::RenderTarget, resource, desc, sizeof(*desc), _ReturnAddress());
 }
 
 void STDMETHODCALLTYPE CreateDepthStencilView(ID3D12Device* device, ID3D12Resource* resource, const D3D12_DEPTH_STENCIL_VIEW_DESC* desc,
    D3D12_CPU_DESCRIPTOR_HANDLE destination)
 {
-   original<&CreateDepthStencilView>(device, resource, desc, destination);
+   D3D12_DEPTH_STENCIL_VIEW_DESC storage;
+   original<&CreateDepthStencilView>(device, resource, PrepareView(device, destination, Kind::DepthStencil, resource, desc, storage, _ReturnAddress()), destination);
    ReportView(device, destination, Kind::DepthStencil, resource, desc, sizeof(*desc), _ReturnAddress());
 }
 
@@ -322,18 +340,54 @@ HRESULT ReportResource(const DepthGuard& guard, HRESULT result, void** resource,
    return result;
 }
 
+// The handlers may upgrade the game's texture in place: its desc, its clear value's format, and no castable formats (the upgraded format's
+// size wouldn't allow the game's). `prepare(desc, clear)` reports the handler, `call(desc, clear, upgraded)` creates; an upgraded creation
+// that fails is made again as the game asked.
+template <typename Desc, typename Prepare, typename Call>
+HRESULT CreateResource(ID3D12Device* device, const Desc* desc, const D3D12_CLEAR_VALUE* clear, std::optional<D3D12_RESOURCE_STATES> state, void** resource,
+   const void* caller, Prepare prepare, Call call)
+{
+   DepthGuard guard(device_depth);
+   Desc upgraded_desc = {};
+   D3D12_CLEAR_VALUE upgraded_clear = {};
+   bool upgraded = false;
+   if (desc && Detours::IsGameCall(guard, caller))
+   {
+      D3D12_RESOURCE_DESC base;
+      std::memcpy(&base, desc, sizeof(base));
+      if (clear)
+         upgraded_clear = *clear;
+      upgraded = prepare(base, clear ? &upgraded_clear : nullptr);
+      if (upgraded)
+      {
+         upgraded_desc = *desc;
+         std::memcpy(&upgraded_desc, &base, sizeof(base));
+      }
+   }
+   HRESULT result = upgraded ? call(&upgraded_desc, clear ? &upgraded_clear : nullptr, true) : call(desc, clear, false);
+   if (upgraded && FAILED(result))
+   {
+      Detours::Report(&Handlers::PostCreateResource, device, nullptr, state, clear, false);
+      result = call(desc, clear, false);
+   }
+   else if (upgraded && !GetCreated<ID3D12Resource>(result, resource))
+   {
+      // Parameter-validation calls (ppvResource == nullptr) return S_FALSE without creating a resource
+      Detours::Report(&Handlers::PostCreateResource, device, nullptr, state, clear, false);
+   }
+   return ReportResource(guard, result, resource, device, state, clear, false, caller);
+}
+
 HRESULT STDMETHODCALLTYPE CreateCommittedResource(ID3D12Device* device, const D3D12_HEAP_PROPERTIES* heap, D3D12_HEAP_FLAGS flags, const D3D12_RESOURCE_DESC* desc,
    D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear, REFIID riid, void** resource)
 {
-   DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreateCommittedResource>(device, heap, flags, desc, state, clear, riid, resource), resource, device, state, clear, false, _ReturnAddress());
+   return CreateResource(device, desc, clear, state, resource, _ReturnAddress(), [&](D3D12_RESOURCE_DESC& prepared, D3D12_CLEAR_VALUE* prepared_clear) { return Detours::Report(&Handlers::PreCreateCommittedResource, device, prepared, prepared_clear, heap, flags); }, [&](const D3D12_RESOURCE_DESC* final_desc, const D3D12_CLEAR_VALUE* final_clear, bool) { return original<&CreateCommittedResource>(device, heap, flags, final_desc, state, final_clear, riid, resource); });
 }
 
 HRESULT STDMETHODCALLTYPE CreatePlacedResource(ID3D12Device* device, ID3D12Heap* heap, UINT64 offset, const D3D12_RESOURCE_DESC* desc, D3D12_RESOURCE_STATES state,
    const D3D12_CLEAR_VALUE* clear, REFIID riid, void** resource)
 {
-   DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreatePlacedResource>(device, heap, offset, desc, state, clear, riid, resource), resource, device, state, clear, false, _ReturnAddress());
+   return CreateResource(device, desc, clear, state, resource, _ReturnAddress(), [&](D3D12_RESOURCE_DESC& prepared, D3D12_CLEAR_VALUE* prepared_clear) { return Detours::Report(&Handlers::PreCreatePlacedResource, device, prepared, prepared_clear, heap, offset); }, [&](const D3D12_RESOURCE_DESC* final_desc, const D3D12_CLEAR_VALUE* final_clear, bool) { return original<&CreatePlacedResource>(device, heap, offset, final_desc, state, final_clear, riid, resource); });
 }
 
 HRESULT STDMETHODCALLTYPE CreateReservedResource(ID3D12Device* device, const D3D12_RESOURCE_DESC* desc, D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear,
@@ -346,8 +400,7 @@ HRESULT STDMETHODCALLTYPE CreateReservedResource(ID3D12Device* device, const D3D
 HRESULT STDMETHODCALLTYPE CreateCommittedResource1(ID3D12Device4* device, const D3D12_HEAP_PROPERTIES* heap, D3D12_HEAP_FLAGS flags, const D3D12_RESOURCE_DESC* desc,
    D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear, ID3D12ProtectedResourceSession* session, REFIID riid, void** resource)
 {
-   DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreateCommittedResource1>(device, heap, flags, desc, state, clear, session, riid, resource), resource, device, state, clear, false, _ReturnAddress());
+   return CreateResource(device, desc, clear, state, resource, _ReturnAddress(), [&](D3D12_RESOURCE_DESC& prepared, D3D12_CLEAR_VALUE* prepared_clear) { return Detours::Report(&Handlers::PreCreateCommittedResource, device, prepared, prepared_clear, heap, flags); }, [&](const D3D12_RESOURCE_DESC* final_desc, const D3D12_CLEAR_VALUE* final_clear, bool) { return original<&CreateCommittedResource1>(device, heap, flags, final_desc, state, final_clear, session, riid, resource); });
 }
 
 HRESULT STDMETHODCALLTYPE CreateReservedResource1(ID3D12Device4* device, const D3D12_RESOURCE_DESC* desc, D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear,
@@ -360,30 +413,26 @@ HRESULT STDMETHODCALLTYPE CreateReservedResource1(ID3D12Device4* device, const D
 HRESULT STDMETHODCALLTYPE CreateCommittedResource2(ID3D12Device8* device, const D3D12_HEAP_PROPERTIES* heap, D3D12_HEAP_FLAGS flags, const D3D12_RESOURCE_DESC1* desc,
    D3D12_RESOURCE_STATES state, const D3D12_CLEAR_VALUE* clear, ID3D12ProtectedResourceSession* session, REFIID riid, void** resource)
 {
-   DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreateCommittedResource2>(device, heap, flags, desc, state, clear, session, riid, resource), resource, device, state, clear, false, _ReturnAddress());
+   return CreateResource(device, desc, clear, state, resource, _ReturnAddress(), [&](D3D12_RESOURCE_DESC& prepared, D3D12_CLEAR_VALUE* prepared_clear) { return Detours::Report(&Handlers::PreCreateCommittedResource, device, prepared, prepared_clear, heap, flags); }, [&](const D3D12_RESOURCE_DESC1* final_desc, const D3D12_CLEAR_VALUE* final_clear, bool) { return original<&CreateCommittedResource2>(device, heap, flags, final_desc, state, final_clear, session, riid, resource); });
 }
 
 HRESULT STDMETHODCALLTYPE CreatePlacedResource1(ID3D12Device8* device, ID3D12Heap* heap, UINT64 offset, const D3D12_RESOURCE_DESC1* desc, D3D12_RESOURCE_STATES state,
    const D3D12_CLEAR_VALUE* clear, REFIID riid, void** resource)
 {
-   DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreatePlacedResource1>(device, heap, offset, desc, state, clear, riid, resource), resource, device, state, clear, false, _ReturnAddress());
+   return CreateResource(device, desc, clear, state, resource, _ReturnAddress(), [&](D3D12_RESOURCE_DESC& prepared, D3D12_CLEAR_VALUE* prepared_clear) { return Detours::Report(&Handlers::PreCreatePlacedResource, device, prepared, prepared_clear, heap, offset); }, [&](const D3D12_RESOURCE_DESC1* final_desc, const D3D12_CLEAR_VALUE* final_clear, bool) { return original<&CreatePlacedResource1>(device, heap, offset, final_desc, state, final_clear, riid, resource); });
 }
 
 HRESULT STDMETHODCALLTYPE CreateCommittedResource3(ID3D12Device10* device, const D3D12_HEAP_PROPERTIES* heap, D3D12_HEAP_FLAGS flags, const D3D12_RESOURCE_DESC1* desc,
    D3D12_BARRIER_LAYOUT layout, const D3D12_CLEAR_VALUE* clear, ID3D12ProtectedResourceSession* session, UINT32 castable_count, const DXGI_FORMAT* castable,
    REFIID riid, void** resource)
 {
-   DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreateCommittedResource3>(device, heap, flags, desc, layout, clear, session, castable_count, castable, riid, resource), resource, device, std::nullopt, clear, false, _ReturnAddress());
+   return CreateResource(device, desc, clear, std::nullopt, resource, _ReturnAddress(), [&](D3D12_RESOURCE_DESC& prepared, D3D12_CLEAR_VALUE* prepared_clear) { return Detours::Report(&Handlers::PreCreateCommittedResource, device, prepared, prepared_clear, heap, flags); }, [&](const D3D12_RESOURCE_DESC1* final_desc, const D3D12_CLEAR_VALUE* final_clear, bool upgraded) { return original<&CreateCommittedResource3>(device, heap, flags, final_desc, layout, final_clear, session, upgraded ? 0 : castable_count, upgraded ? nullptr : castable, riid, resource); });
 }
 
 HRESULT STDMETHODCALLTYPE CreatePlacedResource2(ID3D12Device10* device, ID3D12Heap* heap, UINT64 offset, const D3D12_RESOURCE_DESC1* desc, D3D12_BARRIER_LAYOUT layout,
    const D3D12_CLEAR_VALUE* clear, UINT32 castable_count, const DXGI_FORMAT* castable, REFIID riid, void** resource)
 {
-   DepthGuard guard(device_depth);
-   return ReportResource(guard, original<&CreatePlacedResource2>(device, heap, offset, desc, layout, clear, castable_count, castable, riid, resource), resource, device, std::nullopt, clear, false, _ReturnAddress());
+   return CreateResource(device, desc, clear, std::nullopt, resource, _ReturnAddress(), [&](D3D12_RESOURCE_DESC& prepared, D3D12_CLEAR_VALUE* prepared_clear) { return Detours::Report(&Handlers::PreCreatePlacedResource, device, prepared, prepared_clear, heap, offset); }, [&](const D3D12_RESOURCE_DESC1* final_desc, const D3D12_CLEAR_VALUE* final_clear, bool upgraded) { return original<&CreatePlacedResource2>(device, heap, offset, final_desc, layout, final_clear, upgraded ? 0 : castable_count, upgraded ? nullptr : castable, riid, resource); });
 }
 
 HRESULT STDMETHODCALLTYPE CreateReservedResource2(ID3D12Device10* device, const D3D12_RESOURCE_DESC* desc, D3D12_BARRIER_LAYOUT layout, const D3D12_CLEAR_VALUE* clear,
@@ -391,6 +440,82 @@ HRESULT STDMETHODCALLTYPE CreateReservedResource2(ID3D12Device10* device, const 
 {
    DepthGuard guard(device_depth);
    return ReportResource(guard, original<&CreateReservedResource2>(device, desc, layout, clear, session, castable_count, castable, riid, resource), resource, device, std::nullopt, clear, true, _ReturnAddress());
+}
+
+// The game's allocator lays its heaps out with these: a desc the rules upgrade in place is answered for its upgraded size (and remembered
+// for its creation). D3D12's C ABI: the info is returned through a pointer after `this`.
+template <typename Desc>
+const Desc* UpgradeAllocationDescs(ID3D12Device* device, UINT count, const Desc* descs, std::vector<Desc>& storage, std::vector<bool>* upgraded = nullptr)
+{
+   if (!descs || count == 0)
+      return descs;
+   if (upgraded)
+      upgraded->assign(count, false);
+   bool any = false;
+   for (UINT i = 0; i < count; i++)
+   {
+      D3D12_RESOURCE_DESC base;
+      std::memcpy(&base, &descs[i], sizeof(base));
+      if (!Detours::Report(&Handlers::PreGetResourceAllocationInfo, device, base))
+         continue;
+      if (!any)
+         storage.assign(descs, descs + count);
+      any = true;
+      std::memcpy(&storage[i], &base, sizeof(base));
+      if (upgraded)
+         (*upgraded)[i] = true;
+   }
+   return any ? storage.data() : descs;
+}
+
+// Versions 0 to 2: `infos` is version 1's and 2's per desc info
+template <typename Device, typename Desc, typename... Infos>
+D3D12_RESOURCE_ALLOCATION_INFO* STDMETHODCALLTYPE GetResourceAllocationInfo(Device* device, D3D12_RESOURCE_ALLOCATION_INFO* info, UINT mask, UINT count, const Desc* descs,
+   Infos... infos)
+{
+   constexpr auto detour = &GetResourceAllocationInfo<Device, Desc, Infos...>;
+   DepthGuard guard(device_depth);
+   if (!Detours::IsGameCall(guard, _ReturnAddress()))
+      return original<detour>(device, info, mask, count, descs, infos...);
+   std::vector<Desc> storage;
+   return original<detour>(device, info, mask, count, UpgradeAllocationDescs(device, count, descs, storage), infos...);
+}
+
+D3D12_RESOURCE_ALLOCATION_INFO* STDMETHODCALLTYPE GetResourceAllocationInfo3(ID3D12Device12* device, D3D12_RESOURCE_ALLOCATION_INFO* info, UINT mask, UINT count,
+   const D3D12_RESOURCE_DESC1* descs, const UINT32* castable_counts, const DXGI_FORMAT* const* castables, D3D12_RESOURCE_ALLOCATION_INFO1* infos)
+{
+   DepthGuard guard(device_depth);
+   if (!Detours::IsGameCall(guard, _ReturnAddress()))
+      return original<&GetResourceAllocationInfo3>(device, info, mask, count, descs, castable_counts, castables, infos);
+   std::vector<D3D12_RESOURCE_DESC1> storage;
+   std::vector<bool> upgraded;
+   const D3D12_RESOURCE_DESC1* final_descs = UpgradeAllocationDescs(device, count, descs, storage, &upgraded);
+   // An upgraded one is created without the game's castable formats
+   std::vector<UINT32> counts;
+   if (final_descs != descs && castable_counts)
+   {
+      counts.assign(castable_counts, castable_counts + count);
+      for (UINT i = 0; i < count; i++)
+      {
+         if (upgraded[i])
+            counts[i] = 0;
+      }
+   }
+   return original<&GetResourceAllocationInfo3>(device, info, mask, count, final_descs, counts.empty() ? castable_counts : counts.data(), castables, infos);
+}
+
+// Textures upgraded in place report what the game asked for to the game when the rules spoof it (Upgrade::Rules::spoof_description).
+// Returned through a pointer after `this`.
+template <typename Resource, typename Desc>
+Desc* STDMETHODCALLTYPE GetResourceDesc(Resource* resource, Desc* desc)
+{
+   Desc* result = original<&GetResourceDesc<Resource, Desc>>(resource, desc);
+   if (result && Detours::IsGameCall(_ReturnAddress()))
+   {
+      Scope::Guard scope;
+      Handlers::PostGetDesc(static_cast<ID3D12Resource*>(resource), *result);
+   }
+   return result;
 }
 
 template <auto Detour>
@@ -450,6 +575,16 @@ void InstallD3D12Device(const D3D12::Functions& functions)
                                     MethodHook<&CreatePlacedResource2>(Interface::D3D12Device, LumaSlot_ID3D12Device10_CreatePlacedResource2, "ID3D12Device10::CreatePlacedResource2", __uuidof(ID3D12Device10)),
                                     MethodHook<&CreateReservedResource2>(Interface::D3D12Device, LumaSlot_ID3D12Device10_CreateReservedResource2, "ID3D12Device10::CreateReservedResource2", __uuidof(ID3D12Device10)),
                                  });
+   add(Function::GetResourceAllocationInfo, {
+                                               MethodHook<&GetResourceAllocationInfo<ID3D12Device, D3D12_RESOURCE_DESC>>(Interface::D3D12Device, LumaSlot_ID3D12Device_GetResourceAllocationInfo, "ID3D12Device::GetResourceAllocationInfo"),
+                                               MethodHook<&GetResourceAllocationInfo<ID3D12Device4, D3D12_RESOURCE_DESC, D3D12_RESOURCE_ALLOCATION_INFO1*>>(Interface::D3D12Device, LumaSlot_ID3D12Device4_GetResourceAllocationInfo1, "ID3D12Device4::GetResourceAllocationInfo1", __uuidof(ID3D12Device4)),
+                                               MethodHook<&GetResourceAllocationInfo<ID3D12Device8, D3D12_RESOURCE_DESC1, D3D12_RESOURCE_ALLOCATION_INFO1*>>(Interface::D3D12Device, LumaSlot_ID3D12Device8_GetResourceAllocationInfo2, "ID3D12Device8::GetResourceAllocationInfo2", __uuidof(ID3D12Device8)),
+                                               MethodHook<&GetResourceAllocationInfo3>(Interface::D3D12Device, LumaSlot_ID3D12Device12_GetResourceAllocationInfo3, "ID3D12Device12::GetResourceAllocationInfo3", __uuidof(ID3D12Device12)),
+                                            });
+   add(Function::GetResourceDesc, {
+                                     MethodHook<&GetResourceDesc<ID3D12Resource, D3D12_RESOURCE_DESC>>(Interface::D3D12Resource, LumaSlot_ID3D12Resource_GetDesc, "ID3D12Resource::GetDesc"),
+                                     MethodHook<&GetResourceDesc<ID3D12Resource2, D3D12_RESOURCE_DESC1>>(Interface::D3D12Resource, LumaSlot_ID3D12Resource2_GetDesc1, "ID3D12Resource2::GetDesc1", __uuidof(ID3D12Resource2)),
+                                  });
    add(Function::CopyDescriptors, {
                                      MethodHook<&CopyDescriptors>(Interface::D3D12Device, LumaSlot_ID3D12Device_CopyDescriptors, "ID3D12Device::CopyDescriptors"),
                                      MethodHook<&CopyDescriptorsSimple>(Interface::D3D12Device, LumaSlot_ID3D12Device_CopyDescriptorsSimple, "ID3D12Device::CopyDescriptorsSimple"),

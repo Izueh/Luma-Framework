@@ -19,13 +19,17 @@ std::atomic<bool> upgrades = true;
 std::atomic<uint32_t> mirrors = 0;
 std::atomic<int64_t> bytes = 0;
 std::atomic<uint32_t> views = 0;
+std::atomic<uint32_t> in_place = 0;
+std::atomic<int64_t> in_place_saved_bytes = 0;
+std::atomic<uint32_t> in_place_resized = 0;
 
 constexpr std::array SETTINGS = {
    Settings::Setting{
       .key = Settings::Core::UPGRADES.key,
       .label = "Texture Upgrades",
       .tooltip = "Luma's higher precision copies of the game's textures (mirrors) in place of the game's. Off shows the game's own formats; the mirrors are "
-                 "kept, so switching back is immediate.",
+                 "kept, so switching back is immediate. Textures upgraded in place (a game's rules may ask for it) stay upgraded: that "
+                 "needs a restart.",
       .category = "Resources",
       .visibility = Settings::Visibility::Development,
       .default_value = true,
@@ -98,6 +102,10 @@ Hooks::D3D11::Functions GetD3D11Functions()
          CSSetUnorderedAccessViews, OMSetRenderTargets, OMSetRenderTargetsAndUnorderedAccessViews, Map, Unmap, UpdateSubresource, CopyResource, CopySubresourceRegion,
          ResolveSubresource, ClearRenderTargetView, ClearDepthStencilView, ClearUnorderedAccessViewUint, ClearUnorderedAccessViewFloat, ClearView})
       functions.set(size_t(function));
+   // Textures upgraded in place report the game's format
+   const Upgrade::Rules& rules = Upgrade::GetRules();
+   if (rules.method == Upgrade::Method::InPlace && rules.spoof_description)
+      functions.set(size_t(GetTextureDesc));
    return functions;
 }
 
@@ -113,6 +121,14 @@ Hooks::D3D12::Functions GetD3D12Functions()
       for (const Hooks::D3D12::Function function : {CreateResource, CreateDescriptorHeap, CreateView, CopyDescriptors, ResourceBarrier, OMSetRenderTargets, Copy,
               Clear, Reset, ClearState, SetPipelineState, Draw, ExecuteIndirect, SetRootSignature, SetDescriptorHeaps, SetFixedState})
          functions.set(size_t(function));
+      // In place: the game's heaps sized for the upgraded textures, and their desc spoofed
+      const Upgrade::Rules& rules = Upgrade::GetRules();
+      if (rules.method == Upgrade::Method::InPlace)
+      {
+         functions.set(size_t(GetResourceAllocationInfo));
+         if (rules.spoof_description)
+            functions.set(size_t(GetResourceDesc));
+      }
    }
    // Sampler mirrors the same way as views
    if (Samplers::IsNeeded())
@@ -125,7 +141,26 @@ Hooks::D3D12::Functions GetD3D12Functions()
 
 Stats GetStats()
 {
-   return {mirrors.load(), uint64_t(std::max<int64_t>(bytes.load(), 0)), views.load()};
+   return {mirrors.load(), uint64_t(std::max<int64_t>(bytes.load(), 0)), views.load(), in_place.load(), uint64_t(std::max<int64_t>(in_place_saved_bytes.load(), 0)),
+      in_place_resized.load()};
+}
+
+void CountInPlace(int32_t count, int64_t saved_bytes, bool resized)
+{
+   in_place += uint32_t(count);
+   in_place_saved_bytes += saved_bytes;
+   if (resized)
+      in_place_resized += uint32_t(count);
+}
+
+bool HasAnyResizedInPlace()
+{
+   return in_place_resized.load(std::memory_order_relaxed) != 0;
+}
+
+bool HasAnyInPlace()
+{
+   return in_place.load(std::memory_order_relaxed) != 0;
 }
 
 void CountMirror(int32_t count, int64_t size)

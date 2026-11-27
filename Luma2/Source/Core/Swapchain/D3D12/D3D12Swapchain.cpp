@@ -44,7 +44,7 @@ ComPtr<ID3D12Resource> CreateBuffer(ID3D12Device* device, const DXGI::BufferDesc
 #endif
    // Like any texture of the game's
    if (Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D12::CreateMirror(device, buffer.Get(), D3D12_RESOURCE_STATE_COMMON, nullptr, false);
+      Resources::Mirrors::D3D12::UpgradeResource(device, buffer.Get(), D3D12_RESOURCE_STATE_COMMON, nullptr, false);
    return buffer;
 }
 

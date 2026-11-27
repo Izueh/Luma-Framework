@@ -1,6 +1,7 @@
 #include "Handlers/D3D12/D3D12Handlers.hpp"
 
 #include <array>
+#include <atomic>
 #include <optional>
 #include <span>
 #include <type_traits>
@@ -305,7 +306,8 @@ void PostCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destinatio
 void PostCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type)
 {
    if (Resources::Mirrors::IsNeeded() || Resources::Samplers::IsNeeded())
-      Resources::Mirrors::D3D12::SwapCopiedDescriptors(device, destination, source, count, type, Resources::Mirrors::IsSwapping(), Resources::Samplers::IsSwapping());
+      Resources::Mirrors::D3D12::TrackCopiedDescriptors(device, destination, source, count, type,
+         {.views = Resources::Mirrors::IsSwapping(), .samplers = Resources::Samplers::IsSwapping()});
 #if DEVELOPMENT
    Resources::Descriptors::D3D12::Copy(destination, source, count);
    Trace::Stats::D3D12::RecordCopy(destination, count);
@@ -315,10 +317,59 @@ void PostCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE desti
 #endif
 }
 
+bool PreCreateCommittedResource(ID3D12Device* device, D3D12_RESOURCE_DESC& desc, D3D12_CLEAR_VALUE* clear, const D3D12_HEAP_PROPERTIES* heap, D3D12_HEAP_FLAGS flags)
+{
+   using namespace Resources::Mirrors::D3D12;
+   return Resources::Mirrors::IsNeeded() &&
+      PrepareResource(device, desc, clear, {.placement = Placement::Committed, .heap_type = heap ? heap->Type : D3D12_HEAP_TYPE_DEFAULT, .heap_flags = flags});
+}
+
+bool PreCreatePlacedResource(ID3D12Device* device, D3D12_RESOURCE_DESC& desc, D3D12_CLEAR_VALUE* clear, ID3D12Heap* heap, UINT64 offset)
+{
+   using namespace Resources::Mirrors::D3D12;
+   return Resources::Mirrors::IsNeeded() && PrepareResource(device, desc, clear, {.placement = Placement::Placed, .heap = heap, .offset = offset});
+}
+
+bool PreGetResourceAllocationInfo(ID3D12Device* device, D3D12_RESOURCE_DESC& desc)
+{
+   return Resources::Mirrors::IsNeeded() && Resources::Mirrors::D3D12::UpgradeForAllocation(device, desc);
+}
+
+DXGI_FORMAT PreCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, Resources::Descriptors::D3D12::Kind kind, ID3D12Resource* resource,
+   DXGI_FORMAT format, bool has_desc)
+{
+   using Kind = Resources::Descriptors::D3D12::Kind;
+   using ViewKind = Resources::Mirrors::D3D12::ViewKind;
+   if (!Resources::Mirrors::IsNeeded())
+      return DXGI_FORMAT_UNKNOWN;
+   ViewKind view = ViewKind::ConstantBuffer;
+   switch (kind)
+   {
+   case Kind::ShaderResource: view = ViewKind::ShaderResource; break;
+   case Kind::UnorderedAccess: view = ViewKind::UnorderedAccess; break;
+   case Kind::RenderTarget: view = ViewKind::RenderTarget; break;
+   case Kind::DepthStencil: view = ViewKind::DepthStencil; break;
+   default: return DXGI_FORMAT_UNKNOWN;
+   }
+   return Resources::Mirrors::D3D12::PrepareView(device, destination, view, resource, format, has_desc);
+}
+
+void PostGetDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC& desc)
+{
+   Resources::Mirrors::D3D12::SpoofDesc(resource, desc);
+}
+
+void PostGetDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC1& desc)
+{
+   Resources::Mirrors::D3D12::SpoofDesc(resource, desc);
+}
+
 void PostCreateResource(ID3D12Device* device, ID3D12Resource* resource, std::optional<D3D12_RESOURCE_STATES> state, const D3D12_CLEAR_VALUE* clear, bool reserved)
 {
    if (Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D12::CreateMirror(device, resource, state, clear, reserved);
+      Resources::Mirrors::D3D12::UpgradeResource(device, resource, state, clear, reserved);
+   if (!resource)
+      return;
 #if DEVELOPMENT
    Resources::Descriptors::D3D12::TrackResource(resource);
 #else
@@ -398,12 +449,9 @@ void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3
 #endif
    if (Resources::Mirrors::IsNeeded())
    {
-      Shaders::Database::D3D12::TargetFormats formats;
-      if (Resources::Mirrors::IsSwapping())
-         Resources::Mirrors::D3D12::SwapRenderTargets(list, count, render_targets, single_range, depth_stencil, formats);
+      const Shaders::Database::D3D12::TargetFormats formats =
+         Resources::Mirrors::D3D12::BindRenderTargets(list, count, render_targets, single_range, depth_stencil, Resources::Mirrors::IsSwapping());
       Shaders::Variants::D3D12::SetTargetFormats(list, formats);
-      // What a converting copy binds back: the targets as they're bound now
-      Resources::Mirrors::D3D12::RecordRenderTargets(list, count, render_targets, single_range, depth_stencil);
    }
    if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
       Resources::Database::D3D12::SetRenderTargets(list, count, render_targets, single_range, depth_stencil);
@@ -449,7 +497,7 @@ void PreSetRootConstants([[maybe_unused]] ID3D12GraphicsCommandList* list, [[may
 void PreSetViewports(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_VIEWPORT*& viewports)
 {
    if (Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D12::RecordViewports(list, count, viewports);
+      Resources::Mirrors::D3D12::BindViewports(list, count, viewports);
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordViewports(list, count, viewports);
 #endif
@@ -458,7 +506,7 @@ void PreSetViewports(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_V
 void PreSetScissorRects(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_RECT*& rects)
 {
    if (Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D12::RecordScissorRects(list, count, rects);
+      Resources::Mirrors::D3D12::BindScissorRects(list, count, rects);
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordScissorRects(list, count, rects);
 #endif
@@ -510,7 +558,7 @@ bool PreCopyResource([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_u
       Trace::Capture::D3D12::AddCopy(list, "CopyResource", destination, source, {});
 #endif
    Resources::Mirrors::D3D12::CopyRegion region = {.convertible = true, .whole_resource = true};
-   return Resources::Mirrors::IsSwapping() && Resources::Mirrors::D3D12::SwapCopy(list, destination, source, region);
+   return Resources::Mirrors::IsNeeded() && Resources::Mirrors::D3D12::Copy(list, destination, source, region, Resources::Mirrors::IsSwapping());
 }
 
 bool PreCopyTextureRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] D3D12_TEXTURE_COPY_LOCATION& destination, [[maybe_unused]] UINT& x,
@@ -532,8 +580,6 @@ bool PreCopyTextureRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[ma
       Trace::Capture::D3D12::AddCopy(list, "CopyTextureRegion", destination.pResource, source.pResource, copy);
    }
 #endif
-   if (!Resources::Mirrors::IsSwapping())
-      return false;
    // A footprint side is a buffer: never mirrored, never converted
    const bool subresources = destination.Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX && source.Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
    Resources::Mirrors::D3D12::CopyRegion region = {.convertible = subresources,
@@ -541,15 +587,17 @@ bool PreCopyTextureRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[ma
       .source_subresource = subresources ? source.SubresourceIndex : 0,
       .offset = {x, y, z},
       .box = box};
-   const bool handled = Resources::Mirrors::D3D12::SwapCopy(list, destination.pResource, source.pResource, region);
-   if (!handled)
-   {
-      x = region.offset[0];
-      y = region.offset[1];
-      z = region.offset[2];
-      box = region.box;
-   }
-   return handled;
+   if (!Resources::Mirrors::IsNeeded())
+      return false;
+   const bool swapping = Resources::Mirrors::IsSwapping();
+   if (subresources ? Resources::Mirrors::D3D12::Copy(list, destination.pResource, source.pResource, region, swapping)
+                    : Resources::Mirrors::D3D12::CopyFootprint(list, destination, source, region, swapping))
+      return true;
+   x = region.offset[0];
+   y = region.offset[1];
+   z = region.offset[2];
+   box = region.box;
+   return false;
 }
 
 bool PreCopyBufferRegion([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] ID3D12Resource* destination, [[maybe_unused]] UINT64 destination_offset,
@@ -573,8 +621,8 @@ bool PreResolveSubresource(ID3D12GraphicsCommandList* list, ID3D12Resource*& des
       Trace::Capture::D3D12::AddCopy(list, "ResolveSubresource", destination, source,
          {.kind = Trace::Capture::CopyKind::Resolve, .source_subresource = source_subresource, .destination_subresource = destination_subresource, .resolve_format = uint32_t(format)});
 #endif
-   return Resources::Mirrors::IsSwapping() &&
-      Resources::Mirrors::D3D12::SwapResolve(list, destination, destination_subresource, source, source_subresource, format);
+   return Resources::Mirrors::IsNeeded() &&
+      Resources::Mirrors::D3D12::Resolve(list, destination, destination_subresource, source, source_subresource, format, Resources::Mirrors::IsSwapping());
 }
 
 bool PreClearRenderTargetView([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] D3D12_CPU_DESCRIPTOR_HANDLE& view, [[maybe_unused]] const FLOAT color[4],
@@ -584,8 +632,8 @@ bool PreClearRenderTargetView([[maybe_unused]] ID3D12GraphicsCommandList* list, 
    if (Trace::Capture::IsCapturing())
       Trace::Capture::D3D12::AddClear(list, "ClearRenderTargetView", view, {color[0], color[1], color[2], color[3]});
 #endif
-   if (Resources::Mirrors::IsSwapping())
-      Resources::Mirrors::D3D12::SwapHandle(view, rect_count, &rects);
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D12::PrepareClear(view, rect_count, rects, Resources::Mirrors::IsSwapping());
    return false;
 }
 
@@ -597,8 +645,8 @@ bool PreClearDepthStencilView([[maybe_unused]] ID3D12GraphicsCommandList* list, 
       Trace::Capture::D3D12::AddClear(list, "ClearDepthStencilView", view,
          {(flags & D3D12_CLEAR_FLAG_DEPTH) ? depth : 0.f, (flags & D3D12_CLEAR_FLAG_STENCIL) ? float(stencil) : 0.f, 0.f, 0.f});
 #endif
-   if (Resources::Mirrors::IsSwapping())
-      Resources::Mirrors::D3D12::SwapHandle(view, rect_count, &rects);
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D12::PrepareClear(view, rect_count, rects, Resources::Mirrors::IsSwapping());
    return false;
 }
 
@@ -614,8 +662,8 @@ bool PreClearUnorderedAccessView([[maybe_unused]] ID3D12GraphicsCommandList* lis
       Trace::Capture::D3D12::AddClear(list, values.float_values ? "ClearUnorderedAccessViewFloat" : "ClearUnorderedAccessViewUint", resource, cleared);
    }
 #endif
-   if (Resources::Mirrors::IsSwapping())
-      Resources::Mirrors::D3D12::SwapClearUnorderedAccess(list, gpu, cpu, resource);
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D12::PrepareClearUnorderedAccess(list, gpu, cpu, resource, rect_count, Resources::Mirrors::IsSwapping());
    return false;
 }
 

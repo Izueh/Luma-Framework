@@ -11,6 +11,7 @@
 
 #include "Handlers/D3D11/D3D11Handlers.hpp"
 #include "Handlers/DXGI/DXGIHandlers.hpp"
+#include "Hooks/Detours.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/HookScope.hpp"
 #include "Hooks/VtableSlots.h"
@@ -110,6 +111,54 @@ const std::array CONTEXT_VERSIONS = {
 const std::array CHILD_VERSIONS = {
    Vtables::GetVersion<ID3D11DeviceChild>("ID3D11DeviceChild", LumaMethodCount_ID3D11DeviceChild),
 };
+const std::array TEXTURE1D_VERSIONS = {
+   Vtables::GetVersion<ID3D11Texture1D>("ID3D11Texture1D", LumaMethodCount_ID3D11Texture1D),
+};
+const std::array TEXTURE2D_VERSIONS = {
+   Vtables::GetVersion<ID3D11Texture2D>("ID3D11Texture2D", LumaMethodCount_ID3D11Texture2D),
+   Vtables::GetVersion<ID3D11Texture2D1>("ID3D11Texture2D1", LumaMethodCount_ID3D11Texture2D1),
+};
+const std::array TEXTURE3D_VERSIONS = {
+   Vtables::GetVersion<ID3D11Texture3D>("ID3D11Texture3D", LumaMethodCount_ID3D11Texture3D),
+   Vtables::GetVersion<ID3D11Texture3D1>("ID3D11Texture3D1", LumaMethodCount_ID3D11Texture3D1),
+};
+
+// A 1 texel texture of each dimension, for their methods (GetDesc)
+void ResolveTextureVtables(ID3D11Device* device)
+{
+   const D3D11_TEXTURE1D_DESC desc_1d = {.Width = 1, .MipLevels = 1, .ArraySize = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_SHADER_RESOURCE};
+   const D3D11_TEXTURE2D_DESC desc_2d = {.Width = 1, .Height = 1, .MipLevels = 1, .ArraySize = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {1, 0}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_SHADER_RESOURCE};
+   const D3D11_TEXTURE3D_DESC desc_3d = {.Width = 1, .Height = 1, .Depth = 1, .MipLevels = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_SHADER_RESOURCE};
+   ComPtr<ID3D11Texture1D> texture_1d;
+   ComPtr<ID3D11Texture2D> texture_2d;
+   ComPtr<ID3D11Texture3D> texture_3d;
+   if (SUCCEEDED(device->CreateTexture1D(&desc_1d, nullptr, &texture_1d)))
+      Vtables::Set(Vtables::Interface::D3D11Texture1D, texture_1d.Get(), TEXTURE1D_VERSIONS);
+   if (SUCCEEDED(device->CreateTexture2D(&desc_2d, nullptr, &texture_2d)))
+      Vtables::Set(Vtables::Interface::D3D11Texture2D, texture_2d.Get(), TEXTURE2D_VERSIONS);
+   if (SUCCEEDED(device->CreateTexture3D(&desc_3d, nullptr, &texture_3d)))
+      Vtables::Set(Vtables::Interface::D3D11Texture3D, texture_3d.Get(), TEXTURE3D_VERSIONS);
+   if (!texture_1d || !texture_2d || !texture_3d)
+      Log::Error("D3D11: failed to create temporary textures to read their vtables");
+}
+
+// Textures upgraded in place report the game's format, size and mips to the game when the rules spoof it (Upgrade::Rules::spoof_description)
+void(STDMETHODCALLTYPE* original_get_texture1d_desc)(ID3D11Texture1D* texture, D3D11_TEXTURE1D_DESC* desc) = nullptr;
+void(STDMETHODCALLTYPE* original_get_texture2d_desc)(ID3D11Texture2D* texture, D3D11_TEXTURE2D_DESC* desc) = nullptr;
+void(STDMETHODCALLTYPE* original_get_texture2d_desc1)(ID3D11Texture2D1* texture, D3D11_TEXTURE2D_DESC1* desc) = nullptr;
+void(STDMETHODCALLTYPE* original_get_texture3d_desc)(ID3D11Texture3D* texture, D3D11_TEXTURE3D_DESC* desc) = nullptr;
+void(STDMETHODCALLTYPE* original_get_texture3d_desc1)(ID3D11Texture3D1* texture, D3D11_TEXTURE3D_DESC1* desc) = nullptr;
+
+template <auto& Original, typename Texture, typename Desc>
+void STDMETHODCALLTYPE GetTextureDesc(Texture* texture, Desc* desc)
+{
+   Original(texture, desc);
+   if (desc && Detours::IsGameCall(_ReturnAddress()))
+   {
+      Scope::Guard scope;
+      Handlers::PostGetDesc(texture, *desc);
+   }
+}
 
 // Fails on single threaded devices: retried on the next device
 bool ResolveDeferredContextVtable(ID3D11Device* device)
@@ -142,6 +191,7 @@ void ResolveVtables(ID3D11Device* device)
       Vtables::Set(Vtables::Interface::D3D11DeviceChild, query.Get(), CHILD_VERSIONS);
    else
       Log::Error("D3D11: failed to create a temporary query to read its vtable (0x{:08X})", uint32_t(result));
+   ResolveTextureVtables(device);
 
    InstallPending();
    LogSummary();
@@ -345,6 +395,28 @@ void InstallD3D11(const D3D11::Functions& functions)
          reinterpret_cast<void*>(&GetFeatureLevel), reinterpret_cast<void**>(&original_get_feature_level)},
    };
    Declare(get_feature_level_hooks);
+
+   if (functions.test(size_t(D3D11::Function::GetTextureDesc)))
+   {
+      const std::array get_texture_desc_hooks = {
+         Hook{VtableTarget{Vtables::Interface::D3D11Texture1D, LumaSlot_ID3D11Texture1D_GetDesc, "ID3D11Texture1D::GetDesc"},
+            reinterpret_cast<void*>(&GetTextureDesc<original_get_texture1d_desc, ID3D11Texture1D, D3D11_TEXTURE1D_DESC>),
+            reinterpret_cast<void**>(&original_get_texture1d_desc)},
+         Hook{VtableTarget{Vtables::Interface::D3D11Texture2D, LumaSlot_ID3D11Texture2D_GetDesc, "ID3D11Texture2D::GetDesc"},
+            reinterpret_cast<void*>(&GetTextureDesc<original_get_texture2d_desc, ID3D11Texture2D, D3D11_TEXTURE2D_DESC>),
+            reinterpret_cast<void**>(&original_get_texture2d_desc)},
+         Hook{VtableTarget{Vtables::Interface::D3D11Texture2D, LumaSlot_ID3D11Texture2D1_GetDesc1, "ID3D11Texture2D1::GetDesc1", __uuidof(ID3D11Texture2D1)},
+            reinterpret_cast<void*>(&GetTextureDesc<original_get_texture2d_desc1, ID3D11Texture2D1, D3D11_TEXTURE2D_DESC1>),
+            reinterpret_cast<void**>(&original_get_texture2d_desc1)},
+         Hook{VtableTarget{Vtables::Interface::D3D11Texture3D, LumaSlot_ID3D11Texture3D_GetDesc, "ID3D11Texture3D::GetDesc"},
+            reinterpret_cast<void*>(&GetTextureDesc<original_get_texture3d_desc, ID3D11Texture3D, D3D11_TEXTURE3D_DESC>),
+            reinterpret_cast<void**>(&original_get_texture3d_desc)},
+         Hook{VtableTarget{Vtables::Interface::D3D11Texture3D, LumaSlot_ID3D11Texture3D1_GetDesc1, "ID3D11Texture3D1::GetDesc1", __uuidof(ID3D11Texture3D1)},
+            reinterpret_cast<void*>(&GetTextureDesc<original_get_texture3d_desc1, ID3D11Texture3D1, D3D11_TEXTURE3D_DESC1>),
+            reinterpret_cast<void**>(&original_get_texture3d_desc1)},
+      };
+      Declare(get_texture_desc_hooks);
+   }
 
    InstallD3D11Device(functions);
    InstallD3D11Context(functions);

@@ -25,6 +25,9 @@ enum class Interface : uint8_t
    D3D11ContextVariant2,
    D3D11ContextVariant3,
    D3D11DeviceChild,
+   D3D11Texture1D,
+   D3D11Texture2D,
+   D3D11Texture3D,
    D3D12Device,
    D3D12CommandQueue,
    D3D12CommandAllocator,
@@ -32,6 +35,7 @@ enum class Interface : uint8_t
    D3D12DescriptorHeap,
    D3D12Fence,
    D3D12PipelineLibrary,
+   D3D12Resource,
    Count,
 };
 

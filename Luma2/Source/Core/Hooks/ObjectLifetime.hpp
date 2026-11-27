@@ -55,7 +55,7 @@ template <typename T, typename Object, typename... Arguments>
 T* SetState(Object* object, Arguments&&... arguments)
 {
    T* value = new T(std::forward<Arguments>(arguments)...);
-   IUnknown* holder = CreateStateHolder(value, [](void* destroyed) { delete static_cast<T*>(destroyed); });
+   IUnknown* holder = CreateStateHolder(value, [](void* state) { delete static_cast<T*>(state); });
    const bool attached = SUCCEEDED(object->SetPrivateDataInterface(GetStateGuid<T>(), holder));
    holder->Release();
    return attached ? value : nullptr;
@@ -82,7 +82,7 @@ template <typename T, typename... Arguments>
 T* SetStateOf(IUnknown* object, Arguments&&... arguments)
 {
    T* value = new T(std::forward<Arguments>(arguments)...);
-   IUnknown* holder = CreateStateHolder(value, [](void* destroyed) { delete static_cast<T*>(destroyed); });
+   IUnknown* holder = CreateStateHolder(value, [](void* state) { delete static_cast<T*>(state); });
    const bool attached = AttachStateOf(object, GetStateGuid<T>(), holder);
    holder->Release();
    return attached ? value : nullptr;

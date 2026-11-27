@@ -100,9 +100,14 @@ struct ResourcesInfo
 {
    bool upgrades = false; // Rules exist
    bool samplers = false; // Sampler upgrades are on
+   std::string method; // "Mirror", "InPlace" (Upgrade::Rules::method)
    uint32_t mirrors = 0;
    uint64_t mirror_mb = 0;
    uint32_t views = 0;
+   // Textures upgraded in place, and the memory their mirrors would have taken
+   uint32_t in_place = 0;
+   uint64_t in_place_saved_mb = 0;
+   uint32_t in_place_resized = 0; // Of those, resized by custom dimensions
    float lod_bias_offset = 0.f;
    ChainsInfo chains;
    ScalingInfo scaling;
@@ -206,6 +211,11 @@ struct D3D12MirrorsInfo
    uint32_t uav_clears = 0;
    uint32_t unhandled_clears = 0;
    uint32_t aliasing_barriers = 0;
+   // Textures upgraded in place: copies converted, copies skipped, placed ones that got a mirror (size never asked, or didn't fit)
+   uint32_t in_place_converted_copies = 0;
+   uint32_t in_place_unhandled_copies = 0;
+   uint32_t in_place_unasked_placed = 0;
+   uint32_t in_place_unfit_placed = 0;
 };
 
 struct D3D12Info

@@ -126,6 +126,13 @@ Resource DescribeResource(ID3D12Resource* resource, uint64_t expected_id)
    }
    described.format = desc.Format;
    described.debug_name = GetD3DDebugName(resource);
+   if (const std::optional<Resources::Upgrade::UpgradeInfo> upgrade = Resources::Mirrors::D3D12::FindUpgrade(resource); upgrade && upgrade->method == Resources::Upgrade::Method::InPlace)
+   {
+      const Resources::Upgrade::TextureInfo& game = upgrade->game;
+      described.in_place_from = uint32_t(game.format);
+      if (upgrade->resized)
+         described.in_place_game_size = std::array<uint32_t, 4>{game.width, game.height, game.depth_or_layers, game.levels};
+   }
    // What the call read or wrote while the mirrors are swapped in
    if (Resources::Mirrors::IsSwapping())
    {

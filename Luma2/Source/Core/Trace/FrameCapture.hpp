@@ -102,6 +102,10 @@ struct Resource
    // Luma's mirror of it swapped in for the game's (Resources::Mirrors): formatted summary and structured details
    std::optional<std::string> mirror;
    std::optional<MirrorInfo> mirror_info;
+   // Upgraded in place (Upgrade::Method::InPlace): `format` is the upgraded one, this the DXGI_FORMAT the game asked for
+   std::optional<uint32_t> in_place_from;
+   // And resized: the width, height, depth or array size and mips the game asked for (`size` is the texture's)
+   std::optional<std::array<uint32_t, 4>> in_place_game_size;
 };
 
 struct View

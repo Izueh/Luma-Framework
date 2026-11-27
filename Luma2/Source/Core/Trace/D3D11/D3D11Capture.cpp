@@ -121,6 +121,13 @@ Resource DescribeResource(ID3D11Resource* resource)
    ID3D11Resource* original = Resources::Mirrors::D3D11::FindOriginal(resource);
    ID3D11Resource* target = original ? original : resource;
    Resource described = DescribeOwn(target);
+   if (const std::optional<Resources::Upgrade::UpgradeInfo> upgrade = Resources::Mirrors::D3D11::FindUpgrade(target); upgrade && upgrade->method == Resources::Upgrade::Method::InPlace)
+   {
+      const Resources::Upgrade::TextureInfo& game = upgrade->game;
+      described.in_place_from = uint32_t(game.format);
+      if (upgrade->resized)
+         described.in_place_game_size = std::array<uint32_t, 4>{game.width, game.height, game.depth_or_layers, game.levels};
+   }
    if (const std::optional<Resources::Mirrors::D3D11::MirrorSummary> summary = Resources::Mirrors::D3D11::FindMirrorSummary(target))
    {
       const auto& mi = summary->mirror_info;

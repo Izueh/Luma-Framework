@@ -87,6 +87,11 @@ const std::array PIPELINE_LIBRARY_VERSIONS = {
    Vtables::GetVersion<ID3D12PipelineLibrary>("ID3D12PipelineLibrary", LumaMethodCount_ID3D12PipelineLibrary),
    Vtables::GetVersion<ID3D12PipelineLibrary1>("ID3D12PipelineLibrary1", LumaMethodCount_ID3D12PipelineLibrary1),
 };
+const std::array RESOURCE_VERSIONS = {
+   Vtables::GetVersion<ID3D12Resource>("ID3D12Resource", LumaMethodCount_ID3D12Resource),
+   Vtables::GetVersion<ID3D12Resource1>("ID3D12Resource1", LumaMethodCount_ID3D12Resource1),
+   Vtables::GetVersion<ID3D12Resource2>("ID3D12Resource2", LumaMethodCount_ID3D12Resource2),
+};
 const std::array FENCE_VERSIONS = {
    Vtables::GetVersion<ID3D12Fence>("ID3D12Fence", LumaMethodCount_ID3D12Fence),
    Vtables::GetVersion<ID3D12Fence1>("ID3D12Fence1", LumaMethodCount_ID3D12Fence1),
@@ -129,6 +134,13 @@ void ResolveVtables(ID3D12Device* device)
 
    ComPtr<ID3D12Fence> fence;
    SetVtable(Vtables::Interface::D3D12Fence, fence, FENCE_VERSIONS, device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
+
+   // Buffers and textures share their methods (GetDesc)
+   const D3D12_HEAP_PROPERTIES default_heap = {D3D12_HEAP_TYPE_DEFAULT};
+   const D3D12_RESOURCE_DESC buffer_desc = {.Dimension = D3D12_RESOURCE_DIMENSION_BUFFER, .Width = 256, .Height = 1, .DepthOrArraySize = 1, .MipLevels = 1, .SampleDesc = {1, 0}, .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
+   ComPtr<ID3D12Resource> buffer;
+   SetVtable(Vtables::Interface::D3D12Resource, buffer, RESOURCE_VERSIONS,
+      device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &buffer_desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&buffer)));
 
    // An empty library: what the game's pipeline library hooks need
    if (ComPtr<ID3D12Device1> device1; SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&device1))))

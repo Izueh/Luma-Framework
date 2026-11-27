@@ -20,6 +20,7 @@
 #include "Game/GameRegistry.hpp"
 #include "Handlers/D3D11/D3D11Handlers.hpp"
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
+#include "Hooks/HookScope.hpp"
 #include "Resources/D3D11/D3D11Mirrors.hpp"
 #include "Resources/D3D11/D3D11ResourceDatabase.hpp"
 #include "Resources/D3D11/D3D11Samplers.hpp"
@@ -81,38 +82,38 @@ constexpr Resources::Upgrade::FrameState STATE = {.render = {3440, 1440}, .outpu
 TEST_CASE("Upgrade: FF7R's rules match the textures 1.0 upgraded")
 {
    RulesFixture rules;
-   using Resources::Upgrade::Match;
+   using Resources::Upgrade::GetUpgradeInfo;
    // The output's size and aspect ratio, and 16:9 at any size within a pixel
-   CHECK(Match(Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT), STATE, false)->format == DXGI_FORMAT_R16G16B16A16_FLOAT);
-   CHECK(Match(Target(1720, 720, DXGI_FORMAT_R10G10B10A2_UNORM), STATE, false));
-   CHECK(Match(Target(1920, 1080, DXGI_FORMAT_R10G10B10A2_TYPELESS), STATE, false));
-   CHECK(Match(Target(1921, 1080, DXGI_FORMAT_R11G11B10_FLOAT), STATE, false));
-   CHECK_FALSE(Match(Target(1924, 1080, DXGI_FORMAT_R11G11B10_FLOAT), STATE, false));
-   CHECK_FALSE(Match(Target(512, 512, DXGI_FORMAT_R11G11B10_FLOAT), STATE, false));
+   CHECK(GetUpgradeInfo(Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT), STATE)->upgraded.format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   CHECK(GetUpgradeInfo(Target(1720, 720, DXGI_FORMAT_R10G10B10A2_UNORM), STATE));
+   CHECK(GetUpgradeInfo(Target(1920, 1080, DXGI_FORMAT_R10G10B10A2_TYPELESS), STATE));
+   CHECK(GetUpgradeInfo(Target(1921, 1080, DXGI_FORMAT_R11G11B10_FLOAT), STATE));
+   CHECK_FALSE(GetUpgradeInfo(Target(1924, 1080, DXGI_FORMAT_R11G11B10_FLOAT), STATE));
+   CHECK_FALSE(GetUpgradeInfo(Target(512, 512, DXGI_FORMAT_R11G11B10_FLOAT), STATE));
    // Formats not in the list, and what the GPU doesn't write
-   CHECK_FALSE(Match(Target(3440, 1440, DXGI_FORMAT_R8G8B8A8_UNORM), STATE, false));
+   CHECK_FALSE(GetUpgradeInfo(Target(3440, 1440, DXGI_FORMAT_R8G8B8A8_UNORM), STATE));
    TextureInfo read_only = Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT);
    read_only.render_target = false;
-   CHECK_FALSE(Match(read_only, STATE, false));
+   CHECK_FALSE(GetUpgradeInfo(read_only, STATE));
    TextureInfo dynamic = Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT);
    dynamic.gpu_only = false;
-   CHECK_FALSE(Match(dynamic, STATE, false));
+   CHECK_FALSE(GetUpgradeInfo(dynamic, STATE));
    // Arrays aren't 2D targets
    TextureInfo array = Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT);
    array.depth_or_layers = 2;
-   CHECK_FALSE(Match(array, STATE, false));
+   CHECK_FALSE(GetUpgradeInfo(array, STATE));
    // The 3D LUT, written by a compute shader, 32 on each side, one mip
    TextureInfo lut = {.dimension = Dimension::Texture3D, .width = 32, .height = 32, .depth_or_layers = 32, .format = DXGI_FORMAT_R10G10B10A2_UNORM, .unordered_access = true};
-   CHECK(Match(lut, STATE, false)->format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   CHECK(GetUpgradeInfo(lut, STATE)->upgraded.format == DXGI_FORMAT_R16G16B16A16_FLOAT);
    lut.levels = 2;
-   CHECK_FALSE(Match(lut, STATE, false));
+   CHECK_FALSE(GetUpgradeInfo(lut, STATE));
    lut.levels = 1;
    lut.width = 16;
-   CHECK_FALSE(Match(lut, STATE, false));
+   CHECK_FALSE(GetUpgradeInfo(lut, STATE));
    // No rules, no mirrors
    Resources::Upgrade::SetRules({});
    CHECK_FALSE(Resources::Upgrade::IsNeeded());
-   CHECK_FALSE(Match(Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT), STATE, false));
+   CHECK_FALSE(GetUpgradeInfo(Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT), STATE));
 }
 
 TEST_CASE("Upgrade: the size filters and the mirror's view formats as 1.0's")
@@ -121,14 +122,14 @@ TEST_CASE("Upgrade: the size filters and the mirror's view formats as 1.0's")
    rules.size_filters = SizeFilters::Mips | SizeFilters::No1Px;
    rules.depth_formats = {DXGI_FORMAT_R24G8_TYPELESS};
    Resources::Upgrade::SetRules(rules);
-   using Resources::Upgrade::Match;
+   using Resources::Upgrade::GetUpgradeInfo;
    const Resources::Upgrade::FrameState state = {.render = {1024, 512}, .output = {1024, 512}};
-   CHECK(Match(Target(256, 128, DXGI_FORMAT_R11G11B10_FLOAT), state, false));
-   CHECK_FALSE(Match(Target(256, 100, DXGI_FORMAT_R11G11B10_FLOAT), state, false));
-   CHECK_FALSE(Match(Target(1, 1, DXGI_FORMAT_R11G11B10_FLOAT), state, false));
+   CHECK(GetUpgradeInfo(Target(256, 128, DXGI_FORMAT_R11G11B10_FLOAT), state));
+   CHECK_FALSE(GetUpgradeInfo(Target(256, 100, DXGI_FORMAT_R11G11B10_FLOAT), state));
+   CHECK_FALSE(GetUpgradeInfo(Target(1, 1, DXGI_FORMAT_R11G11B10_FLOAT), state));
    // Depth keeps its stencil, typeless so it can be read
    TextureInfo depth = {.width = 512, .height = 256, .format = DXGI_FORMAT_R24G8_TYPELESS, .depth_stencil = true};
-   CHECK(Match(depth, state, false)->format == DXGI_FORMAT_R32G8X24_TYPELESS);
+   CHECK(GetUpgradeInfo(depth, state)->upgraded.format == DXGI_FORMAT_R32G8X24_TYPELESS);
    Resources::Upgrade::SetRules({});
 
    using Resources::Upgrade::GetBestViewFormat;
@@ -366,7 +367,7 @@ TEST_CASE("Mirrors D3D11: a matching texture gets a mirror, its views mirrored o
       .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
    ComPtr<ID3D11Texture2D> texture;
    REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&desc), nullptr, &texture)));
-   Resources::Mirrors::D3D11::CreateMirror(device.Get(), desc, nullptr, texture.Get());
+   Resources::Mirrors::D3D11::UpgradeTexture(device.Get(), desc, nullptr, texture.Get());
    ID3D11Resource* mirror = Resources::Mirrors::D3D11::FindMirror(texture.Get());
    REQUIRE(mirror);
    CHECK(Resources::Mirrors::D3D11::FindOriginal(mirror) == texture.Get());
@@ -382,7 +383,8 @@ TEST_CASE("Mirrors D3D11: a matching texture gets a mirror, its views mirrored o
    REQUIRE(SUCCEEDED(device->CreateRenderTargetView(texture.Get(), &view_desc, &view)));
    D3D11_RENDER_TARGET_VIEW_DESC1 view_desc1 = {};
    std::memcpy(&view_desc1, &view_desc, sizeof(view_desc));
-   Resources::Mirrors::D3D11::CreateMirrorView(device.Get(), texture.Get(), &view_desc1, view.Get());
+   D3D11_RENDER_TARGET_VIEW_DESC1 game_view_desc;
+   Resources::Mirrors::D3D11::UpgradeView(device.Get(), texture.Get(), &view_desc1, view.Get(), game_view_desc);
    std::array<ID3D11RenderTargetView*, 2> bound = {view.Get(), nullptr};
    Resources::Mirrors::D3D11::SwapViews(bound.data(), UINT(bound.size()));
    REQUIRE(bound[0] != view.Get());
@@ -411,7 +413,7 @@ TEST_CASE("Mirrors D3D11: a matching texture gets a mirror, its views mirrored o
    // CPU data reaches the mirror in its format
    const uint32_t one = 0x3C0u | (0x3C0u << 11) | (0x1E0u << 22);
    const std::vector<uint32_t> data(32 * 18, one);
-   Resources::Mirrors::D3D11::WriteToMirror(context.Get(), texture.Get(), 0, nullptr, data.data(), 32 * 4, 32 * 18 * 4);
+   CHECK_FALSE(Resources::Mirrors::D3D11::WriteSubresource(context.Get(), texture.Get(), 0, nullptr, data.data(), 32 * 4, 32 * 18 * 4));
    D3D11_TEXTURE2D_DESC staging_desc = mirror_desc;
    staging_desc.Usage = D3D11_USAGE_STAGING;
    staging_desc.BindFlags = 0;
@@ -434,7 +436,7 @@ TEST_CASE("Mirrors D3D11: a matching texture gets a mirror, its views mirrored o
    other.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
    ComPtr<ID3D11Texture2D> plain;
    REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&other), nullptr, &plain)));
-   Resources::Mirrors::D3D11::CreateMirror(device.Get(), other, nullptr, plain.Get());
+   Resources::Mirrors::D3D11::UpgradeTexture(device.Get(), other, nullptr, plain.Get());
    CHECK(Resources::Mirrors::D3D11::FindMirror(plain.Get()) == nullptr);
 
    // The mirror and its view go with the game's objects
@@ -645,7 +647,7 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    const D3D12_CLEAR_VALUE clear = {DXGI_FORMAT_R11G11B10_FLOAT, {0.f, 0.f, 0.f, 1.f}};
    ComPtr<ID3D12Resource> texture;
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_RENDER_TARGET, &clear, IID_PPV_ARGS(&texture))));
-   Mirrors12::CreateMirror(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, &clear, false);
+   Mirrors12::UpgradeResource(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, &clear, false);
    ID3D12Resource* mirror = Mirrors12::FindMirror(texture.Get());
    REQUIRE(mirror);
    CHECK(Mirrors12::FindOriginal(mirror) == texture.Get());
@@ -672,28 +674,29 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    const D3D12_CPU_DESCRIPTOR_HANDLE* targets = &rtv;
    BOOL single_range = TRUE;
    const D3D12_CPU_DESCRIPTOR_HANDLE* depth = nullptr;
-   Shaders::Database::D3D12::TargetFormats formats;
-   Mirrors12::SwapRenderTargets(nullptr, 1, targets, single_range, depth, formats);
+   const Shaders::Database::D3D12::TargetFormats formats = Mirrors12::BindRenderTargets(nullptr, 1, targets, single_range, depth, true);
    CHECK(targets[0].ptr != rtv.ptr);
    CHECK_FALSE(single_range);
    CHECK(formats.render_targets[0] == DXGI_FORMAT_R16G16B16A16_FLOAT);
    CHECK(formats.render_targets[1] == DXGI_FORMAT_UNKNOWN);
    CHECK(formats.depth == DXGI_FORMAT_UNKNOWN);
    D3D12_CPU_DESCRIPTOR_HANDLE cleared = rtv;
-   CHECK(Mirrors12::SwapHandle(cleared));
+   const D3D12_RECT* no_rects = nullptr;
+   Mirrors12::PrepareClear(cleared, 0, no_rects, true);
    CHECK(cleared.ptr == targets[0].ptr);
    // The game writes another view there: the handle is the game's again
    const D3D12_RESOURCE_DESC plain_desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 32, 18, 1, 1, DXGI_FORMAT_R8G8B8A8_UNORM, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN,
       D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
    ComPtr<ID3D12Resource> plain;
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &plain_desc, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, IID_PPV_ARGS(&plain))));
-   Mirrors12::CreateMirror(device.Get(), plain.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, false);
+   Mirrors12::UpgradeResource(device.Get(), plain.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, false);
    CHECK_FALSE(Mirrors12::FindMirror(plain.Get()));
    const D3D12_CPU_DESCRIPTOR_HANDLE other = {rtv.ptr + device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV)};
    device->CreateRenderTargetView(plain.Get(), nullptr, other);
    Mirrors12::TrackView(device.Get(), other, Mirrors12::ViewKind::RenderTarget, plain.Get(), nullptr, true);
    cleared = other;
-   CHECK_FALSE(Mirrors12::SwapHandle(cleared));
+   Mirrors12::PrepareClear(cleared, 0, no_rects, true);
+   CHECK(cleared.ptr == other.ptr);
 
    // A shader resource view in a CPU heap, copied into a shader-visible one: the copy is followed by the mirror's view
    const D3D12_DESCRIPTOR_HEAP_DESC cpu_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 4};
@@ -709,23 +712,24 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    Mirrors12::TrackView(device.Get(), srv, Mirrors12::ViewKind::ShaderResource, texture.Get(), nullptr, true);
    const uint32_t swapped = Mirrors12::GetStats().swapped_copies;
    device->CopyDescriptorsSimple(1, gpu_heap->GetCPUDescriptorHandleForHeapStart(), srv, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-   Mirrors12::SwapCopiedDescriptors(device.Get(), gpu_heap->GetCPUDescriptorHandleForHeapStart(), srv, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true, true);
+   Mirrors12::TrackCopiedDescriptors(device.Get(), gpu_heap->GetCPUDescriptorHandleForHeapStart(), srv, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+      {.views = true, .samplers = true});
    CHECK(Mirrors12::GetStats().swapped_copies == swapped + 1);
    // A copy between CPU heaps carries the mirror along
    const D3D12_CPU_DESCRIPTOR_HANDLE staged = {srv.ptr + 2 * device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV)};
    device->CopyDescriptorsSimple(1, staged, srv, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
    const uint32_t descriptors = Mirrors12::GetStats().descriptors;
-   Mirrors12::SwapCopiedDescriptors(device.Get(), staged, srv, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, true, true);
+   Mirrors12::TrackCopiedDescriptors(device.Get(), staged, srv, 1, D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, {.views = true, .samplers = true});
    CHECK(Mirrors12::GetStats().descriptors == descriptors + 1);
 
    // Copies between the game's mirrored textures run on the mirrors
    ComPtr<ID3D12Resource> second;
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&second))));
-   Mirrors12::CreateMirror(device.Get(), second.Get(), D3D12_RESOURCE_STATE_COPY_DEST, nullptr, false);
+   Mirrors12::UpgradeResource(device.Get(), second.Get(), D3D12_RESOURCE_STATE_COPY_DEST, nullptr, false);
    ID3D12Resource* copy_destination = second.Get();
    ID3D12Resource* copy_source = texture.Get();
    Mirrors12::CopyRegion copy_region = {};
-   CHECK_FALSE(Mirrors12::SwapCopy(nullptr, copy_destination, copy_source, copy_region));
+   CHECK_FALSE(Mirrors12::Copy(nullptr, copy_destination, copy_source, copy_region, true));
    CHECK(copy_destination == Mirrors12::FindMirror(second.Get()));
    CHECK(copy_source == mirror);
 
@@ -762,7 +766,7 @@ TEST_CASE("Mirrors D3D12: a depth mirror swaps at the depth bind with its format
    clear.DepthStencil = {1.f, 0};
    ComPtr<ID3D12Resource> texture;
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(&texture))));
-   Mirrors12::CreateMirror(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, false);
+   Mirrors12::UpgradeResource(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, false);
    ID3D12Resource* mirror = Mirrors12::FindMirror(texture.Get());
    REQUIRE(mirror);
    CHECK(mirror->GetDesc().Format == DXGI_FORMAT_R32G8X24_TYPELESS);
@@ -778,8 +782,7 @@ TEST_CASE("Mirrors D3D12: a depth mirror swaps at the depth bind with its format
    const D3D12_CPU_DESCRIPTOR_HANDLE* targets = nullptr;
    BOOL single_range = FALSE;
    const D3D12_CPU_DESCRIPTOR_HANDLE* depth = &dsv;
-   Shaders::Database::D3D12::TargetFormats formats;
-   Mirrors12::SwapRenderTargets(nullptr, 0, targets, single_range, depth, formats);
+   const Shaders::Database::D3D12::TargetFormats formats = Mirrors12::BindRenderTargets(nullptr, 0, targets, single_range, depth, true);
    REQUIRE(depth);
    CHECK(depth->ptr != dsv.ptr);
    CHECK(formats.depth == DXGI_FORMAT_D32_FLOAT_S8X24_UINT);
@@ -789,8 +792,8 @@ TEST_CASE("Mirrors D3D12: a depth mirror swaps at the depth bind with its format
    const Mirrors12::Stats counted = Mirrors12::GetStats();
    ComPtr<ID3D12Resource> other;
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_DEPTH_WRITE, &clear, IID_PPV_ARGS(&other))));
-   Mirrors12::CreateMirror(device.Get(), other.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, nullptr, true);
-   Mirrors12::CreateMirror(device.Get(), other.Get(), std::nullopt, nullptr, false);
+   Mirrors12::UpgradeResource(device.Get(), other.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, nullptr, true);
+   Mirrors12::UpgradeResource(device.Get(), other.Get(), std::nullopt, nullptr, false);
    CHECK_FALSE(Mirrors12::FindMirror(other.Get()));
    CHECK(Mirrors12::GetStats().reserved_resources == counted.reserved_resources + 1);
    CHECK(Mirrors12::GetStats().layout_resources == counted.layout_resources + 1);
@@ -821,7 +824,7 @@ TEST_CASE("Mirrors D3D12: a UAV clear of a mirrored texture clears the mirror th
       D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS};
    ComPtr<ID3D12Resource> texture;
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&texture))));
-   Mirrors12::CreateMirror(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, false);
+   Mirrors12::UpgradeResource(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, false);
    ID3D12Resource* mirror = Mirrors12::FindMirror(texture.Get());
    REQUIRE(mirror);
 
@@ -853,7 +856,7 @@ TEST_CASE("Mirrors D3D12: a UAV clear of a mirrored texture clears the mirror th
    D3D12_GPU_DESCRIPTOR_HANDLE gpu = visible->GetGPUDescriptorHandleForHeapStart();
    D3D12_CPU_DESCRIPTOR_HANDLE cpu = game_cpu;
    ID3D12Resource* resource = texture.Get();
-   Mirrors12::SwapClearUnorderedAccess(list.Get(), gpu, cpu, resource);
+   Mirrors12::PrepareClearUnorderedAccess(list.Get(), gpu, cpu, resource, 0, true);
    CHECK(resource == mirror);
    CHECK(cpu.ptr != game_cpu.ptr);
    const UINT increment = device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
@@ -871,7 +874,7 @@ TEST_CASE("Mirrors D3D12: a UAV clear of a mirrored texture clears the mirror th
    gpu = visible->GetGPUDescriptorHandleForHeapStart();
    cpu = game_cpu;
    resource = texture.Get();
-   Mirrors12::SwapClearUnorderedAccess(list.Get(), gpu, cpu, resource);
+   Mirrors12::PrepareClearUnorderedAccess(list.Get(), gpu, cpu, resource, 0, true);
    CHECK(resource == texture.Get());
    CHECK(Mirrors12::GetStats().unhandled_clears == before.unhandled_clears + 1);
    CHECK(SUCCEEDED(list->Close()));
@@ -903,44 +906,48 @@ TEST_CASE("Upgrade: custom_dimensions overrides dimensions, clamps mip count, an
    TextureInfo tex = Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT);
    tex.levels = 1;
    bool resized = false;
-   const std::optional<TextureInfo> matched = Resources::Upgrade::Match(tex, state, false, false, false, &resized);
+   const std::optional<Resources::Upgrade::UpgradeInfo> matched = Resources::Upgrade::GetUpgradeInfo(tex, state);
+   resized = matched && matched->resized;
    REQUIRE(matched);
-   CHECK(matched->width == 2560);
-   CHECK(matched->height == 1440);
-   CHECK(matched->format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   CHECK(matched->upgraded.width == 2560);
+   CHECK(matched->upgraded.height == 1440);
+   CHECK(matched->upgraded.format == DXGI_FORMAT_R16G16B16A16_FLOAT);
    CHECK(resized);
 
    // Shrink clamps mip count to max valid mips for 128x128 (8 mips) and preserves format when format isn't in rules.formats
    TextureInfo shrunk = Target(512, 512, DXGI_FORMAT_R8G8B8A8_UNORM);
    shrunk.levels = 10;
    resized = false;
-   const std::optional<TextureInfo> shrunk_result = Resources::Upgrade::Match(shrunk, state, false, false, false, &resized);
+   const std::optional<Resources::Upgrade::UpgradeInfo> shrunk_result = Resources::Upgrade::GetUpgradeInfo(shrunk, state);
+   resized = shrunk_result && shrunk_result->resized;
    REQUIRE(shrunk_result);
-   CHECK(shrunk_result->width == 128);
-   CHECK(shrunk_result->height == 128);
-   CHECK(shrunk_result->levels == 8);
-   CHECK(shrunk_result->format == DXGI_FORMAT_R8G8B8A8_UNORM);
+   CHECK(shrunk_result->upgraded.width == 128);
+   CHECK(shrunk_result->upgraded.height == 128);
+   CHECK(shrunk_result->upgraded.levels == 8);
+   CHECK(shrunk_result->upgraded.format == DXGI_FORMAT_R8G8B8A8_UNORM);
    CHECK(resized);
 
    // Cube textures cannot change height independently, and UAV textures cannot add MSAA samples
    TextureInfo cube = Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT);
    cube.cube = true;
    resized = false;
-   const std::optional<TextureInfo> cube_match = Resources::Upgrade::Match(cube, state, false, false, false, &resized);
+   const std::optional<Resources::Upgrade::UpgradeInfo> cube_match = Resources::Upgrade::GetUpgradeInfo(cube, state);
+   resized = cube_match && cube_match->resized;
    CHECK_FALSE(resized);
    if (cube_match)
    {
-      CHECK(cube_match->width == 1280);
-      CHECK(cube_match->height == 720);
+      CHECK(cube_match->upgraded.width == 1280);
+      CHECK(cube_match->upgraded.height == 720);
    }
 
    TextureInfo uav_tex = Target(256, 256, DXGI_FORMAT_R11G11B10_FLOAT);
    uav_tex.unordered_access = true;
    resized = false;
-   const std::optional<TextureInfo> uav_match = Resources::Upgrade::Match(uav_tex, state, false, false, false, &resized);
+   const std::optional<Resources::Upgrade::UpgradeInfo> uav_match = Resources::Upgrade::GetUpgradeInfo(uav_tex, state);
+   resized = uav_match && uav_match->resized;
    CHECK_FALSE(resized);
    if (uav_match)
-      CHECK(uav_match->samples == 1);
+      CHECK(uav_match->upgraded.samples == 1);
 }
 
 TEST_CASE("Chains: seed matching and propagation eligibility")
@@ -1090,7 +1097,7 @@ TEST_CASE("Mirrors D3D11: scaled viewports, invalidation, and recycle pool")
       .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
    ComPtr<ID3D11Texture2D> tex;
    REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&desc), nullptr, &tex)));
-   Resources::Mirrors::D3D11::CreateMirror(device.Get(), desc, nullptr, tex.Get());
+   Resources::Mirrors::D3D11::UpgradeTexture(device.Get(), desc, nullptr, tex.Get());
    ID3D11Resource* mirror = Resources::Mirrors::D3D11::FindMirror(tex.Get());
    REQUIRE(mirror);
    D3D11_TEXTURE2D_DESC mirror_desc = {};
@@ -1101,7 +1108,8 @@ TEST_CASE("Mirrors D3D11: scaled viewports, invalidation, and recycle pool")
    // Viewport rescaling on PrepareDrawOrDispatch when bound to scaled mirror
    ComPtr<ID3D11RenderTargetView> rtv;
    REQUIRE(SUCCEEDED(device->CreateRenderTargetView(tex.Get(), nullptr, &rtv)));
-   Resources::Mirrors::D3D11::CreateMirrorView(device.Get(), tex.Get(), nullptr, rtv.Get());
+   D3D11_RENDER_TARGET_VIEW_DESC1 game_view_desc;
+   Resources::Mirrors::D3D11::UpgradeView(device.Get(), tex.Get(), nullptr, rtv.Get(), game_view_desc);
    ID3D11RenderTargetView* bound_rtv = rtv.Get();
    Resources::Mirrors::D3D11::SwapViews(&bound_rtv, 1);
    context->OMSetRenderTargets(1, &bound_rtv, nullptr);
@@ -1173,7 +1181,7 @@ TEST_CASE("Mirrors D3D12: ViewportsOnly expansion scales sub-rect viewports and 
    const D3D12_VIEWPORT game_vp = {0.f, 0.f, 64.f, 36.f, 0.f, 1.f};
    UINT count = 1;
    const D3D12_VIEWPORT* vps = &game_vp;
-   Mirrors12::RecordViewports(list.Get(), count, vps);
+   Mirrors12::BindViewports(list.Get(), count, vps);
    REQUIRE(vps != nullptr);
    CHECK(vps[0].Width == doctest::Approx(128.f));
    CHECK(vps[0].Height == doctest::Approx(72.f));
@@ -1394,7 +1402,7 @@ TEST_CASE("Mirrors D3D11: partial-region converting copy and cross-format MSAA r
    const D3D11_TEXTURE2D_DESC1 src_desc = {.Width = 32, .Height = 18, .MipLevels = 1, .ArraySize = 1, .Format = DXGI_FORMAT_R11G11B10_FLOAT, .SampleDesc = {1, 0}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
    ComPtr<ID3D11Texture2D> src_tex;
    REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&src_desc), nullptr, &src_tex)));
-   Resources::Mirrors::D3D11::CreateMirror(device.Get(), src_desc, nullptr, src_tex.Get());
+   Resources::Mirrors::D3D11::UpgradeTexture(device.Get(), src_desc, nullptr, src_tex.Get());
    REQUIRE(Resources::Mirrors::D3D11::FindMirror(src_tex.Get()));
 
    const D3D11_TEXTURE2D_DESC dst_desc = {.Width = 32, .Height = 18, .MipLevels = 1, .ArraySize = 1, .Format = DXGI_FORMAT_R8G8B8A8_UNORM, .SampleDesc = {1, 0}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
@@ -1409,12 +1417,408 @@ TEST_CASE("Mirrors D3D11: partial-region converting copy and cross-format MSAA r
    const D3D11_TEXTURE2D_DESC1 msaa_desc = {.Width = 32, .Height = 18, .MipLevels = 1, .ArraySize = 1, .Format = DXGI_FORMAT_R11G11B10_FLOAT, .SampleDesc = {4, 0}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
    ComPtr<ID3D11Texture2D> msaa_tex;
    REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&msaa_desc), nullptr, &msaa_tex)));
-   Resources::Mirrors::D3D11::CreateMirror(device.Get(), msaa_desc, nullptr, msaa_tex.Get());
+   Resources::Mirrors::D3D11::UpgradeTexture(device.Get(), msaa_desc, nullptr, msaa_tex.Get());
    REQUIRE(Resources::Mirrors::D3D11::FindMirror(msaa_tex.Get()));
 
    const uint32_t unhandled_before = Resources::Mirrors::D3D11::GetUnhandledResolves();
    CHECK(Resources::Mirrors::D3D11::RedirectResolve(context.Get(), dst_tex.Get(), 0, msaa_tex.Get(), 0, DXGI_FORMAT_R11G11B10_FLOAT));
    CHECK(Resources::Mirrors::D3D11::GetUnhandledResolves() == unhandled_before);
+}
+
+TEST_CASE("Upgrade: an in-place texture of a typed format stays typed, so views without a desc still work")
+{
+   Resources::Upgrade::Rules rules = GetFF7RRules();
+   rules.method = Resources::Upgrade::Method::InPlace;
+   rules.depth_formats = {DXGI_FORMAT_D24_UNORM_S8_UINT, DXGI_FORMAT_R24G8_TYPELESS, DXGI_FORMAT_D16_UNORM};
+   Resources::Upgrade::SetRules(rules);
+   const auto decide = [](const TextureInfo& game) {
+      const std::optional<Resources::Upgrade::UpgradeInfo> upgrade = Resources::Upgrade::GetUpgradeInfo(game, STATE);
+      REQUIRE(upgrade);
+      CHECK(upgrade->method == Resources::Upgrade::Method::InPlace);
+      return upgrade->upgraded.format;
+   };
+   CHECK(decide(Target(3440, 1440, DXGI_FORMAT_R11G11B10_FLOAT)) == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   const TextureInfo depth = {.width = 3440, .height = 1440, .format = DXGI_FORMAT_D24_UNORM_S8_UINT, .depth_stencil = true};
+   CHECK(decide(depth) == DXGI_FORMAT_D32_FLOAT_S8X24_UINT);
+   TextureInfo depth_only = depth;
+   depth_only.format = DXGI_FORMAT_D16_UNORM;
+   CHECK(decide(depth_only) == DXGI_FORMAT_D32_FLOAT);
+   // A typeless one keeps the typeless format, its views have a desc
+   TextureInfo typeless_depth = depth;
+   typeless_depth.format = DXGI_FORMAT_R24G8_TYPELESS;
+   CHECK(decide(typeless_depth) == DXGI_FORMAT_R32G8X24_TYPELESS);
+   Resources::Upgrade::SetRules({});
+}
+
+namespace {
+// What GetDesc reports to the game (its hook spoofs the real desc)
+DXGI_FORMAT GetSpoofedFormat(ID3D11Texture2D* texture)
+{
+   D3D11_TEXTURE2D_DESC desc;
+   texture->GetDesc(&desc);
+   Resources::Mirrors::D3D11::SpoofDesc(texture, desc);
+   return desc.Format;
+}
+
+DXGI_FORMAT GetSpoofedFormat(ID3D12Resource* resource)
+{
+   D3D12_RESOURCE_DESC desc = resource->GetDesc();
+   Resources::Mirrors::D3D12::SpoofDesc(resource, desc);
+   return desc.Format;
+}
+
+// Stand-ins of Luma's copy and scale shaders (Draw::D3D11::Copy and Scale), for converting copies
+void PublishCopyShaders(ID3D11Device* device)
+{
+   const auto ensure_shader = [](std::string_view name, ShaderStage stage) -> uint32_t {
+      const uint64_t hash = Utils::Hash::Name(name);
+      if (const std::optional<uint32_t> existing = Resources::Database::Find(hash))
+         return *existing;
+      const std::optional<uint32_t> added =
+         Resources::Database::Register({.name_hash = hash, .name = std::string(name), .kind = Resources::Database::Kind::Shader, .stage = stage});
+      REQUIRE(added);
+      return *added;
+   };
+   constexpr const char* VS_SOURCE = "void main(uint id : SV_VertexID, out float4 pos : SV_Position, out float2 uv : TEXCOORD0) {\n"
+                                     "  uv = float2((id << 1) & 2, id & 2);\n"
+                                     "  pos = float4(uv * float2(2, -2) + float2(-1, 1), 0, 1);\n"
+                                     "}\n";
+   constexpr const char* COPY_SOURCE = "Texture2D t0 : register(t0);\n"
+                                       "float4 main(float4 pos : SV_Position) : SV_Target { return t0.Load(int3(pos.xy, 0)); }\n";
+   constexpr const char* SCALE_SOURCE = "Texture2D t0 : register(t0);\n"
+                                        "SamplerState s0 : register(s0);\n"
+                                        "float4 main(float4 pos : SV_Position, float2 uv : TEXCOORD0) : SV_Target { return t0.Sample(s0, uv); }\n";
+   const auto compile = [](const char* source, const char* target) {
+      ComPtr<ID3DBlob> blob;
+      REQUIRE(SUCCEEDED(D3DCompile(source, std::strlen(source), nullptr, nullptr, nullptr, "main", target, 0, 0, &blob, nullptr)));
+      auto shader = std::make_shared<Shaders::CompiledShader>();
+      const auto* bytes = static_cast<const uint8_t*>(blob->GetBufferPointer());
+      shader->bytecode.assign(bytes, bytes + blob->GetBufferSize());
+      return shader;
+   };
+   const auto vertex = compile(VS_SOURCE, "vs_5_0");
+   // Registered before the store, which is sized for the entries there are
+   const uint32_t copy_vs = ensure_shader("Luma_Copy_VS", ShaderStage::Vertex);
+   const uint32_t copy_ps = ensure_shader("Luma_Copy_PS", ShaderStage::Pixel);
+   const uint32_t scale_vs = ensure_shader("Luma_Scale_VS", ShaderStage::Vertex);
+   const uint32_t scale_ps = ensure_shader("Luma_Scale_PS", ShaderStage::Pixel);
+   Shaders::CreateStore(device, Api::D3D11);
+   Resources::Database::D3D11::CreateDeviceObjects(device);
+   Resources::Database::PublishShaders(*Shaders::GetStore(device), {
+                                                                      {copy_vs, {.compiled = vertex}},
+                                                                      {copy_ps, {.compiled = compile(COPY_SOURCE, "ps_5_0")}},
+                                                                      {scale_vs, {.compiled = vertex}},
+                                                                      {scale_ps, {.compiled = compile(SCALE_SOURCE, "ps_5_0")}},
+                                                                   });
+   Resources::Database::D3D11::UpdateShaderObjects(device);
+}
+
+// The last texel of a 2D texture's first subresource (RGBA16F or a 32 bit format), read by Luma (the real desc, spoofed or not)
+std::array<uint16_t, 4> ReadLastTexel(ID3D11Device* device, ID3D11DeviceContext* context, ID3D11Texture2D* source)
+{
+   D3D11_TEXTURE2D_DESC staging_desc;
+   {
+      Hooks::Scope::Guard scope;
+      source->GetDesc(&staging_desc);
+   }
+   staging_desc.MipLevels = 1;
+   staging_desc.Usage = D3D11_USAGE_STAGING;
+   staging_desc.BindFlags = 0;
+   staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+   ComPtr<ID3D11Texture2D> staging;
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(&staging_desc, nullptr, &staging)));
+   context->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, source, 0, nullptr);
+   D3D11_MAPPED_SUBRESOURCE mapped = {};
+   REQUIRE(SUCCEEDED(context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped)));
+   const size_t texel_bytes = staging_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT ? 8 : 4;
+   std::array<uint16_t, 4> texel = {};
+   std::memcpy(texel.data(), static_cast<const uint8_t*>(mapped.pData) + mapped.RowPitch * (staging_desc.Height - 1) + (staging_desc.Width - 1) * texel_bytes, texel_bytes);
+   context->Unmap(staging.Get(), 0);
+   return texel;
+}
+} // namespace
+
+TEST_CASE("Mirrors D3D11 InPlace: the game's texture is created upgraded, its views, uploads and copies converted, and its format spoofed")
+{
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
+   Frame::CreateDeviceState(device.Get());
+   Frame::SetOutputResolution(device.Get(), {64, 36});
+
+   PublishCopyShaders(device.Get());
+
+   Resources::Upgrade::Rules in_place = GetFF7RRules();
+   in_place.method = Resources::Upgrade::Method::InPlace;
+   CHECK(in_place.spoof_description);
+   Resources::Upgrade::SetRules(in_place);
+
+   struct Cleanup
+   {
+      ID3D11Device* device;
+
+      ~Cleanup()
+      {
+         Resources::Upgrade::SetRules({});
+         Resources::Database::D3D11::ReleaseDeviceObjects(device);
+         Shaders::DestroyStore(device);
+      }
+   } cleanup{device.Get()};
+
+   const Resources::Mirrors::Stats before = Resources::Mirrors::GetStats();
+
+   // Created in the upgraded format, the game's initial data converted to it
+   const uint32_t one = 0x3C0u | (0x3C0u << 11) | (0x1E0u << 22);
+   const std::vector<uint32_t> ones(32 * 18, one);
+   const D3D11_SUBRESOURCE_DATA initial = {ones.data(), 32 * 4, 32 * 18 * 4};
+   D3D11_TEXTURE2D_DESC1 desc = {.Width = 32,
+      .Height = 18,
+      .MipLevels = 1,
+      .ArraySize = 1,
+      .Format = DXGI_FORMAT_R11G11B10_FLOAT,
+      .SampleDesc = {1, 0},
+      .Usage = D3D11_USAGE_DEFAULT,
+      .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
+   const D3D11_SUBRESOURCE_DATA* initial_data = &initial;
+   REQUIRE(Resources::Mirrors::D3D11::PrepareTexture(device.Get(), desc, initial_data));
+   CHECK(desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   CHECK(initial_data != &initial);
+   ComPtr<ID3D11Texture2D> texture;
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&desc), initial_data, &texture)));
+   Resources::Mirrors::D3D11::UpgradeTexture(device.Get(), desc, initial_data, texture.Get());
+   const std::optional<Resources::Upgrade::UpgradeInfo> upgrade = Resources::Mirrors::D3D11::FindUpgrade(texture.Get());
+   REQUIRE(upgrade);
+   CHECK(upgrade->method == Resources::Upgrade::Method::InPlace);
+   CHECK(upgrade->game.format == DXGI_FORMAT_R11G11B10_FLOAT);
+   CHECK(Resources::Mirrors::GetStats().in_place == before.in_place + 1);
+   CHECK(Resources::Mirrors::GetStats().in_place_saved_bytes == before.in_place_saved_bytes + 32 * 18 * 8);
+   CHECK(Resources::Mirrors::GetStats().mirrors == before.mirrors);
+   CHECK(GetSpoofedFormat(texture.Get()) == DXGI_FORMAT_R11G11B10_FLOAT);
+   CHECK(Resources::Mirrors::GetStats().in_place_resized == before.in_place_resized);
+
+   const auto read_texel = [&](ID3D11Texture2D* source) { return ReadLastTexel(device.Get(), context.Get(), source); };
+   CHECK(read_texel(texture.Get())[0] == 0x3C00);
+
+   // The game's view format in the texture's; a view without a desc takes the texture's
+   std::optional<D3D11_RENDER_TARGET_VIEW_DESC1> view_desc = D3D11_RENDER_TARGET_VIEW_DESC1{.Format = DXGI_FORMAT_R11G11B10_FLOAT, .ViewDimension = D3D11_RTV_DIMENSION_TEXTURE2D};
+   Resources::Mirrors::D3D11::PrepareView(texture.Get(), view_desc);
+   CHECK(view_desc->Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   ComPtr<ID3D11RenderTargetView> view;
+   CHECK(SUCCEEDED(device->CreateRenderTargetView(texture.Get(), reinterpret_cast<const D3D11_RENDER_TARGET_VIEW_DESC*>(&*view_desc), &view)));
+   std::optional<D3D11_RENDER_TARGET_VIEW_DESC1> no_desc;
+   Resources::Mirrors::D3D11::PrepareView(texture.Get(), no_desc);
+   CHECK_FALSE(no_desc);
+
+   // CPU data of the game's format is converted, and the game's call skipped
+   const FLOAT clear[4] = {};
+   context->ClearRenderTargetView(view.Get(), clear);
+   CHECK(Resources::Mirrors::D3D11::WriteSubresource(context.Get(), texture.Get(), 0, nullptr, ones.data(), 32 * 4, 32 * 18 * 4));
+   CHECK(read_texel(texture.Get())[0] == 0x3C00);
+
+   // A copy into a texture of the game's format is converted (a native one would be dropped)
+   D3D11_TEXTURE2D_DESC plain_desc;
+   std::memcpy(&plain_desc, &desc, sizeof(plain_desc));
+   plain_desc.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+   plain_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+   ComPtr<ID3D11Texture2D> plain;
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(&plain_desc, nullptr, &plain)));
+   CHECK(Resources::Mirrors::D3D11::RedirectCopy(context.Get(), plain.Get(), texture.Get()));
+   uint32_t copied = 0;
+   std::memcpy(&copied, read_texel(plain.Get()).data(), sizeof(copied));
+   CHECK(copied == one);
+   // Region copies the same way; copies between two of the upgraded format stay native
+   const D3D11_BOX box = {0, 0, 0, 4, 4, 1};
+   CHECK(Resources::Mirrors::D3D11::RedirectCopyRegion(context.Get(), plain.Get(), 0, 4, 4, 0, texture.Get(), 0, &box, 0));
+   D3D11_TEXTURE2D_DESC wide_desc = plain_desc;
+   wide_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+   ComPtr<ID3D11Texture2D> wide;
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(&wide_desc, nullptr, &wide)));
+   CHECK_FALSE(Resources::Mirrors::D3D11::RedirectCopy(context.Get(), wide.Get(), texture.Get()));
+
+   // A texture the rules don't match is created as the game asked, and nothing is left pending for it
+   D3D11_TEXTURE2D_DESC1 other = desc;
+   other.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+   const D3D11_SUBRESOURCE_DATA* no_data = nullptr;
+   CHECK_FALSE(Resources::Mirrors::D3D11::PrepareTexture(device.Get(), other, no_data));
+   CHECK(other.Format == DXGI_FORMAT_R8G8B8A8_UNORM);
+   Resources::Mirrors::D3D11::UpgradeTexture(device.Get(), other, no_data, plain.Get());
+   CHECK_FALSE(Resources::Mirrors::D3D11::FindUpgrade(plain.Get()));
+   // Shared textures keep the game's format (others open them)
+   D3D11_TEXTURE2D_DESC1 shared = desc;
+   shared.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+   shared.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
+   CHECK_FALSE(Resources::Mirrors::D3D11::PrepareTexture(device.Get(), shared, no_data));
+   // Without the spoof, GetDesc stays the real one
+   in_place.spoof_description = false;
+   Resources::Upgrade::SetRules(in_place);
+   CHECK(GetSpoofedFormat(texture.Get()) == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   // The Mirror method never upgrades in place
+   in_place.method = Resources::Upgrade::Method::Mirror;
+   Resources::Upgrade::SetRules(in_place);
+   D3D11_TEXTURE2D_DESC1 mirrored = shared;
+   mirrored.MiscFlags = 0;
+   CHECK_FALSE(Resources::Mirrors::D3D11::PrepareTexture(device.Get(), mirrored, no_data));
+
+   view.Reset();
+   texture.Reset();
+   CHECK(Resources::Mirrors::GetStats().in_place == before.in_place);
+   CHECK(Resources::Mirrors::GetStats().in_place_saved_bytes == before.in_place_saved_bytes);
+}
+
+TEST_CASE("Mirrors D3D11 InPlace: custom dimensions resize the game's texture itself, its draws, copies, clears and uploads rescaled, its size spoofed")
+{
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> context;
+   REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
+   Frame::CreateDeviceState(device.Get());
+   Frame::SetOutputResolution(device.Get(), {64, 36});
+   PublishCopyShaders(device.Get());
+   // A 16x16 "shadow map" of a format the rules don't upgrade, made 32x32
+   Resources::Upgrade::Rules rules = {.method = Resources::Upgrade::Method::InPlace, .formats = {DXGI_FORMAT_R11G11B10_FLOAT}, .custom_dimensions = {{.filter = {16, 16, 0, 0}, .size = {32, 32, 0, 0}}}};
+   Resources::Upgrade::SetRules(rules);
+
+   struct Cleanup
+   {
+      ID3D11Device* device;
+
+      ~Cleanup()
+      {
+         Resources::Upgrade::SetRules({});
+         Resources::Database::D3D11::ReleaseDeviceObjects(device);
+         Shaders::DestroyStore(device);
+      }
+   } cleanup{device.Get()};
+
+   const Resources::Mirrors::Stats before = Resources::Mirrors::GetStats();
+
+   D3D11_TEXTURE2D_DESC1 desc = {.Width = 16,
+      .Height = 16,
+      .MipLevels = 1,
+      .ArraySize = 1,
+      .Format = DXGI_FORMAT_R8G8B8A8_UNORM,
+      .SampleDesc = {1, 0},
+      .Usage = D3D11_USAGE_DEFAULT,
+      .BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE};
+   const D3D11_SUBRESOURCE_DATA* no_data = nullptr;
+   REQUIRE(Resources::Mirrors::D3D11::PrepareTexture(device.Get(), desc, no_data));
+   CHECK(desc.Width == 32);
+   CHECK(desc.Height == 32);
+   CHECK(desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM);
+   ComPtr<ID3D11Texture2D> texture;
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(reinterpret_cast<const D3D11_TEXTURE2D_DESC*>(&desc), nullptr, &texture)));
+   Resources::Mirrors::D3D11::UpgradeTexture(device.Get(), desc, no_data, texture.Get());
+   const std::optional<Resources::Upgrade::UpgradeInfo> upgrade = Resources::Mirrors::D3D11::FindUpgrade(texture.Get());
+   REQUIRE(upgrade);
+   CHECK(upgrade->game.width == 16);
+   CHECK(Resources::Mirrors::GetStats().in_place_resized == before.in_place_resized + 1);
+   CHECK(Resources::Mirrors::GetStats().mirrors == before.mirrors);
+   D3D11_TEXTURE2D_DESC spoofed;
+   texture->GetDesc(&spoofed);
+   Resources::Mirrors::D3D11::SpoofDesc(texture.Get(), spoofed);
+   CHECK(spoofed.Width == 16);
+   CHECK(spoofed.Height == 16);
+   CHECK(spoofed.MipLevels == 1);
+
+   // A draw into it gets the game's viewport and scissor scaled; one into a texture of the game's size gets the game's back
+   ComPtr<ID3D11RenderTargetView> view;
+   REQUIRE(SUCCEEDED(device->CreateRenderTargetView(texture.Get(), nullptr, &view)));
+   D3D11_TEXTURE2D_DESC plain_desc;
+   std::memcpy(&plain_desc, &desc, sizeof(plain_desc));
+   plain_desc.Width = 16;
+   plain_desc.Height = 16;
+   ComPtr<ID3D11Texture2D> plain;
+   REQUIRE(SUCCEEDED(device->CreateTexture2D(&plain_desc, nullptr, &plain)));
+   ComPtr<ID3D11RenderTargetView> plain_view;
+   REQUIRE(SUCCEEDED(device->CreateRenderTargetView(plain.Get(), nullptr, &plain_view)));
+   const D3D11_VIEWPORT game_viewport = {0.f, 0.f, 16.f, 16.f, 0.f, 1.f};
+   const D3D11_RECT game_scissor = {0, 0, 8, 16};
+   context->RSSetViewports(1, &game_viewport);
+   context->RSSetScissorRects(1, &game_scissor);
+   const auto bound_viewport = [&] {
+      UINT count = 1;
+      D3D11_VIEWPORT viewport = {};
+      context->RSGetViewports(&count, &viewport);
+      return viewport;
+   };
+   const auto bound_scissor = [&] {
+      UINT count = 1;
+      D3D11_RECT rect = {};
+      context->RSGetScissorRects(&count, &rect);
+      return rect;
+   };
+   context->OMSetRenderTargets(1, view.GetAddressOf(), nullptr);
+   Resources::Mirrors::D3D11::PrepareDrawOrDispatch(context.Get(), false);
+   CHECK(bound_viewport().Width == 32.f);
+   CHECK(bound_scissor().right == 16);
+   // Again: not scaled twice
+   Resources::Mirrors::D3D11::PrepareDrawOrDispatch(context.Get(), false);
+   CHECK(bound_viewport().Width == 32.f);
+   context->OMSetRenderTargets(1, plain_view.GetAddressOf(), nullptr);
+   Resources::Mirrors::D3D11::PrepareDrawOrDispatch(context.Get(), false);
+   CHECK(bound_viewport().Width == 16.f);
+   CHECK(bound_scissor().right == 8);
+   // The game binding its own makes them the game's
+   context->OMSetRenderTargets(1, view.GetAddressOf(), nullptr);
+   const D3D11_VIEWPORT half = {0.f, 0.f, 8.f, 8.f, 0.f, 1.f};
+   context->RSSetViewports(1, &half);
+   Resources::Mirrors::D3D11::OnBindViewports(context.Get(), 1, &half);
+   Resources::Mirrors::D3D11::PrepareDrawOrDispatch(context.Get(), false);
+   CHECK(bound_viewport().Width == 16.f);
+   ID3D11RenderTargetView* no_views[1] = {};
+   context->OMSetRenderTargets(1, no_views, nullptr);
+
+   // CPU data of the game's size is scaled into it
+   const std::vector<uint32_t> white(16 * 16, 0xFFFFFFFFu);
+   CHECK(Resources::Mirrors::D3D11::WriteSubresource(context.Get(), texture.Get(), 0, nullptr, white.data(), 16 * 4, 16 * 16 * 4));
+   std::array<uint16_t, 4> texel = ReadLastTexel(device.Get(), context.Get(), texture.Get());
+   uint32_t value = 0;
+   std::memcpy(&value, texel.data(), sizeof(value));
+   CHECK(value == 0xFFFFFFFFu);
+
+   // Copies to and from a texture of the game's size are scaled
+   CHECK(Resources::Mirrors::D3D11::RedirectCopy(context.Get(), plain.Get(), texture.Get()));
+   texel = ReadLastTexel(device.Get(), context.Get(), plain.Get());
+   std::memcpy(&value, texel.data(), sizeof(value));
+   CHECK(value == 0xFFFFFFFFu);
+   // A region in the game's coordinates: its bottom right 4x4 into the game's 12, 12
+   const FLOAT black[4] = {};
+   context->ClearRenderTargetView(plain_view.Get(), black);
+   const D3D11_BOX box = {12, 12, 0, 16, 16, 1};
+   CHECK(Resources::Mirrors::D3D11::RedirectCopyRegion(context.Get(), plain.Get(), 0, 12, 12, 0, texture.Get(), 0, &box, 0));
+   texel = ReadLastTexel(device.Get(), context.Get(), plain.Get());
+   std::memcpy(&value, texel.data(), sizeof(value));
+   CHECK(value == 0xFFFFFFFFu);
+
+   // A clear's rects are in the game's coordinates: the game's bottom right texel is the texture's 2x2
+   ComPtr<ID3D11DeviceContext1> context1;
+   if (SUCCEEDED(context.As(&context1)))
+   {
+      const D3D11_RECT corner = {15, 15, 16, 16};
+      CHECK(Resources::Mirrors::D3D11::RedirectClearView(context.Get(), view.Get(), black, &corner, 1));
+      texel = ReadLastTexel(device.Get(), context.Get(), texture.Get());
+      std::memcpy(&value, texel.data(), sizeof(value));
+      CHECK(value == 0u);
+   }
+
+   // Other layers, or fewer mips, keep a mirror
+   rules.custom_dimensions = {{.filter = {16, 16, 0, 0}, .size = {32, 32, 2, 0}}};
+   Resources::Upgrade::SetRules(rules);
+   D3D11_TEXTURE2D_DESC1 layered = desc;
+   layered.Width = 16;
+   layered.Height = 16;
+   CHECK_FALSE(Resources::Mirrors::D3D11::PrepareTexture(device.Get(), layered, no_data));
+   rules.custom_dimensions = {{.filter = {16, 16, 0, 0}, .size = {4, 4, 0, 0}}};
+   Resources::Upgrade::SetRules(rules);
+   D3D11_TEXTURE2D_DESC1 mipped = layered;
+   mipped.MipLevels = 5;
+   CHECK_FALSE(Resources::Mirrors::D3D11::PrepareTexture(device.Get(), mipped, no_data));
+
+   view.Reset();
+   texture.Reset();
+   // D3D11 lets go of objects its draws used at the flush
+   context->ClearState();
+   context->Flush();
+   CHECK(Resources::Mirrors::GetStats().in_place_resized == before.in_place_resized);
 }
 
 TEST_CASE("D3D12 parity: mirror/descriptor helpers")
@@ -1451,7 +1855,7 @@ TEST_CASE("D3D12 parity: mirror/descriptor helpers")
    };
    ComPtr<ID3D12Resource> tex;
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &tex_desc, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, IID_PPV_ARGS(&tex))));
-   Mirrors12::CreateMirror(device.Get(), tex.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, false);
+   Mirrors12::UpgradeResource(device.Get(), tex.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, false);
    ID3D12Resource* mirror = Game::D3D12::FindMirror(tex.Get());
    REQUIRE(mirror);
    CHECK(Game::D3D12::FindOriginal(mirror) == tex.Get());
@@ -1587,8 +1991,8 @@ TEST_CASE("Mirrors D3D12: same-family and cross-format MSAA SwapResolve")
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &same_dst_desc, D3D12_RESOURCE_STATE_RESOLVE_DEST, nullptr, IID_PPV_ARGS(&same_dst))));
    REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &cross_dst_desc, D3D12_RESOURCE_STATE_RESOLVE_DEST, nullptr, IID_PPV_ARGS(&cross_dst))));
 
-   Mirrors12::CreateMirror(device.Get(), msaa_src.Get(), D3D12_RESOURCE_STATE_RESOLVE_SOURCE, nullptr, false);
-   Mirrors12::CreateMirror(device.Get(), same_dst.Get(), D3D12_RESOURCE_STATE_RESOLVE_DEST, nullptr, false);
+   Mirrors12::UpgradeResource(device.Get(), msaa_src.Get(), D3D12_RESOURCE_STATE_RESOLVE_SOURCE, nullptr, false);
+   Mirrors12::UpgradeResource(device.Get(), same_dst.Get(), D3D12_RESOURCE_STATE_RESOLVE_DEST, nullptr, false);
    ID3D12Resource* msaa_mirror = Mirrors12::FindMirror(msaa_src.Get());
    ID3D12Resource* same_mirror = Mirrors12::FindMirror(same_dst.Get());
    REQUIRE(msaa_mirror);
@@ -1599,7 +2003,7 @@ TEST_CASE("Mirrors D3D12: same-family and cross-format MSAA SwapResolve")
    ID3D12Resource* dst_arg = same_dst.Get();
    ID3D12Resource* src_arg = msaa_src.Get();
    DXGI_FORMAT fmt = DXGI_FORMAT_R11G11B10_FLOAT;
-   CHECK_FALSE(Mirrors12::SwapResolve(list.Get(), dst_arg, 0, src_arg, 0, fmt));
+   CHECK_FALSE(Mirrors12::Resolve(list.Get(), dst_arg, 0, src_arg, 0, fmt, true));
    CHECK(dst_arg == same_mirror);
    CHECK(src_arg == msaa_mirror);
    CHECK(fmt == DXGI_FORMAT_R16G16B16A16_FLOAT);
@@ -1610,9 +2014,53 @@ TEST_CASE("Mirrors D3D12: same-family and cross-format MSAA SwapResolve")
    dst_arg = cross_dst.Get();
    src_arg = msaa_src.Get();
    fmt = DXGI_FORMAT_R11G11B10_FLOAT;
-   CHECK(Mirrors12::SwapResolve(list.Get(), dst_arg, 0, src_arg, 0, fmt));
+   CHECK(Mirrors12::Resolve(list.Get(), dst_arg, 0, src_arg, 0, fmt, true));
    CHECK(Mirrors12::GetStats().converted_copies == before.converted_copies + 1);
    CHECK(Mirrors12::GetStats().unhandled_copies == before.unhandled_copies);
+
+   // 3. In place: an upload of the game's format into a texture upgraded in place, then a readback of it, each through a texture of the
+   // game's format converted on the list
+   const D3D12_RESOURCE_DESC in_place_desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 32, 18, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {1, 0},
+      D3D12_TEXTURE_LAYOUT_UNKNOWN, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
+   ComPtr<ID3D12Resource> in_place;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &in_place_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&in_place))));
+   const Resources::Upgrade::TextureInfo game_info = {.width = 32, .height = 18, .format = DXGI_FORMAT_R11G11B10_FLOAT, .render_target = true};
+   Resources::Upgrade::TextureInfo upgraded_info = game_info;
+   upgraded_info.format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+   Resources::Mirrors::AttachInPlace(in_place.Get(), game_info, upgraded_info);
+   D3D12_RESOURCE_DESC game_texture = in_place_desc;
+   game_texture.Format = DXGI_FORMAT_R11G11B10_FLOAT;
+   D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+   UINT64 footprint_size = 0;
+   device->GetCopyableFootprints(&game_texture, 0, 1, 0, &footprint, nullptr, nullptr, &footprint_size);
+   const D3D12_HEAP_PROPERTIES upload_heap = {.Type = D3D12_HEAP_TYPE_UPLOAD};
+   const D3D12_HEAP_PROPERTIES readback_heap = {.Type = D3D12_HEAP_TYPE_READBACK};
+   const D3D12_RESOURCE_DESC buffer_desc = {D3D12_RESOURCE_DIMENSION_BUFFER, 0, footprint_size, 1, 1, 1, DXGI_FORMAT_UNKNOWN, {1, 0}, D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
+      D3D12_RESOURCE_FLAG_NONE};
+   ComPtr<ID3D12Resource> upload, readback;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&upload_heap, D3D12_HEAP_FLAG_NONE, &buffer_desc, D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&upload))));
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&readback_heap, D3D12_HEAP_FLAG_NONE, &buffer_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback))));
+   const uint32_t one = 0x3C0u | (0x3C0u << 11) | (0x1E0u << 22);
+   uint8_t* upload_data = nullptr;
+   REQUIRE(SUCCEEDED(upload->Map(0, nullptr, reinterpret_cast<void**>(&upload_data))));
+   for (UINT row = 0; row < 18; row++)
+   {
+      for (UINT column = 0; column < 32; column++)
+         std::memcpy(upload_data + footprint.Offset + row * footprint.Footprint.RowPitch + column * 4, &one, 4);
+   }
+   upload->Unmap(0, nullptr);
+   const uint32_t in_place_converted = Mirrors12::GetStats().in_place_converted_copies;
+   D3D12_TEXTURE_COPY_LOCATION into_texture = {.pResource = in_place.Get(), .Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, .SubresourceIndex = 0};
+   D3D12_TEXTURE_COPY_LOCATION from_upload = {.pResource = upload.Get(), .Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, .PlacedFootprint = footprint};
+   Mirrors12::CopyRegion footprint_region = {};
+   CHECK(Mirrors12::CopyFootprint(list.Get(), into_texture, from_upload, footprint_region, false));
+   D3D12_RESOURCE_BARRIER to_source = {D3D12_RESOURCE_BARRIER_TYPE_TRANSITION};
+   to_source.Transition = {in_place.Get(), 0, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE};
+   list->ResourceBarrier(1, &to_source);
+   D3D12_TEXTURE_COPY_LOCATION into_readback = {.pResource = readback.Get(), .Type = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT, .PlacedFootprint = footprint};
+   D3D12_TEXTURE_COPY_LOCATION from_texture = {.pResource = in_place.Get(), .Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, .SubresourceIndex = 0};
+   CHECK(Mirrors12::CopyFootprint(list.Get(), into_readback, from_texture, footprint_region, false));
+   CHECK(Mirrors12::GetStats().in_place_converted_copies == in_place_converted + 2);
 
    // Execute on WARP queue to verify valid barriers, resolve, blit, and lifetime cleanup
    REQUIRE(SUCCEEDED(list->Close()));
@@ -1626,9 +2074,208 @@ TEST_CASE("Mirrors D3D12: same-family and cross-format MSAA SwapResolve")
    REQUIRE(SUCCEEDED(fence->SetEventOnCompletion(1, event)));
    WaitForSingleObject(event, INFINITE);
    CloseHandle(event);
+   // The game's data came back in its format, through the upgraded texture
+   uint8_t* readback_data = nullptr;
+   const D3D12_RANGE read_range = {0, SIZE_T(footprint_size)};
+   REQUIRE(SUCCEEDED(readback->Map(0, &read_range, reinterpret_cast<void**>(&readback_data))));
+   uint32_t read = 0;
+   std::memcpy(&read, readback_data + footprint.Offset + 17 * footprint.Footprint.RowPitch + 31 * 4, 4);
+   readback->Unmap(0, nullptr);
+   CHECK(read == one);
    Hooks::Lifetime::D3D12::ForgetReferences(list.Get());
    Mirrors12::ForgetListState(list.Get());
    Tail12::ForgetList(list.Get());
    Database12::ForgetList(list.Get());
    Hooks::Lifetime::D3D12::MoveReferencesToQueue(queue.Get(), 0, nullptr);
+}
+
+TEST_CASE("Mirrors D3D12 InPlace: committed and placed textures created upgraded, placed ones only with the size the game was told, views, binds, copies and resizes")
+{
+   namespace Mirrors12 = Resources::Mirrors::D3D12;
+   ComPtr<IDXGIFactory4> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   ComPtr<IDXGIAdapter> adapter;
+   REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
+   ComPtr<ID3D12Device> device;
+   REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
+   Frame::CreateDeviceState(device.Get());
+   Frame::SetOutputResolution(device.Get(), {1024, 576});
+   Resources::Upgrade::Rules rules = GetFF7RRules();
+   rules.method = Resources::Upgrade::Method::InPlace;
+   Resources::Upgrade::SetRules(rules);
+
+   struct Cleanup
+   {
+      ~Cleanup() { Resources::Upgrade::SetRules({}); }
+   } cleanup;
+
+   const Resources::Mirrors::Stats before = Resources::Mirrors::GetStats();
+   const Mirrors12::Stats before12 = Mirrors12::GetStats();
+
+   // Committed: the desc and the clear value's format upgraded
+   const D3D12_HEAP_PROPERTIES default_heap = {D3D12_HEAP_TYPE_DEFAULT};
+   const D3D12_RESOURCE_DESC game_desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 1024, 576, 1, 1, DXGI_FORMAT_R11G11B10_FLOAT, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+      D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
+   D3D12_RESOURCE_DESC desc = game_desc;
+   D3D12_CLEAR_VALUE clear = {DXGI_FORMAT_R11G11B10_FLOAT, {0.f, 0.f, 0.f, 1.f}};
+   REQUIRE(Mirrors12::PrepareResource(device.Get(), desc, &clear, {.placement = Mirrors12::Placement::Committed}));
+   CHECK(desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   CHECK(clear.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   ComPtr<ID3D12Resource> texture;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_RENDER_TARGET, &clear, IID_PPV_ARGS(&texture))));
+   Mirrors12::UpgradeResource(device.Get(), texture.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, &clear, false);
+   REQUIRE(Mirrors12::FindUpgrade(texture.Get()));
+   CHECK(Mirrors12::FindUpgrade(texture.Get())->method == Resources::Upgrade::Method::InPlace);
+   CHECK(Resources::Mirrors::GetStats().in_place == before.in_place + 1);
+   CHECK(GetSpoofedFormat(texture.Get()) == DXGI_FORMAT_R11G11B10_FLOAT);
+   // A shared one keeps the game's
+   D3D12_RESOURCE_DESC shared = game_desc;
+   CHECK_FALSE(Mirrors12::PrepareResource(device.Get(), shared, nullptr, {.placement = Mirrors12::Placement::Committed, .heap_flags = D3D12_HEAP_FLAG_SHARED}));
+
+   // Placed: only when the game was told the upgraded size, and it fits the heap from the offset
+   D3D12_RESOURCE_DESC placed = game_desc;
+   const D3D12_RESOURCE_ALLOCATION_INFO game_size = device->GetResourceAllocationInfo(0, 1, &game_desc);
+   const D3D12_HEAP_DESC small_heap_desc = {game_size.SizeInBytes, {D3D12_HEAP_TYPE_DEFAULT}, 0, D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES};
+   ComPtr<ID3D12Heap> small_heap;
+   REQUIRE(SUCCEEDED(device->CreateHeap(&small_heap_desc, IID_PPV_ARGS(&small_heap))));
+   CHECK_FALSE(Mirrors12::PrepareResource(device.Get(), placed, nullptr, {.placement = Mirrors12::Placement::Placed, .heap = small_heap.Get()}));
+   CHECK(Mirrors12::GetStats().in_place_unasked_placed == before12.in_place_unasked_placed + 1);
+   D3D12_RESOURCE_DESC asked = game_desc;
+   REQUIRE(Mirrors12::UpgradeForAllocation(device.Get(), asked));
+   CHECK(asked.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   const D3D12_RESOURCE_ALLOCATION_INFO upgraded_size = device->GetResourceAllocationInfo(0, 1, &asked);
+   CHECK(upgraded_size.SizeInBytes > game_size.SizeInBytes);
+   CHECK_FALSE(Mirrors12::PrepareResource(device.Get(), placed, nullptr, {.placement = Mirrors12::Placement::Placed, .heap = small_heap.Get()}));
+   CHECK(Mirrors12::GetStats().in_place_unfit_placed == before12.in_place_unfit_placed + 1);
+   const D3D12_HEAP_DESC heap_desc = {upgraded_size.SizeInBytes, {D3D12_HEAP_TYPE_DEFAULT}, 0, D3D12_HEAP_FLAG_ALLOW_ONLY_RT_DS_TEXTURES};
+   ComPtr<ID3D12Heap> heap;
+   REQUIRE(SUCCEEDED(device->CreateHeap(&heap_desc, IID_PPV_ARGS(&heap))));
+   REQUIRE(Mirrors12::PrepareResource(device.Get(), placed, nullptr, {.placement = Mirrors12::Placement::Placed, .heap = heap.Get()}));
+   CHECK(placed.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   ComPtr<ID3D12Resource> placed_texture;
+   REQUIRE(SUCCEEDED(device->CreatePlacedResource(heap.Get(), 0, &placed, D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, IID_PPV_ARGS(&placed_texture))));
+   Mirrors12::UpgradeResource(device.Get(), placed_texture.Get(), D3D12_RESOURCE_STATE_RENDER_TARGET, nullptr, false);
+   REQUIRE(Mirrors12::FindUpgrade(placed_texture.Get()));
+
+   // A render target view in its format, remembered for the bind: the pipeline's format variant gets it
+   const D3D12_DESCRIPTOR_HEAP_DESC rtv_heap_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_RTV, 2};
+   ComPtr<ID3D12DescriptorHeap> rtv_heap;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&rtv_heap_desc, IID_PPV_ARGS(&rtv_heap))));
+   const D3D12_CPU_DESCRIPTOR_HANDLE rtv = rtv_heap->GetCPUDescriptorHandleForHeapStart();
+   CHECK(Mirrors12::PrepareView(device.Get(), rtv, Mirrors12::ViewKind::RenderTarget, texture.Get(), DXGI_FORMAT_R11G11B10_FLOAT, true) ==
+      DXGI_FORMAT_R16G16B16A16_FLOAT);
+   ComPtr<ID3D12CommandAllocator> allocator;
+   REQUIRE(SUCCEEDED(device->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))));
+   ComPtr<ID3D12GraphicsCommandList> list;
+   REQUIRE(SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&list))));
+   Shaders::Database::D3D12::TargetFormats formats;
+   {
+      const D3D12_CPU_DESCRIPTOR_HANDLE* bound = &rtv;
+      BOOL bound_single = TRUE;
+      const D3D12_CPU_DESCRIPTOR_HANDLE* bound_depth = nullptr;
+      formats = Mirrors12::BindRenderTargets(list.Get(), 1, bound, bound_single, bound_depth, false);
+   }
+   CHECK(formats.render_targets[0] == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   // Another view written over the handle forgets it
+   const D3D12_CPU_DESCRIPTOR_HANDLE other_rtv = {rtv.ptr + device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV)};
+   Mirrors12::TrackCopiedDescriptors(device.Get(), other_rtv, rtv, 1, D3D12_DESCRIPTOR_HEAP_TYPE_RTV, {});
+   Shaders::Database::D3D12::TargetFormats copied_formats;
+   {
+      const D3D12_CPU_DESCRIPTOR_HANDLE* bound = &other_rtv;
+      BOOL bound_single = TRUE;
+      const D3D12_CPU_DESCRIPTOR_HANDLE* bound_depth = nullptr;
+      copied_formats = Mirrors12::BindRenderTargets(list.Get(), 1, bound, bound_single, bound_depth, false);
+   }
+   CHECK(copied_formats.render_targets[0] == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   Mirrors12::PrepareView(device.Get(), rtv, Mirrors12::ViewKind::RenderTarget, nullptr, DXGI_FORMAT_R8G8B8A8_UNORM, true);
+   Shaders::Database::D3D12::TargetFormats forgotten;
+   {
+      const D3D12_CPU_DESCRIPTOR_HANDLE* bound = &rtv;
+      BOOL bound_single = TRUE;
+      const D3D12_CPU_DESCRIPTOR_HANDLE* bound_depth = nullptr;
+      forgotten = Mirrors12::BindRenderTargets(list.Get(), 1, bound, bound_single, bound_depth, false);
+   }
+   CHECK(forgotten.render_targets[0] == DXGI_FORMAT_UNKNOWN);
+
+   // Copies: one of the upgraded format stays native; one into the game's format can't run without a root signature on the list, and is
+   // skipped (counted) rather than recorded invalid
+   ComPtr<ID3D12Resource> wide;
+   D3D12_RESOURCE_DESC wide_desc = game_desc;
+   wide_desc.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &wide_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&wide))));
+   Mirrors12::CopyRegion whole = {.convertible = true, .whole_resource = true};
+   ID3D12Resource* copy_destination = wide.Get();
+   ID3D12Resource* copy_source = texture.Get();
+   CHECK_FALSE(Mirrors12::Copy(list.Get(), copy_destination, copy_source, whole, false));
+   ComPtr<ID3D12Resource> plain;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &game_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&plain))));
+   copy_destination = plain.Get();
+   copy_source = texture.Get();
+   CHECK(Mirrors12::Copy(list.Get(), copy_destination, copy_source, whole, false));
+   CHECK(Mirrors12::GetStats().in_place_unhandled_copies == before12.in_place_unhandled_copies + 1);
+   // A resolve within the family takes the game's format to the texture's
+   DXGI_FORMAT resolve_format = DXGI_FORMAT_R11G11B10_FLOAT;
+   copy_destination = wide.Get();
+   copy_source = texture.Get();
+   CHECK_FALSE(Mirrors12::Resolve(list.Get(), copy_destination, 0, copy_source, 0, resolve_format, false));
+   CHECK(resolve_format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+
+   // Resized by custom dimensions: binds scale the game's viewports, scissors and clear rects
+   rules.custom_dimensions = {{.filter = {16, 16, 0, 0}, .size = {32, 32, 0, 0}}};
+   Resources::Upgrade::SetRules(rules);
+   D3D12_RESOURCE_DESC shadow = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 16, 16, 1, 1, DXGI_FORMAT_D32_FLOAT, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+      D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL};
+   REQUIRE(Mirrors12::PrepareResource(device.Get(), shadow, nullptr, {.placement = Mirrors12::Placement::Committed}));
+   CHECK(shadow.Width == 32);
+   CHECK(shadow.Format == DXGI_FORMAT_D32_FLOAT);
+   ComPtr<ID3D12Resource> shadow_map;
+   REQUIRE(SUCCEEDED(device->CreateCommittedResource(&default_heap, D3D12_HEAP_FLAG_NONE, &shadow, D3D12_RESOURCE_STATE_DEPTH_WRITE, nullptr, IID_PPV_ARGS(&shadow_map))));
+   Mirrors12::UpgradeResource(device.Get(), shadow_map.Get(), D3D12_RESOURCE_STATE_DEPTH_WRITE, nullptr, false);
+   REQUIRE(Mirrors12::FindUpgrade(shadow_map.Get()));
+   CHECK(Mirrors12::FindUpgrade(shadow_map.Get())->game.width == 16);
+   CHECK(Resources::Mirrors::GetStats().in_place_resized == before.in_place_resized + 1);
+   const D3D12_DESCRIPTOR_HEAP_DESC dsv_heap_desc = {D3D12_DESCRIPTOR_HEAP_TYPE_DSV, 1};
+   ComPtr<ID3D12DescriptorHeap> dsv_heap;
+   REQUIRE(SUCCEEDED(device->CreateDescriptorHeap(&dsv_heap_desc, IID_PPV_ARGS(&dsv_heap))));
+   const D3D12_CPU_DESCRIPTOR_HANDLE dsv = dsv_heap->GetCPUDescriptorHandleForHeapStart();
+   CHECK(Mirrors12::PrepareView(device.Get(), dsv, Mirrors12::ViewKind::DepthStencil, shadow_map.Get(), DXGI_FORMAT_UNKNOWN, false) == DXGI_FORMAT_UNKNOWN);
+   const D3D12_VIEWPORT game_viewport = {0.f, 0.f, 16.f, 16.f, 0.f, 1.f};
+   UINT viewport_count = 1;
+   const D3D12_VIEWPORT* viewports = &game_viewport;
+   Mirrors12::BindViewports(list.Get(), viewport_count, viewports);
+   CHECK(viewports == &game_viewport);
+   Shaders::Database::D3D12::TargetFormats depth_formats;
+   {
+      const D3D12_CPU_DESCRIPTOR_HANDLE* bound = nullptr;
+      BOOL bound_single = FALSE;
+      const D3D12_CPU_DESCRIPTOR_HANDLE* bound_depth = &dsv;
+      depth_formats = Mirrors12::BindRenderTargets(list.Get(), 0, bound, bound_single, bound_depth, false);
+   }
+   CHECK(depth_formats.depth == DXGI_FORMAT_D32_FLOAT);
+   viewports = &game_viewport;
+   Mirrors12::BindViewports(list.Get(), viewport_count, viewports);
+   CHECK(viewports[0].Width == 32.f);
+   const D3D12_RECT corner = {8, 8, 16, 16};
+   const D3D12_RECT* rects = &corner;
+   D3D12_CPU_DESCRIPTOR_HANDLE cleared = dsv;
+   Mirrors12::PrepareClear(cleared, 1, rects, false);
+   CHECK(rects[0].left == 16);
+   CHECK(rects[0].right == 32);
+   // Bound to a target of the game's size: the game's again
+   {
+      const D3D12_CPU_DESCRIPTOR_HANDLE* bound = nullptr;
+      BOOL bound_single = FALSE;
+      const D3D12_CPU_DESCRIPTOR_HANDLE* bound_depth = nullptr;
+      (void)Mirrors12::BindRenderTargets(list.Get(), 0, bound, bound_single, bound_depth, false);
+   }
+   viewports = &game_viewport;
+   Mirrors12::BindViewports(list.Get(), viewport_count, viewports);
+   CHECK(viewports == &game_viewport);
+   list->Close();
+
+   texture.Reset();
+   placed_texture.Reset();
+   shadow_map.Reset();
+   CHECK(Resources::Mirrors::GetStats().in_place == before.in_place);
+   CHECK(Resources::Mirrors::GetStats().in_place_resized == before.in_place_resized);
 }

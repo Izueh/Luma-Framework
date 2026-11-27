@@ -202,6 +202,46 @@ bool ApplyCustomDimensions(const TextureInfo& desc, bool has_initial_data, Textu
    }
    return false;
 }
+
+// A game texture of a typed format can have views with no desc (the texture's format), so it stays typed: a typeless best format takes
+// its default typed one (for depth, the D format)
+DXGI_FORMAT GetInPlaceFormat(const TextureInfo& game, DXGI_FORMAT upgraded)
+{
+   using namespace Utils::Format::DXGI;
+   if (IsTypeless(game.format) || !IsTypeless(upgraded))
+      return upgraded;
+   if (game.depth_stencil)
+   {
+      switch (upgraded)
+      {
+      case DXGI_FORMAT_R32G8X24_TYPELESS: return DXGI_FORMAT_D32_FLOAT_S8X24_UINT;
+      case DXGI_FORMAT_R32_TYPELESS: return DXGI_FORMAT_D32_FLOAT;
+      default: break;
+      }
+   }
+   return GetDefaultTyped(upgraded);
+}
+
+// Mips resolved to a count (0 is a full chain), so the game's and the texture's can be told apart
+std::optional<UpgradeInfo> GetInPlaceUpgradeInfo(UpgradeInfo info)
+{
+   TextureInfo& game = info.game;
+   TextureInfo& upgraded = info.upgraded;
+   if (game.levels == 0)
+      game.levels = GetMaxMipLevels(game.width, game.height, game.dimension == Dimension::Texture3D ? game.depth_or_layers : 1u);
+   if (upgraded.levels == 0)
+      upgraded.levels = GetMaxMipLevels(upgraded.width, upgraded.height, upgraded.dimension == Dimension::Texture3D ? upgraded.depth_or_layers : 1u);
+   const bool resized = upgraded.width != game.width || upgraded.height != game.height || upgraded.levels != game.levels;
+   if (upgraded.samples != game.samples || upgraded.depth_or_layers != game.depth_or_layers ||
+      (resized && (game.dimension != Dimension::Texture2D || upgraded.levels < game.levels)))
+      return std::nullopt;
+   upgraded.format = GetInPlaceFormat(game, upgraded.format);
+   if (!resized && upgraded.format == game.format)
+      return std::nullopt;
+   info.resized = resized;
+   info.method = Method::InPlace;
+   return info;
+}
 } // namespace
 
 void SetRules(const Rules& value)
@@ -220,35 +260,40 @@ bool IsNeeded()
    return set;
 }
 
-std::optional<TextureInfo> Match(const TextureInfo& desc, const FrameState& state, bool has_initial_data, bool allow_writable_sr, bool force_format_upgrade,
-   bool* resized_by_custom_dimensions)
+std::optional<UpgradeInfo> GetUpgradeInfo(const TextureInfo& game, const FrameState& state, const UpgradeOptions& options)
 {
-   if (resized_by_custom_dimensions)
-      *resized_by_custom_dimensions = false;
-   const bool writable_sr = allow_writable_sr && desc.shader_resource && !has_initial_data;
-   const bool color = desc.render_target || desc.unordered_access || writable_sr;
-   if ((!set && !force_format_upgrade) || !desc.gpu_only || (!color && !desc.depth_stencil))
+   const bool writable_sr = options.allow_writable_sr && game.shader_resource && !options.has_initial_data;
+   const bool color = game.render_target || game.unordered_access || writable_sr;
+   if ((!set && !options.force_format) || !game.gpu_only || (!color && !game.depth_stencil))
       return std::nullopt;
 
-   TextureInfo mirror = desc;
-   const bool resized = ApplyCustomDimensions(desc, has_initial_data, mirror);
-   if (resized_by_custom_dimensions)
-      *resized_by_custom_dimensions = resized;
+   UpgradeInfo info = {.game = game, .upgraded = game};
+   info.resized = ApplyCustomDimensions(game, options.has_initial_data, info.upgraded);
 
    const bool format_matches =
-      force_format_upgrade || (desc.depth_stencil ? Contains(rules.depth_formats, desc.format) : (color && Contains(rules.formats, desc.format)));
-   if (!format_matches && !resized)
+      options.force_format || (game.depth_stencil ? Contains(rules.depth_formats, game.format) : (color && Contains(rules.formats, game.format)));
+   if (!format_matches && !info.resized)
       return std::nullopt;
 
    // 2D textures (cubes are 2D arrays of 6) by size, LUTs by their own shape; depth textures never are LUTs
-   bool format_upgrade = format_matches && desc.dimension == Dimension::Texture2D && (desc.depth_or_layers == 1 || desc.cube) && MatchesSize(desc, state);
-   if (format_matches && !desc.depth_stencil)
-      format_upgrade |= IsLut(desc);
-   if (!format_upgrade && !resized)
+   bool format_upgrade = format_matches && game.dimension == Dimension::Texture2D && (game.depth_or_layers == 1 || game.cube) && MatchesSize(game, state);
+   if (format_matches && !game.depth_stencil)
+      format_upgrade |= IsLut(game);
+   if (!format_upgrade && !info.resized)
       return std::nullopt;
    if (format_upgrade)
-      mirror.format = GetBestFormat(mirror);
-   return mirror;
+      info.upgraded.format = GetBestFormat(info.upgraded);
+   if (!info.resized && info.upgraded.format == info.game.format)
+      return std::nullopt;
+   if (rules.method == Method::InPlace && !options.mirror)
+   {
+      if (std::optional<UpgradeInfo> in_place = GetInPlaceUpgradeInfo(info))
+         return in_place;
+      // If InPlace rejected solely because GetInPlaceFormat kept the same format with no resize, don't create a redundant mirror
+      if (!info.resized && GetInPlaceFormat(info.game, info.upgraded.format) == info.game.format)
+         return std::nullopt;
+   }
+   return info;
 }
 
 DXGI_FORMAT GetBestFormat(const TextureInfo& desc)
@@ -266,6 +311,11 @@ DXGI_FORMAT GetBestFormat(const TextureInfo& desc)
       }
    }
    return DXGI_FORMAT_R16G16B16A16_FLOAT;
+}
+
+uint32_t GetMipSize(uint32_t size, uint32_t level)
+{
+   return std::max(size >> level, 1u);
 }
 
 DXGI_FORMAT GetBestViewFormat(DXGI_FORMAT view_format, ViewKind kind, [[maybe_unused]] DXGI_FORMAT original_format, DXGI_FORMAT mirror_format)

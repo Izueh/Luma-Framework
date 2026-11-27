@@ -119,28 +119,34 @@ std::string GetTrackedResource()
    return tracked_resource;
 }
 
+namespace {
+// A mirror swapped in, or upgraded in place
+bool IsUpgraded(const Resource& resource)
+{
+   return resource.mirror.has_value() || resource.mirror_info.has_value() || resource.in_place_from.has_value();
+}
+} // namespace
+
 bool HasUpgradedResource(const Event& event)
 {
    const auto any_view = [](const std::vector<View>& views) {
-      return std::ranges::any_of(views, [](const View& v) { return v.resource.mirror.has_value() || v.resource.mirror_info.has_value(); });
+      return std::ranges::any_of(views, [](const View& v) { return IsUpgraded(v.resource); });
    };
    return any_view(event.render_targets) || any_view(event.shader_resources) || any_view(event.unordered_access) ||
-      (event.depth_stencil_view && (event.depth_stencil_view->resource.mirror.has_value() || event.depth_stencil_view->resource.mirror_info.has_value())) ||
-      (event.source && (event.source->mirror.has_value() || event.source->mirror_info.has_value())) ||
-      (event.target && (event.target->mirror.has_value() || event.target->mirror_info.has_value()));
+      (event.depth_stencil_view && IsUpgraded(event.depth_stencil_view->resource)) || (event.source && IsUpgraded(*event.source)) ||
+      (event.target && IsUpgraded(*event.target));
 }
 
 bool IsScaledEvent(const Event& event)
 {
    if (event.viewports_scaled || event.scissors_scaled || event.copy_scaled)
       return true;
-   const auto any_scaled = [](const std::vector<View>& views) {
-      return std::ranges::any_of(views, [](const View& v) { return v.resource.mirror_info && v.resource.mirror_info->is_scaled; });
-   };
+   // A scaled mirror, or a texture resized in place
+   const auto is_scaled = [](const Resource& resource) { return (resource.mirror_info && resource.mirror_info->is_scaled) || resource.in_place_game_size.has_value(); };
+   const auto any_scaled = [&](const std::vector<View>& views) { return std::ranges::any_of(views, [&](const View& v) { return is_scaled(v.resource); }); };
    return any_scaled(event.render_targets) || any_scaled(event.shader_resources) || any_scaled(event.unordered_access) ||
-      (event.depth_stencil_view && event.depth_stencil_view->resource.mirror_info && event.depth_stencil_view->resource.mirror_info->is_scaled) ||
-      (event.source && event.source->mirror_info && event.source->mirror_info->is_scaled) ||
-      (event.target && event.target->mirror_info && event.target->mirror_info->is_scaled);
+      (event.depth_stencil_view && is_scaled(event.depth_stencil_view->resource)) || (event.source && is_scaled(*event.source)) ||
+      (event.target && is_scaled(*event.target));
 }
 
 bool Matches(const Event& event, const Filter& filter)

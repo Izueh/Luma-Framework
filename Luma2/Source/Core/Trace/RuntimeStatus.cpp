@@ -22,6 +22,7 @@
 #include "Resources/ResourceChains.hpp"
 #include "Resources/ResourceMirrors.hpp"
 #include "Resources/ResourceScaling.hpp"
+#include "Resources/ResourceUpgrades.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
@@ -189,9 +190,13 @@ Status GetStatus()
    status.resources = {
       .upgrades = Resources::Mirrors::IsNeeded(),
       .samplers = Resources::Samplers::IsNeeded(),
+      .method = Resources::Upgrade::GetRules().method == Resources::Upgrade::Method::InPlace ? "InPlace" : "Mirror",
       .mirrors = mirrors.mirrors,
       .mirror_mb = mirrors.bytes >> 20,
       .views = mirrors.views,
+      .in_place = mirrors.in_place,
+      .in_place_saved_mb = mirrors.in_place_saved_bytes >> 20,
+      .in_place_resized = mirrors.in_place_resized,
       .lod_bias_offset = Resources::Samplers::GetShownLodBiasOffset(),
       .chains = {
          .mode = std::string(Resources::Chains::GetModeName(chains.mode)),
@@ -300,7 +305,8 @@ Status GetStatus()
       const Resources::Mirrors::D3D12::Stats mirrored = Resources::Mirrors::D3D12::GetStats();
       d3d12.mirrors = {mirrored.descriptors, mirrored.samplers, mirrored.swapped_copies, mirrored.direct_writes, variants.format_variants,
          variants.warmed_format_variants, mirrored.converted_copies, mirrored.unhandled_copies, mirrored.uav_clears, mirrored.unhandled_clears,
-         mirrored.aliasing_barriers};
+         mirrored.aliasing_barriers, mirrored.in_place_converted_copies, mirrored.in_place_unhandled_copies, mirrored.in_place_unasked_placed,
+         mirrored.in_place_unfit_placed};
       status.unimplemented.enhanced_barrier_resources = mirrored.layout_resources;
       status.unimplemented.reserved_resources = mirrored.reserved_resources;
       status.unimplemented.anisotropic_static_samplers = Shaders::RootSignatures::D3D12::GetAnisotropicStaticSamplerSignatures();

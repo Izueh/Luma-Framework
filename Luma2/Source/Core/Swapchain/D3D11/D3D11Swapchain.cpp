@@ -98,7 +98,7 @@ ComPtr<ID3D11Texture2D> CreateBuffer(ID3D11Device* device, const DXGI::BufferDes
    texture->SetPrivateData(WKPDID_D3DDebugObjectName, sizeof("Luma game back buffer") - 1, "Luma game back buffer");
    // Like any texture of the game's
    if (Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D11::CreateMirror(device, texture_desc, nullptr, texture.Get());
+      Resources::Mirrors::D3D11::UpgradeTexture(device, texture_desc, nullptr, texture.Get());
    return texture;
 }
 

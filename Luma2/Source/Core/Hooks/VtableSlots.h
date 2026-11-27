@@ -6,6 +6,11 @@
 // clang-format off
 #define LUMA_SLOTS(SLOT)                                                \
    SLOT(ID3D11DeviceChild, GetDevice)                                   \
+   SLOT(ID3D11Texture1D, GetDesc)                                       \
+   SLOT(ID3D11Texture2D, GetDesc)                                       \
+   SLOT(ID3D11Texture2D1, GetDesc1)                                     \
+   SLOT(ID3D11Texture3D, GetDesc)                                       \
+   SLOT(ID3D11Texture3D1, GetDesc1)                                     \
    SLOT(ID3D11Device, GetFeatureLevel)                                  \
    SLOT(ID3D11Device, CreateBuffer)                                     \
    SLOT(ID3D11Device, CreateTexture1D)                                  \
@@ -107,6 +112,12 @@
    SLOT(ID3D11DeviceContext1, ClearView)                                \
    SLOT(ID3D12CommandQueue, ExecuteCommandLists)                        \
    SLOT(ID3D12DeviceChild, GetDevice)                                   \
+   SLOT(ID3D12Resource, GetDesc)                                        \
+   SLOT(ID3D12Resource2, GetDesc1)                                      \
+   SLOT(ID3D12Device, GetResourceAllocationInfo)                        \
+   SLOT(ID3D12Device4, GetResourceAllocationInfo1)                      \
+   SLOT(ID3D12Device8, GetResourceAllocationInfo2)                      \
+   SLOT(ID3D12Device12, GetResourceAllocationInfo3)                     \
    SLOT(ID3D12Device, CreateGraphicsPipelineState)                      \
    SLOT(ID3D12Device, CreateComputePipelineState)                       \
    SLOT(ID3D12Device, CreateRootSignature)                              \
@@ -205,6 +216,11 @@
    INTERFACE(ID3D11DeviceContext3)        \
    INTERFACE(ID3D11DeviceContext4)        \
    INTERFACE(ID3D11DeviceChild)           \
+   INTERFACE(ID3D11Texture1D)             \
+   INTERFACE(ID3D11Texture2D)             \
+   INTERFACE(ID3D11Texture2D1)            \
+   INTERFACE(ID3D11Texture3D)             \
+   INTERFACE(ID3D11Texture3D1)            \
    INTERFACE(ID3D12Device)                \
    INTERFACE(ID3D12Device1)               \
    INTERFACE(ID3D12Device2)               \
@@ -237,7 +253,10 @@
    INTERFACE(ID3D12PipelineLibrary)       \
    INTERFACE(ID3D12PipelineLibrary1)      \
    INTERFACE(ID3D12Fence)                 \
-   INTERFACE(ID3D12Fence1)
+   INTERFACE(ID3D12Fence1)                \
+   INTERFACE(ID3D12Resource)              \
+   INTERFACE(ID3D12Resource1)             \
+   INTERFACE(ID3D12Resource2)
 // clang-format on
 
 #ifdef __cplusplus

@@ -3,6 +3,7 @@
 #include <format>
 #include <optional>
 #include <type_traits>
+#include <utility>
 
 #include "Settings/SettingsRegistry.hpp"
 #include "Draw/D3D11/D3D11Draw.hpp"
@@ -125,6 +126,22 @@ void TrackMirrorViewDestruction(ID3D11Device* device, ID3D11View* original)
    if (ID3D11View* mirror = Resources::Mirrors::D3D11::FindMirrorView(original))
       Hooks::Lifetime::Track(mirror, device, &OnTrackedMirrorViewDestroyed);
 }
+
+template <typename Desc, typename Texture>
+void UpgradeTexture(ID3D11Device* device, const Desc& desc, const D3D11_SUBRESOURCE_DATA* initial_data, Texture* texture)
+{
+   if (!Resources::Mirrors::IsNeeded())
+      return;
+   Resources::Mirrors::D3D11::UpgradeTexture(device, desc, initial_data, texture);
+   TrackMirrorResourceDestruction(device, texture);
+}
+
+template <typename Desc>
+void PrepareView(ID3D11Resource* resource, std::optional<Desc>& desc)
+{
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::PrepareView(resource, desc);
+}
 } // namespace
 
 void PreCreateDevice(UINT& flags, const D3D_FEATURE_LEVEL*& feature_levels, UINT& feature_level_count)
@@ -175,61 +192,96 @@ void PostCreateBuffer(ID3D11Device* device, const D3D11_BUFFER_DESC& desc, const
    Game::Registry::Call(GameEvents().on_init_buffer, device, desc, initial_data, buffer);
 }
 
-void PreCreateTexture1D(ID3D11Device*, D3D11_TEXTURE1D_DESC&, const D3D11_SUBRESOURCE_DATA*&) {}
+void PreCreateTexture1D(ID3D11Device* device, D3D11_TEXTURE1D_DESC& desc, const D3D11_SUBRESOURCE_DATA*& initial_data)
+{
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::PrepareTexture(device, desc, initial_data);
+}
 
 void PostCreateTexture1D(ID3D11Device* device, const D3D11_TEXTURE1D_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture1D* texture)
 {
-   if (Resources::Mirrors::IsNeeded())
-   {
-      Resources::Mirrors::D3D11::CreateMirror(device, desc, initial_data, texture);
-      TrackMirrorResourceDestruction(device, texture);
-   }
+   UpgradeTexture(device, desc, initial_data, texture);
 }
 
+// The game's event first: Luma upgrades the desc the game settled on
 void PreCreateTexture2D(ID3D11Device* device, D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA*& initial_data)
 {
    Game::Registry::Call(GameEvents().on_create_texture_2d, device, desc, initial_data);
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::PrepareTexture(device, desc, initial_data);
 }
 
 void PostCreateTexture2D(ID3D11Device* device, const D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture2D* texture)
 {
+   UpgradeTexture(device, desc, initial_data, texture);
    ID3D11Texture2D* effective = texture;
+   // The game's event sees the desc it asked for (the initial data converted is Luma's)
+   D3D11_TEXTURE2D_DESC1 game_desc = desc;
    if (Resources::Mirrors::IsNeeded())
    {
-      Resources::Mirrors::D3D11::CreateMirror(device, desc, initial_data, texture);
-      TrackMirrorResourceDestruction(device, texture);
       effective = static_cast<ID3D11Texture2D*>(Resources::Mirrors::D3D11::GetEffectiveResource(texture));
+      Resources::Mirrors::D3D11::WriteGameDesc(texture, game_desc);
    }
-   Game::Registry::Call(GameEvents().on_init_texture_2d, device, desc, initial_data, effective);
+   Game::Registry::Call(GameEvents().on_init_texture_2d, device, game_desc, initial_data, effective);
 }
 
-void PreCreateTexture3D(ID3D11Device*, D3D11_TEXTURE3D_DESC1&, const D3D11_SUBRESOURCE_DATA*&) {}
+void PreCreateTexture3D(ID3D11Device* device, D3D11_TEXTURE3D_DESC1& desc, const D3D11_SUBRESOURCE_DATA*& initial_data)
+{
+   if (Resources::Mirrors::IsNeeded())
+      Resources::Mirrors::D3D11::PrepareTexture(device, desc, initial_data);
+}
 
 void PostCreateTexture3D(ID3D11Device* device, const D3D11_TEXTURE3D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture3D* texture)
 {
-   if (Resources::Mirrors::IsNeeded())
-   {
-      Resources::Mirrors::D3D11::CreateMirror(device, desc, initial_data, texture);
-      TrackMirrorResourceDestruction(device, texture);
-   }
+   UpgradeTexture(device, desc, initial_data, texture);
 }
 
 void PostOpenSharedResource(ID3D11Device*, ID3D11Resource*) {}
+
+void PostGetDesc(ID3D11Resource* texture, D3D11_TEXTURE1D_DESC& desc)
+{
+   Resources::Mirrors::D3D11::SpoofDesc(texture, desc);
+}
+
+void PostGetDesc(ID3D11Resource* texture, D3D11_TEXTURE2D_DESC& desc)
+{
+   Resources::Mirrors::D3D11::SpoofDesc(texture, desc);
+}
+
+void PostGetDesc(ID3D11Resource* texture, D3D11_TEXTURE2D_DESC1& desc)
+{
+   Resources::Mirrors::D3D11::SpoofDesc(texture, desc);
+}
+
+void PostGetDesc(ID3D11Resource* texture, D3D11_TEXTURE3D_DESC& desc)
+{
+   Resources::Mirrors::D3D11::SpoofDesc(texture, desc);
+}
+
+void PostGetDesc(ID3D11Resource* texture, D3D11_TEXTURE3D_DESC1& desc)
+{
+   Resources::Mirrors::D3D11::SpoofDesc(texture, desc);
+}
 
 void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource)
 {
    Game::Registry::Call(GameEvents().on_resource_destroyed, device, resource);
 }
 
-void PreCreateShaderResourceView(ID3D11Device*, ID3D11Resource*, std::optional<D3D11_SHADER_RESOURCE_VIEW_DESC1>&) {}
+void PreCreateShaderResourceView(ID3D11Device*, ID3D11Resource* resource, std::optional<D3D11_SHADER_RESOURCE_VIEW_DESC1>& desc)
+{
+   PrepareView(resource, desc);
+}
 
 void PostCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_SHADER_RESOURCE_VIEW_DESC1* desc, ID3D11ShaderResourceView* view)
 {
    ID3D11Resource* effective_resource = resource;
    ID3D11ShaderResourceView* effective_view = view;
+   D3D11_SHADER_RESOURCE_VIEW_DESC1 game_desc;
+   const D3D11_SHADER_RESOURCE_VIEW_DESC1* event_desc = desc;
    if (Resources::Mirrors::IsNeeded())
    {
-      Resources::Mirrors::D3D11::CreateMirrorView(device, resource, desc, view);
+      event_desc = Resources::Mirrors::D3D11::UpgradeView(device, resource, desc, view, game_desc);
       TrackMirrorViewDestruction(device, view);
       effective_resource = Resources::Mirrors::D3D11::GetEffectiveResource(resource);
       effective_view = Resources::Mirrors::D3D11::GetEffectiveView(view);
@@ -238,18 +290,23 @@ void PostCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource
    {
       Resources::Mirrors::D3D11::TrackView(resource, view);
    }
-   Game::Registry::Call(GameEvents().on_init_shader_resource_view, device, effective_resource, desc, effective_view);
+   Game::Registry::Call(GameEvents().on_init_shader_resource_view, device, effective_resource, event_desc, effective_view);
 }
 
-void PreCreateRenderTargetView(ID3D11Device*, ID3D11Resource*, std::optional<D3D11_RENDER_TARGET_VIEW_DESC1>&) {}
+void PreCreateRenderTargetView(ID3D11Device*, ID3D11Resource* resource, std::optional<D3D11_RENDER_TARGET_VIEW_DESC1>& desc)
+{
+   PrepareView(resource, desc);
+}
 
 void PostCreateRenderTargetView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_RENDER_TARGET_VIEW_DESC1* desc, ID3D11RenderTargetView* view)
 {
    ID3D11Resource* effective_resource = resource;
    ID3D11RenderTargetView* effective_view = view;
+   D3D11_RENDER_TARGET_VIEW_DESC1 game_desc;
+   const D3D11_RENDER_TARGET_VIEW_DESC1* event_desc = desc;
    if (Resources::Mirrors::IsNeeded())
    {
-      Resources::Mirrors::D3D11::CreateMirrorView(device, resource, desc, view);
+      event_desc = Resources::Mirrors::D3D11::UpgradeView(device, resource, desc, view, game_desc);
       TrackMirrorViewDestruction(device, view);
       effective_resource = Resources::Mirrors::D3D11::GetEffectiveResource(resource);
       effective_view = Resources::Mirrors::D3D11::GetEffectiveView(view);
@@ -258,18 +315,23 @@ void PostCreateRenderTargetView(ID3D11Device* device, ID3D11Resource* resource, 
    {
       Resources::Mirrors::D3D11::TrackView(resource, view);
    }
-   Game::Registry::Call(GameEvents().on_init_render_target_view, device, effective_resource, desc, effective_view);
+   Game::Registry::Call(GameEvents().on_init_render_target_view, device, effective_resource, event_desc, effective_view);
 }
 
-void PreCreateUnorderedAccessView(ID3D11Device*, ID3D11Resource*, std::optional<D3D11_UNORDERED_ACCESS_VIEW_DESC1>&) {}
+void PreCreateUnorderedAccessView(ID3D11Device*, ID3D11Resource* resource, std::optional<D3D11_UNORDERED_ACCESS_VIEW_DESC1>& desc)
+{
+   PrepareView(resource, desc);
+}
 
 void PostCreateUnorderedAccessView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_UNORDERED_ACCESS_VIEW_DESC1* desc, ID3D11UnorderedAccessView* view)
 {
    ID3D11Resource* effective_resource = resource;
    ID3D11UnorderedAccessView* effective_view = view;
+   D3D11_UNORDERED_ACCESS_VIEW_DESC1 game_desc;
+   const D3D11_UNORDERED_ACCESS_VIEW_DESC1* event_desc = desc;
    if (Resources::Mirrors::IsNeeded())
    {
-      Resources::Mirrors::D3D11::CreateMirrorView(device, resource, desc, view);
+      event_desc = Resources::Mirrors::D3D11::UpgradeView(device, resource, desc, view, game_desc);
       TrackMirrorViewDestruction(device, view);
       effective_resource = Resources::Mirrors::D3D11::GetEffectiveResource(resource);
       effective_view = Resources::Mirrors::D3D11::GetEffectiveView(view);
@@ -278,18 +340,23 @@ void PostCreateUnorderedAccessView(ID3D11Device* device, ID3D11Resource* resourc
    {
       Resources::Mirrors::D3D11::TrackView(resource, view);
    }
-   Game::Registry::Call(GameEvents().on_init_unordered_access_view, device, effective_resource, desc, effective_view);
+   Game::Registry::Call(GameEvents().on_init_unordered_access_view, device, effective_resource, event_desc, effective_view);
 }
 
-void PreCreateDepthStencilView(ID3D11Device*, ID3D11Resource*, std::optional<D3D11_DEPTH_STENCIL_VIEW_DESC>&) {}
+void PreCreateDepthStencilView(ID3D11Device*, ID3D11Resource* resource, std::optional<D3D11_DEPTH_STENCIL_VIEW_DESC>& desc)
+{
+   PrepareView(resource, desc);
+}
 
 void PostCreateDepthStencilView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_DEPTH_STENCIL_VIEW_DESC* desc, ID3D11DepthStencilView* view)
 {
    ID3D11Resource* effective_resource = resource;
    ID3D11DepthStencilView* effective_view = view;
+   D3D11_DEPTH_STENCIL_VIEW_DESC game_desc;
+   const D3D11_DEPTH_STENCIL_VIEW_DESC* event_desc = desc;
    if (Resources::Mirrors::IsNeeded())
    {
-      Resources::Mirrors::D3D11::CreateMirrorView(device, resource, desc, view);
+      event_desc = Resources::Mirrors::D3D11::UpgradeView(device, resource, desc, view, game_desc);
       TrackMirrorViewDestruction(device, view);
       effective_resource = Resources::Mirrors::D3D11::GetEffectiveResource(resource);
       effective_view = Resources::Mirrors::D3D11::GetEffectiveView(view);
@@ -298,7 +365,7 @@ void PostCreateDepthStencilView(ID3D11Device* device, ID3D11Resource* resource, 
    {
       Resources::Mirrors::D3D11::TrackView(resource, view);
    }
-   Game::Registry::Call(GameEvents().on_init_depth_stencil_view, device, effective_resource, desc, effective_view);
+   Game::Registry::Call(GameEvents().on_init_depth_stencil_view, device, effective_resource, event_desc, effective_view);
 }
 
 void OnViewDestroyed(ID3D11Device* device, const ID3D11View* view)
@@ -548,10 +615,9 @@ bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource
    }
 #endif
    Resources::ConstantCapture::D3D11::OnUpdateSubresource(context, resource, data);
-   // Into the mirror too, whether it's swapped in or not; the game's call still writes the original
-   if (Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D11::WriteToMirror(context, resource, subresource, box, data, row_pitch, depth_pitch);
-   return false;
+   if (!Resources::Mirrors::IsNeeded())
+      return false;
+   return Resources::Mirrors::D3D11::WriteSubresource(context, resource, subresource, box, data, row_pitch, depth_pitch);
 }
 
 bool PreCopyResource(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source)

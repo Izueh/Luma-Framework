@@ -43,16 +43,37 @@ struct ContextScalingSnapshot
    bool cross_thread_overlap = false;
 };
 
-// At the game's texture creation: a mirror when the rules match it
-void CreateMirror(ID3D11Device* device, const D3D11_TEXTURE1D_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture1D* texture);
-void CreateMirror(ID3D11Device* device, const D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture2D* texture);
-void CreateMirror(ID3D11Device* device, const D3D11_TEXTURE3D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture3D* texture);
+// Before the game's texture creation: a texture the rules upgrade in place gets its desc upgraded and its initial data converted (a
+// resized one then gets its draws' viewports and scissors, copies, clears and uploads rescaled). True: upgraded in place.
+bool PrepareTexture(ID3D11Device* device, D3D11_TEXTURE1D_DESC& desc, const D3D11_SUBRESOURCE_DATA*& initial_data);
+bool PrepareTexture(ID3D11Device* device, D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA*& initial_data);
+bool PrepareTexture(ID3D11Device* device, D3D11_TEXTURE3D_DESC1& desc, const D3D11_SUBRESOURCE_DATA*& initial_data);
+// After it: the texture prepared on this thread is marked as upgraded in place, any other gets a mirror when the rules match it
+void UpgradeTexture(ID3D11Device* device, const D3D11_TEXTURE1D_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture1D* texture);
+void UpgradeTexture(ID3D11Device* device, const D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture2D* texture);
+void UpgradeTexture(ID3D11Device* device, const D3D11_TEXTURE3D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture3D* texture);
+// What the game asked for and what the texture became, none if it isn't upgraded
+std::optional<Upgrade::UpgradeInfo> FindUpgrade(ID3D11Resource* resource);
+// GetDesc: the game's desc of a texture upgraded in place, when the rules spoof it
+void SpoofDesc(ID3D11Resource* texture, D3D11_TEXTURE1D_DESC& desc);
+void SpoofDesc(ID3D11Resource* texture, D3D11_TEXTURE2D_DESC& desc);
+void SpoofDesc(ID3D11Resource* texture, D3D11_TEXTURE2D_DESC1& desc);
+void SpoofDesc(ID3D11Resource* texture, D3D11_TEXTURE3D_DESC& desc);
+void SpoofDesc(ID3D11Resource* texture, D3D11_TEXTURE3D_DESC1& desc);
+// The desc the game's events see: what it asked for
+void WriteGameDesc(ID3D11Resource* texture, D3D11_TEXTURE2D_DESC1& desc);
 
-// At the game's view creation, for a mirrored texture: the same view of the mirror. A null desc is the game's null one.
-void CreateMirrorView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_SHADER_RESOURCE_VIEW_DESC1* desc, ID3D11ShaderResourceView* view);
-void CreateMirrorView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_RENDER_TARGET_VIEW_DESC1* desc, ID3D11RenderTargetView* view);
-void CreateMirrorView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_UNORDERED_ACCESS_VIEW_DESC1* desc, ID3D11UnorderedAccessView* view);
-void CreateMirrorView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_DEPTH_STENCIL_VIEW_DESC* desc, ID3D11DepthStencilView* view);
+// Before the game's view creation: a view of a texture upgraded in place gets the texture's format
+void PrepareView(ID3D11Resource* resource, std::optional<D3D11_SHADER_RESOURCE_VIEW_DESC1>& desc);
+void PrepareView(ID3D11Resource* resource, std::optional<D3D11_RENDER_TARGET_VIEW_DESC1>& desc);
+void PrepareView(ID3D11Resource* resource, std::optional<D3D11_UNORDERED_ACCESS_VIEW_DESC1>& desc);
+void PrepareView(ID3D11Resource* resource, std::optional<D3D11_DEPTH_STENCIL_VIEW_DESC>& desc);
+// After it: a mirrored texture's view gets the same view of the mirror (a null desc is the game's null one). The desc the game's events
+// see, with the format the game asked for (in `game_desc` when it differs).
+const D3D11_SHADER_RESOURCE_VIEW_DESC1* UpgradeView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_SHADER_RESOURCE_VIEW_DESC1* desc, ID3D11ShaderResourceView* view, D3D11_SHADER_RESOURCE_VIEW_DESC1& game_desc);
+const D3D11_RENDER_TARGET_VIEW_DESC1* UpgradeView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_RENDER_TARGET_VIEW_DESC1* desc, ID3D11RenderTargetView* view, D3D11_RENDER_TARGET_VIEW_DESC1& game_desc);
+const D3D11_UNORDERED_ACCESS_VIEW_DESC1* UpgradeView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_UNORDERED_ACCESS_VIEW_DESC1* desc, ID3D11UnorderedAccessView* view, D3D11_UNORDERED_ACCESS_VIEW_DESC1& game_desc);
+const D3D11_DEPTH_STENCIL_VIEW_DESC* UpgradeView(ID3D11Device* device, ID3D11Resource* resource, const D3D11_DEPTH_STENCIL_VIEW_DESC* desc, ID3D11DepthStencilView* view, D3D11_DEPTH_STENCIL_VIEW_DESC& game_desc);
 
 // Binds, while swapping: each view of a mirrored texture in the detour's copy of the array replaced by its mirror's
 void SwapViews(ID3D11ShaderResourceView** views, UINT count);
@@ -124,8 +145,9 @@ bool RedirectClear(ID3D11DeviceContext* context, ID3D11UnorderedAccessView* view
 bool RedirectClear(ID3D11DeviceContext* context, ID3D11UnorderedAccessView* view, const FLOAT values[4]);
 bool RedirectClearView(ID3D11DeviceContext* context, ID3D11View* view, const FLOAT color[4], const D3D11_RECT* rects, UINT rect_count);
 
-// UpdateSubresource of a mirrored texture: the data converted into its mirror as well (the game's call still writes the original)
-void WriteToMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch);
+// UpdateSubresource: into a texture upgraded in place the data is converted and written by Luma (true: the game's call doesn't run);
+// into a mirrored one it's converted into its mirror as well
+bool WriteSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, const D3D11_BOX* box, const void* data, UINT row_pitch, UINT depth_pitch);
 // Map/Unmap of a mirrored texture: asserts on CPU reads and converts CPU writes into the mirror at Unmap
 void TrackMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, const D3D11_MAPPED_SUBRESOURCE& mapped);
 void CommitMappedMirror(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource);

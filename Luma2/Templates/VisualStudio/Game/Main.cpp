@@ -537,6 +537,9 @@ void Luma::Game::Init()
 
    // Texture format upgrades (16-bit float mirrors):
    // Resources::SetUpgrades({
+   //    // Mirror (default): Luma's copies swapped in, the game's textures untouched. InPlace: the game's textures themselves
+   //    // upgraded, no copies; their GetDesc reports the game's desc unless spoof_description is false.
+   //    // .method = Resources::Upgrade::Method::InPlace,
    //    .formats = {
    //       DXGI_FORMAT_R10G10B10A2_UNORM, DXGI_FORMAT_R10G10B10A2_TYPELESS,
    //       DXGI_FORMAT_R11G11B10_FLOAT,

@@ -33,6 +33,12 @@ void PreCreateTexture3D(ID3D11Device* device, D3D11_TEXTURE3D_DESC1& desc, const
 void PostCreateTexture3D(ID3D11Device* device, const D3D11_TEXTURE3D_DESC1& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Texture3D* texture);
 void PostOpenSharedResource(ID3D11Device* device, ID3D11Resource* resource);
 void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource);
+// GetDesc of a texture, for the game: the format, size and mips it asked for when Luma upgraded it in place and the rules spoof it
+void PostGetDesc(ID3D11Resource* texture, D3D11_TEXTURE1D_DESC& desc);
+void PostGetDesc(ID3D11Resource* texture, D3D11_TEXTURE2D_DESC& desc);
+void PostGetDesc(ID3D11Resource* texture, D3D11_TEXTURE2D_DESC1& desc);
+void PostGetDesc(ID3D11Resource* texture, D3D11_TEXTURE3D_DESC& desc);
+void PostGetDesc(ID3D11Resource* texture, D3D11_TEXTURE3D_DESC1& desc);
 
 // Views: an empty desc is the game's null one
 void PreCreateShaderResourceView(ID3D11Device* device, ID3D11Resource* resource, std::optional<D3D11_SHADER_RESOURCE_VIEW_DESC1>& desc);

@@ -36,9 +36,10 @@ HRESULT CreateResource(Device* device, const Desc* desc, const D3D11_SUBRESOURCE
    if (!Detours::IsGameCall(guard, caller) || !desc)
       return original<Detour>(device, desc, initial_data, resource);
    Desc1 game_desc = Detours::ToDesc1<Desc1>(*desc);
-   Detours::Report(Pre, device, game_desc, initial_data);
+   const D3D11_SUBRESOURCE_DATA* final_initial_data = initial_data;
+   Detours::Report(Pre, device, game_desc, final_initial_data);
    const Desc final_desc = Detours::ToDesc<Desc>(game_desc);
-   const HRESULT result = original<Detour>(device, &final_desc, initial_data, resource);
+   const HRESULT result = original<Detour>(device, &final_desc, final_initial_data, resource);
    if (SUCCEEDED(result) && resource && *resource)
    {
       Scope::Guard scope;

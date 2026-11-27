@@ -134,6 +134,9 @@ struct TraceView
    std::optional<std::string> mirror_origin;
    std::optional<std::string> mirror_origin_shader;
    std::optional<bool> mirror_pending;
+   // Upgraded in place: the format the game asked for (`format` is the upgraded one)
+   std::optional<std::string> in_place_from;
+   std::optional<std::array<uint32_t, 4>> in_place_game_size; // And resized: the game's width, height, depth or layers, mips
    std::optional<std::string> role;
 };
 
@@ -215,6 +218,9 @@ struct TraceResource
    std::optional<std::string> mirror_origin;
    std::optional<std::string> mirror_origin_shader;
    std::optional<bool> mirror_pending;
+   // Upgraded in place: the format the game asked for (`format` is the upgraded one)
+   std::optional<std::string> in_place_from;
+   std::optional<std::array<uint32_t, 4>> in_place_game_size; // And resized: the game's width, height, depth or layers, mips
    std::optional<std::string> role;
 };
 
@@ -478,6 +484,9 @@ std::shared_ptr<const Capture::Frame> CaptureFrame(std::chrono::steady_clock::ti
 template <typename Reply>
 void PopulateMirrorInfo(Reply& reply, const Capture::Resource& resource)
 {
+   if (resource.in_place_from)
+      reply.in_place_from = std::string(Utils::Format::GetName(DXGI_FORMAT(*resource.in_place_from)));
+   reply.in_place_game_size = resource.in_place_game_size;
    reply.mirror = resource.mirror;
    if (!resource.mirror_info)
       return;

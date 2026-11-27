@@ -9,6 +9,7 @@
 
 #include "Game/GameEvents.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
+#include "Resources/D3D12/D3D12Mirrors.hpp"
 #include "Shaders/D3D12/D3D12Database.hpp"
 #include "Shaders/D3D12/D3D12RootSignatures.hpp"
 
@@ -50,7 +51,19 @@ void PostCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destinatio
 // Per pair of destination and source ranges of CopyDescriptors (split where either range ends), and CopyDescriptorsSimple
 void PostCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count,
    D3D12_DESCRIPTOR_HEAP_TYPE type);
-// Committed, placed and reserved resources: `state` is the initial one, none for a creation with an enhanced barrier layout
+// Before a committed or placed resource's creation: true when its desc (and clear value's format) were upgraded in place
+bool PreCreateCommittedResource(ID3D12Device* device, D3D12_RESOURCE_DESC& desc, D3D12_CLEAR_VALUE* clear, const D3D12_HEAP_PROPERTIES* heap, D3D12_HEAP_FLAGS flags);
+bool PreCreatePlacedResource(ID3D12Device* device, D3D12_RESOURCE_DESC& desc, D3D12_CLEAR_VALUE* clear, ID3D12Heap* heap, UINT64 offset);
+// GetResourceAllocationInfo, per desc: true when it was upgraded in place
+bool PreGetResourceAllocationInfo(ID3D12Device* device, D3D12_RESOURCE_DESC& desc);
+// Before a view's creation: the format it gets (an in-place resource's), UNKNOWN for the game's
+DXGI_FORMAT PreCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, Resources::Descriptors::D3D12::Kind kind, ID3D12Resource* resource,
+   DXGI_FORMAT format, bool has_desc);
+// GetDesc and GetDesc1 of a resource, for the game: what it asked for when Luma upgraded it in place and the rules spoof it
+void PostGetDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC& desc);
+void PostGetDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC1& desc);
+// Committed, placed and reserved resources: `state` is the initial one, none for a creation with an enhanced barrier layout. A null
+// `resource`: an upgraded creation failed, the game's is made next.
 void PostCreateResource(ID3D12Device* device, ID3D12Resource* resource, std::optional<D3D12_RESOURCE_STATES> state, const D3D12_CLEAR_VALUE* clear, bool reserved);
 
 // Command lists. A pipeline argument can be replaced by its variant.

@@ -71,9 +71,11 @@ void DrawMirrors()
    const Resources::Mirrors::Stats stats = Resources::Mirrors::GetStats();
    const Resources::Chains::Stats chains = Resources::Chains::GetStats();
    const Resources::Scaling::Stats scaling = Resources::Scaling::GetStats();
-   const std::array<PropertyRow, 6> rows = {{
-      {"Rules", Resources::Upgrade::IsNeeded() ? std::format("{} formats", Resources::Upgrade::GetRules().formats.size()) : std::string("none"),
+   const bool in_place = Resources::Upgrade::GetRules().method == Resources::Upgrade::Method::InPlace;
+   const std::array<PropertyRow, 7> rows = {{
+      {"Rules", Resources::Upgrade::IsNeeded() ? std::format("{} formats, {}", Resources::Upgrade::GetRules().formats.size(), in_place ? "in place" : "mirrors") : std::string("none"),
          Resources::Upgrade::IsNeeded() ? Tone::Info : Tone::Warning},
+      {"In place", std::format("{} ({} resized, saved {})", stats.in_place, stats.in_place_resized, FormatBytes(stats.in_place_saved_bytes))},
       {"Mirrors", std::format("{} ({} scaled, {} pooled)", stats.mirrors, scaling.scaled_mirrors, scaling.pool_size)},
       {"Mirrored views", std::to_string(stats.views)},
       {"Mirror memory", FormatBytes(stats.bytes)},

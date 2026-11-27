@@ -1,7 +1,9 @@
 #include "Resources/D3D12/D3D12Mirrors.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <cmath>
 #include <cstring>
 #include <format>
 #include <map>
@@ -9,8 +11,10 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 #include <wrl/client.h>
@@ -55,6 +59,10 @@ std::atomic<uint32_t> swapped_copies = 0;
 std::atomic<uint32_t> direct_writes = 0;
 std::atomic<uint32_t> converted_copies = 0;
 std::atomic<uint32_t> unhandled_copies = 0;
+std::atomic<uint32_t> in_place_converted_copies = 0;
+std::atomic<uint32_t> in_place_unhandled_copies = 0;
+std::atomic<uint32_t> in_place_unasked_placed = 0;
+std::atomic<uint32_t> in_place_unfit_placed = 0;
 std::atomic<uint32_t> uav_clears = 0;
 std::atomic<uint32_t> unhandled_clears = 0;
 std::atomic<uint32_t> layout_resources = 0;
@@ -233,6 +241,8 @@ struct HeapRange
    bool shader_visible = false;
 };
 
+void EraseInPlaceTargets(SIZE_T start, SIZE_T end);
+
 std::shared_mutex heaps_mutex; // Never held with another
 std::vector<HeapRange> heaps; // By start
 
@@ -255,6 +265,7 @@ struct HeapState
             entry_count -= uint32_t(std::distance(first, last));
             handles.erase(first, last);
          }
+         EraseInPlaceTargets(SIZE_T(range.start), SIZE_T(range.end));
          if (Chains::IsNeeded())
          {
             std::scoped_lock lock(unmirrored_views_mutex);
@@ -677,6 +688,12 @@ struct ListState
    ListScalingSnapshot scaling = {};
    // Barrier transitions recorded on this list, committed in PostExecuteCommandLists order
    std::vector<BarrierTransition> recorded_barriers;
+   // The scale of the bound resized in-place target, and the game's viewports and scissors it scales
+   Math::float2 in_place_scale = {1.f, 1.f};
+   UINT in_place_viewport_count = 0;
+   std::array<D3D12_VIEWPORT, D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> in_place_viewports = {};
+   UINT in_place_scissor_count = 0;
+   std::array<D3D12_RECT, D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> in_place_scissors = {};
 };
 
 struct CopyPipelineEntry
@@ -878,7 +895,7 @@ void TryQueueDirectChain(ID3D12GraphicsCommandList* list, ID3D12Resource* destin
 {
    if (Chains::GetMode() < Chains::Mode::Direct || !destination || !source)
       return;
-   if (FindMirrorState<OwnedResource>(destination))
+   if (FindMirrorState<OwnedResource>(destination) || FindInPlace(destination))
       return;
    const ResourceMirrorState* source_mirror = FindMirrorState<OwnedResource>(source);
    if (!source_mirror)
@@ -919,8 +936,197 @@ bool SameDimensions2D(ID3D12Resource* a, ID3D12Resource* b)
       return true;
    return da.Width == db.Width && da.Height == db.Height;
 }
+
+constexpr Math::float2 NO_SCALE = {1.f, 1.f};
+
+struct InPlaceUpgrade
+{
+   D3D12_RESOURCE_DESC desc = {};
+   Upgrade::TextureInfo game;
+   Upgrade::TextureInfo info;
+};
+
+// A desc's fields (its padding isn't the game's to keep)
+using DescKey = std::array<uint64_t, 8>;
+
+DescKey GetKey(const D3D12_RESOURCE_DESC& desc)
+{
+   return {uint64_t(desc.Dimension), desc.Alignment, desc.Width, (uint64_t(desc.Height) << 32) | desc.DepthOrArraySize, (uint64_t(desc.MipLevels) << 32) | uint64_t(desc.Format),
+      (uint64_t(desc.SampleDesc.Count) << 32) | desc.SampleDesc.Quality, uint64_t(desc.Layout), uint64_t(desc.Flags)};
+}
+
+// What GetResourceAllocationInfo told the game, scoped per device, for its creation. Cleared past its size (a placed resource then gets a mirror).
+using AllocationKey = std::pair<ID3D12Device*, DescKey>;
+std::mutex allocation_upgrades_mutex; // Never held with another
+std::map<AllocationKey, InPlaceUpgrade> allocation_upgrades;
+constexpr size_t MAX_ALLOCATION_UPGRADES = 4096;
+
+// What changes in place: the format, and for a 2D texture its size and mips
+template <typename Desc>
+void WriteInPlaceDesc(Desc& desc, const Upgrade::TextureInfo& info)
+{
+   desc.Format = info.format;
+   desc.Width = info.width;
+   desc.Height = info.height;
+   desc.MipLevels = UINT16(info.levels);
+}
+
+std::optional<InPlaceUpgrade> GetInPlaceUpgrade(ID3D12Device* device, const D3D12_RESOURCE_DESC& desc)
+{
+   if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER || desc.Dimension == D3D12_RESOURCE_DIMENSION_UNKNOWN)
+      return std::nullopt;
+   const std::optional<Upgrade::UpgradeInfo> texture_upgrade =
+      Upgrade::GetUpgradeInfo(Describe(desc, true), GetFrameState(device), {.allow_writable_sr = Chains::GetMode() >= Chains::Mode::Direct});
+   if (!texture_upgrade || texture_upgrade->method != Upgrade::Method::InPlace)
+      return std::nullopt;
+   InPlaceUpgrade upgrade = {.desc = desc, .game = texture_upgrade->game, .info = texture_upgrade->upgraded};
+   WriteInPlaceDesc(upgrade.desc, texture_upgrade->upgraded);
+   // A small placement may not hold the upgraded size: the default one
+   if (upgrade.desc.Alignment == D3D12_SMALL_RESOURCE_PLACEMENT_ALIGNMENT)
+      upgrade.desc.Alignment = 0;
+   return upgrade;
+}
+
+std::optional<InPlaceUpgrade> FindAllocationUpgrade(ID3D12Device* device, const D3D12_RESOURCE_DESC& desc)
+{
+   std::scoped_lock lock(allocation_upgrades_mutex);
+   const auto it = allocation_upgrades.find({device, GetKey(desc)});
+   return it != allocation_upgrades.end() ? std::optional(it->second) : std::nullopt;
+}
+
+// Between PrepareResource and UpgradeResource on the same thread (the game's creation call)
+struct PendingInPlace
+{
+   bool active = false;
+   Upgrade::TextureInfo game;
+   Upgrade::TextureInfo info;
+};
+
+thread_local PendingInPlace pending_in_place;
+
+// Render target and depth handles of in-place resources: their view format and scale
+struct InPlaceTarget
+{
+   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+   Math::float2 scale = NO_SCALE;
+};
+
+std::shared_mutex in_place_targets_mutex; // Never held with another
+std::map<SIZE_T, InPlaceTarget> in_place_targets;
+std::atomic<size_t> in_place_target_count = 0;
+
+std::optional<InPlaceTarget> FindInPlaceTarget(SIZE_T handle)
+{
+   if (in_place_target_count.load(std::memory_order_relaxed) == 0)
+      return std::nullopt;
+   std::shared_lock lock(in_place_targets_mutex);
+   const auto it = in_place_targets.find(handle);
+   return it != in_place_targets.end() ? std::optional(it->second) : std::nullopt;
+}
+
+void EraseInPlaceTargets(SIZE_T start, SIZE_T end)
+{
+   if (in_place_target_count.load(std::memory_order_relaxed) == 0)
+      return;
+   std::unique_lock lock(in_place_targets_mutex);
+   in_place_targets.erase(in_place_targets.lower_bound(start), in_place_targets.lower_bound(end));
+   in_place_target_count = in_place_targets.size();
+}
+
+void LogInPlaceCopy(std::string_view what)
+{
+   LUMA_UNIMPLEMENTED("D3D12 conversions of a partial region, on a copy list, or into a texture that can't be a render target, with a texture upgraded in place");
+   if (in_place_unhandled_copies++ == 0)
+      Log::Warning("Mirrors: {} with a texture upgraded in place couldn't be converted on D3D12 (a partial region, a copy list, or a texture that can't "
+                   "be a render target): it was skipped",
+         what);
+}
+
+// A committed texture of Luma's the list keeps alive until it has executed
+ID3D12Resource* CreateTemporary(ID3D12GraphicsCommandList* list, const D3D12_RESOURCE_DESC& desc, D3D12_RESOURCE_STATES state)
+{
+   ComPtr<ID3D12Device> device;
+   if (FAILED(list->GetDevice(IID_PPV_ARGS(&device))))
+      return nullptr;
+   const D3D12_HEAP_PROPERTIES heap = {D3D12_HEAP_TYPE_DEFAULT};
+   ComPtr<ID3D12Resource> resource;
+   if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, state, nullptr, IID_PPV_ARGS(&resource))))
+      return nullptr;
+   Hooks::Lifetime::D3D12::Object holder;
+   Hooks::Lifetime::D3D12::Replace(holder, resource);
+   return static_cast<ID3D12Resource*>(Hooks::Lifetime::D3D12::Reference(list, holder));
+}
+
+D3D12_RESOURCE_DESC GetTemporaryDesc(DXGI_FORMAT format, uint32_t width, uint32_t height, D3D12_RESOURCE_FLAGS flags)
+{
+   return {.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D, .Width = width, .Height = height, .DepthOrArraySize = 1, .MipLevels = 1, .Format = format, .SampleDesc = {1, 0}, .Flags = flags};
+}
+
+// `source` (in COPY_SOURCE) converted and scaled into a whole subresource of `destination` (in COPY_DEST); a destination that can't be a
+// render target through one of its format, copied natively
+bool ConvertInto(ID3D12GraphicsCommandList* list, ID3D12Resource* destination, UINT destination_subresource, ID3D12Resource* source, UINT source_subresource)
+{
+   const D3D12_RESOURCE_DESC destination_desc = destination->GetDesc();
+   const CopyRegion region = {.convertible = true, .destination_subresource = destination_subresource, .source_subresource = source_subresource};
+   if (destination_desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET)
+      return ConvertingCopy(list, destination, source, region, nullptr);
+   if (destination_desc.Dimension != D3D12_RESOURCE_DIMENSION_TEXTURE2D || destination_desc.DepthOrArraySize != 1 || destination_desc.SampleDesc.Count != 1 ||
+      (destination_desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL))
+      return false;
+   const uint32_t level = destination_subresource % std::max<UINT16>(destination_desc.MipLevels, 1);
+   ID3D12Resource* target = CreateTemporary(list,
+      GetTemporaryDesc(destination_desc.Format, Upgrade::GetMipSize(uint32_t(destination_desc.Width), level), Upgrade::GetMipSize(destination_desc.Height, level),
+         D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+      D3D12_RESOURCE_STATE_COPY_DEST);
+   if (!target || !ConvertingCopy(list, target, source, {.convertible = true, .source_subresource = source_subresource}, nullptr))
+      return false;
+   const D3D12_RESOURCE_BARRIER to_source = Transition(target, 0, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+   list->ResourceBarrier(1, &to_source);
+   const D3D12_TEXTURE_COPY_LOCATION to = {.pResource = destination, .Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, .SubresourceIndex = destination_subresource};
+   const D3D12_TEXTURE_COPY_LOCATION from = {.pResource = target, .Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, .SubresourceIndex = 0};
+   list->CopyTextureRegion(&to, 0, 0, 0, &from, nullptr);
+   return true;
+}
+
+// The scaled values the list has bound for the game's (`scale` 1: the game's)
+void BindInPlaceViewports(ID3D12GraphicsCommandList* list, ListState& state)
+{
+   const UINT count = state.in_place_viewport_count;
+   if (count == 0)
+      return;
+   std::array<D3D12_VIEWPORT, D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> viewports = state.in_place_viewports;
+   for (UINT i = 0; i < count && state.in_place_scale != NO_SCALE; i++)
+   {
+      const D3D12_VIEWPORT& game = state.in_place_viewports[i];
+      const Scaling::Viewport scaled = Scaling::RescaleViewport({game.TopLeftX, game.TopLeftY, game.Width, game.Height, game.MinDepth, game.MaxDepth}, state.in_place_scale);
+      viewports[i] = {scaled.x, scaled.y, scaled.width, scaled.height, scaled.min_depth, scaled.max_depth};
+   }
+   Hooks::Scope::Guard scope;
+   list->RSSetViewports(count, viewports.data());
+   state.viewport_count = count;
+   state.viewports = viewports;
+}
+
+void BindInPlaceScissors(ID3D12GraphicsCommandList* list, ListState& state)
+{
+   const UINT count = state.in_place_scissor_count;
+   if (count == 0)
+      return;
+   std::array<D3D12_RECT, D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> rects = state.in_place_scissors;
+   for (UINT i = 0; i < count && state.in_place_scale != NO_SCALE; i++)
+   {
+      const D3D12_RECT& game = state.in_place_scissors[i];
+      const Scaling::Rect scaled = Scaling::RescaleRect({game.left, game.top, game.right, game.bottom}, state.in_place_scale);
+      rects[i] = {scaled.left, scaled.top, scaled.right, scaled.bottom};
+   }
+   Hooks::Scope::Guard scope;
+   list->RSSetScissorRects(count, rects.data());
+   state.scissor_count = count;
+   state.scissors = rects;
+}
 } // namespace
 
+namespace {
 void CreateMirror(ID3D12Device* device, ID3D12Resource* resource, std::optional<D3D12_RESOURCE_STATES> state, const D3D12_CLEAR_VALUE* clear, bool reserved)
 {
    const D3D12_RESOURCE_DESC desc = resource->GetDesc();
@@ -944,11 +1150,12 @@ void CreateMirror(ID3D12Device* device, ID3D12Resource* resource, std::optional<
    D3D12_HEAP_PROPERTIES properties = {D3D12_HEAP_TYPE_DEFAULT};
    resource->GetHeapProperties(&properties, nullptr);
    const Upgrade::TextureInfo described = Describe(desc, properties.Type == D3D12_HEAP_TYPE_DEFAULT);
-   bool resized = false;
-   const bool allow_writable_sr = Chains::GetMode() >= Chains::Mode::Direct;
-   const std::optional<Upgrade::TextureInfo> mirrored = Upgrade::Match(described, GetFrameState(device), false, allow_writable_sr, false, &resized);
-   if (!mirrored)
+   const std::optional<Upgrade::UpgradeInfo> upgrade =
+      Upgrade::GetUpgradeInfo(described, GetFrameState(device), {.allow_writable_sr = Chains::GetMode() >= Chains::Mode::Direct, .mirror = true});
+   if (!upgrade)
       return;
+   const Upgrade::TextureInfo* mirrored = &upgrade->upgraded;
+   const bool resized = upgrade->resized;
    if (reserved)
    {
       reserved_resources++;
@@ -964,6 +1171,7 @@ void CreateMirror(ID3D12Device* device, ID3D12Resource* resource, std::optional<
    const Chains::Origin origin = resized ? Chains::Origin{Chains::OriginKind::CustomDimensions} : Chains::Origin{Chains::OriginKind::Rule};
    MaterializeMirror(device, resource, *state, clear, described, *mirrored, origin);
 }
+} // namespace
 
 ID3D12Resource* FindMirror(ID3D12Resource* resource)
 {
@@ -1089,6 +1297,10 @@ std::optional<ListScalingSnapshot> GetListScalingSnapshot(ID3D12GraphicsCommandL
 
 void ReleaseDeviceObjects(ID3D12Device* device)
 {
+   {
+      std::scoped_lock lock(allocation_upgrades_mutex);
+      std::erase_if(allocation_upgrades, [device](const auto& entry) { return entry.first.first == device; });
+   }
    if (DeviceState* state = Hooks::Lifetime::GetState<DeviceState>(device))
    {
       {
@@ -1332,6 +1544,7 @@ void TrackSampler(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination,
    Remember(destination.ptr, std::move(slot));
 }
 
+namespace {
 void SwapCopiedDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type,
    bool swap_views, bool swap_samplers)
 {
@@ -1379,6 +1592,7 @@ void SwapCopiedDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE des
    entry_count += uint32_t(copied.size());
    copied.clear();
 }
+} // namespace
 
 std::span<const D3D12_RESOURCE_BARRIER> AddMirrorBarriers(ID3D12GraphicsCommandList* list, std::span<const D3D12_RESOURCE_BARRIER> barriers)
 {
@@ -1441,6 +1655,7 @@ void CommitExecutedBarriers(UINT count, ID3D12CommandList* const* lists)
    }
 }
 
+namespace {
 void SwapRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE*& render_targets, BOOL& single_range,
    const D3D12_CPU_DESCRIPTOR_HANDLE*& depth_stencil, Shaders::Database::D3D12::TargetFormats& formats)
 {
@@ -1522,8 +1737,10 @@ void SwapRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_
    render_targets = swapped.data();
    single_range = FALSE;
 }
+} // namespace
 
-bool SwapHandle(D3D12_CPU_DESCRIPTOR_HANDLE& handle, UINT rect_count, const D3D12_RECT** rects)
+namespace {
+bool SwapHandle(D3D12_CPU_DESCRIPTOR_HANDLE& handle, UINT rect_count = 0, const D3D12_RECT** rects = nullptr)
 {
    const std::shared_ptr<Slot> slot = Find(handle.ptr);
    if (!slot || slot->sampler)
@@ -1551,8 +1768,10 @@ bool SwapHandle(D3D12_CPU_DESCRIPTOR_HANDLE& handle, UINT rect_count, const D3D1
    }
    return true;
 }
+} // namespace
 
-bool SwapCopy(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, ID3D12Resource*& source, CopyRegion& region, bool* out_scaled)
+namespace {
+bool SwapCopy(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, ID3D12Resource*& source, CopyRegion& region, bool* out_scaled = nullptr)
 {
    TryQueueDirectChain(list, destination, source);
    const CopyPlan<ID3D12Resource> plan = PlanCopy(destination, source, &FindMirror, &GetFormat);
@@ -1606,7 +1825,9 @@ bool SwapCopy(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, ID3
          Utils::Format::GetName(GetFormat(plan.destination_mirrored ? source : destination)));
    return false;
 }
+} // namespace
 
+namespace {
 bool SwapResolve(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, UINT destination_subresource, ID3D12Resource*& source,
    UINT source_subresource, DXGI_FORMAT& format)
 {
@@ -1681,7 +1902,9 @@ bool SwapResolve(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, 
          Utils::Format::GetName(src_format), Utils::Format::GetName(dst_format));
    return false;
 }
+} // namespace
 
+namespace {
 void SwapClearUnorderedAccess(ID3D12GraphicsCommandList* list, D3D12_GPU_DESCRIPTOR_HANDLE& gpu, D3D12_CPU_DESCRIPTOR_HANDLE& cpu, ID3D12Resource*& resource)
 {
    ID3D12Resource* mirror = FindMirror(resource);
@@ -1705,6 +1928,7 @@ void SwapClearUnorderedAccess(ID3D12GraphicsCommandList* list, D3D12_GPU_DESCRIP
    resource = mirror;
    uav_clears++;
 }
+} // namespace
 
 void RecordRootSignature(ID3D12GraphicsCommandList* list, ID3D12RootSignature* root_signature)
 {
@@ -1712,10 +1936,11 @@ void RecordRootSignature(ID3D12GraphicsCommandList* list, ID3D12RootSignature* r
       state->root_signature = root_signature;
 }
 
+namespace {
 void RecordRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
    const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil)
 {
-   ListState* state = Hooks::Lifetime::GetOrCreateStateCached<ListState>(list);
+   ListState* state = list ? Hooks::Lifetime::GetOrCreateStateCached<ListState>(list) : nullptr;
    if (!state)
       return;
    count = render_targets ? std::min<UINT>(count, D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT) : 0;
@@ -1732,7 +1957,9 @@ void RecordRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D1
    state->has_depth = depth_stencil != nullptr;
    state->depth = depth_stencil ? *depth_stencil : D3D12_CPU_DESCRIPTOR_HANDLE{};
 }
+} // namespace
 
+namespace {
 void RecordViewports(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_VIEWPORT*& viewports)
 {
    ListState* state = Hooks::Lifetime::GetOrCreateStateCached<ListState>(list);
@@ -1791,7 +2018,9 @@ void RecordViewports(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_V
       Scaling::CountViewportRescale();
    }
 }
+} // namespace
 
+namespace {
 void RecordScissorRects(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_RECT*& rects)
 {
    ListState* state = Hooks::Lifetime::GetOrCreateStateCached<ListState>(list);
@@ -1849,6 +2078,7 @@ void RecordScissorRects(ID3D12GraphicsCommandList* list, UINT& count, const D3D1
       Scaling::CountScissorRescale();
    }
 }
+} // namespace
 
 void RecordTopology(ID3D12GraphicsCommandList* list, D3D12_PRIMITIVE_TOPOLOGY topology)
 {
@@ -1917,15 +2147,16 @@ void PrepareDrawOrDispatch(ID3D12GraphicsCommandList* list, bool is_dispatch)
                if (const auto it = unmirrored_by_handle.find(handle); it != unmirrored_by_handle.end())
                   resource = it->second.resource;
             }
-            if (!resource || FindMirrorState<OwnedResource>(resource))
+            if (!resource || FindMirrorState<OwnedResource>(resource) || FindInPlace(resource))
                continue;
             D3D12_HEAP_PROPERTIES props = {D3D12_HEAP_TYPE_DEFAULT};
             resource->GetHeapProperties(&props, nullptr);
             const Upgrade::TextureInfo info = Describe(resource->GetDesc(), props.Type == D3D12_HEAP_TYPE_DEFAULT);
-            const std::optional<Upgrade::TextureInfo> matched = Upgrade::Match(info, frame_state, false, true, true);
-            if (!matched)
+            const std::optional<Upgrade::UpgradeInfo> upgrade =
+               Upgrade::GetUpgradeInfo(info, frame_state, {.allow_writable_sr = true, .force_format = true, .mirror = true});
+            if (!upgrade)
                continue;
-            Upgrade::TextureInfo target = *matched;
+            Upgrade::TextureInfo target = upgrade->upgraded;
             if (can_scale && Scaling::ShouldScaleTexture(target, frame_state, true, true, rules.aspect_ratio_pixel_threshold))
             {
                const Math::uint2 scaled = Scaling::ComputeScaledSize({target.width, target.height}, frame_state.render, frame_state.output);
@@ -2016,10 +2247,538 @@ void FinishDrawOrDispatch(ID3D12GraphicsCommandList* list, bool is_dispatch)
    }
 }
 
+bool PrepareResource(ID3D12Device* device, D3D12_RESOURCE_DESC& desc, D3D12_CLEAR_VALUE* clear, const Creation& creation)
+{
+   // A creation that failed left its own
+   pending_in_place = {};
+   if (!device || Upgrade::GetRules().method != Upgrade::Method::InPlace)
+      return false;
+   std::optional<InPlaceUpgrade> upgrade = FindAllocationUpgrade(device, desc);
+   if (creation.placement == Placement::Committed)
+   {
+      // Opened by other devices or processes in the game's format
+      if (creation.heap_type != D3D12_HEAP_TYPE_DEFAULT || (creation.heap_flags & D3D12_HEAP_FLAG_SHARED))
+         return false;
+      if (!upgrade)
+         upgrade = GetInPlaceUpgrade(device, desc);
+   }
+   else
+   {
+      if (!creation.heap)
+         return false;
+      // The game's allocator left room only for what it was told
+      if (!upgrade)
+      {
+         if (GetInPlaceUpgrade(device, desc) && in_place_unasked_placed++ == 0)
+            Log::Warning("Mirrors: a placed texture the rules upgrade in place was created without asking its size (GetResourceAllocationInfo): it gets a mirror");
+         return false;
+      }
+      const D3D12_HEAP_DESC heap = creation.heap->GetDesc();
+      if (heap.Properties.Type != D3D12_HEAP_TYPE_DEFAULT || (heap.Flags & D3D12_HEAP_FLAG_SHARED))
+         return false;
+      const D3D12_RESOURCE_ALLOCATION_INFO allocation = device->GetResourceAllocationInfo(0, 1, &upgrade->desc);
+      if (allocation.SizeInBytes == UINT64_MAX || (allocation.Alignment != 0 && creation.offset % allocation.Alignment != 0) ||
+         creation.offset > heap.SizeInBytes || allocation.SizeInBytes > heap.SizeInBytes - creation.offset)
+      {
+         if (in_place_unfit_placed++ == 0)
+            Log::Warning("Mirrors: a placed texture upgraded in place doesn't fit its heap from its offset: it gets a mirror");
+         return false;
+      }
+   }
+   if (!upgrade)
+      return false;
+   if (clear)
+   {
+      const Upgrade::ViewKind kind = (desc.Flags & D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL) ? Upgrade::ViewKind::DepthStencil : Upgrade::ViewKind::RenderTarget;
+      const DXGI_FORMAT format = Upgrade::GetBestViewFormat(clear->Format, kind, upgrade->game.format, upgrade->info.format);
+      clear->Format = format != DXGI_FORMAT_UNKNOWN              ? format
+         : Utils::Format::DXGI::IsTypeless(upgrade->info.format) ? Utils::Format::DXGI::GetDefaultTyped(upgrade->info.format)
+                                                                 : upgrade->info.format;
+   }
+   desc = upgrade->desc;
+   pending_in_place = {.active = true, .game = upgrade->game, .info = upgrade->info};
+   return true;
+}
+
+namespace {
+std::optional<Upgrade::TextureInfo> FinishInPlace(ID3D12Resource* resource)
+{
+   if (!pending_in_place.active)
+      return std::nullopt;
+   const PendingInPlace pending = std::exchange(pending_in_place, {});
+   AttachInPlace(resource, pending.game, pending.info);
+   return pending.game;
+}
+} // namespace
+
+bool UpgradeForAllocation(ID3D12Device* device, D3D12_RESOURCE_DESC& desc)
+{
+   if (!device || Upgrade::GetRules().method != Upgrade::Method::InPlace)
+      return false;
+   const AllocationKey key = {device, GetKey(desc)};
+   const std::optional<InPlaceUpgrade> upgrade = GetInPlaceUpgrade(device, desc);
+   if (!upgrade)
+   {
+      std::scoped_lock lock(allocation_upgrades_mutex);
+      allocation_upgrades.erase(key);
+      return false;
+   }
+   {
+      std::scoped_lock lock(allocation_upgrades_mutex);
+      if (allocation_upgrades.size() >= MAX_ALLOCATION_UPGRADES)
+         allocation_upgrades.clear();
+      allocation_upgrades[key] = *upgrade;
+   }
+   desc = upgrade->desc;
+   return true;
+}
+
+DXGI_FORMAT PrepareView(ID3D12Device*, D3D12_CPU_DESCRIPTOR_HANDLE destination, ViewKind kind, ID3D12Resource* resource, DXGI_FORMAT game_format, bool has_desc)
+{
+   const InPlaceState* state = FindInPlace(resource);
+   DXGI_FORMAT format = DXGI_FORMAT_UNKNOWN;
+   if (state && has_desc)
+   {
+      const DXGI_FORMAT mapped = Upgrade::GetBestViewFormat(game_format, ToUpgradeKind(kind), state->original_info.format, state->info.format);
+      if (mapped != DXGI_FORMAT_UNKNOWN && mapped != game_format)
+         format = mapped;
+   }
+   if ((kind == ViewKind::RenderTarget || kind == ViewKind::DepthStencil) && destination.ptr)
+   {
+      if (state)
+      {
+         const DXGI_FORMAT bound = format != DXGI_FORMAT_UNKNOWN ? format : (has_desc && game_format != DXGI_FORMAT_UNKNOWN) ? game_format
+                                                                                                                             : state->info.format;
+         std::unique_lock lock(in_place_targets_mutex);
+         in_place_targets[destination.ptr] = {bound, GetInPlaceScale(state)};
+         in_place_target_count = in_place_targets.size();
+      }
+      else if (in_place_target_count.load(std::memory_order_relaxed) != 0)
+      {
+         std::unique_lock lock(in_place_targets_mutex);
+         in_place_targets.erase(destination.ptr);
+         in_place_target_count = in_place_targets.size();
+      }
+   }
+   return format;
+}
+
+namespace {
+void CopyInPlaceTargets(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type)
+{
+   if ((type != D3D12_DESCRIPTOR_HEAP_TYPE_RTV && type != D3D12_DESCRIPTOR_HEAP_TYPE_DSV) || in_place_target_count.load(std::memory_order_relaxed) == 0 || !device)
+      return;
+   const uint64_t increment = GetIncrement(device, type);
+   std::unique_lock lock(in_place_targets_mutex);
+   for (UINT i = 0; i < count; i++)
+   {
+      const SIZE_T to = SIZE_T(destination.ptr + i * increment);
+      if (const auto it = in_place_targets.find(SIZE_T(source.ptr + i * increment)); it != in_place_targets.end())
+         in_place_targets[to] = it->second;
+      else
+         in_place_targets.erase(to);
+   }
+   in_place_target_count = in_place_targets.size();
+}
+} // namespace
+
+namespace {
+void BindInPlaceTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
+   const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil, Shaders::Database::D3D12::TargetFormats& formats)
+{
+   if (!list || !HasAnyInPlace())
+      return;
+   Math::float2 scale = NO_SCALE;
+   if (in_place_target_count.load(std::memory_order_relaxed) != 0)
+   {
+      uint64_t increment = 0;
+      if (render_targets && single_range && count > 1)
+      {
+         ComPtr<ID3D12Device> device;
+         if (SUCCEEDED(list->GetDevice(IID_PPV_ARGS(&device))))
+            increment = GetIncrement(device.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+      }
+      count = render_targets ? std::min<UINT>(count, D3D12_SIMULTANEOUS_RENDER_TARGET_COUNT) : 0;
+      for (UINT i = 0; i < count; i++)
+      {
+         const SIZE_T handle = single_range ? SIZE_T(render_targets->ptr + i * increment) : render_targets[i].ptr;
+         if (single_range && i > 0 && increment == 0)
+            break;
+         if (const std::optional<InPlaceTarget> target = FindInPlaceTarget(handle))
+         {
+            if (formats.render_targets[i] == DXGI_FORMAT_UNKNOWN)
+               formats.render_targets[i] = target->format;
+            if (scale == NO_SCALE)
+               scale = target->scale;
+         }
+      }
+      if (depth_stencil)
+      {
+         if (const std::optional<InPlaceTarget> target = FindInPlaceTarget(depth_stencil->ptr))
+         {
+            if (formats.depth == DXGI_FORMAT_UNKNOWN)
+               formats.depth = target->format;
+            if (scale == NO_SCALE)
+               scale = target->scale;
+         }
+      }
+   }
+   if (!HasAnyResizedInPlace())
+      return;
+   ListState* state = Hooks::Lifetime::GetOrCreateStateCached<ListState>(list);
+   if (!state || state->in_place_scale == scale)
+      return;
+   state->in_place_scale = scale;
+   BindInPlaceViewports(list, *state);
+   BindInPlaceScissors(list, *state);
+}
+} // namespace
+
+namespace {
+void ScaleInPlaceViewports(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_VIEWPORT*& viewports)
+{
+   if (!viewports || !HasAnyResizedInPlace())
+      return;
+   ListState* state = Hooks::Lifetime::GetOrCreateStateCached<ListState>(list);
+   if (!state)
+      return;
+   state->in_place_viewport_count = std::min<UINT>(count, D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE);
+   std::copy_n(viewports, state->in_place_viewport_count, state->in_place_viewports.begin());
+   if (state->in_place_scale == NO_SCALE)
+      return;
+   thread_local std::array<D3D12_VIEWPORT, D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> scaled;
+   for (UINT i = 0; i < state->in_place_viewport_count; i++)
+   {
+      const D3D12_VIEWPORT& game = viewports[i];
+      const Scaling::Viewport rescaled = Scaling::RescaleViewport({game.TopLeftX, game.TopLeftY, game.Width, game.Height, game.MinDepth, game.MaxDepth}, state->in_place_scale);
+      scaled[i] = {rescaled.x, rescaled.y, rescaled.width, rescaled.height, rescaled.min_depth, rescaled.max_depth};
+   }
+   count = state->in_place_viewport_count;
+   viewports = scaled.data();
+   Scaling::CountViewportRescale();
+}
+} // namespace
+
+namespace {
+void ScaleInPlaceScissors(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_RECT*& rects)
+{
+   if (!rects || !HasAnyResizedInPlace())
+      return;
+   ListState* state = Hooks::Lifetime::GetOrCreateStateCached<ListState>(list);
+   if (!state)
+      return;
+   state->in_place_scissor_count = std::min<UINT>(count, D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE);
+   std::copy_n(rects, state->in_place_scissor_count, state->in_place_scissors.begin());
+   if (state->in_place_scale == NO_SCALE)
+      return;
+   thread_local std::array<D3D12_RECT, D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> scaled;
+   for (UINT i = 0; i < state->in_place_scissor_count; i++)
+   {
+      const Scaling::Rect rescaled = Scaling::RescaleRect({rects[i].left, rects[i].top, rects[i].right, rects[i].bottom}, state->in_place_scale);
+      scaled[i] = {rescaled.left, rescaled.top, rescaled.right, rescaled.bottom};
+   }
+   count = state->in_place_scissor_count;
+   rects = scaled.data();
+   Scaling::CountScissorRescale();
+}
+} // namespace
+
+namespace {
+void CheckInPlaceUnorderedAccessClear(ID3D12Resource* resource, UINT rect_count)
+{
+   if (rect_count == 0 || !HasAnyResizedInPlace())
+      return;
+   const InPlaceState* state = FindInPlace(resource);
+   if (state && state->resized)
+      LUMA_UNIMPLEMENTED("UAV clear rects of a texture resized in place on D3D12 (cleared in the game's size)");
+}
+} // namespace
+
+namespace {
+void ScaleInPlaceClear(D3D12_CPU_DESCRIPTOR_HANDLE view, UINT rect_count, const D3D12_RECT*& rects)
+{
+   if (!rects || rect_count == 0 || !HasAnyResizedInPlace())
+      return;
+   const std::optional<InPlaceTarget> target = FindInPlaceTarget(view.ptr);
+   if (!target || target->scale == NO_SCALE)
+      return;
+   thread_local std::vector<D3D12_RECT> scaled;
+   scaled.resize(rect_count);
+   for (UINT i = 0; i < rect_count; i++)
+   {
+      const Scaling::Rect rescaled = Scaling::RescaleRect({rects[i].left, rects[i].top, rects[i].right, rects[i].bottom}, target->scale);
+      scaled[i] = {rescaled.left, rescaled.top, rescaled.right, rescaled.bottom};
+   }
+   rects = scaled.data();
+   Scaling::CountClearRectRescale();
+}
+} // namespace
+
+namespace {
+bool CopyInPlace(ID3D12GraphicsCommandList* list, ID3D12Resource* destination, ID3D12Resource* source, CopyRegion& region)
+{
+   if (!list || !destination || !source || !HasAnyInPlace())
+      return false;
+   const InPlaceState* destination_state = FindInPlace(destination);
+   const InPlaceState* source_state = FindInPlace(source);
+   if (!destination_state && !source_state)
+      return false;
+   const D3D12_RESOURCE_DESC destination_desc = destination->GetDesc();
+   const D3D12_RESOURCE_DESC source_desc = source->GetDesc();
+   const Math::float2 destination_scale = GetInPlaceScale(destination_state);
+   const Math::float2 source_scale = GetInPlaceScale(source_state);
+   const bool compatible = Utils::Format::DXGI::AreCopyCompatible(destination_desc.Format, source_desc.Format);
+   if (compatible && destination_scale == source_scale && (!region.whole_resource || destination_desc.MipLevels == source_desc.MipLevels))
+   {
+      // Both the same size over the game's: the game's region in it
+      if (source_scale != NO_SCALE && !region.whole_resource)
+      {
+         if (region.box)
+         {
+            const Scaling::Box scaled = Scaling::RescaleBox({region.box->left, region.box->top, region.box->front, region.box->right, region.box->bottom, region.box->back}, source_scale);
+            thread_local D3D12_BOX box;
+            box = {scaled.left, scaled.top, scaled.front, scaled.right, scaled.bottom, scaled.back};
+            region.box = &box;
+         }
+         region.offset[0] = UINT(std::lround(double(region.offset[0]) * double(source_scale.x)));
+         region.offset[1] = UINT(std::lround(double(region.offset[1]) * double(source_scale.y)));
+      }
+      return false;
+   }
+   bool converted = false;
+   if (list->GetType() == D3D12_COMMAND_LIST_TYPE_DIRECT && region.convertible)
+   {
+      if (region.whole_resource)
+      {
+         // Each mip the game's copy has (an in-place texture may have more)
+         const UINT16 levels = std::min(std::max<UINT16>(destination_desc.MipLevels, 1), std::max<UINT16>(source_desc.MipLevels, 1));
+         converted = destination_desc.DepthOrArraySize == 1 && source_desc.DepthOrArraySize == 1;
+         for (UINT16 level = 0; level < levels && converted; level++)
+            converted = ConvertInto(list, destination, level, source, level);
+      }
+      else if (region.offset == std::array<UINT, 3>{})
+      {
+         // Only a whole subresource, in the game's size
+         const uint32_t level = region.source_subresource % std::max<UINT16>(source_desc.MipLevels, 1);
+         const Upgrade::TextureInfo game = source_state ? source_state->original_info : Describe(source_desc, true);
+         const bool whole = !region.box || (region.box->left == 0 && region.box->top == 0 && region.box->front == 0 && region.box->right == Upgrade::GetMipSize(game.width, level) && region.box->bottom == Upgrade::GetMipSize(game.height, level) && region.box->back == 1);
+         converted = whole && ConvertInto(list, destination, region.destination_subresource, source, region.source_subresource);
+      }
+   }
+   if (converted)
+      in_place_converted_copies++;
+   else
+      LogInPlaceCopy("a copy");
+   return true;
+}
+} // namespace
+
+namespace {
+bool CopyInPlaceFootprint(ID3D12GraphicsCommandList* list, const D3D12_TEXTURE_COPY_LOCATION& destination, UINT x, UINT y, UINT z,
+   const D3D12_TEXTURE_COPY_LOCATION& source, const D3D12_BOX* box)
+{
+   if (!list || !HasAnyInPlace())
+      return false;
+   const bool upload = destination.Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX && source.Type == D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+   const bool readback = source.Type == D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX && destination.Type == D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+   if (!upload && !readback)
+      return false;
+   const D3D12_TEXTURE_COPY_LOCATION& texture = upload ? destination : source;
+   const D3D12_SUBRESOURCE_FOOTPRINT& footprint = (upload ? source : destination).PlacedFootprint.Footprint;
+   const InPlaceState* state = FindInPlace(texture.pResource);
+   if (!state)
+      return false;
+   const D3D12_RESOURCE_DESC desc = texture.pResource->GetDesc();
+   // Without the spoof the game laid its data out in the upgraded format
+   if (!state->resized && Utils::Format::DXGI::AreCopyCompatible(footprint.Format, desc.Format))
+      return false;
+   const uint32_t level = texture.SubresourceIndex % std::max<UINT16>(desc.MipLevels, 1);
+   const uint32_t game_width = Upgrade::GetMipSize(state->original_info.width, level);
+   const uint32_t game_height = Upgrade::GetMipSize(state->original_info.height, level);
+   bool converted = false;
+   if (list->GetType() == D3D12_COMMAND_LIST_TYPE_DIRECT && desc.DepthOrArraySize == 1)
+   {
+      const D3D12_TEXTURE_COPY_LOCATION temporary_location = [&] {
+         D3D12_TEXTURE_COPY_LOCATION location = {.Type = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX, .SubresourceIndex = 0};
+         return location;
+      }();
+      if (upload)
+      {
+         // The whole subresource only: the game's data into a texture of its format and size, converted and scaled into the upgraded one
+         const uint32_t width = box ? box->right - box->left : footprint.Width;
+         const uint32_t height = box ? box->bottom - box->top : footprint.Height;
+         if (x == 0 && y == 0 && z == 0 && width == game_width && height == game_height)
+         {
+            if (ID3D12Resource* temporary = CreateTemporary(list, GetTemporaryDesc(footprint.Format, game_width, game_height, D3D12_RESOURCE_FLAG_NONE), D3D12_RESOURCE_STATE_COPY_DEST))
+            {
+               D3D12_TEXTURE_COPY_LOCATION into = temporary_location;
+               into.pResource = temporary;
+               list->CopyTextureRegion(&into, 0, 0, 0, &source, box);
+               const D3D12_RESOURCE_BARRIER to_source = Transition(temporary, 0, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+               list->ResourceBarrier(1, &to_source);
+               converted = ConvertInto(list, destination.pResource, destination.SubresourceIndex, temporary, 0);
+            }
+         }
+      }
+      else if (ID3D12Resource* temporary = CreateTemporary(list, GetTemporaryDesc(footprint.Format, game_width, game_height, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET),
+                  D3D12_RESOURCE_STATE_COPY_DEST))
+      {
+         // The subresource converted and scaled into a texture of the game's format and size, which the game's copy reads (its box is in its size)
+         if (ConvertingCopy(list, temporary, source.pResource, {.convertible = true, .source_subresource = source.SubresourceIndex}, nullptr))
+         {
+            const D3D12_RESOURCE_BARRIER to_source = Transition(temporary, 0, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            list->ResourceBarrier(1, &to_source);
+            D3D12_TEXTURE_COPY_LOCATION from = temporary_location;
+            from.pResource = temporary;
+            list->CopyTextureRegion(&destination, x, y, z, &from, box);
+            converted = true;
+         }
+      }
+   }
+   if (converted)
+      in_place_converted_copies++;
+   else
+      LogInPlaceCopy(upload ? "an upload" : "a readback");
+   return true;
+}
+} // namespace
+
+namespace {
+bool ResolveInPlace(ID3D12GraphicsCommandList*, ID3D12Resource* destination, ID3D12Resource* source, DXGI_FORMAT& format)
+{
+   if (!destination || !source || !HasAnyInPlace())
+      return false;
+   const InPlaceState* source_state = FindInPlace(source);
+   if (!source_state && !FindInPlace(destination))
+      return false;
+   const DXGI_FORMAT destination_format = GetFormat(destination);
+   const DXGI_FORMAT source_format = GetFormat(source);
+   if (Utils::Format::DXGI::GetTypeless(destination_format) == Utils::Format::DXGI::GetTypeless(source_format) && SameDimensions2D(destination, source))
+   {
+      format = GetResolveFormat(format, source_state ? source_state->original_info.format : source_format, destination_format);
+      return false;
+   }
+   LogInPlaceCopy("a resolve");
+   return true;
+}
+} // namespace
+
+std::optional<Upgrade::UpgradeInfo> FindUpgrade(ID3D12Resource* resource)
+{
+   if (const InPlaceState* state = FindInPlace(resource))
+      return Upgrade::UpgradeInfo{state->original_info, state->info, Upgrade::Method::InPlace, state->resized};
+   if (const ResourceMirrorState* state = FindMirrorState<OwnedResource>(resource))
+      return Upgrade::UpgradeInfo{state->original_info, state->info, Upgrade::Method::Mirror,
+         state->info.width != state->original_info.width || state->info.height != state->original_info.height};
+   return std::nullopt;
+}
+
+void SpoofDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC& desc)
+{
+   if (const Upgrade::TextureInfo* game = FindSpoofedDesc(resource))
+      WriteInPlaceDesc(desc, *game);
+}
+
+void SpoofDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC1& desc)
+{
+   if (const Upgrade::TextureInfo* game = FindSpoofedDesc(resource))
+      WriteInPlaceDesc(desc, *game);
+}
+
+void UpgradeResource(ID3D12Device* device, ID3D12Resource* resource, std::optional<D3D12_RESOURCE_STATES> state, const D3D12_CLEAR_VALUE* clear, bool reserved)
+{
+   if (!resource)
+   {
+      if (std::exchange(pending_in_place, {}).active)
+      {
+         static std::atomic<bool> logged = false;
+         if (!logged.exchange(true))
+            Log::Warning("Mirrors: a texture upgraded in place failed to be created, it was made as the game asked");
+      }
+      return;
+   }
+   if (!FinishInPlace(resource))
+      CreateMirror(device, resource, state, clear, reserved);
+}
+
+void TrackCopiedDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count, D3D12_DESCRIPTOR_HEAP_TYPE type,
+   DescriptorSwapOptions swap)
+{
+   SwapCopiedDescriptors(device, destination, source, count, type, swap.views, swap.samplers);
+   CopyInPlaceTargets(device, destination, source, count, type);
+}
+
+Shaders::Database::D3D12::TargetFormats BindRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE*& render_targets, BOOL& single_range,
+   const D3D12_CPU_DESCRIPTOR_HANDLE*& depth_stencil, bool swapping)
+{
+   Shaders::Database::D3D12::TargetFormats formats;
+   if (swapping)
+      SwapRenderTargets(list, count, render_targets, single_range, depth_stencil, formats);
+   // In-place targets aren't swapped: their formats, and their scale, whether Luma swaps or not
+   BindInPlaceTargets(list, count, render_targets, single_range, depth_stencil, formats);
+   // What a converting copy binds back: the targets as they're bound now
+   RecordRenderTargets(list, count, render_targets, single_range, depth_stencil);
+   return formats;
+}
+
+void BindViewports(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_VIEWPORT*& viewports)
+{
+   const D3D12_VIEWPORT* game_viewports = viewports;
+   RecordViewports(list, count, viewports);
+   if (viewports == game_viewports)
+      ScaleInPlaceViewports(list, count, viewports);
+}
+
+void BindScissorRects(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_RECT*& rects)
+{
+   const D3D12_RECT* game_rects = rects;
+   RecordScissorRects(list, count, rects);
+   if (rects == game_rects)
+      ScaleInPlaceScissors(list, count, rects);
+}
+
+bool Copy(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, ID3D12Resource*& source, CopyRegion& region, bool swapping)
+{
+   if (CopyInPlace(list, destination, source, region))
+      return true;
+   return swapping && SwapCopy(list, destination, source, region);
+}
+
+bool CopyFootprint(ID3D12GraphicsCommandList* list, D3D12_TEXTURE_COPY_LOCATION& destination, D3D12_TEXTURE_COPY_LOCATION& source, CopyRegion& region, bool swapping)
+{
+   if (CopyInPlaceFootprint(list, destination, region.offset[0], region.offset[1], region.offset[2], source, region.box))
+      return true;
+   return swapping && SwapCopy(list, destination.pResource, source.pResource, region);
+}
+
+bool Resolve(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, UINT destination_subresource, ID3D12Resource*& source, UINT source_subresource,
+   DXGI_FORMAT& format, bool swapping)
+{
+   if (ResolveInPlace(list, destination, source, format))
+      return true;
+   return swapping && SwapResolve(list, destination, destination_subresource, source, source_subresource, format);
+}
+
+void PrepareClear(D3D12_CPU_DESCRIPTOR_HANDLE& view, UINT rect_count, const D3D12_RECT*& rects, bool swapping)
+{
+   ScaleInPlaceClear(view, rect_count, rects);
+   if (swapping)
+      SwapHandle(view, rect_count, &rects);
+}
+
+void PrepareClearUnorderedAccess(ID3D12GraphicsCommandList* list, D3D12_GPU_DESCRIPTOR_HANDLE& gpu, D3D12_CPU_DESCRIPTOR_HANDLE& cpu, ID3D12Resource*& resource,
+   UINT rect_count, bool swapping)
+{
+   CheckInPlaceUnorderedAccessClear(resource, rect_count);
+   if (swapping)
+      SwapClearUnorderedAccess(list, gpu, cpu, resource);
+}
+
 Stats GetStats()
 {
    return {entry_count.load(), sampler_count.load(), swapped_copies.load(), direct_writes.load(), converted_copies.load(), unhandled_copies.load(), uav_clears.load(),
-      unhandled_clears.load(), layout_resources.load(), reserved_resources.load(), aliasing_barriers.load()};
+      unhandled_clears.load(), layout_resources.load(), reserved_resources.load(), aliasing_barriers.load(), in_place_converted_copies.load(),
+      in_place_unhandled_copies.load(), in_place_unasked_placed.load(), in_place_unfit_placed.load()};
 }
 } // namespace D3D12
 } // namespace Mirrors

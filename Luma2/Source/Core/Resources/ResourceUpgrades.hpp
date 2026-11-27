@@ -77,8 +77,21 @@ struct CustomDimensions
    Math::uint4 size = {};
 };
 
+enum class Method : uint8_t
+{
+   // A mirror in the upgraded desc, swapped in at binds; the game's texture is kept as it asked
+   Mirror,
+   // The game's texture itself is created upgraded, its views, copies and uploads converted. Textures that can't be (shared ones, other
+   // samples or layers, a placed one its heap can't hold) get a mirror. Changing it needs a restart.
+   InPlace,
+};
+
 struct Rules
 {
+   Method method = Method::Mirror;
+   // InPlace: the texture's GetDesc returns the game's desc to the game. Off, textures the game makes from the desc it read are
+   // upgraded with it.
+   bool spoof_description = true;
    // Render targets and UAVs of these formats get RGBA16F mirrors
    std::vector<DXGI_FORMAT> formats;
    // Depth textures of these get 32 bit depth (keeping a stencil)
@@ -131,11 +144,34 @@ struct FrameState
    Math::uint2 display = {1, 1};
 };
 
-// `allow_writable_sr` enables GPU-only shader resources without initial data (when chain upgrades are active)
-// `force_format_upgrade` skips the format list check (used by shader-hash seeds)
-std::optional<TextureInfo> Match(const TextureInfo& info, const FrameState& state, bool has_initial_data, bool allow_writable_sr = false,
-   bool force_format_upgrade = false, bool* resized_by_custom_dimensions = nullptr);
+struct UpgradeOptions
+{
+   // CPU data at creation: such a shader resource is never a writable one
+   bool has_initial_data = false;
+   // GPU-only shader resources without initial data are upgraded too (while chain upgrades are active)
+   bool allow_writable_sr = false;
+   // The format lists aren't checked (shader-hash seeds)
+   bool force_format = false;
+   // A mirror whatever the rules' method: Luma's own mirrors, and textures that couldn't be upgraded in place
+   bool mirror = false;
+};
+
+// What a texture the rules upgrade becomes
+struct UpgradeInfo
+{
+   TextureInfo game;
+   // In place: mips as a count (not 0), and a typed game format kept typed (views without a desc use it)
+   TextureInfo upgraded;
+   // In place (when the rules ask for it) only where the game's own views keep working: the same samples and layers, no fewer mips
+   Method method = Method::Mirror;
+   // By a rule's custom dimensions
+   bool resized = false;
+};
+
+// None: the rules leave the texture as the game asked
+std::optional<UpgradeInfo> GetUpgradeInfo(const TextureInfo& game, const FrameState& state, const UpgradeOptions& options = {});
 DXGI_FORMAT GetBestFormat(const TextureInfo& info);
+uint32_t GetMipSize(uint32_t size, uint32_t level);
 enum class ViewKind : uint8_t
 {
    ShaderResource,

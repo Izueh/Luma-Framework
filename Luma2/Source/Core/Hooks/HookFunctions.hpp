@@ -106,6 +106,9 @@ enum class Function : uint32_t
    ExecuteCommandList,
    Flush,
 
+   // ID3D11Texture1D, ID3D11Texture2D(1), ID3D11Texture3D(1)
+   GetTextureDesc,
+
    Count,
 };
 
@@ -126,6 +129,9 @@ enum class Function : uint32_t
    CreateView, // Every kind of view and samplers
    CopyDescriptors, // CopyDescriptors and CopyDescriptorsSimple
    CreateResource, // Committed, placed and reserved resources, every version
+   GetResourceAllocationInfo, // Every version
+   // ID3D12Resource
+   GetResourceDesc, // GetDesc and GetDesc1
 
    // ID3D12GraphicsCommandList
    Reset,

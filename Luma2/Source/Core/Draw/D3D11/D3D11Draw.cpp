@@ -403,12 +403,12 @@ bool DrawFullscreen(Context* context, const FullscreenPass& pass)
    return true;
 }
 
-bool Copy(Context* context, ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target, StateMask state_mask)
+bool Copy(Context* context, ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target, CopyOptions options)
 {
-   return DrawFullscreen(context, {.name = "Luma Copy", .vertex_shader = "Luma_Copy_VS"_h, .pixel_shader = "Luma_Copy_PS"_h, .source = source, .target = target, .state_mask = state_mask});
+   return DrawFullscreen(context, {.name = "Luma Copy", .vertex_shader = "Luma_Copy_VS"_h, .pixel_shader = "Luma_Copy_PS"_h, .source = source, .target = target, .while_off = options.while_off, .state_mask = options.state_mask});
 }
 
-bool Scale(Context* context, ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target, StateMask state_mask)
+bool Scale(Context* context, ID3D11ShaderResourceView* source, ID3D11RenderTargetView* target, CopyOptions options)
 {
    // The API returns the same object for the same desc: no state to keep
    ComPtr<ID3D11Device> device;
@@ -419,7 +419,7 @@ bool Scale(Context* context, ID3D11ShaderResourceView* source, ID3D11RenderTarge
    if (FAILED(device->CreateSamplerState(&desc, &linear_sampler)))
       return false;
    return DrawFullscreen(
-      context, {.name = "Luma Scale", .vertex_shader = "Luma_Scale_VS"_h, .pixel_shader = "Luma_Scale_PS"_h, .source = source, .target = target, .sampler = linear_sampler.Get(), .state_mask = state_mask});
+      context, {.name = "Luma Scale", .vertex_shader = "Luma_Scale_VS"_h, .pixel_shader = "Luma_Scale_PS"_h, .source = source, .target = target, .sampler = linear_sampler.Get(), .while_off = options.while_off, .state_mask = options.state_mask});
 }
 } // namespace D3D11
 } // namespace Draw

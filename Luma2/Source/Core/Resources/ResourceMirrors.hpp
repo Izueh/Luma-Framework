@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <format>
 #include <string>
@@ -30,10 +31,19 @@ struct Stats
    uint32_t mirrors = 0;
    uint64_t bytes = 0;
    uint32_t views = 0;
+   // Upgrade::Method::InPlace textures, and the bytes the mirrors they don't have would have taken
+   uint32_t in_place = 0;
+   uint64_t in_place_saved_bytes = 0;
+   // Of those, the ones whose size was upgraded too (custom dimensions)
+   uint32_t in_place_resized = 0;
 };
 
 Stats GetStats();
 void CountMirror(int32_t count, int64_t bytes);
+void CountInPlace(int32_t count, int64_t saved_bytes, bool resized);
+bool HasAnyInPlace();
+// Draws, copies and clears of these are rescaled
+bool HasAnyResizedInPlace();
 void CountView(int32_t count);
 void LogCreationFailure(std::string_view what, HRESULT result);
 uint64_t EstimateBytes(const Upgrade::TextureInfo& info);
@@ -78,6 +88,54 @@ struct MirrorState
 #endif
    }
 };
+
+// A texture upgraded in place: its own desc is `info`, the game asked for `original_info` (another format, and with custom dimensions
+// another width, height and mip count)
+struct InPlaceState
+{
+   Upgrade::TextureInfo original_info;
+   Upgrade::TextureInfo info;
+   int64_t saved_bytes = 0;
+   bool resized = false;
+
+   ~InPlaceState() { CountInPlace(-1, -saved_bytes, resized); }
+};
+
+template <typename Resource>
+void AttachInPlace(Resource* texture, const Upgrade::TextureInfo& original_info, const Upgrade::TextureInfo& info)
+{
+   const int64_t saved = int64_t(EstimateBytes(info));
+   const bool resized = info.width != original_info.width || info.height != original_info.height || info.levels != original_info.levels;
+   // Counted before SetState so a failed attach uncounts on destruction
+   CountInPlace(1, saved, resized);
+   Hooks::Lifetime::SetState<InPlaceState>(texture, original_info, info, saved, resized);
+}
+
+template <typename Resource>
+const InPlaceState* FindInPlace(Resource* resource)
+{
+   if (!resource || !HasAnyInPlace())
+      return nullptr;
+   return Hooks::Lifetime::GetState<InPlaceState>(resource);
+}
+
+inline Math::float2 GetInPlaceScale(const InPlaceState* state)
+{
+   if (!state || !state->resized)
+      return {1.f, 1.f};
+   return {float(state->info.width) / float(std::max(state->original_info.width, 1u)),
+      float(state->info.height) / float(std::max(state->original_info.height, 1u))};
+}
+
+// What the game asked for, when the rules spoof GetDesc
+template <typename Resource>
+const Upgrade::TextureInfo* FindSpoofedDesc(Resource* resource)
+{
+   if (!Upgrade::GetRules().spoof_description)
+      return nullptr;
+   const InPlaceState* state = FindInPlace(resource);
+   return state ? &state->original_info : nullptr;
+}
 
 template <typename Resource>
 struct OriginalState

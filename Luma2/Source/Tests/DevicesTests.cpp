@@ -25,6 +25,8 @@
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/HookScope.hpp"
 #include "Resources/LumaCBuffers.hpp"
+#include "Resources/ResourceMirrors.hpp"
+#include "Resources/ResourceUpgrades.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Shaders/ShaderStore.hpp"
 #include "Trace/RuntimeStatus.hpp"
@@ -66,9 +68,14 @@ void InstallHooks()
       Hooks::D3D11::Functions functions;
       // The bound-state cache's viewports, for the ReShade tests
       functions.set(size_t(Hooks::D3D11::Function::RSSetViewports));
+      // The in-place spoof (a no-op while no rules ask for it)
+      functions.set(size_t(Hooks::D3D11::Function::GetTextureDesc));
       Hooks::InstallDXGI(Hooks::DXGI::Functions().set());
       Hooks::InstallD3D11(functions);
-      Hooks::InstallD3D12({});
+      // The in-place spoof (a no-op while no rules ask for it)
+      Hooks::D3D12::Functions d3d12_functions;
+      d3d12_functions.set(size_t(Hooks::D3D12::Function::GetResourceDesc));
+      Hooks::InstallD3D12(d3d12_functions);
       // The overlay sees the game's input on its message queue
       Hooks::Input::Install();
       return true;
@@ -470,6 +477,104 @@ TEST_CASE("Device proxy D3D11: contexts, children and IDXGIDevice hand out the p
    CHECK(destroyed_calls == 1);
    CHECK(device_usable_when_destroyed);
    CHECK(Hooks::DeviceProxy::GetCount() == 0);
+}
+
+TEST_CASE("Hooks D3D11: GetDesc of a texture upgraded in place gives the game the format it asked for, and Luma the real one")
+{
+   InstallHooks();
+   ComPtr<ID3D11Device> device;
+   ComPtr<ID3D11DeviceContext> immediate_context;
+   CreateD3D11Device(device, immediate_context);
+   // The spoof is on by default
+   Resources::Upgrade::SetRules({.method = Resources::Upgrade::Method::InPlace, .formats = {DXGI_FORMAT_R11G11B10_FLOAT}});
+
+   struct Cleanup
+   {
+      ~Cleanup() { Resources::Upgrade::SetRules({}); }
+   } cleanup;
+
+   const D3D11_TEXTURE2D_DESC desc = {.Width = 8, .Height = 8, .MipLevels = 1, .ArraySize = 1, .Format = DXGI_FORMAT_R16G16B16A16_FLOAT, .SampleDesc = {1, 0}, .Usage = D3D11_USAGE_DEFAULT, .BindFlags = D3D11_BIND_RENDER_TARGET};
+   ComPtr<ID3D11Texture2D> texture;
+   ComPtr<ID3D11Texture2D> plain;
+   {
+      Hooks::Scope::Guard scope;
+      REQUIRE(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &texture)));
+      REQUIRE(SUCCEEDED(device->CreateTexture2D(&desc, nullptr, &plain)));
+   }
+   // As if the rules had also doubled its size: the game asked for 4x4
+   const Resources::Upgrade::TextureInfo game = {.width = 4, .height = 4, .format = DXGI_FORMAT_R11G11B10_FLOAT, .render_target = true};
+   Resources::Upgrade::TextureInfo upgraded = game;
+   upgraded.format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+   Resources::Mirrors::AttachInPlace(static_cast<ID3D11Resource*>(texture.Get()), game, upgraded);
+
+   D3D11_TEXTURE2D_DESC seen = {};
+   texture->GetDesc(&seen);
+   CHECK(seen.Format == DXGI_FORMAT_R11G11B10_FLOAT);
+   CHECK(seen.Width == 4);
+   CHECK(seen.Height == 4);
+   ComPtr<ID3D11Texture2D1> texture1;
+   if (SUCCEEDED(texture.As(&texture1)))
+   {
+      D3D11_TEXTURE2D_DESC1 seen1 = {};
+      texture1->GetDesc1(&seen1);
+      CHECK(seen1.Format == DXGI_FORMAT_R11G11B10_FLOAT);
+   }
+   {
+      Hooks::Scope::Guard scope;
+      texture->GetDesc(&seen);
+      CHECK(seen.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+      CHECK(seen.Width == 8);
+   }
+   // Other textures, and the in-place one without the spoof, report their own
+   plain->GetDesc(&seen);
+   CHECK(seen.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+   Resources::Upgrade::SetRules({.method = Resources::Upgrade::Method::InPlace, .spoof_description = false, .formats = {DXGI_FORMAT_R11G11B10_FLOAT}});
+   texture->GetDesc(&seen);
+   CHECK(seen.Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+}
+
+TEST_CASE("Hooks D3D12: GetDesc and GetDesc1 of a resource upgraded in place give the game what it asked for, and Luma the real one")
+{
+   InstallHooks();
+   const ComPtr<ID3D12Device> device = CreateD3D12Device();
+   Resources::Upgrade::SetRules({.method = Resources::Upgrade::Method::InPlace, .formats = {DXGI_FORMAT_R11G11B10_FLOAT}});
+
+   struct Cleanup
+   {
+      ~Cleanup() { Resources::Upgrade::SetRules({}); }
+   } cleanup;
+
+   const D3D12_HEAP_PROPERTIES heap = {D3D12_HEAP_TYPE_DEFAULT};
+   const D3D12_RESOURCE_DESC desc = {D3D12_RESOURCE_DIMENSION_TEXTURE2D, 0, 8, 8, 1, 1, DXGI_FORMAT_R16G16B16A16_FLOAT, {1, 0}, D3D12_TEXTURE_LAYOUT_UNKNOWN,
+      D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET};
+   ComPtr<ID3D12Resource> texture;
+   {
+      Hooks::Scope::Guard scope;
+      REQUIRE(SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc, D3D12_RESOURCE_STATE_COMMON, nullptr, IID_PPV_ARGS(&texture))));
+   }
+   // As if the rules had also doubled its size: the game asked for 4x4
+   const Resources::Upgrade::TextureInfo game = {.width = 4, .height = 4, .format = DXGI_FORMAT_R11G11B10_FLOAT, .render_target = true};
+   Resources::Upgrade::TextureInfo upgraded = game;
+   upgraded.width = 8;
+   upgraded.height = 8;
+   upgraded.format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+   Resources::Mirrors::AttachInPlace(texture.Get(), game, upgraded);
+
+   const D3D12_RESOURCE_DESC seen = texture->GetDesc();
+   CHECK(seen.Format == DXGI_FORMAT_R11G11B10_FLOAT);
+   CHECK(seen.Width == 4);
+   CHECK(seen.Height == 4);
+   CHECK(seen.Flags == D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET);
+   ComPtr<ID3D12Resource2> texture2;
+   if (SUCCEEDED(texture.As(&texture2)))
+      CHECK(texture2->GetDesc1().Format == DXGI_FORMAT_R11G11B10_FLOAT);
+   {
+      Hooks::Scope::Guard scope;
+      CHECK(texture->GetDesc().Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
+      CHECK(texture->GetDesc().Width == 8);
+   }
+   Resources::Upgrade::SetRules({.method = Resources::Upgrade::Method::InPlace, .spoof_description = false, .formats = {DXGI_FORMAT_R11G11B10_FLOAT}});
+   CHECK(texture->GetDesc().Format == DXGI_FORMAT_R16G16B16A16_FLOAT);
 }
 
 TEST_CASE("Frame D3D11: a device's resolutions change together, and move LumaSettings' stamp")

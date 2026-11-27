@@ -51,7 +51,7 @@ $apiAllowedPatterns = @(
     '/DXGI/',
     '^Luma2/Source/Core/Game/(GameCallbacks|GameEvents)\.hpp$',
     '^Luma2/Source/Core/Hooks/(Detours|DeviceProxy|HookManager|ObjectLifetime|VtableSlots)\.(hpp|cpp|h|c)$',
-    '^Luma2/Source/Core/ReShade/ReShade\.cpp$',
+    '^Luma2/Source/Core/ReShade/(ReShade|AddonEvents)\.cpp$',
     '^Luma2/Source/Core/Resources/ResourceUpgrades\.hpp$',
     '^Luma2/Source/Core/Shaders/(ShaderCompiler|ShaderDatabase)\.cpp$',
     '^Luma2/Source/Core/System/MonitorDisplay\.cpp$',
@@ -76,13 +76,18 @@ foreach ($file in $coreFiles) {
     }
 }
 
-# Rule 3: No namespace Detail or namespace Internal anywhere in Luma2/Source
+# Rule 3: *Internal.hpp headers may only be included within the same feature folder
 foreach ($file in $allLuma2CodeFiles) {
     $rel = Get-RelPath $file.FullName
+    $fileDir = Split-Path -Parent $rel
     $lines = Get-Content -Path $file.FullName
     for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -match '\bnamespace\s+(Detail|Internal)\b') {
-            $violations.Add("[Rule 3: Forbidden Detail/Internal namespace] ${rel}:$($i + 1): $($lines[$i].Trim())")
+        if ($lines[$i] -match '^\s*#\s*include\s*"([^"]*Internal\.hpp)"') {
+            $incPath = "Luma2/Source/Core/" + $Matches[1]
+            $incDir = Split-Path -Parent $incPath
+            if (-not $fileDir.StartsWith($incDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+                $violations.Add("[Rule 3: Internal header included outside its feature folder] ${rel}:$($i + 1): $($lines[$i].Trim())")
+            }
         }
     }
 }
@@ -150,6 +155,51 @@ foreach ($file in $coreFiles) {
             if ($tail -match ':\s*public\s+(IUnknown|ID3D|IDXGI|ID3DInclude|IDxc)') { continue } # COM interface
             if ("${rel}:${name}" -in $raiiClassAllowlist) { continue }
             $violations.Add("[Rule 7: Non-COM/non-RAII class in Core] ${rel}:$($i + 1): $($lines[$i].Trim())")
+        }
+    }
+}
+
+# Rule 8: Comment hygiene (no banner dividers or Doxygen boilerplate in Core/Templates)
+foreach ($file in $allLuma2CodeFiles) {
+    $rel = Get-RelPath $file.FullName
+    $lines = Get-Content -Path $file.FullName
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^\s*(//|/\*)\s*([=\-*#])\2{5,}') {
+            $violations.Add("[Rule 8: Banner divider comment] ${rel}:$($i + 1): $($lines[$i].Trim())")
+        }
+        if ($lines[$i] -match '^\s*(//|\*)\s*(@|\\)(param|return|brief)\b') {
+            $violations.Add("[Rule 8: Doxygen boilerplate comment] ${rel}:$($i + 1): $($lines[$i].Trim())")
+        }
+    }
+}
+
+# Rule 9: No two adjacent bool parameters in Core public headers
+$adjacentBoolAllowlist = @(
+    'Luma2/Source/Core/Effects/SR/SuperResolution.hpp:DescribeDraw',
+    'Luma2/Source/Core/Effects/SR/D3D11/D3D12Interop.hpp:UpdateSharedTextureFrom',
+    'Luma2/Source/Core/Handlers/D3D12/D3D12Handlers.hpp:PostCreateRootSignature',
+    'Luma2/Source/Core/Resources/ResourceScaling.hpp:ShouldScaleTexture',
+    'Luma2/Source/Core/Validation/Validation.hpp:SetActiveLayers'
+)
+foreach ($file in $coreFiles) {
+    if ($file.Extension -ne '.hpp') { continue }
+    $rel = Get-RelPath $file.FullName
+    $lines = Get-Content -Path $file.FullName
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $line = $lines[$i]
+        if ($line -match '^\s*//' -or $line -match '^\s*\*') { continue }
+        if ($line -match '\bbool\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:=\s*(?:true|false)\s*)?,\s*bool\s+[A-Za-z_][A-Za-z0-9_]*') {
+            $skip = $false
+            foreach ($allowed in $adjacentBoolAllowlist) {
+                $parts = $allowed -split ':'
+                if ($rel -eq $parts[0] -and $line -match "\b$($parts[1])\b") {
+                    $skip = $true
+                    break
+                }
+            }
+            if (-not $skip) {
+                $violations.Add("[Rule 9: Adjacent bool parameters in header] ${rel}:$($i + 1): $($line.Trim())")
+            }
         }
     }
 }
