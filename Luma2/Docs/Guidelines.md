@@ -151,15 +151,19 @@ What the 1.0 migration off ReShade established. All of it carries over.
 
 ## 6. Mirrors
 
-**A game object is never modified. Anything Luma changes is a mirror.**
+**By default a game object is never modified: anything Luma changes is a mirror.** Texture upgrades can instead be in place, by the game's choice (below).
 
 * Applies to textures, swapchain back buffers, samplers and views. For shaders and pipelines the equivalent is a variant.
 * The game's view of its own objects stays exactly as created: descs, sizes, formats, heap offsets, GPU addresses.
-* 1.0's "direct" upgrade (editing the desc at creation) is not ported. Every upgrade is what 1.0 calls indirect.
+* **Two upgrade methods, as 1.0** (`ResourceUpgradeManager::enable_indirect_texture_format_upgrades`: off is direct, on is indirect). **Mirror** (1.0's indirect, the default): the original stays as created and an upgraded mirror is swapped in. **InPlace** (1.0's direct): the game's creation call is edited to the upgraded format, so there is one texture and the game, the runtime and any middleware the game calls itself (its own DLSS, Streamline, NVAPI) all use it. Chosen per game, and per rule (`Upgrade::Rules`).
+  * InPlace keeps the size, mips, array size and sample count: only the format changes, so the runtime validates the dimensions the game knows. Everything format dependent goes through the paths mirrors already have: view formats mapped at creation (`Upgrade::GetBestViewFormat`), converting copies between an upgraded and a plain texture, CPU uploads converted, D3D12 pipeline variants for the render target formats.
+  * **Spoofed description, optional** (beyond 1.0, which let the game see the upgraded format): the texture's `GetDesc`/`GetDesc1` (and D3D12's) return the format the game asked for. The hook only replaces the format of textures Luma upgraded in place.
+  * InPlace can't apply to D3D12 placed resources (a wider format no longer fits the game's heap offset) or shared resources (another device or process sees them): those fall back to Mirror. It can't be toggled live: changing it needs a restart.
+  * The swapchain stays Mirror for new mods (its InPlace mode remains for migrating 1.0 mods, discouraged). With this, textures and the swapchain have the same two methods: a mirror swapped in, or the object itself upgraded with the game's view of it kept.
 * One mirror core serves format upgrades, size scaling and the swapchain.
 * A mirror is released with its original. Mirrors never keep a device alive.
 * Content is kept in sync by redirecting writes, copies and clears to the mirror, and converting when data lands in the original (uploads, CPU writes).
-* Costs to accept: the original's memory stays allocated, and D3D11 needs mirrored views plus a swap at every bind.
+* Costs to accept with Mirror: the original's memory stays allocated, and D3D11 needs mirrored views plus a swap at every bind. InPlace pays neither, but loses the live toggle and the untouched game object.
 
 ## 7. Feature activation
 
@@ -314,7 +318,7 @@ struct Setting
 Framework systems replacing code that 1.0 games each wrote for themselves.
 
 * **Resource Database.** Named entries (`"name"_h`) any module, patch or shader binding can resolve. Covers Luma's textures, DDS files loaded from the `Textures` folders, and game resources a mod tags. Entries declare what invalidates them (swapchain resize, render resolution change) and are recreated by the framework. Replaces `LumaTexture` / `ManagedResources` and the per-game `Clean*Resources` functions. Its core is in from Step 1: entries are registered at init, before any device, by Core from what's on disk (Luma's shaders from the scan, its cbuffers) and fixed from then on (a file added while the game runs needs a restart); each device gets an object per entry, released when the game releases the device. A game registers entries only for what it captures from the game at runtime. **Core's entries are read-only:** each entry has an owner, and a game registering a name Core owns is refused (asserted and logged). Shader files keep their override rule instead (the game's file wins over Global's, section 8), logged in Development so it's never accidental.
-* **Upgrade.** Declarative rules: formats, size filters, aspect ratios, LUT size and dimensions, per-shader-hash targets. Rules produce mirrors.
+* **Upgrade.** Declarative rules: formats, size filters, aspect ratios, LUT size and dimensions, per-shader-hash targets, and the method (Mirror or InPlace, with the spoofed description as an InPlace option, section 6). Rules produce mirrors or in-place upgrades.
 * **Chains.** A seed (the tonemap target, the SR output) and everything derived from it by copy (`Direct`) or by being drawn from it (`DirectAndIndirect`) get mirrors with the same treatment.
 * **Scaling.** One tracker for "this was render resolution and is now output resolution": scaled mirrors, viewport and scissor rescale, copy box and clear rect rescale, stencil stand-ins. It replaces FF7R's early-upscale code, FFXV's `upscale_tracking.hpp`, Granblue's and Quantum Break's upscale code and Core's scale chain. It is the same system as Upgrade with a size change.
 * **Samplers.** Sampler mirrors for LOD bias and anisotropy, refreshed when the SR scale changes.
@@ -465,7 +469,7 @@ Add a row whenever 2.0 behaves differently from 1.0 on purpose, or when an impro
 
 | What | 1.0 | 2.0 | Why | Status |
 |---|---|---|---|---|
-| Texture upgrades | direct (desc edited) or indirect (mirrored) | mirrors only | the game's view of its objects stays true, one code path, works on D3D12 | decided |
+| Texture upgrades | direct (desc edited) or indirect (mirrored), `enable_indirect_texture_format_upgrades` | both: Mirror by default, InPlace per game or rule, with an optional spoofed description (format only); placed and shared resources always Mirror | owner: InPlace for middleware Luma can't see into and to save the duplicate memory; Mirror keeps the live toggle (replaces the earlier mirrors-only choice) | decided |
 | Swapchain | upgraded in place at creation, format fixed until recreated | Luma-owned real swapchain, game gets its own buffers (Mirror); 1.0's in place upgrade kept as a per-game mode | output mode switchable at runtime, proper HDR10; in place for games nobody verified Mirror on | decided, Step 5 |
 | Swapchain flags | `FRAME_LATENCY_WAITABLE_OBJECT` added when fullscreen is prevented; ReShade added `DXGI_PRESENT_ALLOW_TEARING` to presents | the game's latency flag kept as it asked; `DXGI_PRESENT_ALLOW_TEARING` added by Luma to a sync interval 0 present when the real swapchain allows tearing and isn't in exclusive fullscreen; `DXGI_MWA_NO_ALT_ENTER` set when borderless (DXGI's own Alt+Enter bypasses the hooked `SetFullscreenState`); `GetFullscreenState` answers what the game asked for | a waitable object the game never waits on changes its pacing; 1.0 got the tearing flag from ReShade | decided, Step 5 |
 | Composition input contract | each game's output shader wrote what its swapchain took (FF7R: scRGB in Development, PQ in Publishing) | composition takes the image as the defines describe it (linear for `POST_PROCESS_SPACE_TYPE` 1) and a final stage encodes for the output mode (PQ, scRGB, sRGB) from a `LumaComposition` cbuffer; FF7R's output shaders write linear in every build | one image serves every output mode at runtime | decided, Step 5 |

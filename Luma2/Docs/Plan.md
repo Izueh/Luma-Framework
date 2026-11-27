@@ -979,6 +979,7 @@ Parts, in order. Each is one brief:
 | 8C | Overlays matrix, Present order policy; NVAPI and Streamline hooks where they are handed the proxy or call the real swapchain's `GetBuffer` (Mirror: their writes to the real buffer are lost under composition) | yes, owner's session |
 | 8D | RenderDoc, OptiScale | yes |
 | 8E | Detached UI (ImGui multi-viewport) | yes |
+| 8F | Upgrade methods: InPlace (1.0's direct) next to Mirror, optional spoofed description | yes, both APIs |
 
 ### 8A: Release UI audit against 1.0 FF7R
 
@@ -1043,6 +1044,28 @@ Parts, in order. Each is one brief:
 4. A case above its noise floor is a finding: the FLIP heat map, the trace of the pass, the cause. Fix what's a 2.0 bug; record what's intended in section 17.
 
 **Verify (once):** every case within its threshold on D3D11 against 1.0, and D3D12 within the D3D11 threshold against D3D11, or each difference explained in the notes.
+
+### 8F: Upgrade methods (InPlace next to Mirror)
+
+**Goal:** a game picks, per game or per rule, between Mirror (today's, the default) and InPlace, 1.0's direct upgrade, with an optional spoofed description (`Guidelines.md` section 6).
+
+**Read first:** 1.0 `includes/resource_upgrades.hpp` (`enable_indirect_texture_format_upgrades`, its DLSS and Streamline note), `core.hpp` `OnCreateResource` (the direct path, `ConvertResourceData`), `OnCreateResourceView` (`GetBestResourceViewUpgradeFormat`), `OnCopyResource_Internal`; 2.0 `Resources/ResourceUpgrades.*`, `Resources/D3D11/D3D11Mirrors.cpp`, `Resources/D3D12/D3D12Mirrors.cpp`, the D3D12 format variants (Step G), `Docs/MirrorMemoryResearch.md`.
+
+**Decide first:**
+* **Where the method lives:** `Upgrade::Rules::method` (Mirror, InPlace) and `Upgrade::Rules::spoof_description`, overridable per rule. Recommended default: Mirror; FF7R keeps Mirror until 8F is verified, then tries InPlace on D3D11 (1.0's method there).
+* **The spoof hook:** `GetDesc`/`GetDesc1` of D3D11 textures and `GetDesc`/`GetDesc1` of D3D12 resources (by value), on the shared vtables with an "upgraded in place by Luma" check (a private-data flag set at creation). Only the format is replaced.
+
+**Build:**
+* The creation hooks edit the game's desc to the upgraded format for InPlace rules, with initial data converted (as 1.0); D3D12 committed resources only, placed and shared ones fall back to Mirror (logged once per rule).
+* View creation maps the game's view format to the upgraded texture's (`Upgrade::GetBestViewFormat`).
+* Copies, resolves and clears between an InPlace texture and a plain one convert, as for mirrors; CPU uploads (`UpdateSubresource`, `Map` of the game's staging copies into it) convert.
+* D3D12 pipeline variants for the render target formats of InPlace textures, as for mirrors.
+* The spoof hook, on when the rule asks.
+* Trace and `luma_status` show the method per texture; the Resources panel counts both.
+* The live upgrade toggle is disabled (with a tooltip) for InPlace textures: changing it needs a restart.
+* Template: the method and spoof fields in its upgrade rules.
+
+**Verify (once):** FF7R on D3D11 with InPlace: the image matches Mirror (`luma_compare`), VRAM drops by the duplicated textures, the debug layer stays clean; with the spoof, `GetDesc` of an upgraded texture returns the game's format. On D3D12 the same, with placed resources counted as Mirror.
 
 **Notes (hook manager hardening, `plans/hook-manager-hardening.md` Phases 0 to 3, done before this step, not verified in a game):**
 * Luma initializes in the loader notification, as 1.0 does. `System::Modules::FindExport` never loads a dll, so the hook manager is safe under the loader lock.
@@ -1171,7 +1194,7 @@ Proposals found during the review. None is committed work until it's moved into 
 * **Mod and Core version check.** Each game DLL compiles Core: it should log the commit it was built from.
 * **Output resolution decoupling.** With a Luma-owned swapchain the real swapchain can be a different size from what the game renders to. That gives borderless upscaling for games with fixed resolutions. Not planned, but Step 5 shouldn't prevent it.
 * **Frame generation hooks.** FF7R has a disabled `ENABLE_FRAMEGEN` path with a hudless target. The composition stage in Step 5 is where a hudless output would be exposed.
-* **In-place (direct) upgrade.** 1.0's desc-edit upgrade as a per-game option, for a game whose DLSS or Streamline calls Luma can't see into (mirrors would be missed there). Not built in Step 4 (owner: such games rarely need upgrades); build it when one does.
+* **In-place (direct) upgrade.** Planned: Step 8F.
 * **Mirror and shader clone creation at `PreCreate` instead of binding.** Explore moving remaining bind-time mirror/clone creation (such as D3D11 sampler mirrors in `PreSetSamplers`, D3D12 format variants at draw, and shader clone creation in `PreCreateShader` rather than `PostCreateShader` or lazy bind/reload paths) to `PreCreate*` hooks. 2.0 will not have in-place shader replacements: all shader replacements and patches (whether sync or async) remain clones/variants, so creating sync clones in `PreCreateShader` (and preserving them across reloads) also ensures driver state armed around creation calls (e.g. `NvAPI_D3D11_SetNvShaderExtnSlot`) applies to the clone.
 * **1.0 settings migration.** Decided in Step 8A: start from defaults (the 1.0 file is a different one and stays). An import of the game's own keys can be added if users ask.
 * **Global shaders during the transition.** `Resources/Global` is a regrouped copy of 1.0's `Shaders/Global` and `Shaders/Includes`. A fix made on one side has to be made on the other until the swap. File names and contents stay the same so the two can still be compared file by file.
