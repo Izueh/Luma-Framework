@@ -1,4 +1,4 @@
-# Mirror memory: spoofed small originals or virtual originals
+# Mirror memory: spoofed small originals, virtual originals or proxy resources
 
 Every upgraded texture is held twice today: the game's original, at its size and format, and Luma's FP16 mirror (`Resources/D3D11/D3D11Mirrors.cpp`, `Resources/D3D12/D3D12Mirrors.cpp`: a second `CreateTexture*` or `CreateCommittedResource` after the game's). While mirrors are swapped in, the original only stands for the game's handle. This compares two ways of not paying for it, from Microsoft's documentation and field reports; nothing here is measured yet.
 
@@ -39,11 +39,52 @@ That difference is the main reason to prefer B.
 * **D3D12 layout and `GetHeapProperties`.** If reserved textures do need the 64 KB layout (to confirm in step 1 below), the same strip at creation for it. `GetHeapProperties` on a virtual original needs an answer (the committed heap the game asked for): a shared-vtable hook with an "is it ours" check, or nothing if no game calls it on a render target. To find out before deciding.
 * **Initial data.** The documentation doesn't say whether a tiled texture takes initial data; Luma gives the game's data to the mirror (converted) and the original needs none.
 
-## Recommendation
+## C. A proxy resource (owner's question)
 
-**B, virtual originals, with a fallback to today's full original.** It saves more, a miss stays a valid call, it uses documented API, and it costs nothing per call. The small amount of hiding it needs is at creation, where Luma already hooks. A replaces documented behaviour with an undocumented vtable change and turns every gap in Luma's redirection into a possible device removal.
+A COM object can't be subclassed: the runtime's texture class isn't ours to derive from. The equivalent is a wrapper, as the swapchain proxy: Luma's object implements the texture's interfaces, the game holds it, and the mirror is the only real resource behind it. There is no original at all.
 
-Decisions: B only where mirrors are made at creation; chain and seed mirrors keep a real original. Swapchain game buffers in Mirror use B too. The live upgrade toggle maps memory on demand.
+**What it gives:** no duplicate memory, nothing to hide (`GetDesc` returns the stored game description, `GetHeapProperties` the committed default heap the game asked for, no `TILED`, no layout change), and a cheaper hot path than today: finding the mirror becomes reading a pointer from the proxy (Luma knows its own vtable), where today it's a private-data lookup on the resource (`Hooks::Lifetime::GetState`).
+
+**What it costs: every boundary where a resource crosses into code that isn't Luma's.** The runtime casts the interface pointers it receives to its own internal objects, so a proxy reaching it is an access violation in `d3d11.dll` or the driver. The most severe failure of the three, so the coverage has to be complete:
+
+| Boundary | Why | Covered today (mirrors) |
+|---|---|---|
+| D3D11 device: `Create*View(1)`, `CreateDepthStencilView`, `OpenSharedResource*`, `CreateTexture*` (returns the proxy), Device3 `WriteToSubresource`/`ReadFromSubresource`, `GetResourceTiling` | the resource argument | views and creation yes; the rest no |
+| D3D11 context: copies, `UpdateSubresource(1)`, resolves, `Map`/`Unmap`, `GenerateMips`, `Discard*`, `SetResourceMinLOD`/`GetResourceMinLOD`, every `*Set*` bind (views), Context2/3/4 (tiles, fences) | the resource or view arguments | the binds, copies, clears, maps: yes (58 slots hooked); Context2 to 4 and min LOD no |
+| D3D11 views: `ID3D11View::GetResource`, `*View::GetDesc` | the runtime's view points to the mirror and has its format: the game gets the mirror back, or an FP16 format where it asked for 8 bit | no (mirrors keep the game's views) |
+| D3D11 video device and context | resources and views in video calls | no |
+| DXGI surface interfaces (`IDXGISurface*`, `IDXGIResource*`, `IDXGIKeyedMutex`) on the proxy | `QueryInterface` from the game, D2D and video | no |
+| Direct2D (`CreateBitmapFromDxgiSurface`, `CreateDxgiSurfaceRenderTarget`), D3D11On12 (`CreateWrappedResource`, `AcquireWrappedResources`) | they cast internally | no |
+| D3D12 command list: copies, `CopyTextureRegion` locations, resolves (list 1), `ResourceBarrier` arrays, enhanced `Barrier` groups (list 7), `DiscardResource`, UAV clears, `ExecuteIndirect`, `WriteBufferImmediate`, atomic copies, `SetPredication` | resource pointers in arguments and structs | most of these yes (38 slots); list 1 to 9 additions partly |
+| D3D12 device and queue: `Create*View`/descriptors, `CreateSharedHandle`, `MakeResident`/`Evict`, `CreateSamplerFeedbackUnorderedAccessView`, `UpdateTileMappings`/`CopyTileMappings`, `GetResourceTiling` | resource arguments | descriptors yes; the rest no |
+| Middleware that takes the game's resources and goes to the driver privately: NGX (DLSS), Streamline tags, NVAPI resource calls, a game's own FSR or XeSS integration | they don't go through the public API Luma hooks | no (Luma's own SR passes its own resources) |
+| Tools injected above Luma (RenderDoc, PIX) | they wrap what the runtime returns, which is the proxy | later |
+
+D3D12 is the easier half: views are descriptors, not objects, so there is no view identity to fake, and Luma already rewrites barriers for mirrors. D3D11's view objects (`GetResource`, `GetDesc`) and its interop (D2D, video, D3D11On12) are the hard half. ReShade is fine as long as every call it makes is hooked: its add-on API passes the game's (proxy) pointers into the same runtime functions Luma detours.
+
+Lifetime: the proxy shares the mirror's reference count (its `AddRef`/`Release` forward) and is freed by the mirror's private-data destroy notification, so a view's `GetResource` can always hand back a live proxy. The live upgrade toggle needs an original made on demand (converted from the mirror) and swapped behind the proxy, views recreated; or a restart.
+
+## The issues with B, stated fully
+
+B is not invisible either. What the game and middleware can observe:
+
+* **D3D11 `MiscFlags` has `TILED`.** A game or library that clones a texture from `GetDesc` gets a tiled texture with no memory: black on Tier 2, device removal on Tier 1 (the default page is only Luma's). Stripping it in Luma's creation hook catches clones through `CreateTexture*`, but code that branches on the flag (refuses to share, picks another copy path) still sees it unless `GetDesc` is masked, which is A's hook again.
+* **D3D12 `GetHeapProperties` returns `E_INVALIDARG`.** An engine or allocator that asserts on it crashes; one that uses the heap type for its own decisions gets nothing.
+* **D3D12 residency.** `MakeResident` and `Evict` work on pageable objects, and a reserved resource's residency is its heaps'. An engine with a residency manager (UE4's D3D12 RHI has one) calls them on its committed resources: to check what the runtime does with a reserved one.
+* **The 64 KB layout** if reserved textures need it (to confirm): visible in `GetDesc`, and a clone with it may be refused.
+* **Copies between tiled and non-tiled resources** are expected to work (the documentation lists no restriction), to confirm.
+
+So B also needs a mask on `GetDesc` (D3D11) and answers for `GetHeapProperties` and residency (D3D12) to be safe with every game; its advantage stays that a missed path is a valid call.
+
+## Recommendation (revised)
+
+No option is free:
+
+* **A** fails worst on a miss (out of bounds) and still needs the `GetDesc` hooks: not recommended.
+* **B** fails softest on a miss, but leaks into what the game sees in four places, each needing its own hook or answer.
+* **C** fails hardest on a miss (an access violation), but once the boundary list above is covered it hides everything, saves the most and is cheaper per call than today's mirrors.
+
+Suggested order: **C on D3D12 first** (no view objects, barriers already rewritten, most boundaries already hooked), measured against today's mirrors on FF7R; D3D11 stays on mirrors until the view and interop boundaries are worth the work. B stays the fallback for a resource C can't cover (one that's shared, or handed to middleware Luma doesn't hook).
 
 ## Research step (before building)
 
