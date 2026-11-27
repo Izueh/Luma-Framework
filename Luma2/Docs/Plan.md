@@ -965,6 +965,49 @@ G1 (small, protects everything), G2a and G2b (unblock the SSAO noise), G6 (creat
 
 **Verify (once):** each bullet above, once. ReShade with one effect on and Luma's HDR output correct underneath it.
 
+**Where Step 8 stands (checked 2026-11-26):**
+* Done: the ReShade guest and bridge (`6db023e9`, `371e2a4e`, `714f85a1`), hook manager hardening Phases 0 to 3 (notes below), toasts (`Widgets::Toast`, job reports), the About tab with `Info::credits` (`UI/OverlayWindow.cpp` `DrawAbout`).
+* Not done: packaging and CI for Luma2 (`Scripts/package.ps1` and `build_and_release.yml` only know `Source/Games` and `Luma.sln`), the Release UI audit against 1.0, the 1.0 FLIP goldens left over from Step 7, the overlay matrix and Present order policy, RenderDoc, OptiScale, detached UI.
+* `plans/hook-manager-hardening.md` is no longer in the repository. Before 8C the owner says where its Phase 0 matrix, Phase 3.3 and Phase 4 now live.
+
+Parts, in order. Each is one brief:
+
+| Part | What | Needs the game |
+|---|---|---|
+| 8A | Release UI audit against 1.0 FF7R (next) | yes |
+| 8B | 1.0 FLIP goldens (Step 7 debt) | yes, 1.0 and 2.0 builds |
+| 8C | Overlays matrix, Present order policy | yes, owner's session |
+| 8D | RenderDoc, OptiScale | yes |
+| 8E | Detached UI (ImGui multi-viewport) | yes |
+| 8F | Packaging and CI (last, by the owner's choice: the zip and workflow should package what 8A to 8E settle) | once, for the install check |
+
+### 8F: Packaging and CI (last)
+
+**Goal:** a Luma2 FF7R zip a user can unpack into the game folder, built by one local command and by CI, with the same layout as a 1.0 mod.
+
+**Read first:** `Scripts/package.ps1`, `.github/workflows/build_and_release.yml` ("Create ZIP per mod", "Create release"), `.github/scripts/plan-build.ps1`, `Source/Games/Luma.Features.props` `LumaPackage` (1.0's package target), `Luma2/Props/Luma2.Game.props` (`OutDir`, `LumaCopySrRuntimes`, `LumaDeploy`), `Luma2/Luma2.slnx`, `Scripts/Test-Luma2Template.ps1`, `Scripts/Check-Luma2Rules.ps1`.
+
+**Decide first:**
+* **The package is what `LumaDeploy` puts in the game folder.** `dxgi.dll` at the root, `Resources/Global` and `Resources/<Project>` merged into `Luma/`, the SR runtime dlls of `LumaCopySrRuntimes`. One list of files feeds both, so a deployed build and an unpacked zip are the same tree (without the `.pdb`). Recommended: move the file list into an MSBuild item group in `Luma2.Game.props` that `LumaDeploy` and a new `LumaPackage` target both use, and have `package.ps1` call that target for a Luma2 project.
+* **`package.ps1` gets a Luma2 path, not a second script.** A project found under `Luma2/Source/Games` packages from `Luma2/Binaries/<Config>/<Project>/` (no platform folder, unlike 1.0). It keeps 1.0's exclusions: `Dump*`, `Unused`, `Dev`, `Sample`, compiled shaders, `.gitkeep`.
+* **Configurations:** CI ships Publishing-Release and Test-Release, as for 1.0. Development-Release stays local.
+* **Name:** `Luma2-<Project>-<Config>.zip`, so the 1.0 and 2.0 FF7R zips can sit in one release until the swap.
+
+**Build:**
+* The shared file list and `LumaPackage` target in `Luma2.Game.props`. `LumaDeploy` uses the same list. No behaviour change for a dev deploy.
+* The `package.ps1` Luma2 path. `d3dcompiler_47.dll` ships as in 1.0. `dxcompiler.dll` doesn't.
+* CI: a Luma2 job that builds `Luma2/Luma2.slnx` x64 for Test-Release and Publishing-Release with vcpkg and DXP set up as for 1.0, packages each game in `Luma2/Source/Games`, and uploads the zips under the release job's artifact pattern.
+* CI also builds and runs `Tests.vcxproj` (out of the solution build since `d9928088`), runs `Test-Luma2Template.ps1` (the template bullet of Step 9 asks for this), and runs `Check-Luma2Rules.ps1`.
+* `plan-build.ps1`: a change under `Luma2/` builds the Luma2 job only, and a change outside it builds the 1.0 cells only. `Luma2/Docs` and other Markdown build nothing, as today.
+* Keep game logic and Core behaviour unchanged. This part touches only scripts, props and the workflow.
+
+**Verify (once):**
+* Package Publishing-Release locally and unzip it into an FF7R install with no dev files. On D3D12 and on `-dx11`: `Luma.log` shows the build and no missing-file warning, the replacement shaders compile from `Luma/`, and DLSS, FSR 4 and XeSS are offered (their dlls were found).
+* The zip's file list equals the `LumaDeploy` tree for the same configuration, except the `.pdb`.
+* CI on a branch: the Luma2 job is green, the artifacts hold both Luma2 zips, and tests, template and rules ran. A PR touching only `Luma2/Docs` builds nothing. One touching `Luma2/Source` builds only Luma2.
+
+**Out of this part:** a 1.0 settings import (Additional considerations, decided in 8A). Package every game in `Luma2/Source/Games`: FF7R and Trails in the Sky 1st Chapter (D3D11 only, no SR dlls).
+
 **Notes (hook manager hardening, `plans/hook-manager-hardening.md` Phases 0 to 3, done before this step, not verified in a game):**
 * Luma initializes in the loader notification, as 1.0 does. `System::Modules::FindExport` never loads a dll, so the hook manager is safe under the loader lock.
 * Every hook is in `Hooks::Declare` (DirectInput's methods through `AddressTarget`). Chains are logged at install and read again by `Hooks::Verify` (first present, every minute in Development, Info tab, `luma_status` `hooks`). `Hooks::GetPresentChain` says where an overlay's `Present` runs relative to Luma's; Step 5's `GetBuffer` is where the Phase 3.3 policy goes.
