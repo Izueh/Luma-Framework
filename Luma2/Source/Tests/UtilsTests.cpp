@@ -4,11 +4,13 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <dxgiformat.h>
 
 #include <glaze/core/context.hpp>
 
+#include "Log/Log.hpp"
 #include "Utils/Format.hpp"
 #include "Utils/Hash.hpp"
 #include "Utils/Json.hpp"
@@ -233,4 +235,28 @@ TEST_CASE("Utils: Luma's glaze has a namespace of its own, apart from a library'
    CHECK(std::string_view(typeid(glz::context).name()).find("luma_glz::") != std::string_view::npos);
    // Reflection still names members (glaze finds them through its namespace's name in __FUNCSIG__)
    CHECK(Utils::Json::Write(Tests::GlazeNamed{}).find("first_field") != std::string::npos);
+}
+
+TEST_CASE("Log: notices are logged, queued in order and taken once")
+{
+   (void)Log::TakeNotices();
+   Log::Notify(Log::Level::Warning, "first");
+   Log::Notify(Log::Level::Error, "second");
+   const std::vector<Log::Notice> notices = Log::TakeNotices();
+   REQUIRE(notices.size() == 2);
+   CHECK(notices[0].level == Log::Level::Warning);
+   CHECK(notices[0].message == "first");
+   CHECK(notices[1].level == Log::Level::Error);
+   CHECK(Log::TakeNotices().empty());
+}
+
+TEST_CASE("Log: the notice queue keeps the latest ones")
+{
+   (void)Log::TakeNotices();
+   for (size_t i = 0; i < Log::MAX_NOTICES + 3; ++i)
+      Log::Notify(Log::Level::Info, std::to_string(i));
+   const std::vector<Log::Notice> notices = Log::TakeNotices();
+   REQUIRE(notices.size() == Log::MAX_NOTICES);
+   CHECK(notices.front().message == "3");
+   CHECK(notices.back().message == std::to_string(Log::MAX_NOTICES + 2));
 }

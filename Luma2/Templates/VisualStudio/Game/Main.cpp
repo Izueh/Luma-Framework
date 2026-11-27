@@ -475,6 +475,8 @@ void Luma::Game::Init()
       .description = DESCRIPTION,
       .credits = CREDITS,
       .links = LINKS,
+      // Shown in About. Publishing builds warn users at start for WorkInProgress and NonFunctional.
+      .state = DevelopmentState::WorkInProgress,
    });
 
    // Shaders::SetDebugName("Tonemap", SHADER_HASHES_TONEMAP);

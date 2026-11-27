@@ -272,6 +272,7 @@ void DrawAbout(bool default_open)
    CallPanel(panels.about);
    if (!info.credits.empty())
       DrawCredits(info.credits);
+   Widgets::Property("Development State", Game::GetName(info.state));
 #if DEVELOPMENT
    Widgets::Property("Build", "Development");
 #elif TEST

@@ -2,7 +2,9 @@
 
 #include <filesystem>
 #include <format>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace Luma {
 namespace Log {
@@ -58,5 +60,18 @@ void Error(std::format_string<Args...> format, Args&&... args)
 {
    Format<Level::Error>(format, std::forward<Args>(args)...);
 }
+
+// A message for the user: written to the log and queued for the overlay, which shows it as a toast. Any thread, safe under the loader
+// lock. The queue keeps the latest MAX_NOTICES.
+struct Notice
+{
+   Level level = Level::Warning;
+   std::string message;
+};
+
+inline constexpr size_t MAX_NOTICES = 16;
+void Notify(Level level, std::string message);
+// For the overlay: the notices queued since the last call, oldest first
+std::vector<Notice> TakeNotices();
 } // namespace Log
 } // namespace Luma

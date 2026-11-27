@@ -43,7 +43,7 @@ std::atomic<bool> can_sharpen_atomic = true;
 constexpr std::string_view DESCRIPTION = "Luma for \"Final Fantasy VII Remake\" is developed by Izueh and Pumbo and is open source and free. It adds DLSS and improved HDR "
                                          "tonemapping. Additional thanks to ShortFuse and Musa from the RenoDX team and their HDR mods for Remake and Rebirth, which served "
                                          "as reference. If you enjoy it, consider donating to any of the contributors.";
-constexpr std::array<std::string_view, 12> CREDITS = {
+constexpr std::array<std::string_view, 13> CREDITS = {
    "Main:",
    "Izueh",
    "Pumbo",
@@ -51,6 +51,7 @@ constexpr std::array<std::string_view, 12> CREDITS = {
    "ShortFuse",
    "Musa",
    "Third Party:",
+   "ReShade",
    "ImGui",
    "RenoDX",
    "3Dmigoto",

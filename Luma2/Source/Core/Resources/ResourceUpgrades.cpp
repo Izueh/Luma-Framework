@@ -1,10 +1,12 @@
 #include "Resources/ResourceUpgrades.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <bit>
 #include <cfloat>
 #include <cmath>
 
+#include "Log/Log.hpp"
 #include "Utils/Debug.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
 
@@ -30,12 +32,30 @@ bool Contains(const std::vector<DXGI_FORMAT>& formats, DXGI_FORMAT format)
    return std::ranges::find(formats, format) != formats.end();
 }
 
+// Shadow maps and other square textures pass the aspect ratio filter of a square output. Publishing skips 1x1, which games
+// often have for a few frames at boot.
+void WarnAboutSquareOutput(SizeFilters filters, Math::uint2 output)
+{
+   static std::atomic<bool> warned = false;
+   if (!Has(filters, SizeFilters::SwapchainAspectRatio) || Has(filters, SizeFilters::No1Px) || output.x != output.y || output.x == 0)
+      return;
+#if !DEVELOPMENT && !TEST
+   if (output.x == 1)
+      return;
+#endif
+   if (!warned.exchange(true))
+      Log::Notify(Log::Level::Warning, "Your current game output resolution has an aspect ratio of 1:1 (a squared resolution), that might cause issues "
+                                       "with texture upgrades by aspect ratio, given that shadow maps and other things are often rendered in squared "
+                                       "textures.");
+}
+
 // The 2D size filters, in their bit order
 bool MatchesSize(const TextureInfo& desc, const FrameState& state)
 {
    const SizeFilters filters = rules.size_filters;
    if (filters == SizeFilters::All)
       return true;
+   WarnAboutSquareOutput(filters, state.output);
    Math::uint2 render = state.render;
    Math::uint2 output = state.output;
    Math::uint2 display = state.display;

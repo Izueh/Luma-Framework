@@ -5,6 +5,7 @@
 #include <format>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -165,6 +166,30 @@ void AddMessages(BuildInfo& info, std::string_view file, const Result& result)
       info.errors += std::format("{}: {}\n", file, result.messages);
 }
 
+// Two files replacing one hash: usually a renamed file left from an older version of the mod. One of them wins at random.
+void WarnAboutDuplicates(const std::vector<Files::File>& files)
+{
+   std::unordered_map<uint32_t, const Files::File*> by_hash;
+   for (const Files::File& file : files)
+   {
+      if (file.kind != Files::Kind::Replacement)
+         continue;
+      for (const Files::Hash& hash : file.hashes)
+      {
+         const auto [it, added] = by_hash.try_emplace(hash.value, &file);
+         if (added || it->second == &file)
+            continue;
+#if DEVELOPMENT || TEST
+         Log::Notify(Log::Level::Warning, std::format("Shaders: {} and {} both replace 0x{:08X}", it->second->path, file.path, hash.value));
+#else
+         Log::Notify(Log::Level::Warning, "It seems like you have duplicate shaders in your \"Luma\" folder, please delete it and re-apply the files "
+                                          "from the latest version of the mod.");
+#endif
+         return;
+      }
+   }
+}
+
 void AddReplaced(const std::vector<Files::File>& files)
 {
    std::scoped_lock lock(replaced_mutex);
@@ -263,6 +288,13 @@ System::Jobs::Outcome Publish(const std::shared_ptr<Store>& alive, Build build, 
    Log::Info("Shaders: {} compiled, {} from the cache, {} failed for {}", info.compiled, info.cached, info.failed, GetName(store.api));
    if (!info.errors.empty())
       Log::Warning("Shaders: {}", info.errors);
+#if !DEVELOPMENT && !TEST
+   // A user can't fix a shader: the install is broken. Once, as a reload compiles the same files.
+   static std::atomic<bool> warned_failure = false;
+   if (info.failed != 0 && !warned_failure.exchange(true))
+      Log::Notify(Log::Level::Error, "Some of the shader files are missing from the \"Luma\" folder, or failed to compile for some unknown reason, "
+                                     "please re-install the mod.");
+#endif
    System::Jobs::Outcome outcome = {info.failed != 0, info.failed ? std::format("{} shader{} failed to compile", info.failed, info.failed == 1 ? "" : "s") : std::format("Shaders ready: {} compiled, {} from the cache", info.compiled, info.cached)};
    {
       std::scoped_lock lock(store.last_build_mutex);
@@ -336,6 +368,7 @@ void Start()
    std::vector<std::string> overridden;
    const std::vector<Files::File> files = Files::Scan(System::Paths::GetShaderRoots(), &overridden);
    AddReplaced(files);
+   WarnAboutDuplicates(files);
 #if DEVELOPMENT
    // The documented override (a game's file replacing a shared one), logged so it's never by accident
    for (const std::string& path : overridden)

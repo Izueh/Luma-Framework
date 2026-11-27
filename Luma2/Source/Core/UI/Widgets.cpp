@@ -25,7 +25,6 @@ namespace UI {
 namespace Widgets {
 namespace {
 using Clock = std::chrono::steady_clock;
-constexpr std::chrono::milliseconds TOAST_DURATION{4000};
 constexpr size_t MAX_TOASTS = 5;
 
 struct ToastEntry
@@ -33,6 +32,7 @@ struct ToastEntry
    Tone tone;
    std::string message;
    Clock::time_point shown;
+   std::chrono::milliseconds duration;
 };
 
 // Never held with another lock
@@ -1000,10 +1000,10 @@ void TextEllipsis(std::string_view text, float max_width, Tone tone, std::string
    DrawTextEllipsis(text, max_width, tone == Tone::Info ? std::nullopt : std::optional(GetColor(tone)), tooltip);
 }
 
-void Toast(Tone tone, std::string message)
+void Toast(Tone tone, std::string message, std::chrono::milliseconds duration)
 {
    std::scoped_lock lock(toasts_mutex);
-   toasts.push_back({tone, std::move(message), Clock::now()});
+   toasts.push_back({tone, std::move(message), Clock::now(), duration});
    while (toasts.size() > MAX_TOASTS)
       toasts.pop_front();
 }
@@ -1020,7 +1020,7 @@ void DrawToasts()
    {
       std::scoped_lock lock(toasts_mutex);
       const Clock::time_point now = Clock::now();
-      std::erase_if(toasts, [now](const ToastEntry& toast) { return now - toast.shown > TOAST_DURATION; });
+      std::erase_if(toasts, [now](const ToastEntry& toast) { return now - toast.shown > toast.duration; });
       shown = toasts;
    }
    const ImGuiViewport* viewport = ImGui::GetMainViewport();

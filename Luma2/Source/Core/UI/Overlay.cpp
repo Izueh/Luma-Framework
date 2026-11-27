@@ -92,6 +92,17 @@ void ToastJobReport()
    Widgets::Toast(report.outcome.failed ? Widgets::Tone::Error : Widgets::Tone::Success, std::move(report.outcome.message));
 }
 
+// What Core and the game told the user (Log::Notify), also while the overlay is closed
+void ToastNotices()
+{
+   for (Log::Notice& notice : Log::TakeNotices())
+   {
+      const Widgets::Tone tone = notice.level >= Log::Level::Error ? Widgets::Tone::Error : notice.level == Log::Level::Warning ? Widgets::Tone::Warning
+                                                                                                                                : Widgets::Tone::Info;
+      Widgets::Toast(tone, std::move(notice.message), Widgets::NOTICE_DURATION);
+   }
+}
+
 void SaveSettings()
 {
    settings_changed = false;
@@ -158,6 +169,7 @@ void DetachWindow()
 bool BeginPresent()
 {
    ToastJobReport();
+   ToastNotices();
    // Toasts are drawn while the overlay is closed too
    if (open || Widgets::HasToasts())
       return true;

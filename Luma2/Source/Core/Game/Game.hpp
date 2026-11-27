@@ -43,6 +43,27 @@ struct Link
    std::string_view url;
 };
 
+// How far the mod is, shown in About. Publishing builds warn about the last two at start.
+enum class DevelopmentState : uint8_t
+{
+   Finished,
+   Playable,
+   WorkInProgress,
+   NonFunctional,
+};
+
+constexpr std::string_view GetName(DevelopmentState state)
+{
+   switch (state)
+   {
+   case DevelopmentState::Finished: return "Finished";
+   case DevelopmentState::Playable: return "Playable";
+   case DevelopmentState::WorkInProgress: return "Work in Progress";
+   case DevelopmentState::NonFunctional: return "Non Functional";
+   }
+   return "?";
+}
+
 struct Info
 {
    // Shown in the overlay's footer. Must outlive Luma (string literals, static arrays).
@@ -52,6 +73,7 @@ struct Info
    std::string_view description;
    std::span<const std::string_view> credits;
    std::span<const Link> links;
+   DevelopmentState state = DevelopmentState::Finished;
 };
 
 // Implemented by the game. Under the loader lock: declarations only (no dll loads, threads or API objects).
