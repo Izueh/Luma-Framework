@@ -1026,13 +1026,14 @@ Parts, in order. Each is one brief:
 
 **Decide first:**
 * **Reference build: 1.0 at `5788b1c6`** (Step 1's choice). Checked 2026-11-26: it contains every 1.0 FF7R change on `upstream`, so nothing newer exists. Built in its own worktree, Development-Release (MCP), never deployed by the build (`LUMA_*` cleared), packaged with that commit's `Scripts/package.ps1`.
-* **One output mode for both: scRGB.** 1.0's Development build forces scRGB (Publishing is HDR10), so 2.0 is set to scRGB for the HDR cases; SDR is a second case on both.
+* **2.0 runs its defaults: Mirror, output Auto (HDR10 with Windows HDR on) (owner).** The real buffers are R10G10B10A2, FF7R's own format; the game draws into the FP16 mirror of its buffer (FF7R's rules cover R10G10B10A2), so `view=swapchain` reads that linear image before composition, the same in every output mode. 1.0's Development build is scRGB (compile-time; HDR10 only in Publishing), so its back buffer is the linear reference. HDR10 and SDR encodes are not covered by these readbacks: see the `view=output` item.
+* **`view=output` (to build before the captures, recommended):** a readback of the real buffer after composition, before the overlay draws, so the HDR10 (PQ BT.2020) and SDR (gamma 2.2) encodes are checked by decoding them against the linear image.
 * **SR off for the image goldens** (the game's TAA, as 1.0 with SR None), render scale 100%, so the cases don't depend on jitter. DLSS inputs are compared separately with `luma_sr_capture` (Step 7 Verify), not as a FLIP case.
 * **Scene:** one save, camera still, game paused where it can be, settings written into the notes. Each capture taken twice for the noise floor; `max_flip` set from it.
 
 **Cases** (a `luma_golden` case each, backends `d3d11-1.0`, `d3d11`, `d3d12`):
 * `ff7r-tonemap-input`, `ff7r-tonemap-output`, `ff7r-lut`: from the trace entry of `Output_HDR` (1.0's hashes) and its inputs.
-* `ff7r-final-scrgb`, `ff7r-final-sdr`: the swapchain (`view=swapchain`).
+* `ff7r-final`: the game's image (`view=swapchain`), against 1.0's scRGB back buffer. `ff7r-output-hdr10`, `ff7r-output-sdr`: the real buffer (`view=output`), 2.0 only, decoded against `ff7r-final`.
 * `ff7r-bloom`, `ff7r-dof`: the bloom apply and DoF outputs (Step 6's Verify).
 
 **Steps:**
