@@ -26,7 +26,7 @@ Goals, in priority order:
 * **1.0 is the tested reference, not scripture.** Port behaviour as it is by default. When something is changed on purpose, add a row to section 17 with the reason. An improvement that isn't worth doing now also goes there, marked as an idea.
 * **Test whole units.** A unit is one step of `Plan.md` (or one of its parts). It is verified once, when complete, in the real game through the overlay and MCP. No test per function, no test-driven scaffolding. doctest is only for pure logic where a test is cheaper than a game launch (hashing, TOML, rule matching, settings), and for device lifetime no game being ported exercises (a second device, a device released while its jobs run), which the Tests host checks on real devices.
 * **Every unit ships its inspection surface.** The trace events, dev UI panel and MCP tools for a feature are part of that feature, because they are how it gets verified.
-* **Unimplemented is loud in Development, silent otherwise.** A feature a backend doesn't have calls `LUMA_UNIMPLEMENTED("Resources::Scaling")`: assert once and log in Development builds, no-op in the others. Never a silent partial implementation.
+* **Unimplemented is loud in Development and Test, silent in Publishing.** A feature a backend doesn't have calls `LUMA_UNIMPLEMENTED("Resources::Scaling")`: assert once and log in Development and Test builds (as 1.0's asserts), no-op in Publishing. Never a silent partial implementation.
 * **No per-frame or per-draw logging.** Log events and first occurrences. Anything repeating belongs to a trace capture.
 
 ## 3. Layers and modules
@@ -46,7 +46,7 @@ Hooks            install, vtables, lifetime, scope, device proxy, detours
 ──────────────────────────────────────────────────────────────────────────────
 System           loader, dll exports, memory scan and CPU hooks, monitor display, window policy, jobs
 Utils / Common   hash, strings, json, toml, formats, math, Api, Device, Enabled
-Log              process-wide log sink and asserts
+Log              process-wide log sink; Notifications (toasts, asserts)
 ```
 
 ### Namespaces
@@ -56,7 +56,8 @@ A folder is a namespace. Something is found by asking "which feature owns it".
 | Namespace | Owns |
 |---|---|
 | `Luma` | shared value types: `float2..4`, `uint2..4`, `Api`, `ApiSet` |
-| `Luma::Log` | `Log/Log.{hpp,cpp}`: process-wide log sink (`Info`, `Warn`, `Error`, `Debug`) and asserts (`Utils/Debug.hpp`), reachable from every layer |
+| `Luma::Log` | `Log/Log.{hpp,cpp}`: process-wide log sink (`Info`, `Warn`, `Error`, `Debug`), reachable from every layer |
+| `Luma::Notifications` | `Notifications/Notifications.{hpp,cpp}`: what Luma tells the user, from every layer and the game. `Post` queues a toast (warnings and errors are logged too), the overlay only draws the queue; `Assert` delivers the assert macros (`Utils/Debug.hpp`) as 1.0 did, a message box or, with silent asserts, a toast |
 | `Luma::Utils::{Debug, Hash, Strings, Json, Toml, Format, Math}` | stateless leaf helpers: no knowledge of the process, its modules or the hooks |
 | `Luma::System::{Loader, Modules, Paths, Memory, MonitorDisplay, WindowPolicy, Jobs}` | process level: bootstrap, loaded modules and exports, Luma's folders, pattern scan and mid-function hooks, monitor HDR state/luminance/SDR white level (`MonitorDisplay`), borderless and focus-loss window policy (`WindowPolicy`), and the Win32 threadpool + lock-free completion queue (`JobQueue`). No graphics API objects |
 | `Luma::Hooks` (+ `::Input`, `::DeviceProxy`, `::Lifetime`, `::Scope`, `::ThirdPartyModules`, `DepthGuard`) | interception plumbing, nested call tracking included, chains with other hookers and the unhook |
@@ -385,7 +386,7 @@ One look and one behaviour for every panel. Reference: the 1.0 screenshots show 
   | `PropertyGrid` | key and value table for state dumps, with copy on click |
   | `HashChip` | a shader or resource hash: monospace, colored by kind, click to copy, hover for the name |
   | `ProgressBar`, `Spinner` | shader compilation, patching, capture in progress |
-  | `Toast` | transient messages, replacing `MessageBox` and on-screen text |
+  | `Toast` | `Notifications::Post`'s messages, replacing `MessageBox` and on-screen text; kept up while hovered, a click copies the text |
   | `StatusBar` | bottom strip: API, output mode, resolutions, compile progress, warning count |
 
 * **One look per role.** Every category header is the same `Section` widget, whether it holds settings, credits or a game's custom content. Lists, links and captions come from widgets too, not raw ImGui calls with their own spacing.
@@ -501,13 +502,13 @@ Add a row whenever 2.0 behaves differently from 1.0 on purpose, or when an impro
 | Releasing Luma objects | released on reload, D3D11 keeps them alive | per command list references, released after the lists that bound them execute (D3D12) | reload and setting changes while other threads record | decided |
 | Mod toggle | "Mod Enabled" checkbox | `Luma.Enabled`: all image changes off at once, tracking keeps running, hotkey | instant A/B without losing state | decided |
 | Sliders | change while dragging | numeric sliders update live while dragging and write `Luma.toml` once on release (`!IsAnyItemActive`); define/recipe sliders and text inputs commit on release | responsive live preview without disk I/O spam or per-pixel shader recompiles | decided |
-| User-facing errors | `MessageBox`, on-screen text | toasts | section 13 | decided |
+| User-facing errors | `MessageBox`, on-screen text | toasts (`Notifications::Post`) | section 13 | decided |
 | Old shader file cleanup | `old_shader_file_names` per game | keep as is | no reason found to change | keep |
 | Native game callbacks | one virtual per native function and stage (`PreVSSetConstantBuffers`, `PreDraw`...), Core's functions included | one struct of function pointers (`Game::D3D11::Callbacks`) for the functions Core doesn't hook only; callbacks no 1.0 game overrides are not offered (texture 1D/3D, view `Pre`s, input layouts, samplers destruction, per-stage SRV/sampler binds, clears other than RTV and `ClearView`, `PreCreateDevice`, `PreFlush`) | a game's work never runs in the middle of Core's on the same function | decided |
 | Game's part of Core's functions | 1.0's Core virtuals (`OnInitDevice`, `OnInitSwapchain`, `OnPresent`, `OnDestroyDeviceData`), plus `Pre`/`Post` virtuals on the same functions | events only, one struct per API (`Game::D3D11::Events`, `Game::D3D12::Events`), each called where 1.0's Core called its virtual: `on_init_device`, `on_destroy_device`, `on_create_swapchain` (one normalized `SwapchainDesc` for the three creation and resize functions, both APIs), `on_init_swapchain` (creation and each resize), `on_present`, `on_create_shader`, `on_bind_*`, `on_clear_state`, and from Step 4 the resource events (`on_create_buffer`/`on_init_buffer`, `on_create_texture_2d`/`on_init_texture_2d`, `on_resource_destroyed`, `on_init_*_view`, `on_view_destroyed`, `on_create_sampler_state`, `on_bind_render_targets*`, `on_map`, `on_unmap`, `on_unmapped`, `on_update_subresource`, `on_copy_resource`, `on_copy_subresource_region`, `on_resolve_subresource`, `on_clear_render_target_view`, `on_clear_view`: the native callbacks they were, same signatures, where an `on_create_*` or a bind may still edit and a copy or clear may skip, as 1.0's virtuals could), `on_finish_command_list`, `on_execute_command_list`; no `Pre`/`Post` present, swapchain, shader, bind or command list callbacks, no `SetFullscreenState` or `*SetShader` ones | Core keeps tracking what the game does, in 1.0's order; FF7R, Borderlands 2, Persona 5 Royal and Far Cry 5 port to them | decided |
 | Shader creation callbacks | `PreCreate*Shader` could edit the bytecode, which Core then hashed | `on_create_shader(device, stage, hash, bytecode, shader)` after Core tracked it, read-only; the hash is the game's bytecode's; editing goes through variants (patches, Step 3) | a shader's hash stays what replacements, draw callbacks and debug names know it by | decided |
 | Game's requested swapchain desc | map keyed by swapchain pointer | the swapchain's private data | section 5 | decided |
-| Asserts | `MessageBox` asking to break | logged, `__debugbreak()` only with a debugger attached, Development only | a message box can hide behind a fullscreen game | decided |
+| Asserts | `MessageBox` asking to break (`ASSERT_MSG`), OK only or the CRT dialog in `_DEBUG` (`ASSERT`); overlay messages with `AVOID_INPUT_LOSS`; Development and Test | the same, through `Notifications::Assert`, and logged; `Options::notifications.silent_asserts` (1.0's define) is the default of the `Luma.Advanced.SilentAsserts` setting | owner: match 1.0 (replaces the earlier log-and-break-only choice) | decided |
 | MCP settings | fixed names (`scene_peak_white`, `dev:<index>`...), not saved | registry keys, saved like an overlay change | one registry, section 9 | decided |
 | Compiled shader cache | `.cso` next to each `.hlsl`, its preprocessed text's `std::hash` in the config (`Shader#<hash>`) | `Luma/Cache/Shaders/<key>.cso`, the key an FNV-1a of the preprocessed text without its `#line` lines, with target, entry and a cache version | source folders hold source only; no machine path in a key (FXC makes the source name absolute), so a prebuilt cache ships; no config entry per shader | decided |
 | Includes | relative to the including file | from the Shaders root, through the roots; each file compiled through a one-line `#include` source so messages name files from the root | section 8 | decided |

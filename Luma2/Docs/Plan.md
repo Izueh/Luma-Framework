@@ -993,7 +993,7 @@ Parts, in order. Each is one brief:
 * Ignore Warnings: dropped (section 17). The Gamma Ramp check is a Development tool in 1.0, not a user warning.
 
 **Decide first:**
-* **User warnings go through `Log::Notify`.** Features sit below the UI (section 3) and can't call `Widgets::Toast`. Recommended: `Log::Notify(level, message)` writes the line to `Luma.log` and queues it, and the overlay drains the queue into toasts every present, also while it's closed. Warnings and errors stay up longer than job reports.
+* **User warnings go through `Luma::Notifications` (owner).** A module of its own in the bottom layer, so every module and the game post directly: `Notifications::Post(kind, message)` queues a toast (warnings and errors are logged too) and the overlay only draws the queue. Asserts are delivered there as 1.0 did, with 1.0's silent mode.
 * **1.0 settings are not imported.** 1.0 kept everything in `[Luma]` of `<game>/Luma.toml`; 2.0 reads `<game>/Luma/Luma.toml`, so the two never collide, and 1.0's leftover `Luma/<Game>` and `Luma/Global` shader folders aren't scanned (2.0 reads `Luma/Shaders`). Recommended: start from defaults. The game's own keys have the same names and units, so an import can be added later if users ask.
 * **`msvcp140.dll` next to the game is a toast, not a yes/no box.** Section 17 replaced `MessageBox` with toasts, and Luma can't block there.
 
@@ -1011,7 +1011,7 @@ Parts, in order. Each is one brief:
 **Verify (once):** in Publishing on both APIs: the About tab shows the development state; each warning shows as a toast once when its cause is set up (a copied replacement file, a broken shader, a deleted `Luma_DisplayComposition.hlsl`, a square window, a dummy `msvcp140.dll`) and appears in `Luma.log`; nothing shows on a clean install.
 
 **Notes (8A built, unit-tested; not verified in the game):**
-* `Log::Notify` / `Log::TakeNotices` (16 kept), drained by `UI::Overlay` into 10 s toasts; `Widgets::Toast` takes a duration.
+* `Luma::Notifications` replaces the first `Log::Notify` and `Widgets::Toast`: `Post` (4 s for info and success, 10 s for warnings and errors, 5 shown), job reports posted by `Jobs::RunFinished`, toasts kept up while hovered and copied on click ("Copied"; clicks reach them only while the overlay is open). Asserts as 1.0: Development and Test, message box with Yes to break (with a message), OK only or the CRT dialog in `_DEBUG` (without), a toast when silent (`Options::notifications.silent_asserts`, setting `Luma.Advanced.SilentAsserts`, Test visibility). Tests force silent asserts.
 * `Game::Info::state` and `Game::DevelopmentState`; About shows "Development State". FF7R and Trails in the Sky keep `Finished`; the template sets `WorkInProgress`.
 * Warnings: duplicate replacement hash (`Shaders::Start`, once), shader compile failure in Publishing (`Shaders::Publish`, once), missing `Luma_Copy_VS` / `Luma_DisplayComposition` (`Startup` after `Shaders::Start`), square output with `SwapchainAspectRatio` (`Upgrade::MatchesSize`, once), `msvcp140.dll` next to Luma (`Startup`).
 * FF7R credits list ReShade again.
