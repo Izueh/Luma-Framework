@@ -77,7 +77,7 @@ FF7R's output shaders (`Output_HDR`, `Output_SDR`) write the game's own encoding
 3. **The game's SDR on an HDR output** goes to SDR in HDR at paper white, encoded with 2.2 emulation on PQ.
 4. **Native composition in Development.** In place, on a copy, only while a development view is on; decode and encode the native encoding.
 5. **Development forced upgrade.** Mirror plus HDR output by default in Development, FP16 game buffers always, `Display Mode` always shown in Development.
-6. **InPlace.** Allowed for scRGB with a linear source; for HDR10 and SDR only with a native source (encode-only composition). Anything else falls back to Mirror with one warning.
+6. **InPlace (owner: kept, discouraged).** Kept so old 1.0 mods migrate predictably, but new mods use Mirror or Native: the template and Guidelines say so, and choosing it logs one notice. Allowed for scRGB with a linear source; for HDR10 and SDR only with a native source (encode-only composition). Anything else falls back to Mirror with one warning.
 7. **`view=output` readback** of the real buffer after composition, and one golden per verified row of the matrix (8B).
 8. **FF7R defaults.** Native, early encoding off; the 8B cases then run Native in D3D11 and D3D12 against 1.0, and Development in Mirror.
 
@@ -86,4 +86,3 @@ FF7R's output shaders (`Output_HDR`, `Output_SDR`) write the game's own encoding
 * Is Native the default for every mod whose game has its own HDR output, or only for FF7R?
 * Development's forced output: scRGB (1.0's) or HDR10 (closer to what users get)?
 * In Native, does Luma ever change the game's buffers (the format, for a game whose HDR swapchain is 8 bit), or never?
-* InPlace: keep (scRGB only, plus native passthrough) or retire it in favour of Mirror and Native?
