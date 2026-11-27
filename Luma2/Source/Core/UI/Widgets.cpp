@@ -3,8 +3,6 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
-#include <chrono>
-#include <deque>
 #include <format>
 #include <mutex>
 #include <optional>
@@ -15,6 +13,7 @@
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 
+#include "Notifications/Notifications.hpp"
 #include "Shaders/ShaderDefines.hpp"
 #include "UI/Icons.hpp"
 #include "UI/OverlayInput.hpp"
@@ -24,20 +23,6 @@ namespace Luma {
 namespace UI {
 namespace Widgets {
 namespace {
-using Clock = std::chrono::steady_clock;
-constexpr size_t MAX_TOASTS = 5;
-
-struct ToastEntry
-{
-   Tone tone;
-   std::string message;
-   Clock::time_point shown;
-   std::chrono::milliseconds duration;
-};
-
-// Never held with another lock
-std::mutex toasts_mutex;
-std::deque<ToastEntry> toasts;
 
 ImGuiID capturing_key_id = 0;
 // The row being dragged or typed in, and its value meanwhile
@@ -1000,50 +985,63 @@ void TextEllipsis(std::string_view text, float max_width, Tone tone, std::string
    DrawTextEllipsis(text, max_width, tone == Tone::Info ? std::nullopt : std::optional(GetColor(tone)), tooltip);
 }
 
-void Toast(Tone tone, std::string message, std::chrono::milliseconds duration)
+namespace {
+Tone GetTone(Notifications::Kind kind)
 {
-   std::scoped_lock lock(toasts_mutex);
-   toasts.push_back({tone, std::move(message), Clock::now(), duration});
-   while (toasts.size() > MAX_TOASTS)
-      toasts.pop_front();
+   switch (kind)
+   {
+   case Notifications::Kind::Info: return Tone::Info;
+   case Notifications::Kind::Success: return Tone::Success;
+   case Notifications::Kind::Warning: return Tone::Warning;
+   case Notifications::Kind::Error: return Tone::Error;
+   }
+   return Tone::Info;
 }
-
-bool HasToasts()
-{
-   std::scoped_lock lock(toasts_mutex);
-   return !toasts.empty();
-}
+} // namespace
 
 void DrawToasts()
 {
-   std::deque<ToastEntry> shown;
-   {
-      std::scoped_lock lock(toasts_mutex);
-      const Clock::time_point now = Clock::now();
-      std::erase_if(toasts, [now](const ToastEntry& toast) { return now - toast.shown > toast.duration; });
-      shown = toasts;
-   }
+   const std::vector<Notifications::Toast> toasts = Notifications::GetToasts();
    const ImGuiViewport* viewport = ImGui::GetMainViewport();
    const float margin = Style::Scale(Style::Sizes::UNIT * 4.f);
    float y = viewport->WorkPos.y + viewport->WorkSize.y - margin;
-   for (size_t i = shown.size(); i-- > 0;)
+   for (size_t i = toasts.size(); i-- > 0;)
    {
-      const ToastEntry& toast = shown[i];
+      const Notifications::Toast& toast = toasts[i];
+      const Tone tone = GetTone(toast.kind);
       ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - margin, y), ImGuiCond_Always, ImVec2(1.f, 1.f));
       ImGui::SetNextWindowBgAlpha(0.92f);
-      ImGui::PushStyleColor(ImGuiCol_Border, GetColor(toast.tone));
-      const std::string name = std::format("##Toast{}", i);
+      ImGui::PushStyleColor(ImGuiCol_Border, GetColor(tone));
+      // By id, so a toast keeps its window (and its hover) while older ones expire
+      const std::string name = std::format("##Toast{}", toast.id);
       if (ImGui::Begin(name.c_str(), nullptr,
              ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
-                ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoDocking))
+                ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove))
       {
-         ImGui::PushStyleColor(ImGuiCol_Text, GetColor(toast.tone));
-         ImGui::TextUnformatted(GetIcon(toast.tone));
+         ImGui::PushStyleColor(ImGuiCol_Text, GetColor(tone));
+         ImGui::TextUnformatted(GetIcon(tone));
          ImGui::PopStyleColor();
          ImGui::SameLine();
          ImGui::PushTextWrapPos(Style::Scale(Style::Sizes::UNIT * 90.f));
          ImGui::TextUnformatted(toast.message.c_str());
          ImGui::PopTextWrapPos();
+         if (toast.copied)
+            TextDim("Copied");
+         // Kept up while the pointer is over it; a click copies the text (an error to paste in a report)
+         if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem))
+         {
+            Notifications::Hold(toast.id);
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+               ImGui::SetClipboardText(toast.message.c_str());
+               Notifications::MarkCopied(toast.id);
+            }
+            else if (!toast.copied)
+            {
+               ImGui::SetTooltip("Click to copy");
+            }
+         }
          WindowShadow(ImGui::GetStyle().WindowRounding);
          y -= ImGui::GetWindowHeight() + Style::Scale(Style::Sizes::UNIT * 2.f);
       }

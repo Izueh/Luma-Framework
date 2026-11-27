@@ -18,6 +18,7 @@
 #include <imgui.h>
 #include <misc/cpp/imgui_stdlib.h>
 
+#include "Notifications/Notifications.hpp"
 #include "Resources/ResourceChains.hpp"
 #include "Shaders/ShaderCompiler.hpp"
 #include "Shaders/ShaderDatabase.hpp"
@@ -724,7 +725,8 @@ void DrawShader(const Trace::Capture::Shader& shader)
       if (Widgets::Button("Dump", Widgets::ButtonKind::Secondary, "Writes its bytecode to Luma/Dump"))
       {
          const std::filesystem::path file = Shaders::Database::Dump(*live);
-         Widgets::Toast(file.empty() ? Tone::Error : Tone::Success, file.empty() ? "The shader couldn't be dumped" : std::format("Dumped {}", file.filename().string()));
+         Notifications::Post(file.empty() ? Notifications::Kind::Error : Notifications::Kind::Success,
+            file.empty() ? "The shader couldn't be dumped" : std::format("Dumped {}", file.filename().string()));
       }
       ImGui::SameLine();
       const bool supports_purple = shader.stage == ShaderStage::Pixel || shader.stage == ShaderStage::Compute;
@@ -1301,7 +1303,7 @@ void DrawHlslTab(const Event& event)
       if (!bytes.empty())
          Shaders::Decompiler::Request(shader->hash, tag, std::move(bytes));
       else
-         Widgets::Toast(Tone::Warning, std::format("No {} bytecode available for 0x{:08X}", SOURCES[size_t(hlsl_source)], shader->hash));
+         Notifications::Post(Notifications::Kind::Warning, std::format("No {} bytecode available for 0x{:08X}", SOURCES[size_t(hlsl_source)], shader->hash));
    }
 
    if (result.state == Shaders::Decompiler::State::Running)

@@ -16,6 +16,7 @@
 #include "UI/Widgets.hpp"
 #include "Utils/Debug.hpp"
 #include "Log/Log.hpp"
+#include "Notifications/Notifications.hpp"
 
 namespace Luma {
 // The game's DllMain calls it. Only registers a loader notification: Luma initializes when a graphics dll loads, still

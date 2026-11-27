@@ -1,7 +1,6 @@
 #include "Log/Log.hpp"
 
 #include <cstdio>
-#include <deque>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -14,9 +13,6 @@ namespace {
 std::mutex mutex;
 std::FILE* file = nullptr;
 std::vector<std::string> pending_lines;
-// Never held with the file's lock
-std::mutex notices_mutex;
-std::deque<Notice> notices;
 
 constexpr std::string_view LevelName(Level level)
 {
@@ -78,23 +74,6 @@ void Write(Level level, std::string_view message)
    }
    std::fputs(line.c_str(), file);
    std::fflush(file);
-}
-
-void Notify(Level level, std::string message)
-{
-   Write(level, message);
-   std::scoped_lock lock(notices_mutex);
-   notices.push_back({level, std::move(message)});
-   while (notices.size() > MAX_NOTICES)
-      notices.pop_front();
-}
-
-std::vector<Notice> TakeNotices()
-{
-   std::scoped_lock lock(notices_mutex);
-   std::vector<Notice> taken(std::make_move_iterator(notices.begin()), std::make_move_iterator(notices.end()));
-   notices.clear();
-   return taken;
 }
 } // namespace Log
 } // namespace Luma

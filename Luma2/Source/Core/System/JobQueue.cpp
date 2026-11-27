@@ -13,6 +13,7 @@
 #include <concurrentqueue.h>
 
 #include "Log/Log.hpp"
+#include "Notifications/Notifications.hpp"
 
 namespace Luma {
 namespace System {
@@ -139,6 +140,7 @@ void RunFinished()
       Outcome outcome = job->done();
       if (outcome.message.empty())
          continue;
+      Notifications::Post(outcome.failed ? Notifications::Kind::Error : Notifications::Kind::Success, outcome.message);
       std::scoped_lock lock(state.report_mutex);
       state.last_report = {state.last_report.id + 1, std::move(outcome)};
    }

@@ -28,6 +28,7 @@
 #include "System/Paths.hpp"
 #include "Utils/Hash.hpp"
 #include "Log/Log.hpp"
+#include "Notifications/Notifications.hpp"
 
 namespace Luma {
 namespace Shaders {
@@ -180,10 +181,10 @@ void WarnAboutDuplicates(const std::vector<Files::File>& files)
          if (added || it->second == &file)
             continue;
 #if DEVELOPMENT || TEST
-         Log::Notify(Log::Level::Warning, std::format("Shaders: {} and {} both replace 0x{:08X}", it->second->path, file.path, hash.value));
+         Notifications::Post(Notifications::Kind::Warning, std::format("Shaders: {} and {} both replace 0x{:08X}", it->second->path, file.path, hash.value));
 #else
-         Log::Notify(Log::Level::Warning, "It seems like you have duplicate shaders in your \"Luma\" folder, please delete it and re-apply the files "
-                                          "from the latest version of the mod.");
+         Notifications::Post(Notifications::Kind::Warning, "It seems like you have duplicate shaders in your \"Luma\" folder, please delete it and re-apply the files "
+                                                           "from the latest version of the mod.");
 #endif
          return;
       }
@@ -292,8 +293,8 @@ System::Jobs::Outcome Publish(const std::shared_ptr<Store>& alive, Build build, 
    // A user can't fix a shader: the install is broken. Once, as a reload compiles the same files.
    static std::atomic<bool> warned_failure = false;
    if (info.failed != 0 && !warned_failure.exchange(true))
-      Log::Notify(Log::Level::Error, "Some of the shader files are missing from the \"Luma\" folder, or failed to compile for some unknown reason, "
-                                     "please re-install the mod.");
+      Notifications::Post(Notifications::Kind::Error, "Some of the shader files are missing from the \"Luma\" folder, or failed to compile for some unknown reason, "
+                                                      "please re-install the mod.");
 #endif
    System::Jobs::Outcome outcome = {info.failed != 0, info.failed ? std::format("{} shader{} failed to compile", info.failed, info.failed == 1 ? "" : "s") : std::format("Shaders ready: {} compiled, {} from the cache", info.compiled, info.cached)};
    {

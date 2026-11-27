@@ -16,13 +16,13 @@
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Settings/SettingsStorage.hpp"
-#include "System/JobQueue.hpp"
 #include "UI/OverlayInput.hpp"
 #include "UI/Icons.hpp"
 #include "UI/OverlayWindow.hpp"
 #include "UI/Style.hpp"
 #include "UI/Widgets.hpp"
 #include "Log/Log.hpp"
+#include "Notifications/Notifications.hpp"
 #include "Utils/Strings.hpp"
 
 // Declared by ImGui's Win32 backend only in a comment, to keep <Windows.h> out of its header
@@ -80,28 +80,6 @@ std::atomic<bool> open = false;
 // Render thread only, like the settings
 std::filesystem::path settings_path;
 bool settings_changed = false;
-uint64_t toasted_job_report = 0;
-
-// What a finished job reported (a shader build), also while the overlay is closed
-void ToastJobReport()
-{
-   System::Jobs::Report report = System::Jobs::GetLastReport();
-   if (report.id == toasted_job_report)
-      return;
-   toasted_job_report = report.id;
-   Widgets::Toast(report.outcome.failed ? Widgets::Tone::Error : Widgets::Tone::Success, std::move(report.outcome.message));
-}
-
-// What Core and the game told the user (Log::Notify), also while the overlay is closed
-void ToastNotices()
-{
-   for (Log::Notice& notice : Log::TakeNotices())
-   {
-      const Widgets::Tone tone = notice.level >= Log::Level::Error ? Widgets::Tone::Error : notice.level == Log::Level::Warning ? Widgets::Tone::Warning
-                                                                                                                                : Widgets::Tone::Info;
-      Widgets::Toast(tone, std::move(notice.message), Widgets::NOTICE_DURATION);
-   }
-}
 
 void SaveSettings()
 {
@@ -168,10 +146,8 @@ void DetachWindow()
 
 bool BeginPresent()
 {
-   ToastJobReport();
-   ToastNotices();
    // Toasts are drawn while the overlay is closed too
-   if (open || Widgets::HasToasts())
+   if (open || Notifications::HasToasts())
       return true;
    if (settings_changed)
       SaveSettings();

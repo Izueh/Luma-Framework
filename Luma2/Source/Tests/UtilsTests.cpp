@@ -10,7 +10,7 @@
 
 #include <glaze/core/context.hpp>
 
-#include "Log/Log.hpp"
+#include "Notifications/Notifications.hpp"
 #include "Utils/Format.hpp"
 #include "Utils/Hash.hpp"
 #include "Utils/Json.hpp"
@@ -237,26 +237,41 @@ TEST_CASE("Utils: Luma's glaze has a namespace of its own, apart from a library'
    CHECK(Utils::Json::Write(Tests::GlazeNamed{}).find("first_field") != std::string::npos);
 }
 
-TEST_CASE("Log: notices are logged, queued in order and taken once")
+TEST_CASE("Notifications: posts are toasts, oldest first, the latest kept")
 {
-   (void)Log::TakeNotices();
-   Log::Notify(Log::Level::Warning, "first");
-   Log::Notify(Log::Level::Error, "second");
-   const std::vector<Log::Notice> notices = Log::TakeNotices();
-   REQUIRE(notices.size() == 2);
-   CHECK(notices[0].level == Log::Level::Warning);
-   CHECK(notices[0].message == "first");
-   CHECK(notices[1].level == Log::Level::Error);
-   CHECK(Log::TakeNotices().empty());
+   Notifications::ClearToasts();
+   Notifications::Post(Notifications::Kind::Warning, "first");
+   Notifications::Post(Notifications::Kind::Success, "second");
+   std::vector<Notifications::Toast> toasts = Notifications::GetToasts();
+   REQUIRE(toasts.size() == 2);
+   CHECK(toasts[0].message == "first");
+   CHECK(toasts[0].duration == Notifications::LONG);
+   CHECK(toasts[1].duration == Notifications::SHORT);
+   CHECK(toasts[0].id != toasts[1].id);
+
+   Notifications::MarkCopied(toasts[0].id);
+   CHECK(Notifications::GetToasts()[0].copied);
+
+   for (size_t i = 0; i < Notifications::MAX_SHOWN + 2; ++i)
+      Notifications::Post(Notifications::Kind::Info, std::to_string(i));
+   toasts = Notifications::GetToasts();
+   REQUIRE(toasts.size() == Notifications::MAX_SHOWN);
+   CHECK(toasts.back().message == std::to_string(Notifications::MAX_SHOWN + 1));
+   Notifications::ClearToasts();
+   CHECK_FALSE(Notifications::HasToasts());
 }
 
-TEST_CASE("Log: the notice queue keeps the latest ones")
+TEST_CASE("Notifications: a silent assert is an error toast with the expression, file and line")
 {
-   (void)Log::TakeNotices();
-   for (size_t i = 0; i < Log::MAX_NOTICES + 3; ++i)
-      Log::Notify(Log::Level::Info, std::to_string(i));
-   const std::vector<Log::Notice> notices = Log::TakeNotices();
-   REQUIRE(notices.size() == Log::MAX_NOTICES);
-   CHECK(notices.front().message == "3");
-   CHECK(notices.back().message == std::to_string(Log::MAX_NOTICES + 2));
+   Notifications::ClearToasts();
+   REQUIRE(Notifications::AreAssertsSilent());
+   Notifications::Assert("a == b", "they differ", "File.cpp", 12);
+   const std::vector<Notifications::Toast> toasts = Notifications::GetToasts();
+   REQUIRE(toasts.size() == 1);
+   CHECK(toasts[0].kind == Notifications::Kind::Error);
+   CHECK(toasts[0].message.find("a == b") != std::string::npos);
+   CHECK(toasts[0].message.find("they differ") != std::string::npos);
+   CHECK(toasts[0].message.find("File.cpp") != std::string::npos);
+   CHECK(toasts[0].message.find("12") != std::string::npos);
+   Notifications::ClearToasts();
 }

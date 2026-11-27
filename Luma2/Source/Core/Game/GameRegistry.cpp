@@ -15,6 +15,7 @@
 #include "Effects/SR/SuperResolution.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/ObjectLifetime.hpp"
+#include "Notifications/Notifications.hpp"
 #include "Resources/ConstantCapture.hpp"
 #include "Resources/ResourceBindings.hpp"
 #include "Resources/ResourceChains.hpp"
@@ -175,6 +176,9 @@ void SetOptions(const Options& options)
    Luma::Resources::Scaling::SetOptions(options.scaling);
    Draw::SetOptions(options.draw);
    Luma::Swapchain::SetOptions(options.swapchain);
+   // Before the saved settings load, so asserts in the rest of Init follow the game's choice
+   Luma::Notifications::SetSilentAsserts(options.notifications.silent_asserts);
+   Luma::Settings::SetDefault(Luma::Settings::Core::SILENT_ASSERTS, options.notifications.silent_asserts);
    Luma::Display::Composition::SetOptions(options.composition);
    Luma::Effects::SR::SetOptions(options.sr);
    Luma::Resources::ConstantCapture::SetOptions(options.constant_capture);

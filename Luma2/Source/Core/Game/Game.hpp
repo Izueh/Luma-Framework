@@ -27,6 +27,7 @@
 #include "Resources/SamplerMirrors.hpp"
 #include "Resources/TextureLoader.hpp"
 #include "Resources/ResourceUpgrades.hpp"
+#include "Notifications/Notifications.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Swapchain/Swapchain.hpp"
 #include "Settings/SettingsRegistry.hpp"
@@ -146,6 +147,9 @@ struct Options
    // Constant buffer capture (D3D11 Map/Unmap/UpdateSubresource, D3D12 upload heap read)
    Luma::Resources::ConstantCapture::Options constant_capture;
    GameDeviceDataType device_data;
+   // 1.0's AVOID_INPUT_LOSS: asserts as toasts, for a game that loses input or crashes when a message box takes the focus. The default
+   // of the Luma.Advanced.SilentAsserts setting.
+   Luma::Notifications::Options notifications;
    // Only these APIs are hooked: a device or swapchain of another is left to the game
    ApiSet supported_apis = {Api::D3D11, Api::D3D12};
 };

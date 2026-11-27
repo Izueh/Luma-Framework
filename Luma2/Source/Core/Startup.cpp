@@ -46,6 +46,7 @@
 #include "UI/Overlay.hpp"
 #include "Utils/Debug.hpp"
 #include "Log/Log.hpp"
+#include "Notifications/Notifications.hpp"
 #include "System/Modules.hpp"
 #include "Utils/Strings.hpp"
 
@@ -70,6 +71,15 @@ constexpr std::array SETTINGS = {
       // Replaced by GetDefaultWorkerThreads
       .default_value = int32_t(1),
       .range = Settings::Range{1, 16},
+   },
+   Settings::Setting{
+      .key = Settings::Core::SILENT_ASSERTS.key,
+      .label = "Silent Asserts",
+      .tooltip = "Show asserts as toasts instead of a message box that asks to break into the debugger. For games that lose input or crash "
+                 "when a window takes the focus.",
+      .category = "Advanced",
+      .visibility = Settings::Visibility::Test,
+      .default_value = false,
    },
 };
 
@@ -150,8 +160,8 @@ void Initialize()
    Log::Info("Luma2 initializing in {}", Utils::Strings::ToUtf8(System::Modules::GetPath(nullptr)));
    // An old one next to the game is loaded in place of the system's: its std::mutex doesn't match the headers Luma was built with
    if (std::error_code error; std::filesystem::is_regular_file(System::Modules::GetSelfDirectory() / L"msvcp140.dll", error))
-      Log::Notify(Log::Level::Warning, "Your game has a custom version of \"msvcp140.dll\" in its path, please remove it and restart the game or Luma "
-                                       "will possibly crash (there are no other side effects).");
+      Notifications::Post(Notifications::Kind::Warning, "Your game has a custom version of \"msvcp140.dll\" in its path, please remove it and restart the game or Luma "
+                                                        "will possibly crash (there are no other side effects).");
    Hooks::ThirdPartyModules::ScanLoadedModules();
 
    // Core's settings first: the game's Init changes their defaults (Settings::SetDefault) and adds its own
@@ -174,7 +184,7 @@ void Initialize()
 #if !DEVELOPMENT && !TEST
    if (const Game::DevelopmentState state = Game::Registry::GetInfo().state;
       state == Game::DevelopmentState::WorkInProgress || state == Game::DevelopmentState::NonFunctional)
-      Log::Notify(state == Game::DevelopmentState::NonFunctional ? Log::Level::Error : Log::Level::Warning,
+      Notifications::Post(state == Game::DevelopmentState::NonFunctional ? Notifications::Kind::Error : Notifications::Kind::Warning,
          "You are playing a mod that is either non functional or non finished. Proceed at your own risk.\nReporting issues is generally "
          "not necessary unless you were asked for testing.");
 #endif
@@ -203,16 +213,19 @@ void Initialize()
    // LumaSettings with what the settings bound to it loaded, for the draws before the first present
    Resources::LumaCBuffers::MarkSettingsDirty();
    System::Jobs::SetThreadCount(uint32_t(Settings::Get(Settings::Core::WORKER_THREADS)));
+   Notifications::SetSilentAsserts(Settings::Get(Settings::Core::SILENT_ASSERTS));
    Settings::AddChangeListener([](const Settings::Setting& setting, const Settings::Value& value) {
       if (setting.key == Settings::Core::WORKER_THREADS.key)
          System::Jobs::SetThreadCount(uint32_t(std::get<int32_t>(value)));
+      else if (setting.key == Settings::Core::SILENT_ASSERTS.key)
+         Notifications::SetSilentAsserts(std::get<bool>(value));
    });
 
    Shaders::Start();
    // Shipped in Global: missing, the install is broken (1.0 warned at the composition pass)
    if (!Resources::Database::Find(Display::Composition::VERTEX_SHADER) || !Resources::Database::Find(Display::Composition::PIXEL_SHADER))
-      Log::Notify(Log::Level::Error, "Some of the shader files are missing from the \"Luma\" folder, or failed to compile for some unknown reason, "
-                                     "please re-install the mod.");
+      Notifications::Post(Notifications::Kind::Error, "Some of the shader files are missing from the \"Luma\" folder, or failed to compile for some unknown reason, "
+                                                      "please re-install the mod.");
    InstallHooks();
 #if DEVELOPMENT
    Trace::Mcp::Start();

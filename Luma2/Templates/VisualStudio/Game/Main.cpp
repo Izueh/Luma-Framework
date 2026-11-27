@@ -179,7 +179,7 @@ void DrawSettingsPanel()
 {
    UI::Widgets::Caption("A custom settings panel, drawn below the registry's settings.");
    if (UI::Widgets::Button("Example Button", UI::Widgets::ButtonKind::Secondary, "Shows a toast"))
-      UI::Widgets::Toast(UI::Widgets::Tone::Info, "Example Button clicked");
+      Notifications::Post(Notifications::Kind::Info, "Example Button clicked");
 }
 
 void DrawInfoPanel()
@@ -528,6 +528,7 @@ void Luma::Game::Init()
       // .sr = {.enable = false, .hdr = true, .inverted_depth = false},
       // .constant_capture = {.enable = false},
       // .device_data = GameDeviceDataType::Of<GameDeviceData>(),
+      // .notifications = {.silent_asserts = true}, // Asserts as toasts, for a game that loses input when a message box shows
       // .supported_apis = {Api::D3D11}, // Only the APIs the game uses (both by default)
    };
 

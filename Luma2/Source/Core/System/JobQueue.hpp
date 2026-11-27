@@ -12,7 +12,7 @@ namespace Jobs {
 struct Outcome
 {
    bool failed = false;
-   // Shown as a toast. Empty for a job that has nothing to report (a dump).
+   // Posted as a notification (a toast). Empty for a job that has nothing to report (a dump).
    std::string message;
 };
 

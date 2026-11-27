@@ -1,7 +1,6 @@
 #pragma once
 
 #include <array>
-#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -154,13 +153,8 @@ void TextDim(std::string_view text);
 // Draws text truncated with "..." if wider than `max_width` (0 = available width), showing the full text in a tooltip on hover
 void TextEllipsis(std::string_view text, float max_width = 0.f, Tone tone = Tone::Info, std::string_view tooltip = {});
 
-// A transient message in the corner of the screen, also shown while the overlay is closed. Any thread.
-inline constexpr std::chrono::milliseconds TOAST_DURATION{4000};
-// Warnings for the user (Log::Notify): long enough to read a sentence or two
-inline constexpr std::chrono::milliseconds NOTICE_DURATION{10000};
-void Toast(Tone tone, std::string message, std::chrono::milliseconds duration = TOAST_DURATION);
-// For the overlay, each frame
-bool HasToasts();
+// For the overlay, each frame: Notifications' toasts in the corner of the screen, also while the overlay is closed (raise one with
+// Notifications::Post)
 void DrawToasts();
 
 struct StatusItem

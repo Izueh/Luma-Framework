@@ -7,6 +7,7 @@
 #include <cmath>
 
 #include "Log/Log.hpp"
+#include "Notifications/Notifications.hpp"
 #include "Utils/Debug.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
 
@@ -44,9 +45,9 @@ void WarnAboutSquareOutput(SizeFilters filters, Math::uint2 output)
       return;
 #endif
    if (!warned.exchange(true))
-      Log::Notify(Log::Level::Warning, "Your current game output resolution has an aspect ratio of 1:1 (a squared resolution), that might cause issues "
-                                       "with texture upgrades by aspect ratio, given that shadow maps and other things are often rendered in squared "
-                                       "textures.");
+      Notifications::Post(Notifications::Kind::Warning, "Your current game output resolution has an aspect ratio of 1:1 (a squared resolution), that might cause issues "
+                                                        "with texture upgrades by aspect ratio, given that shadow maps and other things are often rendered in squared "
+                                                        "textures.");
 }
 
 // The 2D size filters, in their bit order

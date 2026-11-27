@@ -12,6 +12,8 @@ namespace Settings {
 namespace Core {
 // Everything Luma does to the image, at once (Settings::IsEnabled)
 inline constexpr Id<bool> ENABLED = {"Luma.Enabled"};
+// Development and Test: asserts as toasts instead of a message box (Notifications::Options)
+inline constexpr Id<bool> SILENT_ASSERTS = {"Luma.Advanced.SilentAsserts"};
 // Switches ENABLED
 inline constexpr Id<Key> ENABLED_KEY = {"Luma.EnabledKey"};
 // Opens and closes the overlay
