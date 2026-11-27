@@ -81,6 +81,10 @@ FF7R's output shaders (`Output_HDR`, `Output_SDR`) write the game's own encoding
 7. **`view=output` readback** of the real buffer after composition, and one golden per verified row of the matrix (8B).
 8. **FF7R defaults.** Native, early encoding off; the 8B cases then run Native in D3D11 and D3D12 against 1.0, and Development in Mirror.
 
+### Later, optional
+
+* **1x1 game buffers in Mirror** (saves one buffer at the game's size: about 33 MB at 4K on D3D11, one per buffer on D3D12). Only once the game buffers always have an FP16 mirror swapped in, including with `Luma.Enabled` or upgrades off. The game still has to see its size: the buffer is a texture, not the proxy, so `GetDesc`/`GetDesc1` (D3D11) and `GetDesc` (D3D12, returned by value) are replaced on a per-object copy of the vtable of only the buffers Luma creates (as the proxy's Present slots), so no other texture pays. To test against the debug layer, RenderDoc and ReShade on both APIs.
+
 ### Decisions for the owner
 
 * Is Native the default for every mod whose game has its own HDR output, or only for FF7R?

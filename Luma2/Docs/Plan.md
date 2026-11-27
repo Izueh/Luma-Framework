@@ -976,7 +976,7 @@ Parts, in order. Each is one brief:
 |---|---|---|
 | 8A | Release UI audit against 1.0 FF7R (built) | yes |
 | 8B | 1.0 FLIP goldens (Step 7 debt, next) | yes, 1.0 and 2.0 builds |
-| 8C | Overlays matrix, Present order policy | yes, owner's session |
+| 8C | Overlays matrix, Present order policy; NVAPI and Streamline hooks where they are handed the proxy or call the real swapchain's `GetBuffer` (Mirror: their writes to the real buffer are lost under composition) | yes, owner's session |
 | 8D | RenderDoc, OptiScale | yes |
 | 8E | Detached UI (ImGui multi-viewport) | yes |
 
