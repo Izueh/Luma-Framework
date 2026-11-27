@@ -229,7 +229,7 @@ Decided after the first in-game look at Step 0. Apply before Step 1, as one unit
 * Inspection: Development tab "Shaders" (`UI/Panels/Shaders.cpp`, `UI::Panels::DrawShaders`: Reload, Unload/Load, files list with their hashes and errors, what runs replaced, compile errors), widgets `ListDetail`, `HashChip`, `Code`, a monospace font (Consolas). Status bar: the running job with a progress bar, and failed shaders. A toast per finished build. MCP: `shader_list`, `shader_state`, `dump_shader`, `reload_shaders` (waits for the build), and `status` has `log_path` (what the bridge's `luma_log` reads) and a `shaders` block. Dumps: `Luma/Dump/0x<hash>.<target>.cso`, once per hash, on the worker (`Luma.Development.DumpShaders`).
 * Measured offline (Development-Release, WARP, through the real hooks): `PSSetShader` 34 ns hooked (10 ns with Luma off, 4 ns unhooked); a draw with a variant bound 77 ns (two `*SetConstantBuffers` per stage). Per bind: one `GetPrivateData` on the shader (~20 ns), the cached context lookup, two atomic loads (`Luma.Enabled`, the variant). Per draw: the cached context lookups, a frame comparison, the binds. No lock on either path.
 * Offline checks (a throwaway test, not committed): the FF7R tree compiled through `Compiler` and `Cache` from an empty cache (30 units: 29 replacements, 1 custom shader, 0 failures), a second build compiled 0 and read 30 from the cache, changing `SSAO_ALGORITHM` recompiled 1 unit; the tree copied to two other folders, with the current directory changed, gave the same 29 keys, all found in the cache the builds wrote. On a WARP device through the hooks: the variant swapped in at bind, the cbuffers bound at a draw, equal bytes republished kept the same object, unload/load and `Luma.Enabled` off/on gave back the same object, a changed bytecode's old object was released after two presents, and releasing the game's device, context and shader destroyed the real device.
-* FF7R: `Init()` names its hash lists (and 1.0's other forced names), redirects `Output_HDR`/`Output_SDR`, declares "Decode MVs", the define defaults, the cbuffer slots and its settings table (keys as 1.0's `settings.hpp`). Left out until their step: the draw callbacks (part B), the `is_visible`/`is_enabled` predicates on display mode and SR (Steps 5, 7), the per-frame `custom_random` and `can_sharpen` writes, the `ENABLE_FRAMEGEN` custom shaders (never enabled in 1.0), `old_shader_file_names` (packaging, Step 8).
+* FF7R: `Init()` names its hash lists (and 1.0's other forced names), redirects `Output_HDR`/`Output_SDR`, declares "Decode MVs", the define defaults, the cbuffer slots and its settings table (keys as 1.0's `settings.hpp`). Left out until their step: the draw callbacks (part B), the `is_visible`/`is_enabled` predicates on display mode and SR (Steps 5, 7), the per-frame `custom_random` and `can_sharpen` writes, the `ENABLE_FRAMEGEN` custom shaders (never enabled in 1.0), `old_shader_file_names` (packaging, Step 11).
 * Noticed in 1.0, kept: FXC flags are `D3DCOMPILE_OPTIMIZATION_LEVEL0` (/O0) though its comment says /O3; reflection counts typed UAVs only (`D3D_SIT_UAV_RWTYPED`); the disassembly fallback's early stop never triggers (`matching_line` is never reset).
 * D3D12: `LUMA_UNIMPLEMENTED("Shaders on D3D12 (Step 2)")` at device creation when variants or custom shaders are needed.
 * Not verified: see part B's list.
@@ -956,7 +956,6 @@ G1 (small, protects everything), G2a and G2b (unblock the SSAO noise), G6 (creat
 
 **Build:**
 * Release UI pass: every FF7R setting in the registry with categories, tooltips and defaults as in 1.0. Warnings as toasts. About and credits.
-* Packaging: `Scripts/package.ps1` and the CI workflow build and package the Luma2 FF7R.
 * `Luma::ReShade` as `Guidelines.md` section 14 and `plans/hook-manager-hardening.md` Phase 4 (deferred by the owner): Luma loads ReShade after its own export hooks are in (needs export stubs in place of the linker forwarders), third-party work recognised by calling module (`Hooks::ThirdPartyModules`), and the choice of which buffer ReShade's effects run on. No ReShade headers.
 * Overlays (Steam, RTSS, Discord, NVIDIA): the Phase 0 test matrix of `plans/hook-manager-hardening.md` (the owner's session), then the Present order policy of its Phase 3.3 with Step 5's `GetBuffer`.
 * RenderDoc: a capture of FF7R on each API with the mod active. Fix only what's a real Luma bug.
@@ -967,7 +966,8 @@ G1 (small, protects everything), G2a and G2b (unblock the SSAO noise), G6 (creat
 
 **Where Step 8 stands (checked 2026-11-26):**
 * Done: the ReShade guest and bridge (`6db023e9`, `371e2a4e`, `714f85a1`), hook manager hardening Phases 0 to 3 (notes below), toasts (`Widgets::Toast`, job reports), the About tab with `Info::credits` (`UI/OverlayWindow.cpp` `DrawAbout`).
-* Not done: packaging and CI for Luma2 (`Scripts/package.ps1` and `build_and_release.yml` only know `Source/Games` and `Luma.sln`), the Release UI audit against 1.0, the 1.0 FLIP goldens left over from Step 7, the overlay matrix and Present order policy, RenderDoc, OptiScale, detached UI.
+* Moved out: packaging and CI are Step 11, the last step of the plan.
+* Not done: the Release UI audit against 1.0, the 1.0 FLIP goldens left over from Step 7, the overlay matrix and Present order policy, RenderDoc, OptiScale, detached UI.
 * `plans/hook-manager-hardening.md` is no longer in the repository. Before 8C the owner says where its Phase 0 matrix, Phase 3.3 and Phase 4 now live.
 
 Parts, in order. Each is one brief:
@@ -979,34 +979,44 @@ Parts, in order. Each is one brief:
 | 8C | Overlays matrix, Present order policy | yes, owner's session |
 | 8D | RenderDoc, OptiScale | yes |
 | 8E | Detached UI (ImGui multi-viewport) | yes |
-| 8F | Packaging and CI (last, by the owner's choice: the zip and workflow should package what 8A to 8E settle) | once, for the install check |
 
-### 8F: Packaging and CI (last)
+### 8A: Release UI audit against 1.0 FF7R (next)
 
-**Goal:** a Luma2 FF7R zip a user can unpack into the game folder, built by one local command and by CI, with the same layout as a 1.0 mod.
+**Goal:** what a FF7R user sees in a Publishing build matches 1.0: the settings, the About tab, and the warnings 1.0 showed users, as toasts.
 
-**Read first:** `Scripts/package.ps1`, `.github/workflows/build_and_release.yml` ("Create ZIP per mod", "Create release"), `.github/scripts/plan-build.ps1`, `Source/Games/Luma.Features.props` `LumaPackage` (1.0's package target), `Luma2/Props/Luma2.Game.props` (`OutDir`, `LumaCopySrRuntimes`, `LumaDeploy`), `Luma2/Luma2.slnx`, `Scripts/Test-Luma2Template.ps1`, `Scripts/Check-Luma2Rules.ps1`.
+**Read first:** 1.0 `Source/Games/Final Fantasy VII Remake/main.cpp` (the `settings` table, `PrintImGuiAbout`, `DllMain`), 1.0 `core.hpp` `CompileCustomShaders` (duplicates, 1888), `OnInitSwapchain` (square resolution, 3209), the composition draw (missing shaders, 5551), `DllMain` (`msvcp140.dll`, 13058; development state, 13070), the About tab (11632); 2.0 `UI/Overlay.cpp`, `UI/OverlayWindow.cpp` `DrawAbout`, `UI/Widgets.cpp` `Toast`, `Shaders/Shaders.cpp` `Run`/`Publish`, `Game/Game.hpp` `Info`, `Guidelines.md` sections 3 and 13 and the section 17 rows "User-facing errors" and "Ignore Warnings".
+
+**Checked (2026-11-26), matches 1.0, no work:**
+* Every FF7R setting: keys, labels, tooltips, categories (Post Processing, Color Grading), defaults, ranges, scaling, formats, the Sharpness and HDR predicates. 1.0 hid the whole Color Grading section outside HDR; 2.0 hides each of its settings, which shows the same thing.
+* Per-setting reset to default, the Upscaling section (Step 7), the paper white defaults (250 nits, not linked to the OS).
+* About: the description, the three donation links, Discord and GitHub (Core's links), credits, version (footer), build type.
+* Ignore Warnings: dropped (section 17). The Gamma Ramp check is a Development tool in 1.0, not a user warning.
 
 **Decide first:**
-* **The package is what `LumaDeploy` puts in the game folder.** `dxgi.dll` at the root, `Resources/Global` and `Resources/<Project>` merged into `Luma/`, the SR runtime dlls of `LumaCopySrRuntimes`. One list of files feeds both, so a deployed build and an unpacked zip are the same tree (without the `.pdb`). Recommended: move the file list into an MSBuild item group in `Luma2.Game.props` that `LumaDeploy` and a new `LumaPackage` target both use, and have `package.ps1` call that target for a Luma2 project.
-* **`package.ps1` gets a Luma2 path, not a second script.** A project found under `Luma2/Source/Games` packages from `Luma2/Binaries/<Config>/<Project>/` (no platform folder, unlike 1.0). It keeps 1.0's exclusions: `Dump*`, `Unused`, `Dev`, `Sample`, compiled shaders, `.gitkeep`.
-* **Configurations:** CI ships Publishing-Release and Test-Release, as for 1.0. Development-Release stays local.
-* **Name:** `Luma2-<Project>-<Config>.zip`, so the 1.0 and 2.0 FF7R zips can sit in one release until the swap.
+* **User warnings go through `Log::Notify`.** Features sit below the UI (section 3) and can't call `Widgets::Toast`. Recommended: `Log::Notify(level, message)` writes the line to `Luma.log` and queues it, and the overlay drains the queue into toasts every present, also while it's closed. Warnings and errors stay up longer than job reports.
+* **1.0 settings are not imported.** 1.0 kept everything in `[Luma]` of `<game>/Luma.toml`; 2.0 reads `<game>/Luma/Luma.toml`, so the two never collide, and 1.0's leftover `Luma/<Game>` and `Luma/Global` shader folders aren't scanned (2.0 reads `Luma/Shaders`). Recommended: start from defaults. The game's own keys have the same names and units, so an import can be added later if users ask.
+* **`msvcp140.dll` next to the game is a toast, not a yes/no box.** Section 17 replaced `MessageBox` with toasts, and Luma can't block there.
 
 **Build:**
-* The shared file list and `LumaPackage` target in `Luma2.Game.props`. `LumaDeploy` uses the same list. No behaviour change for a dev deploy.
-* The `package.ps1` Luma2 path. `d3dcompiler_47.dll` ships as in 1.0. `dxcompiler.dll` doesn't.
-* CI: a Luma2 job that builds `Luma2/Luma2.slnx` x64 for Test-Release and Publishing-Release with vcpkg and DXP set up as for 1.0, packages each game in `Luma2/Source/Games`, and uploads the zips under the release job's artifact pattern.
-* CI also builds and runs `Tests.vcxproj` (out of the solution build since `d9928088`), runs `Test-Luma2Template.ps1` (the template bullet of Step 9 asks for this), and runs `Check-Luma2Rules.ps1`.
-* `plan-build.ps1`: a change under `Luma2/` builds the Luma2 job only, and a change outside it builds the 1.0 cells only. `Luma2/Docs` and other Markdown build nothing, as today.
-* Keep game logic and Core behaviour unchanged. This part touches only scripts, props and the workflow.
+* `Log::Notify` and its queue (thread-safe, bounded), drained by `UI::Overlay` into `Widgets::Toast`. `Widgets::Toast` takes a duration.
+* `Game::Info::state` (`Finished` by default, `Playable`, `WorkInProgress`, `NonFunctional`): a "Development State" line in About, and in Publishing a warning (error for `NonFunctional`) with 1.0's text. The template shows it. FF7R stays `Finished` (1.0 set no state); Trails in the Sky is the owner's call.
+* The warnings, with 1.0's text, each once per process:
+  * a replacement hash that two files claim (Publishing names no files, Development and Test name both);
+  * shaders that failed to compile: in Publishing the toast asks to re-install the mod, as 1.0;
+  * Luma's composition shaders missing from `Luma/Shaders` (`Luma_Copy_VS`, `Luma_DisplayComposition`), checked once after the files are registered;
+  * an output resolution of 1:1 while texture upgrades use `SwapchainAspectRatio` (in Publishing not for 1x1, as 1.0);
+  * `msvcp140.dll` in the game's folder.
+* FF7R credits: put ReShade back under Third Party (2.0 adapts ReShade's input code and loads ReShade).
 
-**Verify (once):**
-* Package Publishing-Release locally and unzip it into an FF7R install with no dev files. On D3D12 and on `-dx11`: `Luma.log` shows the build and no missing-file warning, the replacement shaders compile from `Luma/`, and DLSS, FSR 4 and XeSS are offered (their dlls were found).
-* The zip's file list equals the `LumaDeploy` tree for the same configuration, except the `.pdb`.
-* CI on a branch: the Luma2 job is green, the artifacts hold both Luma2 zips, and tests, template and rules ran. A PR touching only `Luma2/Docs` builds nothing. One touching `Luma2/Source` builds only Luma2.
+**Verify (once):** in Publishing on both APIs: the About tab shows the development state; each warning shows as a toast once when its cause is set up (a copied replacement file, a broken shader, a deleted `Luma_DisplayComposition.hlsl`, a square window, a dummy `msvcp140.dll`) and appears in `Luma.log`; nothing shows on a clean install.
 
-**Out of this part:** a 1.0 settings import (Additional considerations, decided in 8A). Package every game in `Luma2/Source/Games`: FF7R and Trails in the Sky 1st Chapter (D3D11 only, no SR dlls).
+**Notes (8A built, unit-tested; not verified in the game):**
+* `Log::Notify` / `Log::TakeNotices` (16 kept), drained by `UI::Overlay` into 10 s toasts; `Widgets::Toast` takes a duration.
+* `Game::Info::state` and `Game::DevelopmentState`; About shows "Development State". FF7R and Trails in the Sky keep `Finished`; the template sets `WorkInProgress`.
+* Warnings: duplicate replacement hash (`Shaders::Start`, once), shader compile failure in Publishing (`Shaders::Publish`, once), missing `Luma_Copy_VS` / `Luma_DisplayComposition` (`Startup` after `Shaders::Start`), square output with `SwapchainAspectRatio` (`Upgrade::MatchesSize`, once), `msvcp140.dll` next to Luma (`Startup`).
+* FF7R credits list ReShade again.
+* Verified: 158/158 doctest cases (Development-Release; the Tests project builds only in Development, as before: MCP is Development-only), FF7R and Trails in the Sky in Development-Release, Test-Release and Publishing-Release, `Test-Luma2Template.ps1`, `Check-Luma2Rules.ps1` (only the existing `ReShade/AddonEvents.cpp` `<d3d11.h>` violation).
+* Not verified: the Verify list above, in the game.
 
 **Notes (hook manager hardening, `plans/hook-manager-hardening.md` Phases 0 to 3, done before this step, not verified in a game):**
 * Luma initializes in the loader notification, as 1.0 does. `System::Modules::FindExport` never loads a dll, so the hook manager is safe under the loader lock.
@@ -1039,15 +1049,46 @@ After each game: move code that the new game shares with an earlier one into the
 **The Visual Studio template** (`Luma2/Templates/VisualStudio/Game`, plus `Luma2/Resources/_Template`) is how a new game starts. It is the game API written out as a project: every `Game::Options` member, every kind of setting (bool, int, float, enum, key and string, each source and visibility), `SetInfo`, defines, texture upgrades, panels, the LumaData writer and `GameDeviceData` in `Main.cpp`, and the rest of the API (every D3D11 and D3D12 event, the native callbacks, draw callbacks by hash, a bytecode patcher) in its Examples section, behind `LUMA_EXAMPLES`; it is one file, as FF7R's. `Resources/_Template` is a game's resources folder (cbuffer structs, a replacement, a custom pass and a recipe example), which the new project's first build copies to `Resources/<ProjectName>`.
 
 * **Keep it current, in the same commit as the change.** Any change to what a game can declare or write (a `Game::Options` member, a field of `Settings::Setting`, `Events` or `Callbacks`, `Info`, a define's id, `Upgrade::Rules`, a widget the panels use, the props) updates the template's file for it, and a feature that adds a game-facing option adds its stub. A change to a game project's `.vcxproj` (props imports, optional SDKs) updates `Template.vcxproj`.
-* **Check it.** `Scripts/Test-Luma2Template.ps1` unpacks the template as Visual Studio does, builds the project, then builds it again with `LUMA_EXAMPLES=1`, so the stubs are compiled against the current API (a renamed event breaks it). Run it before committing such a change. Not in CI yet (it compiles Core twice): add it to the workflow with the Packaging bullet of Step 8.
+* **Check it.** `Scripts/Test-Luma2Template.ps1` unpacks the template as Visual Studio does, builds the project, then builds it again with `LUMA_EXAMPLES=1`, so the stubs are compiled against the current API (a renamed event breaks it). Run it before committing such a change. Not in CI yet (it compiles Core twice): add it to the workflow in Step 11.
 * **Install it** with `Scripts/Install-Luma2Template.ps1` (copies the zip into `Documents\Visual Studio 18\Templates\ProjectTemplates`, then restart Visual Studio). Reinstall after any change to the template, and when the Visual Studio version changes (the project targets v145).
 * The swap (Step 10) moves the template's relative paths with `Luma2/Source`: the project's imports (`..\..\..\Props`, `..\..\Core`) and the test script's paths.
 
 ## Step 10: The swap
 
 * All games ported or explicitly retired.
-* `Luma2/Source` replaces `Source/Core` and `Source/Games`, `Luma2/External` merges into `Source/External`, the ReShade submodule goes unless `Compat::ReShade` needs its headers, `Luma.sln` is replaced, CI builds only 2.0.
+* `Luma2/Source` replaces `Source/Core` and `Source/Games`, `Luma2/External` merges into `Source/External`, the ReShade submodule goes unless `Compat::ReShade` needs its headers, `Luma.sln` is replaced. CI and packaging move over in Step 11.
 * `Design.md`, `Implementation.md` and `Core2.md` are folded into `Guidelines.md` or deleted.
+
+## Step 11: Packaging and CI
+
+**Goal:** a zip of each 2.0 game a user can unpack into the game folder, built by one local command and by CI, with the same layout as a 1.0 mod.
+
+**Paths:** the brief below names the pre-swap `Luma2/` paths. If Step 10 is done first, read them as their `Source/` equivalents.
+
+**Read first:** `Scripts/package.ps1`, `.github/workflows/build_and_release.yml` ("Create ZIP per mod", "Create release"), `.github/scripts/plan-build.ps1`, `Source/Games/Luma.Features.props` `LumaPackage` (1.0's package target), `Luma2/Props/Luma2.Game.props` (`OutDir`, `LumaCopySrRuntimes`, `LumaDeploy`), `Luma2/Luma2.slnx`, `Scripts/Test-Luma2Template.ps1`, `Scripts/Check-Luma2Rules.ps1`.
+
+**Decide first:**
+* **The package is what `LumaDeploy` puts in the game folder.** `dxgi.dll` at the root, `Resources/Global` and `Resources/<Project>` merged into `Luma/`, the SR runtime dlls of `LumaCopySrRuntimes`. One list of files feeds both, so a deployed build and an unpacked zip are the same tree (without the `.pdb`). Recommended: move the file list into an MSBuild item group in `Luma2.Game.props` that `LumaDeploy` and a new `LumaPackage` target both use, and have `package.ps1` call that target for a Luma2 project.
+* **`package.ps1` gets a Luma2 path, not a second script.** A project found under `Luma2/Source/Games` packages from `Luma2/Binaries/<Config>/<Project>/` (no platform folder, unlike 1.0). It keeps 1.0's exclusions: `Dump*`, `Unused`, `Dev`, `Sample`, compiled shaders, `.gitkeep`.
+* **Configurations:** CI ships Publishing-Release and Test-Release, as for 1.0. Development-Release stays local.
+* **Name:** `Luma2-<Project>-<Config>.zip`, so the 1.0 and 2.0 FF7R zips can sit in one release until the swap.
+
+**Build:**
+* The shared file list and `LumaPackage` target in `Luma2.Game.props`. `LumaDeploy` uses the same list. No behaviour change for a dev deploy.
+* The `package.ps1` Luma2 path. `d3dcompiler_47.dll` ships as in 1.0. `dxcompiler.dll` doesn't.
+* CI: a Luma2 job that builds `Luma2/Luma2.slnx` x64 for Test-Release and Publishing-Release with vcpkg and DXP set up as for 1.0, packages each game in `Luma2/Source/Games`, and uploads the zips under the release job's artifact pattern.
+* CI also builds and runs `Tests.vcxproj` (out of the solution build since `d9928088`), runs `Test-Luma2Template.ps1` (the template bullet of Step 9 asks for this), and runs `Check-Luma2Rules.ps1`.
+* `plan-build.ps1`: a change under `Luma2/` builds the Luma2 job only, and a change outside it builds the 1.0 cells only. `Luma2/Docs` and other Markdown build nothing, as today.
+* Keep game logic and Core behaviour unchanged. This part touches only scripts, props and the workflow.
+
+**Verify (once):**
+* Package Publishing-Release locally and unzip it into an FF7R install with no dev files. On D3D12 and on `-dx11`: `Luma.log` shows the build and no missing-file warning, the replacement shaders compile from `Luma/`, and DLSS, FSR 4 and XeSS are offered (their dlls were found).
+* The zip's file list equals the `LumaDeploy` tree for the same configuration, except the `.pdb`.
+* CI on a branch: the Luma2 job is green, the artifacts hold both Luma2 zips, and tests, template and rules ran. A PR touching only `Luma2/Docs` builds nothing. One touching `Luma2/Source` builds only Luma2.
+
+**Out of this part:** a 1.0 settings import (decided in Step 8A). Package every game in `Luma2/Source/Games`: FF7R and Trails in the Sky 1st Chapter (D3D11 only, no SR dlls).
+
+**Why last (owner):** the zip and the workflow package whatever the earlier steps settle, so they are built once, at the end. Until then a game is deployed with `LumaDeploy` and tested from the game folder.
 
 ---
 
@@ -1106,6 +1147,6 @@ Proposals found during the review. None is committed work until it's moved into 
 * **Frame generation hooks.** FF7R has a disabled `ENABLE_FRAMEGEN` path with a hudless target. The composition stage in Step 5 is where a hudless output would be exposed.
 * **In-place (direct) upgrade.** 1.0's desc-edit upgrade as a per-game option, for a game whose DLSS or Streamline calls Luma can't see into (mirrors would be missed there). Not built in Step 4 (owner: such games rarely need upgrades); build it when one does.
 * **Mirror and shader clone creation at `PreCreate` instead of binding.** Explore moving remaining bind-time mirror/clone creation (such as D3D11 sampler mirrors in `PreSetSamplers`, D3D12 format variants at draw, and shader clone creation in `PreCreateShader` rather than `PostCreateShader` or lazy bind/reload paths) to `PreCreate*` hooks. 2.0 will not have in-place shader replacements: all shader replacements and patches (whether sync or async) remain clones/variants, so creating sync clones in `PreCreateShader` (and preserving them across reloads) also ensures driver state armed around creation calls (e.g. `NvAPI_D3D11_SetNvShaderExtnSlot`) applies to the clone.
-* **1.0 settings migration.** Users of 1.0 mods have values in the old config. Decide at Step 8 whether to import them once or start from defaults.
+* **1.0 settings migration.** Decided in Step 8A: start from defaults (the 1.0 file is a different one and stays). An import of the game's own keys can be added if users ask.
 * **Global shaders during the transition.** `Resources/Global` is a regrouped copy of 1.0's `Shaders/Global` and `Shaders/Includes`. A fix made on one side has to be made on the other until the swap. File names and contents stay the same so the two can still be compared file by file.
 * **ReShade add-on shader and resource modification markers.** Beyond recording intercepted game draws behind the hidden-by-default `Third-party` filter, Luma can mark shaders and resources modified by ReShade add-ons: (1) on `bind_pipeline`, flag a draw stage when live `GetShader(context, stage)` diverges from Luma's tracked bound shader (meaning an add-on swapped the shader inside `Hooks::Scope::Guard`); (2) on `create_pipeline` returning `true`, set a thread-local tag with the add-on name so the subsequent `Create*Shader` call tags that `ShaderDatabase` entry as add-on-modified (visible in Trace and Shaders); and (3) similarly for resources, track `create_resource` / `create_resource_view` returning `true` (and optional view-binding mismatches) to mark add-on-modified textures/views in Trace and Resources.
