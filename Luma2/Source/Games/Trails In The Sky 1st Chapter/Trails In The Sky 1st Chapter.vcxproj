@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A Luma 2.0 game mod. Created from the "Luma 2.0 Game Mod" Visual Studio template (Luma2/Templates/VisualStudio): keep it the
+     same as a current game's project (Final Fantasy VII Remake's is the reference) -->
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <Import Project="..\..\..\Props\Luma2.Configurations.props" />
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>18.0</VCProjectVersion>
+    <ProjectGuid>{fc11e076-1b4f-40f4-9527-7517ff9a51fc}</ProjectGuid>
+    <RootNamespace>Trails_In_The_Sky_1st_Chapter</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <!-- Enable DXP shader patching recipes (requires vcpkg restore on first build) -->
+    <UseLumaDXP>false</UseLumaDXP>
+    <!-- Override output DLL name (default: dxgi) -->
+    <!-- <LumaDllName>dxgi</LumaDllName> -->
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>DynamicLibrary</ConfigurationType>
+  </PropertyGroup>
+  <Import Project="..\..\..\Props\Luma2.Common.props" />
+  <Import Project="..\..\..\Props\Luma2.Game.props" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="Shared">
+    <Import Project="..\..\Core\Core.vcxitems" Label="Shared" />
+  </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
+  </ImportGroup>
+  <ItemGroup>
+    <ClCompile Include="Main.cpp" />
+    <None Include="vcpkg.json" />
+    <None Include="vcpkg-configuration.json" />
+    <!-- The game's shaders, recipes and textures (they live in "Luma2/Resources/<ProjectName>", outside this folder), shown here to edit them.
+         Appear after the first build, which creates them. -->
+    <None Include="$(Luma2Root)Resources\$(ProjectName)\**\*" Exclude="$(Luma2Root)Resources\$(ProjectName)\**\.gitkeep">
+      <Link>Resources\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </None>
+  </ItemGroup>
+
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+
+  <!-- A new game has no Resources folder yet: the first build copies the template's (the game's cbuffer structs, which Core includes,
+       and examples of a replacement, a custom pass and a recipe). Never touches a folder that exists. -->
+  <Target Name="LumaScaffoldResources" BeforeTargets="ClCompile" Condition="!Exists('$(Luma2Root)Resources\$(ProjectName)') And Exists('$(Luma2Root)Resources\_Template')">
+    <ItemGroup>
+      <LumaTemplateResource Include="$(Luma2Root)Resources\_Template\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(LumaTemplateResource)" DestinationFiles="@(LumaTemplateResource->'$(Luma2Root)Resources\$(ProjectName)\%(RecursiveDir)%(Filename)%(Extension)')" />
+    <Message Importance="high" Text="Created $(Luma2Root)Resources\$(ProjectName) from Resources\_Template. Reload the project to see its files." />
+  </Target>
+</Project>

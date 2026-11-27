@@ -8,6 +8,7 @@
   </Configurations>
   <Folder Name="/Games/">
     <Project Path="Source/Games/Final Fantasy VII Remake/Final Fantasy VII Remake.vcxproj" Id="f382787c-51ca-4eb8-80b1-f627ce17fe08" />
+    <Project Path="Source/Games/Trails In The Sky 1st Chapter/Trails In The Sky 1st Chapter.vcxproj" Id="fc11e076-1b4f-40f4-9527-7517ff9a51fc" />
   </Folder>
   <Project Path="Source/Core/Core.vcxitems" Id="90863f95-7fb1-4575-86f4-005003b20d8a" />
   <Project Path="Source/Tests/Tests.vcxproj" Id="98939f88-37cb-454c-a78c-0db8aabafe58">
