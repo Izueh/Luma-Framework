@@ -267,6 +267,7 @@ bool DrawControl(const Settings::Setting& setting, Settings::Value& value, float
 }
 } // namespace
 
+// Sections and tabs
 bool Section(std::string_view label, bool default_open, const char* icon)
 {
    const Style::Category category = Style::GetCategory(label);
@@ -357,6 +358,7 @@ void EndTab()
    ImGui::EndTabItem();
 }
 
+// Properties, prose and links
 void Property(std::string_view name, std::string_view value)
 {
    RowLabel(name);
@@ -416,6 +418,7 @@ float WrapSameLine(float line_used, float width)
    return width;
 }
 
+// Settings rows and input controls
 void RowLabel(std::string_view label, std::string_view tooltip, bool emphasized)
 {
    ImGui::AlignTextToFramePadding();
@@ -789,6 +792,7 @@ void ProgressBar(float fraction, std::string_view label)
       ImGui::ProgressBar(std::clamp(fraction, 0.f, 1.f), ImVec2(-1.f, 0.f), text.empty() ? nullptr : text.c_str());
 }
 
+// Lists, grids and tables
 void ListDetail(std::string_view id, std::span<const ListEntry> entries, size_t& selected, const std::function<void(size_t index)>& detail, float height,
    const std::function<bool(size_t index)>& visible, const std::function<void(size_t index)>& row_action)
 {
@@ -944,6 +948,7 @@ void DataTable(std::string_view id, std::span<const TableColumn> columns, std::s
    ImGui::EndTable();
 }
 
+// Text, code and chips
 void HashChip(uint32_t hash, ShaderStage stage, std::string_view name)
 {
    const std::string text = std::format("0x{:08X}", hash);
@@ -999,6 +1004,7 @@ Tone GetTone(Notifications::Kind kind)
 }
 } // namespace
 
+// Overlay chrome
 void DrawToasts()
 {
    const std::vector<Notifications::Toast> toasts = Notifications::GetToasts();

@@ -663,8 +663,18 @@ std::vector<RootArgument>& GetArguments(ListState& state, bool compute, UINT ind
       arguments.resize(index + 1);
    return arguments;
 }
+
+void AddResourceEvent(ID3D12GraphicsCommandList* list, Event event)
+{
+   if (ListState* state = GetState(list))
+   {
+      event.thread = GetCurrentThreadId();
+      state->events.push_back(std::move(event));
+   }
+}
 } // namespace
 
+// Command-list state recording
 void RecordReset(ID3D12GraphicsCommandList* list)
 {
    if (ListState* state = GetState(list))
@@ -680,139 +690,6 @@ void RecordClearState(ID3D12GraphicsCommandList* list)
       *state = {};
       state->events = std::move(events);
       state->resource_states = std::move(resource_states);
-   }
-}
-
-namespace {
-void AddResourceEvent(ID3D12GraphicsCommandList* list, Event event)
-{
-   if (ListState* state = GetState(list))
-   {
-      event.thread = GetCurrentThreadId();
-      state->events.push_back(std::move(event));
-   }
-}
-} // namespace
-
-void AddCopy(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* destination, ID3D12Resource* source, const Copy& copy)
-{
-   Event event = {.type = EventType::Copy, .name = std::string(name)};
-   if (source)
-      event.source = DescribeResource(source, 0);
-   if (destination)
-      event.target = DescribeResource(destination, 0);
-   event.copy = copy;
-   AddResourceEvent(list, std::move(event));
-}
-
-void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* resource, const std::array<float, 4>& values)
-{
-   Event event = {.type = EventType::Clear, .name = std::string(name)};
-   if (resource)
-      event.target = DescribeResource(resource, 0);
-   event.clear_values = values;
-   AddResourceEvent(list, std::move(event));
-}
-
-void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, D3D12_CPU_DESCRIPTOR_HANDLE view, const std::array<float, 4>& values)
-{
-   const std::optional<Descriptor> descriptor = Resources::Descriptors::D3D12::Read(view);
-   Event event = {.type = EventType::Clear, .name = std::string(name)};
-   if (descriptor && descriptor->resource)
-      event.target = DescribeResource(descriptor->resource, descriptor->resource_id);
-   event.clear_values = values;
-   AddResourceEvent(list, std::move(event));
-}
-
-void RecordBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers)
-{
-   ListState* state = GetState(list);
-   if (!state || !barriers)
-      return;
-   for (UINT i = 0; i < count; i++)
-   {
-      const D3D12_RESOURCE_BARRIER& barrier = barriers[i];
-      if (barrier.Type != D3D12_RESOURCE_BARRIER_TYPE_TRANSITION || barrier.Flags == D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY ||
-         (barrier.Transition.Subresource != D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES && barrier.Transition.Subresource != 0))
-         continue;
-      const auto it = std::ranges::find(state->resource_states, barrier.Transition.pResource, &std::pair<ID3D12Resource*, D3D12_RESOURCE_STATES>::first);
-      if (it != state->resource_states.end())
-         it->second = barrier.Transition.StateAfter;
-      else
-         state->resource_states.emplace_back(barrier.Transition.pResource, barrier.Transition.StateAfter);
-   }
-}
-
-std::optional<BoundView> FindBoundView(ID3D12GraphicsCommandList* list, Readback::ViewKind view, ShaderStage stage, uint32_t slot)
-{
-   const ListState* state = GetState(list);
-   if (!state)
-      return std::nullopt;
-   const auto found = [&](const Descriptor& descriptor, std::optional<D3D12_RESOURCE_STATES> required) -> std::optional<BoundView> {
-      if (!descriptor.resource)
-         return std::nullopt;
-      // A resource destroyed since the view was written, or another at its address, is never touched
-      const std::optional<ResourceInfo> info = Resources::Descriptors::D3D12::FindResource(descriptor.resource);
-      if (!info || (descriptor.resource_id && info->id != descriptor.resource_id))
-         return std::nullopt;
-      BoundView bound = {.resource = descriptor.resource, .format = GetViewFormat(descriptor), .state = required};
-      if (!bound.state)
-      {
-         const auto it = std::ranges::find(state->resource_states, descriptor.resource, &std::pair<ID3D12Resource*, D3D12_RESOURCE_STATES>::first);
-         if (it != state->resource_states.end())
-            bound.state = it->second;
-      }
-      return bound;
-   };
-   switch (view)
-   {
-   case Readback::ViewKind::RenderTarget:
-   {
-      if (slot >= state->render_targets.size())
-         return std::nullopt;
-      const std::optional<Descriptor> descriptor = Resources::Descriptors::D3D12::Read(state->render_targets[slot]);
-      // A render target being drawn to is in that state alone
-      return descriptor && descriptor->kind == Kind::RenderTarget ? found(*descriptor, D3D12_RESOURCE_STATE_RENDER_TARGET) : std::nullopt;
-   }
-   case Readback::ViewKind::Depth:
-   case Readback::ViewKind::Stencil:
-   {
-      if (!state->depth_stencil)
-         return std::nullopt;
-      const std::optional<Descriptor> descriptor = Resources::Descriptors::D3D12::Read(*state->depth_stencil);
-      return descriptor && descriptor->kind == Kind::DepthStencil ? found(*descriptor, std::nullopt) : std::nullopt;
-   }
-   case Readback::ViewKind::ShaderResource:
-   case Readback::ViewKind::UnorderedAccess:
-   {
-      const bool compute = stage == ShaderStage::Compute;
-      const bool uav = view == Readback::ViewKind::UnorderedAccess;
-      const RootLayout* layout = state->layouts[compute];
-      if (!layout)
-         return std::nullopt;
-      const std::vector<RootArgument>& arguments = state->arguments[compute];
-      for (size_t index = 0; index < layout->parameters.size() && index < arguments.size(); index++)
-      {
-         const RootParameter& parameter = layout->parameters[index];
-         const RootArgument& argument = arguments[index];
-         if (IsLumaParameter(*layout, index) || !IsVisible(parameter, compute, stage) || parameter.type != D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE ||
-            argument.type != RootArgument::Type::Table)
-            continue;
-         for (const Shaders::Database::D3D12::RootRange& range : parameter.ranges)
-         {
-            if (range.space != 0 || range.type != (uav ? D3D12_DESCRIPTOR_RANGE_TYPE_UAV : D3D12_DESCRIPTOR_RANGE_TYPE_SRV) || slot < range.base_register ||
-               slot - range.base_register >= range.count)
-               continue;
-            const std::optional<Descriptor> descriptor = Resources::Descriptors::D3D12::Read(D3D12_GPU_DESCRIPTOR_HANDLE{argument.value}, range.offset + (slot - range.base_register));
-            if (!descriptor || descriptor->kind != (uav ? Kind::UnorderedAccess : Kind::ShaderResource))
-               return std::nullopt;
-            // A UAV being written is in that state alone
-            return found(*descriptor, uav ? std::optional(D3D12_RESOURCE_STATE_UNORDERED_ACCESS) : std::nullopt);
-         }
-      }
-      return std::nullopt;
-   }
-   default: return std::nullopt;
    }
 }
 
@@ -902,6 +779,26 @@ void RecordStencilRef(ID3D12GraphicsCommandList* list, UINT stencil_ref)
       state->stencil_ref = stencil_ref;
 }
 
+void RecordBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers)
+{
+   ListState* state = GetState(list);
+   if (!state || !barriers)
+      return;
+   for (UINT i = 0; i < count; i++)
+   {
+      const D3D12_RESOURCE_BARRIER& barrier = barriers[i];
+      if (barrier.Type != D3D12_RESOURCE_BARRIER_TYPE_TRANSITION || barrier.Flags == D3D12_RESOURCE_BARRIER_FLAG_BEGIN_ONLY ||
+         (barrier.Transition.Subresource != D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES && barrier.Transition.Subresource != 0))
+         continue;
+      const auto it = std::ranges::find(state->resource_states, barrier.Transition.pResource, &std::pair<ID3D12Resource*, D3D12_RESOURCE_STATES>::first);
+      if (it != state->resource_states.end())
+         it->second = barrier.Transition.StateAfter;
+      else
+         state->resource_states.emplace_back(barrier.Transition.pResource, barrier.Transition.StateAfter);
+   }
+}
+
+// Event capture
 Recording BeginDraw(ID3D12GraphicsCommandList* list, const Game::D3D12::DrawCall& draw)
 {
    using Game::D3D12::DrawFunction;
@@ -937,6 +834,36 @@ void End(Recording recording, Outcome outcome)
    recording.event.outcome = outcome;
    if (ListState* state = GetState(recording.list))
       state->events.push_back(std::move(recording.event));
+}
+
+void AddCopy(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* destination, ID3D12Resource* source, const Copy& copy)
+{
+   Event event = {.type = EventType::Copy, .name = std::string(name)};
+   if (source)
+      event.source = DescribeResource(source, 0);
+   if (destination)
+      event.target = DescribeResource(destination, 0);
+   event.copy = copy;
+   AddResourceEvent(list, std::move(event));
+}
+
+void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* resource, const std::array<float, 4>& values)
+{
+   Event event = {.type = EventType::Clear, .name = std::string(name)};
+   if (resource)
+      event.target = DescribeResource(resource, 0);
+   event.clear_values = values;
+   AddResourceEvent(list, std::move(event));
+}
+
+void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, D3D12_CPU_DESCRIPTOR_HANDLE view, const std::array<float, 4>& values)
+{
+   const std::optional<Descriptor> descriptor = Resources::Descriptors::D3D12::Read(view);
+   Event event = {.type = EventType::Clear, .name = std::string(name)};
+   if (descriptor && descriptor->resource)
+      event.target = DescribeResource(descriptor->resource, descriptor->resource_id);
+   event.clear_values = values;
+   AddResourceEvent(list, std::move(event));
 }
 
 void AddSrPass(ID3D12GraphicsCommandList* list, const SrInfo& info, ID3D12Resource* color, ID3D12Resource* depth, ID3D12Resource* motion_vectors,
@@ -1017,6 +944,81 @@ void RecordExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* con
    }
 }
 
+// Readback view queries
+std::optional<BoundView> FindBoundView(ID3D12GraphicsCommandList* list, Readback::ViewKind view, ShaderStage stage, uint32_t slot)
+{
+   const ListState* state = GetState(list);
+   if (!state)
+      return std::nullopt;
+   const auto found = [&](const Descriptor& descriptor, std::optional<D3D12_RESOURCE_STATES> required) -> std::optional<BoundView> {
+      if (!descriptor.resource)
+         return std::nullopt;
+      // A resource destroyed since the view was written, or another at its address, is never touched
+      const std::optional<ResourceInfo> info = Resources::Descriptors::D3D12::FindResource(descriptor.resource);
+      if (!info || (descriptor.resource_id && info->id != descriptor.resource_id))
+         return std::nullopt;
+      BoundView bound = {.resource = descriptor.resource, .format = GetViewFormat(descriptor), .state = required};
+      if (!bound.state)
+      {
+         const auto it = std::ranges::find(state->resource_states, descriptor.resource, &std::pair<ID3D12Resource*, D3D12_RESOURCE_STATES>::first);
+         if (it != state->resource_states.end())
+            bound.state = it->second;
+      }
+      return bound;
+   };
+   switch (view)
+   {
+   case Readback::ViewKind::RenderTarget:
+   {
+      if (slot >= state->render_targets.size())
+         return std::nullopt;
+      const std::optional<Descriptor> descriptor = Resources::Descriptors::D3D12::Read(state->render_targets[slot]);
+      // A render target being drawn to is in that state alone
+      return descriptor && descriptor->kind == Kind::RenderTarget ? found(*descriptor, D3D12_RESOURCE_STATE_RENDER_TARGET) : std::nullopt;
+   }
+   case Readback::ViewKind::Depth:
+   case Readback::ViewKind::Stencil:
+   {
+      if (!state->depth_stencil)
+         return std::nullopt;
+      const std::optional<Descriptor> descriptor = Resources::Descriptors::D3D12::Read(*state->depth_stencil);
+      return descriptor && descriptor->kind == Kind::DepthStencil ? found(*descriptor, std::nullopt) : std::nullopt;
+   }
+   case Readback::ViewKind::ShaderResource:
+   case Readback::ViewKind::UnorderedAccess:
+   {
+      const bool compute = stage == ShaderStage::Compute;
+      const bool uav = view == Readback::ViewKind::UnorderedAccess;
+      const RootLayout* layout = state->layouts[compute];
+      if (!layout)
+         return std::nullopt;
+      const std::vector<RootArgument>& arguments = state->arguments[compute];
+      for (size_t index = 0; index < layout->parameters.size() && index < arguments.size(); index++)
+      {
+         const RootParameter& parameter = layout->parameters[index];
+         const RootArgument& argument = arguments[index];
+         if (IsLumaParameter(*layout, index) || !IsVisible(parameter, compute, stage) || parameter.type != D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE ||
+            argument.type != RootArgument::Type::Table)
+            continue;
+         for (const Shaders::Database::D3D12::RootRange& range : parameter.ranges)
+         {
+            if (range.space != 0 || range.type != (uav ? D3D12_DESCRIPTOR_RANGE_TYPE_UAV : D3D12_DESCRIPTOR_RANGE_TYPE_SRV) || slot < range.base_register ||
+               slot - range.base_register >= range.count)
+               continue;
+            const std::optional<Descriptor> descriptor = Resources::Descriptors::D3D12::Read(D3D12_GPU_DESCRIPTOR_HANDLE{argument.value}, range.offset + (slot - range.base_register));
+            if (!descriptor || descriptor->kind != (uav ? Kind::UnorderedAccess : Kind::ShaderResource))
+               return std::nullopt;
+            // A UAV being written is in that state alone
+            return found(*descriptor, uav ? std::optional(D3D12_RESOURCE_STATE_UNORDERED_ACCESS) : std::nullopt);
+         }
+      }
+      return std::nullopt;
+   }
+   default: return std::nullopt;
+   }
+}
+
+// Cbuffer tracking and shader skipping
 bool IsSkipped(ID3D12GraphicsCommandList* list, Shaders::StageSet stages)
 {
    const Shaders::Variants::D3D12::BoundPipeline bound = Shaders::Variants::D3D12::GetBoundPipeline(list);

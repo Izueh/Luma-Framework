@@ -68,6 +68,7 @@ struct Options
    int32_t mip_level = 0;
 };
 
+// Targeting and lifecycle
 // Relaxed atomic check for hot draw paths
 bool IsActive();
 // Direct resource-address targeting (ResourcesPanel, Copy/Clear/CPU events)
@@ -85,35 +86,37 @@ void Clear();
 // Resets per-frame instance counter on Present
 void ResetFrame();
 
+// Display options
 Options GetOptions();
 void SetOptions(const Options& options);
-
 // Packs Options + texture dimension bits into LumaData.CustomData2 for Luma_DisplayComposition.hlsl
 uint32_t PackFlags(const Options& options, uint32_t dimension_bits);
 
-// D3D11: snapshots `resource` if its address matches the target (or its mirror)
+// D3D11 capture and bind
+// Snapshots `resource` if its address matches the target (or its mirror)
 void CaptureD3D11(ID3D11DeviceContext* context, ID3D11Resource* resource);
-// D3D11: snapshots the target view on a game draw/dispatch (pass-instance mode or resource-address fallback)
+// Snapshots the target view on a game draw/dispatch (pass-instance mode or resource-address fallback)
 bool CaptureCallD3D11(const Game::D3D11::Call& call, Shaders::StageSet stages, bool handled);
-// D3D11: snapshots the target view on a Luma pass
+// Snapshots the target view on a Luma pass
 void CaptureLumaPassD3D11(ID3D11DeviceContext* context, std::string_view pass_name);
-// D3D11: snapshots an SR pass input or output texture
+// Snapshots an SR pass input or output texture
 void CaptureSrPassD3D11(ID3D11DeviceContext* context, std::string_view pass_name, ID3D11Resource* color, ID3D11Resource* depth,
    ID3D11Resource* motion_vectors, ID3D11Resource* exposure, ID3D11Resource* reactive, ID3D11Resource* transparency, ID3D11Resource* output);
-// D3D11: scans bound render targets, depth, SRVs and UAVs on `context` and snapshots if any matches
+// Scans bound render targets, depth, SRVs and UAVs on `context` and snapshots if any matches
 void CaptureBoundD3D11(ID3D11DeviceContext* context);
-// D3D11: binds the snapshot SRV into t2..t8 and sets CustomData2/CustomData3
+// Binds the snapshot SRV into t2..t8 and sets CustomData2/CustomData3
 bool BindD3D11(ID3D11DeviceContext* context, uint32_t& custom_data_2, float& custom_data_3);
 void ReleaseD3D11(const ID3D11Device* device);
 
-// D3D12: snapshots `resource` (currently in `current_state`) if its address matches the target
+// D3D12 capture and bind
+// Snapshots `resource` (currently in `current_state`) if its address matches the target
 void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES current_state);
-// D3D12: snapshots the target view on a game draw/dispatch (pass-instance mode)
+// Snapshots the target view on a game draw/dispatch (pass-instance mode)
 bool CaptureCallD3D12(const Game::D3D12::Call& call, Shaders::StageSet stages, bool handled);
-// D3D12: snapshots an SR pass input or output texture
+// Snapshots an SR pass input or output texture
 void CaptureSrPassD3D12(ID3D12GraphicsCommandList* list, std::string_view pass_name, ID3D12Resource* color, ID3D12Resource* depth,
    ID3D12Resource* motion_vectors, ID3D12Resource* exposure, ID3D12Resource* reactive, ID3D12Resource* transparency, ID3D12Resource* output);
-// D3D12: writes the snapshot SRV into the composition descriptor table (t2..t8) and sets CustomData2/CustomData3
+// Writes the snapshot SRV into the composition descriptor table (t2..t8) and sets CustomData2/CustomData3
 bool BindD3D12(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE table_start, uint32_t view_increment, uint32_t& custom_data_2, float& custom_data_3);
 void ReleaseD3D12(const ID3D12Device* device);
 } // namespace DebugDraw

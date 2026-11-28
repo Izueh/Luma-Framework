@@ -19,6 +19,7 @@ namespace Luma {
 namespace Trace {
 namespace Capture {
 namespace D3D11 {
+// Event capture
 struct Recording
 {
    Event event;
@@ -42,19 +43,21 @@ void AddWrite(ID3D11DeviceContext* context, std::string_view name, ID3D11Resourc
 void AddSrPass(ID3D11DeviceContext* context, const SrInfo& info, ID3D11Resource* color, ID3D11Resource* depth, ID3D11Resource* motion_vectors,
    ID3D11Resource* exposure, ID3D11Resource* reactive, ID3D11Resource* transparency, ID3D11Resource* output);
 
-// Presenting thread, before Capture::OnPresent: the copies read back into their events
-void ReadBackConstantBuffers();
-
+// Cbuffer tracking and shader skipping
+// The trace's action on a shader bound to one of `stages` (a call's) skips the call
+bool IsSkipped(ID3D11DeviceContext* context, Shaders::StageSet stages);
 // While Track is active, before the game's draw callbacks: copies the tracked slot if this is the tracked call (`stages` are the
 // call's)
 void TrackCall(ID3D11DeviceContext* context, Shaders::StageSet stages);
-// The trace's action on a shader bound to one of `stages` (a call's) skips the call
-bool IsSkipped(ID3D11DeviceContext* context, Shaders::StageSet stages);
 // While Track is active: a deferred context's copy belongs to the command list it ended in, and is read once that list was executed
 void FinishCommandList(const ID3D11DeviceContext* context, const ID3D11CommandList* list);
 void MergeCommandList(ID3D11DeviceContext* context, const ID3D11CommandList* list);
+
+// Present readbacks
 // Presenting thread: the newest copy of the tracked slot whose contents are there read back into Track (none: the reading is stale)
 void ReadBackTracked();
+// Presenting thread, before Capture::FinishFrame: the copies read back into their events
+void ReadBackConstantBuffers();
 } // namespace D3D11
 } // namespace Capture
 } // namespace Trace

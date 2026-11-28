@@ -174,6 +174,7 @@ bool MatchesD3D12Target(ID3D12Resource* resource, uintptr_t address)
 }
 } // namespace
 
+// Targeting and lifecycle
 bool IsActive()
 {
    return active.load(std::memory_order_relaxed);
@@ -314,6 +315,7 @@ void ResetFrame()
    captured_this_frame = false;
 }
 
+// Display options
 Options GetOptions()
 {
    std::scoped_lock lock(mutex);
@@ -856,6 +858,7 @@ MatchedResource FindBoundSrvD3D11(ID3D11DeviceContext* context, uintptr_t addres
 }
 } // namespace
 
+// D3D11 capture and bind
 void CaptureD3D11(ID3D11DeviceContext* context, ID3D11Resource* resource)
 {
    const uintptr_t address = target_address.load(std::memory_order_acquire);
@@ -1104,6 +1107,7 @@ void SnapshotD3D12Resource(ID3D12GraphicsCommandList* list, ID3D12Resource* reso
 }
 } // namespace
 
+// D3D12 capture and bind
 void CaptureD3D12(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES current_state)
 {
    const uintptr_t address = target_address.load(std::memory_order_acquire);

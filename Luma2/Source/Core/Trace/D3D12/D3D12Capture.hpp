@@ -20,7 +20,7 @@ namespace Luma {
 namespace Trace {
 namespace Capture {
 namespace D3D12 {
-// The list's record, from the game's calls (Luma's own aren't hooked)
+// Command-list state recording (from the game's calls; Luma's own aren't hooked)
 void RecordReset(ID3D12GraphicsCommandList* list);
 void RecordClearState(ID3D12GraphicsCommandList* list);
 void RecordRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12RootSignature* root_signature);
@@ -34,7 +34,10 @@ void RecordScissorRects(ID3D12GraphicsCommandList* list, UINT count, const D3D12
 void RecordTopology(ID3D12GraphicsCommandList* list, D3D12_PRIMITIVE_TOPOLOGY topology);
 void RecordBlendFactor(ID3D12GraphicsCommandList* list, const FLOAT factor[4]);
 void RecordStencilRef(ID3D12GraphicsCommandList* list, UINT stencil_ref);
+// The list's transitions, for the states a readback's barriers start from
+void RecordBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers);
 
+// Event capture
 struct Recording
 {
    Event event;
@@ -46,22 +49,19 @@ Recording BeginDraw(ID3D12GraphicsCommandList* list, const Game::D3D12::DrawCall
 Recording BeginDispatch(ID3D12GraphicsCommandList* list, const Game::D3D12::DispatchCall& dispatch);
 // Kept by the list until a queue executes it
 void End(Recording recording, Outcome outcome = Outcome::Ran);
+// While capturing, as the game made the call (before Luma redirects it to mirrors): a copy or a resolve, a view or resource cleared.
+// Kept by the list until a queue executes it, like its draws.
+void AddCopy(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* destination, ID3D12Resource* source, const Copy& copy);
+void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* resource, const std::array<float, 4>& values);
+void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, D3D12_CPU_DESCRIPTOR_HANDLE view, const std::array<float, 4>& values);
+void AddSrPass(ID3D12GraphicsCommandList* list, const SrInfo& info, ID3D12Resource* color, ID3D12Resource* depth, ID3D12Resource* motion_vectors,
+   ID3D12Resource* exposure, ID3D12Resource* reactive, ID3D12Resource* transparency, ID3D12Resource* output);
 // The bundle's events go into the list where it runs
 void RecordExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle);
 // The lists' events go into the frame, in this order
 void RecordExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists);
 
-// While capturing, as the game made the call (before Luma redirects it to mirrors): a copy or a resolve, a view or resource cleared.
-// Kept by the list until a queue executes it, like its draws.
-void AddCopy(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* destination, ID3D12Resource* source, const Copy& copy);
-void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, D3D12_CPU_DESCRIPTOR_HANDLE view, const std::array<float, 4>& values);
-void AddClear(ID3D12GraphicsCommandList* list, std::string_view name, ID3D12Resource* resource, const std::array<float, 4>& values);
-void AddSrPass(ID3D12GraphicsCommandList* list, const SrInfo& info, ID3D12Resource* color, ID3D12Resource* depth, ID3D12Resource* motion_vectors,
-   ID3D12Resource* exposure, ID3D12Resource* reactive, ID3D12Resource* transparency, ID3D12Resource* output);
-
-// The list's transitions, for the states a readback's barriers start from
-void RecordBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers);
-
+// Readback view queries
 struct BoundView
 {
    ID3D12Resource* resource = nullptr; // Alive: the game's call reads or writes it
@@ -73,10 +73,11 @@ struct BoundView
 // The view of the call about to run on `list` at `slot` (space 0) of `stage`, from the list's record
 std::optional<BoundView> FindBoundView(ID3D12GraphicsCommandList* list, Readback::ViewKind view, ShaderStage stage, uint32_t slot);
 
-// While Track is active, before the game's draw events: copies the tracked slot if this is the tracked call (from an upload heap)
-void TrackCall(ID3D12GraphicsCommandList* list, Shaders::StageSet stages);
+// Cbuffer tracking and shader skipping
 // The trace's action on a shader of the call's pipeline (at one of `stages`) skips the call
 bool IsSkipped(ID3D12GraphicsCommandList* list, Shaders::StageSet stages);
+// While Track is active, before the game's draw events: copies the tracked slot if this is the tracked call (from an upload heap)
+void TrackCall(ID3D12GraphicsCommandList* list, Shaders::StageSet stages);
 // Presenting thread, at a D3D12 present: the last copy of the tracked slot this frame into Track (none: the reading is stale)
 void ReadBackTracked();
 } // namespace D3D12

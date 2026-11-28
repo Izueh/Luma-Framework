@@ -32,6 +32,7 @@ enum class Tone : uint8_t
    Injected, // What Luma added, in trace
 };
 
+// Sections and tabs
 // A collapsible category header, raised, with an accent bar and an icon (chosen from the label, or `icon`).
 // True while open: draw its rows, then call EndSection().
 bool Section(std::string_view label, bool default_open = true, const char* icon = nullptr);
@@ -42,18 +43,34 @@ void SetNextSectionOpen(bool open);
 void SubHeader(std::string_view label);
 // Registers a custom icon for a category name
 void RegisterCategoryIcon(std::string_view category, const char* icon);
-
 // A tab of the overlay's tab bar, underlined in the accent color while selected. True while selected: call EndTab().
 bool Tab(std::string_view label, const char* icon = nullptr);
 void EndTab();
 
+// Properties, prose and links
+// A row with a name in the label column and a value
+void Property(std::string_view name, std::string_view value);
+// A dim line heading the rows or items after it
+void Caption(std::string_view text);
+// Text wrapped at the available width
+void Paragraph(std::string_view text);
+// One item of a bulleted list
+void ListItem(std::string_view text);
+// The width Link() will take
+float GetLinkWidth(std::string_view label, std::string_view url);
+// A button opening `url` in the browser, with the service's mark in its color (Ko-fi, Buy Me a Coffee, Discord, GitHub) or a
+// generic link icon
+bool Link(std::string_view label, std::string_view url);
+// Lays the next item out on the same line if `width` still fits, otherwise on the next one. Returns the item's width.
+float WrapSameLine(float line_used, float width);
+
+// Settings rows and input controls
+// The label column of a row with a custom control, which follows on the same line. `emphasized` for a changed value.
+void RowLabel(std::string_view label, std::string_view tooltip = {}, bool emphasized = false);
 // One registry setting: its label at a fixed width, the control for its value type, a reset icon when it isn't the default,
 // a badge for what a change triggers. Sliders and text apply when the edit ends, unless the setting is live. True if the
 // value changed (it's already set in the registry).
 bool SettingRow(const Settings::Setting& setting);
-// The label column of a row with a custom control, which follows on the same line. `emphasized` for a changed value.
-void RowLabel(std::string_view label, std::string_view tooltip = {}, bool emphasized = false);
-
 bool Toggle(std::string_view id, bool& value);
 bool Slider(std::string_view id, float& value, float min, float max, std::string_view format = "%.3f");
 bool Slider(std::string_view id, int32_t& value, int32_t min, int32_t max);
@@ -72,34 +89,17 @@ void Tag(std::string_view text, Tone tone, std::string_view tooltip = {});
 // A message across the available width, tinted by `tone`, with an optional primary action at its end. True when the action is
 // clicked.
 bool Banner(Tone tone, std::string_view text, std::string_view action = {}, std::string_view action_tooltip = {});
-// A row with a name in the label column and a value
-void Property(std::string_view name, std::string_view value);
-// A dim line heading the rows or items after it
-void Caption(std::string_view text);
-// Text wrapped at the available width
-void Paragraph(std::string_view text);
-// One item of a bulleted list
-void ListItem(std::string_view text);
-// A button opening `url` in the browser, with the service's mark in its color (Ko-fi, Buy Me a Coffee, Discord, GitHub) or a
-// generic link icon
-bool Link(std::string_view label, std::string_view url);
-// The width Link() will take
-float GetLinkWidth(std::string_view label, std::string_view url);
-// Lays the next item out on the same line if `width` still fits, otherwise on the next one. Returns the item's width.
-float WrapSameLine(float line_used, float width);
-
 // Click, then press a key (Escape cancels). `key` is a Windows virtual key code.
 bool KeyBind(std::string_view id, uint32_t& key);
 // True on every edit (SettingRow applies the text when the edit ends)
 bool TextInput(std::string_view id, std::string& text);
-
 // True when clicked (for Danger, when the confirmation is accepted)
 bool Button(std::string_view label, ButtonKind kind = ButtonKind::Secondary, std::string_view tooltip = {});
 bool IconButton(const char* icon, std::string_view tooltip);
-
 // `fraction` in [0, 1], negative for work of unknown length
 void ProgressBar(float fraction, std::string_view label = {});
 
+// Lists, grids and tables
 struct ListEntry
 {
    std::string label;
@@ -144,6 +144,7 @@ using TableRow = std::vector<TableCell>;
 // it. Above `max_height` (0: none) it scrolls on its own, only the visible rows drawn.
 void DataTable(std::string_view id, std::span<const TableColumn> columns, std::span<const TableRow> rows, float max_height = 0.f);
 
+// Text, code and chips
 // A shader hash: monospace "0x12345678" tinted by stage, a click copies it, hovering shows `name` and the stage
 void HashChip(uint32_t hash, ShaderStage stage, std::string_view name = {});
 // Monospace text, wrapped (compiler messages)
@@ -153,6 +154,7 @@ void TextDim(std::string_view text);
 // Draws text truncated with "..." if wider than `max_width` (0 = available width), showing the full text in a tooltip on hover
 void TextEllipsis(std::string_view text, float max_width = 0.f, Tone tone = Tone::Info, std::string_view tooltip = {});
 
+// Overlay chrome
 // For the overlay, each frame: Notifications' toasts in the corner of the screen, also while the overlay is closed (raise one with
 // Notifications::Post)
 void DrawToasts();

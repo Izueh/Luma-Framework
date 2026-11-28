@@ -591,6 +591,7 @@ Recording BeginGameCall(ID3D11DeviceContext* context, EventType type, Shaders::S
 }
 } // namespace
 
+// Event capture
 Recording BeginDraw(ID3D11DeviceContext* context, const Game::D3D11::DrawCall& draw)
 {
    using Function = Hooks::D3D11::Function;
@@ -723,6 +724,7 @@ void AddSrPass(ID3D11DeviceContext* context, const SrInfo& info, ID3D11Resource*
    Add(std::move(event));
 }
 
+// Cbuffer tracking and shader skipping
 bool IsSkipped(ID3D11DeviceContext* context, Shaders::StageSet stages)
 {
    const Shaders::Variants::D3D11::BoundShaders* bound = Shaders::Variants::D3D11::GetBoundShaders(context);
@@ -799,6 +801,7 @@ void MergeCommandList(ID3D11DeviceContext* context, const ID3D11CommandList* lis
    }
 }
 
+// Present readbacks
 void ReadBackTracked()
 {
    // The newest copy whose contents are there, older ones dropped; the others keep waiting for their execution
