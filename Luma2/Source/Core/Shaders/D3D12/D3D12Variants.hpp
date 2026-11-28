@@ -26,8 +26,8 @@ namespace D3D12 {
 // What a variant pipeline was made from
 struct Built
 {
-   std::array<std::shared_ptr<const CompiledShader>, 6> compiled; // Null for the game's stage
-   std::array<Source, 6> sources = {};
+   std::array<std::shared_ptr<const CompiledShader>, STAGE_COUNT> compiled; // Null for the game's stage
+   std::array<Source, STAGE_COUNT> sources = {};
    StageSet variant_stages;
    bool compute = false;
    // The Resources::Database entries its shaders request, once each

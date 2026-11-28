@@ -73,9 +73,10 @@ struct EnvValue
 
 struct RecipeInfo
 {
-   std::string identity; // From the Recipes folder: "PS/dithering_fix.recipe.yml"
+   std::string identity; // From the Recipes folder: "SM5/PS/dithering_fix.recipe.yml"
    std::string name;
    std::string description;
+   std::string shader_model; // "SM5" or "SM6"
    std::string stage; // Its stage folder, empty for any stage
    std::string key; // Its switch's setting
    bool enabled = false;

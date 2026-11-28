@@ -46,7 +46,10 @@ std::filesystem::path FindDecompilerTool(std::wstring_view exe_name)
       System::Modules::GetSelfDirectory() / exe_name,
    };
 #ifdef LUMA_RESOURCES_DIR
-   candidates.push_back(std::filesystem::path(LUMA_RESOURCES_DIR).parent_path() / L"External" / L"Decompilers" / exe_name);
+   std::filesystem::path resources_dir = std::filesystem::path(LUMA_RESOURCES_DIR).lexically_normal();
+   if (resources_dir.filename().empty())
+      resources_dir = resources_dir.parent_path();
+   candidates.push_back(resources_dir.parent_path() / L"External" / L"Decompilers" / exe_name);
 #endif
    for (const std::filesystem::path& path : candidates)
    {
@@ -121,6 +124,7 @@ Result DecompileSync(const std::string& key, const Bytecode& bytecode)
    const std::filesystem::path work_dir = System::Paths::GetCache() / L"Decomp" / L"Temp";
    std::filesystem::create_directories(work_dir, error);
    const std::filesystem::path cso_path = work_dir / std::format("{}.bin", key);
+   const std::filesystem::path out_hlsl_path = work_dir / std::format("{}.hlsl", key);
    {
       std::ofstream out(cso_path, std::ios::binary | std::ios::trunc);
       if (!out)
@@ -128,17 +132,29 @@ Result DecompileSync(const std::string& key, const Bytecode& bytecode)
       out.write(reinterpret_cast<const char*>(bytecode.data()), std::streamsize(bytecode.size()));
    }
 
-   // Invoke RenoDX decomp.exe with flatten + do-while options; 3DMigoto cmd_Decompiler.exe with -D
-   const std::wstring cmd = is_dxil ? std::format(L"\"{}\" --flatten --do-while \"{}\"", tool_path.wstring(), cso_path.wstring())
+   // Invoke RenoDX decomp.exe as "{cso} {hlsl} --flatten --use-do-while" with working_dir set to dxcompiler.dll's directory so
+   // decomp.exe can load dxcompiler.dll; 3DMigoto cmd_Decompiler.exe uses "-D {cso}".
+   std::filesystem::path run_dir = work_dir;
+   if (is_dxil)
+   {
+      const Compiler::DxcStatus dxc = Compiler::GetDxcStatus();
+      if (dxc.loaded && !dxc.path.empty())
+      {
+         const std::filesystem::path dxc_dir = std::filesystem::path(std::u8string(dxc.path.begin(), dxc.path.end())).parent_path();
+         if (!dxc_dir.empty())
+            run_dir = dxc_dir;
+      }
+   }
+   const std::wstring cmd = is_dxil ? std::format(L"\"{}\" \"{}\" \"{}\" --flatten --use-do-while", tool_path.wstring(), cso_path.wstring(), out_hlsl_path.wstring())
                                     : std::format(L"\"{}\" -D \"{}\"", tool_path.wstring(), cso_path.wstring());
 
    std::string stdout_text;
    DWORD exit_code = 1;
-   const bool ran = RunProcessCapture(cmd, work_dir, stdout_text, exit_code);
+   const bool ran = RunProcessCapture(cmd, run_dir, stdout_text, exit_code);
 
    std::string hlsl;
-   // 3DMigoto writes "<stem>.hlsl" or "<stem>_replace.txt" next to the input binary
-   for (const std::filesystem::path& generated : {work_dir / std::format("{}.hlsl", key), work_dir / std::format("{}_replace.txt", key)})
+   // decomp.exe writes `out_hlsl_path`; 3DMigoto writes "<stem>.hlsl" or "<stem>_replace.txt" next to the input binary
+   for (const std::filesystem::path& generated : {out_hlsl_path, work_dir / std::format("{}_replace.txt", key)})
    {
       if (const std::optional<std::string> text = ReadTextFile(generated); text && !text->empty())
       {

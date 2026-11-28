@@ -100,7 +100,7 @@ bool HasFreshSnapshotLocked()
 
 std::string_view GetStageName(ShaderStage stage)
 {
-   constexpr std::string_view NAMES[] = {"VS", "HS", "DS", "GS", "PS", "CS"};
+   constexpr std::string_view NAMES[] = {"VS", "HS", "DS", "GS", "PS", "CS", "AS", "MS"};
    return NAMES[size_t(stage)];
 }
 

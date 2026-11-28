@@ -367,11 +367,11 @@ float4 Compose(float4 pos)
 	//return mipColor2; //TODOFT
 
 	// This case means the game currently doesn't have Luma custom shaders built in (fallback in case of problems), or has manually unloaded them
-	const bool modActive = LumaData.CustomData1 == 0;
+	const bool modActive = LumaComposition.InputMode == 0;
 	if (!modActive)
 	{
 		// Native HDR10 PQ game output (Luma disabled/unloaded while presenting through Mirror swapchain)
-		if (LumaData.CustomData1 == 3)
+		if (LumaComposition.InputMode == 3)
 		{
 			if (HasStage(STAGE_DECODE))
 			{
@@ -382,7 +382,7 @@ float4 Compose(float4 pos)
 			return float4(color.rgb, color.a);
 		}
 		// SDR was already linear, assuming we are outputting on scRGB HDR buffers (usually implies "POST_PROCESS_SPACE_TYPE" is 1)
-		const bool vanillaSwapchainWasLinear = LumaData.CustomData1 == 2;
+		const bool vanillaSwapchainWasLinear = LumaComposition.InputMode == 2;
 		// "VANILLA_ENCODING_TYPE" is expected to be 0 for this branch
 		if (vanillaSwapchainWasLinear && HasStage(STAGE_GAMMA))
 		{
@@ -509,6 +509,31 @@ float4 Compose(float4 pos)
 			color.rgb = ComposeUI(pos.xyz, color.rgb, UIPaperWhite, UIPaperWhite);
 			gamePaperWhite = UIPaperWhite;
 		}
+	}
+
+	// Active mod with native HDR10 PQ input (POST_PROCESS_SPACE_TYPE == 3): decode PQ BT.2020 directly to linear scRGB units (1 = 80 nits)
+	if (POST_PROCESS_SPACE_TYPE == 3)
+	{
+		if (HasStage(STAGE_DECODE))
+		{
+			color.rgb = PQ_to_Linear(color.rgb);
+			color.rgb *= (HDR10_MaxWhiteNits / sRGB_WhiteLevelNits);
+			color.rgb = BT2020_To_BT709(color.rgb);
+		}
+		if (HasStage(STAGE_GAMUT) && GAMUT_MAPPING_TYPE > 0)
+		{
+			FixColorGradingLUTNegativeLuminance(color.rgb);
+			bool sdr = LumaSettings.DisplayMode != 1;
+			if (GAMUT_MAPPING_TYPE == 2)
+				sdr = true;
+			else if (GAMUT_MAPPING_TYPE >= 3)
+				sdr = false;
+			if (sdr)
+				color.rgb = SimpleGamutClip(color.rgb, false);
+			else
+				color.rgb = BT2020_To_BT709(SimpleGamutClip(BT709_To_BT2020(color.rgb), true));
+		}
+		return float4(color.rgb, color.a);
 	}
 
 	// SDR: In this case, paper white (game and UI) would have been 1 (neutral for SDR), so we can ignore it if we want to

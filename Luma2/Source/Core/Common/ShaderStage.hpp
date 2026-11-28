@@ -13,5 +13,7 @@ enum class ShaderStage : uint8_t
    Geometry,
    Pixel,
    Compute,
+   Amplification,
+   Mesh,
 };
 } // namespace Luma

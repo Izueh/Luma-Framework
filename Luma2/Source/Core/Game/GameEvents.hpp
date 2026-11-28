@@ -226,7 +226,7 @@ struct Call
    const DispatchCall* dispatch = nullptr; // Null for a draw
    ID3D12PipelineState* pipeline = nullptr;
    // The game's shader per stage (ShaderStage order), 0 where the pipeline has none
-   std::array<uint32_t, 6> hashes = {};
+   std::array<uint32_t, Luma::Shaders::STAGE_COUNT> hashes = {};
    // The stages running a variant of the game's shader: the variant pipeline is bound
    Luma::Shaders::StageSet variant_stages;
 };

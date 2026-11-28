@@ -19,6 +19,7 @@
 #include <dxp/RecipeReport.hpp>
 #include <dxp/Version.hpp>
 #include <dxp/sm5/Recipe.hpp>
+#include <dxp/sm6/Recipe.hpp>
 #endif
 
 #include "Resources/ResourceBindings.hpp"
@@ -27,6 +28,7 @@
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Shaders/ShaderCache.hpp"
+#include "Shaders/ShaderCompiler.hpp"
 #include "Shaders/ShaderContainer.hpp"
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderInvariants.hpp"
@@ -109,6 +111,14 @@ Variants::Variant MakeVariant(uint32_t hash, std::string file, std::shared_ptr<c
 }
 
 #if LUMA_USE_DXP
+enum class ShaderModel : uint8_t
+{
+   Sm5,
+   Sm6,
+};
+
+using ParsedRecipe = std::variant<std::shared_ptr<const dxp::sm5::Recipe>, std::shared_ptr<const dxp::sm6::Recipe>>;
+
 // One recipe file, read at boot. Its strings are what its settings point at: a deque, they never move.
 struct Recipe
 {
@@ -124,6 +134,7 @@ struct Recipe
 
    std::string identity;
    std::filesystem::path path;
+   ShaderModel model = ShaderModel::Sm5;
    std::optional<ShaderStage> stage;
    std::string stage_name;
    std::string name;
@@ -136,7 +147,7 @@ struct Recipe
    // The recipe's LUMA_SPACE, typed by its default: the host's value, not a setting (Luma's space on D3D12, 0 on D3D11)
    std::optional<dxp::PrimitiveValue> luma_space;
    // Replaced by a reload. Lock order: `recipes_mutex` guards these three.
-   std::shared_ptr<const dxp::sm5::Recipe> parsed;
+   std::optional<ParsedRecipe> parsed;
    uint64_t content = 0; // FNV-1a of the file: a changed recipe misses the cache
    std::string error;
 };
@@ -155,16 +166,19 @@ bool index_dirty = false;
 struct Link
 {
    std::string identity;
+   ShaderModel model = ShaderModel::Sm5;
    std::optional<ShaderStage> stage;
-   std::shared_ptr<const dxp::sm5::Recipe> recipe;
+   ParsedRecipe recipe;
    dxp::PatchOptions options;
    std::string key; // What the recipe and its environment are, for the cache key
 };
 
 using Chain = std::vector<Link>;
 
-constexpr std::pair<std::string_view, ShaderStage> STAGE_FOLDERS[] = {{"VS", ShaderStage::Vertex}, {"HS", ShaderStage::Hull}, {"DS", ShaderStage::Domain},
+constexpr std::pair<std::string_view, ShaderStage> SM5_STAGE_FOLDERS[] = {{"VS", ShaderStage::Vertex}, {"HS", ShaderStage::Hull}, {"DS", ShaderStage::Domain},
    {"GS", ShaderStage::Geometry}, {"PS", ShaderStage::Pixel}, {"CS", ShaderStage::Compute}};
+constexpr std::pair<std::string_view, ShaderStage> SM6_STAGE_FOLDERS[] = {{"VS", ShaderStage::Vertex}, {"HS", ShaderStage::Hull}, {"DS", ShaderStage::Domain},
+   {"GS", ShaderStage::Geometry}, {"PS", ShaderStage::Pixel}, {"CS", ShaderStage::Compute}, {"AS", ShaderStage::Amplification}, {"MS", ShaderStage::Mesh}};
 
 std::optional<std::string> ReadFile(const std::filesystem::path& path)
 {
@@ -241,26 +255,41 @@ void Parse(Recipe& recipe)
       return;
    }
    // Before DXP runs: a crash inside it (it can't report one) then names the recipe
-   Log::Info("Shaders: parsing recipe {}", recipe.identity);
-   auto parsed = dxp::sm5::Recipe::ParseFromText(*text, recipe.identity);
-   if (!parsed)
+   Log::Info("Shaders: parsing {} recipe {}", recipe.model == ShaderModel::Sm6 ? "SM6" : "SM5", recipe.identity);
+   if (recipe.model == ShaderModel::Sm6)
    {
-      // Its shaders go back to the game's until it's fixed and reloaded
-      recipe.error = parsed.error();
-      recipe.parsed.reset();
-      Log::Error("Shaders: recipe {} doesn't parse: {}", recipe.identity, recipe.error);
-      return;
+      auto parsed = dxp::sm6::Recipe::ParseFromText(*text, recipe.identity);
+      if (!parsed)
+      {
+         recipe.error = parsed.error();
+         recipe.parsed.reset();
+         Log::Error("Shaders: SM6 recipe {} doesn't parse: {}", recipe.identity, recipe.error);
+         return;
+      }
+      recipe.parsed = std::make_shared<const dxp::sm6::Recipe>(std::move(*parsed));
+   }
+   else
+   {
+      auto parsed = dxp::sm5::Recipe::ParseFromText(*text, recipe.identity);
+      if (!parsed)
+      {
+         // Its shaders go back to the game's until it's fixed and reloaded
+         recipe.error = parsed.error();
+         recipe.parsed.reset();
+         Log::Error("Shaders: SM5 recipe {} doesn't parse: {}", recipe.identity, recipe.error);
+         return;
+      }
+      recipe.parsed = std::make_shared<const dxp::sm5::Recipe>(std::move(*parsed));
    }
    recipe.error.clear();
    recipe.content = Utils::Hash::Name(*text);
-   recipe.parsed = std::make_shared<const dxp::sm5::Recipe>(std::move(*parsed));
 }
 
-// The recipe files under the Recipes folder: its root for any stage, the stage folders for one. In each, in name order.
+// The recipe files under Recipes/SM5 and Recipes/SM6: each model root for any stage, its stage folders for one.
 void Scan(std::deque<Recipe>& found)
 {
    const std::filesystem::path root = System::Paths::GetRecipes();
-   const auto scan_folder = [&](const std::filesystem::path& folder, std::optional<ShaderStage> stage, std::string_view stage_name) {
+   const auto scan_folder = [&](const std::filesystem::path& folder, ShaderModel model, std::optional<ShaderStage> stage, std::string_view stage_name) {
       std::error_code error;
       std::vector<std::filesystem::path> files;
       for (std::filesystem::directory_iterator it(folder, error), end; !error && it != end; it.increment(error))
@@ -275,19 +304,33 @@ void Scan(std::deque<Recipe>& found)
          Recipe& recipe = found.emplace_back();
          recipe.identity = Utils::Strings::ToUtf8(std::filesystem::path(std::filesystem::relative(path, root, error).generic_wstring()));
          recipe.path = path;
+         recipe.model = model;
          recipe.stage = stage;
          recipe.stage_name = stage_name;
       }
    };
-   scan_folder(root, std::nullopt, {});
-   for (const auto& [name, stage] : STAGE_FOLDERS)
-      scan_folder(root / name, stage, name);
+   const auto scan_model = [&](const std::filesystem::path& model_root, ShaderModel model, std::span<const std::pair<std::string_view, ShaderStage>> stages) {
+      scan_folder(model_root, model, std::nullopt, {});
+      for (const auto& [name, stage] : stages)
+         scan_folder(model_root / name, model, stage, name);
+      std::error_code error;
+      for (std::filesystem::directory_iterator it(model_root, error), end; !error && it != end; it.increment(error))
+      {
+         const std::string name = Utils::Strings::ToUtf8(it->path().filename());
+         if (it->is_directory(error) && !std::ranges::contains(stages, name, &std::pair<std::string_view, ShaderStage>::first))
+            Log::Warning("Shaders: recipe folder {}/{} isn't a valid stage, it's ignored", model == ShaderModel::Sm6 ? "SM6" : "SM5", name);
+      }
+   };
+   scan_model(root / "SM5", ShaderModel::Sm5, SM5_STAGE_FOLDERS);
+   scan_model(root / "SM6", ShaderModel::Sm6, SM6_STAGE_FOLDERS);
    std::error_code error;
    for (std::filesystem::directory_iterator it(root, error), end; !error && it != end; it.increment(error))
    {
       const std::string name = Utils::Strings::ToUtf8(it->path().filename());
-      if (it->is_directory(error) && !std::ranges::contains(STAGE_FOLDERS, name, &std::pair<std::string_view, ShaderStage>::first))
-         Log::Warning("Shaders: recipe folder {} isn't a stage (VS, HS, DS, GS, PS, CS), it's ignored", name);
+      if (it->is_directory(error) && name != "SM5" && name != "SM6")
+         Log::Warning("Shaders: recipe folder {} must live under Recipes/SM5 or Recipes/SM6, it's ignored", name);
+      else if (it->is_regular_file(error) && name.ends_with(".recipe.yml"))
+         Log::Warning("Shaders: recipe {} must live under Recipes/SM5 or Recipes/SM6, it's ignored", name);
    }
 }
 
@@ -295,7 +338,7 @@ void Scan(std::deque<Recipe>& found)
 // env: {VAR: {label, tooltip, visibility}}
 void ReadMeta(Recipe& recipe)
 {
-   const std::optional<dxp::MetaValue>& meta = recipe.parsed ? recipe.parsed->GetMeta() : std::optional<dxp::MetaValue>();
+   const std::optional<dxp::MetaValue> meta = recipe.parsed ? std::visit([](const auto& r) { return r->GetMeta(); }, *recipe.parsed) : std::nullopt;
    recipe.name = recipe.identity;
    if (!meta)
       return;
@@ -325,9 +368,10 @@ void RegisterSettings(Recipe& recipe)
    Settings::Register(std::span(&recipe_settings.back(), 1), Settings::Kind::Recipe);
    if (!recipe.parsed)
       return;
-   const std::optional<dxp::MetaValue>& meta = recipe.parsed->GetMeta();
+   const std::optional<dxp::MetaValue> meta = std::visit([](const auto& r) { return r->GetMeta(); }, *recipe.parsed);
    const dxp::MetaValue* env_meta = meta ? meta->Find("env") : nullptr;
-   std::vector<std::pair<std::string, dxp::PrimitiveValue>> env(recipe.parsed->GetEnv().begin(), recipe.parsed->GetEnv().end());
+   const auto& env_map = std::visit([](const auto& r) -> const std::unordered_map<std::string, dxp::PrimitiveValue>& { return r->GetEnv(); }, *recipe.parsed);
+   std::vector<std::pair<std::string, dxp::PrimitiveValue>> env(env_map.begin(), env_map.end());
    std::ranges::sort(env, {}, &std::pair<std::string, dxp::PrimitiveValue>::first);
    recipe.luma_space.reset();
    for (auto& [name, value] : env)
@@ -376,8 +420,9 @@ Chain MakeChain(Api api)
          continue;
       Link& link = chain.emplace_back();
       link.identity = recipe.identity;
+      link.model = recipe.model;
       link.stage = recipe.stage;
-      link.recipe = recipe.parsed;
+      link.recipe = *recipe.parsed;
       link.key = std::format("{}#{:016X}", recipe.identity, recipe.content);
       for (const Recipe::Env& variable : recipe.env)
       {
@@ -455,14 +500,15 @@ struct ChainResult
    std::string report;
 };
 
-ChainResult RunChain(const Database::Shader& shader, const Chain& chain)
+ChainResult RunChain(const Database::Shader& shader, const Chain& chain, bool dxil)
 {
    ChainResult result;
+   const ShaderModel target_model = dxil ? ShaderModel::Sm6 : ShaderModel::Sm5;
    std::string chain_key = std::format("dxp {}", DXP_VERSION_STRING);
    std::vector<const Link*> links;
    for (const Link& link : chain)
    {
-      if (link.stage && *link.stage != shader.stage)
+      if (link.model != target_model || (link.stage && *link.stage != shader.stage))
          continue;
       links.push_back(&link);
       chain_key += "|" + link.key;
@@ -510,7 +556,7 @@ ChainResult RunChain(const Database::Shader& shader, const Chain& chain)
       std::expected<dxp::RecipeReport, std::string> report;
       try
       {
-         report = link->recipe->Execute(input, link_options);
+         report = std::visit([&](const auto& recipe) { return recipe->Execute(input, link_options); }, link->recipe);
       }
       catch (const std::exception& exception)
       {
@@ -540,6 +586,16 @@ ChainResult RunChain(const Database::Shader& shader, const Chain& chain)
    }
    if (!result.error.empty())
       return result;
+   if (dxil && !code.empty() && !Compiler::IsSignedDxil(code))
+   {
+      if (std::expected<Bytecode, std::string> signed_dxil = Compiler::SignDxil(code))
+         code = std::move(*signed_dxil);
+      else
+      {
+         result.error += std::format("DXIL signing failed: {}\n", signed_dxil.error());
+         return result;
+      }
+   }
    result.entry.modified = !code.empty();
    for (const auto& [handle, binding] : bindings)
       result.entry.bindings.push_back({handle, std::string(GetKindName(binding.binding_class)), binding.register_index, binding.space});
@@ -648,12 +704,9 @@ Outcome Patch(const Database::Shader& shader, const Job& job)
 #if LUMA_USE_DXP
    if (bytecode.empty() && !job.chain.empty())
    {
-      if (const std::optional<Container::Program> program = Container::GetProgram(shader.bytecode); program && program->dxil)
-      {
-         LUMA_UNIMPLEMENTED("Shaders::Patching of DXIL shaders (DXP's SM6 recipes)");
-         return outcome;
-      }
-      ChainResult result = RunChain(shader, job.chain);
+      const std::optional<Container::Program> program = Container::GetProgram(shader.bytecode);
+      const bool dxil = program && program->dxil;
+      ChainResult result = RunChain(shader, job.chain, dxil);
       outcome.considered = result.ran;
       info.cached = result.cached;
       info.recipes = std::move(result.entry.recipes);
@@ -1006,6 +1059,7 @@ std::vector<RecipeInfo> GetRecipes([[maybe_unused]] const Store* store)
          info.identity = recipe.identity;
          info.name = recipe.name;
          info.description = recipe.description;
+         info.shader_model = recipe.model == ShaderModel::Sm6 ? "SM6" : "SM5";
          info.stage = recipe.stage_name;
          info.key = recipe.key;
          info.enabled = Settings::Get<bool>(recipe.key);

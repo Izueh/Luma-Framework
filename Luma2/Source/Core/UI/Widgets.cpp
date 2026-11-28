@@ -49,7 +49,7 @@ ImVec4 GetStageTint(ShaderStage stage)
 
 std::string_view GetStageName(ShaderStage stage)
 {
-   constexpr std::string_view NAMES[] = {"vertex", "hull", "domain", "geometry", "pixel", "compute"};
+   constexpr std::string_view NAMES[] = {"vertex", "hull", "domain", "geometry", "pixel", "compute", "amplification", "mesh"};
    return NAMES[size_t(stage)];
 }
 

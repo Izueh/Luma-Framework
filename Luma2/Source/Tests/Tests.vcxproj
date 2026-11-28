@@ -60,4 +60,11 @@
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <PropertyGroup>
+    <LumaDxcDir Condition="'$(LumaDxcDir)'=='' and Exists('$(Luma2ExternalDir)DXC\dxcompiler.dll')">$(Luma2ExternalDir)DXC\</LumaDxcDir>
+    <LumaDxcDir Condition="'$(LumaDxcDir)'=='' and Exists('$(WindowsSdkDir)bin\$(TargetPlatformVersion)\$(PlatformTarget)\dxcompiler.dll')">$(WindowsSdkDir)bin\$(TargetPlatformVersion)\$(PlatformTarget)\</LumaDxcDir>
+  </PropertyGroup>
+  <Target Name="LumaCopyTestDxc" AfterTargets="Build" Condition="'$(Platform)'=='x64' and '$(LumaDxcDir)'!='' and Exists('$(LumaDxcDir)dxcompiler.dll')">
+    <Copy SourceFiles="$(LumaDxcDir)dxcompiler.dll;$(LumaDxcDir)dxil.dll" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

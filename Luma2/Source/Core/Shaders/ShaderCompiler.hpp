@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <expected>
 #include <filesystem>
 #include <optional>
 #include <span>
@@ -12,10 +13,10 @@
 
 #include "Shaders/Shaders.hpp"
 
-// FXC (D3DCompiler_47.dll, loaded on first use) for DXBC targets ("ps_5_0"). Files and their #include lines are named from
-// the Shaders root ("Includes/Color/Color.hlsl") and found through `roots`, the first holding them winning. One thread uses it
-// at a time, whatever the call (FXC isn't thread safe): each call below takes the Lock for its duration, so shader
-// creation waits for the compile in flight, not for a whole build.
+// FXC (D3DCompiler_47.dll) for DXBC targets ("ps_5_0", "ps_5_1") and DXC (dxcompiler.dll + dxil.dll) for DXIL targets
+// ("ps_6_0".."lib_6_8"), both loaded on first use. Files and their #include lines are named from the Shaders root
+// ("Includes/Color/Color.hlsl") and found through `roots`, the first holding them winning. FXC is used by one thread at a
+// time (it isn't thread safe): each FXC call takes the Lock for its duration.
 namespace Luma {
 namespace Shaders {
 namespace Compiler {
@@ -28,6 +29,14 @@ public:
    ~Lock();
    Lock(const Lock&) = delete;
    Lock& operator=(const Lock&) = delete;
+};
+
+struct DxcStatus
+{
+   bool loaded = false;
+   bool signer_loaded = false;
+   std::string path;
+   uint64_t version = 0;
 };
 
 struct Define
@@ -53,23 +62,32 @@ struct Compiled
    bool failed = false;
 };
 
-Preprocessed Preprocess(std::span<const std::filesystem::path> roots, std::string_view file, std::span<const Define> defines);
+bool IsDxilTarget(std::string_view target);
+bool IsSignedDxil(std::span<const uint8_t> bytecode);
+// Validates and signs a DXIL container with dxil.dll (IDxcValidator)
+std::expected<Bytecode, std::string> SignDxil(std::span<const uint8_t> bytecode);
+DxcStatus GetDxcStatus();
+
+Preprocessed Preprocess(std::span<const std::filesystem::path> roots, std::string_view file, std::span<const Define> defines, std::string_view target = {});
 Compiled Compile(std::span<const std::filesystem::path> roots, std::string_view file, std::span<const Define> defines, std::string_view target,
    std::string_view entry);
 
 // D3DReflect: `iid` is the API's reflection interface. False if FXC isn't there or the bytecode has no reflection data.
 bool Reflect(std::span<const uint8_t> bytecode, REFIID iid, void** reflector);
+// IDxcUtils::CreateReflection for DXIL bytecode (`ID3D12ShaderReflection`)
+bool ReflectDxil(std::span<const uint8_t> bytecode, REFIID iid, void** reflector);
 std::optional<std::string> Disassemble(std::span<const uint8_t> bytecode);
 
 struct Binding
 {
    std::string name;
    uint32_t slot = 0;
+   uint32_t space = 0;
 };
 
-// The cbuffers DXBC bytecode declares (the ones it reads: the compiler drops the others), by name. Empty when it was stripped.
+// The cbuffers DXBC or DXIL bytecode declares (the ones it reads: the compiler drops the others), by name. Empty when stripped.
 std::vector<Binding> ReflectConstantBufferBindings(std::span<const uint8_t> bytecode);
-// Its textures (shader resource views of a texture): name and register
+// Its textures (shader resource views of a texture): name, register and space
 std::vector<Binding> ReflectTextureBindings(std::span<const uint8_t> bytecode);
 
 #if DEVELOPMENT

@@ -278,6 +278,16 @@ Status GetStatus()
       D3D12Info& d3d12 = status.d3d12.emplace();
       const Shaders::Database::D3D12::Stats database = Shaders::Database::D3D12::GetStats();
       d3d12.pipelines = database.pipelines;
+      d3d12.mesh_pipelines = database.mesh_pipelines;
+      d3d12.state_objects = database.state_objects;
+      const Shaders::Compiler::DxcStatus dxc = Shaders::Compiler::GetDxcStatus();
+      d3d12.dxc_loaded = dxc.loaded;
+      d3d12.dxil_signer_loaded = dxc.signer_loaded;
+      for (const Shaders::Database::Shader* shader : Shaders::Database::GetShaders())
+      {
+         if (Shaders::Compiler::IsDxilTarget(shader->target))
+            d3d12.dxil_shaders++;
+      }
       d3d12.extended_root_signatures = database.extended_signatures;
       d3d12.unextended_root_signatures = database.unextended_signatures;
       d3d12.largest_extended_root_signature_dwords = database.largest_extended_dwords;
@@ -360,6 +370,8 @@ std::string DescribeRootSignatures()
    if (const uint32_t rejected = Shaders::Invariants::GetRejectedCount())
       text += std::format("; {} variant{} refused by D3D12's invariants", rejected, rejected == 1 ? "" : "s");
 #endif
+   const Shaders::Compiler::DxcStatus dxc = Shaders::Compiler::GetDxcStatus();
+   text += std::format("; DXC: {} (dxil.dll: {})", dxc.loaded ? "loaded" : "missing", dxc.signer_loaded ? "loaded" : "missing");
    return text;
 }
 } // namespace Trace

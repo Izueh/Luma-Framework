@@ -36,8 +36,9 @@ void PostCreatePipelineLibrary(size_t blob_size, HRESULT result);
 // Extends the game's root signature with Luma's parameters, falls back to the game's blob if refused, and tracks the created signature.
 HRESULT CreateRootSignature(std::span<const uint8_t> game_blob, void** root_signature,
    const std::function<HRESULT(std::span<const uint8_t>)>& call_original);
-void PostCreateRootSignatureFromSubobjectInLibrary();
-void PostCreateStateObject();
+HRESULT CreateRootSignatureFromSubobjectInLibrary(std::span<const uint8_t> library, std::wstring_view subobject_name, void** root_signature,
+   const std::function<HRESULT(std::span<const uint8_t>)>& create_from_blob, const std::function<HRESULT()>& call_original);
+void PostCreateStateObject(ID3D12Device* device, const D3D12_STATE_OBJECT_DESC* desc, void* state_object);
 
 // Descriptor heaps and views
 // Extends shader-visible heaps with Luma's tail (retrying smaller sizes before falling back to the game's desc) and tracks the heap.

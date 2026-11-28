@@ -33,7 +33,7 @@ namespace CB
   // Runtime display composition and pipeline-space settings (32 bytes, 16-byte aligned).
   struct DisplayCompositionSettings
   {
-    uint PostProcessSpaceType; // 0 Gamma, 1 Linear, 2 Linear until UI
+    uint PostProcessSpaceType; // 0 Gamma, 1 Linear, 2 Linear until UI, 3 PQ
     uint VanillaEncodingType; // 0 sRGB, 1 Gamma 2.2
     uint GammaCorrectionType; // 0 sRGB, 1 Gamma 2.2, 2..4 hybrid modes
     uint GamutMappingType; // 0 None, 1 Auto, 2 SDR BT.709, 3 HDR BT.2020
@@ -119,6 +119,9 @@ namespace CB
     uint Stages;
     // The game's image size over the real buffer's: 1 when they match
     float2 SourceScale;
+    // Input mode: 0 mod active (uses DisplayComposition.PostProcessSpaceType), 1 vanilla gamma, 2 vanilla linear, 3 vanilla HDR10 PQ
+    uint InputMode;
+    float3 Padding;
   };
 }
 

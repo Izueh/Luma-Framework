@@ -14,6 +14,7 @@
 
 #include "Common/ShaderStage.hpp"
 #include "Shaders/ShaderDatabase.hpp"
+#include "Shaders/ShaderStages.hpp"
 
 // The game's pipelines and root signatures on D3D12, each in its object's private data: a pipeline's shaders are the same
 // Database::Shader as D3D11's (by hash), a root signature's layout is what its extension and trace read.
@@ -73,7 +74,7 @@ struct DescCopy
    std::vector<std::byte> bytes;
    std::vector<std::unique_ptr<std::byte[]>> storage;
    // Where each stage's D3D12_SHADER_BYTECODE is in the bytes (ShaderStage order), SIZE_MAX for a stage it doesn't have
-   std::array<size_t, 6> stages = {SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX};
+   std::array<size_t, STAGE_COUNT> stages = {SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX, SIZE_MAX};
    // Of everything but the shaders' bytecode and the root signature object, for Luma's pipeline library
    uint64_t content_hash = 0;
 };
@@ -92,7 +93,7 @@ struct Pipeline
 {
    PipelineKind kind = PipelineKind::Graphics;
    bool from_library = false; // Loaded from the game's ID3D12PipelineLibrary
-   std::array<Shader*, 6> shaders = {}; // ShaderStage order
+   std::array<Shader*, STAGE_COUNT> shaders = {}; // ShaderStage order
    Microsoft::WRL::ComPtr<ID3D12RootSignature> root_signature;
    const RootLayout* root_layout = nullptr; // Null for one Luma didn't see created
    bool embedded_root_signature = false; // No root signature in the desc: it's in the bytecode
@@ -104,7 +105,7 @@ struct Pipeline
 struct PipelineDesc
 {
    PipelineKind kind = PipelineKind::Graphics;
-   std::array<std::span<const uint8_t>, 6> stages;
+   std::array<std::span<const uint8_t>, STAGE_COUNT> stages;
    ID3D12RootSignature* root_signature = nullptr;
    // A stream desc with a subobject type this build doesn't know: what came before it was read
    bool unknown_subobject = false;
@@ -152,12 +153,16 @@ const RootLayout* FindRootLayout(ID3D12RootSignature* root_signature);
 // Any thread: the game created (or loaded) `pipeline` from `desc`, `copy` (null when not copied) its deep copy
 const Pipeline* TrackPipeline(ID3D12Device* device, const PipelineDesc& desc, std::shared_ptr<const DescCopy> copy, bool from_library, ID3D12PipelineState* pipeline);
 const Pipeline* FindPipeline(ID3D12PipelineState* pipeline);
+// Any thread: tracks DXIL libraries inside a DXR/Work Graphs state object without building state-object variants
+void TrackStateObject(ID3D12Device* device, const D3D12_STATE_OBJECT_DESC* desc, ID3D12StateObject* state_object);
 
 // Stats
 
 struct Stats
 {
    uint32_t pipelines = 0; // The game's, alive
+   uint32_t mesh_pipelines = 0; // Alive pipelines with AS or MS stages
+   uint32_t state_objects = 0; // Alive ID3D12StateObject instances
    uint32_t extended_signatures = 0; // Created so far
    uint32_t unextended_signatures = 0; // Created as the game's: local, over the size limit, a conflict, refused, or Luma's shaders not needed
    uint32_t largest_extended_dwords = 0;

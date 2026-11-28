@@ -515,17 +515,29 @@ TEST_CASE("Shaders: a D3D12 format set recorded for a pipeline is found again fo
    Library::ReleaseDeviceObjects(device.Get());
 }
 
-TEST_CASE("Shaders: D3D12 builds every DXBC target below SM5.1 as SM5.1 and refuses DXIL ones, D3D11 takes them as they are")
+TEST_CASE("Shaders: D3D12 upgrades DXBC below SM5.1 to SM5.1 and keeps DXIL 6.x, D3D11 keeps DXBC and refuses DXIL")
 {
    CHECK(Shaders::GetTarget("ps_4_0", Api::D3D12) == "ps_5_1");
    CHECK(Shaders::GetTarget("vs_4_1", Api::D3D12) == "vs_5_1");
    CHECK(Shaders::GetTarget("cs_5_0", Api::D3D12) == "cs_5_1");
    CHECK(Shaders::GetTarget("ps_5_1", Api::D3D12) == "ps_5_1");
-   CHECK(Shaders::GetTarget("ps_6_0", Api::D3D12).empty());
-   CHECK(Shaders::GetTarget("cs_6_6", Api::D3D12).empty());
+   CHECK(Shaders::GetTarget("ps_6_0", Api::D3D12) == "ps_6_0");
+   CHECK(Shaders::GetTarget("cs_6_6", Api::D3D12) == "cs_6_6");
+   CHECK(Shaders::GetTarget("ms_6_5", Api::D3D12) == "ms_6_5");
+   CHECK(Shaders::GetTarget("as_6_5", Api::D3D12) == "as_6_5");
+   CHECK(Shaders::GetTarget("lib_6_6", Api::D3D12) == "lib_6_6");
    CHECK(Shaders::GetTarget("ps_4_0", Api::D3D11) == "ps_4_0");
    CHECK(Shaders::GetTarget("ps_5_0", Api::D3D11) == "ps_5_0");
-   CHECK(Shaders::GetTarget("ps_6_0", Api::D3D11) == "ps_6_0");
+   CHECK(Shaders::GetTarget("ps_6_0", Api::D3D11).empty());
+   CHECK(Shaders::GetTarget("lib_6_6", Api::D3D11).empty());
+
+   // Files::Parse supports 6-char and 7-char SM6 targets
+   const std::optional<File> mesh = Shaders::Files::Parse("Nanite_MS_0x12345678.ms_6_5.hlsl", REDIRECTS);
+   REQUIRE(mesh);
+   CHECK(mesh->target == "ms_6_5");
+   const std::optional<File> lib = Shaders::Files::Parse("RayGen_0x87654321.lib_6_6.hlsl", REDIRECTS);
+   REQUIRE(lib);
+   CHECK(lib->target == "lib_6_6");
 }
 
 #if DEVELOPMENT || TEST
@@ -938,3 +950,188 @@ TEST_CASE("Compiler: FXC is used by one thread at a time")
    CHECK(finished);
    CHECK(disassembled);
 }
+
+#ifdef LUMA_RESOURCES_DIR
+TEST_CASE("DXIL: DXC preprocesses, compiles, signs, reflects and matches CBuffers.hlsl layout")
+{
+   const Shaders::Compiler::DxcStatus status = Shaders::Compiler::GetDxcStatus();
+   REQUIRE(status.loaded);
+   REQUIRE(status.signer_loaded);
+
+   const std::filesystem::path temp_root = std::filesystem::temp_directory_path() / L"Luma2DxcTest";
+   std::error_code ec;
+   std::filesystem::create_directories(temp_root, ec);
+   const std::filesystem::path shader_path = temp_root / L"Test_DXIL.hlsl";
+   {
+      std::ofstream out(shader_path, std::ios::binary | std::ios::trunc);
+      out << "#include \"Includes/Core/Common.hlsl\"\n"
+             "#include \"Includes/Core/Samplers.hlsl\"\n"
+             "Texture2D<float4> fast_noise : register(t127, LUMA_TEXTURE_SPACE);\n"
+             "float4 main(float4 pos : SV_Position) : SV_Target {\n"
+             "   return float4(LumaSettings.SwapchainSize, LumaData.CustomData1, fast_noise.Load(int3(0, 0, 0)).x);\n"
+             "}\n";
+   }
+   const std::array<std::filesystem::path, 2> roots = {temp_root, std::filesystem::path(LUMA_RESOURCES_DIR) / L"Global" / L"Shaders"};
+   const std::vector<Shaders::Compiler::Define> defines = {
+      {"_D3D12", "1"},
+      {"DEVELOPMENT", "1"},
+      {"LUMA_SETTINGS_CB_INDEX", "b13, space100"},
+      {"LUMA_DATA_CB_INDEX", "b12, space100"},
+      {"LUMA_TEXTURE_SPACE", "space100"},
+      {"LUMA_POINT_CLAMP_SAMPLER_INDEX", "s0, space100"},
+      {"LUMA_LINEAR_CLAMP_SAMPLER_INDEX", "s1, space100"},
+      {"LUMA_LINEAR_WRAP_SAMPLER_INDEX", "s2, space100"},
+      {"LUMA_ANISOTROPIC_WRAP_SAMPLER_INDEX", "s3, space100"},
+      {"LUMA_POINT_WRAP_SAMPLER_INDEX", "s4, space100"},
+   };
+   const Shaders::Compiler::Preprocessed preprocessed = Shaders::Compiler::Preprocess(roots, "Test_DXIL.hlsl", defines, "ps_6_6");
+   REQUIRE_FALSE(preprocessed.failed);
+   CHECK_FALSE(preprocessed.text.empty());
+
+   const Shaders::Compiler::Compiled compiled = Shaders::Compiler::Compile(roots, "Test_DXIL.hlsl", defines, "ps_6_6", "main");
+   INFO(compiled.messages);
+   REQUIRE_FALSE(compiled.failed);
+   REQUIRE_FALSE(compiled.bytecode.empty());
+   CHECK(Shaders::Container::HasChunk(compiled.bytecode, "DXIL"));
+   CHECK(Shaders::Container::GetTarget(compiled.bytecode) == "ps_6_6");
+   CHECK(Shaders::Compiler::IsSignedDxil(compiled.bytecode));
+
+   // Reflection reads cbuffer & texture bindings with space 100
+   const std::vector<Shaders::Compiler::Binding> cbuffers = Shaders::Compiler::ReflectConstantBufferBindings(compiled.bytecode);
+   CHECK(std::ranges::any_of(cbuffers, [](const auto& b) { return b.name == "LumaSettings" && b.slot == 13 && b.space == 100; }));
+   CHECK(std::ranges::any_of(cbuffers, [](const auto& b) { return b.name == "LumaData" && b.slot == 12 && b.space == 100; }));
+   const std::vector<Shaders::Compiler::Binding> textures = Shaders::Compiler::ReflectTextureBindings(compiled.bytecode);
+   CHECK(std::ranges::any_of(textures, [](const auto& b) { return b.name == "fast_noise" && b.slot == 127 && b.space == 100; }));
+
+   // Cbuffer layout offsets under DXC match C++ CB::LumaGlobalSettings
+   const std::vector<Shaders::Compiler::ConstantBuffer> layouts = Shaders::Compiler::ReflectConstantBuffers(compiled.bytecode);
+   const auto settings_it = std::ranges::find(layouts, "LumaSettings", &Shaders::Compiler::ConstantBuffer::name);
+   REQUIRE(settings_it != layouts.end());
+   const auto find_var = [&](std::string_view name) {
+      return std::ranges::find(settings_it->variables, name, &Shaders::Compiler::Variable::name);
+   };
+   REQUIRE(find_var("LumaSettings.DisplayComposition.PostProcessSpaceType") != settings_it->variables.end());
+   CHECK(find_var("LumaSettings.DisplayComposition.PostProcessSpaceType")->offset == offsetof(CB::LumaGlobalSettings, DisplayComposition));
+
+   // Disassembly works for DXIL
+   CHECK(Shaders::Compiler::Disassemble(compiled.bytecode).has_value());
+
+   // SignDxil re-signs a zeroed hash container
+   Shaders::Bytecode unsigned_copy = compiled.bytecode;
+   std::memset(unsigned_copy.data() + 4, 0, 16);
+   CHECK_FALSE(Shaders::Compiler::IsSignedDxil(unsigned_copy));
+   const std::expected<Shaders::Bytecode, std::string> resigned = Shaders::Compiler::SignDxil(unsigned_copy);
+   REQUIRE(resigned.has_value());
+   CHECK(Shaders::Compiler::IsSignedDxil(*resigned));
+
+   // D3D12 invariants accept the DXIL variant
+   const std::array<uint32_t, 1> tex_slots = {127};
+   const Shaders::Invariants::Findings findings = Shaders::Invariants::CheckD3D12(compiled.bytecode,
+      {.space = 100, .settings_slot = 13, .data_slot = 12, .reads_luma = true, .static_samplers = true, .texture_slots = tex_slots});
+   CHECK(findings.errors.empty());
+
+   std::filesystem::remove_all(temp_root, ec);
+}
+
+TEST_CASE("DXIL: D3D12 WARP accepts DXIL PSO, v1.2 bindless root signature, and AS/MS stage tracking")
+{
+   const Shaders::Compiler::DxcStatus status = Shaders::Compiler::GetDxcStatus();
+   REQUIRE(status.loaded);
+   REQUIRE(status.signer_loaded);
+
+   const std::filesystem::path temp_root = std::filesystem::temp_directory_path() / L"Luma2DxcWarpTest";
+   std::error_code ec;
+   std::filesystem::create_directories(temp_root, ec);
+   {
+      std::ofstream vs(temp_root / L"vs.hlsl", std::ios::binary | std::ios::trunc);
+      vs << "float4 main(uint id : SV_VertexID) : SV_Position { return float4(0, 0, 0, 1); }\n";
+      std::ofstream ps(temp_root / L"ps.hlsl", std::ios::binary | std::ios::trunc);
+      ps << "cbuffer LumaSettings : register(b13, space100) { float4 val; }\n"
+            "float4 main(float4 pos : SV_Position) : SV_Target { return val; }\n";
+      std::ofstream ms(temp_root / L"ms.hlsl", std::ios::binary | std::ios::trunc);
+      ms << "struct V { float4 pos : SV_Position; };\n"
+            "[outputtopology(\"triangle\")] [numthreads(1, 1, 1)]\n"
+            "void main(out vertices V verts[3], out indices uint3 tris[1]) {\n"
+            "   SetMeshOutputCounts(3, 1);\n"
+            "   verts[0].pos = float4(0, 0, 0, 1); verts[1].pos = float4(1, 0, 0, 1); verts[2].pos = float4(0, 1, 0, 1);\n"
+            "   tris[0] = uint3(0, 1, 2);\n"
+            "}\n";
+   }
+   const std::array<std::filesystem::path, 1> roots = {temp_root};
+   const Shaders::Compiler::Compiled vs6 = Shaders::Compiler::Compile(roots, "vs.hlsl", {}, "vs_6_0", "main");
+   const Shaders::Compiler::Compiled ps6 = Shaders::Compiler::Compile(roots, "ps.hlsl", {}, "ps_6_0", "main");
+   const Shaders::Compiler::Compiled ms6 = Shaders::Compiler::Compile(roots, "ms.hlsl", {}, "ms_6_5", "main");
+   REQUIRE_FALSE(vs6.failed);
+   REQUIRE_FALSE(ps6.failed);
+   REQUIRE_FALSE(ms6.failed);
+
+   // Container::GetStage maps Mesh shader (kind 13) to ShaderStage::Mesh
+   const std::optional<Shaders::Container::Program> ms_prog = Shaders::Container::GetProgram(ms6.bytecode);
+   REQUIRE(ms_prog.has_value());
+   CHECK(ms_prog->dxil);
+   CHECK(Shaders::Container::GetStage(*ms_prog) == ShaderStage::Mesh);
+
+   // D3D12 WARP device: extend a v1.2 root signature with bindless flag, read layout natively, and create a DXIL PSO
+   Microsoft::WRL::ComPtr<IDXGIFactory4> factory;
+   REQUIRE(SUCCEEDED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))));
+   Microsoft::WRL::ComPtr<IDXGIAdapter> warp;
+   REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&warp))));
+   Microsoft::WRL::ComPtr<ID3D12Device> device;
+   REQUIRE(SUCCEEDED(D3D12CreateDevice(warp.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
+
+   D3D12_ROOT_SIGNATURE_DESC1 rs_desc = {.Flags = D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED};
+   D3D12_VERSIONED_ROOT_SIGNATURE_DESC versioned = {.Version = D3D_ROOT_SIGNATURE_VERSION_1_1, .Desc_1_1 = rs_desc};
+   Microsoft::WRL::ComPtr<ID3DBlob> rs_blob;
+   REQUIRE(SUCCEEDED(D3D12SerializeVersionedRootSignature(&versioned, &rs_blob, nullptr)));
+   const Shaders::RootSignatures::D3D12::Extended extended = Shaders::RootSignatures::D3D12::Extend(GetBytes(rs_blob.Get()));
+   REQUIRE_FALSE(extended.blob.empty());
+   Microsoft::WRL::ComPtr<ID3D12RootSignature> rs;
+   REQUIRE(SUCCEEDED(device->CreateRootSignature(0, extended.blob.data(), extended.blob.size(), IID_PPV_ARGS(&rs))));
+   const Shaders::Database::D3D12::RootLayout* layout =
+      Shaders::Database::D3D12::TrackRootSignature(GetBytes(rs_blob.Get()), rs.Get(), extended.luma_parameter, extended.table, extended.static_samplers);
+   REQUIRE(layout);
+   CHECK((layout->flags & D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED) != 0);
+
+   D3D12_GRAPHICS_PIPELINE_STATE_DESC pso_desc = {};
+   pso_desc.pRootSignature = rs.Get();
+   pso_desc.VS = {vs6.bytecode.data(), vs6.bytecode.size()};
+   pso_desc.PS = {ps6.bytecode.data(), ps6.bytecode.size()};
+   pso_desc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+   pso_desc.SampleMask = UINT_MAX;
+   pso_desc.RasterizerState = {D3D12_FILL_MODE_SOLID, D3D12_CULL_MODE_NONE, FALSE, 0, 0.f, 0.f, TRUE, FALSE, FALSE, 0, D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF};
+   pso_desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+   pso_desc.NumRenderTargets = 1;
+   pso_desc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+   pso_desc.SampleDesc = {1, 0};
+   Microsoft::WRL::ComPtr<ID3D12PipelineState> pso;
+   CHECK(SUCCEEDED(device->CreateGraphicsPipelineState(&pso_desc, IID_PPV_ARGS(&pso))));
+
+   // Stream desc with MS stage tracks ShaderStage::Mesh in DescribePipeline and CopyDesc
+   struct alignas(void*) StreamMs
+   {
+      D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type = D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS;
+      D3D12_SHADER_BYTECODE ms;
+   };
+   struct alignas(void*) StreamPs
+   {
+      D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type = D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS;
+      D3D12_SHADER_BYTECODE ps;
+   };
+   struct StreamDesc
+   {
+      StreamMs ms;
+      StreamPs ps;
+   } stream_data = {{D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS, {ms6.bytecode.data(), ms6.bytecode.size()}},
+      {D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS, {ps6.bytecode.data(), ps6.bytecode.size()}}};
+   const D3D12_PIPELINE_STATE_STREAM_DESC stream = {sizeof(stream_data), &stream_data};
+   const Shaders::Database::D3D12::PipelineDesc described = Shaders::Database::D3D12::DescribePipeline(stream);
+   CHECK(described.mesh_shaders);
+   CHECK(described.stages[size_t(ShaderStage::Mesh)].size() == ms6.bytecode.size());
+   const std::shared_ptr<const Shaders::Database::D3D12::DescCopy> copied =
+      Shaders::Database::D3D12::CopyDesc(Shaders::Database::D3D12::PipelineKind::Stream, &stream);
+   REQUIRE(copied);
+   CHECK(copied->stages[size_t(ShaderStage::Mesh)] != SIZE_MAX);
+
+   std::filesystem::remove_all(temp_root, ec);
+}
+#endif

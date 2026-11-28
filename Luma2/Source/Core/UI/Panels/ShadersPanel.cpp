@@ -51,12 +51,12 @@ std::string cached_source_text;
 std::string cached_disasm_key;
 std::string cached_disasm_text;
 
-// The stage a replacement's target names ("ps_5_0"), for a hash the game didn't create yet
+// The stage a replacement's target names ("ps_5_0", "ms_6_5"), for a hash the game didn't create yet
 ShaderStage GetStage(std::string_view file)
 {
    const size_t dot = file.rfind(".hlsl");
    const std::string_view prefix = dot != std::string_view::npos && dot >= 6 ? file.substr(dot - 6, 2) : std::string_view();
-   constexpr std::string_view PREFIXES[] = {"vs", "hs", "ds", "gs", "ps", "cs"};
+   constexpr std::string_view PREFIXES[] = {"vs", "hs", "ds", "gs", "ps", "cs", "as", "ms"};
    for (size_t i = 0; i < std::size(PREFIXES); i++)
    {
       if (prefix == PREFIXES[i])

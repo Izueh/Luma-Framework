@@ -74,7 +74,7 @@ std::string last_tracked_resource;
 // The events `unique_only` keeps, for the frame
 std::vector<bool> first_of_shader;
 // Expanded constant buffer drawer per stage (nullopt = collapsed by default)
-std::array<std::optional<uint32_t>, 6> open_cb_slots = {};
+std::array<std::optional<uint32_t>, Shaders::STAGE_COUNT> open_cb_slots = {};
 // Show full raw float4 buffer instead of stopping at shader reflection
 bool cb_full_raw = false;
 
@@ -792,7 +792,7 @@ struct ContentsTable
 };
 
 constexpr uint64_t TRACKED_REFRESH_FRAMES = 10;
-std::array<ContentsTable, 6> contents_tables;
+std::array<ContentsTable, Shaders::STAGE_COUNT> contents_tables;
 
 void BuildContents(ContentsTable& table, std::span<const std::byte> contents, const Trace::Track::Reading* reading)
 {
@@ -1290,7 +1290,7 @@ void DrawHlslTab(const Event& event)
    ImGui::SameLine();
    if (result.state != Shaders::Decompiler::State::Running &&
       Widgets::Button(result.state == Shaders::Decompiler::State::Ready ? std::format("{} Re-decompile", Icons::RELOAD) : std::format("{} Decompile", Icons::CODE),
-         Widgets::ButtonKind::Primary, "Runs 3DMigoto cmd_Decompiler.exe (DXBC) or RenoDX decomp.exe --flatten --do-while (DXIL) asynchronously"))
+         Widgets::ButtonKind::Primary, "Runs 3DMigoto cmd_Decompiler.exe (DXBC) or RenoDX decomp.exe --flatten --use-do-while (DXIL) asynchronously"))
    {
       Shaders::Bytecode bytes;
       if (hlsl_source == 0 && live)

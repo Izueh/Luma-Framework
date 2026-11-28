@@ -91,6 +91,9 @@ uint64_t GetKey(std::string_view preprocessed, std::string_view target, std::str
       start = end;
    }
    hash = Hash(target, Hash("|", hash));
+   // Tag DXC flags separately from FXC so flag changes don't invalidate FXC caches
+   if (const size_t sep = target.find('_'); sep != std::string_view::npos && target.substr(sep + 1).starts_with('6'))
+      hash = Hash("|dxc:O3:2018", hash);
    return Hash(entry, Hash("|", hash));
 }
 

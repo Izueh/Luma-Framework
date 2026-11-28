@@ -40,7 +40,7 @@ namespace Shaders {
 namespace Variants {
 namespace D3D12 {
 namespace {
-using Key = std::array<std::shared_ptr<const CompiledShader>, 6>;
+using Key = std::array<std::shared_ptr<const CompiledShader>, STAGE_COUNT>;
 using Database::D3D12::TargetFormats;
 
 // Part of every name in Luma's pipeline library: a change of what a name covers makes old entries unreachable instead of mismatched
@@ -70,7 +70,7 @@ struct Core
    // Of the device's variants, when this last chose (presenting thread)
    uint64_t applied_generation = 0;
    std::shared_ptr<const Database::D3D12::DescCopy> desc;
-   std::array<const Database::Shader*, 6> shaders = {};
+   std::array<const Database::Shader*, STAGE_COUNT> shaders = {};
    ComPtr<ID3D12RootSignature> root_signature; // The desc names it
    ComPtr<ID3D12Device> device;
    bool compute = false;
@@ -157,7 +157,7 @@ bool ReadsTextures(const CompiledShader& compiled)
 
 // Per stage, the variant a bind takes: the forced one (trace), else the highest-priority one that compiled. Null for the game's. One
 // that reads Luma's textures can't run with a signature that has no table for them.
-Key Choose(const Core& core, std::array<Source, 6>& sources)
+Key Choose(const Core& core, std::array<Source, STAGE_COUNT>& sources)
 {
    Key key;
    if (!core.extended)
@@ -472,7 +472,7 @@ void WarmFormatVariants(const std::shared_ptr<Core>& core)
 void Update(const std::shared_ptr<Core>& core);
 
 // Any thread: `pipeline` (null if it couldn't be made) is what binds take from now on
-void Publish(const std::shared_ptr<Core>& core, Key key, const std::array<Source, 6>& sources, ComPtr<ID3D12PipelineState> pipeline)
+void Publish(const std::shared_ptr<Core>& core, Key key, const std::array<Source, STAGE_COUNT>& sources, ComPtr<ID3D12PipelineState> pipeline)
 {
    bool update_again = false;
    {
@@ -551,7 +551,7 @@ void Publish(const std::shared_ptr<Core>& core, Key key, const std::array<Source
 // Any thread: makes the pipeline of the choice now, if it changed
 void Update(const std::shared_ptr<Core>& core)
 {
-   std::array<Source, 6> sources = {};
+   std::array<Source, STAGE_COUNT> sources = {};
    Key key = Choose(*core, sources);
    {
       std::scoped_lock lock(core->mutex);

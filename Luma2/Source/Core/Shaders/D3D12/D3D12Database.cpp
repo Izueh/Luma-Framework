@@ -11,6 +11,8 @@
 #include "Hooks/ObjectLifetime.hpp"
 #include "Resources/ResourceBindings.hpp"
 #include "Shaders/D3D12/D3D12RootSignatures.hpp"
+#include "Shaders/ShaderVariants.hpp"
+#include "Utils/Debug.hpp"
 #include "Utils/Hash.hpp"
 #include "System/Modules.hpp"
 #include "Log/Log.hpp"
@@ -23,6 +25,8 @@ namespace Database {
 namespace D3D12 {
 namespace {
 std::atomic<uint32_t> live_pipelines = 0;
+std::atomic<uint32_t> live_mesh_pipelines = 0;
+std::atomic<uint32_t> live_state_objects = 0;
 std::atomic<uint32_t> extended_signatures = 0;
 std::atomic<uint32_t> game_signatures = 0;
 std::atomic<uint32_t> largest_extended = 0;
@@ -45,10 +49,14 @@ void ForEachPipelineShader(const Pipeline& pipeline, Callback callback)
 struct PipelineState
 {
    Pipeline pipeline;
+   bool mesh = false;
 
    explicit PipelineState(Pipeline pipeline_) : pipeline(std::move(pipeline_))
    {
+      mesh = pipeline.shaders[size_t(ShaderStage::Amplification)] != nullptr || pipeline.shaders[size_t(ShaderStage::Mesh)] != nullptr;
       live_pipelines++;
+      if (mesh)
+         live_mesh_pipelines++;
       ForEachPipelineShader(pipeline, [](Shader& shader) { shader.objects++; });
       if (pipeline.root_layout)
          const_cast<RootLayout*>(pipeline.root_layout)->pipelines++;
@@ -57,6 +65,8 @@ struct PipelineState
    ~PipelineState()
    {
       live_pipelines--;
+      if (mesh)
+         live_mesh_pipelines--;
       ForEachPipelineShader(pipeline, [](Shader& shader) { shader.objects--; });
       if (pipeline.root_layout)
          const_cast<RootLayout*>(pipeline.root_layout)->pipelines--;
@@ -64,6 +74,34 @@ struct PipelineState
 
    PipelineState(const PipelineState&) = delete;
    PipelineState& operator=(const PipelineState&) = delete;
+};
+
+struct StateObjectState
+{
+   std::vector<Shader*> libraries;
+
+   explicit StateObjectState(std::vector<Shader*> libraries_) : libraries(std::move(libraries_))
+   {
+      live_state_objects++;
+      for (Shader* shader : libraries)
+      {
+         if (shader)
+            shader->objects++;
+      }
+   }
+
+   ~StateObjectState()
+   {
+      live_state_objects--;
+      for (Shader* shader : libraries)
+      {
+         if (shader)
+            shader->objects--;
+      }
+   }
+
+   StateObjectState(const StateObjectState&) = delete;
+   StateObjectState& operator=(const StateObjectState&) = delete;
 };
 
 std::span<const uint8_t> ToSpan(const D3D12_SHADER_BYTECODE& bytecode)
@@ -96,6 +134,8 @@ std::optional<ShaderStage> GetStage(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type)
    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_GS: return ShaderStage::Geometry;
    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_PS: return ShaderStage::Pixel;
    case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CS: return ShaderStage::Compute;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS: return ShaderStage::Amplification;
+   case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS: return ShaderStage::Mesh;
    default: return std::nullopt;
    }
 }
@@ -125,18 +165,43 @@ bool ReadLayout(std::span<const uint8_t> blob, RootLayout& layout)
    if (!factory || FAILED(factory(blob.data(), blob.size(), IID_PPV_ARGS(&deserializer))))
       return false;
    const D3D12_VERSIONED_ROOT_SIGNATURE_DESC* unconverted = deserializer->GetUnconvertedRootSignatureDesc();
-   const D3D12_VERSIONED_ROOT_SIGNATURE_DESC* converted = nullptr;
-   if (!unconverted || FAILED(deserializer->GetRootSignatureDescAtVersion(D3D_ROOT_SIGNATURE_VERSION_1_1, &converted)) || !converted)
+   if (!unconverted)
       return false;
    layout.version = unconverted->Version;
-   const D3D12_ROOT_SIGNATURE_DESC1& desc = converted->Desc_1_1;
-   layout.flags = desc.Flags;
-   layout.static_samplers = desc.NumStaticSamplers;
-   layout.static_sampler_descs.assign(desc.pStaticSamplers, desc.pStaticSamplers + desc.NumStaticSamplers);
-   layout.parameters.reserve(desc.NumParameters);
-   for (UINT i = 0; i < desc.NumParameters; i++)
+   const D3D12_ROOT_PARAMETER1* params = nullptr;
+   UINT num_params = 0;
+   if (unconverted->Version == D3D_ROOT_SIGNATURE_VERSION_1_2)
    {
-      const D3D12_ROOT_PARAMETER1& source = desc.pParameters[i];
+      // Read v1.2 directly so v1.2 static sampler flags never fail down-conversion to 1.1
+      const D3D12_ROOT_SIGNATURE_DESC2& desc = unconverted->Desc_1_2;
+      layout.flags = desc.Flags;
+      layout.static_samplers = desc.NumStaticSamplers;
+      layout.static_sampler_descs.reserve(desc.NumStaticSamplers);
+      for (UINT i = 0; i < desc.NumStaticSamplers; i++)
+      {
+         const D3D12_STATIC_SAMPLER_DESC1& s = desc.pStaticSamplers[i];
+         layout.static_sampler_descs.push_back({s.Filter, s.AddressU, s.AddressV, s.AddressW, s.MipLODBias, s.MaxAnisotropy, s.ComparisonFunc, s.BorderColor,
+            s.MinLOD, s.MaxLOD, s.ShaderRegister, s.RegisterSpace, s.ShaderVisibility});
+      }
+      params = desc.pParameters;
+      num_params = desc.NumParameters;
+   }
+   else
+   {
+      const D3D12_VERSIONED_ROOT_SIGNATURE_DESC* converted = nullptr;
+      if (FAILED(deserializer->GetRootSignatureDescAtVersion(D3D_ROOT_SIGNATURE_VERSION_1_1, &converted)) || !converted)
+         return false;
+      const D3D12_ROOT_SIGNATURE_DESC1& desc = converted->Desc_1_1;
+      layout.flags = desc.Flags;
+      layout.static_samplers = desc.NumStaticSamplers;
+      layout.static_sampler_descs.assign(desc.pStaticSamplers, desc.pStaticSamplers + desc.NumStaticSamplers);
+      params = desc.pParameters;
+      num_params = desc.NumParameters;
+   }
+   layout.parameters.reserve(num_params);
+   for (UINT i = 0; i < num_params; i++)
+   {
+      const D3D12_ROOT_PARAMETER1& source = params[i];
       RootParameter& parameter = layout.parameters.emplace_back();
       parameter.type = source.ParameterType;
       parameter.visibility = source.ShaderVisibility;
@@ -543,8 +608,6 @@ std::shared_ptr<const DescCopy> CopyDesc(PipelineKind kind, const void* native)
          case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_CACHED_PSO: ClearCachedPipeline(*copy, value); break;
          case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_VIEW_INSTANCING: CopyViewInstancing(*copy, value); break;
          case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_SERIALIZED_ROOT_SIGNATURE: CopySerializedRootSignature(*copy, value); break;
-         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS:
-         case D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS: CopyShaderBytecode(*copy, value, std::nullopt); break;
          default:
             if (const std::optional<ShaderStage> stage = GetStage(type))
                CopyShaderBytecode(*copy, value, *stage);
@@ -612,10 +675,10 @@ PipelineDesc DescribePipeline(const D3D12_PIPELINE_STATE_STREAM_DESC& desc)
       const uint8_t* value = bytes + offset + layout->value_offset;
       if (type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_ROOT_SIGNATURE)
          std::memcpy(&result.root_signature, value, sizeof(result.root_signature));
-      else if (type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_AS || type == D3D12_PIPELINE_STATE_SUBOBJECT_TYPE_MS)
-         result.mesh_shaders = true;
       else if (const std::optional<ShaderStage> stage = GetStage(type))
       {
+         if (*stage == ShaderStage::Amplification || *stage == ShaderStage::Mesh)
+            result.mesh_shaders = true;
          D3D12_SHADER_BYTECODE bytecode;
          std::memcpy(&bytecode, value, sizeof(bytecode));
          result.stages[size_t(*stage)] = ToSpan(bytecode);
@@ -799,10 +862,36 @@ const Pipeline* FindPipeline(ID3D12PipelineState* pipeline)
    return state ? &state->pipeline : nullptr;
 }
 
+void TrackStateObject(ID3D12Device* device, const D3D12_STATE_OBJECT_DESC* desc, ID3D12StateObject* state_object)
+{
+   if (!device || !desc || !state_object)
+      return;
+   if (Hooks::Lifetime::GetState<StateObjectState>(state_object))
+      return;
+   const std::shared_ptr<Store> store = GetStore(device);
+   std::vector<Shader*> libraries;
+   for (UINT i = 0; desc->pSubobjects && i < desc->NumSubobjects; i++)
+   {
+      const D3D12_STATE_SUBOBJECT& subobject = desc->pSubobjects[i];
+      if (subobject.Type != D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY || !subobject.pDesc)
+         continue;
+      const auto& library = *static_cast<const D3D12_DXIL_LIBRARY_DESC*>(subobject.pDesc);
+      const std::span<const uint8_t> bytecode = ToSpan(library.DXILLibrary);
+      if (bytecode.empty())
+         continue;
+      Shader& tracked = Track(store.get(), ShaderStage::Compute, bytecode);
+      libraries.push_back(&tracked);
+      if (store && Variants::HasVariant(*store, tracked.hash))
+         LUMA_UNIMPLEMENTED("State object variant swapping (DXR shader binding table GetShaderIdentifier)");
+   }
+   Hooks::Lifetime::SetState<StateObjectState>(state_object, std::move(libraries));
+}
+
 // Stats
 Stats GetStats()
 {
-   Stats stats = {live_pipelines.load(), extended_signatures.load(), game_signatures.load(), largest_extended.load()};
+   Stats stats = {live_pipelines.load(), live_mesh_pipelines.load(), live_state_objects.load(), extended_signatures.load(), game_signatures.load(),
+      largest_extended.load()};
    std::scoped_lock lock(unextended_mutex);
    stats.unextended_dwords = unextended_dwords;
    return stats;

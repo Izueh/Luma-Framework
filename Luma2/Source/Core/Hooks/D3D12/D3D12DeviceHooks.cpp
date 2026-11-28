@@ -113,10 +113,14 @@ HRESULT STDMETHODCALLTYPE CreateRootSignatureFromSubobjectInLibrary(ID3D12Device
    REFIID riid, void** root_signature)
 {
    DepthGuard guard(device_depth);
-   const HRESULT result = original<&CreateRootSignatureFromSubobjectInLibrary>(device, node_mask, library, length, name, riid, root_signature);
-   if (Detours::IsGameCall(guard, _ReturnAddress()) && SUCCEEDED(result))
-      Detours::Report(&Handlers::PostCreateRootSignatureFromSubobjectInLibrary);
-   return result;
+   if (!Detours::IsGameCall(guard, _ReturnAddress()) || !library)
+      return original<&CreateRootSignatureFromSubobjectInLibrary>(device, node_mask, library, length, name, riid, root_signature);
+   return Detours::Report(&Handlers::CreateRootSignatureFromSubobjectInLibrary, std::span(static_cast<const uint8_t*>(library), length),
+      name ? std::wstring_view(name) : std::wstring_view(), root_signature,
+      std::function<HRESULT(std::span<const uint8_t>)>([&](std::span<const uint8_t> extended_blob) {
+         return original<&CreateRootSignature>(device, node_mask, extended_blob.data(), extended_blob.size(), riid, root_signature);
+      }),
+      std::function<HRESULT()>([&]() { return original<&CreateRootSignatureFromSubobjectInLibrary>(device, node_mask, library, length, name, riid, root_signature); }));
 }
 
 HRESULT STDMETHODCALLTYPE CreateStateObject(ID3D12Device5* device, const D3D12_STATE_OBJECT_DESC* desc, REFIID riid, void** state_object)
@@ -124,7 +128,7 @@ HRESULT STDMETHODCALLTYPE CreateStateObject(ID3D12Device5* device, const D3D12_S
    DepthGuard guard(device_depth);
    const HRESULT result = original<&CreateStateObject>(device, desc, riid, state_object);
    if (Detours::IsGameCall(guard, _ReturnAddress()) && SUCCEEDED(result))
-      Detours::Report(&Handlers::PostCreateStateObject);
+      Detours::Report(&Handlers::PostCreateStateObject, static_cast<ID3D12Device*>(device), desc, state_object ? *state_object : nullptr);
    return result;
 }
 
@@ -133,7 +137,7 @@ HRESULT STDMETHODCALLTYPE AddToStateObject(ID3D12Device7* device, const D3D12_ST
    DepthGuard guard(device_depth);
    const HRESULT result = original<&AddToStateObject>(device, addition, existing, riid, state_object);
    if (Detours::IsGameCall(guard, _ReturnAddress()) && SUCCEEDED(result))
-      Detours::Report(&Handlers::PostCreateStateObject);
+      Detours::Report(&Handlers::PostCreateStateObject, static_cast<ID3D12Device*>(device), addition, state_object ? *state_object : nullptr);
    return result;
 }
 

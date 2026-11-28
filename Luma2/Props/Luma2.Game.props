@@ -83,16 +83,29 @@
   </ItemDefinitionGroup>
 
   <Target Name="LumaCopySrRuntimes" AfterTargets="Build" Condition="Exists('$(TargetDir)')">
+    <PropertyGroup>
+      <!-- Resolved inside the target so WindowsSdkDir / TargetPlatformVersion from Microsoft.Cpp.targets are populated -->
+      <_LumaDxcDir Condition="'$(LumaDxcDir)'!=''">$(LumaDxcDir)</_LumaDxcDir>
+      <_LumaDxcDir Condition="'$(_LumaDxcDir)'=='' and Exists('$(Luma2ExternalDir)DXC\dxcompiler.dll')">$(Luma2ExternalDir)DXC\</_LumaDxcDir>
+      <_LumaDxcDir Condition="'$(_LumaDxcDir)'=='' and Exists('$(WindowsSdkDir)bin\$(TargetPlatformVersion)\$(PlatformTarget)\dxcompiler.dll')">$(WindowsSdkDir)bin\$(TargetPlatformVersion)\$(PlatformTarget)\</_LumaDxcDir>
+    </PropertyGroup>
     <Copy Condition="'$(UseLumaNGX)'=='true' and Exists('$(LumaNGXRuntimePath)')" SourceFiles="$(LumaNGXRuntimePath)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
     <ItemGroup Condition="'$(UseLumaFSR4)'=='true'">
       <_LumaFfxRuntimeFiles Include="$(LumaFSRRoot)bin\*.dll" />
     </ItemGroup>
     <Copy Condition="'$(UseLumaFSR4)'=='true'" SourceFiles="@(_LumaFfxRuntimeFiles)" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
     <Copy Condition="'$(UseLumaXeSS)'=='true'" SourceFiles="$(LumaXeSSRoot)bin\libxess.dll;$(LumaXeSSRoot)bin\libxess_dx11.dll" DestinationFolder="$(TargetDir)" SkipUnchangedFiles="true" />
+    <MakeDir Condition="'$(Platform)'=='x64' and '$(_LumaDxcDir)'!='' and Exists('$(_LumaDxcDir)dxcompiler.dll')" Directories="$(TargetDir)Luma" />
+    <Copy Condition="'$(Platform)'=='x64' and '$(_LumaDxcDir)'!='' and Exists('$(_LumaDxcDir)dxcompiler.dll')" SourceFiles="$(_LumaDxcDir)dxcompiler.dll;$(_LumaDxcDir)dxil.dll" DestinationFolder="$(TargetDir)Luma\" SkipUnchangedFiles="true" />
   </Target>
 
   <!-- Copies the dll and its pdb into the game when "LumaGameDir" is set (e.g. in the project's .vcxproj.user file), next to the "Luma" folder the mod reads and writes -->
   <Target Name="LumaDeploy" AfterTargets="LumaCopySrRuntimes" Condition="'$(LumaGameDir)'!=''">
+    <PropertyGroup>
+      <_LumaDxcDir Condition="'$(LumaDxcDir)'!=''">$(LumaDxcDir)</_LumaDxcDir>
+      <_LumaDxcDir Condition="'$(_LumaDxcDir)'=='' and Exists('$(Luma2ExternalDir)DXC\dxcompiler.dll')">$(Luma2ExternalDir)DXC\</_LumaDxcDir>
+      <_LumaDxcDir Condition="'$(_LumaDxcDir)'=='' and Exists('$(WindowsSdkDir)bin\$(TargetPlatformVersion)\$(PlatformTarget)\dxcompiler.dll')">$(WindowsSdkDir)bin\$(TargetPlatformVersion)\$(PlatformTarget)\</_LumaDxcDir>
+    </PropertyGroup>
     <Copy SourceFiles="$(TargetPath);$(OutDir)$(TargetName).pdb" DestinationFolder="$(LumaGameDir)" SkipUnchangedFiles="true" />
     <Copy Condition="'$(UseLumaNGX)'=='true' and Exists('$(LumaNGXRuntimePath)')" SourceFiles="$(LumaNGXRuntimePath)" DestinationFolder="$(LumaGameDir)" SkipUnchangedFiles="true" />
     <ItemGroup Condition="'$(UseLumaFSR4)'=='true'">
@@ -101,6 +114,7 @@
     <Copy Condition="'$(UseLumaFSR4)'=='true'" SourceFiles="@(_LumaFfxDeployFiles)" DestinationFolder="$(LumaGameDir)" SkipUnchangedFiles="true" />
     <Copy Condition="'$(UseLumaXeSS)'=='true'" SourceFiles="$(LumaXeSSRoot)bin\libxess.dll;$(LumaXeSSRoot)bin\libxess_dx11.dll" DestinationFolder="$(LumaGameDir)" SkipUnchangedFiles="true" />
     <MakeDir Directories="$(LumaGameDir)Luma" />
+    <Copy Condition="'$(Platform)'=='x64' and '$(_LumaDxcDir)'!='' and Exists('$(_LumaDxcDir)dxcompiler.dll')" SourceFiles="$(_LumaDxcDir)dxcompiler.dll;$(_LumaDxcDir)dxil.dll" DestinationFolder="$(LumaGameDir)Luma\" SkipUnchangedFiles="true" />
     <!-- The Luma folder is Global's files with the game's on top (a game's file wins a name clash) -->
     <ItemGroup>
       <LumaGlobalResource Include="$(Luma2Root)Resources\Global\**\*" Exclude="$(Luma2Root)Resources\Global\**\.gitkeep" />

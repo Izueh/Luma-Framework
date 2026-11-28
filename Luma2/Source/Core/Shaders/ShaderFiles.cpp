@@ -21,8 +21,28 @@ constexpr std::string_view EXTENSION = ".hlsl";
 constexpr std::string_view LUMA_PREFIX = "Luma_";
 constexpr std::string_view REDIRECTED_HASH = "########";
 constexpr size_t HASH_LENGTH = 8;
-// "ps_5_0", at the end of a replacement's name
-constexpr size_t TARGET_LENGTH = 6;
+
+bool IsValidTarget(std::string_view target)
+{
+   const size_t first = target.find('_');
+   if (first == std::string_view::npos)
+      return false;
+   const size_t second = target.find('_', first + 1);
+   if (second == std::string_view::npos || target.find('_', second + 1) != std::string_view::npos)
+      return false;
+   const std::string_view stage = target.substr(0, first);
+   const std::string_view major = target.substr(first + 1, second - first - 1);
+   const std::string_view minor = target.substr(second + 1);
+   if (major.empty() || minor.empty())
+      return false;
+   const auto is_digits = [](std::string_view text) {
+      return std::ranges::all_of(text, [](char c) { return c >= '0' && c <= '9'; });
+   };
+   if (!is_digits(major) || !is_digits(minor))
+      return false;
+   constexpr std::string_view STAGES[] = {"vs", "hs", "ds", "gs", "ps", "cs", "ms", "as", "lib"};
+   return std::ranges::contains(STAGES, stage);
+}
 
 // Written while Init runs, read without a lock after
 std::vector<Redirect> redirects;
@@ -68,13 +88,15 @@ std::optional<File> Parse(std::string_view path, std::span<const Redirect> decla
       file.kind = Kind::Custom;
       return file;
    }
-   // A name before the hash, the hash, a dot and the target ("_0x12345678.ps_5_0" at least)
-   if (!has_hash || name.size() < 2 + HASH_LENGTH + 1 + TARGET_LENGTH)
+   // A name before the hash, the hash, a dot and the target ("_0x12345678.ps_5_0" or ".lib_6_6")
+   const size_t dot = name.rfind('.');
+   if (!has_hash || dot == std::string_view::npos)
       return std::nullopt;
-   ASSERT_ONCE_MSG(name.size() > 2 + HASH_LENGTH + 1 + TARGET_LENGTH, "A replacement has a name before its hash, to tell it from a dumped shader");
-   file.target = std::string(name.substr(name.size() - TARGET_LENGTH));
-   if (file.target[2] != '_' || file.target[4] != '_')
+   const std::string_view target = name.substr(dot + 1);
+   if (!IsValidTarget(target) || dot < 2 + HASH_LENGTH)
       return std::nullopt;
+   ASSERT_ONCE_MSG(dot > 2 + HASH_LENGTH, "A replacement has a name before its hash, to tell it from a dumped shader");
+   file.target = std::string(target);
    const size_t first_hash = name.find("0x");
    for (size_t position = first_hash; position != std::string_view::npos; position = name.find("0x", position + 1))
    {
@@ -137,7 +159,7 @@ std::vector<Declaration> ParseDeclarations(std::string_view text, std::string_vi
          else
             declaration.defines.emplace_back(token.substr(0, equals), token.substr(equals + 1));
       }
-      const bool valid = declaration.target.size() == TARGET_LENGTH && declaration.target[2] == '_' && declaration.target[4] == '_';
+      const bool valid = IsValidTarget(declaration.target);
       ASSERT_ONCE_MSG(valid, "A Luma declaration line starts with its target, like \"// Luma: ps_5_0\"");
       if (!valid)
          continue;

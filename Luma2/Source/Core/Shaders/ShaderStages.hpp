@@ -8,7 +8,8 @@
 
 namespace Luma {
 namespace Shaders {
-inline constexpr size_t STAGE_COUNT = 6;
+inline constexpr size_t STAGE_COUNT = 8;
+inline constexpr size_t D3D11_STAGE_COUNT = 6;
 
 // A set of stages: the ones a call uses, where a variant runs, where Luma bound its buffers, which stages a state group covers.
 // `bits` is in ShaderStage order: use the functions.
@@ -69,7 +70,8 @@ struct StageSet
 };
 
 // What a draw and a dispatch use
-inline constexpr StageSet GRAPHICS_STAGES = {ShaderStage::Vertex, ShaderStage::Hull, ShaderStage::Domain, ShaderStage::Geometry, ShaderStage::Pixel};
+inline constexpr StageSet GRAPHICS_STAGES = {ShaderStage::Vertex, ShaderStage::Hull, ShaderStage::Domain, ShaderStage::Geometry, ShaderStage::Pixel,
+   ShaderStage::Amplification, ShaderStage::Mesh};
 inline constexpr StageSet COMPUTE_STAGES = {ShaderStage::Compute};
 } // namespace Shaders
 } // namespace Luma

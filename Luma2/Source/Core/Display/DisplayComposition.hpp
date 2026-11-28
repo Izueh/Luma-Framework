@@ -19,7 +19,7 @@ inline constexpr uint64_t PIXEL_SHADER = Utils::Hash::Name("Luma_DisplayComposit
 // Game::Options::composition: default pipeline space and composition parameters for a game.
 struct Options
 {
-   int32_t post_process_space = 0; // 0 Gamma, 1 Linear, 2 Linear until UI
+   int32_t post_process_space = 0; // 0 Gamma, 1 Linear, 2 Linear until UI, 3 PQ
    bool early_display_encoding = false;
    int32_t vanilla_encoding = 0; // 0 sRGB, 1 Gamma 2.2
    int32_t gamma_correction = 1; // 0 sRGB, 1 Gamma 2.2, 2..4 hybrid modes

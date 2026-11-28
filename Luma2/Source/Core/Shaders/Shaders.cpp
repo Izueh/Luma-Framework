@@ -69,14 +69,14 @@ struct Result
 
 std::string_view GetTargetPrefix(ShaderStage stage)
 {
-   constexpr std::string_view PREFIXES[] = {"vs", "hs", "ds", "gs", "ps", "cs"};
+   constexpr std::string_view PREFIXES[] = {"vs", "hs", "ds", "gs", "ps", "cs", "as", "ms"};
    return PREFIXES[size_t(stage)];
 }
 
 // "ps_5_0": the pixel stage
 ShaderStage GetStage(std::string_view target)
 {
-   constexpr std::string_view PREFIXES[] = {"vs", "hs", "ds", "gs", "ps", "cs"};
+   constexpr std::string_view PREFIXES[] = {"vs", "hs", "ds", "gs", "ps", "cs", "as", "ms"};
    for (size_t i = 0; i < std::size(PREFIXES); i++)
    {
       if (target.starts_with(PREFIXES[i]))
@@ -94,6 +94,8 @@ std::string_view GetStageDefine(ShaderStage stage)
    case ShaderStage::Geometry: return "GS";
    case ShaderStage::Pixel: return "PS";
    case ShaderStage::Compute: return "CS";
+   case ShaderStage::Amplification: return "AS";
+   case ShaderStage::Mesh: return "MS";
    default: return {};
    }
 }
@@ -130,9 +132,9 @@ Result Compile(std::span<const std::filesystem::path> roots, std::string_view fi
    if (target.empty())
    {
       info.failed++;
-      return {nullptr, std::format("target {} is DXIL, which isn't compiled for {} yet: the game's shader runs", declared, GetName(build_api)), true};
+      return {nullptr, std::format("target {} is DXIL (Shader Model 6), which {} doesn't support: the game's shader runs", declared, GetName(build_api)), true};
    }
-   const Compiler::Preprocessed preprocessed = Compiler::Preprocess(roots, file, defines);
+   const Compiler::Preprocessed preprocessed = Compiler::Preprocess(roots, file, defines, target);
    if (preprocessed.failed)
    {
       info.failed++;
@@ -498,13 +500,13 @@ std::shared_ptr<Store> GetShownStore()
 
 std::string GetTarget(std::string_view target, Api build_api)
 {
+   if (Compiler::IsDxilTarget(target))
+      return build_api == Api::D3D12 ? std::string(target) : std::string();
    if (build_api != Api::D3D12)
       return std::string(target);
    // "ps_5_0": the stage, then the model
    const size_t separator = target.find('_');
    const std::string_view model = separator != std::string_view::npos ? target.substr(separator + 1) : std::string_view();
-   if (model.starts_with('6'))
-      return {};
    // SM5.1 names Luma's space; DXBC below it runs in the same pipelines as the game's SM5.0 stages
    if (model == "4_0" || model == "4_1" || model == "5_0")
       return std::format("{}_5_1", target.substr(0, separator));

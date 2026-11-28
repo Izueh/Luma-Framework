@@ -371,9 +371,13 @@ std::string GetTarget(std::span<const uint8_t> bytecode)
 std::optional<ShaderStage> GetStage(const Program& program)
 {
    constexpr std::array<ShaderStage, 6> STAGES = {ShaderStage::Pixel, ShaderStage::Vertex, ShaderStage::Geometry, ShaderStage::Hull, ShaderStage::Domain, ShaderStage::Compute};
-   if (program.kind >= STAGES.size())
-      return std::nullopt;
-   return STAGES[program.kind];
+   if (program.kind < STAGES.size())
+      return STAGES[program.kind];
+   if (program.kind == 13)
+      return ShaderStage::Mesh;
+   if (program.kind == 14)
+      return ShaderStage::Amplification;
+   return std::nullopt;
 }
 
 std::span<const uint8_t> GetRootSignature(std::span<const uint8_t> bytecode)

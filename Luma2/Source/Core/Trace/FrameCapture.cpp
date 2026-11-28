@@ -28,7 +28,7 @@ std::string tracked_resource;
 
 const Shader* GetPrimaryShader(const Event& event)
 {
-   for (const ShaderStage stage : {ShaderStage::Pixel, ShaderStage::Vertex, ShaderStage::Compute})
+   for (const ShaderStage stage : {ShaderStage::Pixel, ShaderStage::Vertex, ShaderStage::Mesh, ShaderStage::Compute})
    {
       if (const auto it = std::ranges::find(event.shaders, stage, &Shader::stage); it != event.shaders.end())
          return &*it;

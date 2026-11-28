@@ -823,7 +823,7 @@ Variants of geometry shaders created with stream output; resolving between a mir
 
 ### G5: DXIL
 
-State objects, root signatures from a DXIL library, DXIL patching (DXP SM6 recipes), `_6_x` replacement files compiled by DXC. Suggest: stay deferred to the first SM6 game (decided earlier), but G1's gate makes them fail loudly, not silently.
+State objects, root signatures from a DXIL library, DXIL patching (DXP SM6 recipes), `_6_x` replacement files compiled by DXC. Promoted from "first SM6 game" into **Step 8G** as the last major D3D12 feature before Step 9.
 
 ### G6: Create time, not bind time
 
@@ -1002,6 +1002,7 @@ Parts, in order. Each is one brief:
 | 8D | RenderDoc, OptiScale | yes |
 | 8E | Detached UI (ImGui multi-viewport) | yes |
 | 8F | Upgrade methods: InPlace (1.0's direct) next to Mirror, spoofed description on by default (built on both APIs, not verified in a game) | yes, both APIs |
+| 8G | DXIL and Shader Model 6 on D3D12 (DXC compile/sign/reflect, DXP SM6 patching, AS/MS stages, library root signatures, state object tracking) | yes, SM6 D3D12 game (plus WARP/GPU doctests) |
 
 ### 8A: Release UI audit against 1.0 FF7R
 
@@ -1113,6 +1114,91 @@ Parts, in order. Each is one brief:
 * Unload: bypass (`Scope::SetBypass`) and proof-based unhook (`Hooks::UninstallAll`) for a Luma that never initialized; an initialized Luma pins its dll and never unloads. Both versions' hook managers are the same code again.
 * Not built: ReShade (Phase 4), the `LoadLibrary` hooks of Phase 2.3 (no data asks for them), the Present order policy (needs the overlay test matrix).
 
+### 8G: DXIL and Shader Model 6 (D3D12)
+
+**Goal:** complete D3D12 Shader Model 6 (DXIL) support as the last major D3D12 core feature before Step 9: `_6_x` replacement and custom shaders compiled, signed and reflected via DXC, DXIL shader patching via DXP SM6 recipes, mesh/amplification shader pipeline stages, library root signatures, and state object tracking.
+
+**Read first:** `Guidelines.md` sections 2, 4, 7, 10, 15 and 16; `Plan.md` G1, G2f, G2g and Step 3; `Shaders/ShaderCompiler.{hpp,cpp}`, `Shaders/ShaderContainer.{hpp,cpp}`, `Shaders/ShaderFiles.cpp`, `Shaders/Shaders.cpp`, `Shaders/ShaderCache.cpp`, `Shaders/ShaderDatabase.cpp`, `Shaders/ShaderInvariants.cpp`, `Shaders/ShaderPatching.cpp`, `Shaders/D3D12/D3D12Database.cpp`, `Shaders/D3D12/D3D12RootSignatures.cpp`, `Shaders/D3D12/D3D12Variants.cpp`, `Common/ShaderStage.hpp`, `Hooks/D3D12/D3D12DeviceHooks.cpp`, `Handlers/D3D12/D3D12Handlers.cpp`, `Luma2/Props/Luma2.Game.props`, and `dxp/sm6/Recipe.hpp`.
+
+**Decide first:**
+* **DXC runtime distribution (`dxcompiler.dll` + `dxil.dll`).** `dxcompiler.dll` requires `dxil.dll` beside it to validate and sign DXIL containers; without `dxil.dll`, D3D12 rejects compiled DXIL PSOs with `E_INVALIDARG`. Decided: not opt-in — DXIL/SM6 is a first-class D3D12 feature, distributed the same way as `d3dcompiler_47.dll`. Vendor an official Microsoft DXC release (`dxcompiler.dll` + `dxil.dll` + license) under `Luma2/External/DXC/` and bundle both into `Luma/` by default in `LumaDeploy` and `LumaPackage`/`package.ps1` (only skipped for D3D11-only games). `LoadDxc()` loads lazily on D3D12 using the same newest-version rule as `D3DCompiler_47.dll` (`GetProductVersion` across System32, `Luma/`, `<selfDir>/`, and `Luma2/External/DXC/` in Development, preferring a directory that has both `dxcompiler.dll` and `dxil.dll` paired; note Windows does not ship `dxcompiler.dll`/`dxil.dll` in System32 on user machines).
+* **DXC language version and optimization flags.** FXC keeps `/O0` for 1.0 golden parity; DXIL has no 1.0 goldens. Recommended: `-O3` and `-HV 2021` (fall back to `-HV 2018` only if existing `Resources/Global/Shaders/Includes/**` require invasive edits).
+* **DXP SM5 vs SM6 recipe layout.** `dxp::sm5::Recipe` and `dxp::sm6::Recipe` are separate types in `dxpatcher.lib`. Decided: explicit `Recipes/SM5/` and `Recipes/SM6/` subfolders (each holding root any-stage recipes or stage folders `VS/HS/DS/GS/PS/CS`, plus `AS/MS` under `SM6/`), with no implicit SM5 default at `Recipes/`. Move existing recipes (FF7R and `_Template`) into `Recipes/SM5/` and warn on unexpected files/folders directly under `Recipes/`.
+* **State objects (DXR / Work Graphs) scope.** Decided: track DXIL libraries, hash/dump them, extend global root signatures inside state objects, and record `SetPipelineState1` in Trace/status without asserting `LUMA_UNIMPLEMENTED`; defer DXR state-object variant swapping (`GetShaderIdentifier` / shader binding tables).
+
+#### 8G.1: DXC compilation, signing, reflection and Global includes
+
+* **Runtime loader and signing gate (`Shaders/ShaderCompiler.cpp`):**
+  * Update `LoadDxc()` to pick the newest paired `dxcompiler.dll` + `dxil.dll` (via `GetProductVersion`, matching `D3DCompiler_47.dll`) across System32, `Luma/`, `<selfDir>/`, and `Luma2/External/DXC/` (Development), log the loaded DLL path and product version, and record whether `dxil.dll` is present alongside it.
+  * Route `_6_x` targets through `IDxcCompiler3::Compile` using a custom `IDxcIncludeHandler` resolving root-relative `#include` paths through `System::Paths::GetShaderRoots()` (matching FXC's `Include`, using `IDxcUtils::CreateBlob`).
+  * Route `Compiler::Preprocess` by target (or compiler kind) so `_6_x` shaders preprocess through DXC (`-P` + `-D`), stripping `#line` lines identically to FXC for machine-independent cache keys. Include the compiler backend (`dxc` + product version or flags) in `Cache::GetKey` so FXC and DXC entries never collide.
+  * Keep reflection data in compiled replacements/custom shaders (do not pass `-Qstrip_reflect`, or extract `DXC_OUT_REFLECTION`). Verify the output DXIL container is signed (container hash bytes 4..19 non-zero); if unsigned (missing `dxil.dll`), fail the compile unit with an actionable error naming `dxil.dll` and post a warning toast once.
+  * `Luma2.Game.props`: deploy `dxcompiler.dll` + `dxil.dll` into `Luma/` alongside `d3dcompiler_47.dll` by default (same distribution model as FXC, no opt-in prop; only skipped if a project is D3D11-only).
+* **Target parsing and normalization (`Shaders/ShaderFiles.cpp`, `Shaders/Shaders.cpp`):**
+  * Replace the fixed `TARGET_LENGTH = 6` check in `Files::Parse` and `Files::ParseDeclarations` with a proper `<stage>_<major>_<minor>` parser supporting `vs`, `hs`, `ds`, `gs`, `ps`, `cs`, `ms`, `as`, and `lib` (7 chars for `lib_6_x`).
+  * Update `Shaders::GetTarget(declared, build_api)`: pass `_6_x` targets through on `Api::D3D12` (instead of returning empty); reject `_6_x` clearly on `Api::D3D11` (DXBC only). Keep `_4_0`/`_4_1`/`_5_0` → `_5_1` normalization on D3D12.
+* **DXIL reflection (`Shaders/ShaderCompiler.cpp`, `Shaders/ShaderDatabase.cpp`):**
+  * Extend `Compiler::ReflectConstantBufferBindings` and `Compiler::ReflectTextureBindings` to support DXIL via `IDxcUtils::CreateReflection` (`ID3D12ShaderReflection`), adding `space` to `Compiler::Binding` so `MakeCompiledShader` and `Invariants` see the exact register and space.
+  * Fix `Database::ReflectSlots` for DXIL: use `ID3D12ShaderReflection` when reflection is present, and fall back directly to `Container::GetBindings` (`PSV0`) + `Container::GetSignature` (`OSG1`) for stripped DXIL shaders (microseconds, no FXC-regex disassembly fallback).
+* **Global shader includes (`Resources/Global/Shaders/Includes/**`):**
+  * Audit and fix any FXC-only idioms in `CBuffers.hlsl`, `Settings.hlsl`, `Common.hlsl`, `Math.hlsl`, `Samplers.hlsl`, `Color/*`, and `Tonemap/*` so they compile cleanly under both FXC (`_5_0`/`_5_1`) and DXC (`_6_0`/`_6_6`) with zero regressions.
+* **PSO mixing check (closes G2g):** verify offline on WARP and a real GPU (debug layer + GPU-based validation) whether D3D12 accepts a PSO mixing a DXIL stage with an FXC SM5.1 stage, and record the finding in Notes.
+
+#### 8G.2: DXIL shader patching (DXP SM6 recipes)
+
+* **SM6 recipe loading (`Shaders/ShaderPatching.cpp`):**
+  * Include `<dxp/sm6/Recipe.hpp>` under `LUMA_USE_DXP`. Store `std::variant<std::shared_ptr<const dxp::sm5::Recipe>, std::shared_ptr<const dxp::sm6::Recipe>>` per parsed recipe (with its shader model recorded for UI/MCP).
+  * Scan `Recipes/SM5/` and `Recipes/SM6/` explicitly (stage folders `VS/HS/DS/GS/PS/CS`, plus `AS/MS` under `SM6/`), warning on unexpected files or folders directly under `Recipes/`. Move existing recipes (`Final Fantasy VII Remake` and `_Template`) into `Recipes/SM5/` and update `Test-Luma2Template.ps1` / `PatchingTests.cpp`.
+  * Read `meta:` and `env:` uniformly across SM5 and SM6 recipes, including hidden host `LUMA_SPACE` propagation on D3D12.
+* **Execution, signing and caching (`Shaders/ShaderPatching.cpp`, `Shaders/ShaderCompiler.cpp`):**
+  * Remove `LUMA_UNIMPLEMENTED("Shaders::Patching of DXIL shaders (DXP's SM6 recipes)")`. Dispatch DXBC shaders to the SM5 chain and DXIL shaders to the SM6 chain based on `Container::GetProgram(bytecode)->dxil`.
+  * Verify whether `dxp::sm6::Recipe::Execute` returns a signed DXIL container; if unsigned, validate and sign it via `IDxcValidator::Validate` (`dxil.dll`) before caching and publishing, failing loudly if `dxil.dll` is unavailable.
+  * Reuse `ResolveBindings`, `CheckD3D12Register`, `Invariants::CheckD3D12` (which already validates DXIL `PSV0` bindings in `d3d12_space`), `Cache::GetPatchKey` / `Patches.json`, and `Dump` (`0x<hash>.patched.<target>.cso`).
+  * Keep raw game bytecode callbacks (`options.patch_sync`/`patch_async`) cleanly skipping DXIL shaders (where `Container::GetProgramCode` is empty) unless container-level patching is requested.
+
+#### 8G.3: D3D12 SM6 pipeline features (AS/MS, v1.2 root signatures, bindless, libraries, state objects)
+
+* **Amplification and Mesh stages (`Common/ShaderStage.hpp`, `Shaders/ShaderStages.hpp`, `Shaders/ShaderContainer.cpp`, `Shaders/D3D12/*`, `Trace/D3D12/*`, `Game/D3D12/*`):**
+  * Add `Amplification` and `Mesh` to `ShaderStage` (D3D11 keeps iterating its 6 stages; D3D12 handles all 8). Map `Container::GetStage` for `kind == 13` (`ms`) and `kind == 14` (`as`).
+  * Track AS and MS shaders in `Database::D3D12::DescribePipeline`, `CopyDesc`, and `TrackPipeline`; support replacing/patching them in `Variants::D3D12` (update fixed `std::array<..., 6>` to stage count); expose them in `Trace::Capture::D3D12` (on `DispatchMesh`) and `Game::D3D12::Call`.
+* **Root signatures v1.2 and bindless (`Shaders/D3D12/D3D12Database.cpp`, `Shaders/D3D12/D3D12RootSignatures.cpp`):**
+  * In `Database::D3D12::ReadLayout`, read `D3D_ROOT_SIGNATURE_VERSION_1_2` directly when `unconverted->Version == D3D_ROOT_SIGNATURE_VERSION_1_2` instead of converting down to 1.1 (which can fail on v1.2 static sampler flags).
+  * Confirm `RootSignatures::D3D12::Extend` preserves `D3D12_ROOT_SIGNATURE_FLAG_CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED` and `SAMPLER_HEAP_DIRECTLY_INDEXED` and works with SM6.6 bindless shaders alongside Luma's `space100` root CBVs and texture table. (Keep G2f's direct-heap-indexed fallback deferred until a game actually hits a 60–63 DWORD signature needing textures.)
+* **Library root signatures (`Hooks/D3D12/D3D12DeviceHooks.cpp`, `Handlers/D3D12/D3D12Handlers.cpp`, `Shaders/D3D12/D3D12RootSignatures.cpp`):**
+  * Replace `LUMA_UNIMPLEMENTED` in `PostCreateRootSignatureFromSubobjectInLibrary`: in `PreCreateRootSignatureFromSubobjectInLibrary`, extract the named serialized root signature blob from the DXIL library (via `IDxcContainerReflection` / `RDAT` subobject lookup), extend global root signatures via `RootSignatures::D3D12::Extend`, create via `CreateRootSignature`, and track via `Database::D3D12::TrackRootSignature`; fall back to the original call for local root signatures or if extraction/extension fails.
+* **State objects (`Hooks/D3D12/D3D12DeviceHooks.cpp`, `Handlers/D3D12/D3D12Handlers.cpp`, `Shaders/D3D12/D3D12Database.cpp`):**
+  * Replace the blanket `LUMA_UNIMPLEMENTED` in `PostCreateStateObject`: parse `D3D12_STATE_OBJECT_DESC` in `CreateStateObject` and `AddToStateObject`, track every `D3D12_STATE_SUBOBJECT_TYPE_DXIL_LIBRARY` in `Shaders::Database` (hashing and dumping in Development), extend `D3D12_STATE_SUBOBJECT_TYPE_GLOBAL_ROOT_SIGNATURE` if needed while leaving local root signatures untouched, and track live state objects for `luma_status` and `SetPipelineState1` in Trace.
+  * If a replacement or patch actually targets a DXIL library inside a state object, log an explicit warning and hit `LUMA_UNIMPLEMENTED("State object variant swapping (DXR shader binding table GetShaderIdentifier)")` rather than failing silently.
+
+#### 8G.4: Inspection surface and tests
+
+* **UI and MCP (`UI/Panels/ShadersPanel.cpp`, `UI/Panels/PatchesPanel.cpp`, `Trace/RuntimeStatus.*`, `Mcp/McpStatus.cpp`):**
+  * `luma_status`: expose `dxc_loaded`, `dxil_signer_loaded`, `dxil_shaders`, `mesh_pipelines`, and `state_objects` under `d3d12`/`shaders`.
+  * Shaders tab: show DXC/signer status and `_6_x` target compilation diagnostics; Patches tab: show recipe shader model (`SM5`/`SM6`) and `AS`/`MS` stages.
+* **Doctests (`ShadersTests.cpp`, `PatchingTests.cpp`):**
+  * Target parsing (`ps_6_6`, `cs_6_6`, `ms_6_5`, `as_6_5`, `lib_6_3`) and `GetTarget` on D3D11 vs D3D12.
+  * DXC preprocess (cache key machine-independence), compile, signing verification, and `CBuffers.hlsl` member-offset parity with C++ under DXC.
+  * DXIL reflection (`ReflectConstantBufferBindings`, `ReflectTextureBindings`, `ReflectConstantBuffers`, `ReflectSlots` with and without stripped reflection).
+  * WARP D3D12 tests: DXIL PSO creation + variant swap + Luma cbuffer/texture binding in `space100`, DXBC+DXIL mixed PSO check, AS/MS stream PSO tracking and variant creation, v1.2 root signature tracking/extension, and DXP SM6 recipe parse → execute → sign → cache round-trip.
+
+**Not in this step:** state-object variant swapping (`GetShaderIdentifier` / DXR shader binding tables), G2f direct-heap-indexed fallback for 60–63 DWORD signatures, Vulkan SPIR-V compilation via DXC.
+
+**Verify (once):**
+* All four configurations of FF7R and `Tests.vcxproj` build; every doctest passes; `Test-Luma2Template.ps1` and `Check-Luma2Rules.ps1` pass.
+* Regression check in FF7R on D3D11 and D3D12 (unchanged shaders, patches, and debug layer).
+* In a real SM6 D3D12 game (e.g. a UE5 / SM6 title):
+  * `luma_status` reports `dxc_loaded: true`, `dxil_signer_loaded: true`, non-zero `dxil_shaders` (and `mesh_pipelines`/`state_objects` if the game uses them), 0 `rejected_variants`, and no `LUMA_UNIMPLEMENTED` asserts on normal DXR state objects.
+  * A `_6_x` replacement shader compiles through DXC, signs, caches (0 compiled on second boot), swaps in at bind, and reads `LumaSettings`/`LumaData` in `space100` cleanly under the D3D12 debug layer and GPU-based validation.
+  * A DXP SM6 recipe patches a DXIL shader, binds Luma's cbuffers/textures in `space100`, toggles live via `luma_set_recipe`, and reloads from cache on second boot.
+  * `luma_trace_capture`/`list`/`get`, `luma_shader_list`/`state`/`dump`/`reload`, and `luma_patch_state` all work on DXIL shaders (including disassembly, decompilation, and typed cbuffers).
+
+**Notes (Step 8G built, unit-tested, multi-config verified; not yet verified in a real SM6 game):**
+* Decided (with owner): DXC (`dxcompiler.dll` + `dxil.dll`) is distributed by default like `d3dcompiler_47.dll` (no opt-in prop), resolved from `Luma2/External/DXC/` or the Windows SDK in `Luma2.Game.props` and deployed into `Luma/` for x64 builds; `LoadDxc()` picks the newest paired `dxcompiler.dll` + `dxil.dll` via `GetProductVersion`. DXC compiles with `-HV 2018 -O3 -Qstrip_debug` (`-HV 2021` rejects FXC-style vector ternaries/logical ops across `Resources/Global/Shaders/Includes/**`, whereas `-HV 2018` compiles all Global includes cleanly with zero edits).
+* Recipes: explicit `Recipes/SM5/` and `Recipes/SM6/` subfolders (no implicit SM5 default at `Recipes/`); existing FF7R, `_Template`, and `Lichii` recipes moved into `Recipes/SM5/PS/`. `ShaderPatching` parses both `dxp::sm5::Recipe` and `dxp::sm6::Recipe`, dispatches by `Container::GetProgram->dxil`, signs unsigned DXIL output via `Compiler::SignDxil` (`IDxcValidator`), and reports `shader_model` (`SM5`/`SM6`) in the Patches tab and MCP `luma_patch_state`.
+* Stages & D3D12: `ShaderStage` extended to 8 stages (`Amplification`, `Mesh`; `D3D11_STAGE_COUNT = 6`), wired through `Container::GetStage`, `Database::D3D12` (`DescribePipeline`, `CopyDesc`, `TrackPipeline`), `Variants::D3D12`, `Game::D3D12::Call`, `Game::Registry`, Trace, MCP, and UI. `Database::D3D12::ReadLayout` reads `D3D_ROOT_SIGNATURE_VERSION_1_2` natively. `CreateRootSignatureFromSubobjectInLibrary` extracts and extends embedded `RTS0` root signatures (falling back cleanly with a one-time warning for RDAT-only subobjects). `CreateStateObject` / `AddToStateObject` track DXIL libraries and live state objects without asserting `LUMA_UNIMPLEMENTED` unless a variant actually targets a library (DXR variant swapping deferred).
+* Inspection: `luma_status.d3d12` adds `mesh_pipelines`, `state_objects`, `dxil_shaders`, `dxc_loaded`, `dxil_signer_loaded`; Shaders tab shows DXC/signer status.
+* Verified: 167/167 doctest cases (2633 assertions, including DXC preprocess/compile/sign/reflect/`CBuffers.hlsl` offset parity, `SignDxil` re-signing, WARP D3D12 DXIL PSO + bindless root signature + `ms_6_5` stream tracking), FF7R `Development-Release` and `Publishing-Release` (with `UseLumaDXP=true`), and `Check-Luma2Rules.ps1` (PASSED, 330 Core / 351 total files). `Test-Luma2Template.ps1` base template builds cleanly (`LUMA_EXAMPLES` has pre-existing `D3D11::Callbacks` drift). Real-game SM6 verification and FF7R live regression check remain.
+
 ---
 
 ## Step 9: Game by game
@@ -1123,7 +1209,7 @@ Order, chosen so each game adds features the previous ones didn't need:
 
 | # | Game | Why now: features it adds |
 |---|---|---|
-| 1 | Unreal Engine (generic) | runtime shader classification (`shader_detect.hpp`), 2D and 3D LUT handling, a mod that covers many titles. Then one Unreal D3D12 title to exercise SM6, DXIL and DXC |
+| 1 | Unreal Engine (generic) | runtime shader classification (`shader_detect.hpp`), 2D and 3D LUT handling, a mod that covers many titles. Then one Unreal D3D12 title to exercise Step 8G's SM6, DXIL and DXC path in a full mod |
 | 2 | Final Fantasy XV | the full `Scaling` tracker (stencil stand-ins, pooling), VBAO, immediate-context `UpdateSubresource` handling, DirectInput blocking |
 | 3 | Borderlands 2 and The Pre-Sequel, then GOTY Enhanced | **Win32 build**, the SR bridge, `Resources::Geometry` (vertex and index buffer bind and write tracking, current and previous copies swapped at present, vertex shader patching for motion vectors), blend state callbacks, `Effects::SMAA`, `Effects::Bloom` |
 | 4 | Persona 5 Royal, then Metaphor ReFantazio | deferred contexts and command lists as the main path, context ordering, blend edits |
@@ -1164,7 +1250,7 @@ After each game: move code that the new game shares with an earlier one into the
 
 **Build:**
 * The shared file list and `LumaPackage` target in `Luma2.Game.props`. `LumaDeploy` uses the same list. No behaviour change for a dev deploy.
-* The `package.ps1` Luma2 path. `d3dcompiler_47.dll` ships as in 1.0. `dxcompiler.dll` doesn't.
+* The `package.ps1` Luma2 path. `d3dcompiler_47.dll` ships in `Luma/` as in 1.0, and `dxcompiler.dll` + `dxil.dll` ship alongside it in `Luma/` for D3D12-capable games (Step 8G).
 * CI: a Luma2 job that builds `Luma2/Luma2.slnx` x64 for Test-Release and Publishing-Release with vcpkg and DXP set up as for 1.0, packages each game in `Luma2/Source/Games`, and uploads the zips under the release job's artifact pattern.
 * CI also builds and runs `Tests.vcxproj` (out of the solution build since `d9928088`), runs `Test-Luma2Template.ps1` (the template bullet of Step 9 asks for this), and runs `Check-Luma2Rules.ps1`.
 * `plan-build.ps1`: a change under `Luma2/` builds the Luma2 job only, and a change outside it builds the 1.0 cells only. `Luma2/Docs` and other Markdown build nothing, as today.
@@ -1188,13 +1274,14 @@ Update when a backend gains or skips something. `—` means `LUMA_UNIMPLEMENTED`
 | Feature | D3D11 | D3D12 | Planned |
 |---|---|---|---|
 | Hooks, overlay, settings, MCP status | Step 0 (full 1.0 detours) | Step 0 (device, swapchain, present, binds, draws, barriers, copies, clears) | Step 0 |
-| Shader replacement, custom shaders, defines | Step 1; clones at shader creation (G6) | Step 2 and G (PSO variants, extended root signatures, SM5.1 in Luma's space, publish checks in Development and Test) | 1 / 2 / G |
+| Shader replacement, custom shaders, defines | Step 1; clones at shader creation (G6) | Step 2 and G (PSO variants, extended root signatures, SM5.1 in Luma's space, publish checks in Development and Test); DXIL / SM6 (`_6_x` via DXC + signing) Step 8G | 1 / 2 / G / 8G |
 | Resource database (Luma's shaders, cbuffers, textures) | Step 1 / 3 | Step 2 / 4D (heap tail + Luma SRV table) | 1 / 2 / 4D |
 | Draw callbacks, state stack, passes | Step 1 | Step 2 / 5 (composition renderer) | 1 / 2 / 5 |
-| Trace capture & Debug Draw | Step 1 / 4A / 5 (draws, dispatches, copies, clears, `CpuWrite`/`CpuRead`, `CpuAccess`, live Debug Draw) | Step 2 / 4A / 5 (draws, dispatches, copies, clears, live Debug Draw) | 1 / 2 / 4A / 5 |
-| Shader disassembly, reflection & decompilation | FXC + async `cmd_Decompiler.exe` (DXBC) | FXC/DXC dynamic `dxcompiler.dll` + async `cmd_Decompiler.exe` (DXBC) / RenoDX `decomp.exe --flatten --do-while` (DXIL) | 5 / 6 |
+| Trace capture & Debug Draw | Step 1 / 4A / 5 (draws, dispatches, copies, clears, `CpuWrite`/`CpuRead`, `CpuAccess`, live Debug Draw) | Step 2 / 4A / 5 (draws, dispatches, copies, clears, live Debug Draw); AS/MS & state objects Step 8G | 1 / 2 / 4A / 5 / 8G |
+| Shader disassembly, reflection & decompilation | FXC + async `cmd_Decompiler.exe` (DXBC) | FXC/DXC dynamic `dxcompiler.dll` + async `cmd_Decompiler.exe` (DXBC) / RenoDX `decomp.exe --flatten --do-while` (DXIL); full DXIL binding/slot reflection Step 8G | 5 / 6 / 8G |
 | Shader patching (DXBC) | Step 3 | Step 3; patches adding Luma's cbuffers and textures Step 4D (SM5.1 through `LUMA_SPACE`) | 3 / 4 |
-| Shader patching (DXIL) | n/a | — | first SM6 game |
+| Shader patching (DXIL) | n/a | Step 8G (DXP SM6 recipes + DXIL signing) | 8G |
+| Mesh/Amplification stages, library root signatures, state objects | n/a | Step 8G (AS/MS variants, `CreateRootSignatureFromSubobjectInLibrary`, state object tracking; DXR state-object variant swapping —) | 8G |
 | Mirrors, format upgrades, samplers | Step 4B; sampler mirrors at creation (G6) | Step 4D and G (format variants by RTV and DSV formats, warmed at pipeline creation; depth mirrors; converting copies; mirror UAV clears; anisotropic static samplers —) | 4B / 4D / G |
 | Descriptor heap tail, Luma's textures and descriptor table | n/a | Step 4D and G (ring, adaptive size, opt-in static samplers) | 4D / G |
 | MCP readback, goldens | Step 4A | Step 4A (depth, stencil, MSAA —) | 4A |

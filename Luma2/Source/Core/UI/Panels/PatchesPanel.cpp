@@ -46,6 +46,7 @@ void DrawRecipe(const Shaders::Patching::RecipeInfo& recipe)
    Widgets::Property("Identity", recipe.identity);
    if (!recipe.description.empty())
       Widgets::Paragraph(recipe.description);
+   Widgets::Property("Shader model", recipe.shader_model);
    Widgets::Property("Stage", recipe.stage.empty() ? "any" : recipe.stage);
    Widgets::Property("Shaders changed", std::format("{}", recipe.matched));
    if (!recipe.registered)

@@ -38,6 +38,7 @@
 #endif
 #include "UI/Overlay.hpp"
 #include "Utils/Debug.hpp"
+#include "Utils/Strings.hpp"
 #include "Log/Log.hpp"
 #include "Validation/D3D12/D3D12Validation.hpp"
 
@@ -284,14 +285,51 @@ HRESULT CreateRootSignature(std::span<const uint8_t> game_blob, void** root_sign
    return result;
 }
 
-void PostCreateRootSignatureFromSubobjectInLibrary()
+HRESULT CreateRootSignatureFromSubobjectInLibrary(std::span<const uint8_t> library, std::wstring_view subobject_name, void** root_signature,
+   const std::function<HRESULT(std::span<const uint8_t>)>& create_from_blob, const std::function<HRESULT()>& call_original)
 {
-   LUMA_UNIMPLEMENTED("Root signatures from a DXIL library: not extended, their pipelines get no variants");
+   if (Shaders::IsNeeded())
+   {
+      if (const std::span<const uint8_t> embedded = Shaders::Container::GetRootSignature(library); !embedded.empty())
+      {
+         const Shaders::RootSignatures::D3D12::Extended extended = Shaders::RootSignatures::D3D12::Extend(embedded);
+         if (!extended.blob.empty())
+         {
+            const HRESULT result = create_from_blob(extended.blob);
+            if (SUCCEEDED(result))
+            {
+               if (const Microsoft::WRL::ComPtr<ID3D12RootSignature> created = GetCreatedObject<ID3D12RootSignature>(result, root_signature))
+               {
+                  [[maybe_unused]] const Shaders::Database::D3D12::RootLayout* layout =
+                     Shaders::Database::D3D12::TrackRootSignature(embedded, created.Get(), extended.luma_parameter, extended.table, extended.static_samplers);
+#if DEVELOPMENT
+                  if (layout)
+                     Trace::Stats::D3D12::RecordRootSignature(*layout);
+#endif
+               }
+               return result;
+            }
+         }
+      }
+      else
+      {
+         static std::once_flag logged_rdat;
+         std::call_once(logged_rdat, [&] {
+            Log::Warning("D3D12: CreateRootSignatureFromSubobjectInLibrary (\"{}\") uses an RDAT subobject without RTS0; leaving unextended",
+               Utils::Strings::ToUtf8(subobject_name));
+         });
+      }
+   }
+   return call_original();
 }
 
-void PostCreateStateObject()
+void PostCreateStateObject(ID3D12Device* device, const D3D12_STATE_OBJECT_DESC* desc, void* state_object)
 {
-   LUMA_UNIMPLEMENTED("Variants of state objects (DXIL, the first SM6 game)");
+   if (!Shaders::IsNeeded() || !state_object)
+      return;
+   Microsoft::WRL::ComPtr<ID3D12StateObject> object;
+   if (SUCCEEDED(static_cast<IUnknown*>(state_object)->QueryInterface(IID_PPV_ARGS(&object))))
+      Shaders::Database::D3D12::TrackStateObject(device, desc, object.Get());
 }
 
 // Descriptor heaps and views

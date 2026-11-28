@@ -32,6 +32,7 @@ struct PatchRecipe
    std::string identity;
    std::string name;
    std::optional<std::string> description;
+   std::string shader_model; // "SM5" or "SM6"
    std::optional<std::string> stage; // Its stage folder, none for any stage
    std::string key;
    bool enabled = false;
@@ -149,6 +150,7 @@ std::string PatchState(const Request& request)
       info.name = std::move(recipe.name);
       if (!recipe.description.empty())
          info.description = std::move(recipe.description);
+      info.shader_model = std::move(recipe.shader_model);
       if (!recipe.stage.empty())
          info.stage = std::move(recipe.stage);
       info.key = std::move(recipe.key);

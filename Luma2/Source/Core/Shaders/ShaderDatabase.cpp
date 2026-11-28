@@ -13,6 +13,7 @@
 #include <utility>
 
 #include <d3d11shader.h>
+#include <d3d12shader.h>
 #include <wrl/client.h>
 
 #include "Game/GameRegistry.hpp"
@@ -130,9 +131,78 @@ std::bitset<N> FromList(const std::vector<uint32_t>& list)
 }
 
 // From the reflection data, checking that the bindings were really found: games strip reflection data in ways that
-// still pass, with no bindings left
+// still pass, with no bindings left. DXIL shaders use ID3D12ShaderReflection first, then PSV0 + OSG1 directly.
+bool ReflectDxilSlots(std::span<const uint8_t> bytecode, ShaderStage stage, Reflection& reflection)
+{
+   Microsoft::WRL::ComPtr<ID3D12ShaderReflection> reflector;
+   D3D12_SHADER_DESC desc = {};
+   if (Compiler::ReflectDxil(bytecode, IID_PPV_ARGS(&reflector)) && SUCCEEDED(reflector->GetDesc(&desc)))
+   {
+      for (UINT i = 0; i < desc.OutputParameters; i++)
+      {
+         D3D12_SIGNATURE_PARAMETER_DESC output = {};
+         if (SUCCEEDED(reflector->GetOutputParameterDesc(i, &output)) && output.SemanticName && std::string_view(output.SemanticName) == "SV_Target" &&
+            output.SemanticIndex < reflection.render_targets.size())
+            reflection.render_targets.set(output.SemanticIndex);
+      }
+      for (UINT i = 0; i < desc.BoundResources; i++)
+      {
+         D3D12_SHADER_INPUT_BIND_DESC binding = {};
+         if (FAILED(reflector->GetResourceBindingDesc(i, &binding)) || binding.Space != 0)
+            continue;
+         const UINT count = binding.BindCount == 0 ? 1 : std::min<UINT>(binding.BindCount, 128);
+         for (UINT slot = binding.BindPoint; slot < binding.BindPoint + count; slot++)
+         {
+            if (binding.Type == D3D_SIT_TEXTURE && slot < reflection.shader_resources.size())
+               reflection.shader_resources.set(slot);
+            else if (binding.Type == D3D_SIT_UAV_RWTYPED && slot < reflection.unordered_access.size())
+               reflection.unordered_access.set(slot);
+            else if (binding.Type == D3D_SIT_CBUFFER && slot < reflection.constant_buffers.size())
+               reflection.constant_buffers.set(slot);
+            else if (binding.Type == D3D_SIT_SAMPLER && slot < reflection.samplers.size())
+               reflection.samplers.set(slot);
+         }
+      }
+      return true;
+   }
+   // Stripped DXIL still carries PSV0 bindings and OSG1 outputs: read them without invoking the disassembler
+   const Container::Bindings bindings = Container::GetBindings(bytecode);
+   if (!bindings.found)
+      return false;
+   for (const Container::Binding& binding : bindings.bindings)
+   {
+      if (binding.space != 0)
+         continue;
+      const uint32_t count = binding.count == UINT32_MAX ? 128 : std::min<uint32_t>(binding.count, 128);
+      for (uint32_t i = 0; i < count; i++)
+      {
+         const uint32_t slot = binding.base + i;
+         if (binding.type == Container::BindingType::ShaderResource && slot < reflection.shader_resources.size())
+            reflection.shader_resources.set(slot);
+         else if (binding.type == Container::BindingType::UnorderedAccess && slot < reflection.unordered_access.size())
+            reflection.unordered_access.set(slot);
+         else if (binding.type == Container::BindingType::ConstantBuffer && slot < reflection.constant_buffers.size())
+            reflection.constant_buffers.set(slot);
+         else if (binding.type == Container::BindingType::Sampler && slot < reflection.samplers.size())
+            reflection.samplers.set(slot);
+      }
+   }
+   if (stage == ShaderStage::Pixel)
+   {
+      const Container::Signature signature = Container::GetSignature(bytecode);
+      for (const Container::Element& output : signature.outputs)
+      {
+         if (output.semantic == "SV_TARGET" && output.index < reflection.render_targets.size())
+            reflection.render_targets.set(output.index);
+      }
+   }
+   return true;
+}
+
 bool ReflectSlots(std::span<const uint8_t> bytecode, ShaderStage stage, Reflection& reflection)
 {
+   if (Container::HasChunk(bytecode, "DXIL"))
+      return ReflectDxilSlots(bytecode, stage, reflection);
    // FXC's reflector is used under its lock (one thread at a time), released before it ends
    const Compiler::Lock lock;
    Microsoft::WRL::ComPtr<ID3D11ShaderReflection> reflector;

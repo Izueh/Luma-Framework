@@ -1,5 +1,6 @@
 #include "Shaders/ShaderCompiler.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <format>
@@ -15,6 +16,7 @@
 #include <wrl/client.h>
 
 #include "Log/Log.hpp"
+#include "Notifications/Notifications.hpp"
 #include "Shaders/ShaderContainer.hpp"
 #include "System/Modules.hpp"
 #include "System/Paths.hpp"
@@ -37,6 +39,8 @@ struct Library
 struct DxcLibrary
 {
    DxcCreateInstanceProc create_instance = nullptr;
+   DxcCreateInstanceProc create_validator_instance = nullptr;
+   DxcStatus status;
 };
 
 Library library;
@@ -46,42 +50,6 @@ std::once_flag dxc_load_once;
 // FXC is used by one thread at a time: it isn't thread safe. Recursive, so a caller holds a Lock across the use of
 // the reflector it got. Innermost: nothing else is locked while it's held, and each call holds it only for its own duration.
 std::recursive_mutex fxc_mutex;
-
-void LoadDxc()
-{
-   std::vector<std::filesystem::path> candidates = {
-      System::Paths::GetRoot() / L"dxcompiler.dll",
-      System::Modules::GetSelfDirectory() / L"dxcompiler.dll",
-   };
-#ifdef LUMA_RESOURCES_DIR
-   candidates.push_back(std::filesystem::path(LUMA_RESOURCES_DIR).parent_path() / L"External" / L"Decompilers" / L"dxcompiler.dll");
-#endif
-   candidates.push_back(System::Modules::GetSystemPath(L"dxcompiler.dll"));
-   HMODULE module = nullptr;
-   for (const std::filesystem::path& path : candidates)
-   {
-      std::error_code error;
-      if (std::filesystem::is_regular_file(path, error))
-      {
-         module = LoadLibraryW(path.c_str());
-         if (module)
-         {
-            Log::Info("Shaders: loaded DXC from {}", Utils::Strings::ToUtf8(path));
-            break;
-         }
-      }
-   }
-   if (!module)
-      module = LoadLibraryW(L"dxcompiler.dll");
-   if (module)
-      dxc_library.create_instance = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(module, "DxcCreateInstance"));
-}
-
-const DxcLibrary& GetDxc()
-{
-   std::call_once(dxc_load_once, &LoadDxc);
-   return dxc_library;
-}
 
 uint64_t GetProductVersion(const std::filesystem::path& path)
 {
@@ -105,6 +73,92 @@ uint64_t GetProductVersion(const std::filesystem::path& path)
    if (!get_info(path.c_str(), 0, size, info.data()) || !query_value(info.data(), L"\\", reinterpret_cast<void**>(&fixed), &fixed_size) || !fixed)
       return 0;
    return (uint64_t(fixed->dwProductVersionMS) << 32) | fixed->dwProductVersionLS;
+}
+
+// Picks the newest paired dxcompiler.dll + dxil.dll (same product-version rule as D3DCompiler_47.dll), preferring a directory
+// that carries both DLLs so compiled DXIL containers are validated and signed.
+void LoadDxc()
+{
+   std::vector<std::filesystem::path> directories = {
+      System::Modules::GetSystemPath(L"dxcompiler.dll").parent_path(),
+      System::Paths::GetRoot(),
+      System::Modules::GetSelfDirectory(),
+   };
+#ifdef LUMA_RESOURCES_DIR
+   std::filesystem::path resources_dir = std::filesystem::path(LUMA_RESOURCES_DIR).lexically_normal();
+   if (resources_dir.filename().empty())
+      resources_dir = resources_dir.parent_path();
+   const std::filesystem::path external = resources_dir.parent_path() / L"External";
+   directories.push_back(external / L"DXC");
+   directories.push_back(external / L"Decompilers");
+#endif
+   std::filesystem::path best_dir;
+   uint64_t best_version = 0;
+   bool best_paired = false;
+   for (const std::filesystem::path& dir : directories)
+   {
+      if (dir.empty())
+         continue;
+      std::error_code error;
+      const std::filesystem::path compiler_path = dir / L"dxcompiler.dll";
+      if (!std::filesystem::is_regular_file(compiler_path, error))
+         continue;
+      const bool paired = std::filesystem::is_regular_file(dir / L"dxil.dll", error);
+      const uint64_t version = GetProductVersion(compiler_path);
+      if (best_dir.empty() || (paired && !best_paired) || (paired == best_paired && version > best_version))
+      {
+         best_dir = dir;
+         best_version = version;
+         best_paired = paired;
+      }
+   }
+   HMODULE compiler_module = nullptr;
+   HMODULE signer_module = nullptr;
+   std::filesystem::path loaded_path;
+   if (!best_dir.empty())
+   {
+      if (best_paired)
+         signer_module = LoadLibraryExW((best_dir / L"dxil.dll").c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+      loaded_path = best_dir / L"dxcompiler.dll";
+      compiler_module = LoadLibraryExW(loaded_path.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+      if (!compiler_module)
+         compiler_module = LoadLibraryW(loaded_path.c_str());
+   }
+   if (!compiler_module)
+   {
+      compiler_module = LoadLibraryW(L"dxcompiler.dll");
+      if (compiler_module)
+      {
+         wchar_t buffer[MAX_PATH] = {};
+         if (GetModuleFileNameW(compiler_module, buffer, MAX_PATH) != 0)
+         {
+            loaded_path = buffer;
+            best_version = GetProductVersion(loaded_path);
+         }
+      }
+   }
+   if (!signer_module)
+      signer_module = LoadLibraryW(L"dxil.dll");
+   if (compiler_module)
+      dxc_library.create_instance = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(compiler_module, "DxcCreateInstance"));
+   if (signer_module)
+      dxc_library.create_validator_instance = reinterpret_cast<DxcCreateInstanceProc>(GetProcAddress(signer_module, "DxcCreateInstance"));
+   dxc_library.status = {
+      .loaded = dxc_library.create_instance != nullptr,
+      .signer_loaded = dxc_library.create_validator_instance != nullptr,
+      .path = Utils::Strings::ToUtf8(loaded_path),
+      .version = best_version,
+   };
+   if (dxc_library.status.loaded)
+      Log::Info("Shaders: loaded DXC from {} (dxil.dll {})", dxc_library.status.path, dxc_library.status.signer_loaded ? "loaded" : "missing");
+   else
+      Log::Warning("Shaders: dxcompiler.dll couldn't be loaded, SM6 (DXIL) shaders can't be compiled");
+}
+
+const DxcLibrary& GetDxc()
+{
+   std::call_once(dxc_load_once, &LoadDxc);
+   return dxc_library;
 }
 
 // A copy shipped in the Luma folder, for Wine and Proton users whose system one may be missing or outdated, is used
@@ -196,7 +250,264 @@ std::string GetText(ID3DBlob* blob)
 {
    return blob ? std::string(static_cast<const char*>(blob->GetBufferPointer()), strnlen(static_cast<const char*>(blob->GetBufferPointer()), blob->GetBufferSize())) : std::string();
 }
+
+std::string GetDxcText(IDxcResult* result, DXC_OUT_KIND kind)
+{
+   ComPtr<IDxcBlobUtf8> text;
+   if (!result || FAILED(result->GetOutput(kind, IID_PPV_ARGS(&text), nullptr)) || !text || !text->GetStringPointer())
+      return {};
+   return std::string(text->GetStringPointer(), text->GetStringLength());
+}
+
+// Writable IDxcBlob wrapper over a Bytecode buffer so IDxcValidator::Validate can sign in place
+struct WritableDxcBlob final : IDxcBlob
+{
+   Bytecode* bytes = nullptr;
+
+   explicit WritableDxcBlob(Bytecode& bytes_) : bytes(&bytes_) {}
+
+   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** object) override
+   {
+      if (riid == __uuidof(IDxcBlob) || riid == __uuidof(IUnknown))
+      {
+         *object = this;
+         return S_OK;
+      }
+      *object = nullptr;
+      return E_NOINTERFACE;
+   }
+
+   ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+   ULONG STDMETHODCALLTYPE Release() override { return 1; }
+   LPVOID STDMETHODCALLTYPE GetBufferPointer() override { return bytes->data(); }
+   SIZE_T STDMETHODCALLTYPE GetBufferSize() override { return bytes->size(); }
+};
+
+// Resolves DXC #include directives from the Shaders roots, matching FXC's Include
+struct DxcInclude final : IDxcIncludeHandler
+{
+   IDxcUtils* utils = nullptr;
+   std::span<const std::filesystem::path> roots;
+
+   DxcInclude(IDxcUtils* utils_, std::span<const std::filesystem::path> roots_) : utils(utils_), roots(roots_) {}
+
+   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** object) override
+   {
+      if (riid == __uuidof(IDxcIncludeHandler) || riid == __uuidof(IUnknown))
+      {
+         *object = this;
+         return S_OK;
+      }
+      *object = nullptr;
+      return E_NOINTERFACE;
+   }
+
+   ULONG STDMETHODCALLTYPE AddRef() override { return 1; }
+   ULONG STDMETHODCALLTYPE Release() override { return 1; }
+
+   HRESULT STDMETHODCALLTYPE LoadSource(LPCWSTR filename, IDxcBlob** include_source) override
+   {
+      if (!filename || !include_source || !utils)
+         return E_INVALIDARG;
+      std::string normalized = Utils::Strings::ToUtf8(std::wstring_view(filename));
+      std::ranges::replace(normalized, '\\', '/');
+      while (normalized.starts_with("./"))
+         normalized.erase(0, 2);
+      const std::optional<std::string> text = ReadFile(roots, normalized);
+      if (!text)
+         return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+      ComPtr<IDxcBlobEncoding> blob;
+      const HRESULT hr = utils->CreateBlob(text->data(), UINT32(text->size()), DXC_CP_UTF8, &blob);
+      if (FAILED(hr))
+         return hr;
+      *include_source = blob.Detach();
+      return S_OK;
+   }
+};
+
+std::wstring ToWide(std::string_view text)
+{
+   if (text.empty())
+      return {};
+   const int length = MultiByteToWideChar(CP_UTF8, 0, text.data(), int(text.size()), nullptr, 0);
+   if (length <= 0)
+      return std::wstring(text.begin(), text.end());
+   std::wstring wide(size_t(length), L'\0');
+   MultiByteToWideChar(CP_UTF8, 0, text.data(), int(text.size()), wide.data(), length);
+   return wide;
+}
+
+std::vector<std::wstring> BuildDxcDefineArgs(std::span<const Define> defines)
+{
+   std::vector<std::wstring> args;
+   args.reserve(defines.size() * 2);
+   for (const Define& define : defines)
+   {
+      if (define.name.empty() || define.value.empty())
+         continue;
+      args.emplace_back(L"-D");
+      args.push_back(ToWide(std::format("{}={}", define.name, define.value)));
+   }
+   return args;
+}
+
+Preprocessed PreprocessDxc(std::span<const std::filesystem::path> roots, std::string_view file, std::span<const Define> defines)
+{
+   const DxcLibrary& dxc = GetDxc();
+   if (!dxc.create_instance)
+      return {{}, "dxcompiler.dll isn't loaded", true};
+   ComPtr<IDxcUtils> utils;
+   ComPtr<IDxcCompiler3> compiler;
+   if (FAILED(dxc.create_instance(CLSID_DxcUtils, IID_PPV_ARGS(&utils))) || FAILED(dxc.create_instance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler))))
+      return {{}, "DXC interfaces couldn't be created", true};
+   const std::string source = GetSource(file);
+   const DxcBuffer buffer = {.Ptr = source.data(), .Size = source.size(), .Encoding = DXC_CP_UTF8};
+   std::vector<std::wstring> storage = BuildDxcDefineArgs(defines);
+   storage.emplace_back(L"-P");
+   storage.emplace_back(L"-HV");
+   storage.emplace_back(L"2018");
+   std::vector<LPCWSTR> args;
+   args.reserve(storage.size());
+   for (const std::wstring& arg : storage)
+      args.push_back(arg.c_str());
+   DxcInclude include(utils.Get(), roots);
+   ComPtr<IDxcResult> result;
+   const HRESULT call_hr = compiler->Compile(&buffer, args.data(), UINT32(args.size()), &include, IID_PPV_ARGS(&result));
+   if (FAILED(call_hr) || !result)
+      return {{}, std::format("DXC preprocess failed (0x{:08X})", uint32_t(call_hr)), true};
+   HRESULT status = E_FAIL;
+   result->GetStatus(&status);
+   return {GetDxcText(result.Get(), DXC_OUT_HLSL), GetDxcText(result.Get(), DXC_OUT_ERRORS), FAILED(status)};
+}
+
+Compiled CompileDxc(std::span<const std::filesystem::path> roots, std::string_view file, std::span<const Define> defines, std::string_view target,
+   std::string_view entry)
+{
+   const DxcLibrary& dxc = GetDxc();
+   if (!dxc.create_instance)
+      return {{}, "dxcompiler.dll isn't loaded", true};
+   ComPtr<IDxcUtils> utils;
+   ComPtr<IDxcCompiler3> compiler;
+   if (FAILED(dxc.create_instance(CLSID_DxcUtils, IID_PPV_ARGS(&utils))) || FAILED(dxc.create_instance(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler))))
+      return {{}, "DXC interfaces couldn't be created", true};
+   const std::string source = GetSource(file);
+   const DxcBuffer buffer = {.Ptr = source.data(), .Size = source.size(), .Encoding = DXC_CP_UTF8};
+   std::vector<std::wstring> storage = BuildDxcDefineArgs(defines);
+   storage.emplace_back(L"-T");
+   storage.push_back(ToWide(target));
+   if (!target.starts_with("lib_") && !entry.empty())
+   {
+      storage.emplace_back(L"-E");
+      storage.push_back(ToWide(entry));
+   }
+   storage.emplace_back(L"-HV");
+   storage.emplace_back(L"2018");
+   storage.emplace_back(L"-O3");
+   storage.emplace_back(L"-Qstrip_debug");
+   std::vector<LPCWSTR> args;
+   args.reserve(storage.size());
+   for (const std::wstring& arg : storage)
+      args.push_back(arg.c_str());
+   DxcInclude include(utils.Get(), roots);
+   ComPtr<IDxcResult> result;
+   const HRESULT call_hr = compiler->Compile(&buffer, args.data(), UINT32(args.size()), &include, IID_PPV_ARGS(&result));
+   if (FAILED(call_hr) || !result)
+      return {{}, std::format("DXC compile failed (0x{:08X})", uint32_t(call_hr)), true};
+   HRESULT status = E_FAIL;
+   result->GetStatus(&status);
+   Compiled compiled = {{}, GetDxcText(result.Get(), DXC_OUT_ERRORS), FAILED(status)};
+   if (!compiled.failed)
+   {
+      ComPtr<IDxcBlob> object;
+      if (SUCCEEDED(result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&object), nullptr)) && object && object->GetBufferPointer() && object->GetBufferSize() != 0)
+      {
+         const auto* bytes = static_cast<const uint8_t*>(object->GetBufferPointer());
+         compiled.bytecode.assign(bytes, bytes + object->GetBufferSize());
+      }
+      else
+         compiled.failed = true;
+   }
+   if (!compiled.failed && !IsSignedDxil(compiled.bytecode))
+   {
+      if (std::expected<Bytecode, std::string> signed_dxil = SignDxil(compiled.bytecode))
+      {
+         compiled.bytecode = std::move(*signed_dxil);
+      }
+      else
+      {
+         compiled.failed = true;
+         compiled.bytecode.clear();
+         if (!compiled.messages.empty() && !compiled.messages.ends_with('\n'))
+            compiled.messages += '\n';
+         compiled.messages += signed_dxil.error();
+         static std::once_flag warned_unsigned;
+         std::call_once(warned_unsigned, [] {
+            Notifications::Post(Notifications::Kind::Warning, "Shaders: DXIL compilation requires dxil.dll beside dxcompiler.dll to sign shaders.");
+         });
+      }
+   }
+   if (compiled.failed && compiled.messages.empty())
+      compiled.messages = std::format("DXC compile failed (0x{:08X})", uint32_t(status));
+   return compiled;
+}
 } // namespace
+
+bool IsDxilTarget(std::string_view target)
+{
+   const size_t separator = target.find('_');
+   return separator != std::string_view::npos && target.substr(separator + 1).starts_with('6');
+}
+
+bool IsSignedDxil(std::span<const uint8_t> bytecode)
+{
+   if (bytecode.size() < 20 || std::memcmp(bytecode.data(), "DXBC", 4) != 0)
+      return false;
+   for (size_t i = 4; i < 20; i++)
+   {
+      if (bytecode[i] != 0)
+         return true;
+   }
+   return false;
+}
+
+std::expected<Bytecode, std::string> SignDxil(std::span<const uint8_t> bytecode)
+{
+   if (bytecode.empty())
+      return std::unexpected("DXIL bytecode is empty");
+   if (IsSignedDxil(bytecode))
+      return Bytecode(bytecode.begin(), bytecode.end());
+   const DxcLibrary& dxc = GetDxc();
+   if (!dxc.create_validator_instance)
+      return std::unexpected("DXIL output is unsigned because dxil.dll was not found beside dxcompiler.dll");
+   ComPtr<IDxcValidator> validator;
+   if (FAILED(dxc.create_validator_instance(CLSID_DxcValidator, IID_PPV_ARGS(&validator))) || !validator)
+      return std::unexpected("dxil.dll failed to create IDxcValidator");
+   Bytecode signed_bytes(bytecode.begin(), bytecode.end());
+   WritableDxcBlob blob(signed_bytes);
+   ComPtr<IDxcOperationResult> result;
+   const HRESULT call_hr = validator->Validate(&blob, DxcValidatorFlags_InPlaceEdit, &result);
+   if (FAILED(call_hr) || !result)
+      return std::unexpected(std::format("DXIL validation failed (0x{:08X})", uint32_t(call_hr)));
+   HRESULT status = E_FAIL;
+   result->GetStatus(&status);
+   if (FAILED(status))
+   {
+      ComPtr<IDxcBlobEncoding> error_blob;
+      std::string message;
+      if (SUCCEEDED(result->GetErrorBuffer(&error_blob)) && error_blob && error_blob->GetBufferPointer())
+         message.assign(static_cast<const char*>(error_blob->GetBufferPointer()),
+            strnlen(static_cast<const char*>(error_blob->GetBufferPointer()), error_blob->GetBufferSize()));
+      return std::unexpected(message.empty() ? std::format("DXIL validation failed (0x{:08X})", uint32_t(status)) : message);
+   }
+   if (!IsSignedDxil(signed_bytes))
+      return std::unexpected("DXIL validation succeeded without writing a container hash");
+   return signed_bytes;
+}
+
+DxcStatus GetDxcStatus()
+{
+   return GetDxc().status;
+}
 
 Lock::Lock()
 {
@@ -208,8 +519,10 @@ Lock::~Lock()
    fxc_mutex.unlock();
 }
 
-Preprocessed Preprocess(std::span<const std::filesystem::path> roots, std::string_view file, std::span<const Define> defines)
+Preprocessed Preprocess(std::span<const std::filesystem::path> roots, std::string_view file, std::span<const Define> defines, std::string_view target)
 {
+   if (IsDxilTarget(target))
+      return PreprocessDxc(roots, file, defines);
    const Library& fxc = GetLibrary();
    if (!fxc.preprocess)
       return {{}, "D3DCompiler_47.dll isn't loaded", true};
@@ -228,6 +541,8 @@ Preprocessed Preprocess(std::span<const std::filesystem::path> roots, std::strin
 Compiled Compile(std::span<const std::filesystem::path> roots, std::string_view file, std::span<const Define> defines, std::string_view target,
    std::string_view entry)
 {
+   if (IsDxilTarget(target))
+      return CompileDxc(roots, file, defines, target, entry);
    const Library& fxc = GetLibrary();
    if (!fxc.compile)
       return {{}, "D3DCompiler_47.dll isn't loaded", true};
@@ -266,6 +581,18 @@ bool Reflect(std::span<const uint8_t> bytecode, REFIID iid, void** reflector)
    return fxc.reflect && SUCCEEDED(fxc.reflect(bytecode.data(), bytecode.size(), iid, reflector));
 }
 
+bool ReflectDxil(std::span<const uint8_t> bytecode, REFIID iid, void** reflector)
+{
+   const DxcLibrary& dxc = GetDxc();
+   if (!dxc.create_instance || bytecode.empty())
+      return false;
+   ComPtr<IDxcUtils> utils;
+   if (FAILED(dxc.create_instance(CLSID_DxcUtils, IID_PPV_ARGS(&utils))) || !utils)
+      return false;
+   const DxcBuffer container = {.Ptr = bytecode.data(), .Size = bytecode.size(), .Encoding = 0};
+   return SUCCEEDED(utils->CreateReflection(&container, iid, reflector));
+}
+
 std::optional<std::string> Disassemble(std::span<const uint8_t> bytecode)
 {
    if (bytecode.empty())
@@ -300,6 +627,20 @@ std::optional<std::string> Disassemble(std::span<const uint8_t> bytecode)
 std::vector<Binding> ReflectConstantBufferBindings(std::span<const uint8_t> bytecode)
 {
    std::vector<Binding> bindings;
+   if (Container::HasChunk(bytecode, "DXIL"))
+   {
+      ComPtr<ID3D12ShaderReflection> reflector;
+      D3D12_SHADER_DESC desc = {};
+      if (!ReflectDxil(bytecode, IID_PPV_ARGS(&reflector)) || FAILED(reflector->GetDesc(&desc)))
+         return bindings;
+      for (UINT i = 0; i < desc.BoundResources; i++)
+      {
+         D3D12_SHADER_INPUT_BIND_DESC binding = {};
+         if (SUCCEEDED(reflector->GetResourceBindingDesc(i, &binding)) && binding.Type == D3D_SIT_CBUFFER && binding.Name)
+            bindings.push_back({binding.Name, binding.BindPoint, binding.Space});
+      }
+      return bindings;
+   }
    const Lock lock;
    ComPtr<ID3D11ShaderReflection> reflector;
    D3D11_SHADER_DESC desc = {};
@@ -309,7 +650,7 @@ std::vector<Binding> ReflectConstantBufferBindings(std::span<const uint8_t> byte
    {
       D3D11_SHADER_INPUT_BIND_DESC binding = {};
       if (SUCCEEDED(reflector->GetResourceBindingDesc(i, &binding)) && binding.Type == D3D_SIT_CBUFFER && binding.Name)
-         bindings.push_back({binding.Name, binding.BindPoint});
+         bindings.push_back({binding.Name, binding.BindPoint, 0});
    }
    return bindings;
 }
@@ -317,6 +658,20 @@ std::vector<Binding> ReflectConstantBufferBindings(std::span<const uint8_t> byte
 std::vector<Binding> ReflectTextureBindings(std::span<const uint8_t> bytecode)
 {
    std::vector<Binding> bindings;
+   if (Container::HasChunk(bytecode, "DXIL"))
+   {
+      ComPtr<ID3D12ShaderReflection> reflector;
+      D3D12_SHADER_DESC desc = {};
+      if (!ReflectDxil(bytecode, IID_PPV_ARGS(&reflector)) || FAILED(reflector->GetDesc(&desc)))
+         return bindings;
+      for (UINT i = 0; i < desc.BoundResources; i++)
+      {
+         D3D12_SHADER_INPUT_BIND_DESC binding = {};
+         if (SUCCEEDED(reflector->GetResourceBindingDesc(i, &binding)) && binding.Type == D3D_SIT_TEXTURE && binding.Name)
+            bindings.push_back({binding.Name, binding.BindPoint, binding.Space});
+      }
+      return bindings;
+   }
    const Lock lock;
    ComPtr<ID3D11ShaderReflection> reflector;
    D3D11_SHADER_DESC desc = {};
@@ -326,7 +681,7 @@ std::vector<Binding> ReflectTextureBindings(std::span<const uint8_t> bytecode)
    {
       D3D11_SHADER_INPUT_BIND_DESC binding = {};
       if (SUCCEEDED(reflector->GetResourceBindingDesc(i, &binding)) && binding.Type == D3D_SIT_TEXTURE && binding.Name)
-         bindings.push_back({binding.Name, binding.BindPoint});
+         bindings.push_back({binding.Name, binding.BindPoint, 0});
    }
    return bindings;
 }

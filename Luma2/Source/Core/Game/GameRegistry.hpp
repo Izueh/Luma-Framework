@@ -92,7 +92,14 @@ bool HasDrawCallbacks()
 template <Api api, typename Call, typename RefreshVariantStagesFn>
 DrawResult DispatchDrawEvents(Call& call, Luma::Shaders::StageSet callback_stages, RefreshVariantStagesFn&& refresh_variant_stages)
 {
-   constexpr std::array ORDER = {ShaderStage::Pixel, ShaderStage::Vertex, ShaderStage::Geometry, ShaderStage::Hull, ShaderStage::Domain, ShaderStage::Compute};
+   constexpr auto get_order = [] {
+      if constexpr (api == Api::D3D12)
+         return std::array{ShaderStage::Pixel, ShaderStage::Vertex, ShaderStage::Mesh, ShaderStage::Amplification, ShaderStage::Geometry, ShaderStage::Hull,
+            ShaderStage::Domain, ShaderStage::Compute};
+      else
+         return std::array{ShaderStage::Pixel, ShaderStage::Vertex, ShaderStage::Geometry, ShaderStage::Hull, ShaderStage::Domain, ShaderStage::Compute};
+   };
+   constexpr auto ORDER = get_order();
    const auto& events = GetEvents<api>();
    const auto variant_callback = call.variant_stages.Any() ? events.on_variant_draw : nullptr;
    decltype(events.on_draw_or_dispatch) callback = nullptr;

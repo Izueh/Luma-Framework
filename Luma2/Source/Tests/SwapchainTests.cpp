@@ -250,10 +250,20 @@ TEST_CASE("Composition: InPlace SDR passthrough skips unnecessary re-encoding, a
    Display::Composition::SetOptions({.post_process_space = 1, .early_display_encoding = false, .vanilla_encoding = 1, .gamma_correction = 1});
    CHECK(Display::Composition::Plan({.encoding = Encoding::Linear, .game_linear = true, .always = false}).has_value());
 
-   // Mirror mode with native-HDR PQ game when mod is inactive signals custom_data_1 == 3
+   // Mirror mode with native-HDR PQ game when mod is inactive signals InputMode == 3
    const std::optional<Pass> pq_pass = Display::Composition::Plan({.encoding = Encoding::Pq, .game_linear = false, .game_pq = true, .always = true});
    REQUIRE(pq_pass.has_value());
-   CHECK(pq_pass->custom.custom_data_1 == 3u);
+   CHECK(pq_pass->data.InputMode == 3u);
+
+   // PostProcessSpaceType 3 (PQ) syncs to the cbuffer, and InPlace PQ passthrough skips redundant re-encoding
+   Display::Composition::SetOptions({.post_process_space = 3, .early_display_encoding = false, .vanilla_encoding = 0, .gamma_correction = 0});
+   CHECK(Resources::LumaCBuffers::cb_luma_global_settings.DisplayComposition.PostProcessSpaceType == 3u);
+   Resources::LumaCBuffers::cb_luma_global_settings.DisplayMode = 1;
+   Resources::LumaCBuffers::cb_luma_global_settings.GamePaperWhiteNits = 80.f;
+   CHECK_FALSE(Display::Composition::Plan({.encoding = Encoding::Pq, .game_linear = false, .game_pq = true, .always = false}).has_value());
+   const std::optional<Pass> pq_to_linear = Display::Composition::Plan({.encoding = Encoding::Linear, .game_linear = false, .game_pq = true, .always = false});
+   REQUIRE(pq_to_linear.has_value());
+   CHECK(pq_to_linear->data.InputMode == 3u);
 
    Display::Composition::SetOptions({});
    Settings::Clear();

@@ -221,6 +221,11 @@ struct D3D12MirrorsInfo
 struct D3D12Info
 {
    uint32_t pipelines = 0;
+   uint32_t mesh_pipelines = 0;
+   uint32_t state_objects = 0;
+   uint32_t dxil_shaders = 0;
+   bool dxc_loaded = false;
+   bool dxil_signer_loaded = false;
    D3D12VariantsInfo variant_pipelines;
    D3D12LibraryInfo luma_pipeline_library;
    uint32_t extended_root_signatures = 0;

@@ -63,7 +63,7 @@ std::shared_ptr<Store> GetStore(Device device);
 std::vector<std::shared_ptr<Store>> GetStores();
 // Any thread, for the dev tools: the store of the device that presented last, else of a live one. Null before any device.
 std::shared_ptr<Store> GetShownStore();
-// On D3D12 upgrades <5.1 to 5.1 and returns empty for 6.x (DXIL unsupported)
+// On D3D12 upgrades DXBC <5.1 to 5.1 and keeps 6.x (DXIL); on D3D11 keeps DXBC and returns empty for 6.x
 std::string GetTarget(std::string_view target, Api api);
 // Hashes with a replacement file, from the scans so far
 bool HasReplacementFile(uint32_t hash);

@@ -43,7 +43,7 @@ constexpr std::array<std::string_view, 5> GAMMA_CORRECTION_LABELS = {
    "By Luma",
    "2.2 Luma",
 };
-constexpr std::array<std::string_view, 3> POST_PROCESS_SPACE_LABELS = {"SDR Gamma", "Linear", "Linear Until UI"};
+constexpr std::array<std::string_view, 4> POST_PROCESS_SPACE_LABELS = {"SDR Gamma", "Linear", "Linear Until UI", "PQ"};
 constexpr std::array<std::string_view, 2> VANILLA_ENCODING_LABELS = {"sRGB", "Gamma 2.2"};
 constexpr std::array<std::string_view, 4> GAMUT_MAPPING_LABELS = {"None", "Auto", "SDR (BT.709)", "HDR (BT.2020)"};
 constexpr std::array<std::string_view, 4> UI_DRAW_TYPE_LABELS = {"Raw", "Direct Custom", "Direct Inverse", "Separate Texture"};
@@ -324,9 +324,10 @@ std::optional<Pass> Plan(const Inputs& inputs)
       const auto has_stage = [stages](Stage stage) { return (stages & (1u << uint32_t(stage))) != 0; };
       const bool sdr = Resources::LumaCBuffers::cb_luma_global_settings.DisplayMode == 0;
       const bool input_linear = mod_active ? dc.PostProcessSpaceType == 1 : inputs.game_linear;
+      const bool input_pq = mod_active ? dc.PostProcessSpaceType == 3 : inputs.game_pq;
       const bool output_linear = inputs.encoding == Encoding::Linear;
-      const bool needs_reencoding = (output_linear != input_linear) || inputs.encoding == Encoding::Pq ||
-         (!mod_active && inputs.game_pq && inputs.encoding != Encoding::Pq);
+      const bool output_pq = inputs.encoding == Encoding::Pq;
+      const bool needs_reencoding = (output_linear != input_linear) || (output_pq != input_pq);
       const bool early_display_encoding = dc.PostProcessSpaceType == 1 && dc.EarlyDisplayEncoding >= 1;
       const bool early_gamma_correction = early_display_encoding && dc.GammaCorrectionType < 2;
       const bool in_out_gamma_different = dc.VanillaEncodingType != dc.GammaCorrectionType;
@@ -345,8 +346,8 @@ std::optional<Pass> Plan(const Inputs& inputs)
    }
 
    Pass pass;
-   // Shader fallback mode when Luma's shaders aren't active: 0 mod active, 1 vanilla gamma, 2 vanilla linear, 3 vanilla HDR10 PQ
-   pass.custom.custom_data_1 = mod_active ? 0u : (inputs.game_pq ? 3u : (inputs.game_linear ? 2u : 1u));
+   // Input mode: 0 mod active (uses DisplayComposition.PostProcessSpaceType), 1 vanilla gamma, 2 vanilla linear, 3 vanilla HDR10 PQ
+   pass.data.InputMode = mod_active ? 0u : (inputs.game_pq ? 3u : (inputs.game_linear ? 2u : 1u));
    pass.data.OutputEncoding = uint32_t(inputs.encoding);
    pass.data.Stages = stages;
    pass.data.SourceScale = inputs.source_scale;
