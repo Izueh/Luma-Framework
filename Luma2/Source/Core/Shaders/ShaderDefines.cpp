@@ -13,6 +13,7 @@
 #include "Game/GameRegistry.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Settings/SettingKeys.hpp"
+#include "Shaders/Shaders.hpp"
 #include "Utils/Debug.hpp"
 #include "Log/Log.hpp"
 
@@ -38,6 +39,7 @@ const std::array SETTINGS = {
 #else
       .default_value = true,
 #endif
+      .is_visible = &Shaders::IsSupported,
    },
 };
 
@@ -102,6 +104,7 @@ bool Add(const Definition& definition)
       .default_value = definition.default_value,
       .range = definition.range,
       .source = Define{owned.name},
+      .is_visible = &Shaders::IsSupported,
    };
    if (Settings::Register({&setting, 1}, Settings::Kind::Define))
       return true;

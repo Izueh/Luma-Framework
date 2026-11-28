@@ -15,8 +15,11 @@ namespace Registry {
 const Info& GetInfo();
 const D3D11::Events& GetD3D11Events();
 const D3D12::Events& GetD3D12Events();
+const Vulkan::Events& GetVulkanEvents();
 const Panels& GetPanels();
 ApiSet GetSupportedApis();
+// True if the active device's API (or any declared supported API before a device exists) is in `apis`
+bool HasSupportedApi(ApiSet apis);
 // Null if the game set none for the hash (OnShaderDraw)
 D3D11::DrawCallback FindDrawCallback(uint32_t hash);
 // Any draw event: OnShaderDraw, on_variant_draw or on_draw_or_dispatch
@@ -29,12 +32,14 @@ Hooks::D3D12::Functions GetRequestedD3D12Functions();
 // The native functions the game's events need hooked
 Hooks::DXGI::Functions GetRequestedDXGIFunctions();
 Hooks::D3D11::Functions GetRequestedFunctions();
+Hooks::Vulkan::Functions GetRequestedVulkanFunctions();
 void LogDeclarations();
 // Forgets the info, events, callbacks, panels and options (tests)
 void Reset();
 
 // With each device the game creates, before its callbacks
-void CreateDeviceData(IUnknown* device);
+void CreateDeviceData(Device device);
+void DestroyDeviceData(Device device);
 
 // Runs `callback` if the game set it. Handlers are already inside a Luma scope.
 template <typename Callback, typename... Arguments>
@@ -51,10 +56,12 @@ const auto& GetEvents()
 {
    if constexpr (api == Api::D3D11)
       return GetD3D11Events();
+   else if constexpr (api == Api::D3D12)
+      return GetD3D12Events();
    else
    {
-      static_assert(api == Api::D3D12);
-      return GetD3D12Events();
+      static_assert(api == Api::Vulkan);
+      return GetVulkanEvents();
    }
 }
 

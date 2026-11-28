@@ -7,6 +7,7 @@
 #include <string_view>
 
 #include "Display/DisplayMode.hpp"
+#include "Display/Swapchain.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Shaders/ShaderVariants.hpp"
@@ -64,7 +65,7 @@ constexpr std::array USER_SETTINGS = {
       .default_value = Settings::EnumIndex{1},
       .enum_labels = GAMMA_CORRECTION_LABELS,
       .live = true,
-      .is_visible = [] { return DisplayMode::HasHdrOutput(); },
+      .is_visible = [] { return Swapchain::IsSupported() && DisplayMode::HasHdrOutput(); },
    },
 };
 
@@ -78,6 +79,7 @@ constexpr std::array DEV_PARAM_SETTINGS = {
       .default_value = Settings::EnumIndex{0},
       .enum_labels = POST_PROCESS_SPACE_LABELS,
       .live = true,
+      .is_visible = &Swapchain::IsSupported,
    },
    Settings::Setting{
       .key = Settings::Core::COMPOSITION_EARLY_DISPLAY_ENCODING.key,
@@ -86,6 +88,7 @@ constexpr std::array DEV_PARAM_SETTINGS = {
       .category = DEV_CATEGORY,
       .visibility = Settings::Visibility::Development,
       .default_value = false,
+      .is_visible = &Swapchain::IsSupported,
    },
    Settings::Setting{
       .key = Settings::Core::COMPOSITION_VANILLA_ENCODING.key,
@@ -96,6 +99,7 @@ constexpr std::array DEV_PARAM_SETTINGS = {
       .default_value = Settings::EnumIndex{0},
       .enum_labels = VANILLA_ENCODING_LABELS,
       .live = true,
+      .is_visible = &Swapchain::IsSupported,
    },
    Settings::Setting{
       .key = Settings::Core::COMPOSITION_GAMUT_MAPPING.key,
@@ -106,6 +110,7 @@ constexpr std::array DEV_PARAM_SETTINGS = {
       .default_value = Settings::EnumIndex{0},
       .enum_labels = GAMUT_MAPPING_LABELS,
       .live = true,
+      .is_visible = &Swapchain::IsSupported,
    },
    Settings::Setting{
       .key = Settings::Core::COMPOSITION_UI_DRAW_TYPE.key,
@@ -116,6 +121,7 @@ constexpr std::array DEV_PARAM_SETTINGS = {
       .default_value = Settings::EnumIndex{0},
       .enum_labels = UI_DRAW_TYPE_LABELS,
       .live = true,
+      .is_visible = &Swapchain::IsSupported,
    },
 #if DEVELOPMENT
    Settings::Setting{
@@ -125,6 +131,7 @@ constexpr std::array DEV_PARAM_SETTINGS = {
       .category = DEV_CATEGORY,
       .visibility = Settings::Visibility::Development,
       .default_value = false,
+      .is_visible = &Swapchain::IsSupported,
    },
    Settings::Setting{
       .key = Settings::Core::COMPOSITION_SPLIT_VIEW_MODE.key,
@@ -135,6 +142,7 @@ constexpr std::array DEV_PARAM_SETTINGS = {
       .default_value = Settings::EnumIndex{0},
       .enum_labels = SPLIT_VIEW_MODE_LABELS,
       .live = true,
+      .is_visible = &Swapchain::IsSupported,
    },
    Settings::Setting{
       .key = Settings::Core::COMPOSITION_SPLIT_VIEW_NATIVE.key,
@@ -143,6 +151,7 @@ constexpr std::array DEV_PARAM_SETTINGS = {
       .category = DEV_CATEGORY,
       .visibility = Settings::Visibility::Development,
       .default_value = false,
+      .is_visible = &Swapchain::IsSupported,
    },
 #endif
 };
@@ -159,6 +168,7 @@ std::array<Settings::Setting, size_t(Stage::Count)> MakeStageSettings()
          .category = DEV_CATEGORY,
          .visibility = Settings::Visibility::Development,
          .default_value = true,
+         .is_visible = &Swapchain::IsSupported,
       };
    }
    return settings;

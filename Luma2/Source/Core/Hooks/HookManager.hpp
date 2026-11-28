@@ -66,6 +66,8 @@ struct Counts
 void InstallDXGI(const DXGI::Functions& functions);
 void InstallD3D11(const D3D11::Functions& functions);
 void InstallD3D12(const D3D12::Functions& functions);
+void InstallVulkan(const Vulkan::Functions& functions);
+uint32_t GetVulkanDeviceCount();
 // Called by InstallD3D11
 void InstallD3D11Device(const D3D11::Functions& functions);
 void InstallD3D11Context(const D3D11::Functions& functions);

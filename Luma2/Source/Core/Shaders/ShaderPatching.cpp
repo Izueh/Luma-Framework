@@ -839,6 +839,15 @@ void Register()
       Settings::AddChangeListener(&OnSettingChanged);
 }
 
+bool IsSupported()
+{
+#ifdef LUMA_USE_DXP
+   return Shaders::IsSupported();
+#else
+   return Shaders::IsSupported() && IsNeeded();
+#endif
+}
+
 bool IsNeeded()
 {
    return needed;

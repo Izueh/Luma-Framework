@@ -36,6 +36,7 @@ void SetOptions(const Options& options);
 const Options& GetOptions();
 // Its settings, before the game's Init
 void Register();
+bool IsSupported();
 
 // From the settings over the game's options, read when a swapchain is created
 Mode GetMode();

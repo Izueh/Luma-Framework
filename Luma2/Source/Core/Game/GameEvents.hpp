@@ -13,6 +13,10 @@
 #include "Hooks/HookFunctions.hpp"
 #include "Shaders/ShaderStages.hpp"
 
+struct VkDevice_T;
+struct VkQueue_T;
+struct VkSwapchainKHR_T;
+
 namespace Luma {
 namespace Game {
 enum class DrawResult : uint8_t
@@ -249,8 +253,20 @@ struct Events
 void OnShaderDraw(std::span<const uint32_t> hashes, DrawCallback callback);
 } // namespace D3D12
 
+namespace Vulkan {
+// Placeholder lifecycle and presentation events for Vulkan games/emulators
+struct Events
+{
+   void (*on_init_device)(VkDevice_T* device) = nullptr;
+   void (*on_destroy_device)(VkDevice_T* device) = nullptr;
+   void (*on_init_swapchain)(VkSwapchainKHR_T* swapchain, VkDevice_T* device, bool resize) = nullptr;
+   void (*on_present)(VkSwapchainKHR_T* swapchain, VkQueue_T* queue) = nullptr;
+};
+} // namespace Vulkan
+
 // Replace the events set before for that API
 void SetEvents(const D3D11::Events& events);
 void SetEvents(const D3D12::Events& events);
+void SetEvents(const Vulkan::Events& events);
 } // namespace Game
 } // namespace Luma

@@ -45,6 +45,7 @@
     <ClCompile Include="UITests.cpp" />
     <ClCompile Include="SwapchainTests.cpp" />
     <ClCompile Include="SuperResolutionTests.cpp" />
+    <ClCompile Include="VulkanTests.cpp" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Game\GameCBuffers.hlsl" />

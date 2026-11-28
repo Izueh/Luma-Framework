@@ -9,9 +9,10 @@
 
 #include <Windows.h>
 
+#include "Common/DeviceTable.hpp"
 #include "FrameState/FrameState.hpp"
+#include "Game/GameRegistry.hpp"
 #include "Hooks/DeviceProxy.hpp"
-#include "Hooks/ObjectLifetime.hpp"
 #include "Resources/ResourceChains.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
@@ -43,10 +44,11 @@ constexpr std::array SETTINGS = {
       .category = "Resources",
       .visibility = Settings::Visibility::Development,
       .default_value = true,
+      .is_visible = [] { return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12}) && IsNeeded(); },
    },
 };
 
-// Attached to each device via ObjectLifetime. Never held with another lock.
+// Per-device scaling state. Never held with another lock.
 struct DeviceState
 {
    std::atomic<uint32_t> active_thread_id = 0;
@@ -56,19 +58,16 @@ struct DeviceState
    Math::uint2 last_output = {};
 };
 
-DeviceState* GetOrCreateDeviceState(IUnknown* device)
+DeviceTable<DeviceState> device_states;
+
+DeviceState* GetOrCreateDeviceState(Device device)
 {
-   if (!device)
-      return nullptr;
-   IUnknown* const unwrapped = Hooks::DeviceProxy::Unwrap(device);
-   if (DeviceState* existing = Hooks::Lifetime::GetStateOf<DeviceState>(unwrapped))
-      return existing;
-   return Hooks::Lifetime::SetStateOf<DeviceState>(unwrapped);
+   return device_states.FindOrCreate(Hooks::DeviceProxy::GetDeviceKey(device));
 }
 
-DeviceState* FindDeviceState(IUnknown* device)
+DeviceState* FindDeviceState(Device device)
 {
-   return device ? Hooks::Lifetime::GetStateOf<DeviceState>(Hooks::DeviceProxy::Unwrap(device)) : nullptr;
+   return device_states.Find(Hooks::DeviceProxy::GetDeviceKey(device));
 }
 } // namespace
 
@@ -139,7 +138,7 @@ Hooks::D3D12::Functions GetD3D12Functions()
    return functions;
 }
 
-void Begin(IUnknown* device)
+void Begin(Device device)
 {
    if (DeviceState* state = GetOrCreateDeviceState(device))
    {
@@ -149,7 +148,7 @@ void Begin(IUnknown* device)
    }
 }
 
-void End(IUnknown* device)
+void End(Device device)
 {
    if (DeviceState* state = FindDeviceState(device))
    {
@@ -158,18 +157,23 @@ void End(IUnknown* device)
    }
 }
 
-void ResetFrame(IUnknown* device)
+void ResetFrame(Device device)
 {
    End(device);
 }
 
-bool IsActive(IUnknown* device)
+void DestroyDeviceState(Device device)
+{
+   device_states.Erase(Hooks::DeviceProxy::GetDeviceKey(device));
+}
+
+bool IsActive(Device device)
 {
    const DeviceState* state = FindDeviceState(device);
    return state && state->active_thread_id.load(std::memory_order_acquire) != 0;
 }
 
-bool IsActiveOnCurrentThread(IUnknown* device)
+bool IsActiveOnCurrentThread(Device device)
 {
    const DeviceState* state = FindDeviceState(device);
    if (!state)
@@ -178,7 +182,7 @@ bool IsActiveOnCurrentThread(IUnknown* device)
    return active != 0 && active == GetCurrentThreadId();
 }
 
-bool CheckCrossThreadOverlap(IUnknown* device)
+bool CheckCrossThreadOverlap(Device device)
 {
    const DeviceState* state = FindDeviceState(device);
    if (!state)
@@ -192,7 +196,7 @@ bool CheckCrossThreadOverlap(IUnknown* device)
    return false;
 }
 
-void SetTargetResolution(IUnknown* device, Math::uint2 size)
+void SetTargetResolution(Device device, Math::uint2 size)
 {
    if (DeviceState* state = GetOrCreateDeviceState(device))
    {
@@ -201,7 +205,7 @@ void SetTargetResolution(IUnknown* device, Math::uint2 size)
    }
 }
 
-Math::uint2 GetTargetResolution(IUnknown* device)
+Math::uint2 GetTargetResolution(Device device)
 {
    if (DeviceState* state = FindDeviceState(device))
    {
@@ -222,7 +226,7 @@ bool ShouldDeactivateAt(uint32_t shader_hash)
    return std::ranges::find(options.deactivate_at_hashes, shader_hash) != options.deactivate_at_hashes.end();
 }
 
-bool ConsumeResolutionChange(IUnknown* device, Math::uint2 render, Math::uint2 output)
+bool ConsumeResolutionChange(Device device, Math::uint2 render, Math::uint2 output)
 {
    DeviceState* state = GetOrCreateDeviceState(device);
    if (!state)
@@ -340,7 +344,7 @@ void CountScaledBlit()
    scaled_blits.fetch_add(1, std::memory_order_relaxed);
 }
 
-Stats GetStats(IUnknown* device)
+Stats GetStats(Device device)
 {
    const DeviceState* state = FindDeviceState(device);
    const uint32_t active_thread = state ? state->active_thread_id.load(std::memory_order_relaxed) : last_active_thread.load(std::memory_order_relaxed);

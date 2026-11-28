@@ -15,6 +15,7 @@
 #include <Psapi.h>
 #include <dxgi.h>
 
+#include "Game/GameRegistry.hpp"
 #include "Hooks/DXGI/DXGIHooks.hpp"
 #include "Hooks/DXGI/DXGISwapchainProxy.hpp"
 #include "Hooks/HookManager.hpp"
@@ -49,6 +50,7 @@ constexpr std::array SETTINGS = {
       .visibility = Settings::Visibility::Test,
       .default_value = true,
       .requires_restart = true,
+      .is_visible = [] { return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12}); },
    },
    Settings::Setting{
       .key = Settings::Core::RESHADE_BRIDGE.key,
@@ -59,6 +61,7 @@ constexpr std::array SETTINGS = {
       .visibility = Settings::Visibility::Test,
       .default_value = true,
       .requires_restart = true,
+      .is_visible = [] { return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12}); },
    },
 };
 

@@ -45,6 +45,7 @@ const Options& GetOptions();
 
 // After the game's Init and the roots, before the settings load: reads the recipes and registers their settings
 void Register();
+bool IsSupported();
 // Recipes, or a bytecode patch callback. Decided by Register.
 bool IsNeeded();
 

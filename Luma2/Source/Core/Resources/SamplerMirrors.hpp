@@ -4,9 +4,8 @@
 #include <cstdint>
 #include <optional>
 
+#include "Common/Device.hpp"
 #include "Hooks/HookFunctions.hpp"
-
-struct IUnknown;
 
 namespace Luma {
 namespace Resources {
@@ -26,11 +25,12 @@ bool IsSwapping();
 Hooks::D3D11::Functions GetD3D11Functions();
 
 // Any thread: the device's offset (its super resolution's, or the Development custom one)
-float GetLodBiasOffset(IUnknown* device);
+float GetLodBiasOffset(Device device);
 // Any thread: changes with the device's offset and with the custom one
-uint32_t GetGeneration(IUnknown* device);
+uint32_t GetGeneration(Device device);
 // Presenting thread, at the device's present
-void SetLodBiasOffset(IUnknown* device, float offset);
+void SetLodBiasOffset(Device device, float offset);
+void DestroyDeviceState(Device device);
 // For the dev tools: the offset of the device that presented last
 float GetShownLodBiasOffset();
 

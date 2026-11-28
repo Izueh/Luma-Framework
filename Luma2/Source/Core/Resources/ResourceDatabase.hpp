@@ -12,11 +12,10 @@
 #include <utility>
 #include <vector>
 
+#include "Common/Device.hpp"
 #include "Common/ShaderStage.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Utils/Hash.hpp"
-
-struct IUnknown;
 
 namespace Luma::FrameState {
 struct DeviceState;
@@ -96,7 +95,7 @@ struct CustomData
 // finds once (a write, at every draw with a Luma shader, looks nothing up)
 struct WriteTarget
 {
-   IUnknown* device = nullptr;
+   Device device;
    const FrameState::DeviceState* frame = nullptr; // Its resolutions (FrameState::Read)
    Game::GameDeviceData* game_device_data = nullptr; // Null without Game::Options::device_data
 };

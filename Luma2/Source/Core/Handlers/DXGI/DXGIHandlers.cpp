@@ -32,6 +32,7 @@
 #include "Resources/SamplerMirrors.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Display/DXGI/DXGISwapchain.hpp"
+#include "Display/Vulkan/VulkanSwapchain.hpp"
 #include "Display/DisplayMode.hpp"
 #include "Display/DXGI/DXGISpoofing.hpp"
 #include "FrameState/FrameState.hpp"
@@ -71,7 +72,7 @@ struct KnownSwapchain
 {
    const void* swapchain;
    Presenter presenter;
-   const void* device;
+   Device device;
 };
 
 // DXGI can't be asked what a swapchain was created with. Never held with another lock.
@@ -85,12 +86,12 @@ std::optional<Presenter> FindPresenter(const void* swapchain)
    return it != known.end() ? std::optional(it->presenter) : std::nullopt;
 }
 
-// The real device the swapchain presents for, null if Luma doesn't know it
-IUnknown* FindDevice(const void* swapchain)
+// The real device the swapchain presents for, empty if Luma doesn't know it
+Device FindDevice(const void* swapchain)
 {
    std::shared_lock lock(known_mutex);
    const auto it = std::ranges::find(known, swapchain, &KnownSwapchain::swapchain);
-   return it != known.end() ? static_cast<IUnknown*>(const_cast<void*>(it->device)) : nullptr;
+   return it != known.end() ? it->device : Device{};
 }
 
 std::optional<Presenter> GetPresenter(IUnknown* creator)
@@ -195,6 +196,8 @@ void ReportInitSwapchain(IDXGISwapChain* swapchain, const Presenter& presenter, 
 // Swapchain creation and destruction
 void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc, std::optional<Api> known_api)
 {
+   if (Display::Swapchain::Vulkan::IsCreatingSwapchain())
+      return;
    // D3D11CreateDeviceAndSwapChain creates the device and swapchain together so `creator` is null,
    // but the caller already knows it is D3D11 and passes `known_api`.
    const std::optional<Api> api =
@@ -217,6 +220,8 @@ void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc, std::opti
 
 void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND hwnd)
 {
+   if (Display::Swapchain::Vulkan::IsCreatingSwapchain())
+      return;
    const std::optional<Api> api = GetCreatorApi(creator);
    if (!api)
       return;
@@ -236,6 +241,11 @@ void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, D
 
 void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
 {
+   if (Display::Swapchain::Vulkan::NotifyDxgiSwapchainCreated(swapchain))
+   {
+      Log::Info("DXGI: swapchain {} created under Vulkan-on-DXGI (deferred to Vulkan handlers)", static_cast<void*>(swapchain));
+      return;
+   }
    ReShade::FindReShadeLoadedAfterLuma();
    const std::optional<Presenter> presenter = GetPresenter(creator);
    if (!presenter || !GetCreatorApi(creator))
@@ -246,12 +256,12 @@ void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
             static_cast<void*>(creator));
       return;
    }
-   const void* device = std::visit(
+   const Device device = std::visit(
       Overloaded{
-         [](ID3D11Device* d3d11) -> const void* { return d3d11; },
-         [](ID3D12CommandQueue* queue) -> const void* {
+         [](ID3D11Device* d3d11) -> Device { return d3d11; },
+         [](ID3D12CommandQueue* queue) -> Device {
             ComPtr<ID3D12Device> queue_device;
-            return SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&queue_device))) ? queue_device.Get() : nullptr;
+            return SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&queue_device))) ? Device(queue_device.Get()) : Device{};
          },
       },
       *presenter);
@@ -261,7 +271,7 @@ void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
    }
    const DXGI_SWAP_CHAIN_DESC desc = Describe(swapchain, *presenter, "created");
    // Before the game's callbacks, which read it
-   FrameState::SetOutputResolution(static_cast<IUnknown*>(const_cast<void*>(device)), {desc.BufferDesc.Width, desc.BufferDesc.Height});
+   FrameState::SetOutputResolution(device, {desc.BufferDesc.Width, desc.BufferDesc.Height});
    // Its state and the game's buffers (whose upgrade rules match the output resolution), before anything asks for them
    Display::Swapchain::DXGI::TrackCreated(swapchain, *presenter);
    LogOverlays();
@@ -270,6 +280,12 @@ void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
 
 void OnSwapChainDestroyed(const IDXGISwapChain* swapchain)
 {
+   if (Display::Swapchain::Vulkan::IsVulkanDxgiSwapchain(swapchain))
+   {
+      Display::Swapchain::Vulkan::NotifyDxgiSwapchainDestroyed(swapchain);
+      Log::Info("DXGI: Vulkan-on-DXGI swapchain {} destroyed", static_cast<const void*>(swapchain));
+      return;
+   }
    UI::DXGI::DetachFromSwapchain(swapchain);
    Trace::RemoveSwapchain(swapchain);
    {
@@ -282,7 +298,7 @@ void OnSwapChainDestroyed(const IDXGISwapChain* swapchain)
 void ForgetSwapchains(const void* device)
 {
    std::scoped_lock lock(known_mutex);
-   std::erase_if(known, [device](const KnownSwapchain& entry) { return entry.device == device; });
+   std::erase_if(known, [device](const KnownSwapchain& entry) { return GetRawDeviceKey(entry.device) == device; });
 }
 
 // Proxy and overlay routing
@@ -337,14 +353,14 @@ void PostResizeBuffers(IDXGISwapChain* swapchain, UINT, UINT, UINT, DXGI_FORMAT,
    }
    const DXGI_SWAP_CHAIN_DESC desc = Describe(swapchain, *presenter, "resized");
    Display::Swapchain::DXGI::ClearColorSpaceOnFormatChange(swapchain, desc.BufferDesc.Format);
-   IUnknown* const device = FindDevice(swapchain);
+   const Device device = FindDevice(swapchain);
    FrameState::SetOutputResolution(device, {desc.BufferDesc.Width, desc.BufferDesc.Height});
    std::visit(
       Overloaded{
          [](ID3D11Device* d3d11) { Resources::Database::D3D11::Invalidate(d3d11, Resources::Database::Invalidation::SwapchainResize); },
          [device](ID3D12CommandQueue*) {
-            if (device)
-               Resources::Database::D3D12::Invalidate(static_cast<ID3D12Device*>(device), Resources::Database::Invalidation::SwapchainResize);
+            if (auto* const d3d12 = std::get_if<ID3D12Device*>(&device); d3d12 && *d3d12)
+               Resources::Database::D3D12::Invalidate(*d3d12, Resources::Database::Invalidation::SwapchainResize);
          },
       },
       *presenter);
@@ -481,7 +497,7 @@ void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags, bool
       Trace::Capture::FinishFrame();
    }
 #endif
-   UI::DXGI::AttachOverlay(swapchain, *presenter, FindDevice(swapchain));
+   UI::DXGI::AttachOverlay(swapchain, *presenter, GetRawDeviceKey(FindDevice(swapchain)));
    // Last, on top of everything the game, Luma and ReShade drew
    UI::DXGI::DrawOverlay(swapchain);
 #if DEVELOPMENT

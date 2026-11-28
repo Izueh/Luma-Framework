@@ -9,12 +9,10 @@
 #include <variant>
 #include <vector>
 
-#include <wrl/client.h>
-
+#include "Common/DeviceTable.hpp"
 #include "Display/DisplayMode.hpp"
 #include "Effects/SR/SuperResolution.hpp"
 #include "Hooks/DeviceProxy.hpp"
-#include "Hooks/ObjectLifetime.hpp"
 #include "Notifications/Notifications.hpp"
 #include "Resources/ConstantCapture.hpp"
 #include "Resources/ResourceBindings.hpp"
@@ -27,6 +25,8 @@
 #include "Shaders/ShaderPatching.hpp"
 #include "Shaders/ShaderDatabase.hpp"
 #include "Shaders/ShaderFiles.hpp"
+#include "Shaders/ShaderStore.hpp"
+#include "Shaders/Shaders.hpp"
 #include "Utils/Debug.hpp"
 #include "Log/Log.hpp"
 
@@ -38,6 +38,7 @@ struct Declarations
    Info info;
    D3D11::Events d3d11_events;
    D3D12::Events d3d12_events;
+   Vulkan::Events vulkan_events;
    Panels panels;
    GameDeviceDataType device_data;
    ApiSet supported_apis = {Api::D3D11, Api::D3D12};
@@ -64,18 +65,7 @@ struct DeviceData
    }
 };
 
-template <typename Device>
-GameDeviceData* GetDeviceData(Device* device)
-{
-   const DeviceData* state = Hooks::Lifetime::GetState<DeviceData>(device);
-   return state ? state->data : nullptr;
-}
-
-template <typename Device>
-void AttachGameDeviceData(Device* device)
-{
-   Hooks::Lifetime::SetState<DeviceData>(device, declarations.device_data.create(), declarations.device_data.destroy);
-}
+DeviceTable<DeviceData> device_data_table;
 
 template <typename Functions, typename Callback, typename Function>
 void Request(Functions& functions, Callback callback, std::initializer_list<Function> required)
@@ -115,6 +105,11 @@ void SetEvents(const D3D11::Events& events)
 void SetEvents(const D3D12::Events& events)
 {
    declarations.d3d12_events = events;
+}
+
+void SetEvents(const Vulkan::Events& events)
+{
+   declarations.vulkan_events = events;
 }
 
 void D3D11::OnShaderDraw(std::span<const uint32_t> hashes, DrawCallback callback)
@@ -200,91 +195,70 @@ void SetPanels(const Panels& panels)
    declarations.panels = panels;
 }
 
-namespace {
-IUnknown* GetUnknown(Device device)
-{
-   return std::visit(
-      Overloaded{
-         [](std::monostate) -> IUnknown* { return nullptr; },
-         [](auto* ptr) -> IUnknown* { return ptr; },
-      },
-      device);
-}
-} // namespace
-
 GameDeviceData* GetGameDeviceData(Device game_device)
 {
-   return std::visit(
-      Overloaded{
-         [](std::monostate) -> GameDeviceData* { return nullptr; },
-         []<typename NativeDevice>(NativeDevice* device) -> GameDeviceData* {
-            if (!device)
-               return nullptr;
-            Microsoft::WRL::ComPtr<NativeDevice> unwrapped;
-            return SUCCEEDED(Hooks::DeviceProxy::Unwrap(device)->QueryInterface(IID_PPV_ARGS(&unwrapped))) ? GetDeviceData(unwrapped.Get()) : nullptr;
-         },
-      },
-      game_device);
+   const DeviceData* state = device_data_table.Find(Hooks::DeviceProxy::GetDeviceKey(game_device));
+   return state ? state->data : nullptr;
 }
 
 Luma::FrameState::Resolutions FrameState::Get(Device device)
 {
-   return Luma::FrameState::Get(GetUnknown(device));
+   return Luma::FrameState::Get(device);
 }
 
 void FrameState::SetRenderResolution(Device device, Math::uint2 size)
 {
-   Luma::FrameState::SetRenderResolution(GetUnknown(device), size);
+   Luma::FrameState::SetRenderResolution(device, size);
 }
 
 void FrameState::SetCamera(Device device, const Camera& camera)
 {
-   Luma::FrameState::SetCamera(GetUnknown(device), camera);
+   Luma::FrameState::SetCamera(device, camera);
 }
 
 FrameState::Camera FrameState::GetCamera(Device device)
 {
-   return Luma::FrameState::GetCamera(GetUnknown(device));
+   return Luma::FrameState::GetCamera(device);
 }
 
 void FrameState::MarkPass(Device device, PassMarker marker)
 {
-   Luma::FrameState::MarkPass(GetUnknown(device), marker);
+   Luma::FrameState::MarkPass(device, marker);
 }
 
 bool FrameState::HasPass(Device device, PassMarker marker)
 {
-   return Luma::FrameState::HasPass(GetUnknown(device), marker);
+   return Luma::FrameState::HasPass(device, marker);
 }
 
 void FrameState::MarkPass(Device device, uint64_t custom_hash)
 {
-   Luma::FrameState::MarkPass(GetUnknown(device), custom_hash);
+   Luma::FrameState::MarkPass(device, custom_hash);
 }
 
 bool FrameState::HasPass(Device device, uint64_t custom_hash)
 {
-   return Luma::FrameState::HasPass(GetUnknown(device), custom_hash);
+   return Luma::FrameState::HasPass(device, custom_hash);
 }
 
 void Resources::Scaling::Begin(Device device)
 {
-   Luma::Resources::Scaling::Begin(GetUnknown(device));
+   Luma::Resources::Scaling::Begin(device);
 }
 
 void Resources::Scaling::End(Device device)
 {
-   Luma::Resources::Scaling::End(GetUnknown(device));
+   Luma::Resources::Scaling::End(device);
 }
 
 bool Resources::Scaling::IsActive(Device device)
 {
-   return Luma::Resources::Scaling::IsActive(GetUnknown(device));
+   return Luma::Resources::Scaling::IsActive(device);
 }
 
 void Resources::Scaling::SetTargetResolution(Device device, Math::uint2 size)
 {
-   Luma::Resources::Scaling::SetTargetResolution(GetUnknown(device), size);
+   Luma::Resources::Scaling::SetTargetResolution(device, size);
 }
 
 std::optional<uint32_t> Resources::Database::RegisterRuntimeTexture(std::string_view name, Invalidation invalidation)
@@ -323,9 +297,21 @@ const D3D12::Events& GetD3D12Events()
    return declarations.d3d12_events;
 }
 
+const Vulkan::Events& GetVulkanEvents()
+{
+   return declarations.vulkan_events;
+}
+
 ApiSet GetSupportedApis()
 {
    return declarations.supported_apis;
+}
+
+bool HasSupportedApi(ApiSet apis)
+{
+   if (const std::shared_ptr<Luma::Shaders::Store> shown = Luma::Shaders::GetShownStore())
+      return apis.Has(shown->api);
+   return declarations.supported_apis.Intersects(apis);
 }
 
 const Panels& GetPanels()
@@ -437,19 +423,24 @@ Hooks::D3D11::Functions GetRequestedFunctions()
    return functions;
 }
 
+Hooks::Vulkan::Functions GetRequestedVulkanFunctions()
+{
+   return {};
+}
+
 void LogDeclarations()
 {
    const Info& info = declarations.info;
    const ApiSet apis = declarations.supported_apis;
    std::string used;
-   for (const Api api : {Api::D3D11, Api::D3D12})
+   for (const Api api : {Api::D3D11, Api::D3D12, Api::Vulkan})
    {
       if (apis.Has(api))
-         used += std::format("{}{}", used.empty() ? "" : " and ", GetName(api));
+         used += std::format("{}{}", used.empty() ? "" : ", ", GetName(api));
    }
-   Log::Info("Game: {} {} set {} D3D11 and {} D3D12 events, uses {}", info.name.empty() ? "(unnamed game)" : info.name,
+   Log::Info("Game: {} {} set {} D3D11, {} D3D12 and {} Vulkan events, uses {}", info.name.empty() ? "(unnamed game)" : info.name,
       info.version, CountCallbacks(declarations.d3d11_events), CountCallbacks(declarations.d3d12_events),
-      used.empty() ? "no API" : used);
+      CountCallbacks(declarations.vulkan_events), used.empty() ? "no API" : used);
 }
 
 void Reset()
@@ -468,16 +459,16 @@ void Reset()
    Draw::SetOptions({});
 }
 
-void CreateDeviceData(IUnknown* device)
+void CreateDeviceData(Device device)
 {
    if (!declarations.device_data.create)
       return;
-   Microsoft::WRL::ComPtr<ID3D11Device> d3d11_device;
-   if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&d3d11_device))))
-      return AttachGameDeviceData(d3d11_device.Get());
-   Microsoft::WRL::ComPtr<ID3D12Device> d3d12_device;
-   if (SUCCEEDED(device->QueryInterface(IID_PPV_ARGS(&d3d12_device))))
-      AttachGameDeviceData(d3d12_device.Get());
+   device_data_table.Emplace(Hooks::DeviceProxy::GetDeviceKey(device), declarations.device_data.create(), declarations.device_data.destroy);
+}
+
+void DestroyDeviceData(Device device)
+{
+   device_data_table.Erase(Hooks::DeviceProxy::GetDeviceKey(device));
 }
 } // namespace Registry
 } // namespace Game

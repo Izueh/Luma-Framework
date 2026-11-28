@@ -20,6 +20,7 @@ namespace Luma {
 namespace Resources {
 namespace Mirrors {
 void Register();
+bool IsSupported();
 bool IsNeeded();
 bool IsSwapping();
 bool HasAnyMirrors();

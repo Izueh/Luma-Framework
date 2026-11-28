@@ -307,6 +307,18 @@ bool IsProxy(const void* object)
    return object && *static_cast<void* const* const*>(object) == GetVtable();
 }
 
+const void* GetDeviceKey(Luma::Device device)
+{
+   return std::visit(
+      Overloaded{
+         [](std::monostate) -> const void* { return nullptr; },
+         [](ID3D11Device* d3d11) -> const void* { return d3d11 ? Unwrap(d3d11) : nullptr; },
+         [](ID3D12Device* d3d12) -> const void* { return d3d12 ? Unwrap(d3d12) : nullptr; },
+         [](VkDevice_T* vulkan) -> const void* { return vulkan; },
+      },
+      device);
+}
+
 uint32_t GetCount()
 {
    Registry& registry = GetRegistry();

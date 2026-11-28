@@ -33,7 +33,7 @@ using LdrDllNotificationFunction = VOID(CALLBACK*)(ULONG reason, const LdrDllNot
 using LdrRegisterDllNotificationFunction = NTSTATUS(NTAPI*)(ULONG flags, LdrDllNotificationFunction callback, PVOID context, PVOID* cookie);
 using LdrUnregisterDllNotificationFunction = NTSTATUS(NTAPI*)(PVOID cookie);
 
-constexpr std::array<std::wstring_view, 2> GRAPHICS_MODULES = {L"d3d11.dll", L"d3d12.dll"};
+constexpr std::array<std::wstring_view, 3> GRAPHICS_MODULES = {L"d3d11.dll", L"d3d12.dll", L"vulkan-1.dll"};
 
 void* notification_cookie = nullptr;
 
@@ -49,6 +49,12 @@ bool IsGraphicsModule(std::wstring_view name)
 
 void OnGraphicsModule(std::wstring_view name, void* base, bool was_already_loaded)
 {
+   // Emulators often LoadLibrary/FreeLibrary vulkan-1.dll between GPU probing and emulation; pinning keeps our export hooks valid.
+   if (Utils::Strings::EqualsIgnoreCase(name, L"vulkan-1.dll") && base)
+   {
+      HMODULE pinned = nullptr;
+      GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, static_cast<LPCWSTR>(base), &pinned);
+   }
    Startup::Initialize();
    Log::Info("Core: {} {} at {}", Utils::Strings::ToUtf8(name), was_already_loaded ? "was already loaded" : "loaded", base);
 }

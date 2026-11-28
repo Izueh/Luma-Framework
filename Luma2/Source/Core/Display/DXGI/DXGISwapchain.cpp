@@ -322,19 +322,19 @@ void ResolveSizes(IDXGISwapChain* swapchain, State& state)
       state.game.width = real.BufferDesc.Width;
       state.game.height = real.BufferDesc.Height;
    }
-   ComPtr<IUnknown> device = std::visit(
+   ComPtr<ID3D12Device> d3d12_ref;
+   const Device device = std::visit(
       Overloaded{
-         [](ID3D11Device* d3d11) -> ComPtr<IUnknown> { return d3d11; },
-         [](ID3D12CommandQueue* queue) -> ComPtr<IUnknown> {
-            ComPtr<ID3D12Device> d3d12;
-            return SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&d3d12))) ? ComPtr<IUnknown>(d3d12) : nullptr;
+         [](ID3D11Device* d3d11) -> Device { return d3d11; },
+         [&](ID3D12CommandQueue* queue) -> Device {
+            return SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&d3d12_ref))) ? Device(d3d12_ref.Get()) : Device{};
          },
       },
       state.presenter);
    MONITORINFO monitor = {.cbSize = sizeof(monitor)};
    GetMonitorInfoW(MonitorFromWindow(state.window, MONITOR_DEFAULTTONEAREST), &monitor);
-   FrameState::SetOutputResolution(device.Get(), {state.game.width, state.game.height});
-   FrameState::SetSwapchainResolution(device.Get(), {state.real.width, state.real.height},
+   FrameState::SetOutputResolution(device, {state.game.width, state.game.height});
+   FrameState::SetSwapchainResolution(device, {state.real.width, state.real.height},
       {uint32_t(monitor.rcMonitor.right - monitor.rcMonitor.left), uint32_t(monitor.rcMonitor.bottom - monitor.rcMonitor.top)});
 }
 

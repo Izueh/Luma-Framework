@@ -4,7 +4,9 @@
 #include <array>
 #include <atomic>
 
-#include "Hooks/ObjectLifetime.hpp"
+#include "Common/DeviceTable.hpp"
+#include "Game/GameRegistry.hpp"
+#include "Hooks/DeviceProxy.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 
@@ -20,16 +22,17 @@ std::atomic<float> custom_offset = 0.f;
 std::atomic<uint32_t> generation = 0;
 std::atomic<float> shown_offset = 0.f;
 
-// In the device's private data
 struct DeviceBias
 {
    std::atomic<float> sr_offset = 0.f;
    std::atomic<uint32_t> generation = 0;
 };
 
-DeviceBias* FindBias(IUnknown* device)
+DeviceTable<DeviceBias> device_biases;
+
+DeviceBias* FindBias(Device device)
 {
-   return device ? Hooks::Lifetime::GetStateOf<DeviceBias>(device) : nullptr;
+   return device_biases.Find(Hooks::DeviceProxy::GetDeviceKey(device));
 }
 
 constexpr std::array SETTINGS = {
@@ -40,6 +43,7 @@ constexpr std::array SETTINGS = {
       .category = "Resources",
       .visibility = Settings::Visibility::Development,
       .default_value = true,
+      .is_visible = [] { return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12}) && IsNeeded(); },
    },
 };
 
@@ -51,6 +55,7 @@ constexpr std::array DEVELOPMENT_SETTINGS = {
       .category = "Resources",
       .visibility = Settings::Visibility::Development,
       .default_value = false,
+      .is_visible = [] { return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12}) && IsNeeded(); },
    },
    Settings::Setting{
       .key = Settings::Core::SAMPLERS_BIAS.key,
@@ -61,6 +66,7 @@ constexpr std::array DEVELOPMENT_SETTINGS = {
       .default_value = 0.f,
       .range = Settings::Range{-4.f, 4.f},
       .format = "%.2f",
+      .is_visible = [] { return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12}) && IsNeeded(); },
    },
 };
 
@@ -123,7 +129,7 @@ Hooks::D3D11::Functions GetD3D11Functions()
    return functions;
 }
 
-float GetLodBiasOffset(IUnknown* device)
+float GetLodBiasOffset(Device device)
 {
    if (custom_bias.load(std::memory_order_relaxed))
       return custom_offset.load(std::memory_order_relaxed);
@@ -131,20 +137,26 @@ float GetLodBiasOffset(IUnknown* device)
    return bias ? bias->sr_offset.load(std::memory_order_relaxed) : 0.f;
 }
 
-uint32_t GetGeneration(IUnknown* device)
+uint32_t GetGeneration(Device device)
 {
    const DeviceBias* bias = FindBias(device);
    return generation.load(std::memory_order_relaxed) + (bias ? bias->generation.load(std::memory_order_relaxed) : 0);
 }
 
-void SetLodBiasOffset(IUnknown* device, float offset)
+void SetLodBiasOffset(Device device, float offset)
 {
    shown_offset.store(offset, std::memory_order_relaxed);
-   DeviceBias* bias = FindBias(device);
-   if (!bias && offset != 0.f && device)
-      bias = Hooks::Lifetime::SetStateOf<DeviceBias>(device);
+   const void* key = Hooks::DeviceProxy::GetDeviceKey(device);
+   DeviceBias* bias = device_biases.Find(key);
+   if (!bias && offset != 0.f && key)
+      bias = device_biases.FindOrCreate(key);
    if (bias && bias->sr_offset.exchange(offset) != offset)
       bias->generation.fetch_add(1, std::memory_order_relaxed);
+}
+
+void DestroyDeviceState(Device device)
+{
+   device_biases.Erase(Hooks::DeviceProxy::GetDeviceKey(device));
 }
 
 float GetShownLodBiasOffset()

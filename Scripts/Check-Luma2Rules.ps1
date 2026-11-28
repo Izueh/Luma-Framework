@@ -49,6 +49,7 @@ $apiAllowedPatterns = @(
     '/D3D11/',
     '/D3D12/',
     '/DXGI/',
+    '/Vulkan/',
     '^Luma2/Source/Core/Game/GameEvents\.hpp$',
     '^Luma2/Source/Core/Hooks/(Detours|DeviceProxy|HookManager|ObjectLifetime|VtableSlots)\.(hpp|cpp|h|c)$',
     '^Luma2/Source/Core/ReShade/(ReShade|AddonEvents)\.cpp$',
@@ -70,7 +71,7 @@ foreach ($file in $coreFiles) {
     if ($allowed) { continue }
     $lines = Get-Content -Path $file.FullName
     for ($i = 0; $i -lt $lines.Count; $i++) {
-        if ($lines[$i] -match '^\s*#\s*include\s*[<"](d3d11|d3d12|dxgi|d3dcompiler|dxcapi)') {
+        if ($lines[$i] -match '^\s*#\s*include\s*[<"](d3d11|d3d12|dxgi|d3dcompiler|dxcapi|vulkan/)') {
             $violations.Add("[Rule 2: API header in API-agnostic file] ${rel}:$($i + 1): $($lines[$i].Trim())")
         }
     }

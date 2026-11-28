@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cfloat>
 
+#include "Game/GameRegistry.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Utils/DXGI/DXGIFormat.hpp"
@@ -30,6 +31,7 @@ constexpr std::array SETTINGS = {
       .visibility = Settings::Visibility::Development,
       .default_value = Settings::EnumIndex{0},
       .enum_labels = MODE_LABELS,
+      .is_visible = [] { return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12}) && IsNeeded(); },
    },
 };
 } // namespace

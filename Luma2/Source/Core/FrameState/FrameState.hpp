@@ -2,9 +2,8 @@
 
 #include <cstdint>
 
+#include "Common/Device.hpp"
 #include "Common/Math.hpp"
-
-struct IUnknown;
 
 // The per-frame model: each device's resolutions, camera data, timing, and pass markers. Read from any thread.
 namespace Luma {
@@ -48,32 +47,33 @@ enum class PassMarker : uint8_t
 struct DeviceState;
 
 // With each device, before its callbacks: the screen's size until a swapchain says otherwise
-void CreateDeviceState(IUnknown* device);
+void CreateDeviceState(Device device);
+void DestroyDeviceState(Device device);
 // Any thread, the three as they were set together. A device Luma doesn't know (or a game's proxy of one it does) gives the defaults.
-Resolutions Get(IUnknown* device);
-// The same without the device's private data lookup, for a hot path that finds the state once (a context, at every draw): null for
+Resolutions Get(Device device);
+// The same without the device table lookup, for a hot path that finds the state once (a context, at every draw): null for
 // a device Luma doesn't know, valid while the device is. Read gives the defaults for null.
-const DeviceState* Find(IUnknown* device);
+const DeviceState* Find(Device device);
 Resolutions Read(const DeviceState* state);
 // The game's back buffer size: render and previous render follow it (until SR changes them), and the swapchain's until
 // SetSwapchainResolution says otherwise
-void SetOutputResolution(IUnknown* device, Math::uint2 size);
+void SetOutputResolution(Device device, Math::uint2 size);
 // The real buffers' and the monitor's, after the output's
-void SetSwapchainResolution(IUnknown* device, Math::uint2 swapchain, Math::uint2 display);
-void SetRenderResolution(IUnknown* device, Math::uint2 size);
+void SetSwapchainResolution(Device device, Math::uint2 swapchain, Math::uint2 display);
+void SetRenderResolution(Device device, Math::uint2 size);
 // Any thread: changes after every change of any device's resolutions (part of LumaSettings' stamp)
 uint64_t GetGeneration();
 
-void SetCamera(IUnknown* device, const Camera& camera);
-Camera GetCamera(IUnknown* device);
-Timing GetTiming(IUnknown* device);
+void SetCamera(Device device, const Camera& camera);
+Camera GetCamera(Device device);
+Timing GetTiming(Device device);
 
-void MarkPass(IUnknown* device, PassMarker marker);
-bool HasPass(IUnknown* device, PassMarker marker);
-void MarkPass(IUnknown* device, uint64_t custom_hash);
-bool HasPass(IUnknown* device, uint64_t custom_hash);
+void MarkPass(Device device, PassMarker marker);
+bool HasPass(Device device, PassMarker marker);
+void MarkPass(Device device, uint64_t custom_hash);
+bool HasPass(Device device, uint64_t custom_hash);
 
 // Presenting thread: advances frame_index/time_delta and resets per-frame pass markers and camera_cut
-void AdvanceFrame(IUnknown* device);
+void AdvanceFrame(Device device);
 } // namespace FrameState
 } // namespace Luma

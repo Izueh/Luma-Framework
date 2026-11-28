@@ -4,6 +4,8 @@
 
 #include <Unknwn.h>
 
+#include "Common/Device.hpp"
+
 namespace Luma {
 namespace Hooks {
 namespace DeviceProxy {
@@ -21,6 +23,8 @@ void Replace(void** object);
 // The real interface behind a proxy, or `object`
 IUnknown* Unwrap(IUnknown* object);
 bool IsProxy(const void* object);
+// Normalized raw pointer identity for any Device (unwraps D3D11/D3D12 proxies, passes Vulkan through). Null for empty.
+const void* GetDeviceKey(Luma::Device device);
 
 uint32_t GetCount();
 } // namespace DeviceProxy

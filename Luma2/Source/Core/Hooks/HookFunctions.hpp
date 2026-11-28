@@ -155,5 +155,23 @@ enum class Function : uint32_t
 
 using Functions = std::bitset<size_t(Function::Count)>;
 } // namespace D3D12
+
+namespace Vulkan {
+// The Vulkan functions hooked on request. Instance, surface, device, swapchain creation/destruction and QueuePresentKHR are always hooked.
+enum class Function : uint32_t
+{
+   CreateShaderModule,
+   CreateGraphicsPipelines,
+   CreateComputePipelines,
+   CreateImage,
+   CreateBuffer,
+   CmdDraw,
+   CmdDispatch,
+
+   Count,
+};
+
+using Functions = std::bitset<size_t(Function::Count)>;
+} // namespace Vulkan
 } // namespace Hooks
 } // namespace Luma

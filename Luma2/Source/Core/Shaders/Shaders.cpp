@@ -9,8 +9,9 @@
 #include <unordered_set>
 #include <utility>
 
+#include "Common/DeviceTable.hpp"
 #include "Game/GameRegistry.hpp"
-#include "Hooks/ObjectLifetime.hpp"
+#include "Hooks/DeviceProxy.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Settings/SettingKeys.hpp"
@@ -26,6 +27,7 @@
 #include "System/JobQueue.hpp"
 #include "Shaders/ShaderVariants.hpp"
 #include "System/Paths.hpp"
+#include "Utils/Debug.hpp"
 #include "Utils/Hash.hpp"
 #include "Log/Log.hpp"
 #include "Notifications/Notifications.hpp"
@@ -43,11 +45,8 @@ bool builds = false;
 std::mutex replaced_mutex;
 std::unordered_set<uint32_t> replaced;
 
-// In the device's private data: the store dies with the device
-struct StoreHolder
-{
-   std::shared_ptr<Store> store;
-};
+// Per-device shader stores keyed by normalized device pointer
+DeviceTable<std::shared_ptr<Store>> device_stores;
 
 // Live devices' stores, for what applies to all of them (a define change) and for the dev tools. Never held with another lock.
 std::mutex stores_mutex;
@@ -316,6 +315,11 @@ System::Jobs::Outcome Publish(const std::shared_ptr<Store>& alive, Build build, 
 void StartBuild(const std::shared_ptr<Store>& shared)
 {
    Store& store = *shared;
+   if (store.api == Api::Vulkan)
+   {
+      LUMA_UNIMPLEMENTED("Shaders::Vulkan");
+      return;
+   }
    if (store.building)
    {
       store.reload_pending = true;
@@ -334,9 +338,10 @@ void StartBuild(const std::shared_ptr<Store>& shared)
       else
          defines.push_back(register_define);
    }
-   // "#if _D3D12" in shaders of games that run on both APIs
+   // "#if _D3D12" in shaders of games that run on multiple APIs
    defines.push_back({"_D3D11", store.api == Api::D3D11 ? "1" : "0"});
    defines.push_back({"_D3D12", store.api == Api::D3D12 ? "1" : "0"});
+   defines.push_back({"_VULKAN", store.api == Api::Vulkan ? "1" : "0"});
    std::weak_ptr<Store> weak = shared;
    System::Jobs::Queue(
       "Compiling shaders", [build, defines = std::move(defines), api = store.api, weak] { *build = Run(defines, api, weak); },
@@ -398,6 +403,11 @@ void Start()
    builds = needed || any_program;
 }
 
+bool IsSupported()
+{
+   return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12});
+}
+
 bool IsNeeded()
 {
    return needed;
@@ -438,10 +448,10 @@ Hooks::D3D12::Functions GetD3D12Functions()
    return functions;
 }
 
-void CreateStore(IUnknown* device, Api api)
+void CreateStore(Device device, Api api)
 {
    auto store = std::make_shared<Store>(api);
-   if (!Hooks::Lifetime::SetStateOf<StoreHolder>(device, store))
+   if (!device_stores.Emplace(Hooks::DeviceProxy::GetDeviceKey(device), store))
       return;
    if (started && builds)
       StartBuild(store);
@@ -450,17 +460,17 @@ void CreateStore(IUnknown* device, Api api)
    stores.push_back(store);
 }
 
-void DestroyStore(IUnknown* device)
+void DestroyStore(Device device)
 {
-   Hooks::Lifetime::RemoveStateOf<StoreHolder>(device);
+   device_stores.Erase(Hooks::DeviceProxy::GetDeviceKey(device));
    std::scoped_lock lock(stores_mutex);
    std::erase_if(stores, [](const std::weak_ptr<Store>& weak) { return weak.expired(); });
 }
 
-std::shared_ptr<Store> GetStore(IUnknown* device)
+std::shared_ptr<Store> GetStore(Device device)
 {
-   const StoreHolder* holder = device ? Hooks::Lifetime::GetStateOf<StoreHolder>(device) : nullptr;
-   return holder ? holder->store : nullptr;
+   const auto* holder = device_stores.Find(Hooks::DeviceProxy::GetDeviceKey(device));
+   return holder ? *holder : nullptr;
 }
 
 std::vector<std::shared_ptr<Store>> GetStores()
@@ -528,7 +538,7 @@ void Load()
    Reload();
 }
 
-void CountFrame(IUnknown* device)
+void CountFrame(Device device)
 {
    if (std::shared_ptr<Store> store = GetStore(device))
    {

@@ -68,33 +68,6 @@ void RemoveState(Object* object)
       object->SetPrivateDataInterface(GetStateGuid<T>(), nullptr);
 }
 
-// The same for an object known only as IUnknown (a device of either API): found through the interface that has private data
-void* GetStateOf(IUnknown* object, const GUID& guid);
-bool AttachStateOf(IUnknown* object, const GUID& guid, IUnknown* holder);
-
-template <typename T>
-T* GetStateOf(IUnknown* object)
-{
-   return static_cast<T*>(GetStateOf(object, GetStateGuid<T>()));
-}
-
-template <typename T, typename... Arguments>
-T* SetStateOf(IUnknown* object, Arguments&&... arguments)
-{
-   T* value = new T(std::forward<Arguments>(arguments)...);
-   IUnknown* holder = CreateStateHolder(value, [](void* state) { delete static_cast<T*>(state); });
-   const bool attached = AttachStateOf(object, GetStateGuid<T>(), holder);
-   holder->Release();
-   return attached ? value : nullptr;
-}
-
-template <typename T>
-void RemoveStateOf(IUnknown* object)
-{
-   if (object)
-      AttachStateOf(object, GetStateGuid<T>(), nullptr);
-}
-
 // How many states have been destroyed so far: a state pointer remembered with this count is valid while it hasn't changed
 uint64_t GetDestroyedCount();
 

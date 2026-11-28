@@ -6,6 +6,7 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "Game/GameRegistry.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Log/Log.hpp"
@@ -23,6 +24,7 @@ const std::array SETTINGS = {
       .visibility = Settings::Visibility::Development,
       .default_value = DEBUG_LAYER,
       .requires_restart = true,
+      .is_visible = [] { return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12}); },
    },
    Settings::Setting{
       .key = Settings::Core::GPU_VALIDATION.key,
@@ -32,6 +34,7 @@ const std::array SETTINGS = {
       .visibility = Settings::Visibility::Development,
       .default_value = GPU_VALIDATION,
       .requires_restart = true,
+      .is_visible = [] { return Game::Registry::HasSupportedApi({Api::D3D12}); },
    },
 };
 #endif

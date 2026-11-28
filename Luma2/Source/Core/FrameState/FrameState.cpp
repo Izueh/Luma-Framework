@@ -8,8 +8,8 @@
 
 #include <Windows.h>
 
+#include "Common/DeviceTable.hpp"
 #include "Hooks/DeviceProxy.hpp"
-#include "Hooks/ObjectLifetime.hpp"
 
 namespace Luma {
 namespace FrameState {
@@ -54,23 +54,30 @@ Math::uint2 GetScreenSize()
    return {uint32_t(GetSystemMetrics(SM_CXSCREEN)), uint32_t(GetSystemMetrics(SM_CYSCREEN))};
 }
 
-DeviceState* FindMutable(IUnknown* device)
+DeviceTable<DeviceState> device_states;
+
+DeviceState* FindMutable(Device device)
 {
-   return device ? Hooks::Lifetime::GetStateOf<DeviceState>(Hooks::DeviceProxy::Unwrap(device)) : nullptr;
+   return device_states.Find(Hooks::DeviceProxy::GetDeviceKey(device));
 }
 } // namespace
 
-void CreateDeviceState(IUnknown* device)
+void CreateDeviceState(Device device)
 {
-   Hooks::Lifetime::SetStateOf<DeviceState>(device, GetScreenSize());
+   device_states.Emplace(Hooks::DeviceProxy::GetDeviceKey(device), GetScreenSize());
 }
 
-const DeviceState* Find(IUnknown* device)
+void DestroyDeviceState(Device device)
+{
+   device_states.Erase(Hooks::DeviceProxy::GetDeviceKey(device));
+}
+
+const DeviceState* Find(Device device)
 {
    return FindMutable(device);
 }
 
-Resolutions Get(IUnknown* device)
+Resolutions Get(Device device)
 {
    return Read(Find(device));
 }
@@ -86,7 +93,7 @@ Resolutions Read(const DeviceState* state)
    return state->resolutions;
 }
 
-void SetOutputResolution(IUnknown* device, Math::uint2 size)
+void SetOutputResolution(Device device, Math::uint2 size)
 {
    if (DeviceState* state = FindMutable(device))
    {
@@ -98,7 +105,7 @@ void SetOutputResolution(IUnknown* device, Math::uint2 size)
    }
 }
 
-void SetSwapchainResolution(IUnknown* device, Math::uint2 swapchain, Math::uint2 display)
+void SetSwapchainResolution(Device device, Math::uint2 swapchain, Math::uint2 display)
 {
    if (DeviceState* state = FindMutable(device))
    {
@@ -111,7 +118,7 @@ void SetSwapchainResolution(IUnknown* device, Math::uint2 swapchain, Math::uint2
    }
 }
 
-void SetRenderResolution(IUnknown* device, Math::uint2 size)
+void SetRenderResolution(Device device, Math::uint2 size)
 {
    if (DeviceState* state = FindMutable(device))
    {
@@ -129,7 +136,7 @@ uint64_t GetGeneration()
    return generation.load(std::memory_order_acquire);
 }
 
-void SetCamera(IUnknown* device, const Camera& camera)
+void SetCamera(Device device, const Camera& camera)
 {
    if (DeviceState* state = FindMutable(device))
    {
@@ -138,7 +145,7 @@ void SetCamera(IUnknown* device, const Camera& camera)
    }
 }
 
-Camera GetCamera(IUnknown* device)
+Camera GetCamera(Device device)
 {
    if (const DeviceState* state = Find(device))
    {
@@ -148,7 +155,7 @@ Camera GetCamera(IUnknown* device)
    return {};
 }
 
-Timing GetTiming(IUnknown* device)
+Timing GetTiming(Device device)
 {
    if (const DeviceState* state = Find(device))
    {
@@ -158,7 +165,7 @@ Timing GetTiming(IUnknown* device)
    return {};
 }
 
-void MarkPass(IUnknown* device, PassMarker marker)
+void MarkPass(Device device, PassMarker marker)
 {
    if (size_t(marker) >= size_t(PassMarker::Count))
       return;
@@ -169,7 +176,7 @@ void MarkPass(IUnknown* device, PassMarker marker)
    }
 }
 
-bool HasPass(IUnknown* device, PassMarker marker)
+bool HasPass(Device device, PassMarker marker)
 {
    if (size_t(marker) >= size_t(PassMarker::Count))
       return false;
@@ -181,7 +188,7 @@ bool HasPass(IUnknown* device, PassMarker marker)
    return false;
 }
 
-void MarkPass(IUnknown* device, uint64_t custom_hash)
+void MarkPass(Device device, uint64_t custom_hash)
 {
    if (DeviceState* state = FindMutable(device))
    {
@@ -191,7 +198,7 @@ void MarkPass(IUnknown* device, uint64_t custom_hash)
    }
 }
 
-bool HasPass(IUnknown* device, uint64_t custom_hash)
+bool HasPass(Device device, uint64_t custom_hash)
 {
    if (const DeviceState* state = Find(device))
    {
@@ -201,7 +208,7 @@ bool HasPass(IUnknown* device, uint64_t custom_hash)
    return false;
 }
 
-void AdvanceFrame(IUnknown* device)
+void AdvanceFrame(Device device)
 {
    if (DeviceState* state = FindMutable(device))
    {

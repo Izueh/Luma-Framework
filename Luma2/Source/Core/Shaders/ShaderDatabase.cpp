@@ -25,6 +25,7 @@
 #include "Shaders/ShaderPatching.hpp"
 #include "Shaders/ShaderSignatures.hpp"
 #include "Shaders/ShaderStore.hpp"
+#include "Shaders/Shaders.hpp"
 #include "System/JobQueue.hpp"
 #include "System/Paths.hpp"
 #include "Utils/Debug.hpp"
@@ -77,6 +78,7 @@ const std::array SETTINGS = {
       .category = "Development",
       .visibility = Settings::Visibility::Development,
       .default_value = true,
+      .is_visible = &Shaders::IsSupported,
    },
 };
 

@@ -5,11 +5,10 @@
 #include <string_view>
 #include <vector>
 
+#include "Common/Device.hpp"
 #include "Common/Math.hpp"
 #include "Hooks/HookFunctions.hpp"
 #include "Resources/ResourceUpgrades.hpp"
-
-struct IUnknown;
 
 namespace Luma {
 namespace Resources {
@@ -90,20 +89,21 @@ Hooks::D3D11::Functions GetD3D11Functions();
 Hooks::D3D12::Functions GetD3D12Functions();
 
 // Per-device activation window (thread-affine: scoped to the thread that called Begin)
-void Begin(IUnknown* device);
-void End(IUnknown* device);
-void ResetFrame(IUnknown* device);
-bool IsActive(IUnknown* device);
-bool IsActiveOnCurrentThread(IUnknown* device);
+void Begin(Device device);
+void End(Device device);
+void ResetFrame(Device device);
+void DestroyDeviceState(Device device);
+bool IsActive(Device device);
+bool IsActiveOnCurrentThread(Device device);
 // Returns true and counts an overlap if another thread currently holds the active scaling window
-bool CheckCrossThreadOverlap(IUnknown* device);
-void SetTargetResolution(IUnknown* device, Math::uint2 size);
-Math::uint2 GetTargetResolution(IUnknown* device);
+bool CheckCrossThreadOverlap(Device device);
+void SetTargetResolution(Device device, Math::uint2 size);
+Math::uint2 GetTargetResolution(Device device);
 bool ShouldActivateAfter(uint32_t shader_hash);
 bool ShouldDeactivateAt(uint32_t shader_hash);
 
 // Returns true if render or output resolution changed since the last check (triggers scaled mirror invalidation)
-bool ConsumeResolutionChange(IUnknown* device, Math::uint2 render, Math::uint2 output);
+bool ConsumeResolutionChange(Device device, Math::uint2 render, Math::uint2 output);
 
 struct ScaleContext
 {
@@ -127,7 +127,7 @@ void CountScissorRescale();
 void CountCopyBoxRescale();
 void CountClearRectRescale();
 void CountScaledBlit();
-Stats GetStats(IUnknown* device = nullptr);
+Stats GetStats(Device device = {});
 } // namespace Scaling
 } // namespace Resources
 } // namespace Luma

@@ -136,7 +136,8 @@ Status GetStatus()
 
    status.overlay_open = UI::IsOpen();
    const Hooks::Counts hooks = Hooks::GetCounts();
-   status.counts = {Hooks::DeviceProxy::GetCount(), uint32_t(status.swapchains.size()), hooks.declared, hooks.installed, hooks.failed};
+   status.counts = {Hooks::DeviceProxy::GetCount() + Hooks::GetVulkanDeviceCount(), uint32_t(status.swapchains.size()), hooks.declared, hooks.installed,
+      hooks.failed};
    const Hooks::Verification verification = Hooks::GetLastVerification();
    const Hooks::PresentChain present = Hooks::GetPresentChain();
    constexpr std::string_view PRESENT_ORDERS[] = {"not hooked", "alone", "luma outermost", "overlay outermost"};
@@ -150,7 +151,7 @@ Status GetStatus()
       .present_overlay = present.overlay};
    status.reshade = {ReShade::DescribeLoadState(), ReShade::DescribeBridge(), ReShade::DescribeMirrorSwapchainView()};
 
-   for (const Api api : {Api::D3D11, Api::D3D12})
+   for (const Api api : {Api::D3D11, Api::D3D12, Api::Vulkan})
    {
       if (Game::Registry::GetSupportedApis().Has(api))
          status.supported_apis.emplace_back(GetName(api));

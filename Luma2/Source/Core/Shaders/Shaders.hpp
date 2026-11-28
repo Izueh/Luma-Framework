@@ -8,9 +8,8 @@
 #include <vector>
 
 #include "Common/Api.hpp"
+#include "Common/Device.hpp"
 #include "Hooks/HookFunctions.hpp"
-
-struct IUnknown;
 
 // Game shaders replaced by files, Luma's own shaders, their defines. One feature with one need decision: Core asks
 // GetD3D11Functions once.
@@ -44,6 +43,7 @@ void Register();
 void Start();
 // Decided by Start: always in Development and Test builds (files can be added while the game runs, dumping), otherwise when
 // there are replacement files, patches or draw callbacks (which find the game's shaders by the binds this tracks)
+bool IsSupported();
 bool IsNeeded();
 // The native functions to hook: creations (the database), binds (the variants), draws (the resources variants request) and
 // what resets a context's state. None if it isn't needed.
@@ -54,11 +54,11 @@ Hooks::D3D12::Functions GetD3D12Functions();
 
 // Any thread, at each device's creation, before its first shader: its store, built for its API (D3D12: SM5.1, Luma's cbuffers in
 // their own register space) from now on
-void CreateStore(IUnknown* device, Api api);
-// Any thread, when the game releases the device: detaches the store so in-flight jobs stop even if another ref keeps the COM device alive
-void DestroyStore(IUnknown* device);
+void CreateStore(Device device, Api api);
+// Any thread, when the game releases the device: detaches the store so in-flight jobs stop even if another ref keeps the device alive
+void DestroyStore(Device device);
 // Null for a device created inside Luma's scope
-std::shared_ptr<Store> GetStore(IUnknown* device);
+std::shared_ptr<Store> GetStore(Device device);
 // Any thread: every live device's
 std::vector<std::shared_ptr<Store>> GetStores();
 // Any thread, for the dev tools: the store of the device that presented last, else of a live one. Null before any device.
@@ -76,7 +76,7 @@ void Unload();
 void Load();
 
 // Presenting thread, at the present boundary of `device`'s swapchain
-void CountFrame(IUnknown* device);
+void CountFrame(Device device);
 // Presents so far
 uint64_t GetFrame();
 

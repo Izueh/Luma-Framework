@@ -245,10 +245,10 @@ void PublishRecord(const Record& record);
 void ChooseActiveType(Record& record);
 // At the device's present: the user's choice applied, SRType and the sampler LOD bias set, the record published, the frame's draw
 // forgotten
-void UpdateAtPresent(Record& record, IUnknown* device);
+void UpdateAtPresent(Record& record, Device device);
 // Empty without an active provider, or below its minimum size
-std::optional<Prepared> PrepareDraw(const Record& record, IUnknown* device, const DrawOverrides& overrides);
-void FinishDraw(Record& record, IUnknown* device, const Prepared& prepared, bool succeeded);
+std::optional<Prepared> PrepareDraw(const Record& record, Device device, const DrawOverrides& overrides);
+void FinishDraw(Record& record, Device device, const Prepared& prepared, bool succeeded);
 #if DEVELOPMENT
 struct DrawOutcome
 {
@@ -288,7 +288,7 @@ RuntimeInfo GetRuntimeInfo();
 bool IsActive();
 
 // Updates sampler LOD bias offset from current SR type and resolutions (unless Development custom bias is active)
-void UpdateSamplerLodBias(IUnknown* device, Type active_type, bool taa_detected, uint32_t render_height, uint32_t output_height);
+void UpdateSamplerLodBias(Device device, Type active_type, bool taa_detected, uint32_t render_height, uint32_t output_height);
 } // namespace SR
 } // namespace Effects
 } // namespace Luma

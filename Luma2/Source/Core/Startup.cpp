@@ -130,6 +130,11 @@ Hooks::D3D11::Functions GetCoreFunctions()
    return functions;
 }
 
+Hooks::Vulkan::Functions GetCoreVulkanFunctions()
+{
+   return Game::Registry::GetRequestedVulkanFunctions();
+}
+
 // After the game's Init and its saved settings, so what's declared and enabled can decide. Exactly the requested set.
 void InstallHooks()
 {
@@ -141,6 +146,8 @@ void InstallHooks()
       Hooks::InstallD3D11(functions);
    if (apis.Has(Api::D3D12))
       Hooks::InstallD3D12(GetCoreD3D12Functions());
+   if (apis.Has(Api::Vulkan))
+      Hooks::InstallVulkan(GetCoreVulkanFunctions());
    Hooks::Input::Install();
 }
 } // namespace

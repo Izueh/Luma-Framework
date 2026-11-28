@@ -115,24 +115,6 @@ bool Track(IUnknown* object, IUnknown* device, DestroyCallback on_destroy)
 {
    return WithPrivateData(object, [&](auto* typed) { return Attach(typed, object, device, on_destroy); });
 }
-
-void* GetStateOf(IUnknown* object, const GUID& guid)
-{
-   return WithPrivateData(object, [&](auto* typed) -> void* {
-      IUnknown* holder = nullptr;
-      UINT size = sizeof(holder);
-      if (FAILED(typed->GetPrivateData(guid, &size, &holder)) || !holder || size != sizeof(holder))
-         return nullptr;
-      void* state = GetStateFromHolder(holder);
-      holder->Release(); // GetPrivateData added a reference, the object keeps its own
-      return state;
-   });
-}
-
-bool AttachStateOf(IUnknown* object, const GUID& guid, IUnknown* holder)
-{
-   return WithPrivateData(object, [&](auto* typed) { return SUCCEEDED(typed->SetPrivateDataInterface(guid, holder)); });
-}
 } // namespace Lifetime
 } // namespace Hooks
 } // namespace Luma

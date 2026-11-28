@@ -5,6 +5,7 @@
 #include <mutex>
 #include <unordered_map>
 
+#include "Game/GameRegistry.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
@@ -33,6 +34,7 @@ constexpr std::array SETTINGS = {
       .category = "Resources",
       .visibility = Settings::Visibility::Development,
       .default_value = true,
+      .is_visible = [] { return IsSupported() && IsNeeded(); },
    },
 };
 
@@ -64,6 +66,11 @@ uint32_t GetBitsPerTexel(DXGI_FORMAT format)
    }
 }
 } // namespace
+
+bool IsSupported()
+{
+   return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12});
+}
 
 void Register()
 {

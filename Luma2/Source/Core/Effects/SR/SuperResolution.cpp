@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string_view>
 
+#include "Game/GameRegistry.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Settings/SettingKeys.hpp"
@@ -163,7 +164,7 @@ void Register()
          .category = "Upscaling",
          .default_value = Settings::EnumIndex{uint32_t(UserType::Auto)},
          .enum_labels = USER_TYPE_LABELS,
-         .is_visible = []() { return options.enable; },
+         .is_visible = []() { return options.enable && Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12}); },
          .is_option_enabled = [](int32_t index) {
             const RuntimeInfo info = GetRuntimeInfo();
             switch (UserType(index))
@@ -303,7 +304,7 @@ bool IsActive()
    return options.enable && GetUserType() != UserType::None && GetRuntimeInfo().active_type != Type::None;
 }
 
-void UpdateSamplerLodBias(IUnknown* device, Type active_type, bool taa_detected, uint32_t render_height, uint32_t output_height)
+void UpdateSamplerLodBias(Device device, Type active_type, bool taa_detected, uint32_t render_height, uint32_t output_height)
 {
    if (active_type != Type::None && taa_detected && render_height > 0 && output_height > 0)
       Resources::Samplers::SetLodBiasOffset(device, GetMipLODBias(active_type, float(render_height), float(output_height)));
@@ -329,7 +330,7 @@ void ChooseActiveType(Record& record)
    PublishRecord(record);
 }
 
-void UpdateAtPresent(Record& record, IUnknown* device)
+void UpdateAtPresent(Record& record, Device device)
 {
    const Type next_type = ResolveActiveType(GetUserType(), record.capabilities);
    if (next_type != record.active_type)
@@ -350,7 +351,7 @@ void UpdateAtPresent(Record& record, IUnknown* device)
    record.drew_this_frame = false;
 }
 
-std::optional<Prepared> PrepareDraw(const Record& record, IUnknown* device, const DrawOverrides& overrides)
+std::optional<Prepared> PrepareDraw(const Record& record, Device device, const DrawOverrides& overrides)
 {
    if (record.active_type == Type::None || record.active_type == Type::Count)
       return std::nullopt;
@@ -365,7 +366,7 @@ std::optional<Prepared> PrepareDraw(const Record& record, IUnknown* device, cons
    return prepared;
 }
 
-void FinishDraw(Record& record, IUnknown* device, const Prepared& prepared, bool succeeded)
+void FinishDraw(Record& record, Device device, const Prepared& prepared, bool succeeded)
 {
    if (!succeeded)
    {

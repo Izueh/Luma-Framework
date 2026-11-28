@@ -12,13 +12,16 @@
     <ClCompile>
       <!-- Core's folders, then Global's shaders after the project's own (a game's "Resources\<Game>\Shaders", Tests' stand-in): Core
            includes "Game/GameCBuffers.hlsl" and "Includes/Core/CBuffers.hlsl", the cbuffer structs shared with the shaders -->
-      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory);%(AdditionalIncludeDirectories);$(Luma2Root)Resources\Global\Shaders</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory);%(AdditionalIncludeDirectories);$(Luma2ExternalDir)Vulkan;$(Luma2Root)Resources\Global\Shaders</AdditionalIncludeDirectories>
       <!-- "Pch.hpp" is forced into every source and parsed once per project (see its comment for what it holds). Third party code opts out below. -->
       <PrecompiledHeader>Use</PrecompiledHeader>
       <PrecompiledHeaderFile>Pch.hpp</PrecompiledHeaderFile>
       <PrecompiledHeaderOutputFile>$(IntDir)Core\Pch.pch</PrecompiledHeaderOutputFile>
       <ForcedIncludeFiles>Pch.hpp;%(ForcedIncludeFiles)</ForcedIncludeFiles>
     </ClCompile>
+    <Link Condition="'$(LumaDllName)' != 'dxgi' and '$(ConfigurationType)' == 'DynamicLibrary'">
+      <AdditionalDependencies>dxgi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+    </Link>
   </ItemDefinitionGroup>
 
   <ItemGroup>
@@ -27,6 +30,8 @@
 
   <PropertyGroup>
     <LumaDllFolder Condition="'$(LumaDllName)' == 'dxgi'">DXGI</LumaDllFolder>
+    <LumaDllFolder Condition="'$(LumaDllName)' == 'version'">Version</LumaDllFolder>
+    <LumaDllFolder Condition="'$(LumaDllName)' == 'vulkan-1'">Vulkan</LumaDllFolder>
     <LumaDllFolder Condition="'$(LumaDllFolder)' == ''">$(LumaDllName)</LumaDllFolder>
   </PropertyGroup>
 
@@ -63,9 +68,14 @@
       <CompileAs>CompileAsC</CompileAs>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
-    <!-- The overlay: ImGui with the Win32, DX11 and DX12 backends -->
+    <!-- The overlay: ImGui with the Win32, DX11, DX12 and Vulkan backends -->
     <ClCompile Include="$(Luma2ExternalDir)imgui\imgui.cpp;$(Luma2ExternalDir)imgui\imgui_draw.cpp;$(Luma2ExternalDir)imgui\imgui_tables.cpp;$(Luma2ExternalDir)imgui\imgui_widgets.cpp;$(Luma2ExternalDir)imgui\backends\imgui_impl_win32.cpp;$(Luma2ExternalDir)imgui\backends\imgui_impl_dx11.cpp;$(Luma2ExternalDir)imgui\backends\imgui_impl_dx12.cpp;$(Luma2ExternalDir)imgui\misc\cpp\imgui_stdlib.cpp">
       <ObjectFileName>$(IntDir)imgui\</ObjectFileName>
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="$(Luma2ExternalDir)imgui\backends\imgui_impl_vulkan.cpp">
+      <ObjectFileName>$(IntDir)imgui\</ObjectFileName>
+      <PreprocessorDefinitions>IMGUI_IMPL_VULKAN_NO_PROTOTYPES;VK_USE_PLATFORM_WIN32_KHR;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
     <!-- Textures from disk: DirectXTex's DDS loader (Resources::Database) -->

@@ -18,9 +18,11 @@
 #include "Effects/SR/SuperResolution.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Hooks/HookManager.hpp"
+#include "Resources/ResourceMirrors.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Shaders/ShaderDefines.hpp"
+#include "Shaders/ShaderPatching.hpp"
 #include "Shaders/Shaders.hpp"
 #include "System/JobQueue.hpp"
 #include "Trace/RuntimeStatus.hpp"
@@ -427,6 +429,31 @@ std::vector<Widgets::StatusItem> GetStatusItems(const Trace::OverlaySummary& sum
    return items;
 }
 
+bool IsTabVisible(Tab tab)
+{
+   switch (tab)
+   {
+   case Tab::Settings: return !CollectSettingsSections(SettingsTab::Settings).empty() || Game::Registry::GetPanels().settings != nullptr;
+#if DEVELOPMENT
+   case Tab::Framework: return !CollectSettingsSections(SettingsTab::Framework).empty();
+#endif
+   case Tab::Overlay: return true;
+#if DEVELOPMENT
+   case Tab::Development: return !CollectSettingsSections(SettingsTab::Development).empty() || Game::Registry::GetPanels().development != nullptr;
+   case Tab::Shaders: return Shaders::IsSupported();
+   case Tab::Patches: return Shaders::Patching::IsSupported();
+   case Tab::Resources: return Resources::Mirrors::IsSupported();
+   case Tab::Trace: return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12});
+#endif
+#if DEVELOPMENT || TEST
+   case Tab::Info: return true;
+#else
+   case Tab::About: return true;
+#endif
+   }
+   return false;
+}
+
 // Wrapping tab bar so narrow windows flow tabs onto a second row instead of squeezing labels to "..."
 void DrawTabBar()
 {
@@ -437,7 +464,7 @@ void DrawTabBar()
       const char* icon;
    };
 
-   const std::array tabs = {
+   const std::array all_tabs = {
       TabItem{Tab::Settings, "Settings", Icons::SLIDERS},
 #if DEVELOPMENT
       TabItem{Tab::Framework, "Framework", Icons::TOOLS},
@@ -456,6 +483,15 @@ void DrawTabBar()
       TabItem{Tab::About, "About", Icons::INFO},
 #endif
    };
+   std::vector<TabItem> tabs;
+   tabs.reserve(all_tabs.size());
+   for (const TabItem& item : all_tabs)
+   {
+      if (IsTabVisible(item.id))
+         tabs.push_back(item);
+   }
+   if (!tabs.empty() && std::ranges::none_of(tabs, [](const TabItem& item) { return item.id == current_tab; }))
+      current_tab = tabs.front().id;
    const ImGuiStyle& style = ImGui::GetStyle();
    const float unit = Style::Scale(Style::Sizes::UNIT);
    const ImVec2 padding(unit * 2.f, style.FramePadding.y);

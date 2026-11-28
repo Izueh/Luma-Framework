@@ -3,6 +3,7 @@
 #include <array>
 #include <span>
 
+#include "Game/GameRegistry.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "System/WindowPolicy.hpp"
@@ -28,7 +29,7 @@ constexpr std::array LUMA_SETTINGS = {
       .category = "Display",
       .default_value = Settings::EnumIndex{0},
       .enum_labels = OUTPUT_MODES,
-      .is_visible = [] { return ManagesOutput(GetMode()); },
+      .is_visible = [] { return IsSupported() && ManagesOutput(GetMode()); },
    },
    Settings::Setting{
       .key = Settings::Core::HDR_METADATA.key,
@@ -37,6 +38,7 @@ constexpr std::array LUMA_SETTINGS = {
       .category = "Display",
       .visibility = Settings::Visibility::Test,
       .default_value = true,
+      .is_visible = &IsSupported,
    },
    Settings::Setting{
       .key = Settings::Core::SUPPRESS_FOCUS_LOSS.key,
@@ -48,6 +50,7 @@ constexpr std::array LUMA_SETTINGS = {
 #else
       .default_value = false,
 #endif
+      .is_visible = &IsSupported,
    },
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_MODE.key,
@@ -60,6 +63,7 @@ constexpr std::array LUMA_SETTINGS = {
       .default_value = Settings::EnumIndex{0},
       .enum_labels = MODES,
       .requires_restart = true,
+      .is_visible = &IsSupported,
    },
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_FLIP_MODEL.key,
@@ -70,6 +74,7 @@ constexpr std::array LUMA_SETTINGS = {
       .visibility = Settings::Visibility::Test,
       .default_value = true,
       .requires_restart = true,
+      .is_visible = &IsSupported,
    },
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_TEARING.key,
@@ -79,6 +84,7 @@ constexpr std::array LUMA_SETTINGS = {
       .visibility = Settings::Visibility::Test,
       .default_value = true,
       .requires_restart = true,
+      .is_visible = &IsSupported,
    },
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_WRAP.key,
@@ -89,6 +95,7 @@ constexpr std::array LUMA_SETTINGS = {
       .visibility = Settings::Visibility::Test,
       .default_value = true,
       .requires_restart = true,
+      .is_visible = &IsSupported,
    },
    Settings::Setting{
       .key = Settings::Core::SWAPCHAIN_FULLSCREEN.key,
@@ -100,6 +107,7 @@ constexpr std::array LUMA_SETTINGS = {
       .default_value = Settings::EnumIndex{0},
       .enum_labels = FULLSCREEN,
       .requires_restart = true,
+      .is_visible = &IsSupported,
    },
 };
 
@@ -114,6 +122,7 @@ constexpr std::array DEV_SETTINGS = {
       .default_value = 1.f,
       .range = Settings::Range{0.25f, 2.f},
       .format = "%.2f",
+      .is_visible = &IsSupported,
    },
 };
 #endif
@@ -145,6 +154,11 @@ void SetOptions(const Options& value)
 const Options& GetOptions()
 {
    return options;
+}
+
+bool IsSupported()
+{
+   return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12});
 }
 
 void Register()

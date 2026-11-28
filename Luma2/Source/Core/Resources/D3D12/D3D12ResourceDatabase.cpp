@@ -209,7 +209,7 @@ D3D12_GPU_VIRTUAL_ADDRESS UploadBytes(ID3D12GraphicsCommandList* list, const Lis
    std::scoped_lock lock(store.mutex);
    if (store.released)
       return 0;
-   if ((!store.chunk || store.chunk->used + aligned > CHUNK_SIZE) && !NewChunk(static_cast<ID3D12Device*>(state.target.device), store))
+   if ((!store.chunk || store.chunk->used + aligned > CHUNK_SIZE) && !NewChunk(std::get<ID3D12Device*>(state.target.device), store))
       return 0;
    Chunk& chunk = *store.chunk;
    if (!Hooks::Lifetime::D3D12::Reference(list, chunk.object))
@@ -422,7 +422,7 @@ bool BindTable(ID3D12GraphicsCommandList* list, List& state, bool compute, uint3
    const TableLayout& layout = tables[table];
    if (!HasTextures(*state.store, layout))
       return false;
-   auto* device = static_cast<ID3D12Device*>(state.target.device);
+   auto* device = std::get<ID3D12Device*>(state.target.device);
    const D3D12_GPU_DESCRIPTOR_HANDLE gpu = HeapTail::D3D12::GetRange(state.heap, table * Bindings::D3D12_TEXTURE_REGISTERS, Bindings::D3D12_TEXTURE_REGISTERS, table,
       [&](D3D12_CPU_DESCRIPTOR_HANDLE start, uint32_t increment) { WriteTable(device, *state.store, &layout, start, increment); });
    if (!gpu.ptr)
@@ -574,9 +574,8 @@ void SetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_C
    {
       if (state->rtv_single_range)
       {
-         const UINT increment = state->target.device
-            ? static_cast<ID3D12Device*>(state->target.device)->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV)
-            : 0;
+         auto* const* device = std::get_if<ID3D12Device*>(&state->target.device);
+         const UINT increment = device && *device ? (*device)->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_RTV) : 0;
          for (UINT i = 0; i < state->rtv_count; i++)
             state->rtvs[i] = {render_targets[0].ptr + SIZE_T(i) * increment};
       }
@@ -1064,7 +1063,7 @@ bool BindTableViews(ID3D12GraphicsCommandList* list, bool compute, uint32_t tabl
       const std::optional<HeapTail::D3D12::RingRange> range = HeapTail::D3D12::AllocateRing(list, state->heap, Bindings::D3D12_TEXTURE_REGISTERS);
       if (!range)
          return false;
-      WriteTable(static_cast<ID3D12Device*>(state->target.device), *state->store, layout, range->cpu, range->increment, &views);
+      WriteTable(std::get<ID3D12Device*>(state->target.device), *state->store, layout, range->cpu, range->increment, &views);
       state->views = views;
       state->views_table = table;
       state->views_heap = state->heap;

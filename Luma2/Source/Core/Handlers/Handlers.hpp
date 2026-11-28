@@ -9,6 +9,8 @@
 #include "Game/GameRegistry.hpp"
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/DeviceProxy.hpp"
+#include "Resources/ResourceScaling.hpp"
+#include "Resources/SamplerMirrors.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Shaders/ShaderStages.hpp"
 #if DEVELOPMENT
@@ -41,10 +43,17 @@ void HandleOnDeviceDestroyed(Device* device, ReleaseCoreFn&& release_core_object
 {
    Log::Info("{}: device {} released by the game ({} live)", GetName(api), static_cast<void*>(device), Hooks::DeviceProxy::GetCount());
    Game::Registry::Call(Game::Registry::GetEvents<api>().on_destroy_device, device);
-   UI::DXGI::DetachFromDevice(device);
-   ForgetSwapchains(device);
+   Game::Registry::DestroyDeviceData(device);
+   if constexpr (api == Api::D3D11 || api == Api::D3D12)
+   {
+      UI::DXGI::DetachFromDevice(device);
+      ForgetSwapchains(device);
+   }
    release_core_objects();
    Shaders::DestroyStore(device);
+   Resources::Samplers::DestroyDeviceState(device);
+   Resources::Scaling::DestroyDeviceState(device);
+   FrameState::DestroyDeviceState(device);
    stop_validation();
 }
 

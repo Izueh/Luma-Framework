@@ -20,8 +20,6 @@
 #include "System/Paths.hpp"
 #include "Utils/Strings.hpp"
 
-#pragma comment(lib, "version.lib")
-
 using Microsoft::WRL::ComPtr;
 
 namespace Luma {
@@ -87,15 +85,24 @@ const DxcLibrary& GetDxc()
 
 uint64_t GetProductVersion(const std::filesystem::path& path)
 {
+   HMODULE version = System::Modules::FindSystemModule(L"version.dll");
+   if (!version)
+      version = LoadLibraryW(System::Modules::GetSystemPath(L"version.dll").c_str());
+   if (!version)
+      return 0;
+   const auto get_size = reinterpret_cast<decltype(&GetFileVersionInfoSizeW)>(GetProcAddress(version, "GetFileVersionInfoSizeW"));
+   const auto get_info = reinterpret_cast<decltype(&GetFileVersionInfoW)>(GetProcAddress(version, "GetFileVersionInfoW"));
+   const auto query_value = reinterpret_cast<decltype(&VerQueryValueW)>(GetProcAddress(version, "VerQueryValueW"));
+   if (!get_size || !get_info || !query_value)
+      return 0;
    DWORD handle = 0;
-   const DWORD size = GetFileVersionInfoSizeW(path.c_str(), &handle);
+   const DWORD size = get_size(path.c_str(), &handle);
    if (size == 0)
       return 0;
    std::vector<uint8_t> info(size);
    VS_FIXEDFILEINFO* fixed = nullptr;
    UINT fixed_size = 0;
-   if (!GetFileVersionInfoW(path.c_str(), 0, size, info.data()) || !VerQueryValueW(info.data(), L"\\", reinterpret_cast<void**>(&fixed), &fixed_size) ||
-      !fixed)
+   if (!get_info(path.c_str(), 0, size, info.data()) || !query_value(info.data(), L"\\", reinterpret_cast<void**>(&fixed), &fixed_size) || !fixed)
       return 0;
    return (uint64_t(fixed->dwProductVersionMS) << 32) | fixed->dwProductVersionLS;
 }

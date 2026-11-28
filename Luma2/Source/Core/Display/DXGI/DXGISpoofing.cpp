@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 
+#include "Display/Swapchain.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "System/MonitorDisplay.hpp"
@@ -21,6 +22,7 @@ constexpr std::array SETTINGS = {
       .visibility = Settings::Visibility::Test,
       .default_value = false,
       .requires_restart = true,
+      .is_visible = &Display::Swapchain::IsSupported,
    },
 };
 

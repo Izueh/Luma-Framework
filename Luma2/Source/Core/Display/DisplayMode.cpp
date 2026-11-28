@@ -6,6 +6,7 @@
 #include <variant>
 
 #include "Display/DisplayComposition.hpp"
+#include "Display/Swapchain.hpp"
 #include "Resources/LumaCBuffers.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
@@ -50,7 +51,7 @@ const std::array SETTINGS = {
       .default_value = Settings::EnumIndex{0},
       .enum_labels = DISPLAY_MODES,
       .live = true,
-      .is_visible = [] { return HasHdrOutput() && !forced_shader_sdr; },
+      .is_visible = [] { return Swapchain::IsSupported() && HasHdrOutput() && !forced_shader_sdr; },
    },
    Settings::Setting{
       .key = Settings::Core::PEAK_WHITE.key,
@@ -63,7 +64,7 @@ const std::array SETTINGS = {
       .format = "%.0f nits",
       .live = true,
       .is_enabled = [] { return Composition::IsModActive(); },
-      .is_visible = [] { return IsHdr(); },
+      .is_visible = [] { return Swapchain::IsSupported() && IsHdr(); },
    },
    Settings::Setting{
       .key = Settings::Core::LINK_OS_WHITE_LEVEL.key,
@@ -72,7 +73,7 @@ const std::array SETTINGS = {
                  "This makes the game cursor brightness match the one of the game.",
       .category = "Display",
       .default_value = true, // Luma 1.0 defaulted to linked, falling back to unlinked if the OS value can't be read or set
-      .is_visible = [] { return IsHdr() || (IsShaderSdr() && display.hdr_enabled); },
+      .is_visible = [] { return Swapchain::IsSupported() && (IsHdr() || (IsShaderSdr() && display.hdr_enabled)); },
    },
    Settings::Setting{
       .key = Settings::Core::PAPER_WHITE.key,
@@ -83,7 +84,7 @@ const std::array SETTINGS = {
       .range = Settings::Range{System::Display::SRGB_WHITE_NITS, 500.f},
       .format = "%.0f nits",
       .live = true,
-      .is_visible = [] { return IsHdr() || (IsShaderSdr() && display.hdr_enabled); },
+      .is_visible = [] { return Swapchain::IsSupported() && (IsHdr() || (IsShaderSdr() && display.hdr_enabled)); },
    },
    Settings::Setting{
       .key = Settings::Core::UI_PAPER_WHITE.key,
@@ -95,7 +96,7 @@ const std::array SETTINGS = {
       .format = "%.0f nits",
       .live = true,
       .is_enabled = [] { return Composition::IsModActive(); },
-      .is_visible = [] { return IsHdr() && HasSeparateUiPaperWhite() && !Settings::Get(Settings::Core::LINK_OS_WHITE_LEVEL); },
+      .is_visible = [] { return Swapchain::IsSupported() && IsHdr() && HasSeparateUiPaperWhite() && !Settings::Get(Settings::Core::LINK_OS_WHITE_LEVEL); },
    },
 };
 

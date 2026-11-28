@@ -16,6 +16,7 @@
 
 #include "Common/Math.hpp"
 #include "FrameState/FrameState.hpp"
+#include "Game/GameRegistry.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Shaders/Shaders.hpp"
@@ -140,6 +141,7 @@ void Register()
          .range = Settings::Range{dev_setting.min, dev_setting.max},
          .source = Settings::Sources::Binding{&(cb_luma_global_settings.*DEV_SETTING_FIELDS[i])},
          .live = true,
+         .is_visible = [] { return Game::Registry::HasSupportedApi({Api::D3D11, Api::D3D12}); },
       };
    }
    Settings::Register(dev_settings, Settings::Kind::Development);
