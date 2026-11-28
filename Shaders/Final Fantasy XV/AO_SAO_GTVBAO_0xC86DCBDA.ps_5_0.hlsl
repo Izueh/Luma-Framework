@@ -35,8 +35,11 @@
 
 #define VBAO_STEP_COUNT 16
 #define VBAO_SLICE_COUNT 1
-// How far the rays reach, in AO pixels (half res, like VBAO_RAY_WIDTH_PIXELS of the FF7R one, which is 512 at its 3777 wide full res AO). 130 covers the same part of the screen at a 1920 wide render (960 wide AO). It doesn't depend on the game's AO radius.
-#define VBAO_RAY_WIDTH_PIXELS 130.0f
+// How far the rays reach, as a fraction of the AO target width (the FF7R one is 512 pixels at its 3777 wide full res AO, 130 pixels of a 960 wide AO cover the same part of the screen).
+// It's the reach up close: further away it follows the depth scaling of the game's SAO radius, see "VBAOReachScale".
+#define VBAO_RAY_WIDTH_UV (130.0f / 960.0f)
+// Min reach in AO pixels (the far distance)
+#define VBAO_MIN_RAY_WIDTH_PIXELS 8.0f
 // Min thickness of the depth buffer "surfaces" in world units (meters), like the FF7R one (20 cm). Thin: the objects occlude only a little behind their silhouette, which avoids the halos around them. It grows with the depth, see the "VBAO Thickness Scale" setting.
 #define VBAO_THICKNESS_WORLD 0.2f
 // The normal offset of the ray origin: absolute (world units) and relative to the view depth (the FF7R one is 0.0005 + 0.025 * the device depth, practically nothing)
@@ -141,6 +144,16 @@ void AddOccludedInterval(inout uint occupiedBits, float2 horizonCosines, float h
   uint startMask = bins.x < 32u ? (fullMask << bins.x) : 0u;
   uint endMask = bins.y != 0u ? (fullMask >> (32u - bins.y)) : 0u;
   occupiedBits |= startMask & endMask;
+}
+
+// The reach of the rays, relative to VBAO_RAY_WIDTH_UV, at this view depth. It follows the depth scaling of the game's SAO radius, which is a fixed part of the screen (g_MaxScreenRadius) up close,
+// and a fixed world radius (g_FalloffRadius) past the depth where that becomes smaller (~100 m with the game's values), so the AO fades in the distance like the game's.
+// Squared: the game's AO also fades with its depth bias and its depth mips past that depth. Measured against the SAO (occlusion relative to 2-4 m, by depth band, Altissia):
+// 128-256 m: SAO 1.03, linear 1.03, squared 1.08; 256-512 m: SAO 1.05, linear 1.32, squared 1.10; 512+ m: SAO 0.76, linear 1.30, squared 1.13 (the fixed reach was 1.37, 1.54, 1.49).
+float VBAOReachScale(float viewZ)
+{
+  float scale = saturate(g_ProjParams.x * g_FalloffRadius / max(viewZ * g_MaxScreenRadius, 1.0e-6f));
+  return scale * scale;
 }
 
 // uv: of the pixel, viewPosition: of the pixel (before the normal offset), rayWidthPixels in AO target pixels, thickness in world units.
@@ -409,7 +422,8 @@ void main(
   float screenRadius = min(g_ProjParams.x * g_FalloffRadius / viewZ, g_MaxScreenRadius);
   float worldRadius = viewZ * screenRadius * g_ProjParamsInverse.x * 0.5f;
   // The ray reach in AO pixels, and its size in world units at this depth (view space width of a half res pixel = g_ViewFarPlaneUVOffset.z * depth * 2 / full res width)
-  const float rayWidthPixels = VBAO_RAY_WIDTH_PIXELS;
+  float reachScale = VBAOReachScale(viewZ);
+  const float rayWidthPixels = max(VBAO_RAY_WIDTH_UV * g_ProjParams.z * 0.5f * reachScale, VBAO_MIN_RAY_WIDTH_PIXELS);
   float worldReach = rayWidthPixels * g_ViewFarPlaneUVOffset.z * depth * (2.0f / g_ProjParams.z);
 
   float4 random = VBAORandom((uint2)v0.xy, LumaSettings.FrameIndex);

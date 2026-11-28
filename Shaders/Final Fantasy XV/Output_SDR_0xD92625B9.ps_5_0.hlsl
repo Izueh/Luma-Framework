@@ -28,6 +28,9 @@ void main(
   o0.w = r0.w;
   // r0.xyz = gamma * r0.xyz;
   // o0.xyz = exp2(r0.xyz);
+  // Luma: the game's gamma (the brightness setting, 1 by default) applies to the gamma space color as it did, then the color is linearized for the display composition.
+  // Mirrored for the negative (wide gamut) values, so it doesn't generate NaNs.
+  r0.xyz = sign(r0.xyz) * pow(abs(r0.xyz), gamma);
   o0.xyz = gamma_sRGB_to_linear(r0.xyz, GCT_MIRROR);
   return;
 }

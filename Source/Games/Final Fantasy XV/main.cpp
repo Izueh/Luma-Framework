@@ -50,7 +50,6 @@ namespace
    const uint32_t CBView_buffer_size = 768;
 
    bool enable_directional_shadows = false;
-   bool foliage_mip_bias_correction = true; // Foliage textures are alpha tested: sharper mips make them shimmer, see "GetFoliageSampler"
 
    int rain_composition = 0; // 0 = after AA, 1 = after game DoF
 
@@ -403,13 +402,13 @@ public:
 #if DEVELOPMENT
       // For the MCP "luma_read_resource" tool (view=registered:<name>)
       Mcp::RegisterTextures({MCP_GAME_TEXTURE("vbao.foliage_mask", foliage_mask)});
-      Mcp::RegisterToggles({{"foliage_mip_bias_correction", &foliage_mip_bias_correction}});
 #endif
       GetShaderDefineData(POST_PROCESS_SPACE_TYPE_HASH).SetDefaultValue('1');
       GetShaderDefineData(EARLY_DISPLAY_ENCODING_HASH).SetDefaultValue('0');
       GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
+      GetShaderDefineData(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL_HASH).SetDefaultValue('1'); // The tonemappers run their vanilla SDR path on the SDR part of the split view
 
       // Quality level of the per-pixel extended tonemap pivot computation (see "Includes/Tonemap.hlsli")
       std::vector<ShaderDefineData> game_shader_defines_data = {
@@ -481,7 +480,6 @@ public:
       cb_luma_global_settings.GameSettings.VBAOThicknessScale = std::clamp(cb_luma_global_settings.GameSettings.VBAOThicknessScale, 0.f, 1.f);
 #endif
 #if DEVELOPMENT || TEST // Only tuning settings, fixed in the published builds
-      Config::Get(NAME, "FoliageMipBiasCorrection", foliage_mip_bias_correction);
       bool enable_vbao_foliage_mask = true;
       Config::Get(NAME, "EnableVBAOFoliageMask", enable_vbao_foliage_mask);
       cb_luma_global_settings.GameSettings.EnableVBAOFoliageMask = enable_vbao_foliage_mask ? 1 : 0;
@@ -581,21 +579,6 @@ public:
                cb_luma_global_settings.GameSettings.VBAOThicknessScale = 0.15f;
                Config::Set(NAME, "VBAOThicknessScale", cb_luma_global_settings.GameSettings.VBAOThicknessScale);
             }
-         }
-#endif
-#if DEVELOPMENT || TEST
-         if (ImGui::Checkbox("Foliage Mip Bias Correction", &foliage_mip_bias_correction))
-         {
-            Config::Set(NAME, "FoliageMipBiasCorrection", foliage_mip_bias_correction);
-         }
-         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-         {
-            ImGui::SetTooltip("Gives the plants (stencil class 0xB0, alpha tested, they shimmer with sharp mips) +1 of the SR texture mip bias back (never softer than the game's own).\nRequires active SR.");
-         }
-         if (DrawResetButton(foliage_mip_bias_correction, true, "FoliageMipBiasCorrection"))
-         {
-            foliage_mip_bias_correction = true;
-            Config::Set(NAME, "FoliageMipBiasCorrection", foliage_mip_bias_correction);
          }
 #endif
          const char* rain_timings[] = {"After TAA / DLSS", "After DoF"};
@@ -805,59 +788,6 @@ public:
       return game_device_data.foliage_mask_srv.get();
    }
 
-   // The plants (ENV_Grass* / ENV_Leaf* G-buffer shaders, dithered or not) alpha test the alpha of the first texture they sample, which flickers with sharp mips.
-   // Luma's SR mip bias (log2(render / output) - 1) is more negative than the one recommended for SR (without the - 1), so give the plants +1 of it back (never softer than the game's own bias).
-   // No shader patch: nothing in their assembly tells them apart from the other alpha tested materials (only 66 of the 95 plant shaders share a dither fade window, which the wood materials also have,
-   // and the plain alpha test of the others is the same as everywhere), while the G-buffer stencil class 0xB0 marks exactly the plants.
-   // Returns the sampler to bind at s0 for this draw (nullptr if it isn't a plant draw) and the one it replaces.
-   ID3D11SamplerState* GetFoliageSampler(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, DeviceData& device_data, GameDeviceDataFFXV& game_device_data, ComPtr<ID3D11SamplerState>& out_original_sampler)
-   {
-      const float mip_lod_bias_offset = device_data.texture_mip_lod_bias_offset;
-      if (!foliage_mip_bias_correction || mip_lod_bias_offset >= 0.f)
-         return nullptr;
-
-      ComPtr<ID3D11DepthStencilState> depth_stencil_state;
-      UINT stencil_ref = 0;
-      native_device_context->OMGetDepthStencilState(depth_stencil_state.put(), &stencil_ref);
-      if (!depth_stencil_state || (stencil_ref >> 4) != 0xB)
-         return nullptr;
-
-      const std::lock_guard lock(game_device_data.foliage_mip_bias_mutex);
-      auto& state_entry = game_device_data.gbuffer_stencil_write_states[depth_stencil_state.get()];
-      if (!state_entry.first)
-      {
-         D3D11_DEPTH_STENCIL_DESC depth_stencil_desc;
-         depth_stencil_state->GetDesc(&depth_stencil_desc);
-         state_entry.first = depth_stencil_state;
-         state_entry.second = depth_stencil_desc.StencilEnable && depth_stencil_desc.FrontFace.StencilPassOp == D3D11_STENCIL_OP_REPLACE;
-      }
-      if (!state_entry.second)
-         return nullptr;
-
-      native_device_context->PSGetSamplers(0, 1, out_original_sampler.put());
-      if (!out_original_sampler)
-         return nullptr;
-      if (game_device_data.foliage_samplers_mip_lod_bias_offset != mip_lod_bias_offset)
-      {
-         game_device_data.foliage_samplers.clear();
-         game_device_data.foliage_samplers_mip_lod_bias_offset = mip_lod_bias_offset;
-      }
-      auto& sampler_entry = game_device_data.foliage_samplers[out_original_sampler.get()];
-      if (!sampler_entry.first)
-      {
-         sampler_entry.first = out_original_sampler;
-         D3D11_SAMPLER_DESC sampler_desc;
-         out_original_sampler->GetDesc(&sampler_desc);
-         if (sampler_desc.Filter == D3D11_FILTER_ANISOTROPIC || sampler_desc.Filter == D3D11_FILTER_COMPARISON_ANISOTROPIC)
-         {
-            // At most the part of the bias Luma added (the game's own sampler could have had a smaller one)
-            sampler_desc.MipLODBias = std::clamp(sampler_desc.MipLODBias + (std::min)(1.f, -mip_lod_bias_offset), D3D11_MIP_LOD_BIAS_MIN, D3D11_MIP_LOD_BIAS_MAX);
-            native_device->CreateSamplerState(&sampler_desc, sampler_entry.second.put());
-         }
-      }
-      return sampler_entry.second.get();
-   }
-
    DrawOrDispatchOverrideType OnDrawOrDispatch(ID3D11Device* native_device, ID3D11DeviceContext* native_device_context, CommandListData& cmd_list_data, DeviceData& device_data, ShaderStages stages, const ShaderHashesList<OneShaderPerPipeline>& original_shader_hashes, bool is_custom_pass, bool& updated_cbuffers, std::function<void()>* original_draw_dispatch_func) override
    {
       auto& game_device_data = GetGameDeviceData(device_data);
@@ -903,27 +833,6 @@ public:
          const bool use_foliage_mask = cb_luma_global_settings.GameSettings.EnableVBAO != 0 && cb_luma_global_settings.GameSettings.EnableVBAOFoliageMask != 0;
          ID3D11ShaderResourceView* foliage_mask_srv = use_foliage_mask ? BuildFoliageMask(native_device, native_device_context, device_data, game_device_data) : nullptr;
          native_device_context->PSSetShaderResources(7, 1, &foliage_mask_srv);
-      }
-
-      // Plants draw with a softer sampler, and the game's one is put back right after (it doesn't necessarily re-bind its samplers between draws).
-      // Doing the draw here means setting the Luma cbuffers ourselves, as the other draws that replace the original one do.
-      if ((stages & ShaderStages::Pixel) != 0 && original_draw_dispatch_func)
-      {
-         ComPtr<ID3D11SamplerState> original_sampler;
-         if (ID3D11SamplerState* foliage_sampler = GetFoliageSampler(native_device, native_device_context, device_data, game_device_data, original_sampler))
-         {
-            native_device_context->PSSetSamplers(0, 1, &foliage_sampler);
-            if (is_custom_pass)
-            {
-               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaSettings);
-               SetLumaConstantBuffers(native_device_context, cmd_list_data, device_data, stages, LumaConstantBufferType::LumaData);
-            }
-            (*original_draw_dispatch_func)();
-            ID3D11SamplerState* original_sampler_ptr = original_sampler.get();
-            native_device_context->PSSetSamplers(0, 1, &original_sampler_ptr);
-            updated_cbuffers = true;
-            return DrawOrDispatchOverrideType::Replaced;
-         }
       }
 
       if (original_shader_hashes.Contains(shader_hashes_rain) &&

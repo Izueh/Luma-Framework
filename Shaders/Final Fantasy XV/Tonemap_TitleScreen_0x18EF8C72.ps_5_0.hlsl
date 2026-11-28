@@ -57,7 +57,11 @@ void frag_main()
     bool EnabledToneCurve = cb0_m16.z != 0u;
 
     float3 _275;
-    if (LumaSettings.DisplayMode == 1)
+    // SDR/HDR split view ("TEST_SDR_HDR_SPLIT_VIEW_MODE"): the SDR part of the screen runs the vanilla SDR path, as the SDR display mode does
+    // (it's still scaled by the HDR paper white ratio below so the UI blending and the display composition treat both parts the same, and the display composition clips it to SDR).
+    const bool forceSDR = ShouldForceSDR(TEXCOORD);
+    const bool hdr = LumaSettings.DisplayMode == 1 && !forceSDR;
+    if (hdr)
     {
         float TenPowLogHighRangePlusContrastMinusOne = cb0_m2.x;
         float TenPowDispositionTimesTwoPowHighRange_PlusOne_Log_Inverse = cb0_m2.y;
@@ -106,7 +110,7 @@ void frag_main()
     float _467 = max(_466, 0.0f);
     float _468 = max(_465, 0.0f);
     float _469 = max(_464, 0.0f);
-    if (LumaSettings.DisplayMode == 1)
+    if (hdr)
     {
         float3 color = ApplyTonemapAndGrading(float3(_466, _465, _464), true);
         _467 = color.x;
@@ -125,6 +129,14 @@ void frag_main()
         _467 = saturate(_467);
         _468 = saturate(_468);
         _469 = saturate(_469);
+        if (LumaSettings.DisplayMode == 1) // SDR part of the split view, in HDR
+        {
+            float gamePaperWhite = LumaSettings.GamePaperWhiteNits / sRGB_WhiteLevelNits;
+            float UIPaperWhite = LumaSettings.UIPaperWhiteNits / sRGB_WhiteLevelNits;
+            _467 *= gamePaperWhite / UIPaperWhite;
+            _468 *= gamePaperWhite / UIPaperWhite;
+            _469 *= gamePaperWhite / UIPaperWhite;
+        }
     }
 
     // The game is forced to its SDR path, so it encodes its output to gamma space (the rest of the game post processing expects it, and core linearizes it later), HDR included

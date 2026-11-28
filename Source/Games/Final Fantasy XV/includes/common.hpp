@@ -63,13 +63,6 @@ struct GameDeviceDataFFXV final : public GameDeviceData
    ComPtr<ID3D11UnorderedAccessView> foliage_mask_uav;
    bool foliage_mask_failed_logged = false;
 
-   // Foliage mip bias: per depth stencil state (immutable, kept alive so its address can't be reused) whether it's a G-buffer stencil write,
-   // and per sampler Luma bound (anisotropic, with the SR mip bias) its copy with the foliage bias correction.
-   std::mutex foliage_mip_bias_mutex;
-   std::unordered_map<const ID3D11DepthStencilState*, std::pair<ComPtr<ID3D11DepthStencilState>, bool>> gbuffer_stencil_write_states;
-   std::unordered_map<const ID3D11SamplerState*, std::pair<ComPtr<ID3D11SamplerState>, ComPtr<ID3D11SamplerState>>> foliage_samplers; // Source (kept alive), biased copy
-   float foliage_samplers_mip_lod_bias_offset = 0.f; // The SR mip bias the sampler copies were built with
-
    void ResetPerFrameData()
    {
       gbuffer_depth_stencil = nullptr;
