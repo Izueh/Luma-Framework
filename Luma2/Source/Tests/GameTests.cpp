@@ -106,12 +106,13 @@ TEST_CASE("Game: setting the events again replaces the first ones")
    CHECK(calls == std::vector<std::string>{"device created second"});
 }
 
-TEST_CASE("Game: events and callbacks request the hooks of their native functions, and only those")
+TEST_CASE("Game: events request the hooks of their native functions, and only those")
 {
    Fixture fixture;
    CHECK(Game::Registry::GetRequestedFunctions().none());
-   Game::SetEvents(Game::D3D11::Events{.on_init_device = &OnDeviceCreated11, .on_bind_constant_buffers = &OnBindConstantBuffers});
-   Game::SetCallbacks(Game::D3D11::Callbacks{.post_ia_set_index_buffer = &OnSetIndexBuffer});
+   Game::SetEvents(Game::D3D11::Events{.on_init_device = &OnDeviceCreated11,
+      .on_bind_constant_buffers = &OnBindConstantBuffers,
+      .on_bind_index_buffer = &OnSetIndexBuffer});
    const Hooks::D3D11::Functions functions = Game::Registry::GetRequestedFunctions();
    using enum Hooks::D3D11::Function;
    CHECK(functions.count() == 7);
@@ -119,32 +120,6 @@ TEST_CASE("Game: events and callbacks request the hooks of their native function
    CHECK(functions.test(size_t(VSSetConstantBuffers)));
    CHECK(functions.test(size_t(CSSetConstantBuffers)));
    CHECK_FALSE(functions.test(size_t(IASetVertexBuffers)));
-   // The event's functions are Core's, the callback's aren't
-   CHECK(Game::Registry::GetCallbackFunctions().count() == 1);
-}
-
-TEST_CASE("Game: no native callback is for a function Core owns, and every event is")
-{
-   Fixture fixture;
-   Game::D3D11::Callbacks callbacks;
-   // Every field is a function pointer
-   auto* fields = reinterpret_cast<void**>(&callbacks);
-   for (size_t i = 0; i < sizeof(callbacks) / sizeof(void*); i++)
-      fields[i] = reinterpret_cast<void*>(&OnMap);
-   Game::SetCallbacks(callbacks);
-   const Hooks::D3D11::Functions native = Game::Registry::GetCallbackFunctions();
-   CHECK(native.any());
-   CHECK((native & Startup::GetOwnedFunctions()).none());
-
-   Game::Registry::Reset();
-   Game::D3D11::Events events;
-   auto* event_fields = reinterpret_cast<void**>(&events);
-   for (size_t i = 0; i < sizeof(events) / sizeof(void*); i++)
-      event_fields[i] = reinterpret_cast<void*>(&OnMap);
-   Game::SetEvents(events);
-   const Hooks::D3D11::Functions requested = Game::Registry::GetRequestedFunctions();
-   CHECK(requested.any());
-   CHECK((requested & ~Startup::GetOwnedFunctions()).none());
 }
 
 TEST_CASE("Game: draw callbacks are found by any of their hashes, the last set wins")

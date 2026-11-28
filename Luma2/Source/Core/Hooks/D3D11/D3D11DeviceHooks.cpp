@@ -395,6 +395,7 @@ void InstallD3D11Device(const D3D11::Functions& functions)
       if (functions.test(size_t(function)))
          hooks.insert(hooks.end(), function_hooks);
    };
+   // Resources
    add(Function::CreateBuffer, {DeviceHook<&CreateBuffer>(LumaSlot_ID3D11Device_CreateBuffer, "ID3D11Device::CreateBuffer", GUID_NULL, false)});
    add(Function::CreateTexture1D, {DeviceHook<&CreateTexture1D>(LumaSlot_ID3D11Device_CreateTexture1D, "ID3D11Device::CreateTexture1D", GUID_NULL, false)});
    add(Function::CreateTexture2D, {
@@ -410,6 +411,8 @@ void InstallD3D11Device(const D3D11::Functions& functions)
                                         DeviceHook<&OpenSharedResource1>(LumaSlot_ID3D11Device1_OpenSharedResource1, "ID3D11Device1::OpenSharedResource1", __uuidof(ID3D11Device1), true),
                                         DeviceHook<&OpenSharedResourceByName>(LumaSlot_ID3D11Device1_OpenSharedResourceByName, "ID3D11Device1::OpenSharedResourceByName", __uuidof(ID3D11Device1), false),
                                      });
+
+   // Views and state objects
    add(Function::CreateShaderResourceView, {
                                               DeviceHook<&CreateShaderResourceView>(LumaSlot_ID3D11Device_CreateShaderResourceView, "ID3D11Device::CreateShaderResourceView", GUID_NULL, false),
                                               DeviceHook<&CreateShaderResourceView1>(LumaSlot_ID3D11Device3_CreateShaderResourceView1, "ID3D11Device3::CreateShaderResourceView1", __uuidof(ID3D11Device3), false),
@@ -428,6 +431,8 @@ void InstallD3D11Device(const D3D11::Functions& functions)
                                       DeviceHook<&CreateBlendState>(LumaSlot_ID3D11Device_CreateBlendState, "ID3D11Device::CreateBlendState", GUID_NULL, false),
                                       DeviceHook<&CreateBlendState1>(LumaSlot_ID3D11Device1_CreateBlendState1, "ID3D11Device1::CreateBlendState1", __uuidof(ID3D11Device1), false),
                                    });
+
+   // Shaders and input layouts
    add(Function::CreateInputLayout, {DeviceHook<&CreateInputLayout>(LumaSlot_ID3D11Device_CreateInputLayout, "ID3D11Device::CreateInputLayout", GUID_NULL, false)});
    add(Function::CreateVertexShader, {DeviceHook<&CreateVertexShader>(LumaSlot_ID3D11Device_CreateVertexShader, "ID3D11Device::CreateVertexShader", GUID_NULL, false)});
    add(Function::CreateHullShader, {DeviceHook<&CreateHullShader>(LumaSlot_ID3D11Device_CreateHullShader, "ID3D11Device::CreateHullShader", GUID_NULL, false)});
@@ -436,6 +441,8 @@ void InstallD3D11Device(const D3D11::Functions& functions)
    add(Function::CreateGeometryShaderWithStreamOutput, {DeviceHook<&CreateGeometryShaderWithStreamOutput>(LumaSlot_ID3D11Device_CreateGeometryShaderWithStreamOutput, "ID3D11Device::CreateGeometryShaderWithStreamOutput", GUID_NULL, false)});
    add(Function::CreatePixelShader, {DeviceHook<&CreatePixelShader>(LumaSlot_ID3D11Device_CreatePixelShader, "ID3D11Device::CreatePixelShader", GUID_NULL, false)});
    add(Function::CreateComputeShader, {DeviceHook<&CreateComputeShader>(LumaSlot_ID3D11Device_CreateComputeShader, "ID3D11Device::CreateComputeShader", GUID_NULL, false)});
+
+   // Deferred contexts
    add(Function::CreateDeferredContext, {
                                            DeviceHook<&CreateDeferredContext>(LumaSlot_ID3D11Device_CreateDeferredContext, "ID3D11Device::CreateDeferredContext", GUID_NULL, true),
                                            DeviceHook<&CreateDeferredContext1>(LumaSlot_ID3D11Device1_CreateDeferredContext1, "ID3D11Device1::CreateDeferredContext1", __uuidof(ID3D11Device1), true),

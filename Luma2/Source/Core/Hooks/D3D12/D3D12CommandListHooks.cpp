@@ -21,6 +21,7 @@ namespace {
 using Detours::original;
 using Game::D3D12::DrawFunction;
 
+// Command list lifecycle and pipeline binds
 HRESULT STDMETHODCALLTYPE Reset(ID3D12GraphicsCommandList* list, ID3D12CommandAllocator* allocator, ID3D12PipelineState* pipeline)
 {
    if (Detours::IsGameCall(_ReturnAddress()))
@@ -61,14 +62,6 @@ void STDMETHODCALLTYPE SetComputeRootSignature(ID3D12GraphicsCommandList* list, 
    if (Detours::IsGameCall(_ReturnAddress()))
       Detours::Report(&Handlers::PreSetRootSignature, list, true, root_signature);
    original<&SetComputeRootSignature>(list, root_signature);
-}
-
-void STDMETHODCALLTYPE OMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
-   const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil)
-{
-   if (Detours::IsGameCall(_ReturnAddress()))
-      Detours::Report(&Handlers::PreOMSetRenderTargets, list, count, std::ref(render_targets), std::ref(single_range), std::ref(depth_stencil));
-   original<&OMSetRenderTargets>(list, count, render_targets, single_range, depth_stencil);
 }
 
 void STDMETHODCALLTYPE SetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12DescriptorHeap* const* heaps)
@@ -112,6 +105,15 @@ void STDMETHODCALLTYPE SetRootDescriptor(ID3D12GraphicsCommandList* list, UINT i
    original<&SetRootDescriptor<Compute, Kind>>(list, index, address);
 }
 
+// Render targets and rasterizer/OM state
+void STDMETHODCALLTYPE OMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
+   const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil)
+{
+   if (Detours::IsGameCall(_ReturnAddress()))
+      Detours::Report(&Handlers::PreOMSetRenderTargets, list, count, std::ref(render_targets), std::ref(single_range), std::ref(depth_stencil));
+   original<&OMSetRenderTargets>(list, count, render_targets, single_range, depth_stencil);
+}
+
 void STDMETHODCALLTYPE RSSetViewports(ID3D12GraphicsCommandList* list, UINT count, const D3D12_VIEWPORT* viewports)
 {
    if (Detours::IsGameCall(_ReturnAddress()))
@@ -147,72 +149,7 @@ void STDMETHODCALLTYPE OMSetStencilRef(ID3D12GraphicsCommandList* list, UINT ste
    original<&OMSetStencilRef>(list, stencil_ref);
 }
 
-// Draws and dispatches: the handler may skip the game's call (a draw event, the trace)
-void STDMETHODCALLTYPE DrawInstanced(ID3D12GraphicsCommandList* list, UINT vertex_count, UINT instance_count, UINT start_vertex, UINT start_instance)
-{
-   const bool game_call = Detours::IsGameCall(_ReturnAddress());
-   const bool handled = game_call &&
-      Detours::Report(&Handlers::PreDraw, list,
-         Game::D3D12::DrawCall{.function = DrawFunction::DrawInstanced, .vertex_or_index_count = vertex_count, .instance_count = instance_count, .start_vertex_or_index = start_vertex, .start_instance = start_instance});
-   if (!handled)
-      original<&DrawInstanced>(list, vertex_count, instance_count, start_vertex, start_instance);
-   if (game_call)
-      Detours::Report(&Handlers::PostDraw, list);
-}
-
-void STDMETHODCALLTYPE DrawIndexedInstanced(ID3D12GraphicsCommandList* list, UINT index_count, UINT instance_count, UINT start_index, INT base_vertex,
-   UINT start_instance)
-{
-   const bool game_call = Detours::IsGameCall(_ReturnAddress());
-   const bool handled = game_call &&
-      Detours::Report(&Handlers::PreDraw, list,
-         Game::D3D12::DrawCall{.function = DrawFunction::DrawIndexedInstanced, .vertex_or_index_count = index_count, .instance_count = instance_count, .start_vertex_or_index = start_index, .base_vertex = base_vertex, .start_instance = start_instance});
-   if (!handled)
-      original<&DrawIndexedInstanced>(list, index_count, instance_count, start_index, base_vertex, start_instance);
-   if (game_call)
-      Detours::Report(&Handlers::PostDraw, list);
-}
-
-void STDMETHODCALLTYPE DispatchMesh(ID3D12GraphicsCommandList6* list, UINT x, UINT y, UINT z)
-{
-   const bool game_call = Detours::IsGameCall(_ReturnAddress());
-   const bool handled = game_call &&
-      Detours::Report(&Handlers::PreDraw, static_cast<ID3D12GraphicsCommandList*>(list), Game::D3D12::DrawCall{.function = DrawFunction::DispatchMesh, .mesh_groups = {x, y, z}});
-   if (!handled)
-      original<&DispatchMesh>(list, x, y, z);
-   if (game_call)
-      Detours::Report(&Handlers::PostDraw, static_cast<ID3D12GraphicsCommandList*>(list));
-}
-
-void STDMETHODCALLTYPE Dispatch(ID3D12GraphicsCommandList* list, UINT x, UINT y, UINT z)
-{
-   const bool game_call = Detours::IsGameCall(_ReturnAddress());
-   const bool handled = game_call && Detours::Report(&Handlers::PreDispatch, list, Game::D3D12::DispatchCall{.x = x, .y = y, .z = z});
-   if (!handled)
-      original<&Dispatch>(list, x, y, z);
-   if (game_call)
-      Detours::Report(&Handlers::PostDispatch, list);
-}
-
-void STDMETHODCALLTYPE ExecuteIndirect(ID3D12GraphicsCommandList* list, ID3D12CommandSignature* signature, UINT max_count, ID3D12Resource* arguments,
-   UINT64 arguments_offset, ID3D12Resource* count_buffer, UINT64 count_offset)
-{
-   const bool game_call = Detours::IsGameCall(_ReturnAddress());
-   const bool handled = game_call &&
-      Detours::Report(&Handlers::PreExecuteIndirect, list, Game::D3D12::IndirectArguments{signature, max_count, arguments, arguments_offset, count_buffer, count_offset});
-   if (!handled)
-      original<&ExecuteIndirect>(list, signature, max_count, arguments, arguments_offset, count_buffer, count_offset);
-   if (game_call)
-      Detours::Report(&Handlers::PostExecuteIndirect, list);
-}
-
-void STDMETHODCALLTYPE ExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle)
-{
-   if (Detours::IsGameCall(_ReturnAddress()))
-      Detours::Report(&Handlers::PreExecuteBundle, list, bundle);
-   original<&ExecuteBundle>(list, bundle);
-}
-
+// Barriers, copies and clears (handlers may change resources/handles for mirrors or skip the call)
 void STDMETHODCALLTYPE ResourceBarrier(ID3D12GraphicsCommandList* list, UINT count, const D3D12_RESOURCE_BARRIER* barriers)
 {
    std::span<const D3D12_RESOURCE_BARRIER> final_barriers(barriers, barriers ? count : 0);
@@ -221,7 +158,6 @@ void STDMETHODCALLTYPE ResourceBarrier(ID3D12GraphicsCommandList* list, UINT cou
    original<&ResourceBarrier>(list, UINT(final_barriers.size()), final_barriers.empty() ? barriers : final_barriers.data());
 }
 
-// Copies and clears: the handlers may change the resources and handles (Luma's mirrors) or skip the call
 void STDMETHODCALLTYPE CopyResource(ID3D12GraphicsCommandList* list, ID3D12Resource* destination, ID3D12Resource* source)
 {
    if (Detours::IsGameCall(_ReturnAddress()) && Detours::Report(&Handlers::PreCopyResource, list, std::ref(destination), std::ref(source)))
@@ -295,6 +231,72 @@ void STDMETHODCALLTYPE ClearUnorderedAccessViewFloat(ID3D12GraphicsCommandList* 
    original<&ClearUnorderedAccessViewFloat>(list, gpu, cpu, resource, values, rect_count, rects);
 }
 
+// Draws, dispatches and bundles (the handler may skip the game's call)
+void STDMETHODCALLTYPE DrawInstanced(ID3D12GraphicsCommandList* list, UINT vertex_count, UINT instance_count, UINT start_vertex, UINT start_instance)
+{
+   const bool game_call = Detours::IsGameCall(_ReturnAddress());
+   const bool handled = game_call &&
+      Detours::Report(&Handlers::PreDraw, list,
+         Game::D3D12::DrawCall{.function = DrawFunction::DrawInstanced, .vertex_or_index_count = vertex_count, .instance_count = instance_count, .start_vertex_or_index = start_vertex, .start_instance = start_instance});
+   if (!handled)
+      original<&DrawInstanced>(list, vertex_count, instance_count, start_vertex, start_instance);
+   if (game_call)
+      Detours::Report(&Handlers::PostDraw, list);
+}
+
+void STDMETHODCALLTYPE DrawIndexedInstanced(ID3D12GraphicsCommandList* list, UINT index_count, UINT instance_count, UINT start_index, INT base_vertex,
+   UINT start_instance)
+{
+   const bool game_call = Detours::IsGameCall(_ReturnAddress());
+   const bool handled = game_call &&
+      Detours::Report(&Handlers::PreDraw, list,
+         Game::D3D12::DrawCall{.function = DrawFunction::DrawIndexedInstanced, .vertex_or_index_count = index_count, .instance_count = instance_count, .start_vertex_or_index = start_index, .base_vertex = base_vertex, .start_instance = start_instance});
+   if (!handled)
+      original<&DrawIndexedInstanced>(list, index_count, instance_count, start_index, base_vertex, start_instance);
+   if (game_call)
+      Detours::Report(&Handlers::PostDraw, list);
+}
+
+void STDMETHODCALLTYPE DispatchMesh(ID3D12GraphicsCommandList6* list, UINT x, UINT y, UINT z)
+{
+   const bool game_call = Detours::IsGameCall(_ReturnAddress());
+   const bool handled = game_call &&
+      Detours::Report(&Handlers::PreDraw, static_cast<ID3D12GraphicsCommandList*>(list), Game::D3D12::DrawCall{.function = DrawFunction::DispatchMesh, .mesh_groups = {x, y, z}});
+   if (!handled)
+      original<&DispatchMesh>(list, x, y, z);
+   if (game_call)
+      Detours::Report(&Handlers::PostDraw, static_cast<ID3D12GraphicsCommandList*>(list));
+}
+
+void STDMETHODCALLTYPE Dispatch(ID3D12GraphicsCommandList* list, UINT x, UINT y, UINT z)
+{
+   const bool game_call = Detours::IsGameCall(_ReturnAddress());
+   const bool handled = game_call && Detours::Report(&Handlers::PreDispatch, list, Game::D3D12::DispatchCall{.x = x, .y = y, .z = z});
+   if (!handled)
+      original<&Dispatch>(list, x, y, z);
+   if (game_call)
+      Detours::Report(&Handlers::PostDispatch, list);
+}
+
+void STDMETHODCALLTYPE ExecuteIndirect(ID3D12GraphicsCommandList* list, ID3D12CommandSignature* signature, UINT max_count, ID3D12Resource* arguments,
+   UINT64 arguments_offset, ID3D12Resource* count_buffer, UINT64 count_offset)
+{
+   const bool game_call = Detours::IsGameCall(_ReturnAddress());
+   const bool handled = game_call &&
+      Detours::Report(&Handlers::PreExecuteIndirect, list, Game::D3D12::IndirectArguments{signature, max_count, arguments, arguments_offset, count_buffer, count_offset});
+   if (!handled)
+      original<&ExecuteIndirect>(list, signature, max_count, arguments, arguments_offset, count_buffer, count_offset);
+   if (game_call)
+      Detours::Report(&Handlers::PostExecuteIndirect, list);
+}
+
+void STDMETHODCALLTYPE ExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle)
+{
+   if (Detours::IsGameCall(_ReturnAddress()))
+      Detours::Report(&Handlers::PreExecuteBundle, list, bundle);
+   original<&ExecuteBundle>(list, bundle);
+}
+
 template <auto Detour>
 Hook ListHook(uint32_t slot, const char* name, const IID& version = GUID_NULL)
 {
@@ -310,6 +312,7 @@ void InstallD3D12CommandList(const D3D12::Functions& functions)
       if (functions.test(size_t(function)))
          hooks.insert(hooks.end(), function_hooks);
    };
+   // Command list lifecycle and pipeline binds
    add(Function::Reset, {ListHook<&Reset>(LumaSlot_ID3D12GraphicsCommandList_Reset, "ID3D12GraphicsCommandList::Reset")});
    add(Function::ClearState, {ListHook<&ClearState>(LumaSlot_ID3D12GraphicsCommandList_ClearState, "ID3D12GraphicsCommandList::ClearState")});
    add(Function::SetPipelineState, {
@@ -320,7 +323,6 @@ void InstallD3D12CommandList(const D3D12::Functions& functions)
                                       ListHook<&SetGraphicsRootSignature>(LumaSlot_ID3D12GraphicsCommandList_SetGraphicsRootSignature, "ID3D12GraphicsCommandList::SetGraphicsRootSignature"),
                                       ListHook<&SetComputeRootSignature>(LumaSlot_ID3D12GraphicsCommandList_SetComputeRootSignature, "ID3D12GraphicsCommandList::SetComputeRootSignature"),
                                    });
-   add(Function::OMSetRenderTargets, {ListHook<&OMSetRenderTargets>(LumaSlot_ID3D12GraphicsCommandList_OMSetRenderTargets, "ID3D12GraphicsCommandList::OMSetRenderTargets")});
    add(Function::SetDescriptorHeaps, {ListHook<&SetDescriptorHeaps>(LumaSlot_ID3D12GraphicsCommandList_SetDescriptorHeaps, "ID3D12GraphicsCommandList::SetDescriptorHeaps")});
    add(Function::SetRootArguments,
       {
@@ -337,6 +339,9 @@ void InstallD3D12CommandList(const D3D12::Functions& functions)
          ListHook<&SetRootDescriptor<false, 2>>(LumaSlot_ID3D12GraphicsCommandList_SetGraphicsRootUnorderedAccessView, "ID3D12GraphicsCommandList::SetGraphicsRootUnorderedAccessView"),
          ListHook<&SetRootDescriptor<true, 2>>(LumaSlot_ID3D12GraphicsCommandList_SetComputeRootUnorderedAccessView, "ID3D12GraphicsCommandList::SetComputeRootUnorderedAccessView"),
       });
+
+   // Render targets and rasterizer/OM state
+   add(Function::OMSetRenderTargets, {ListHook<&OMSetRenderTargets>(LumaSlot_ID3D12GraphicsCommandList_OMSetRenderTargets, "ID3D12GraphicsCommandList::OMSetRenderTargets")});
    add(Function::SetFixedState, {
                                    ListHook<&RSSetViewports>(LumaSlot_ID3D12GraphicsCommandList_RSSetViewports, "ID3D12GraphicsCommandList::RSSetViewports"),
                                    ListHook<&RSSetScissorRects>(LumaSlot_ID3D12GraphicsCommandList_RSSetScissorRects, "ID3D12GraphicsCommandList::RSSetScissorRects"),
@@ -344,6 +349,8 @@ void InstallD3D12CommandList(const D3D12::Functions& functions)
                                    ListHook<&OMSetBlendFactor>(LumaSlot_ID3D12GraphicsCommandList_OMSetBlendFactor, "ID3D12GraphicsCommandList::OMSetBlendFactor"),
                                    ListHook<&OMSetStencilRef>(LumaSlot_ID3D12GraphicsCommandList_OMSetStencilRef, "ID3D12GraphicsCommandList::OMSetStencilRef"),
                                 });
+
+   // Barriers, copies and clears
    add(Function::ResourceBarrier, {ListHook<&ResourceBarrier>(LumaSlot_ID3D12GraphicsCommandList_ResourceBarrier, "ID3D12GraphicsCommandList::ResourceBarrier")});
    add(Function::Copy, {
                           ListHook<&CopyResource>(LumaSlot_ID3D12GraphicsCommandList_CopyResource, "ID3D12GraphicsCommandList::CopyResource"),
@@ -357,6 +364,8 @@ void InstallD3D12CommandList(const D3D12::Functions& functions)
                            ListHook<&ClearUnorderedAccessViewUint>(LumaSlot_ID3D12GraphicsCommandList_ClearUnorderedAccessViewUint, "ID3D12GraphicsCommandList::ClearUnorderedAccessViewUint"),
                            ListHook<&ClearUnorderedAccessViewFloat>(LumaSlot_ID3D12GraphicsCommandList_ClearUnorderedAccessViewFloat, "ID3D12GraphicsCommandList::ClearUnorderedAccessViewFloat"),
                         });
+
+   // Draws, dispatches and bundles
    add(Function::Draw, {
                           ListHook<&DrawInstanced>(LumaSlot_ID3D12GraphicsCommandList_DrawInstanced, "ID3D12GraphicsCommandList::DrawInstanced"),
                           ListHook<&DrawIndexedInstanced>(LumaSlot_ID3D12GraphicsCommandList_DrawIndexedInstanced, "ID3D12GraphicsCommandList::DrawIndexedInstanced"),

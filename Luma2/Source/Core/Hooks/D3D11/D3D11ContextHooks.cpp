@@ -540,6 +540,7 @@ void DeclareContextHooks(const D3D11::Functions& functions, const ContextVtable&
       AddContextHook<&IASetIndexBuffer<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_IASetIndexBuffer, BASE, "IASetIndexBuffer");
    if (wants(Function::ClearState))
       AddContextHook<&ClearState<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_ClearState, BASE, "ClearState");
+   // CPU writes
    if (wants(Function::Map))
       AddContextHook<&Map<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_Map, BASE, "Map");
    if (wants(Function::Unmap))
@@ -549,6 +550,8 @@ void DeclareContextHooks(const D3D11::Functions& functions, const ContextVtable&
       AddContextHook<&UpdateSubresource<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_UpdateSubresource, BASE, "UpdateSubresource");
       AddContextHook<&UpdateSubresource1<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext1_UpdateSubresource1, CONTEXT1, "UpdateSubresource1");
    }
+
+   // Copies and resolves
    if (wants(Function::CopyResource))
       AddContextHook<&CopyResource<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_CopyResource, BASE, "CopyResource");
    if (wants(Function::CopySubresourceRegion))
@@ -558,13 +561,15 @@ void DeclareContextHooks(const D3D11::Functions& functions, const ContextVtable&
       AddContextHook<&CopySubresourceRegion1<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext1_CopySubresourceRegion1, CONTEXT1,
          "CopySubresourceRegion1");
    }
+   if (wants(Function::CopyStructureCount))
+      AddContextHook<&CopyStructureCount<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_CopyStructureCount, BASE, "CopyStructureCount");
    if (wants(Function::ResolveSubresource))
       AddContextHook<&ResolveSubresource<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_ResolveSubresource, BASE, "ResolveSubresource");
+
+   // Clears
    if (wants(Function::ClearRenderTargetView))
       AddContextHook<&ClearRenderTargetView<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_ClearRenderTargetView, BASE,
          "ClearRenderTargetView");
-   if (wants(Function::CopyStructureCount))
-      AddContextHook<&CopyStructureCount<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_CopyStructureCount, BASE, "CopyStructureCount");
    if (wants(Function::ClearDepthStencilView))
       AddContextHook<&ClearDepthStencilView<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_ClearDepthStencilView, BASE,
          "ClearDepthStencilView");
@@ -576,6 +581,8 @@ void DeclareContextHooks(const D3D11::Functions& functions, const ContextVtable&
          BASE, "ClearUnorderedAccessViewFloat");
    if (wants(Function::ClearView))
       AddContextHook<&ClearView<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext1_ClearView, CONTEXT1, "ClearView");
+
+   // Draws and dispatches
    if (wants(Function::Draw))
       AddContextHook<&Draw<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_Draw, BASE, "Draw");
    if (wants(Function::DrawInstanced))
@@ -597,6 +604,8 @@ void DeclareContextHooks(const D3D11::Functions& functions, const ContextVtable&
       AddContextHook<&Dispatch<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_Dispatch, BASE, "Dispatch");
    if (wants(Function::DispatchIndirect))
       AddContextHook<&DispatchIndirect<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_DispatchIndirect, BASE, "DispatchIndirect");
+
+   // Command lists and flush
    if (wants(Function::FinishCommandList))
       AddContextHook<&FinishCommandList<V>>(hooks, vtable, LumaSlot_ID3D11DeviceContext_FinishCommandList, BASE, "FinishCommandList");
    if (wants(Function::ExecuteCommandList))

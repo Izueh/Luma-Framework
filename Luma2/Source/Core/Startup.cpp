@@ -133,12 +133,7 @@ Hooks::D3D11::Functions GetCoreFunctions()
 // After the game's Init and its saved settings, so what's declared and enabled can decide. Exactly the requested set.
 void InstallHooks()
 {
-   const Hooks::D3D11::Functions core = GetCoreFunctions();
-   // A feature hooking a function the game may have a native callback for would run in the middle of the game's work on it
-   ASSERT_ONCE_MSG((core & ~GetOwnedFunctions()).none(), "A Core feature hooks a function missing from Startup::GetOwnedFunctions");
-   if (const Hooks::D3D11::Functions shared = Game::Registry::GetCallbackFunctions() & GetOwnedFunctions(); shared.any())
-      Log::Error("Core: {} of the game's native callbacks are for functions Core owns, which have events instead", shared.count());
-   const Hooks::D3D11::Functions functions = core | Game::Registry::GetRequestedFunctions();
+   const Hooks::D3D11::Functions functions = GetCoreFunctions() | Game::Registry::GetRequestedFunctions();
    Log::Info("Core: {} of {} hookable D3D11 functions requested", functions.count(), functions.size());
    const ApiSet apis = Game::Registry::GetSupportedApis();
    Hooks::InstallDXGI(GetCoreDXGIFunctions() | Game::Registry::GetRequestedDXGIFunctions());
@@ -230,34 +225,6 @@ void Initialize()
 #if DEVELOPMENT
    Mcp::Start();
 #endif
-}
-
-Hooks::D3D11::Functions GetOwnedFunctions()
-{
-   using enum Hooks::D3D11::Function;
-   Hooks::D3D11::Functions functions;
-   for (const Hooks::D3D11::Function function : {
-           // Shaders: the database, the variants
-           CreateVertexShader, CreateHullShader, CreateDomainShader, CreateGeometryShader, CreateGeometryShaderWithStreamOutput, CreatePixelShader,
-           CreateComputeShader, VSSetShader, HSSetShader, DSSetShader, GSSetShader, PSSetShader, CSSetShader,
-           // Luma's cbuffers: the game's buffers at their slots
-           VSSetConstantBuffers, HSSetConstantBuffers, DSSetConstantBuffers, GSSetConstantBuffers, PSSetConstantBuffers, CSSetConstantBuffers,
-           // Draw's bound-state cache
-           RSSetViewports, RSSetScissorRects, OMSetBlendState, OMSetDepthStencilState,
-           // What resets a context's state
-           ClearState, FinishCommandList, ExecuteCommandList,
-           // Resources: mirrors (creation, views, binds, writes, copies, clears) and sampler mirrors, and trace's copy, clear and write
-           // events
-           CreateBuffer, CreateTexture1D, CreateTexture2D, CreateTexture3D, OpenSharedResource, CreateShaderResourceView, CreateRenderTargetView,
-           CreateUnorderedAccessView, CreateDepthStencilView, CreateSamplerState, VSSetShaderResources, HSSetShaderResources, DSSetShaderResources,
-           GSSetShaderResources, PSSetShaderResources, CSSetShaderResources, VSSetSamplers, HSSetSamplers, DSSetSamplers, GSSetSamplers, PSSetSamplers,
-           CSSetSamplers, CSSetUnorderedAccessViews, OMSetRenderTargets, OMSetRenderTargetsAndUnorderedAccessViews, Map, Unmap, UpdateSubresource,
-           CopyResource, CopySubresourceRegion, ResolveSubresource, ClearRenderTargetView, ClearDepthStencilView, ClearUnorderedAccessViewUint,
-           ClearUnorderedAccessViewFloat, ClearView,
-           // The variants' requests, the draw callbacks, trace
-           Draw, DrawInstanced, DrawIndexed, DrawIndexedInstanced, DrawAuto, DrawInstancedIndirect, DrawIndexedInstancedIndirect, Dispatch, DispatchIndirect})
-      functions.set(size_t(function));
-   return functions;
 }
 
 bool IsInitialized()

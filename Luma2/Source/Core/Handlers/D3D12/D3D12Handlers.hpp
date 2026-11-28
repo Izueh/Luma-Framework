@@ -14,6 +14,7 @@
 
 namespace Luma {
 namespace Handlers {
+// Device and queue lifecycle
 // Enables the debug layer for the device about to be created, when this build asks for it
 void PreCreateDevice();
 void PostCreateDevice(ID3D12Device* device);
@@ -22,6 +23,7 @@ void OnDeviceDestroyed(ID3D12Device* device);
 // Every submission, Luma's own included
 void PostExecuteCommandLists(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists);
 
+// Pipelines and root signatures
 // Pipelines created on the device or loaded from the game's pipeline library: rewrites an embedded root signature to its extended one,
 // invokes `call_original`, and tracks/attaches variants on the created pipeline.
 HRESULT CreateGraphicsPipelineState(ID3D12Device* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, bool from_library, void** pipeline,
@@ -36,58 +38,62 @@ HRESULT CreateRootSignature(std::span<const uint8_t> game_blob, void** root_sign
    const std::function<HRESULT(std::span<const uint8_t>)>& call_original);
 void PostCreateRootSignatureFromSubobjectInLibrary();
 void PostCreateStateObject();
+
+// Descriptor heaps and views
 // Extends shader-visible heaps with Luma's tail (retrying smaller sizes before falling back to the game's desc) and tracks the heap.
 HRESULT CreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& game_desc, void** heap,
    const std::function<HRESULT(const D3D12_DESCRIPTOR_HEAP_DESC&)>& call_original);
 // ID3D12DescriptorHeap::GetDesc: hides Luma's tail so the game sees the descriptor count it asked for
 void PostGetDesc(ID3D12DescriptorHeap* heap, D3D12_DESCRIPTOR_HEAP_DESC& desc);
+// Before a view's creation: the format it gets (an in-place resource's), UNKNOWN for the game's
+DXGI_FORMAT PreCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, Resources::Descriptors::D3D12::Kind kind, ID3D12Resource* resource,
+   DXGI_FORMAT format, bool has_desc);
 // Every kind of view and samplers, with what was written
 void PostCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, const Resources::Descriptors::D3D12::Descriptor& descriptor);
 // Per pair of destination and source ranges of CopyDescriptors (split where either range ends), and CopyDescriptorsSimple
 void PostCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, D3D12_CPU_DESCRIPTOR_HANDLE source, UINT count,
    D3D12_DESCRIPTOR_HEAP_TYPE type);
+
+// Resources and GetDesc
 // Before a committed or placed resource's creation: true when its desc (and clear value's format) were upgraded in place
 bool PreCreateCommittedResource(ID3D12Device* device, D3D12_RESOURCE_DESC& desc, D3D12_CLEAR_VALUE* clear, const D3D12_HEAP_PROPERTIES* heap, D3D12_HEAP_FLAGS flags);
 bool PreCreatePlacedResource(ID3D12Device* device, D3D12_RESOURCE_DESC& desc, D3D12_CLEAR_VALUE* clear, ID3D12Heap* heap, UINT64 offset);
 // GetResourceAllocationInfo, per desc: true when it was upgraded in place
 bool PreGetResourceAllocationInfo(ID3D12Device* device, D3D12_RESOURCE_DESC& desc);
-// Before a view's creation: the format it gets (an in-place resource's), UNKNOWN for the game's
-DXGI_FORMAT PreCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, Resources::Descriptors::D3D12::Kind kind, ID3D12Resource* resource,
-   DXGI_FORMAT format, bool has_desc);
-// GetDesc and GetDesc1 of a resource, for the game: what it asked for when Luma upgraded it in place and the rules spoof it
-void PostGetDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC& desc);
-void PostGetDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC1& desc);
 // Committed, placed and reserved resources: `state` is the initial one, none for a creation with an enhanced barrier layout. A null
 // `resource`: an upgraded creation failed, the game's is made next.
 void PostCreateResource(ID3D12Device* device, ID3D12Resource* resource, std::optional<D3D12_RESOURCE_STATES> state, const D3D12_CLEAR_VALUE* clear, bool reserved);
+// GetDesc and GetDesc1 of a resource, for the game: what it asked for when Luma upgraded it in place and the rules spoof it
+void PostGetDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC& desc);
+void PostGetDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC1& desc);
 
-// Command lists. A pipeline argument can be replaced by its variant.
+// Command list lifecycle and pipeline binds (a pipeline argument can be replaced by its variant)
 void PreReset(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline);
 void PreClearState(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline);
 void PreSetPipelineState(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline);
 // SetPipelineState1
 void PreSetStateObject(ID3D12GraphicsCommandList* list);
 void PreSetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12RootSignature* root_signature);
-// The handles can be replaced (mirrors' render targets)
-void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE*& render_targets, BOOL& single_range,
-   const D3D12_CPU_DESCRIPTOR_HANDLE*& depth_stencil);
 // The heaps Luma's table is read from
 void PreSetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12DescriptorHeap* const* heaps);
 // What trace reads a call's state from (Development builds hook them)
 void PreSetRootTable(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_DESCRIPTOR_HANDLE table);
 void PreSetRootDescriptor(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_VIRTUAL_ADDRESS address);
 void PreSetRootConstants(ID3D12GraphicsCommandList* list, bool compute, UINT index, UINT count, const void* values, UINT offset);
+
+// Render targets and rasterizer/OM state
+// The handles can be replaced (mirrors' render targets)
+void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE*& render_targets, BOOL& single_range,
+   const D3D12_CPU_DESCRIPTOR_HANDLE*& depth_stencil);
 void PreSetViewports(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_VIEWPORT*& viewports);
 void PreSetScissorRects(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_RECT*& rects);
 void PreSetTopology(ID3D12GraphicsCommandList* list, D3D12_PRIMITIVE_TOPOLOGY topology);
 void PreSetBlendFactor(ID3D12GraphicsCommandList* list, const FLOAT factor[4]);
 void PreSetStencilRef(ID3D12GraphicsCommandList* list, UINT stencil_ref);
-// DrawInstanced, DrawIndexedInstanced, DispatchMesh, and Dispatch: true when the game's call doesn't run (a draw event or the
-// trace skipped or replaced it)
+
+// Barriers, copies and clears (true skips the call; locations are copies of the game's, which can be edited)
 // The barriers to issue: the game's, with the mirrors' appended
 std::span<const D3D12_RESOURCE_BARRIER> PreResourceBarrier(ID3D12GraphicsCommandList* list, std::span<const D3D12_RESOURCE_BARRIER> barriers);
-
-// Copies and clears: true skips the call. The locations are copies of the game's, which can be edited.
 bool PreCopyResource(ID3D12GraphicsCommandList* list, ID3D12Resource*& destination, ID3D12Resource*& source);
 bool PreCopyTextureRegion(ID3D12GraphicsCommandList* list, D3D12_TEXTURE_COPY_LOCATION& destination, UINT& x, UINT& y, UINT& z, D3D12_TEXTURE_COPY_LOCATION& source,
    const D3D12_BOX*& box);
@@ -109,6 +115,7 @@ struct ClearValues
 bool PreClearUnorderedAccessView(ID3D12GraphicsCommandList* list, D3D12_GPU_DESCRIPTOR_HANDLE& gpu, D3D12_CPU_DESCRIPTOR_HANDLE& cpu, ID3D12Resource*& resource,
    ClearValues values, UINT rect_count, const D3D12_RECT* rects);
 
+// Draws, dispatches and bundles (true when the game's call doesn't run)
 bool PreDraw(ID3D12GraphicsCommandList* list, const Game::D3D12::DrawCall& draw);
 void PostDraw(ID3D12GraphicsCommandList* list);
 bool PreDispatch(ID3D12GraphicsCommandList* list, const Game::D3D12::DispatchCall& dispatch);
@@ -118,7 +125,7 @@ bool PreExecuteIndirect(ID3D12GraphicsCommandList* list, const Game::D3D12::Indi
 void PostExecuteIndirect(ID3D12GraphicsCommandList* list);
 void PreExecuteBundle(ID3D12GraphicsCommandList* list, ID3D12GraphicsCommandList* bundle);
 
-// Presenting thread, at a D3D12 present
+// Present (presenting thread, at a D3D12 present)
 void PresentD3D12(ID3D12CommandQueue* queue);
 } // namespace Handlers
 } // namespace Luma

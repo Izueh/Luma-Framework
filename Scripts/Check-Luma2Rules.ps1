@@ -49,7 +49,7 @@ $apiAllowedPatterns = @(
     '/D3D11/',
     '/D3D12/',
     '/DXGI/',
-    '^Luma2/Source/Core/Game/(GameCallbacks|GameEvents)\.hpp$',
+    '^Luma2/Source/Core/Game/GameEvents\.hpp$',
     '^Luma2/Source/Core/Hooks/(Detours|DeviceProxy|HookManager|ObjectLifetime|VtableSlots)\.(hpp|cpp|h|c)$',
     '^Luma2/Source/Core/ReShade/(ReShade|AddonEvents)\.cpp$',
     '^Luma2/Source/Core/Resources/ResourceUpgrades\.hpp$',

@@ -38,7 +38,6 @@ struct Declarations
    Info info;
    D3D11::Events d3d11_events;
    D3D12::Events d3d12_events;
-   D3D11::Callbacks d3d11_callbacks;
    Panels panels;
    GameDeviceDataType device_data;
    ApiSet supported_apis = {Api::D3D11, Api::D3D12};
@@ -116,11 +115,6 @@ void SetEvents(const D3D11::Events& events)
 void SetEvents(const D3D12::Events& events)
 {
    declarations.d3d12_events = events;
-}
-
-void SetCallbacks(const D3D11::Callbacks& callbacks)
-{
-   declarations.d3d11_callbacks = callbacks;
 }
 
 void D3D11::OnShaderDraw(std::span<const uint32_t> hashes, DrawCallback callback)
@@ -329,11 +323,6 @@ const D3D12::Events& GetD3D12Events()
    return declarations.d3d12_events;
 }
 
-const D3D11::Callbacks& GetD3D11Callbacks()
-{
-   return declarations.d3d11_callbacks;
-}
-
 ApiSet GetSupportedApis()
 {
    return declarations.supported_apis;
@@ -381,20 +370,6 @@ Hooks::D3D12::Functions GetRequestedD3D12Functions()
    return functions;
 }
 
-Hooks::D3D11::Functions GetCallbackFunctions()
-{
-   using enum Hooks::D3D11::Function;
-   const D3D11::Callbacks& d3d11 = declarations.d3d11_callbacks;
-   Hooks::D3D11::Functions functions;
-   Request(functions, d3d11.pre_create_blend_state, {CreateBlendState});
-   Request(functions, d3d11.post_ia_set_vertex_buffers, {IASetVertexBuffers});
-   Request(functions, d3d11.post_ia_set_index_buffer, {IASetIndexBuffer});
-   Request(functions, d3d11.pre_copy_structure_count, {CopyStructureCount});
-   Request(functions, d3d11.post_create_deferred_context, {CreateDeferredContext});
-   Request(functions, d3d11.on_deferred_context_destroyed, {CreateDeferredContext});
-   return functions;
-}
-
 Hooks::DXGI::Functions GetRequestedDXGIFunctions()
 {
    using enum Hooks::DXGI::Function;
@@ -416,7 +391,7 @@ Hooks::D3D11::Functions GetRequestedFunctions()
    using enum Hooks::D3D11::Function;
    const D3D11::Events& d3d11 = declarations.d3d11_events;
    // Device creation and destruction are always hooked
-   Hooks::D3D11::Functions functions = GetCallbackFunctions();
+   Hooks::D3D11::Functions functions;
    Request(functions, d3d11.on_create_shader,
       {CreateVertexShader, CreateHullShader, CreateDomainShader, CreateGeometryShader, CreateGeometryShaderWithStreamOutput, CreatePixelShader, CreateComputeShader});
    Request(functions, d3d11.on_create_buffer, {CreateBuffer});
@@ -430,24 +405,30 @@ Hooks::D3D11::Functions GetRequestedFunctions()
    Request(functions, d3d11.on_init_depth_stencil_view, {CreateDepthStencilView});
    Request(functions, d3d11.on_view_destroyed, {CreateShaderResourceView, CreateRenderTargetView, CreateUnorderedAccessView, CreateDepthStencilView});
    Request(functions, d3d11.on_create_sampler_state, {CreateSamplerState});
+   Request(functions, d3d11.on_create_blend_state, {CreateBlendState});
    Request(functions, d3d11.on_bind_render_targets, {OMSetRenderTargets});
    Request(functions, d3d11.on_bind_render_targets_and_unordered_access_views, {OMSetRenderTargetsAndUnorderedAccessViews});
-   Request(functions, d3d11.on_map, {Map});
-   Request(functions, d3d11.on_unmap, {Unmap});
-   Request(functions, d3d11.on_unmapped, {Unmap});
-   Request(functions, d3d11.on_update_subresource, {UpdateSubresource});
-   Request(functions, d3d11.on_copy_resource, {CopyResource});
-   Request(functions, d3d11.on_copy_subresource_region, {CopySubresourceRegion});
-   Request(functions, d3d11.on_resolve_subresource, {ResolveSubresource});
-   Request(functions, d3d11.on_clear_render_target_view, {ClearRenderTargetView});
-   Request(functions, d3d11.on_clear_view, {ClearView});
    Request(functions, d3d11.on_bind_constant_buffers,
       {VSSetConstantBuffers, HSSetConstantBuffers, DSSetConstantBuffers, GSSetConstantBuffers, PSSetConstantBuffers, CSSetConstantBuffers});
    Request(functions, d3d11.on_bind_viewports, {RSSetViewports});
    Request(functions, d3d11.on_bind_scissor_rects, {RSSetScissorRects});
    Request(functions, d3d11.on_bind_blend_state, {OMSetBlendState});
    Request(functions, d3d11.on_bind_depth_stencil_state, {OMSetDepthStencilState});
+   Request(functions, d3d11.on_bind_vertex_buffers, {IASetVertexBuffers});
+   Request(functions, d3d11.on_bind_index_buffer, {IASetIndexBuffer});
    Request(functions, d3d11.on_clear_state, {ClearState});
+   Request(functions, d3d11.on_map, {Map});
+   Request(functions, d3d11.on_unmap, {Unmap});
+   Request(functions, d3d11.on_unmapped, {Unmap});
+   Request(functions, d3d11.on_update_subresource, {UpdateSubresource});
+   Request(functions, d3d11.on_copy_resource, {CopyResource});
+   Request(functions, d3d11.on_copy_subresource_region, {CopySubresourceRegion});
+   Request(functions, d3d11.on_copy_structure_count, {CopyStructureCount});
+   Request(functions, d3d11.on_resolve_subresource, {ResolveSubresource});
+   Request(functions, d3d11.on_clear_render_target_view, {ClearRenderTargetView});
+   Request(functions, d3d11.on_clear_view, {ClearView});
+   Request(functions, d3d11.on_init_deferred_context, {CreateDeferredContext});
+   Request(functions, d3d11.on_deferred_context_destroyed, {CreateDeferredContext});
    Request(functions, d3d11.on_finish_command_list, {FinishCommandList});
    Request(functions, d3d11.on_execute_command_list, {ExecuteCommandList});
    // The draw events, and the callbacks of OnShaderDraw
@@ -466,8 +447,8 @@ void LogDeclarations()
       if (apis.Has(api))
          used += std::format("{}{}", used.empty() ? "" : " and ", GetName(api));
    }
-   Log::Info("Game: {} {} set {} D3D11 and {} D3D12 events, {} D3D11 callbacks, uses {}", info.name.empty() ? "(unnamed game)" : info.name,
-      info.version, CountCallbacks(declarations.d3d11_events), CountCallbacks(declarations.d3d12_events), CountCallbacks(declarations.d3d11_callbacks),
+   Log::Info("Game: {} {} set {} D3D11 and {} D3D12 events, uses {}", info.name.empty() ? "(unnamed game)" : info.name,
+      info.version, CountCallbacks(declarations.d3d11_events), CountCallbacks(declarations.d3d12_events),
       used.empty() ? "no API" : used);
 }
 

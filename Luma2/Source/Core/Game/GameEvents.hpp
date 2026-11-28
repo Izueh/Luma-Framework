@@ -72,15 +72,15 @@ struct Call
 
 using DrawCallback = DrawResult (*)(const Call& call);
 
-// Each only reports, unless its comment says so. Calls made from one aren't tracked by
-// Core. Setting one installs its hook, so they are set in Init, in field order. They get the real API objects, not Luma's proxies.
+// Each only reports, unless its comment says so. Calls made from one aren't tracked by Core. Setting one installs its hook, so they
+// are set in Init, in field order. They get the real API objects, not Luma's proxies.
 struct Events
 {
+   // Device and swapchain lifecycle
    // After Core's objects on the device and the GameDeviceData are created
    void (*on_init_device)(ID3D11Device* device) = nullptr;
    // The game released its last reference. First, while Core's objects are still valid; the GameDeviceData is destroyed after.
    void (*on_destroy_device)(ID3D11Device* device) = nullptr;
-
    // At each creation and resize, before Core's own changes
    void (*on_create_swapchain)(SwapchainDesc& desc) = nullptr;
    // At the end of a creation and of each resize, the device's output resolution already set
@@ -89,12 +89,13 @@ struct Events
    // so the callback can contribute to the frame being composed and reset per-frame state.
    void (*on_present)(IDXGISwapChain* swapchain, ID3D11Device* device) = nullptr;
 
+   // Shaders
    // After Core tracked it. `hash` is the game's bytecode's: shaders are changed through variants, never here.
    void (*on_create_shader)(ID3D11Device* device, ShaderStage stage, uint32_t hash, std::span<const uint8_t> bytecode, ID3D11DeviceChild* shader) = nullptr;
 
-   // Resources and views (Core's mirrors and trace hook them). An on_create_* runs before Core and may edit the desc (Core
-   // sees the edit), an on_init_* after Core with the effective object (Luma's mirror if Core replaced it while swapping, else
-   // the game's original). Use Game::D3D11::FindMirror / FindOriginal / GetViewResource / GetResourceViews to translate between them.
+   // Resources, views and state objects. An on_create_* runs before Core and may edit the desc (Core sees the edit), an on_init_*
+   // after Core with the effective object (Luma's mirror if Core replaced it while swapping, else the game's original). Use
+   // Game::D3D11::FindMirror / FindOriginal / GetViewResource / GetResourceViews to translate between them.
    void (*on_create_buffer)(ID3D11Device* device, D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA*& initial_data) = nullptr;
    void (*on_init_buffer)(ID3D11Device* device, const D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA* initial_data, ID3D11Buffer* buffer) = nullptr;
    void (*on_create_texture_2d)(ID3D11Device* device, D3D11_TEXTURE2D_DESC1& desc, const D3D11_SUBRESOURCE_DATA*& initial_data) = nullptr;
@@ -109,12 +110,25 @@ struct Events
    void (*on_view_destroyed)(ID3D11Device* device, const ID3D11View* view) = nullptr;
    // Before Core's sampler mirror: may edit the desc
    void (*on_create_sampler_state)(ID3D11Device* device, D3D11_SAMPLER_DESC& desc) = nullptr;
+   // CreateBlendState is reported as a DESC1 with logic ops disabled
+   void (*on_create_blend_state)(ID3D11Device* device, D3D11_BLEND_DESC1& desc) = nullptr;
 
+   // Pipeline and state binds
    // Render target binds, after Core swaps in mirrors (so the event sees the effective views): may edit the arrays (copies of the game's;
    // null when the game keeps the bound ones, D3D11_KEEP_*). True skips the bind.
    bool (*on_bind_render_targets)(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views, ID3D11DepthStencilView*& depth_stencil) = nullptr;
    bool (*on_bind_render_targets_and_unordered_access_views)(ID3D11DeviceContext* context, UINT count, ID3D11RenderTargetView** views,
       ID3D11DepthStencilView*& depth_stencil, UINT uav_start, UINT uav_count, ID3D11UnorderedAccessView** uavs, const UINT* initial_counts) = nullptr;
+   // Observe-only state binds (after Core records them, except constant buffers, reported first)
+   void (*on_bind_constant_buffers)(ID3D11DeviceContext* context, ShaderStage stage, UINT start, UINT count, ID3D11Buffer* const* buffers) = nullptr;
+   void (*on_bind_viewports)(ID3D11DeviceContext* context, UINT count, const D3D11_VIEWPORT* viewports) = nullptr;
+   void (*on_bind_scissor_rects)(ID3D11DeviceContext* context, UINT count, const D3D11_RECT* rects) = nullptr;
+   void (*on_bind_blend_state)(ID3D11DeviceContext* context, ID3D11BlendState* state, const FLOAT blend_factor[4], UINT sample_mask) = nullptr;
+   void (*on_bind_depth_stencil_state)(ID3D11DeviceContext* context, ID3D11DepthStencilState* state, UINT stencil_ref) = nullptr;
+   void (*on_bind_vertex_buffers)(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11Buffer* const* buffers, const UINT* strides, const UINT* offsets) = nullptr;
+   void (*on_bind_index_buffer)(ID3D11DeviceContext* context, ID3D11Buffer* buffer, DXGI_FORMAT format, UINT offset) = nullptr;
+   // After Core forgot what it recorded
+   void (*on_clear_state)(ID3D11DeviceContext* context) = nullptr;
 
    // CPU writes, copies and clears (on_map and on_unmapped after the call). Copies, resolves and clears receive the effective
    // (mirror-resolved) resources/views while swapping, before Core issues its redirected call. True skips the call.
@@ -129,30 +143,24 @@ struct Events
    // A whole-subresource copy has no box, as the game passed it
    bool (*on_copy_subresource_region)(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, UINT x, UINT y, UINT z,
       ID3D11Resource* source, UINT source_subresource, const D3D11_BOX* box, UINT copy_flags) = nullptr;
+   bool (*on_copy_structure_count)(ID3D11DeviceContext* context, ID3D11Buffer* destination, UINT destination_offset, ID3D11UnorderedAccessView* source) = nullptr;
    bool (*on_resolve_subresource)(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, ID3D11Resource* source,
       UINT source_subresource, DXGI_FORMAT format) = nullptr;
    bool (*on_clear_render_target_view)(ID3D11DeviceContext* context, ID3D11RenderTargetView* view, const FLOAT color[4]) = nullptr;
    // Not reported as a render target clear, even on a render target view
    bool (*on_clear_view)(ID3D11DeviceContext* context, ID3D11View* view, const FLOAT color[4], const D3D11_RECT* rects, UINT rect_count) = nullptr;
 
-   // After Core records them, except constant buffers, reported first
-   void (*on_bind_constant_buffers)(ID3D11DeviceContext* context, ShaderStage stage, UINT start, UINT count, ID3D11Buffer* const* buffers) = nullptr;
-   void (*on_bind_viewports)(ID3D11DeviceContext* context, UINT count, const D3D11_VIEWPORT* viewports) = nullptr;
-   void (*on_bind_scissor_rects)(ID3D11DeviceContext* context, UINT count, const D3D11_RECT* rects) = nullptr;
-   void (*on_bind_blend_state)(ID3D11DeviceContext* context, ID3D11BlendState* state, const FLOAT blend_factor[4], UINT sample_mask) = nullptr;
-   void (*on_bind_depth_stencil_state)(ID3D11DeviceContext* context, ID3D11DepthStencilState* state, UINT stencil_ref) = nullptr;
-   // After Core forgot what it recorded
-   void (*on_clear_state)(ID3D11DeviceContext* context) = nullptr;
-
    // Draws and dispatches, before the game's call and before the variants' requests are bound (they're bound after the events, only
    // when they all return None). Their result can skip the call or replace it. Their own calls aren't hooked or traced, so they
    // restore what later draws would see. None while Luma is off.
-   // Runs first, only for a call with a variant bound (`variant_stages`). The other events run
-   // only if it returns None.
+   // Runs first, only for a call with a variant bound (`variant_stages`). The other events run only if it returns None.
    DrawResult (*on_variant_draw)(const Call& call) = nullptr;
    // For each call no shader's callback (OnShaderDraw) took
    DrawResult (*on_draw_or_dispatch)(const Call& call) = nullptr;
 
+   // Deferred contexts and command lists
+   void (*on_init_deferred_context)(ID3D11Device* device, ID3D11DeviceContext* context) = nullptr;
+   void (*on_deferred_context_destroyed)(ID3D11Device* device, const ID3D11DeviceContext* context) = nullptr;
    // After Core's handling
    void (*on_finish_command_list)(ID3D11DeviceContext* context, BOOL restore, ID3D11CommandList* list) = nullptr;
    // Before Core's handling, so the game can run its own lists first. True skips the execution.

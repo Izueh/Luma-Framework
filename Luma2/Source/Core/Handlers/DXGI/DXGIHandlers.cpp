@@ -192,6 +192,7 @@ void ReportInitSwapchain(IDXGISwapChain* swapchain, const Presenter& presenter, 
 }
 } // namespace
 
+// Swapchain creation and destruction
 void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc, std::optional<Api> known_api)
 {
    // D3D11CreateDeviceAndSwapChain creates the device and swapchain together so `creator` is null,
@@ -267,21 +268,6 @@ void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
    ReportInitSwapchain(swapchain, *presenter, false);
 }
 
-void OnOverlayBufferRequest(IDXGISwapChain* swapchain)
-{
-   Display::Swapchain::DXGI::ComposeForOverlay(swapchain);
-}
-
-bool ShouldWrapSwapChain(IDXGISwapChain* swapchain)
-{
-   return Display::Swapchain::DXGI::Wraps(swapchain);
-}
-
-Hooks::SwapchainProxy::ReShadeSwapchainView GetReShadeSwapchainView(IDXGISwapChain* swapchain)
-{
-   return Display::Swapchain::DXGI::GetReShadeSwapchainView(swapchain);
-}
-
 void OnSwapChainDestroyed(const IDXGISwapChain* swapchain)
 {
    UI::DXGI::DetachFromSwapchain(swapchain);
@@ -293,6 +279,29 @@ void OnSwapChainDestroyed(const IDXGISwapChain* swapchain)
    Log::Info("DXGI: swapchain {} destroyed", static_cast<const void*>(swapchain));
 }
 
+void ForgetSwapchains(const void* device)
+{
+   std::scoped_lock lock(known_mutex);
+   std::erase_if(known, [device](const KnownSwapchain& entry) { return entry.device == device; });
+}
+
+// Proxy and overlay routing
+bool ShouldWrapSwapChain(IDXGISwapChain* swapchain)
+{
+   return Display::Swapchain::DXGI::Wraps(swapchain);
+}
+
+Hooks::SwapchainProxy::ReShadeSwapchainView GetReShadeSwapchainView(IDXGISwapChain* swapchain)
+{
+   return Display::Swapchain::DXGI::GetReShadeSwapchainView(swapchain);
+}
+
+void OnOverlayBufferRequest(IDXGISwapChain* swapchain)
+{
+   Display::Swapchain::DXGI::ComposeForOverlay(swapchain);
+}
+
+// Resize and fullscreen
 void PreResizeBuffers(IDXGISwapChain* swapchain, UINT& count, UINT& width, UINT& height, DXGI_FORMAT& format, UINT& flags, const UINT*, IUnknown* const*)
 {
    const std::optional<Presenter> presenter = FindPresenter(swapchain);
@@ -353,6 +362,12 @@ bool PreSetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutp
    return borderless;
 }
 
+std::optional<BOOL> GetFullscreenState(IDXGISwapChain* swapchain)
+{
+   return Display::Swapchain::DXGI::GetFullscreenState(swapchain);
+}
+
+// Buffer and index queries
 std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer, bool third_party)
 {
    return Display::Swapchain::DXGI::GetBuffer(swapchain, index, riid, buffer, third_party);
@@ -363,14 +378,20 @@ std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain, bool th
    return Display::Swapchain::DXGI::GetCurrentBackBufferIndex(swapchain, third_party);
 }
 
-std::optional<BOOL> GetFullscreenState(IDXGISwapChain* swapchain)
-{
-   return Display::Swapchain::DXGI::GetFullscreenState(swapchain);
-}
-
+// Color space, HDR and display spoofing
 bool PreSetColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
 {
    return Display::Swapchain::DXGI::SetColorSpace(swapchain, color_space);
+}
+
+void PostSetColorSpace(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
+{
+   Display::Swapchain::DXGI::RecordColorSpace(swapchain, color_space);
+}
+
+bool PreSetHdrMetadata(IDXGISwapChain* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, const void* metadata)
+{
+   return Display::Swapchain::DXGI::SetHdrMetadata(swapchain, type, size, metadata);
 }
 
 void PostCheckColorSpaceSupport(IDXGISwapChain*, DXGI_COLOR_SPACE_TYPE color_space, UINT& support)
@@ -383,16 +404,7 @@ void PostGetOutputDesc1(IDXGIOutput6*, DXGI_OUTPUT_DESC1& desc)
    Display::Spoofing::DXGI::SpoofOutputDesc(desc);
 }
 
-bool PreSetHdrMetadata(IDXGISwapChain* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, const void* metadata)
-{
-   return Display::Swapchain::DXGI::SetHdrMetadata(swapchain, type, size, metadata);
-}
-
-void PostSetColorSpace(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
-{
-   Display::Swapchain::DXGI::RecordColorSpace(swapchain, color_space);
-}
-
+// Present
 void PrePresentWork(IDXGISwapChain* swapchain)
 {
    const std::optional<Presenter> presenter = FindPresenter(swapchain);
@@ -493,12 +505,6 @@ bool ComposesWholeBuffer(IDXGISwapChain* swapchain)
 void PostPresent(IDXGISwapChain* swapchain)
 {
    Display::Swapchain::DXGI::AdvanceBuffer(swapchain);
-}
-
-void ForgetSwapchains(const void* device)
-{
-   std::scoped_lock lock(known_mutex);
-   std::erase_if(known, [device](const KnownSwapchain& entry) { return entry.device == device; });
 }
 } // namespace Handlers
 } // namespace Luma

@@ -47,11 +47,6 @@ const Game::D3D11::Events& GameEvents()
    return Game::Registry::GetD3D11Events();
 }
 
-const Game::D3D11::Callbacks& GameCallbacks()
-{
-   return Game::Registry::GetD3D11Callbacks();
-}
-
 bool IsRestoringGameBuffers()
 {
    return Resources::LumaCBuffers::GetOptions().restore_after_draw;
@@ -144,6 +139,7 @@ void PrepareView(ID3D11Resource* resource, std::optional<Desc>& desc)
 }
 } // namespace
 
+// Device lifecycle
 void PreCreateDevice(UINT& flags, const D3D_FEATURE_LEVEL*& feature_levels, UINT& feature_level_count)
 {
    flags = Validation::D3D11::GetCreateFlags(flags);
@@ -182,6 +178,7 @@ void OnDeviceDestroyed(ID3D11Device* device)
       [&] { Validation::D3D11::StopWatchingDevice(device); });
 }
 
+// Resources and GetDesc
 void PreCreateBuffer(ID3D11Device* device, D3D11_BUFFER_DESC& desc, const D3D11_SUBRESOURCE_DATA*& initial_data)
 {
    Game::Registry::Call(GameEvents().on_create_buffer, device, desc, initial_data);
@@ -268,6 +265,7 @@ void OnResourceDestroyed(ID3D11Device* device, const ID3D11Resource* resource)
    Game::Registry::Call(GameEvents().on_resource_destroyed, device, resource);
 }
 
+// Views and state objects
 void PreCreateShaderResourceView(ID3D11Device*, ID3D11Resource* resource, std::optional<D3D11_SHADER_RESOURCE_VIEW_DESC1>& desc)
 {
    PrepareView(resource, desc);
@@ -388,11 +386,12 @@ void OnSamplerDestroyed(ID3D11Device*, const ID3D11SamplerState*) {}
 
 void PreCreateBlendState(ID3D11Device* device, D3D11_BLEND_DESC1& desc)
 {
-   Game::Registry::Call(GameCallbacks().pre_create_blend_state, device, desc);
+   Game::Registry::Call(GameEvents().on_create_blend_state, device, desc);
 }
 
 void PostCreateBlendState(ID3D11Device*, const D3D11_BLEND_DESC1&, ID3D11BlendState*) {}
 
+// Shaders and input layouts
 // Nothing changes the game's bytecode, which is what Core hashes: shaders are changed through variants
 void PreCreateShader(ID3D11Device* device, ShaderStage stage, const void* bytecode, SIZE_T length, bool stream_output)
 {
@@ -420,6 +419,7 @@ void PostCreateInputLayout(ID3D11Device*, const D3D11_INPUT_ELEMENT_DESC*, UINT,
 
 void OnInputLayoutDestroyed(ID3D11Device*, const ID3D11InputLayout*) {}
 
+// Pipeline and state binds
 bool PreSetShader(ID3D11DeviceContext* context, ShaderStage stage, ID3D11DeviceChild*& shader)
 {
    if (Shaders::IsNeeded())
@@ -525,12 +525,12 @@ void PostOMSetDepthStencilState(ID3D11DeviceContext* context, ID3D11DepthStencil
 
 void PostIASetVertexBuffers(ID3D11DeviceContext* context, UINT start, UINT count, ID3D11Buffer* const* buffers, const UINT* strides, const UINT* offsets)
 {
-   Game::Registry::Call(GameCallbacks().post_ia_set_vertex_buffers, context, start, count, buffers, strides, offsets);
+   Game::Registry::Call(GameEvents().on_bind_vertex_buffers, context, start, count, buffers, strides, offsets);
 }
 
 void PostIASetIndexBuffer(ID3D11DeviceContext* context, ID3D11Buffer* buffer, DXGI_FORMAT format, UINT offset)
 {
-   Game::Registry::Call(GameCallbacks().post_ia_set_index_buffer, context, buffer, format, offset);
+   Game::Registry::Call(GameEvents().on_bind_index_buffer, context, buffer, format, offset);
 }
 
 void PostClearState(ID3D11DeviceContext* context)
@@ -539,6 +539,7 @@ void PostClearState(ID3D11DeviceContext* context)
    Game::Registry::Call(GameEvents().on_clear_state, context);
 }
 
+// CPU writes
 void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subresource, D3D11_MAP type, UINT flags, D3D11_MAPPED_SUBRESOURCE& mapped)
 {
 #if DEVELOPMENT
@@ -620,6 +621,7 @@ bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource
    return Resources::Mirrors::D3D11::WriteSubresource(context, resource, subresource, box, data, row_pitch, depth_pitch);
 }
 
+// Copies and resolves
 bool PreCopyResource(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source)
 {
    ID3D11Resource* effective_dst = destination;
@@ -667,6 +669,11 @@ bool PreCopySubresourceRegion(ID3D11DeviceContext* context, ID3D11Resource* dest
       Resources::Mirrors::D3D11::RedirectCopyRegion(context, destination, destination_subresource, x, y, z, source, source_subresource, box, copy_flags);
 }
 
+bool PreCopyStructureCount(ID3D11DeviceContext* context, ID3D11Buffer* destination, UINT destination_offset, ID3D11UnorderedAccessView* source)
+{
+   return Game::Registry::Call(GameEvents().on_copy_structure_count, context, destination, destination_offset, source);
+}
+
 bool PreResolveSubresource(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, ID3D11Resource* source,
    UINT source_subresource, DXGI_FORMAT format)
 {
@@ -686,6 +693,7 @@ bool PreResolveSubresource(ID3D11DeviceContext* context, ID3D11Resource* destina
    return Resources::Mirrors::IsNeeded() && Resources::Mirrors::D3D11::RedirectResolve(context, destination, destination_subresource, source, source_subresource, format);
 }
 
+// Clears
 bool PreClearRenderTargetView(ID3D11DeviceContext* context, ID3D11RenderTargetView* view, const FLOAT color[4])
 {
    ID3D11RenderTargetView* effective_view = Resources::Mirrors::IsNeeded() ? Resources::Mirrors::D3D11::GetEffectiveView(view) : view;
@@ -696,11 +704,6 @@ bool PreClearRenderTargetView(ID3D11DeviceContext* context, ID3D11RenderTargetVi
       Trace::Capture::D3D11::AddClear(context, "ClearRenderTargetView", view, {color[0], color[1], color[2], color[3]});
 #endif
    return Resources::Mirrors::IsNeeded() && Resources::Mirrors::D3D11::RedirectClear(context, view, color);
-}
-
-bool PreCopyStructureCount(ID3D11DeviceContext* context, ID3D11Buffer* destination, UINT destination_offset, ID3D11UnorderedAccessView* source)
-{
-   return Game::Registry::Call(GameCallbacks().pre_copy_structure_count, context, destination, destination_offset, source);
 }
 
 bool PreClearDepthStencilView([[maybe_unused]] ID3D11DeviceContext* context, [[maybe_unused]] ID3D11DepthStencilView* view, [[maybe_unused]] UINT flags,
@@ -792,6 +795,7 @@ bool RunCall(ID3D11DeviceContext* context, const Call& call)
 #endif
 }
 
+// Draws and dispatches
 bool PreDraw(ID3D11DeviceContext* context, const DrawCall& draw)
 {
    return RunCall(context, draw);
@@ -814,14 +818,15 @@ void PostDispatch(ID3D11DeviceContext* context)
       Resources::Mirrors::D3D11::FinishDrawOrDispatch(context, true);
 }
 
+// Deferred contexts and command lists
 void PostCreateDeferredContext(ID3D11Device* device, ID3D11DeviceContext* context)
 {
-   Game::Registry::Call(GameCallbacks().post_create_deferred_context, device, context);
+   Game::Registry::Call(GameEvents().on_init_deferred_context, device, context);
 }
 
 void OnDeferredContextDestroyed(ID3D11Device* device, const ID3D11DeviceContext* context)
 {
-   Game::Registry::Call(GameCallbacks().on_deferred_context_destroyed, device, context);
+   Game::Registry::Call(GameEvents().on_deferred_context_destroyed, device, context);
 }
 
 void PostFinishCommandList(ID3D11DeviceContext* context, BOOL restore, ID3D11CommandList* list)
@@ -862,6 +867,7 @@ bool PreFlush(ID3D11DeviceContext*)
    return false;
 }
 
+// Present
 void PresentD3D11(ID3D11Device* device)
 {
    if (Shaders::IsNeeded())

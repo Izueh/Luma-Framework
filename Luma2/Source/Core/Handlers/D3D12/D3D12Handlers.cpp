@@ -219,6 +219,7 @@ HRESULT CreatePipeline(ID3D12Device* device, PipelineKind kind, const Desc* desc
 }
 } // namespace
 
+// Pipelines and root signatures
 HRESULT CreateGraphicsPipelineState(ID3D12Device* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, bool from_library, void** pipeline,
    const std::function<HRESULT(const D3D12_GRAPHICS_PIPELINE_STATE_DESC*)>& call_original)
 {
@@ -293,6 +294,7 @@ void PostCreateStateObject()
    LUMA_UNIMPLEMENTED("Variants of state objects (DXIL, the first SM6 game)");
 }
 
+// Descriptor heaps and views
 HRESULT CreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& game_desc, void** heap,
    const std::function<HRESULT(const D3D12_DESCRIPTOR_HEAP_DESC&)>& call_original)
 {
@@ -325,6 +327,31 @@ HRESULT CreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_D
 #endif
    }
    return result;
+}
+
+void PostGetDesc(ID3D12DescriptorHeap* heap, D3D12_DESCRIPTOR_HEAP_DESC& desc)
+{
+   if (const std::optional<uint32_t> game_size = Resources::HeapTail::D3D12::GetGameSize(heap))
+      desc.NumDescriptors = *game_size;
+}
+
+DXGI_FORMAT PreCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, Resources::Descriptors::D3D12::Kind kind, ID3D12Resource* resource,
+   DXGI_FORMAT format, bool has_desc)
+{
+   using Kind = Resources::Descriptors::D3D12::Kind;
+   using ViewKind = Resources::Mirrors::D3D12::ViewKind;
+   if (!Resources::Mirrors::IsNeeded())
+      return DXGI_FORMAT_UNKNOWN;
+   ViewKind view = ViewKind::ConstantBuffer;
+   switch (kind)
+   {
+   case Kind::ShaderResource: view = ViewKind::ShaderResource; break;
+   case Kind::UnorderedAccess: view = ViewKind::UnorderedAccess; break;
+   case Kind::RenderTarget: view = ViewKind::RenderTarget; break;
+   case Kind::DepthStencil: view = ViewKind::DepthStencil; break;
+   default: return DXGI_FORMAT_UNKNOWN;
+   }
+   return Resources::Mirrors::D3D12::PrepareView(device, destination, view, resource, format, has_desc);
 }
 
 void PostCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, const Resources::Descriptors::D3D12::Descriptor& descriptor)
@@ -373,6 +400,7 @@ void PostCopyDescriptors(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE desti
 #endif
 }
 
+// Resources and GetDesc
 bool PreCreateCommittedResource(ID3D12Device* device, D3D12_RESOURCE_DESC& desc, D3D12_CLEAR_VALUE* clear, const D3D12_HEAP_PROPERTIES* heap, D3D12_HEAP_FLAGS flags)
 {
    using namespace Resources::Mirrors::D3D12;
@@ -391,35 +419,6 @@ bool PreGetResourceAllocationInfo(ID3D12Device* device, D3D12_RESOURCE_DESC& des
    return Resources::Mirrors::IsNeeded() && Resources::Mirrors::D3D12::UpgradeForAllocation(device, desc);
 }
 
-DXGI_FORMAT PreCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, Resources::Descriptors::D3D12::Kind kind, ID3D12Resource* resource,
-   DXGI_FORMAT format, bool has_desc)
-{
-   using Kind = Resources::Descriptors::D3D12::Kind;
-   using ViewKind = Resources::Mirrors::D3D12::ViewKind;
-   if (!Resources::Mirrors::IsNeeded())
-      return DXGI_FORMAT_UNKNOWN;
-   ViewKind view = ViewKind::ConstantBuffer;
-   switch (kind)
-   {
-   case Kind::ShaderResource: view = ViewKind::ShaderResource; break;
-   case Kind::UnorderedAccess: view = ViewKind::UnorderedAccess; break;
-   case Kind::RenderTarget: view = ViewKind::RenderTarget; break;
-   case Kind::DepthStencil: view = ViewKind::DepthStencil; break;
-   default: return DXGI_FORMAT_UNKNOWN;
-   }
-   return Resources::Mirrors::D3D12::PrepareView(device, destination, view, resource, format, has_desc);
-}
-
-void PostGetDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC& desc)
-{
-   Resources::Mirrors::D3D12::SpoofDesc(resource, desc);
-}
-
-void PostGetDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC1& desc)
-{
-   Resources::Mirrors::D3D12::SpoofDesc(resource, desc);
-}
-
 void PostCreateResource(ID3D12Device* device, ID3D12Resource* resource, std::optional<D3D12_RESOURCE_STATES> state, const D3D12_CLEAR_VALUE* clear, bool reserved)
 {
    if (Resources::Mirrors::IsNeeded())
@@ -434,6 +433,17 @@ void PostCreateResource(ID3D12Device* device, ID3D12Resource* resource, std::opt
 #endif
 }
 
+void PostGetDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC& desc)
+{
+   Resources::Mirrors::D3D12::SpoofDesc(resource, desc);
+}
+
+void PostGetDesc(ID3D12Resource* resource, D3D12_RESOURCE_DESC1& desc)
+{
+   Resources::Mirrors::D3D12::SpoofDesc(resource, desc);
+}
+
+// Command list lifecycle and pipeline binds
 void PreReset(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline)
 {
    // No targets bound any more
@@ -497,31 +507,6 @@ void PreSetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12Ro
 #endif
 }
 
-void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE*& render_targets, BOOL& single_range,
-   const D3D12_CPU_DESCRIPTOR_HANDLE*& depth_stencil)
-{
-#if DEVELOPMENT
-   // The game's targets
-   Trace::Capture::D3D12::RecordRenderTargets(list, count, render_targets, single_range, depth_stencil);
-   Trace::Stats::D3D12::RecordBind(list, Trace::Stats::D3D12::Bind::RenderTargets);
-#endif
-   if (Resources::Mirrors::IsNeeded())
-   {
-      const Shaders::Database::D3D12::TargetFormats formats =
-         Resources::Mirrors::D3D12::BindRenderTargets(list, count, render_targets, single_range, depth_stencil, Resources::Mirrors::IsSwapping());
-      Shaders::Variants::D3D12::SetTargetFormats(list, formats);
-   }
-   Draw::D3D12::RecordRenderTargets(list, count, render_targets, single_range, depth_stencil);
-   if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
-      Resources::Database::D3D12::SetRenderTargets(list, count, render_targets, single_range, depth_stencil);
-}
-
-void PostGetDesc(ID3D12DescriptorHeap* heap, D3D12_DESCRIPTOR_HEAP_DESC& desc)
-{
-   if (const std::optional<uint32_t> game_size = Resources::HeapTail::D3D12::GetGameSize(heap))
-      desc.NumDescriptors = *game_size;
-}
-
 // Trace reads descriptor tables through the heaps' GPU ranges; Luma's table is in the bound heap's tail
 void PreSetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12DescriptorHeap* const* heaps)
 {
@@ -552,6 +537,26 @@ void PreSetRootConstants([[maybe_unused]] ID3D12GraphicsCommandList* list, [[may
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordRootConstants(list, compute, index, count, values, offset);
 #endif
+}
+
+// Render targets and rasterizer/OM state
+void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE*& render_targets, BOOL& single_range,
+   const D3D12_CPU_DESCRIPTOR_HANDLE*& depth_stencil)
+{
+#if DEVELOPMENT
+   // The game's targets
+   Trace::Capture::D3D12::RecordRenderTargets(list, count, render_targets, single_range, depth_stencil);
+   Trace::Stats::D3D12::RecordBind(list, Trace::Stats::D3D12::Bind::RenderTargets);
+#endif
+   if (Resources::Mirrors::IsNeeded())
+   {
+      const Shaders::Database::D3D12::TargetFormats formats =
+         Resources::Mirrors::D3D12::BindRenderTargets(list, count, render_targets, single_range, depth_stencil, Resources::Mirrors::IsSwapping());
+      Shaders::Variants::D3D12::SetTargetFormats(list, formats);
+   }
+   Draw::D3D12::RecordRenderTargets(list, count, render_targets, single_range, depth_stencil);
+   if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
+      Resources::Database::D3D12::SetRenderTargets(list, count, render_targets, single_range, depth_stencil);
 }
 
 void PreSetViewports(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_VIEWPORT*& viewports)
@@ -596,6 +601,7 @@ void PreSetStencilRef([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_
 #endif
 }
 
+// Barriers, copies and clears
 std::span<const D3D12_RESOURCE_BARRIER> PreResourceBarrier([[maybe_unused]] ID3D12GraphicsCommandList* list, std::span<const D3D12_RESOURCE_BARRIER> barriers)
 {
 #if DEVELOPMENT
@@ -728,6 +734,7 @@ bool PreClearUnorderedAccessView([[maybe_unused]] ID3D12GraphicsCommandList* lis
    return false;
 }
 
+// Draws, dispatches and bundles
 bool PreDraw(ID3D12GraphicsCommandList* list, const Game::D3D12::DrawCall& draw)
 {
    return RunCall(list, draw);
@@ -783,6 +790,7 @@ void PreExecuteBundle(ID3D12GraphicsCommandList* list, [[maybe_unused]] ID3D12Gr
    Resources::Database::D3D12::BindForBundle(list);
 }
 
+// Present
 void PresentD3D12(ID3D12CommandQueue* queue)
 {
    if (queue)

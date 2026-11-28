@@ -5,7 +5,6 @@
 
 #include "Common/Api.hpp"
 #include "Game/Game.hpp"
-#include "Game/GameCallbacks.hpp"
 #include "Game/GameEvents.hpp"
 #include "Hooks/HookFunctions.hpp"
 
@@ -16,7 +15,6 @@ namespace Registry {
 const Info& GetInfo();
 const D3D11::Events& GetD3D11Events();
 const D3D12::Events& GetD3D12Events();
-const D3D11::Callbacks& GetD3D11Callbacks();
 const Panels& GetPanels();
 ApiSet GetSupportedApis();
 // Null if the game set none for the hash (OnShaderDraw)
@@ -28,11 +26,9 @@ bool HasD3D12DrawCallbacks();
 // The native D3D12 functions the game's draw events need hooked
 Hooks::D3D12::Functions GetRequestedD3D12Functions();
 
-// The native functions the game's events and callbacks need hooked
+// The native functions the game's events need hooked
 Hooks::DXGI::Functions GetRequestedDXGIFunctions();
 Hooks::D3D11::Functions GetRequestedFunctions();
-// Those of its native callbacks alone, which must not include one Core owns (Startup::GetOwnedFunctions)
-Hooks::D3D11::Functions GetCallbackFunctions();
 void LogDeclarations();
 // Forgets the info, events, callbacks, panels and options (tests)
 void Reset();
