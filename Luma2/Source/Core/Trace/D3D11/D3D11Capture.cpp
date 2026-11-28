@@ -770,7 +770,7 @@ void TrackCall(ID3D11DeviceContext* context, Shaders::StageSet stages)
       tracked.erase(tracked.begin());
 }
 
-void OnFinishCommandList(const ID3D11DeviceContext* context, const ID3D11CommandList* list)
+void FinishCommandList(const ID3D11DeviceContext* context, const ID3D11CommandList* list)
 {
    std::scoped_lock lock(tracked_mutex);
    for (TrackedCopy& copy : tracked)
@@ -780,7 +780,7 @@ void OnFinishCommandList(const ID3D11DeviceContext* context, const ID3D11Command
    }
 }
 
-void OnExecuteCommandList(ID3D11DeviceContext* context, const ID3D11CommandList* list)
+void MergeCommandList(ID3D11DeviceContext* context, const ID3D11CommandList* list)
 {
    // A list executed into another deferred context is recorded by that one now
    const bool immediate = context->GetType() == D3D11_DEVICE_CONTEXT_IMMEDIATE;

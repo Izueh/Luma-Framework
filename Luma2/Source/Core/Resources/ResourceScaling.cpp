@@ -9,7 +9,7 @@
 
 #include <Windows.h>
 
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Hooks/DeviceProxy.hpp"
 #include "Hooks/ObjectLifetime.hpp"
 #include "Resources/ResourceChains.hpp"
@@ -158,7 +158,7 @@ void End(IUnknown* device)
    }
 }
 
-void OnPresent(IUnknown* device)
+void ResetFrame(IUnknown* device)
 {
    End(device);
 }
@@ -209,7 +209,7 @@ Math::uint2 GetTargetResolution(IUnknown* device)
       if (state->target_resolution.x > 0 && state->target_resolution.y > 0)
          return state->target_resolution;
    }
-   return Frame::Get(device).output;
+   return FrameState::Get(device).output;
 }
 
 bool ShouldActivateAfter(uint32_t shader_hash)
@@ -235,10 +235,9 @@ bool ConsumeResolutionChange(IUnknown* device, Math::uint2 render, Math::uint2 o
    return changed;
 }
 
-bool ShouldScaleTexture(const Upgrade::TextureInfo& desc, const Upgrade::FrameState& state, bool active, bool from_output_sized_source,
-   uint32_t aspect_ratio_pixel_threshold)
+bool ShouldScaleTexture(const Upgrade::TextureInfo& desc, const Upgrade::FrameState& state, ScaleContext context)
 {
-   if (!active || desc.dimension != Upgrade::Dimension::Texture2D)
+   if (!context.active || desc.dimension != Upgrade::Dimension::Texture2D)
       return false;
    if (state.render.x == 0 || state.render.y == 0 || state.output.x == 0 || state.output.y == 0)
       return false;
@@ -248,9 +247,9 @@ bool ShouldScaleTexture(const Upgrade::TextureInfo& desc, const Upgrade::FrameSt
       return false;
    if (desc.width >= state.output.x || desc.height >= state.output.y)
       return false;
-   if (!from_output_sized_source)
+   if (!context.from_output_sized_source)
       return false;
-   const float threshold = float(aspect_ratio_pixel_threshold);
+   const float threshold = float(context.aspect_ratio_pixel_threshold);
    const float width = float(desc.width);
    const float height = float(desc.height);
    const float min_ratio = desc.width <= desc.height ? (width - threshold) / height : width / (height + threshold);

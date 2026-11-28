@@ -45,8 +45,6 @@ void RecordExecute(UINT count);
 void CountFrame();
 // Presenting thread: the report written now, on a job. Its path.
 std::filesystem::path Write();
-// Any thread: written at the next present
-void RequestWrite();
 // A D3D12 device was seen: there is something to write
 bool HasData();
 } // namespace D3D12

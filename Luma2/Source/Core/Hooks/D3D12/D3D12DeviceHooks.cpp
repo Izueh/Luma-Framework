@@ -16,8 +16,6 @@
 #include "Hooks/Detours.hpp"
 #include "Hooks/VtableSlots.h"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
-#include "Shaders/D3D12/D3D12Database.hpp"
-#include "Shaders/D3D12/D3D12RootSignatures.hpp"
 
 using Microsoft::WRL::ComPtr;
 
@@ -37,36 +35,14 @@ ComPtr<T> GetCreated(HRESULT result, void** object)
    return created;
 }
 
-using Shaders::Database::D3D12::PipelineKind;
-
-template <typename Desc>
-constexpr PipelineKind GetKind()
-{
-   if constexpr (std::is_same_v<Desc, D3D12_GRAPHICS_PIPELINE_STATE_DESC>)
-      return PipelineKind::Graphics;
-   else if constexpr (std::is_same_v<Desc, D3D12_COMPUTE_PIPELINE_STATE_DESC>)
-      return PipelineKind::Compute;
-   else
-      return PipelineKind::Stream;
-}
-
-// Pipelines from the device and from the game's pipeline library, tracked the same way. `call` calls the original with a desc.
-template <typename Desc, typename Call>
-HRESULT CreatePipeline(ID3D12Device* device, bool from_library, const Desc* desc, void** pipeline, const void* caller, Call call)
+// Pipelines from the device and from the game's pipeline library, tracked the same way.
+template <typename Handler, typename Desc, typename Call>
+HRESULT CreatePipeline(Handler handler, ID3D12Device* device, bool from_library, const Desc* desc, void** pipeline, const void* caller, Call call)
 {
    DepthGuard guard(device_depth);
    if (!Detours::IsGameCall(guard, caller) || !desc)
       return call(desc);
-   // A root signature that comes with the pipeline is replaced by its extended one
-   const std::optional<Shaders::RootSignatures::D3D12::RewrittenDesc> rewritten = Detours::Report(&Handlers::PreCreatePipelineState, device, GetKind<Desc>(), static_cast<const void*>(desc));
-   const Desc* final_desc = rewritten ? reinterpret_cast<const Desc*>(rewritten->bytes.data()) : desc;
-   const HRESULT result = call(final_desc);
-   Scope::Guard scope;
-   if (from_library)
-      Handlers::PostLoadPipeline(result);
-   if (const ComPtr<ID3D12PipelineState> created = GetCreated<ID3D12PipelineState>(result, pipeline))
-      Handlers::PostCreatePipelineState(device, GetKind<Desc>(), final_desc, from_library, created.Get());
-   return result;
+   return Detours::Report(handler, device, desc, from_library, pipeline, std::function<HRESULT(const Desc*)>(call));
 }
 
 ComPtr<ID3D12Device> GetDevice(ID3D12DeviceChild* child)
@@ -78,32 +54,38 @@ ComPtr<ID3D12Device> GetDevice(ID3D12DeviceChild* child)
 
 HRESULT STDMETHODCALLTYPE CreateGraphicsPipelineState(ID3D12Device* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID riid, void** pipeline)
 {
-   return CreatePipeline(device, false, desc, pipeline, _ReturnAddress(), [&](const auto* final_desc) { return original<&CreateGraphicsPipelineState>(device, final_desc, riid, pipeline); });
+   return CreatePipeline(&Handlers::CreateGraphicsPipelineState, device, false, desc, pipeline, _ReturnAddress(),
+      [&](const auto* final_desc) { return original<&CreateGraphicsPipelineState>(device, final_desc, riid, pipeline); });
 }
 
 HRESULT STDMETHODCALLTYPE CreateComputePipelineState(ID3D12Device* device, const D3D12_COMPUTE_PIPELINE_STATE_DESC* desc, REFIID riid, void** pipeline)
 {
-   return CreatePipeline(device, false, desc, pipeline, _ReturnAddress(), [&](const auto* final_desc) { return original<&CreateComputePipelineState>(device, final_desc, riid, pipeline); });
+   return CreatePipeline(&Handlers::CreateComputePipelineState, device, false, desc, pipeline, _ReturnAddress(),
+      [&](const auto* final_desc) { return original<&CreateComputePipelineState>(device, final_desc, riid, pipeline); });
 }
 
 HRESULT STDMETHODCALLTYPE CreatePipelineState(ID3D12Device2* device, const D3D12_PIPELINE_STATE_STREAM_DESC* desc, REFIID riid, void** pipeline)
 {
-   return CreatePipeline(device, false, desc, pipeline, _ReturnAddress(), [&](const auto* final_desc) { return original<&CreatePipelineState>(device, final_desc, riid, pipeline); });
+   return CreatePipeline(&Handlers::CreatePipelineState, device, false, desc, pipeline, _ReturnAddress(),
+      [&](const auto* final_desc) { return original<&CreatePipelineState>(device, final_desc, riid, pipeline); });
 }
 
 HRESULT STDMETHODCALLTYPE LoadGraphicsPipeline(ID3D12PipelineLibrary* library, LPCWSTR name, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, REFIID riid, void** pipeline)
 {
-   return CreatePipeline(GetDevice(library).Get(), true, desc, pipeline, _ReturnAddress(), [&](const auto* final_desc) { return original<&LoadGraphicsPipeline>(library, name, final_desc, riid, pipeline); });
+   return CreatePipeline(&Handlers::CreateGraphicsPipelineState, GetDevice(library).Get(), true, desc, pipeline, _ReturnAddress(),
+      [&](const auto* final_desc) { return original<&LoadGraphicsPipeline>(library, name, final_desc, riid, pipeline); });
 }
 
 HRESULT STDMETHODCALLTYPE LoadComputePipeline(ID3D12PipelineLibrary* library, LPCWSTR name, const D3D12_COMPUTE_PIPELINE_STATE_DESC* desc, REFIID riid, void** pipeline)
 {
-   return CreatePipeline(GetDevice(library).Get(), true, desc, pipeline, _ReturnAddress(), [&](const auto* final_desc) { return original<&LoadComputePipeline>(library, name, final_desc, riid, pipeline); });
+   return CreatePipeline(&Handlers::CreateComputePipelineState, GetDevice(library).Get(), true, desc, pipeline, _ReturnAddress(),
+      [&](const auto* final_desc) { return original<&LoadComputePipeline>(library, name, final_desc, riid, pipeline); });
 }
 
 HRESULT STDMETHODCALLTYPE LoadPipeline(ID3D12PipelineLibrary1* library, LPCWSTR name, const D3D12_PIPELINE_STATE_STREAM_DESC* desc, REFIID riid, void** pipeline)
 {
-   return CreatePipeline(GetDevice(library).Get(), true, desc, pipeline, _ReturnAddress(), [&](const auto* final_desc) { return original<&LoadPipeline>(library, name, final_desc, riid, pipeline); });
+   return CreatePipeline(&Handlers::CreatePipelineState, GetDevice(library).Get(), true, desc, pipeline, _ReturnAddress(),
+      [&](const auto* final_desc) { return original<&LoadPipeline>(library, name, final_desc, riid, pipeline); });
 }
 
 HRESULT STDMETHODCALLTYPE CreatePipelineLibrary(ID3D12Device1* device, const void* blob, SIZE_T length, REFIID riid, void** library)
@@ -121,29 +103,10 @@ HRESULT STDMETHODCALLTYPE CreateRootSignature(ID3D12Device* device, UINT node_ma
    DepthGuard guard(device_depth);
    if (!Detours::IsGameCall(guard, _ReturnAddress()) || !blob)
       return original<&CreateRootSignature>(device, node_mask, blob, length, riid, root_signature);
-   const std::span game_blob(static_cast<const uint8_t*>(blob), length);
-   const Shaders::RootSignatures::D3D12::Extended extended = Detours::Report(&Handlers::PreCreateRootSignature, game_blob);
-   uint32_t luma_parameter = UINT32_MAX;
-   bool luma_table = false;
-   bool luma_samplers = false;
-   HRESULT result = E_FAIL;
-   if (!extended.blob.empty())
-   {
-      result = original<&CreateRootSignature>(device, node_mask, extended.blob.data(), extended.blob.size(), riid, root_signature);
-      if (SUCCEEDED(result))
-      {
-         luma_parameter = extended.luma_parameter;
-         luma_table = extended.table;
-         luma_samplers = extended.static_samplers;
-      }
-      else
-         Detours::Report(&Handlers::PostExtendedRootSignatureRefused, result);
-   }
-   if (FAILED(result))
-      result = original<&CreateRootSignature>(device, node_mask, blob, length, riid, root_signature);
-   if (const ComPtr<ID3D12RootSignature> created = GetCreated<ID3D12RootSignature>(result, root_signature))
-      Detours::Report(&Handlers::PostCreateRootSignature, game_blob, created.Get(), luma_parameter, luma_table, luma_samplers);
-   return result;
+   return Detours::Report(&Handlers::CreateRootSignature, std::span(static_cast<const uint8_t*>(blob), length), root_signature,
+      std::function<HRESULT(std::span<const uint8_t>)>([&](std::span<const uint8_t> final_blob) {
+         return original<&CreateRootSignature>(device, node_mask, final_blob.data(), final_blob.size(), riid, root_signature);
+      }));
 }
 
 HRESULT STDMETHODCALLTYPE CreateRootSignatureFromSubobjectInLibrary(ID3D12Device14* device, UINT node_mask, const void* library, SIZE_T length, LPCWSTR name,
@@ -152,7 +115,7 @@ HRESULT STDMETHODCALLTYPE CreateRootSignatureFromSubobjectInLibrary(ID3D12Device
    DepthGuard guard(device_depth);
    const HRESULT result = original<&CreateRootSignatureFromSubobjectInLibrary>(device, node_mask, library, length, name, riid, root_signature);
    if (Detours::IsGameCall(guard, _ReturnAddress()) && SUCCEEDED(result))
-      Detours::Report(&Handlers::PostCreateRootSignatureFromLibrary);
+      Detours::Report(&Handlers::PostCreateRootSignatureFromSubobjectInLibrary);
    return result;
 }
 
@@ -174,30 +137,15 @@ HRESULT STDMETHODCALLTYPE AddToStateObject(ID3D12Device7* device, const D3D12_ST
    return result;
 }
 
-// Shader-visible heaps get Luma's tail (Resources::HeapTail::D3D12), which GetDesc hides: each size the handlers offer is tried in
-// turn, then the game's
+// Shader-visible heaps get Luma's tail (Resources::HeapTail::D3D12), which GetDesc hides
 HRESULT STDMETHODCALLTYPE CreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC* desc, REFIID riid, void** heap)
 {
    DepthGuard guard(device_depth);
    if (!Detours::IsGameCall(guard, _ReturnAddress()) || !desc)
       return original<&CreateDescriptorHeap>(device, desc, riid, heap);
-   std::optional<D3D12_DESCRIPTOR_HEAP_DESC> extended = Detours::Report(&Handlers::PreCreateDescriptorHeap, *desc);
-   HRESULT result = E_FAIL;
-   uint32_t tail_size = 0;
-   while (extended && FAILED(result))
-   {
-      result = original<&CreateDescriptorHeap>(device, &*extended, riid, heap);
-      tail_size = extended->NumDescriptors - desc->NumDescriptors;
-      extended = Detours::Report(&Handlers::PostExtendDescriptorHeap, device, *desc, *extended, result);
-   }
-   if (FAILED(result))
-   {
-      tail_size = 0;
-      result = original<&CreateDescriptorHeap>(device, desc, riid, heap);
-   }
-   if (const ComPtr<ID3D12DescriptorHeap> created = GetCreated<ID3D12DescriptorHeap>(result, heap))
-      Detours::Report(&Handlers::PostCreateDescriptorHeap, device, *desc, created.Get(), tail_size);
-   return result;
+   return Detours::Report(&Handlers::CreateDescriptorHeap, device, *desc, heap,
+      std::function<HRESULT(const D3D12_DESCRIPTOR_HEAP_DESC&)>(
+         [&](const D3D12_DESCRIPTOR_HEAP_DESC& final_desc) { return original<&CreateDescriptorHeap>(device, &final_desc, riid, heap); }));
 }
 
 // D3D12's C ABI: the desc is returned through a pointer after `this`
@@ -205,10 +153,7 @@ D3D12_DESCRIPTOR_HEAP_DESC* STDMETHODCALLTYPE GetDescriptorHeapDesc(ID3D12Descri
 {
    D3D12_DESCRIPTOR_HEAP_DESC* result = original<&GetDescriptorHeapDesc>(heap, desc);
    if (result)
-   {
-      if (const std::optional<uint32_t> game_size = Handlers::GetGameHeapSize(heap))
-         result->NumDescriptors = *game_size;
-   }
+      Handlers::PostGetDesc(heap, *result);
    return result;
 }
 

@@ -92,7 +92,7 @@ Hooks::D3D12::Functions GetD3D12Functions();
 // Per-device activation window (thread-affine: scoped to the thread that called Begin)
 void Begin(IUnknown* device);
 void End(IUnknown* device);
-void OnPresent(IUnknown* device);
+void ResetFrame(IUnknown* device);
 bool IsActive(IUnknown* device);
 bool IsActiveOnCurrentThread(IUnknown* device);
 // Returns true and counts an overlap if another thread currently holds the active scaling window
@@ -105,9 +105,15 @@ bool ShouldDeactivateAt(uint32_t shader_hash);
 // Returns true if render or output resolution changed since the last check (triggers scaled mirror invalidation)
 bool ConsumeResolutionChange(IUnknown* device, Math::uint2 render, Math::uint2 output);
 
+struct ScaleContext
+{
+   bool active = false;
+   bool from_output_sized_source = false;
+   uint32_t aspect_ratio_pixel_threshold = 1;
+};
+
 // Pure scaling math helpers
-bool ShouldScaleTexture(const Upgrade::TextureInfo& desc, const Upgrade::FrameState& state, bool active, bool from_output_sized_source,
-   uint32_t aspect_ratio_pixel_threshold = 1);
+bool ShouldScaleTexture(const Upgrade::TextureInfo& desc, const Upgrade::FrameState& state, ScaleContext context);
 Math::uint2 ComputeScaledSize(Math::uint2 original, Math::uint2 render, Math::uint2 output);
 Viewport RescaleViewport(const Viewport& viewport, Math::float2 scale);
 Rect RescaleRect(const Rect& rect, Math::float2 scale);

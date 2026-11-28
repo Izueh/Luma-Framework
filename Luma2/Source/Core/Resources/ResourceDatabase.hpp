@@ -18,7 +18,7 @@
 
 struct IUnknown;
 
-namespace Luma::Frame {
+namespace Luma::FrameState {
 struct DeviceState;
 }
 
@@ -97,7 +97,7 @@ struct CustomData
 struct WriteTarget
 {
    IUnknown* device = nullptr;
-   const Frame::DeviceState* frame = nullptr; // Its resolutions (Frame::Read)
+   const FrameState::DeviceState* frame = nullptr; // Its resolutions (FrameState::Read)
    Game::GameDeviceData* game_device_data = nullptr; // Null without Game::Options::device_data
 };
 

@@ -5,7 +5,7 @@
 #include <utility>
 
 #include "Common/Api.hpp"
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Handlers/DXGI/DXGIHandlers.hpp"
 #include "Hooks/DeviceProxy.hpp"
@@ -30,7 +30,7 @@ void HandlePostCreateDevice(Device* device, std::string_view details, StartValid
    else
       Log::Info("{}: device {} created ({}, {} live)", GetName(api), static_cast<void*>(device), details, Hooks::DeviceProxy::GetCount());
    Game::Registry::CreateDeviceData(device);
-   Frame::CreateDeviceState(device);
+   FrameState::CreateDeviceState(device);
    Shaders::CreateStore(device, api);
    create_core_objects();
    Game::Registry::Call(Game::Registry::GetEvents<api>().on_init_device, device);

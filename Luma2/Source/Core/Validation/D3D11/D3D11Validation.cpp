@@ -20,7 +20,7 @@ UINT GetCreateFlags(UINT flags)
 void WatchDeviceMessages(ID3D11Device* device)
 {
    if (WatchInfoQueue<Api::D3D11>(store, device))
-      SetActiveLayers(true, IsGpuValidationOn());
+      SetActiveLayers({.debug_layer = true, .gpu_validation = IsGpuValidationOn()});
    else if (WantsDebugLayer())
       Log::Warning("D3D11: device {} has no debug layer (Windows' \"Graphics Tools\" optional feature isn't installed?)", static_cast<void*>(device));
 }

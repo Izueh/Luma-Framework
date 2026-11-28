@@ -419,10 +419,15 @@ void LoadIndex()
    if (index_loaded)
       return;
    index_loaded = true;
-   if (const std::optional<std::string> text = Cache::ReadPatchIndex(); text && !Utils::Json::Read(*text, index))
+   if (const std::optional<std::string> text = Cache::ReadPatchIndex())
    {
-      Log::Warning("Shaders: the patch index in the cache doesn't read, patching again");
-      index.clear();
+      if (auto parsed = Utils::Json::Read<decltype(index)>(*text))
+         index = std::move(*parsed);
+      else
+      {
+         Log::Warning("Shaders: the patch index in the cache doesn't read, patching again");
+         index.clear();
+      }
    }
 }
 
@@ -883,7 +888,7 @@ void TrackShader(Store& store, const Database::Shader& shader)
    state.pending.push_back(&shader);
 }
 
-void OnPresent()
+void PublishCompleted()
 {
    if (!needed || !loaded)
       return;

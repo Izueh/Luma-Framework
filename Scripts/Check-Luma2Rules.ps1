@@ -174,13 +174,6 @@ foreach ($file in $allLuma2CodeFiles) {
 }
 
 # Rule 9: No two adjacent bool parameters in Core public headers
-$adjacentBoolAllowlist = @(
-    'Luma2/Source/Core/Effects/SR/SuperResolution.hpp:DescribeDraw',
-    'Luma2/Source/Core/Effects/SR/D3D11/D3D12Interop.hpp:UpdateSharedTextureFrom',
-    'Luma2/Source/Core/Handlers/D3D12/D3D12Handlers.hpp:PostCreateRootSignature',
-    'Luma2/Source/Core/Resources/ResourceScaling.hpp:ShouldScaleTexture',
-    'Luma2/Source/Core/Validation/Validation.hpp:SetActiveLayers'
-)
 foreach ($file in $coreFiles) {
     if ($file.Extension -ne '.hpp') { continue }
     $rel = Get-RelPath $file.FullName
@@ -189,17 +182,7 @@ foreach ($file in $coreFiles) {
         $line = $lines[$i]
         if ($line -match '^\s*//' -or $line -match '^\s*\*') { continue }
         if ($line -match '\bbool\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:=\s*(?:true|false)\s*)?,\s*bool\s+[A-Za-z_][A-Za-z0-9_]*') {
-            $skip = $false
-            foreach ($allowed in $adjacentBoolAllowlist) {
-                $parts = $allowed -split ':'
-                if ($rel -eq $parts[0] -and $line -match "\b$($parts[1])\b") {
-                    $skip = $true
-                    break
-                }
-            }
-            if (-not $skip) {
-                $violations.Add("[Rule 9: Adjacent bool parameters in header] ${rel}:$($i + 1): $($line.Trim())")
-            }
+            $violations.Add("[Rule 9: Adjacent bool parameters in header] ${rel}:$($i + 1): $($line.Trim())")
         }
     }
 }

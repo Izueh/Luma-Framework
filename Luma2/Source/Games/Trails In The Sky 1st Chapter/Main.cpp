@@ -208,7 +208,7 @@ void Luma::Game::Init()
    // HDR10 / scRGB / SDR-on-HDR / SDR swapchain encoding.
    SetOptions({
       .cbuffers = {.settings_slot = 13, .data_slot = 12},
-      .swapchain = {.mode = Swapchain::Mode::Mirror, .hdr_output = Swapchain::OutputMode::Hdr10},
+      .swapchain = {.mode = Display::Swapchain::Mode::Mirror, .hdr_output = Display::Swapchain::OutputMode::Hdr10},
       .composition = {
          .post_process_space = 1,
          .early_display_encoding = false,

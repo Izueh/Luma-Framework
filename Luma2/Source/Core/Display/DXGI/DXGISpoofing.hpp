@@ -11,9 +11,9 @@ namespace DXGI {
 // Its setting, before the game's Init (which sets its default with Settings::SetDefault)
 void Register();
 // IDXGIOutput6::GetDesc1: an SDR color space and luminance while spoofing SDR
-void OnOutputDesc(DXGI_OUTPUT_DESC1& desc);
+void SpoofOutputDesc(DXGI_OUTPUT_DESC1& desc);
 // IDXGISwapChain3::CheckColorSpaceSupport: HDR color spaces reported unsupported while spoofing SDR
-void OnColorSpaceSupport(DXGI_COLOR_SPACE_TYPE color_space, UINT& support);
+void SpoofColorSpaceSupport(DXGI_COLOR_SPACE_TYPE color_space, UINT& support);
 } // namespace DXGI
 } // namespace Spoofing
 } // namespace Display

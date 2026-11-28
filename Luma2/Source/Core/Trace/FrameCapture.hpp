@@ -353,7 +353,6 @@ void Request();
 void FinishFrame();
 // Starts capturing if a capture was requested (called after Present/overlay work so the next frame starts cleanly)
 void StartRequestedFrame();
-void AdvanceFrame();
 
 struct Added
 {

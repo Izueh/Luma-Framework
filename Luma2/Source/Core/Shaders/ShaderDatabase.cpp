@@ -251,11 +251,10 @@ Reflection Reflect(const Shader& shader)
    }
    if (const std::optional<std::string> text = Cache::ReadReflection(shader.hash))
    {
-      CachedReflection cached;
-      if (Utils::Json::Read(*text, cached))
+      if (const auto cached = Utils::Json::Read<CachedReflection>(*text))
       {
-         return {FromList<14>(cached.constant_buffers), FromList<16>(cached.samplers), FromList<128>(cached.shader_resources),
-            FromList<64>(cached.unordered_access), FromList<8>(cached.render_targets), cached.found};
+         return {FromList<14>(cached->constant_buffers), FromList<16>(cached->samplers), FromList<128>(cached->shader_resources),
+            FromList<64>(cached->unordered_access), FromList<8>(cached->render_targets), cached->found};
       }
    }
    reflection = {};

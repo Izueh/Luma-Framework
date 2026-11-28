@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <span>
 
@@ -10,8 +11,6 @@
 #include "Game/GameEvents.hpp"
 #include "Resources/D3D12/D3D12Descriptors.hpp"
 #include "Resources/D3D12/D3D12Mirrors.hpp"
-#include "Shaders/D3D12/D3D12Database.hpp"
-#include "Shaders/D3D12/D3D12RootSignatures.hpp"
 
 namespace Luma {
 namespace Handlers {
@@ -23,29 +22,25 @@ void OnDeviceDestroyed(ID3D12Device* device);
 // Every submission, Luma's own included
 void PostExecuteCommandLists(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists);
 
-// Pipelines the device creates or the game's pipeline library loads. `desc` is of `kind`; the Pre handler can replace it (a root
-// signature that comes with the pipeline, for its extended one), the Post one gets the desc used.
-std::optional<Shaders::RootSignatures::D3D12::RewrittenDesc> PreCreatePipelineState(ID3D12Device* device, Shaders::Database::D3D12::PipelineKind kind,
-   const void* desc);
-void PostCreatePipelineState(ID3D12Device* device, Shaders::Database::D3D12::PipelineKind kind, const void* desc, bool from_library, ID3D12PipelineState* pipeline);
-// Any load from the game's pipeline library, before PostCreatePipelineState for one that succeeded
-void PostLoadPipeline(HRESULT result);
+// Pipelines created on the device or loaded from the game's pipeline library: rewrites an embedded root signature to its extended one,
+// invokes `call_original`, and tracks/attaches variants on the created pipeline.
+HRESULT CreateGraphicsPipelineState(ID3D12Device* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, bool from_library, void** pipeline,
+   const std::function<HRESULT(const D3D12_GRAPHICS_PIPELINE_STATE_DESC*)>& call_original);
+HRESULT CreateComputePipelineState(ID3D12Device* device, const D3D12_COMPUTE_PIPELINE_STATE_DESC* desc, bool from_library, void** pipeline,
+   const std::function<HRESULT(const D3D12_COMPUTE_PIPELINE_STATE_DESC*)>& call_original);
+HRESULT CreatePipelineState(ID3D12Device* device, const D3D12_PIPELINE_STATE_STREAM_DESC* desc, bool from_library, void** pipeline,
+   const std::function<HRESULT(const D3D12_PIPELINE_STATE_STREAM_DESC*)>& call_original);
 void PostCreatePipelineLibrary(size_t blob_size, HRESULT result);
-// The game's signature extended with Luma's parameters, empty to create the game's own
-Shaders::RootSignatures::D3D12::Extended PreCreateRootSignature(std::span<const uint8_t> blob);
-// The device refused the extended signature: the game's own is created
-void PostExtendedRootSignatureRefused(HRESULT result);
-// `luma_parameter` is UINT32_MAX when unextended
-void PostCreateRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table, bool luma_samplers);
-void PostCreateRootSignatureFromLibrary();
+// Extends the game's root signature with Luma's parameters, falls back to the game's blob if refused, and tracks the created signature.
+HRESULT CreateRootSignature(std::span<const uint8_t> game_blob, void** root_signature,
+   const std::function<HRESULT(std::span<const uint8_t>)>& call_original);
+void PostCreateRootSignatureFromSubobjectInLibrary();
 void PostCreateStateObject();
-std::optional<D3D12_DESCRIPTOR_HEAP_DESC> PreCreateDescriptorHeap(const D3D12_DESCRIPTOR_HEAP_DESC& desc);
-// Returns next fallback desc to try, or nullopt on success or final refusal
-std::optional<D3D12_DESCRIPTOR_HEAP_DESC> PostExtendDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& desc, const D3D12_DESCRIPTOR_HEAP_DESC& extended,
-   HRESULT result);
-void PostCreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& desc, ID3D12DescriptorHeap* heap, uint32_t tail_size);
-// ID3D12DescriptorHeap::GetDesc, for any heap: the size the game asked for, none for a heap without Luma's tail
-std::optional<uint32_t> GetGameHeapSize(ID3D12DescriptorHeap* heap);
+// Extends shader-visible heaps with Luma's tail (retrying smaller sizes before falling back to the game's desc) and tracks the heap.
+HRESULT CreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& game_desc, void** heap,
+   const std::function<HRESULT(const D3D12_DESCRIPTOR_HEAP_DESC&)>& call_original);
+// ID3D12DescriptorHeap::GetDesc: hides Luma's tail so the game sees the descriptor count it asked for
+void PostGetDesc(ID3D12DescriptorHeap* heap, D3D12_DESCRIPTOR_HEAP_DESC& desc);
 // Every kind of view and samplers, with what was written
 void PostCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, const Resources::Descriptors::D3D12::Descriptor& descriptor);
 // Per pair of destination and source ranges of CopyDescriptors (split where either range ends), and CopyDescriptorsSimple

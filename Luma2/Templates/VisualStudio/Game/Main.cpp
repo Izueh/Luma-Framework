@@ -63,7 +63,7 @@ constexpr std::array<uint32_t, 1> EXAMPLE_HASHES = {0xDEADBEEF};
 
 // Called at every draw with a Luma shader: fills the game's part of LumaData ("Resources/<Game>/Shaders/Game/GameCBuffers.hlsl").
 // LumaData is uploaded only when its bytes change. Any thread.
-void UpdateLumaInstanceData(CB::LumaInstanceData& data, const GameDeviceData& game_device_data, const Frame::Resolutions& resolutions)
+void UpdateLumaInstanceData(CB::LumaInstanceData& data, const GameDeviceData& game_device_data, const FrameState::Resolutions& resolutions)
 {
    data.GameData.dummy = float(resolutions.render.x) * game_device_data.resolution_scale;
 }
@@ -73,9 +73,9 @@ void OnInitSwapchain(Device device)
    GameDeviceData* game_device_data = Game::GetGameDeviceData(device);
    if (!game_device_data)
       return;
-   const Frame::Resolutions resolutions = Game::Frame::Get(device);
+   const FrameState::Resolutions resolutions = Game::FrameState::Get(device);
    game_device_data->upscaled_render_resolution = {float(resolutions.output.x), float(resolutions.output.y)};
-   Game::Frame::SetRenderResolution(device, resolutions.output);
+   Game::FrameState::SetRenderResolution(device, resolutions.output);
    // Only a change made outside Present needs this so draws see it before the next Present
    Game::MarkLumaSettingsDirty();
 }
@@ -214,7 +214,7 @@ Game::DrawResult OnExampleDrawD3D11(const Game::D3D11::Call& call)
       call.context->GetDevice(&device);
       if (device && !Game::Resources::Scaling::IsActive(device.Get()))
       {
-         Game::Resources::Scaling::SetTargetResolution(device.Get(), Game::Frame::Get(device.Get()).output);
+         Game::Resources::Scaling::SetTargetResolution(device.Get(), Game::FrameState::Get(device.Get()).output);
          Game::Resources::Scaling::Begin(device.Get());
       }
       Game::D3D11::BindLumaShader(call.context, "Luma_Example_PS"_h, {.custom_data_3 = 1.f});
@@ -512,8 +512,8 @@ void Luma::Game::Init()
       // .scaling = {.mode = Resources::Scaling::Mode::Off},
       // .patching = {.patch_sync = nullptr, .patch_async = nullptr},
       .swapchain = {
-         .mode = Swapchain::Mode::Mirror, // Mirror, InPlace, or Native
-         .hdr_output = Swapchain::OutputMode::Hdr10, // Sdr, Hdr10, or ScRgb
+         .mode = Display::Swapchain::Mode::Mirror, // Mirror, InPlace, or Native
+         .hdr_output = Display::Swapchain::OutputMode::Hdr10, // Sdr, Hdr10, or ScRgb
          // .borderless = true,
       },
       // ### Update display composition defaults for the game ###

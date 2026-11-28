@@ -10,7 +10,7 @@
 
 #include "Common/Device.hpp"
 #include "Common/Math.hpp"
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Hooks/HookFunctions.hpp"
 #include "Resources/ResourceDatabase.hpp"
 
@@ -250,7 +250,13 @@ void UpdateAtPresent(Record& record, IUnknown* device);
 std::optional<Prepared> PrepareDraw(const Record& record, IUnknown* device, const DrawOverrides& overrides);
 void FinishDraw(Record& record, IUnknown* device, const Prepared& prepared, bool succeeded);
 #if DEVELOPMENT
-Trace::Capture::SrInfo DescribeDraw(const Record& record, const Prepared& prepared, bool succeeded, bool copy_back);
+struct DrawOutcome
+{
+   bool succeeded = false;
+   bool copy_back = false;
+};
+
+Trace::Capture::SrInfo DescribeDraw(const Record& record, const Prepared& prepared, DrawOutcome outcome);
 #endif
 
 float GetMipLODBias(float render_height, float output_height);
@@ -259,8 +265,8 @@ Math::uint2 FindClosestIntegerResolutionForAspectRatio(double target_width, doub
 
 Type GetAutoType(const std::array<Capabilities, TYPE_COUNT>& backends);
 Type ResolveActiveType(UserType user_type, const std::array<Capabilities, TYPE_COUNT>& backends);
-SettingsData BuildSettingsData(const Options& options, const Frame::Resolutions& resolutions, const DrawOverrides& overrides);
-DrawParams BuildDrawParams(const Frame::Resolutions& resolutions, const Frame::Camera& camera, const Frame::Timing& timing, const DrawOverrides& overrides);
+SettingsData BuildSettingsData(const Options& options, const FrameState::Resolutions& resolutions, const DrawOverrides& overrides);
+DrawParams BuildDrawParams(const FrameState::Resolutions& resolutions, const FrameState::Camera& camera, const FrameState::Timing& timing, const DrawOverrides& overrides);
 
 void SetOptions(const Options& options);
 const Options& GetOptions();

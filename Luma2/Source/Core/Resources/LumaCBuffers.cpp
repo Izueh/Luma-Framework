@@ -15,7 +15,7 @@
 #include <unordered_set>
 
 #include "Common/Math.hpp"
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Shaders/Shaders.hpp"
@@ -173,7 +173,7 @@ uint64_t GetSettingsStamp()
 {
    // Dirty per context: at every present (the frame), when a device's resolutions change (a
    // resize) and when marked dirty. The three only grow, so their sum moves whenever one does.
-   return Shaders::GetFrame() + Frame::GetGeneration() + settings_generation.load(std::memory_order_acquire);
+   return Shaders::GetFrame() + FrameState::GetGeneration() + settings_generation.load(std::memory_order_acquire);
 }
 
 std::vector<Shaders::Request> GetRequests()
@@ -226,7 +226,7 @@ void WriteSettings(std::span<std::byte> destination, const Database::CustomData&
       std::scoped_lock lock(published_mutex);
       settings = published;
    }
-   const Frame::Resolutions resolutions = Frame::Read(target.frame);
+   const FrameState::Resolutions resolutions = FrameState::Read(target.frame);
    settings.SwapchainSize = ToFloat(resolutions.output);
    settings.SwapchainInvSize = {1.f / settings.SwapchainSize.x, 1.f / settings.SwapchainSize.y};
    settings.RenderSize = ToFloat(resolutions.render);
@@ -240,7 +240,7 @@ void WriteSettings(std::span<std::byte> destination, const Database::CustomData&
 void WriteData(std::span<std::byte> destination, const Database::CustomData& custom, const Database::WriteTarget& target)
 {
    ASSERT_ONCE(destination.size() >= DATA_SIZE);
-   const Frame::Resolutions resolutions = Frame::Read(target.frame);
+   const FrameState::Resolutions resolutions = FrameState::Read(target.frame);
    const Math::float2 output = ToFloat(resolutions.output);
    const Math::float2 render = ToFloat(resolutions.render);
    const Math::float2 previous_render = ToFloat(resolutions.previous_render);

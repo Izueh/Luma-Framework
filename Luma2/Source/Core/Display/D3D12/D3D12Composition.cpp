@@ -8,8 +8,8 @@
 
 #include <wrl/client.h>
 
-#include "Frame/FrameState.hpp"
-#include "Game/Game.hpp"
+#include "FrameState/FrameState.hpp"
+#include "Game/GameRegistry.hpp"
 #include "Resources/ResourceBindings.hpp"
 #include "Resources/ResourceDatabase.hpp"
 #include "Shaders/ShaderStore.hpp"
@@ -310,7 +310,7 @@ bool Compose(Renderer& renderer, ID3D12Resource* source, ID3D12Resource* target,
 
    // The cbuffers, written as a pass's (LumaData with this pass's values)
    SetCurrent(pass);
-   const Resources::Database::WriteTarget write_target = {renderer.device.Get(), Luma::Frame::Find(renderer.device.Get()), Game::GetGameDeviceData(renderer.device.Get())};
+   const Resources::Database::WriteTarget write_target = {renderer.device.Get(), Luma::FrameState::Find(renderer.device.Get()), Game::GetGameDeviceData(renderer.device.Get())};
    std::byte* slice = renderer.upload_data + size_t(index) * CBUFFER_SLICE;
    const D3D12_GPU_VIRTUAL_ADDRESS slice_address = renderer.upload->GetGPUVirtualAddress() + uint64_t(index) * CBUFFER_SLICE;
    std::vector<D3D12_GPU_VIRTUAL_ADDRESS> addresses;

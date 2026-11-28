@@ -299,7 +299,7 @@ void Clear()
    captured_prev_frame = false;
 }
 
-void OnPresent()
+void ResetFrame()
 {
    frame_instance_counter.store(0, std::memory_order_relaxed);
    if (!IsActive())

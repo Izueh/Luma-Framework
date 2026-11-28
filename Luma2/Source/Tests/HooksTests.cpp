@@ -443,9 +443,9 @@ TEST_CASE("Hooks: a forwarded export whose dll isn't loaded waits for it, withou
       CHECK(after.installed == before.installed);
       CHECK(after.failed == before.failed);
       CHECK(GetModuleHandleA(forwarder->dll.c_str()) == nullptr);
-      bool waits_for_dll = false;
-      CHECK(System::Modules::FindExport(System::Modules::FindSystemModule(forwarder->module), forwarder->name.c_str(), &waits_for_dll) == nullptr);
-      CHECK(waits_for_dll);
+      const System::Modules::ExportLookup lookup = System::Modules::LookupExport(System::Modules::FindSystemModule(forwarder->module), forwarder->name.c_str());
+      CHECK(lookup.address == nullptr);
+      CHECK(lookup.waits_for_dll);
    }
    else
    {

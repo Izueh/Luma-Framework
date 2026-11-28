@@ -89,15 +89,15 @@ TEST_CASE("Json: reflected structs round trip with escaping")
    const std::string text = Utils::Json::Write(Reply{});
    CHECK(text == R"({"ok":true,"count":3,"name":"quote\" slash\\ newline\n","ratio":0.5})");
 
-   Reply read{.ok = false, .count = 0, .name = {}, .ratio = 0};
-   REQUIRE(Utils::Json::Read(text, read));
-   CHECK(read.ok);
-   CHECK(read.count == 3);
-   CHECK(read.name == Reply{}.name);
+   const auto read = Utils::Json::Read<Reply>(text);
+   REQUIRE(read.has_value());
+   CHECK(read->ok);
+   CHECK(read->count == 3);
+   CHECK(read->name == Reply{}.name);
 
-   std::string error;
-   CHECK_FALSE(Utils::Json::Read("{\"ok\":", read, &error));
-   CHECK_FALSE(error.empty());
+   const auto bad = Utils::Json::Read<Reply>("{\"ok\":");
+   CHECK_FALSE(bad.has_value());
+   CHECK_FALSE(bad.error().empty());
 }
 
 TEST_CASE("Toml: documents keep their tables, order and value types")
@@ -117,8 +117,9 @@ Flag = true
 [Other]
 Kept = true
 )";
-   Utils::Toml::Table document;
-   REQUIRE(Utils::Toml::Read(text, document));
+   auto parsed = Utils::Toml::Read(text);
+   REQUIRE(parsed.has_value());
+   Utils::Toml::Table& document = *parsed;
    REQUIRE(document["Display"].is_object());
    Utils::Toml::Table& display = document["Display"].get_object();
    CHECK(std::get<int64_t>(display["Count"].data) == 99);
@@ -144,12 +145,11 @@ Kept = true
 
 TEST_CASE("Toml: malformed documents fail and keys are quoted when needed")
 {
-   Utils::Toml::Table document;
-   std::string error;
-   CHECK_FALSE(Utils::Toml::Read("[Display\nCount = ", document, &error));
-   CHECK_FALSE(error.empty());
+   const auto bad = Utils::Toml::Read("[Display\nCount = ");
+   CHECK_FALSE(bad.has_value());
+   CHECK_FALSE(bad.error().empty());
 
-   document.clear();
+   Utils::Toml::Table document;
    document["needs quotes"].data = true;
    CHECK(Utils::Toml::Write(document) == "\"needs quotes\" = true\n");
 }

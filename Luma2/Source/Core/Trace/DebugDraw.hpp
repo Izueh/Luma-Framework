@@ -75,7 +75,6 @@ void SetTarget(std::string resource_id);
 std::string GetTarget();
 // Pass + instance + view targeting (matches Luma 1.0 Trace behavior)
 void SetPassTarget(PassTarget target);
-std::optional<PassTarget> GetPassTarget();
 bool IsPassTarget(const PassTarget& target);
 bool IsSamePass(const PassTarget& target);
 // Last view mode/slot used by SetPassTarget (for magnifier quick-browse across passes)
@@ -84,7 +83,7 @@ uint32_t GetLastViewSlot();
 std::string DescribeTarget();
 void Clear();
 // Resets per-frame instance counter on Present
-void OnPresent();
+void ResetFrame();
 
 Options GetOptions();
 void SetOptions(const Options& options);

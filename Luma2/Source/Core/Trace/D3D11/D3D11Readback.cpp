@@ -1,6 +1,6 @@
 #include "Trace/D3D11/D3D11Readback.hpp"
 
-#include "Swapchain/DXGI/DXGISwapchain.hpp"
+#include "Display/DXGI/DXGISwapchain.hpp"
 
 #if DEVELOPMENT
 #include <array>
@@ -354,7 +354,7 @@ void ReadBack(IDXGISwapChain* swapchain, ID3D11Device* device)
    {
       // The game's image: its own buffer where Luma composes into the real one
       ComPtr<ID3D11Texture2D> back_buffer;
-      const ComPtr<IUnknown> game_buffer = Swapchain::DXGI::GetGameBuffer(swapchain);
+      const ComPtr<IUnknown> game_buffer = Display::Swapchain::DXGI::GetGameBuffer(swapchain);
       if (game_buffer ? FAILED(game_buffer.As(&back_buffer)) : FAILED(swapchain->GetBuffer(0, IID_PPV_ARGS(&back_buffer))))
          return Finish({.error = "the swapchain has no back buffer"});
       // What the game drew is in its buffer's mirror while mirrors are swapped in

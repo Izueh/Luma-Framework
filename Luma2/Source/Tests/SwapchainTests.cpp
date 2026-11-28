@@ -12,7 +12,7 @@
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Settings/SettingsStorage.hpp"
-#include "Swapchain/Swapchain.hpp"
+#include "Display/Swapchain.hpp"
 #include "System/WindowPolicy.hpp"
 
 using namespace Luma;
@@ -24,13 +24,13 @@ struct Fixture
    Fixture()
    {
       Settings::Clear();
-      Swapchain::Register();
-      Swapchain::SetOptions({});
+      Display::Swapchain::Register();
+      Display::Swapchain::SetOptions({});
    }
 
    ~Fixture()
    {
-      Swapchain::SetOptions({});
+      Display::Swapchain::SetOptions({});
       Settings::Clear();
    }
 };
@@ -39,22 +39,22 @@ struct Fixture
 TEST_CASE("Swapchain: the Mode setting picks Native over the game's mode, and the game can pick it")
 {
    Fixture fixture;
-   using Swapchain::Mode;
-   CHECK(Swapchain::GetMode() == Mode::Mirror);
-   Swapchain::SetOptions({.mode = Mode::Native});
-   CHECK(Swapchain::GetMode() == Mode::Native);
+   using Display::Swapchain::Mode;
+   CHECK(Display::Swapchain::GetMode() == Mode::Mirror);
+   Display::Swapchain::SetOptions({.mode = Mode::Native});
+   CHECK(Display::Swapchain::GetMode() == Mode::Native);
 
    REQUIRE(Settings::Set(Settings::Core::SWAPCHAIN_MODE, Settings::EnumIndex{0}));
-   CHECK(Swapchain::GetMode() == Mode::Mirror);
+   CHECK(Display::Swapchain::GetMode() == Mode::Mirror);
    REQUIRE(Settings::Set(Settings::Core::SWAPCHAIN_MODE, Settings::EnumIndex{1}));
-   CHECK(Swapchain::GetMode() == Mode::InPlace);
+   CHECK(Display::Swapchain::GetMode() == Mode::InPlace);
    // Resetting returns to the game's configured default
    REQUIRE(Settings::Reset(Settings::Core::SWAPCHAIN_MODE.key));
-   CHECK(Swapchain::GetMode() == Mode::Native);
+   CHECK(Display::Swapchain::GetMode() == Mode::Native);
 
-   Swapchain::SetOptions({});
+   Display::Swapchain::SetOptions({});
    REQUIRE(Settings::Set(Settings::Core::SWAPCHAIN_MODE, Settings::EnumIndex{2}));
-   CHECK(Swapchain::GetMode() == Mode::Native);
+   CHECK(Display::Swapchain::GetMode() == Mode::Native);
    // The labels match the modes (no separate "Game default" entry)
    const Settings::Setting* setting = Settings::Find(Settings::Core::SWAPCHAIN_MODE.key);
    REQUIRE(setting);
@@ -76,9 +76,9 @@ TEST_CASE("Swapchain: the Mode setting picks Native over the game's mode, and th
    CHECK(suppress_focus->visibility == Settings::Visibility::Release);
    CHECK_FALSE(suppress_focus->requires_restart);
 #if DEVELOPMENT
-   CHECK(Swapchain::SuppressesFocusLoss());
+   CHECK(Display::Swapchain::SuppressesFocusLoss());
 #else
-   CHECK_FALSE(Swapchain::SuppressesFocusLoss());
+   CHECK_FALSE(Display::Swapchain::SuppressesFocusLoss());
 #endif
 }
 
@@ -156,7 +156,7 @@ TEST_CASE("Swapchain: SuppressFocusLoss blocks focus-loss messages and toggles l
 
    // Enabled: WM_KILLFOCUS, WM_ACTIVATE (WA_INACTIVE), and WM_ACTIVATEAPP (FALSE) are blocked, activation passes through
    REQUIRE(Settings::Set(Settings::Core::SUPPRESS_FOCUS_LOSS, true));
-   System::Window::SetFocusLossSuppression(window, Swapchain::SuppressesFocusLoss());
+   System::Window::SetFocusLossSuppression(window, Display::Swapchain::SuppressesFocusLoss());
    SendMessageW(window, WM_KILLFOCUS, 0, 0);
    SendMessageW(window, WM_ACTIVATE, MAKEWPARAM(WA_INACTIVE, 1), 0);
    SendMessageW(window, WM_ACTIVATEAPP, FALSE, 0);
@@ -172,7 +172,7 @@ TEST_CASE("Swapchain: SuppressFocusLoss blocks focus-loss messages and toggles l
 
    // Toggled off live via Settings::Set: focus-loss messages reach the game window again without recreating the window
    REQUIRE(Settings::Set(Settings::Core::SUPPRESS_FOCUS_LOSS, false));
-   CHECK_FALSE(Swapchain::SuppressesFocusLoss());
+   CHECK_FALSE(Display::Swapchain::SuppressesFocusLoss());
    SendMessageW(window, WM_KILLFOCUS, 0, 0);
    SendMessageW(window, WM_ACTIVATE, MAKEWPARAM(WA_INACTIVE, 0), 0);
    SendMessageW(window, WM_ACTIVATEAPP, FALSE, 0);
@@ -206,15 +206,15 @@ TEST_CASE("Swapchain: SuppressFocusLoss blocks focus-loss messages and toggles l
 
 TEST_CASE("Swapchain: each mode has its name, and only Native keeps the game's format and color space and doesn't compose")
 {
-   using Swapchain::Mode;
-   CHECK(Swapchain::GetName(Mode::Mirror) == "Mirror");
-   CHECK(Swapchain::GetName(Mode::InPlace) == "InPlace");
-   CHECK(Swapchain::GetName(Mode::Native) == "Native");
+   using Display::Swapchain::Mode;
+   CHECK(Display::Swapchain::GetName(Mode::Mirror) == "Mirror");
+   CHECK(Display::Swapchain::GetName(Mode::InPlace) == "InPlace");
+   CHECK(Display::Swapchain::GetName(Mode::Native) == "Native");
    for (const Mode mode : {Mode::Mirror, Mode::InPlace})
    {
-      CHECK(Swapchain::ManagesOutput(mode));
+      CHECK(Display::Swapchain::ManagesOutput(mode));
    }
-   CHECK_FALSE(Swapchain::ManagesOutput(Mode::Native));
+   CHECK_FALSE(Display::Swapchain::ManagesOutput(Mode::Native));
 }
 
 TEST_CASE("Composition: off, the plan is empty even where Mirror always composes and the image would be scaled or encoded")
@@ -390,31 +390,31 @@ TEST_CASE("DXGISpoofing: SpoofSdrDisplay reports SDR output desc and unsupported
    desc.MaxFullFrameLuminance = 600.f;
 
    // Default off: untouched
-   Display::Spoofing::DXGI::OnOutputDesc(desc);
+   Display::Spoofing::DXGI::SpoofOutputDesc(desc);
    CHECK(desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
    CHECK(desc.MaxLuminance == 1000.f);
    UINT support = DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT;
-   Display::Spoofing::DXGI::OnColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, support);
+   Display::Spoofing::DXGI::SpoofColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, support);
    CHECK(support == DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT);
 
    // Enabled: reports SDR G22 P709, 8-bit, <= 80 nits, and clears HDR color space support
    REQUIRE(Settings::Set(Settings::Core::SPOOF_SDR_DISPLAY, true));
-   Display::Spoofing::DXGI::OnOutputDesc(desc);
+   Display::Spoofing::DXGI::SpoofOutputDesc(desc);
    CHECK(desc.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
    CHECK(desc.BitsPerColor == 8u);
    CHECK(desc.MaxLuminance == System::Display::SRGB_WHITE_NITS);
    CHECK(desc.MaxFullFrameLuminance == System::Display::SRGB_WHITE_NITS);
 
    UINT pq_support = DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT;
-   Display::Spoofing::DXGI::OnColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, pq_support);
+   Display::Spoofing::DXGI::SpoofColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020, pq_support);
    CHECK(pq_support == 0u);
 
    UINT scrgb_support = DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT;
-   Display::Spoofing::DXGI::OnColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, scrgb_support);
+   Display::Spoofing::DXGI::SpoofColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709, scrgb_support);
    CHECK(scrgb_support == 0u);
 
    UINT sdr_support = DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT;
-   Display::Spoofing::DXGI::OnColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, sdr_support);
+   Display::Spoofing::DXGI::SpoofColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709, sdr_support);
    CHECK(sdr_support == DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT);
 
    Settings::Clear();

@@ -17,8 +17,8 @@
 #include <DDSTextureLoader12.h>
 
 #include "Settings/SettingsRegistry.hpp"
-#include "Frame/FrameState.hpp"
-#include "Game/Game.hpp"
+#include "FrameState/FrameState.hpp"
+#include "Game/GameRegistry.hpp"
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
 #include "Hooks/ObjectLifetime.hpp"
 #include "Hooks/HookScope.hpp"
@@ -173,7 +173,7 @@ List* GetList(ID3D12GraphicsCommandList* list)
    if (FAILED(list->GetDevice(IID_PPV_ARGS(&device))))
       return state;
    state->store = Hooks::Lifetime::GetState<Store>(device.Get());
-   state->target = {device.Get(), Frame::Find(device.Get()), Game::GetGameDeviceData(device.Get())};
+   state->target = {device.Get(), FrameState::Find(device.Get()), Game::GetGameDeviceData(device.Get())};
    return state;
 }
 
@@ -970,7 +970,7 @@ void SetManagedState(ID3D12Device* device, uint64_t name_hash, D3D12_RESOURCE_ST
    store->runtime[*index].managed_state = state;
 }
 
-void OnPresent(ID3D12Device* device)
+void ClearFrameTags(ID3D12Device* device)
 {
    Store* store = Hooks::Lifetime::GetState<Store>(device);
    if (!store)

@@ -301,8 +301,8 @@ bool Evaluate([[maybe_unused]] State& state, [[maybe_unused]] ID3D11DeviceContex
    for (size_t i = 0; i < size_t(Slot::Count); i++)
    {
       if (sources[i] &&
-         !D3D12Interop::UpdateSharedTextureFrom(*state.interop, state.interop->textures[i], sources[i], i == size_t(Slot::Depth),
-            i == size_t(Slot::Depth) || i == size_t(Slot::Output)))
+         !D3D12Interop::UpdateSharedTextureFrom(*state.interop, state.interop->textures[i], sources[i],
+            {.is_depth = i == size_t(Slot::Depth), .unordered_access = i == size_t(Slot::Depth) || i == size_t(Slot::Output)}))
          return false;
    }
 

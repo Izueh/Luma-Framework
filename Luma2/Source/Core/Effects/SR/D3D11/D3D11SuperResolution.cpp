@@ -13,7 +13,7 @@
 #include "Effects/SR/D3D11/D3D11Fsr4.hpp"
 #include "Effects/SR/D3D11/D3D11XeSS.hpp"
 #include "Effects/SR/D3D11/D3D12Interop.hpp"
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Hooks/HookScope.hpp"
 #include "Hooks/ObjectLifetime.hpp"
 #include "Log/Log.hpp"
@@ -121,15 +121,20 @@ ID3D11Resource* EnsureUavOutput(DeviceState& state, ID3D11Device* device, ID3D11
 }
 } // namespace
 
-void PreCreateDevice([[maybe_unused]] const D3D_FEATURE_LEVEL*& feature_levels, [[maybe_unused]] UINT& feature_level_count)
+void UpgradeFeatureLevels([[maybe_unused]] const D3D_FEATURE_LEVEL*& feature_levels, [[maybe_unused]] UINT& feature_level_count)
 {
 #if defined(LUMA_USE_FSR) && LUMA_USE_FSR
    // Required by FSR 3 on DX11. Only adds 11.1 at the front, never removes the game's levels;
    // D3D11Hooks hides the raised level from the game via GetFeatureLevel.
    // A null list doesn't include 11.1.
    static constexpr D3D_FEATURE_LEVEL default_levels_11_1[] = {
-      D3D_FEATURE_LEVEL_11_1, D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_1, D3D_FEATURE_LEVEL_10_0,
-      D3D_FEATURE_LEVEL_9_3,  D3D_FEATURE_LEVEL_9_2,  D3D_FEATURE_LEVEL_9_1,
+      D3D_FEATURE_LEVEL_11_1,
+      D3D_FEATURE_LEVEL_11_0,
+      D3D_FEATURE_LEVEL_10_1,
+      D3D_FEATURE_LEVEL_10_0,
+      D3D_FEATURE_LEVEL_9_3,
+      D3D_FEATURE_LEVEL_9_2,
+      D3D_FEATURE_LEVEL_9_1,
    };
    if (!feature_levels || feature_level_count == 0)
    {
@@ -173,7 +178,7 @@ void ReleaseDeviceObjects(ID3D11Device* device)
 #endif
 }
 
-void OnPresent(ID3D11Device* device)
+void UpdateAtPresent(ID3D11Device* device)
 {
    DeviceState* state = Hooks::Lifetime::GetState<DeviceState>(device);
    if (!state)
@@ -243,7 +248,7 @@ bool Draw(ID3D11DeviceContext* context, const DrawOverrides& overrides)
    }
    if (Trace::Capture::IsCapturing())
    {
-      Trace::Capture::D3D11::AddSrPass(context, DescribeDraw(record, *prepared, ok, needs_copy_back), inputs.source_color, inputs.depth_buffer,
+      Trace::Capture::D3D11::AddSrPass(context, DescribeDraw(record, *prepared, {.succeeded = ok, .copy_back = needs_copy_back}), inputs.source_color, inputs.depth_buffer,
          inputs.motion_vectors, inputs.exposure, inputs.bias_mask, inputs.transparency_alpha, final_output);
    }
 #endif

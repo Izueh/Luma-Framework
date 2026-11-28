@@ -1,9 +1,10 @@
 #include "Trace/D3D12/D3D12Readback.hpp"
 
-#include "Swapchain/DXGI/DXGISwapchain.hpp"
+#include "Display/DXGI/DXGISwapchain.hpp"
 
 #if DEVELOPMENT
 #include <algorithm>
+#include <expected>
 #include <format>
 #include <mutex>
 #include <optional>
@@ -51,25 +52,21 @@ std::mutex mutex;
 std::optional<Copy> pending;
 
 // Records the copy of `mip` (every array slice) of `resource`, in `state`, into a new readback buffer
-std::optional<Copy> RecordCopy(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES state, uint32_t mip, std::string* error)
+std::expected<Copy, std::string> RecordCopy(ID3D12GraphicsCommandList* list, ID3D12Resource* resource, D3D12_RESOURCE_STATES state, uint32_t mip)
 {
-   const auto fail = [error](std::string message) -> std::optional<Copy> {
-      *error = std::move(message);
-      return std::nullopt;
-   };
    ComPtr<ID3D12Device> device;
    if (FAILED(list->GetDevice(IID_PPV_ARGS(&device))))
-      return fail("the list's device couldn't be found");
+      return std::unexpected("the list's device couldn't be found");
    Copy copy = {.desc = resource->GetDesc(), .mip = mip};
    const D3D12_RESOURCE_DESC& desc = copy.desc;
    if (desc.Dimension == D3D12_RESOURCE_DIMENSION_BUFFER)
-      return fail("the view is of a buffer, not a texture");
+      return std::unexpected("the view is of a buffer, not a texture");
    if (desc.SampleDesc.Count > 1)
-      return fail("multisampled textures aren't read back on D3D12 yet");
+      return std::unexpected("multisampled textures aren't read back on D3D12 yet");
    if (IsDepthStencil(desc.Format))
-      return fail("depth stencil textures aren't read back on D3D12 yet");
+      return std::unexpected("depth stencil textures aren't read back on D3D12 yet");
    if (mip >= desc.MipLevels)
-      return fail(std::format("mip {} is out of range ({} mips)", mip, desc.MipLevels));
+      return std::unexpected(std::format("mip {} is out of range ({} mips)", mip, desc.MipLevels));
    const UINT slices = desc.Dimension == D3D12_RESOURCE_DIMENSION_TEXTURE3D ? 1u : desc.DepthOrArraySize;
    copy.footprints.resize(slices);
    copy.rows.resize(slices);
@@ -89,7 +86,7 @@ std::optional<Copy> RecordCopy(ID3D12GraphicsCommandList* list, ID3D12Resource* 
       .SampleDesc = {1, 0},
       .Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR};
    if (FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&copy.buffer))))
-      return fail("the readback buffer couldn't be created");
+      return std::unexpected("the readback buffer couldn't be created");
    std::vector<D3D12_RESOURCE_BARRIER> barriers;
    for (UINT slice = 0; slice < slices; slice++)
    {
@@ -172,7 +169,7 @@ Result ReadBackBuffer(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue, uint
    ComPtr<IDXGISwapChain3> swapchain3;
    ComPtr<ID3D12Resource> back_buffer;
    // The game's image: its own buffer where Luma composes into the real one (in the common state, as a back buffer's present one)
-   if (const ComPtr<IUnknown> game_buffer = Swapchain::DXGI::GetGameBuffer(swapchain))
+   if (const ComPtr<IUnknown> game_buffer = Display::Swapchain::DXGI::GetGameBuffer(swapchain))
       game_buffer.As(&back_buffer);
    else if (FAILED(swapchain->QueryInterface(IID_PPV_ARGS(&swapchain3))) || FAILED(swapchain3->GetBuffer(swapchain3->GetCurrentBackBufferIndex(), IID_PPV_ARGS(&back_buffer))))
       return {.error = "the swapchain has no back buffer"};
@@ -188,12 +185,11 @@ Result ReadBackBuffer(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue, uint
    if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device))) || FAILED(device->CreateCommandAllocator(type, IID_PPV_ARGS(&allocator))) ||
       FAILED(device->CreateCommandList(0, type, allocator.Get(), nullptr, IID_PPV_ARGS(&list))))
       return {.error = "the readback command list couldn't be created"};
-   std::string error;
    // A back buffer is in the present state between frames
-   std::optional<Copy> copy = RecordCopy(list.Get(), back_buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, mip, &error);
+   std::expected<Copy, std::string> copy = RecordCopy(list.Get(), back_buffer.Get(), D3D12_RESOURCE_STATE_PRESENT, mip);
    list->Close();
    if (!copy)
-      return {.error = error};
+      return {.error = std::move(copy.error())};
    ID3D12CommandList* const lists[] = {list.Get()};
    queue->ExecuteCommandLists(1, lists);
    if (!WaitForQueue(queue))
@@ -229,11 +225,10 @@ bool ReadAfterCall(const Game::D3D12::Call& call, Shaders::StageSet stages, bool
    // A mirrored texture is read from its mirror while the mirrors are swapped in (it's what the call wrote), unless the game's is asked
    // for. The mirror is in the original's state: it gets every barrier the original does.
    ID3D12Resource* mirror = !target->original && Resources::Mirrors::IsSwapping() ? Resources::Mirrors::D3D12::FindMirror(view->resource) : nullptr;
-   std::string error;
-   std::optional<Copy> copy = RecordCopy(call.list, mirror ? mirror : view->resource, *view->state, target->mip, &error);
+   std::expected<Copy, std::string> copy = RecordCopy(call.list, mirror ? mirror : view->resource, *view->state, target->mip);
    if (!copy)
    {
-      Finish({.error = error.empty() ? "the copy couldn't be recorded" : error});
+      Finish({.error = copy.error().empty() ? "the copy couldn't be recorded" : std::move(copy.error())});
       return true;
    }
    copy->view_format = target->view == ViewKind::Depth || target->view == ViewKind::Stencil ? GetDepthReadFormat(view->format, target->view == ViewKind::Stencil) : view->format;
@@ -245,11 +240,11 @@ bool ReadAfterCall(const Game::D3D12::Call& call, Shaders::StageSet stages, bool
       copy->mirrored = true;
    }
    std::scoped_lock lock(mutex);
-   pending = std::move(copy);
+   pending = std::move(*copy);
    return true;
 }
 
-void OnExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists)
+void CommitExecuted(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists)
 {
    if (!IsArmed())
       return;

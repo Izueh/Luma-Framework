@@ -6,9 +6,10 @@
 #include <span>
 #include <type_traits>
 
+#include "Draw/D3D12/D3D12Draw.hpp"
 #include "Effects/SR/D3D12/D3D12SuperResolution.hpp"
 #include "Effects/SR/SuperResolution.hpp"
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Handlers/Handlers.hpp"
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
@@ -19,7 +20,9 @@
 #include "Resources/SamplerMirrors.hpp"
 #include "Resources/ResourceUpgrades.hpp"
 #include "Resources/D3D12/D3D12ResourceDatabase.hpp"
+#include "Shaders/D3D12/D3D12Database.hpp"
 #include "Shaders/D3D12/D3D12PipelineLibrary.hpp"
+#include "Shaders/D3D12/D3D12RootSignatures.hpp"
 #include "Shaders/D3D12/D3D12Variants.hpp"
 #include "Shaders/Shaders.hpp"
 #include "Game/D3D12/D3D12DrawEvents.hpp"
@@ -150,6 +153,7 @@ void OnDeviceDestroyed(ID3D12Device* device)
 #if DEVELOPMENT
          Trace::DebugDraw::ReleaseD3D12(device);
 #endif
+         Draw::D3D12::ReleaseDeviceObjects(device);
          Effects::SR::D3D12::ReleaseDeviceObjects(device);
          Resources::Database::D3D12::ReleaseDeviceObjects(device);
          Resources::Mirrors::D3D12::ReleaseDeviceObjects(device);
@@ -166,40 +170,71 @@ void PostExecuteCommandLists(ID3D12CommandQueue* queue, UINT count, ID3D12Comman
    Hooks::Lifetime::D3D12::MoveReferencesToQueue(queue, count, lists);
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordExecute(queue, count, lists);
-   Trace::Readback::D3D12::OnExecute(queue, count, lists);
+   Trace::Readback::D3D12::CommitExecuted(queue, count, lists);
    Trace::Stats::D3D12::RecordExecute(count);
 #endif
 }
 
-std::optional<Shaders::RootSignatures::D3D12::RewrittenDesc> PreCreatePipelineState(ID3D12Device* device, PipelineKind kind, const void* desc)
+namespace {
+template <typename T>
+Microsoft::WRL::ComPtr<T> GetCreatedObject(HRESULT result, void** object)
 {
-   if (!Shaders::IsNeeded() || !device)
-      return std::nullopt;
-   return Shaders::RootSignatures::D3D12::RewritePipelineDesc(device, kind, desc);
+   Microsoft::WRL::ComPtr<T> created;
+   if (SUCCEEDED(result) && object && *object)
+      static_cast<IUnknown*>(*object)->QueryInterface(IID_PPV_ARGS(&created));
+   return created;
 }
 
-void PostCreatePipelineState(ID3D12Device* device, PipelineKind kind, const void* desc, bool from_library, ID3D12PipelineState* pipeline)
+template <typename Desc>
+HRESULT CreatePipeline(ID3D12Device* device, PipelineKind kind, const Desc* desc, bool from_library, void** pipeline,
+   const std::function<HRESULT(const Desc*)>& call_original)
 {
+   std::optional<Shaders::RootSignatures::D3D12::RewrittenDesc> rewritten;
+   if (Shaders::IsNeeded() && device)
+      rewritten = Shaders::RootSignatures::D3D12::RewritePipelineDesc(device, kind, desc);
+   const Desc* final_desc = rewritten ? reinterpret_cast<const Desc*>(rewritten->bytes.data()) : desc;
+   const HRESULT result = call_original(final_desc);
+#if DEVELOPMENT
+   if (from_library)
+      Trace::Stats::D3D12::RecordLibraryLoad(result);
+#endif
    if (!Shaders::IsNeeded())
-      return;
-   const Shaders::Database::D3D12::PipelineDesc described = Describe(kind, desc);
-   std::shared_ptr<const Shaders::Database::D3D12::DescCopy> copy;
-   if (Shaders::Variants::D3D12::NeedsDescCopy(described))
-      copy = Shaders::Database::D3D12::CopyDesc(kind, desc);
-   const Shaders::Database::D3D12::Pipeline* tracked = Shaders::Database::D3D12::TrackPipeline(device, described, std::move(copy), from_library, pipeline);
-   if (!tracked)
-      return;
-   Shaders::Variants::D3D12::AttachVariants(pipeline, *tracked);
+      return result;
+   if (const Microsoft::WRL::ComPtr<ID3D12PipelineState> created = GetCreatedObject<ID3D12PipelineState>(result, pipeline))
+   {
+      const Shaders::Database::D3D12::PipelineDesc described = Describe(kind, final_desc);
+      std::shared_ptr<const Shaders::Database::D3D12::DescCopy> copy;
+      if (Shaders::Variants::D3D12::NeedsDescCopy(described))
+         copy = Shaders::Database::D3D12::CopyDesc(kind, final_desc);
+      if (const Shaders::Database::D3D12::Pipeline* tracked =
+             Shaders::Database::D3D12::TrackPipeline(device, described, std::move(copy), from_library, created.Get()))
+      {
+         Shaders::Variants::D3D12::AttachVariants(created.Get(), *tracked);
 #if DEVELOPMENT
-   Trace::Stats::D3D12::RecordPipeline(device, *tracked, described);
+         Trace::Stats::D3D12::RecordPipeline(device, *tracked, described);
 #endif
+      }
+   }
+   return result;
+}
+} // namespace
+
+HRESULT CreateGraphicsPipelineState(ID3D12Device* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC* desc, bool from_library, void** pipeline,
+   const std::function<HRESULT(const D3D12_GRAPHICS_PIPELINE_STATE_DESC*)>& call_original)
+{
+   return CreatePipeline(device, PipelineKind::Graphics, desc, from_library, pipeline, call_original);
 }
 
-void PostLoadPipeline([[maybe_unused]] HRESULT result)
+HRESULT CreateComputePipelineState(ID3D12Device* device, const D3D12_COMPUTE_PIPELINE_STATE_DESC* desc, bool from_library, void** pipeline,
+   const std::function<HRESULT(const D3D12_COMPUTE_PIPELINE_STATE_DESC*)>& call_original)
 {
-#if DEVELOPMENT
-   Trace::Stats::D3D12::RecordLibraryLoad(result);
-#endif
+   return CreatePipeline(device, PipelineKind::Compute, desc, from_library, pipeline, call_original);
+}
+
+HRESULT CreatePipelineState(ID3D12Device* device, const D3D12_PIPELINE_STATE_STREAM_DESC* desc, bool from_library, void** pipeline,
+   const std::function<HRESULT(const D3D12_PIPELINE_STATE_STREAM_DESC*)>& call_original)
+{
+   return CreatePipeline(device, PipelineKind::Stream, desc, from_library, pipeline, call_original);
 }
 
 void PostCreatePipelineLibrary([[maybe_unused]] size_t blob_size, [[maybe_unused]] HRESULT result)
@@ -209,31 +244,46 @@ void PostCreatePipelineLibrary([[maybe_unused]] size_t blob_size, [[maybe_unused
 #endif
 }
 
-Shaders::RootSignatures::D3D12::Extended PreCreateRootSignature(std::span<const uint8_t> blob)
+HRESULT CreateRootSignature(std::span<const uint8_t> game_blob, void** root_signature, const std::function<HRESULT(std::span<const uint8_t>)>& call_original)
 {
-   if (!Shaders::IsNeeded())
-      return {};
-   return Shaders::RootSignatures::D3D12::Extend(blob);
-}
-
-void PostExtendedRootSignatureRefused(HRESULT result)
-{
-   ASSERT_ONCE_MSG(false, "The device refused an extended root signature");
-   Log::Error("D3D12: the device refused an extended root signature (0x{:08X}), the game's is used and its pipelines get no variants", uint32_t(result));
-}
-
-void PostCreateRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table, bool luma_samplers)
-{
-   if (!Shaders::IsNeeded())
-      return;
-   [[maybe_unused]] const Shaders::Database::D3D12::RootLayout* layout = Shaders::Database::D3D12::TrackRootSignature(blob, root_signature, luma_parameter, luma_table, luma_samplers);
+   const Shaders::RootSignatures::D3D12::Extended extended = Shaders::IsNeeded() ? Shaders::RootSignatures::D3D12::Extend(game_blob) : Shaders::RootSignatures::D3D12::Extended{};
+   uint32_t luma_parameter = UINT32_MAX;
+   bool luma_table = false;
+   bool luma_samplers = false;
+   HRESULT result = E_FAIL;
+   if (!extended.blob.empty())
+   {
+      result = call_original(extended.blob);
+      if (SUCCEEDED(result))
+      {
+         luma_parameter = extended.luma_parameter;
+         luma_table = extended.table;
+         luma_samplers = extended.static_samplers;
+      }
+      else
+      {
+         ASSERT_ONCE_MSG(false, "The device refused an extended root signature");
+         Log::Error("D3D12: the device refused an extended root signature (0x{:08X}), the game's is used and its pipelines get no variants", uint32_t(result));
+      }
+   }
+   if (FAILED(result))
+      result = call_original(game_blob);
+   if (Shaders::IsNeeded())
+   {
+      if (const Microsoft::WRL::ComPtr<ID3D12RootSignature> created = GetCreatedObject<ID3D12RootSignature>(result, root_signature))
+      {
+         [[maybe_unused]] const Shaders::Database::D3D12::RootLayout* layout =
+            Shaders::Database::D3D12::TrackRootSignature(game_blob, created.Get(), luma_parameter, luma_table, luma_samplers);
 #if DEVELOPMENT
-   if (layout)
-      Trace::Stats::D3D12::RecordRootSignature(*layout);
+         if (layout)
+            Trace::Stats::D3D12::RecordRootSignature(*layout);
 #endif
+      }
+   }
+   return result;
 }
 
-void PostCreateRootSignatureFromLibrary()
+void PostCreateRootSignatureFromSubobjectInLibrary()
 {
    LUMA_UNIMPLEMENTED("Root signatures from a DXIL library: not extended, their pipelines get no variants");
 }
@@ -243,32 +293,38 @@ void PostCreateStateObject()
    LUMA_UNIMPLEMENTED("Variants of state objects (DXIL, the first SM6 game)");
 }
 
-std::optional<D3D12_DESCRIPTOR_HEAP_DESC> PreCreateDescriptorHeap(const D3D12_DESCRIPTOR_HEAP_DESC& desc)
+HRESULT CreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& game_desc, void** heap,
+   const std::function<HRESULT(const D3D12_DESCRIPTOR_HEAP_DESC&)>& call_original)
 {
-   if (!Shaders::IsNeeded())
-      return std::nullopt;
-   return Resources::HeapTail::D3D12::Extend(desc);
-}
-
-std::optional<D3D12_DESCRIPTOR_HEAP_DESC> PostExtendDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& desc, const D3D12_DESCRIPTOR_HEAP_DESC& extended,
-   HRESULT result)
-{
-   return Resources::HeapTail::D3D12::RecordExtension(device, desc, extended, result);
-}
-
-void PostCreateDescriptorHeap(ID3D12Device* device, const D3D12_DESCRIPTOR_HEAP_DESC& desc, ID3D12DescriptorHeap* heap, uint32_t tail_size)
-{
-   if (tail_size)
-      Resources::HeapTail::D3D12::Track(device, heap, desc, tail_size);
-   if (Resources::Mirrors::IsNeeded() || Resources::Samplers::IsNeeded())
-      Resources::Mirrors::D3D12::TrackHeap(device, heap, desc);
+   std::optional<D3D12_DESCRIPTOR_HEAP_DESC> extended = Shaders::IsNeeded() ? Resources::HeapTail::D3D12::Extend(game_desc) : std::nullopt;
+   HRESULT result = E_FAIL;
+   uint32_t tail_size = 0;
+   while (extended && FAILED(result))
+   {
+      result = call_original(*extended);
+      tail_size = extended->NumDescriptors - game_desc.NumDescriptors;
+      extended = Resources::HeapTail::D3D12::RecordExtension(device, game_desc, *extended, result);
+   }
+   if (FAILED(result))
+   {
+      tail_size = 0;
+      result = call_original(game_desc);
+   }
+   if (const Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> created = GetCreatedObject<ID3D12DescriptorHeap>(result, heap))
+   {
+      if (tail_size)
+         Resources::HeapTail::D3D12::Track(device, created.Get(), game_desc, tail_size);
+      if (Resources::Mirrors::IsNeeded() || Resources::Samplers::IsNeeded())
+         Resources::Mirrors::D3D12::TrackHeap(device, created.Get(), game_desc);
 #if DEVELOPMENT
-   Resources::Descriptors::D3D12::TrackHeap(device, heap, desc);
-   Trace::Stats::D3D12::RecordHeap(desc, heap);
+      Resources::Descriptors::D3D12::TrackHeap(device, created.Get(), game_desc);
+      Trace::Stats::D3D12::RecordHeap(game_desc, created.Get());
 #else
-   if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
-      Resources::Descriptors::D3D12::TrackHeap(device, heap, desc);
+      if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
+         Resources::Descriptors::D3D12::TrackHeap(device, created.Get(), game_desc);
 #endif
+   }
+   return result;
 }
 
 void PostCreateView(ID3D12Device* device, D3D12_CPU_DESCRIPTOR_HANDLE destination, const Resources::Descriptors::D3D12::Descriptor& descriptor)
@@ -381,6 +437,7 @@ void PostCreateResource(ID3D12Device* device, ID3D12Resource* resource, std::opt
 void PreReset(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline)
 {
    // No targets bound any more
+   Draw::D3D12::ForgetList(list);
    if (Resources::Mirrors::IsNeeded())
    {
       Shaders::Variants::D3D12::SetTargetFormats(list, {});
@@ -401,6 +458,7 @@ void PreReset(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline)
 
 void PreClearState(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline)
 {
+   Draw::D3D12::ForgetList(list);
    if (Resources::Mirrors::IsNeeded())
    {
       Shaders::Variants::D3D12::SetTargetFormats(list, {});
@@ -431,8 +489,8 @@ void PreSetStateObject(ID3D12GraphicsCommandList* list)
 void PreSetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12RootSignature* root_signature)
 {
    Resources::Database::D3D12::SetRootSignature(list, compute, root_signature);
-   if (!compute && Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D12::RecordRootSignature(list, root_signature);
+   if (!compute)
+      Draw::D3D12::RecordRootSignature(list, root_signature);
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordRootSignature(list, compute, root_signature);
    Trace::Stats::D3D12::RecordBind(list, Trace::Stats::D3D12::Bind::RootSignature);
@@ -453,13 +511,15 @@ void PreOMSetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3
          Resources::Mirrors::D3D12::BindRenderTargets(list, count, render_targets, single_range, depth_stencil, Resources::Mirrors::IsSwapping());
       Shaders::Variants::D3D12::SetTargetFormats(list, formats);
    }
+   Draw::D3D12::RecordRenderTargets(list, count, render_targets, single_range, depth_stencil);
    if (Effects::SR::IsNeeded() || Resources::ConstantCapture::IsNeeded())
       Resources::Database::D3D12::SetRenderTargets(list, count, render_targets, single_range, depth_stencil);
 }
 
-std::optional<uint32_t> GetGameHeapSize(ID3D12DescriptorHeap* heap)
+void PostGetDesc(ID3D12DescriptorHeap* heap, D3D12_DESCRIPTOR_HEAP_DESC& desc)
 {
-   return Resources::HeapTail::D3D12::GetGameSize(heap);
+   if (const std::optional<uint32_t> game_size = Resources::HeapTail::D3D12::GetGameSize(heap))
+      desc.NumDescriptors = *game_size;
 }
 
 // Trace reads descriptor tables through the heaps' GPU ranges; Luma's table is in the bound heap's tail
@@ -498,6 +558,7 @@ void PreSetViewports(ID3D12GraphicsCommandList* list, UINT& count, const D3D12_V
 {
    if (Resources::Mirrors::IsNeeded())
       Resources::Mirrors::D3D12::BindViewports(list, count, viewports);
+   Draw::D3D12::RecordViewports(list, count, viewports);
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordViewports(list, count, viewports);
 #endif
@@ -507,6 +568,7 @@ void PreSetScissorRects(ID3D12GraphicsCommandList* list, UINT& count, const D3D1
 {
    if (Resources::Mirrors::IsNeeded())
       Resources::Mirrors::D3D12::BindScissorRects(list, count, rects);
+   Draw::D3D12::RecordScissorRects(list, count, rects);
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordScissorRects(list, count, rects);
 #endif
@@ -517,8 +579,7 @@ void PreSetTopology(ID3D12GraphicsCommandList* list, D3D12_PRIMITIVE_TOPOLOGY to
 #if DEVELOPMENT
    Trace::Capture::D3D12::RecordTopology(list, topology);
 #endif
-   if (Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D12::RecordTopology(list, topology);
+   Draw::D3D12::RecordTopology(list, topology);
 }
 
 void PreSetBlendFactor([[maybe_unused]] ID3D12GraphicsCommandList* list, [[maybe_unused]] const FLOAT factor[4])
@@ -730,12 +791,12 @@ void PresentD3D12(ID3D12CommandQueue* queue)
       if (SUCCEEDED(queue->GetDevice(IID_PPV_ARGS(&device))))
       {
          if (Resources::Mirrors::IsNeeded())
-            Resources::Mirrors::D3D12::OnPresent(device.Get());
+            Resources::Mirrors::D3D12::FlushFrame(device.Get());
          if (Effects::SR::IsNeeded())
-            Effects::SR::D3D12::OnPresent(device.Get());
-         Resources::Database::D3D12::OnPresent(device.Get());
-         Resources::ConstantCapture::OnPresent();
-         Frame::OnPresent(device.Get());
+            Effects::SR::D3D12::UpdateAtPresent(device.Get());
+         Resources::Database::D3D12::ClearFrameTags(device.Get());
+         Resources::ConstantCapture::AdvanceFrame();
+         FrameState::AdvanceFrame(device.Get());
       }
    }
    if (!Shaders::IsNeeded())

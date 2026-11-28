@@ -294,12 +294,6 @@ void StartRequestedFrame()
    }
 }
 
-void AdvanceFrame()
-{
-   FinishFrame();
-   StartRequestedFrame();
-}
-
 Added Add(Event event)
 {
    std::scoped_lock lock(mutex);

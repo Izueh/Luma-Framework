@@ -58,7 +58,7 @@ bool IsPausedForFrame()
    return paused_for_frame.load(std::memory_order_relaxed);
 }
 
-void OnPresent()
+void AdvanceFrame()
 {
    paused_for_frame.store(false, std::memory_order_relaxed);
 }

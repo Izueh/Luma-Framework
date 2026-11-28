@@ -1,0 +1,126 @@
+#include "DllLoader.hpp"
+
+#include <array>
+#include <string_view>
+
+#include <winternl.h>
+
+#include "Startup.hpp"
+#include "ReShade/AddonEvents.hpp"
+#include "ReShade/ReShade.hpp"
+#include "Hooks/ThirdPartyModules.hpp"
+#include "Hooks/HookManager.hpp"
+#include "Log/Log.hpp"
+#include "System/Modules.hpp"
+#include "Utils/Strings.hpp"
+
+namespace Luma {
+namespace Loader {
+namespace {
+// Documented, but not in the Windows SDK headers
+struct LdrDllNotificationData
+{
+   ULONG flags;
+   const UNICODE_STRING* full_dll_name;
+   const UNICODE_STRING* base_dll_name;
+   void* dll_base;
+   ULONG size_of_image;
+};
+
+constexpr ULONG LDR_DLL_NOTIFICATION_REASON_LOADED = 1;
+constexpr ULONG LDR_DLL_NOTIFICATION_REASON_UNLOADED = 2;
+using LdrDllNotificationFunction = VOID(CALLBACK*)(ULONG reason, const LdrDllNotificationData* data, PVOID context);
+using LdrRegisterDllNotificationFunction = NTSTATUS(NTAPI*)(ULONG flags, LdrDllNotificationFunction callback, PVOID context, PVOID* cookie);
+using LdrUnregisterDllNotificationFunction = NTSTATUS(NTAPI*)(PVOID cookie);
+
+constexpr std::array<std::wstring_view, 2> GRAPHICS_MODULES = {L"d3d11.dll", L"d3d12.dll"};
+
+void* notification_cookie = nullptr;
+
+bool IsGraphicsModule(std::wstring_view name)
+{
+   for (std::wstring_view graphics_module : GRAPHICS_MODULES)
+   {
+      if (Utils::Strings::EqualsIgnoreCase(name, graphics_module))
+         return true;
+   }
+   return false;
+}
+
+void OnGraphicsModule(std::wstring_view name, void* base, bool was_already_loaded)
+{
+   Startup::Initialize();
+   Log::Info("Core: {} {} at {}", Utils::Strings::ToUtf8(name), was_already_loaded ? "was already loaded" : "loaded", base);
+}
+
+VOID CALLBACK OnDllNotification(ULONG reason, const LdrDllNotificationData* data, PVOID context)
+{
+   (void)context;
+   if (!data || !data->base_dll_name)
+      return;
+   if (reason == LDR_DLL_NOTIFICATION_REASON_UNLOADED)
+   {
+      Hooks::ThirdPartyModules::OnModuleUnloaded(data->dll_base);
+      ReShade::AddonEvents::OnModuleUnloaded(data->dll_base);
+      return;
+   }
+   if (reason != LDR_DLL_NOTIFICATION_REASON_LOADED)
+      return;
+   const std::wstring_view name(data->base_dll_name->Buffer, data->base_dll_name->Length / sizeof(wchar_t));
+   Hooks::ThirdPartyModules::OnModuleLoaded(name, data->dll_base, data->size_of_image);
+   ReShade::AddonEvents::OnModuleLoaded(name, data->dll_base, data->size_of_image);
+   if (IsGraphicsModule(name))
+      OnGraphicsModule(name, data->dll_base, false);
+   if (Startup::IsInitialized())
+      Hooks::OnModuleLoaded(name);
+}
+
+void UnregisterNotification()
+{
+   if (!notification_cookie)
+      return;
+   HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+   if (const auto unregister_notification = reinterpret_cast<LdrUnregisterDllNotificationFunction>(GetProcAddress(ntdll, "LdrUnregisterDllNotification")))
+      unregister_notification(notification_cookie);
+   notification_cookie = nullptr;
+}
+} // namespace
+
+void Attach(HMODULE module)
+{
+   System::Modules::SetSelf(module);
+   DisableThreadLibraryCalls(module);
+   Log::Info("Luma2 loaded from {}", Utils::Strings::ToUtf8(System::Modules::GetPath(module)));
+
+   HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+   const auto register_notification = reinterpret_cast<LdrRegisterDllNotificationFunction>(GetProcAddress(ntdll, "LdrRegisterDllNotification"));
+   if (!register_notification || register_notification(0, &OnDllNotification, nullptr, &notification_cookie) < 0)
+   {
+      notification_cookie = nullptr;
+      Log::Error("Core: LdrRegisterDllNotification failed, only modules already loaded will be detected");
+   }
+
+   // Loaded before Luma (d3d11 and d3d12 import dxgi)
+   for (std::wstring_view name : GRAPHICS_MODULES)
+   {
+      if (HMODULE graphics_module = GetModuleHandleW(name.data()))
+         OnGraphicsModule(name, graphics_module, true);
+   }
+
+   // Last, so ReShade's hooks and its loader notification go in after Luma's and it ends up on top. Still in DllMain, so the bridge
+   // registers before ReShade loads its add-ons (at the first device), but never from the loader notification.
+   ReShade::Load();
+}
+
+void Detach(bool is_process_terminating)
+{
+   if (is_process_terminating)
+   {
+      Log::Info("Process exiting");
+      return;
+   }
+   UnregisterNotification();
+   Startup::Unload();
+}
+} // namespace Loader
+} // namespace Luma

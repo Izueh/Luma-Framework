@@ -31,9 +31,9 @@
 #include "Display/DisplayComposition.hpp"
 #include "Display/DisplayMode.hpp"
 #include "Display/DXGI/DXGISpoofing.hpp"
-#include "Swapchain/Swapchain.hpp"
+#include "Display/Swapchain.hpp"
 #include "System/JobQueue.hpp"
-#include "System/DllLoader.hpp"
+#include "DllLoader.hpp"
 #include "System/Paths.hpp"
 #include "Validation/Validation.hpp"
 #if DEVELOPMENT
@@ -41,7 +41,7 @@
 #include "Trace/D3D12/D3D12Stats.hpp"
 #endif
 #include "Trace/RuntimeStatus.hpp"
-#include "Trace/McpServer.hpp"
+#include "Mcp/McpServer.hpp"
 #include "UI/OverlayInput.hpp"
 #include "UI/Overlay.hpp"
 #include "Utils/Debug.hpp"
@@ -173,7 +173,7 @@ void Initialize()
    Resources::Scaling::Register();
    Resources::Samplers::Register();
    Effects::SR::Register();
-   Swapchain::Register();
+   Display::Swapchain::Register();
    Display::DisplayMode::Register();
    Display::Composition::RegisterSettings();
    Display::Spoofing::DXGI::Register();
@@ -228,7 +228,7 @@ void Initialize()
                                                       "please re-install the mod.");
    InstallHooks();
 #if DEVELOPMENT
-   Trace::Mcp::Start();
+   Mcp::Start();
 #endif
 }
 
@@ -280,8 +280,8 @@ BOOL DllMain(HMODULE module, DWORD reason, LPVOID reserved)
 {
    switch (reason)
    {
-   case DLL_PROCESS_ATTACH: System::Loader::Attach(module); break;
-   case DLL_PROCESS_DETACH: System::Loader::Detach(reserved != nullptr); break;
+   case DLL_PROCESS_ATTACH: Loader::Attach(module); break;
+   case DLL_PROCESS_DETACH: Loader::Detach(reserved != nullptr); break;
    }
    return TRUE;
 }

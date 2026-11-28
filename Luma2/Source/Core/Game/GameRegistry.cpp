@@ -175,7 +175,7 @@ void SetOptions(const Options& options)
    Luma::Resources::Chains::SetOptions(options.chains);
    Luma::Resources::Scaling::SetOptions(options.scaling);
    Draw::SetOptions(options.draw);
-   Luma::Swapchain::SetOptions(options.swapchain);
+   Luma::Display::Swapchain::SetOptions(options.swapchain);
    // Before the saved settings load, so asserts in the rest of Init follow the game's choice
    Luma::Notifications::SetSilentAsserts(options.notifications.silent_asserts);
    Luma::Settings::SetDefault(Luma::Settings::Core::SILENT_ASSERTS, options.notifications.silent_asserts);
@@ -233,44 +233,44 @@ GameDeviceData* GetGameDeviceData(Device game_device)
       game_device);
 }
 
-Luma::Frame::Resolutions Frame::Get(Device device)
+Luma::FrameState::Resolutions FrameState::Get(Device device)
 {
-   return Luma::Frame::Get(GetUnknown(device));
+   return Luma::FrameState::Get(GetUnknown(device));
 }
 
-void Frame::SetRenderResolution(Device device, Math::uint2 size)
+void FrameState::SetRenderResolution(Device device, Math::uint2 size)
 {
-   Luma::Frame::SetRenderResolution(GetUnknown(device), size);
+   Luma::FrameState::SetRenderResolution(GetUnknown(device), size);
 }
 
-void Frame::SetCamera(Device device, const Camera& camera)
+void FrameState::SetCamera(Device device, const Camera& camera)
 {
-   Luma::Frame::SetCamera(GetUnknown(device), camera);
+   Luma::FrameState::SetCamera(GetUnknown(device), camera);
 }
 
-Frame::Camera Frame::GetCamera(Device device)
+FrameState::Camera FrameState::GetCamera(Device device)
 {
-   return Luma::Frame::GetCamera(GetUnknown(device));
+   return Luma::FrameState::GetCamera(GetUnknown(device));
 }
 
-void Frame::MarkPass(Device device, PassMarker marker)
+void FrameState::MarkPass(Device device, PassMarker marker)
 {
-   Luma::Frame::MarkPass(GetUnknown(device), marker);
+   Luma::FrameState::MarkPass(GetUnknown(device), marker);
 }
 
-bool Frame::HasPass(Device device, PassMarker marker)
+bool FrameState::HasPass(Device device, PassMarker marker)
 {
-   return Luma::Frame::HasPass(GetUnknown(device), marker);
+   return Luma::FrameState::HasPass(GetUnknown(device), marker);
 }
 
-void Frame::MarkPass(Device device, uint64_t custom_hash)
+void FrameState::MarkPass(Device device, uint64_t custom_hash)
 {
-   Luma::Frame::MarkPass(GetUnknown(device), custom_hash);
+   Luma::FrameState::MarkPass(GetUnknown(device), custom_hash);
 }
 
-bool Frame::HasPass(Device device, uint64_t custom_hash)
+bool FrameState::HasPass(Device device, uint64_t custom_hash)
 {
-   return Luma::Frame::HasPass(GetUnknown(device), custom_hash);
+   return Luma::FrameState::HasPass(GetUnknown(device), custom_hash);
 }
 
 void Resources::Scaling::Begin(Device device)
@@ -482,7 +482,7 @@ void Reset()
    Luma::Resources::Chains::SetOptions({});
    Luma::Resources::Scaling::SetOptions({});
    Luma::Resources::Upgrade::SetRules({});
-   Luma::Swapchain::SetOptions({});
+   Luma::Display::Swapchain::SetOptions({});
    Luma::Display::Composition::SetOptions({});
    Draw::SetOptions({});
 }

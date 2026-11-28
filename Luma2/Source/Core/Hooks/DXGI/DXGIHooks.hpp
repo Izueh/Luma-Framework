@@ -23,9 +23,9 @@ bool CloseThirdPartyWorkWindowAtFinishPresent();
 // (every tool's hook) inside Luma's scope
 HRESULT PresentForGame(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags, const DXGI_PRESENT_PARAMETERS* parameters, bool present1,
    std::optional<bool> prologue = std::nullopt);
-// An overlay asked the proxy for a buffer or the index (Swapchain::DXGI::ComposeForOverlay)
+// An overlay asked the proxy for a buffer or the index (Display::Swapchain::DXGI::ComposeForOverlay)
 void OnOverlayBufferRequest(IDXGISwapChain* swapchain);
-// What ReShade's calls on this swapchain get (Swapchain::DXGI)
+// What ReShade's calls on this swapchain get (Display::Swapchain::DXGI)
 SwapchainProxy::ReShadeSwapchainView GetReShadeSwapchainView(IDXGISwapChain* swapchain);
 // ReShade's present event ran the present work of this swapchain on this thread, and Luma's Present hasn't come yet
 bool IsThirdPartyWorkWindowOpenFor(IDXGISwapChain* swapchain);

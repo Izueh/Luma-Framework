@@ -111,11 +111,11 @@ bool ParsePerViewGlobal(Device device, std::span<const std::byte> bytes)
    data->jitterless_frames_count = 0;
    data->is_in_menu = false;
 
-   Math::uint2 render_size = Game::Frame::Get(device).render;
+   Math::uint2 render_size = Game::FrameState::Get(device).render;
    if (f[122].x > 0.f && f[122].y > 0.f)
    {
       render_size = {uint32_t(f[122].x + 0.5f), uint32_t(f[122].y + 0.5f)};
-      Game::Frame::SetRenderResolution(device, render_size);
+      Game::FrameState::SetRenderResolution(device, render_size);
    }
 
    // Projection matrix rows at float4[24..27]
@@ -131,13 +131,13 @@ bool ParsePerViewGlobal(Device device, std::span<const std::byte> bytes)
    if (vert_fov < (10.f * (PI / 180.f)) || vert_fov > (170.f * (PI / 180.f)))
       vert_fov = 60.f * (PI / 180.f);
 
-   Game::Frame::Camera camera = Game::Frame::GetCamera(device);
+   Game::FrameState::Camera camera = Game::FrameState::GetCamera(device);
    camera.jitter_pixels = {f[118].x * float(render_size.x) * 0.5f, f[118].y * float(render_size.y) * -0.5f};
    camera.vert_fov = vert_fov;
    camera.near_plane = near_plane;
    camera.far_plane = FLT_MAX;
    camera.camera_cut = f[140].y != 0.f;
-   Game::Frame::SetCamera(device, camera);
+   Game::FrameState::SetCamera(device, camera);
    return true;
 }
 
@@ -147,7 +147,7 @@ void OnPerViewGlobalWrite(Device device, std::span<const std::byte> bytes)
 }
 
 // Called at every draw with a Luma shader (LumaData is uploaded when its bytes change)
-void UpdateLumaInstanceDataCB(CB::LumaInstanceData& data, const GameDeviceData& game_device_data, const Frame::Resolutions& resolutions)
+void UpdateLumaInstanceDataCB(CB::LumaInstanceData& data, const GameDeviceData& game_device_data, const FrameState::Resolutions& resolutions)
 {
    const Math::float2 render_resolution = ToFloat(resolutions.render);
    data.GameData.RenderResolution = {render_resolution.x, render_resolution.y, 1.0f / render_resolution.x, 1.0f / render_resolution.y};
@@ -163,7 +163,7 @@ void OnInitSwapchain(Device device)
    GameDeviceData* game_device_data = Game::GetGameDeviceData(device);
    if (!game_device_data)
       return;
-   const Math::float2 output_resolution = ToFloat(Game::Frame::Get(device).output);
+   const Math::float2 output_resolution = ToFloat(Game::FrameState::Get(device).output);
    game_device_data->upscaled_render_resolution = output_resolution;
    const bool sharpen_ok = output_resolution == game_device_data->upscaled_render_resolution;
    can_sharpen_atomic.store(sharpen_ok, std::memory_order_relaxed);
@@ -185,18 +185,18 @@ void OnPresent(Device device)
 
 Game::DrawResult OnDrawOutputPass(Device device, bool is_hdr)
 {
-   if (Game::Frame::HasPass(device, Game::Frame::PassMarker::MainPostProcessing) || !Game::Frame::HasPass(device, Game::Frame::PassMarker::Taa))
+   if (Game::FrameState::HasPass(device, Game::FrameState::PassMarker::MainPostProcessing) || !Game::FrameState::HasPass(device, Game::FrameState::PassMarker::Taa))
       return Game::DrawResult::None;
    Game::Resources::Scaling::End(device);
-   Game::Frame::MarkPass(device, Game::Frame::PassMarker::Upscaling);
-   Game::Frame::MarkPass(device, Game::Frame::PassMarker::MainPostProcessing);
+   Game::FrameState::MarkPass(device, Game::FrameState::PassMarker::Upscaling);
+   Game::FrameState::MarkPass(device, Game::FrameState::PassMarker::MainPostProcessing);
    Game::Display::SetHdr(is_hdr);
    return Game::DrawResult::None;
 }
 
 Game::Effects::SR::DrawOverrides PrepareTaaSr(Device device, Math::uint2 render_size, Math::uint2 upscaled_size, Math::uint4 viewport_rect)
 {
-   Game::Frame::SetRenderResolution(device, render_size);
+   Game::FrameState::SetRenderResolution(device, render_size);
    Game::Resources::Scaling::SetTargetResolution(device, upscaled_size);
    Game::Effects::SR::DrawOverrides overrides;
    overrides.output_size = upscaled_size;
@@ -226,7 +226,7 @@ Game::Effects::SR::DrawOverrides PrepareTaaSr(Device device, Math::uint2 render_
          double(upscaled_size.x) * sr_scale, double(upscaled_size.y) * sr_scale, aspect);
       overrides.dynamic_resolution = data->drs_active;
 
-      const Math::float2 output_resolution = ToFloat(Game::Frame::Get(device).output);
+      const Math::float2 output_resolution = ToFloat(Game::FrameState::Get(device).output);
       const bool sharpen_ok = output_resolution == data->upscaled_render_resolution;
       can_sharpen_atomic.store(sharpen_ok, std::memory_order_relaxed);
       const float can_sharpen = sharpen_ok ? 1.f : 0.f;
@@ -254,9 +254,9 @@ Game::DrawResult OnDrawTaa(const Game::D3D11::Call& call)
 {
    Microsoft::WRL::ComPtr<ID3D11Device> device;
    call.context->GetDevice(&device);
-   if (!device || Game::Frame::HasPass(device.Get(), Game::Frame::PassMarker::MainPostProcessing))
+   if (!device || Game::FrameState::HasPass(device.Get(), Game::FrameState::PassMarker::MainPostProcessing))
       return Game::DrawResult::None;
-   Game::Frame::MarkPass(device.Get(), Game::Frame::PassMarker::Taa);
+   Game::FrameState::MarkPass(device.Get(), Game::FrameState::PassMarker::Taa);
 
    ID3D11Resource* const output_res = Game::D3D11::TagBoundRTV(call, 0, Game::Resources::Database::Sr::OUTPUT);
    ID3D11Resource* const depth_res = Game::D3D11::TagBoundSRV(call, ShaderStage::Pixel, 1, Game::Resources::Database::Sr::DEPTH);
@@ -325,7 +325,7 @@ Game::DrawResult OnDrawTaa(const Game::D3D11::Call& call)
          if (data->drs_active && data->found_per_view_globals)
             Game::Resources::Scaling::Begin(device.Get());
       }
-      Game::Frame::MarkPass(device.Get(), Game::Frame::PassMarker::Upscaling);
+      Game::FrameState::MarkPass(device.Get(), Game::FrameState::PassMarker::Upscaling);
       return Game::DrawResult::Replaced;
    }
    return Game::DrawResult::None;
@@ -335,7 +335,7 @@ Game::DrawResult OnDrawDofAndMotionBlur(const Game::D3D11::Call& call)
 {
    Microsoft::WRL::ComPtr<ID3D11Device> device;
    call.context->GetDevice(&device);
-   if (!device || Game::Frame::HasPass(device.Get(), Game::Frame::PassMarker::MainPostProcessing) || !Game::Frame::HasPass(device.Get(), Game::Frame::PassMarker::Taa))
+   if (!device || Game::FrameState::HasPass(device.Get(), Game::FrameState::PassMarker::MainPostProcessing) || !Game::FrameState::HasPass(device.Get(), Game::FrameState::PassMarker::Taa))
       return Game::DrawResult::None;
    if (GameDeviceData* data = Game::GetGameDeviceData(device.Get()))
    {
@@ -377,9 +377,9 @@ Game::DrawResult OnDrawTaa(const Game::D3D12::Call& call)
    Microsoft::WRL::ComPtr<ID3D12Device> device;
    if (FAILED(call.list->GetDevice(IID_PPV_ARGS(&device))) || !device)
       return Game::DrawResult::None;
-   if (Game::Frame::HasPass(device.Get(), Game::Frame::PassMarker::MainPostProcessing))
+   if (Game::FrameState::HasPass(device.Get(), Game::FrameState::PassMarker::MainPostProcessing))
       return Game::DrawResult::None;
-   Game::Frame::MarkPass(device.Get(), Game::Frame::PassMarker::Taa);
+   Game::FrameState::MarkPass(device.Get(), Game::FrameState::PassMarker::Taa);
 
    // Read UE4 CBPerViewGlobal (b1, 4096 bytes) synchronously from the mapped upload heap
    std::array<std::byte, CB_PER_VIEW_GLOBAL_SIZE> cb1_bytes = {};
@@ -397,7 +397,7 @@ Game::DrawResult OnDrawTaa(const Game::D3D12::Call& call)
    const std::optional<D3D12_VIEWPORT> viewport = Game::D3D12::GetViewport(call.list);
    const Math::uint2 render_size = viewport && viewport->Width > 0.f && viewport->Height > 0.f
       ? Math::uint2{uint32_t(viewport->Width + 0.5f), uint32_t(viewport->Height + 0.5f)}
-      : Game::Frame::Get(device.Get()).render;
+      : Game::FrameState::Get(device.Get()).render;
    const Math::uint4 viewport_rect = viewport
       ? Math::uint4{uint32_t(viewport->TopLeftX + 0.5f), uint32_t(viewport->TopLeftY + 0.5f), upscaled_size.x, upscaled_size.y}
       : Math::uint4{0, 0, upscaled_size.x, upscaled_size.y};
@@ -422,7 +422,7 @@ Game::DrawResult OnDrawTaa(const Game::D3D12::Call& call)
          if (data->drs_active && data->found_per_view_globals)
             Game::Resources::Scaling::Begin(device.Get());
       }
-      Game::Frame::MarkPass(device.Get(), Game::Frame::PassMarker::Upscaling);
+      Game::FrameState::MarkPass(device.Get(), Game::FrameState::PassMarker::Upscaling);
       return Game::DrawResult::Replaced;
    }
    return Game::DrawResult::None;
@@ -701,7 +701,7 @@ void Luma::Game::Init()
       .textures = {.load = true},
       .samplers = {.upgrade = true},
       .scaling = {.mode = Resources::Scaling::Mode::ViewportsOnly},
-      .swapchain = {.mode = Swapchain::Mode::Mirror, .hdr_output = Swapchain::OutputMode::Hdr10},
+      .swapchain = {.mode = Display::Swapchain::Mode::Mirror, .hdr_output = Display::Swapchain::OutputMode::Hdr10},
       .composition = {
          .post_process_space = 1,
          .early_display_encoding = true,

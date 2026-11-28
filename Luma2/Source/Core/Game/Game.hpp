@@ -16,7 +16,7 @@
 #include "Display/DisplayComposition.hpp"
 #include "Draw/Draw.hpp"
 #include "Effects/SR/SuperResolution.hpp"
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Game/GameEvents.hpp"
 #include "Resources/ConstantCapture.hpp"
 #include "Resources/ResourceBindings.hpp"
@@ -29,7 +29,7 @@
 #include "Resources/ResourceUpgrades.hpp"
 #include "Notifications/Notifications.hpp"
 #include "Settings/SettingKeys.hpp"
-#include "Swapchain/Swapchain.hpp"
+#include "Display/Swapchain.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Shaders/ShaderDefines.hpp"
 #include "Shaders/ShaderPatching.hpp"
@@ -139,7 +139,7 @@ struct Options
    // The game's own bytecode patches (recipes are files in the Recipes folder)
    Luma::Shaders::Patching::Options patching;
    // How Luma presents: Mirror (the game draws to Luma's buffers) or in place, the HDR output mode, borderless
-   Luma::Swapchain::Options swapchain;
+   Luma::Display::Swapchain::Options swapchain;
    // Default display composition pipeline space and gamma/gamut/UI parameters (written to LumaSettings.DisplayComposition)
    Luma::Display::Composition::Options composition;
    // Super Resolution (DLSS, FSR 3, FSR 4, XeSS)
@@ -225,15 +225,16 @@ GameDeviceData* GetGameDeviceData(Device device);
 // What the game's image is: its own HDR option. Any thread, applied at the next present:
 // LumaSettings' display mode and white levels follow (SDR at 80 nits), the output mode doesn't.
 namespace Display {
+namespace Swapchain = Luma::Display::Swapchain;
 void SetHdr(bool hdr);
 } // namespace Display
 
-// The device's resolutions, camera, and pass markers (Luma::Frame). Any thread, the device or the game's proxy of it.
-namespace Frame {
-using Camera = Luma::Frame::Camera;
-using PassMarker = Luma::Frame::PassMarker;
+// The device's resolutions, camera, and pass markers (Luma::FrameState). Any thread, the device or the game's proxy of it.
+namespace FrameState {
+using Camera = Luma::FrameState::Camera;
+using PassMarker = Luma::FrameState::PassMarker;
 
-Luma::Frame::Resolutions Get(Device device);
+Luma::FrameState::Resolutions Get(Device device);
 // What the game renders the scene at, from its SR or TAA path: the output's until set, and again after a resize
 void SetRenderResolution(Device device, Math::uint2 size);
 void SetCamera(Device device, const Camera& camera);
@@ -242,7 +243,7 @@ void MarkPass(Device device, PassMarker marker);
 bool HasPass(Device device, PassMarker marker);
 void MarkPass(Device device, uint64_t custom_hash);
 bool HasPass(Device device, uint64_t custom_hash);
-} // namespace Frame
+} // namespace FrameState
 
 // For the draw events (Events::on_variant_draw, on_draw_or_dispatch, OnShaderDraw), inside a Luma scope
 namespace D3D11 {

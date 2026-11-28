@@ -604,11 +604,6 @@ std::filesystem::path Write()
    return System::Paths::GetDump() / L"D3D12Stats.json";
 }
 
-void RequestWrite()
-{
-   write_requested = true;
-}
-
 bool HasData()
 {
    std::scoped_lock lock(mutex);

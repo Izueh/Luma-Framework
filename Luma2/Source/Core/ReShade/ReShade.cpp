@@ -23,8 +23,8 @@
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
 #include "Startup.hpp"
-#include "Swapchain/DXGI/DXGISwapchain.hpp"
-#include "Swapchain/Swapchain.hpp"
+#include "Display/DXGI/DXGISwapchain.hpp"
+#include "Display/Swapchain.hpp"
 #include "System/Modules.hpp"
 #include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
@@ -369,7 +369,7 @@ void Load()
       return;
    }
    // Mirror tells ReShade's own reads from the game's in the proxy the game holds
-   if (Swapchain::GetMode() == Swapchain::Mode::Mirror && !Swapchain::Wraps())
+   if (Display::Swapchain::GetMode() == Display::Swapchain::Mode::Mirror && !Display::Swapchain::Wraps())
    {
       not_loaded_reason = std::format("{} next to Luma, not loaded: the swapchain is in Mirror mode without the swapchain wrapper", file);
       Log::Info("ReShade: {} not loaded, the game's swapchain is in Mirror mode without the swapchain wrapper ({} = false), where ReShade would "
@@ -428,9 +428,9 @@ void CheckHookOrderAtFirstPresent()
    if (!IsReShadeLoaded(state))
       return;
    CheckAndLogHookOrder(state);
-   if (state != LoadState::LoadedByAnotherModule || Swapchain::GetMode() != Swapchain::Mode::Mirror)
+   if (state != LoadState::LoadedByAnotherModule || Display::Swapchain::GetMode() != Display::Swapchain::Mode::Mirror)
       return;
-   if (!Swapchain::Wraps())
+   if (!Display::Swapchain::Wraps())
       Log::Warning("ReShade: the game's swapchain is in Mirror mode without the swapchain wrapper ({} = false): ReShade's calls can't be told from "
                    "the game's, so the game may get Luma's real buffers",
          Settings::Core::SWAPCHAIN_WRAP.key);
@@ -493,10 +493,10 @@ std::string DescribeMirrorSwapchainView()
 {
    if (!IsReShadeLoaded(load_state.load(std::memory_order_acquire)))
       return "no ReShade";
-   const Swapchain::DXGI::Status status = Swapchain::DXGI::GetStatus();
+   const Display::Swapchain::DXGI::Status status = Display::Swapchain::DXGI::GetStatus();
    if (!status.known)
       return "no swapchain yet";
-   if (status.mode != Swapchain::GetName(Swapchain::Mode::Mirror))
+   if (status.mode != Display::Swapchain::GetName(Display::Swapchain::Mode::Mirror))
       return std::format("not needed ({}: ReShade holds the real buffers like the game)", status.mode);
    if (!status.wrapped)
       return "off, the game holds the real swapchain (no wrapper): ReShade's calls can't be told from the game's";

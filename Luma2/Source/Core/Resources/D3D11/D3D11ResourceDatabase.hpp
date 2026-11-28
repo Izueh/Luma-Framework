@@ -48,7 +48,7 @@ ID3D11Resource* GetResource(ID3D11Device* device, uint64_t name_hash);
 ID3D11ShaderResourceView* GetSRV(ID3D11Device* device, uint64_t name_hash);
 ID3D11RenderTargetView* GetRTV(ID3D11Device* device, uint64_t name_hash);
 ID3D11UnorderedAccessView* GetUAV(ID3D11Device* device, uint64_t name_hash);
-void OnPresent(ID3D11Device* device);
+void ClearFrameTags(ID3D11Device* device);
 void Invalidate(ID3D11Device* device, Invalidation reason);
 // Whether every entry `compiled` requests has an object on the context's device (a texture that failed to load doesn't)
 bool HasRequested(ID3D11DeviceContext* context, const Shaders::CompiledShader& compiled);

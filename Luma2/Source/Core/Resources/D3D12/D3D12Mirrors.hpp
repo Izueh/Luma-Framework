@@ -50,10 +50,8 @@ std::optional<ListScalingSnapshot> GetListScalingSnapshot(ID3D12GraphicsCommandL
 // The game released the device: Luma's descriptor heaps and pools on it go
 void ReleaseDeviceObjects(ID3D12Device* device);
 // Presenting thread: resolution invalidation, materializes queued chain mirrors with committed states, recycles pool
-void OnPresent(ID3D12Device* device);
+void FlushFrame(ID3D12Device* device);
 void InvalidateScaledMirrors(ID3D12Device* device);
-// Whether any mirror or mirrored descriptor exists: nothing on the hot paths does anything until then
-bool HasMirrors();
 
 // A heap the game created: shader-visible ones are where copies are swapped
 void TrackHeap(ID3D12Device* device, ID3D12DescriptorHeap* heap, const D3D12_DESCRIPTOR_HEAP_DESC& desc);
@@ -76,8 +74,6 @@ std::span<const D3D12_RESOURCE_BARRIER> AddMirrorBarriers(ID3D12GraphicsCommandL
 // Commits each executed command list's final barrier states in submission order
 void CommitExecutedBarriers(UINT count, ID3D12CommandList* const* lists);
 
-void RecordRootSignature(ID3D12GraphicsCommandList* list, ID3D12RootSignature* root_signature);
-void RecordTopology(ID3D12GraphicsCommandList* list, D3D12_PRIMITIVE_TOPOLOGY topology);
 void ForgetListState(ID3D12GraphicsCommandList* list);
 
 // Draw/dispatch hooks for chains (queues deferred chain mirrors) and scaling (ViewportsOnly & ResourcesAndViewports)

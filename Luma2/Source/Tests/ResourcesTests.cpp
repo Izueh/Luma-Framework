@@ -14,8 +14,9 @@
 #include <wrl/client.h>
 
 #include "Draw/D3D11/D3D11Draw.hpp"
+#include "Draw/D3D12/D3D12Draw.hpp"
 #include "Draw/Draw.hpp"
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Game/Game.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Handlers/D3D11/D3D11Handlers.hpp"
@@ -352,8 +353,8 @@ TEST_CASE("Mirrors D3D11: a matching texture gets a mirror, its views mirrored o
    ComPtr<ID3D11Device> device;
    ComPtr<ID3D11DeviceContext> context;
    REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {64, 36});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {64, 36});
    RulesFixture rules;
    const Resources::Mirrors::Stats before = Resources::Mirrors::GetStats();
 
@@ -636,8 +637,8 @@ TEST_CASE("Mirrors D3D12: a matching texture gets a mirror, its views swap at re
    REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
    ComPtr<ID3D12Device> device;
    REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {64, 36});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {64, 36});
    RulesFixture rules;
    const Resources::Mirrors::Stats before = Resources::Mirrors::GetStats();
 
@@ -752,8 +753,8 @@ TEST_CASE("Mirrors D3D12: a depth mirror swaps at the depth bind with its format
    REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
    ComPtr<ID3D12Device> device;
    REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {64, 36});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {64, 36});
    RulesFixture reset_rules;
    Resources::Upgrade::Rules rules = GetFF7RRules();
    rules.depth_formats = {DXGI_FORMAT_R24G8_TYPELESS};
@@ -814,8 +815,8 @@ TEST_CASE("Mirrors D3D12: a UAV clear of a mirrored texture clears the mirror th
    REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
    ComPtr<ID3D12Device> device;
    REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {64, 36});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {64, 36});
    Database12::CreateDeviceObjects(device.Get());
    RulesFixture rules;
 
@@ -996,11 +997,11 @@ TEST_CASE("Scaling: pure math and thread-affine Begin/End with cross-thread over
    Resources::Scaling::SetOptions({.mode = Resources::Scaling::Mode::ResourcesAndViewports});
    const Resources::Upgrade::FrameState state_2x = {.render = {1280, 720}, .output = {2560, 1440}, .display = {2560, 1440}};
    const Resources::Upgrade::FrameState state_1x = {.render = {2560, 1440}, .output = {2560, 1440}, .display = {2560, 1440}};
-   CHECK(Resources::Scaling::ShouldScaleTexture(Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT), state_2x, true, true));
-   CHECK(Resources::Scaling::ShouldScaleTexture(Target(640, 360, DXGI_FORMAT_R11G11B10_FLOAT), state_2x, true, true));
-   CHECK_FALSE(Resources::Scaling::ShouldScaleTexture(Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT), state_2x, true, false));
-   CHECK_FALSE(Resources::Scaling::ShouldScaleTexture(Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT), state_1x, true, true));
-   CHECK_FALSE(Resources::Scaling::ShouldScaleTexture(Target(256, 256, DXGI_FORMAT_R11G11B10_FLOAT), state_2x, true, true));
+   CHECK(Resources::Scaling::ShouldScaleTexture(Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT), state_2x, {.active = true, .from_output_sized_source = true}));
+   CHECK(Resources::Scaling::ShouldScaleTexture(Target(640, 360, DXGI_FORMAT_R11G11B10_FLOAT), state_2x, {.active = true, .from_output_sized_source = true}));
+   CHECK_FALSE(Resources::Scaling::ShouldScaleTexture(Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT), state_2x, {.active = true, .from_output_sized_source = false}));
+   CHECK_FALSE(Resources::Scaling::ShouldScaleTexture(Target(1280, 720, DXGI_FORMAT_R11G11B10_FLOAT), state_1x, {.active = true, .from_output_sized_source = true}));
+   CHECK_FALSE(Resources::Scaling::ShouldScaleTexture(Target(256, 256, DXGI_FORMAT_R11G11B10_FLOAT), state_2x, {.active = true, .from_output_sized_source = true}));
 
    const Math::uint2 scaled = Resources::Scaling::ComputeScaledSize({640, 360}, {1280, 720}, {2560, 1440});
    CHECK(scaled.x == 1280);
@@ -1044,7 +1045,7 @@ TEST_CASE("Scaling: pure math and thread-affine Begin/End with cross-thread over
 
    Resources::Scaling::End(device.Get());
    CHECK_FALSE(Resources::Scaling::IsActive(device.Get()));
-   Resources::Scaling::OnPresent(device.Get());
+   Resources::Scaling::ResetFrame(device.Get());
 }
 
 TEST_CASE("Mirrors D3D11: scaled viewports, invalidation, and recycle pool")
@@ -1052,9 +1053,9 @@ TEST_CASE("Mirrors D3D11: scaled viewports, invalidation, and recycle pool")
    ComPtr<ID3D11Device> device;
    ComPtr<ID3D11DeviceContext> context;
    REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {128, 72});
-   Frame::SetRenderResolution(device.Get(), {64, 36});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {128, 72});
+   FrameState::SetRenderResolution(device.Get(), {64, 36});
    const bool was_enabled = Settings::IsEnabled();
    if (!Settings::Find(Settings::Core::ENABLED.key))
    {
@@ -1115,7 +1116,7 @@ TEST_CASE("Mirrors D3D11: scaled viewports, invalidation, and recycle pool")
    context->OMSetRenderTargets(1, &bound_rtv, nullptr);
    const D3D11_VIEWPORT vp = {0.f, 0.f, 64.f, 36.f, 0.f, 1.f};
    context->RSSetViewports(1, &vp);
-   Resources::Mirrors::D3D11::OnBindViewports(context.Get(), 1, &vp);
+   Resources::Mirrors::D3D11::BindViewports(context.Get(), 1, &vp);
    Resources::Mirrors::D3D11::PrepareDrawOrDispatch(context.Get(), false);
 
    UINT vp_count = 1;
@@ -1129,9 +1130,9 @@ TEST_CASE("Mirrors D3D11: scaled viewports, invalidation, and recycle pool")
    Resources::Mirrors::D3D11::InvalidateScaledMirrors(device.Get());
    CHECK(Resources::Scaling::GetStats().invalidations == invalidations_before + 1);
    CHECK(Resources::Mirrors::D3D11::FindMirror(tex.Get()) == nullptr);
-   Resources::Mirrors::D3D11::OnPresent(device.Get());
-   Resources::Mirrors::D3D11::OnPresent(device.Get());
-   Resources::Mirrors::D3D11::OnPresent(device.Get());
+   Resources::Mirrors::D3D11::FlushFrame(device.Get());
+   Resources::Mirrors::D3D11::FlushFrame(device.Get());
+   Resources::Mirrors::D3D11::FlushFrame(device.Get());
    Resources::Mirrors::D3D11::ForgetContextState(context.Get());
 }
 
@@ -1144,9 +1145,9 @@ TEST_CASE("Mirrors D3D12: ViewportsOnly expansion scales sub-rect viewports and 
    REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
    ComPtr<ID3D12Device> device;
    REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {128, 72});
-   Frame::SetRenderResolution(device.Get(), {64, 36});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {128, 72});
+   FrameState::SetRenderResolution(device.Get(), {64, 36});
    const bool was_enabled = Settings::IsEnabled();
    if (!Settings::Find(Settings::Core::ENABLED.key))
    {
@@ -1200,8 +1201,8 @@ TEST_CASE("D3D11 handlers: depth-only bind, Unmap order, and mirror visibility i
    ComPtr<ID3D11Device> device;
    ComPtr<ID3D11DeviceContext> context;
    REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {64, 36});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {64, 36});
    RulesFixture rules;
    const bool was_enabled = Settings::IsEnabled();
    if (!Settings::Find(Settings::Core::ENABLED.key))
@@ -1336,8 +1337,8 @@ TEST_CASE("Mirrors D3D11: partial-region converting copy and cross-format MSAA r
    ComPtr<ID3D11Device> device;
    ComPtr<ID3D11DeviceContext> context;
    REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {64, 36});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {64, 36});
 
    auto ensure_shader = [](std::string_view name, ShaderStage stage) -> uint32_t {
       const uint64_t hash = Utils::Hash::Name(name);
@@ -1543,8 +1544,8 @@ TEST_CASE("Mirrors D3D11 InPlace: the game's texture is created upgraded, its vi
    ComPtr<ID3D11Device> device;
    ComPtr<ID3D11DeviceContext> context;
    REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {64, 36});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {64, 36});
 
    PublishCopyShaders(device.Get());
 
@@ -1670,8 +1671,8 @@ TEST_CASE("Mirrors D3D11 InPlace: custom dimensions resize the game's texture it
    ComPtr<ID3D11Device> device;
    ComPtr<ID3D11DeviceContext> context;
    REQUIRE(SUCCEEDED(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, &context)));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {64, 36});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {64, 36});
    PublishCopyShaders(device.Get());
    // A 16x16 "shadow map" of a format the rules don't upgrade, made 32x32
    Resources::Upgrade::Rules rules = {.method = Resources::Upgrade::Method::InPlace, .formats = {DXGI_FORMAT_R11G11B10_FLOAT}, .custom_dimensions = {{.filter = {16, 16, 0, 0}, .size = {32, 32, 0, 0}}}};
@@ -1761,7 +1762,7 @@ TEST_CASE("Mirrors D3D11 InPlace: custom dimensions resize the game's texture it
    context->OMSetRenderTargets(1, view.GetAddressOf(), nullptr);
    const D3D11_VIEWPORT half = {0.f, 0.f, 8.f, 8.f, 0.f, 1.f};
    context->RSSetViewports(1, &half);
-   Resources::Mirrors::D3D11::OnBindViewports(context.Get(), 1, &half);
+   Resources::Mirrors::D3D11::BindViewports(context.Get(), 1, &half);
    Resources::Mirrors::D3D11::PrepareDrawOrDispatch(context.Get(), false);
    CHECK(bound_viewport().Width == 16.f);
    ID3D11RenderTargetView* no_views[1] = {};
@@ -1830,8 +1831,8 @@ TEST_CASE("D3D12 parity: mirror/descriptor helpers")
    REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
    ComPtr<ID3D12Device> device;
    REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {64, 36});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {64, 36});
    RulesFixture rules;
 
    struct Cleanup
@@ -1892,8 +1893,8 @@ TEST_CASE("Mirrors D3D12: same-family and cross-format MSAA SwapResolve")
    REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
    ComPtr<ID3D12Device> device;
    REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {64, 36});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {64, 36});
    Database12::CreateDeviceObjects(device.Get());
    RulesFixture rules;
 
@@ -1973,7 +1974,7 @@ TEST_CASE("Mirrors D3D12: same-family and cross-format MSAA SwapResolve")
    REQUIRE(SUCCEEDED(device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, allocator.Get(), nullptr, IID_PPV_ARGS(&list))));
    list->SetGraphicsRootSignature(root_signature.Get());
    Database12::SetRootSignature(list.Get(), false, root_signature.Get());
-   Mirrors12::RecordRootSignature(list.Get(), root_signature.Get());
+   Draw::D3D12::RecordRootSignature(list.Get(), root_signature.Get());
    ID3D12DescriptorHeap* const heaps[] = {heap.Get()};
    list->SetDescriptorHeaps(1, heaps);
    Database12::SetDescriptorHeaps(list.Get(), 1, heaps);
@@ -2083,6 +2084,7 @@ TEST_CASE("Mirrors D3D12: same-family and cross-format MSAA SwapResolve")
    readback->Unmap(0, nullptr);
    CHECK(read == one);
    Hooks::Lifetime::D3D12::ForgetReferences(list.Get());
+   Draw::D3D12::ForgetList(list.Get());
    Mirrors12::ForgetListState(list.Get());
    Tail12::ForgetList(list.Get());
    Database12::ForgetList(list.Get());
@@ -2098,8 +2100,8 @@ TEST_CASE("Mirrors D3D12 InPlace: committed and placed textures created upgraded
    REQUIRE(SUCCEEDED(factory->EnumWarpAdapter(IID_PPV_ARGS(&adapter))));
    ComPtr<ID3D12Device> device;
    REQUIRE(SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0, IID_PPV_ARGS(&device))));
-   Frame::CreateDeviceState(device.Get());
-   Frame::SetOutputResolution(device.Get(), {1024, 576});
+   FrameState::CreateDeviceState(device.Get());
+   FrameState::SetOutputResolution(device.Get(), {1024, 576});
    Resources::Upgrade::Rules rules = GetFF7RRules();
    rules.method = Resources::Upgrade::Method::InPlace;
    Resources::Upgrade::SetRules(rules);

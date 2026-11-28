@@ -19,7 +19,7 @@ namespace D3D12 {
 // already handled and records the copy. Whether the call was handled.
 bool ReadAfterCall(const Game::D3D12::Call& call, Shaders::StageSet stages, bool handled);
 // After ExecuteCommandLists: the queue the armed copy's list ran on
-void OnExecute(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists);
+void CommitExecuted(ID3D12CommandQueue* queue, UINT count, ID3D12CommandList* const* lists);
 // Presenting thread, at a D3D12 present, before the overlay: the copy (or the back buffer) read back into the result
 void ReadBack(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue);
 } // namespace D3D12

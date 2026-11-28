@@ -93,7 +93,7 @@ Type ResolveActiveType(UserType user_type, const std::array<Capabilities, TYPE_C
    return backends[size_t(requested)].supported ? requested : Type::None;
 }
 
-SettingsData BuildSettingsData(const Options& opts, const Frame::Resolutions& resolutions, const DrawOverrides& overrides)
+SettingsData BuildSettingsData(const Options& opts, const FrameState::Resolutions& resolutions, const DrawOverrides& overrides)
 {
    const Math::uint2 output = overrides.output_size.value_or(resolutions.output);
    const Math::uint2 render = overrides.settings_render_size.value_or(overrides.render_size.value_or(resolutions.render));
@@ -121,7 +121,7 @@ SettingsData BuildSettingsData(const Options& opts, const Frame::Resolutions& re
    return data;
 }
 
-DrawParams BuildDrawParams(const Frame::Resolutions& resolutions, const Frame::Camera& camera, const Frame::Timing& timing, const DrawOverrides& overrides)
+DrawParams BuildDrawParams(const FrameState::Resolutions& resolutions, const FrameState::Camera& camera, const FrameState::Timing& timing, const DrawOverrides& overrides)
 {
    const Math::uint2 render = overrides.render_size.value_or(resolutions.render);
    DrawParams params;
@@ -343,8 +343,8 @@ void UpdateAtPresent(Record& record, IUnknown* device)
       Resources::LumaCBuffers::cb_luma_global_settings.SRType = sr_type_value;
       Resources::LumaCBuffers::MarkSettingsDirty();
    }
-   const Frame::Resolutions resolutions = Frame::Get(device);
-   UpdateSamplerLodBias(device, record.active_type, Frame::HasPass(device, Frame::PassMarker::Taa), resolutions.render.y, resolutions.output.y);
+   const FrameState::Resolutions resolutions = FrameState::Get(device);
+   UpdateSamplerLodBias(device, record.active_type, FrameState::HasPass(device, FrameState::PassMarker::Taa), resolutions.render.y, resolutions.output.y);
    // Before the draw is forgotten: the dev tools see the frame that just ended
    PublishRecord(record);
    record.drew_this_frame = false;
@@ -354,9 +354,9 @@ std::optional<Prepared> PrepareDraw(const Record& record, IUnknown* device, cons
 {
    if (record.active_type == Type::None || record.active_type == Type::Count)
       return std::nullopt;
-   const Frame::Resolutions resolutions = Frame::Get(device);
+   const FrameState::Resolutions resolutions = FrameState::Get(device);
    Prepared prepared = {BuildSettingsData(GetOptions(), resolutions, overrides),
-      BuildDrawParams(resolutions, Frame::GetCamera(device), Frame::GetTiming(device), overrides)};
+      BuildDrawParams(resolutions, FrameState::GetCamera(device), FrameState::GetTiming(device), overrides)};
    prepared.params.reset |= record.force_reset;
    const uint32_t min_res = record.capabilities[size_t(record.active_type)].min_resolution;
    if (prepared.settings.output_width < min_res || prepared.settings.output_height < min_res || prepared.params.render_width < min_res ||
@@ -376,12 +376,12 @@ void FinishDraw(Record& record, IUnknown* device, const Prepared& prepared, bool
    record.drew_this_frame = true;
    record.last_settings = prepared.settings;
    record.last_draw = prepared.params;
-   Frame::MarkPass(device, Frame::PassMarker::Sr);
+   FrameState::MarkPass(device, FrameState::PassMarker::Sr);
    PublishRecord(record);
 }
 
 #if DEVELOPMENT
-Trace::Capture::SrInfo DescribeDraw(const Record& record, const Prepared& prepared, bool succeeded, bool copy_back)
+Trace::Capture::SrInfo DescribeDraw(const Record& record, const Prepared& prepared, DrawOutcome outcome)
 {
    const SettingsData& settings = prepared.settings;
    const DrawParams& params = prepared.params;
@@ -398,8 +398,8 @@ Trace::Capture::SrInfo DescribeDraw(const Record& record, const Prepared& prepar
       .auto_exposure = settings.auto_exposure,
       .mvs_jittered = settings.mvs_jittered,
       .reset = params.reset,
-      .succeeded = succeeded,
-      .copy_back = copy_back,
+      .succeeded = outcome.succeeded,
+      .copy_back = outcome.copy_back,
       .jitter_x = params.jitter_x,
       .jitter_y = params.jitter_y,
       .jitter_phases = record.last_jitter_phases,

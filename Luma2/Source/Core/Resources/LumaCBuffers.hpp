@@ -11,7 +11,7 @@
 
 #include "Common/Api.hpp"
 #include "Common/Math.hpp"
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Hooks/HookFunctions.hpp"
 #include "Shaders/ShaderCompiler.hpp"
 
@@ -65,7 +65,7 @@ extern CB::LumaGlobalSettings cb_luma_global_settings;
 // The game's part of LumaData (data.GameData), written at every draw with a Luma shader, from any
 // thread, into a LumaData whose Luma part is filled and whose game part is zero. It gets the drawing context's device data and
 // resolutions, found once per context. Not called for a device without GameDeviceData.
-using UpdateLumaInstanceData = void (*)(CB::LumaInstanceData& data, const Game::GameDeviceData& game_device_data, const Frame::Resolutions& resolutions);
+using UpdateLumaInstanceData = void (*)(CB::LumaInstanceData& data, const Game::GameDeviceData& game_device_data, const FrameState::Resolutions& resolutions);
 
 // Game::Options::cbuffers: fixed for the process, they shape the cbuffers and are compiled into every shader
 struct Options

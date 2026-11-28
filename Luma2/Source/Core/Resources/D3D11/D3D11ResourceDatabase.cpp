@@ -13,8 +13,8 @@
 #include <DDSTextureLoader11.h>
 
 #include "Settings/SettingsRegistry.hpp"
-#include "Frame/FrameState.hpp"
-#include "Game/Game.hpp"
+#include "FrameState/FrameState.hpp"
+#include "Game/GameRegistry.hpp"
 #include "Hooks/D3D11/D3D11Stages.hpp"
 #include "Hooks/ObjectLifetime.hpp"
 #include "Resources/LumaCBuffers.hpp"
@@ -124,7 +124,7 @@ const Store* GetStore(ID3D11DeviceContext* context, Context& state)
       // The device's other states are created with it, before its store
       state.store = Hooks::Lifetime::GetState<Store>(device.Get());
       if (state.store)
-         state.target = {device.Get(), Frame::Find(device.Get()), Game::GetGameDeviceData(device.Get())};
+         state.target = {device.Get(), FrameState::Find(device.Get()), Game::GetGameDeviceData(device.Get())};
    }
    return state.store;
 }
@@ -435,7 +435,7 @@ ID3D11UnorderedAccessView* GetUAV(ID3D11Device* device, uint64_t name_hash)
    return store->objects[*index].runtime.managed_uav.Get();
 }
 
-void OnPresent(ID3D11Device* device)
+void ClearFrameTags(ID3D11Device* device)
 {
    Store* store = Hooks::Lifetime::GetState<Store>(device);
    if (!store)

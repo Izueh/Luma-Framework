@@ -17,7 +17,7 @@
 #include <dxgi1_4.h>
 #include <wrl/client.h>
 
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Game/GameRegistry.hpp"
 #include "Hooks/HookManager.hpp"
 #include "Hooks/InputHooks.hpp"
@@ -37,8 +37,8 @@
 #include "Validation/D3D12/D3D12Validation.hpp"
 #include "Validation/Validation.hpp"
 #include "Handlers/DXGI/DXGIHandlers.hpp"
-#include "Swapchain/DXGI/DXGISwapchain.hpp"
-#include "Swapchain/Swapchain.hpp"
+#include "Display/DXGI/DXGISwapchain.hpp"
+#include "Display/Swapchain.hpp"
 #include "ReShade/AddonEvents.hpp"
 #include "ReShade/ReShade.hpp"
 #include "ReShade/ReShadeABI.hpp"
@@ -583,28 +583,28 @@ TEST_CASE("Frame D3D11: a device's resolutions change together, and move LumaSet
    ComPtr<ID3D11Device> device;
    ComPtr<ID3D11DeviceContext> immediate_context;
    CreateD3D11Device(device, immediate_context);
-   if (!Frame::Find(device.Get()))
-      Frame::CreateDeviceState(device.Get());
-   const Frame::DeviceState* state = Frame::Find(device.Get());
+   if (!FrameState::Find(device.Get()))
+      FrameState::CreateDeviceState(device.Get());
+   const FrameState::DeviceState* state = FrameState::Find(device.Get());
    REQUIRE(state);
 
    uint64_t stamp = Resources::LumaCBuffers::GetSettingsStamp();
-   Frame::SetOutputResolution(device.Get(), {320, 180});
+   FrameState::SetOutputResolution(device.Get(), {320, 180});
    CHECK(Resources::LumaCBuffers::GetSettingsStamp() != stamp);
-   Frame::Resolutions resolutions = Frame::Read(state);
+   FrameState::Resolutions resolutions = FrameState::Read(state);
    CHECK(resolutions.output.x == 320);
    CHECK(resolutions.render.y == 180);
    CHECK(resolutions.previous_render.x == 320);
 
    stamp = Resources::LumaCBuffers::GetSettingsStamp();
-   Frame::SetRenderResolution(device.Get(), {160, 90});
+   FrameState::SetRenderResolution(device.Get(), {160, 90});
    CHECK(Resources::LumaCBuffers::GetSettingsStamp() != stamp);
-   resolutions = Frame::Read(state);
+   resolutions = FrameState::Read(state);
    CHECK(resolutions.render.x == 160);
    CHECK(resolutions.previous_render.x == 320);
    CHECK(resolutions.output.x == 320);
    // The cached state reads as the device does
-   CHECK(Frame::Get(device.Get()).render.y == 90);
+   CHECK(FrameState::Get(device.Get()).render.y == 90);
 }
 
 TEST_CASE("Shaders D3D11: each device has its own store, built for its API, and the store goes with the device")
@@ -1206,15 +1206,15 @@ struct NativeMode
    NativeMode()
    {
       if (!Settings::Find(Settings::Core::SWAPCHAIN_MODE.key))
-         Swapchain::Register();
+         Display::Swapchain::Register();
       // The game holds the real swapchain, as the other tests here
       Settings::Set(Settings::Core::SWAPCHAIN_WRAP, false);
-      Swapchain::SetOptions({.mode = Swapchain::Mode::Native});
+      Display::Swapchain::SetOptions({.mode = Display::Swapchain::Mode::Native});
    }
 
    ~NativeMode()
    {
-      Swapchain::SetOptions({});
+      Display::Swapchain::SetOptions({});
       Settings::Clear();
    }
 };
@@ -1296,7 +1296,7 @@ TEST_CASE("Swapchain D3D11 Native: presented as in place (flip model, tearing, b
 
    REQUIRE(SUCCEEDED(swapchain->Present(0, 0)));
    CHECK(present_calls == 1);
-   Swapchain::DXGI::Status status = Swapchain::DXGI::GetStatus();
+   Display::Swapchain::DXGI::Status status = Display::Swapchain::DXGI::GetStatus();
    CHECK(status.mode == "Native");
    CHECK_FALSE(status.composed);
    CHECK(status.flip_model);
@@ -1308,7 +1308,7 @@ TEST_CASE("Swapchain D3D11 Native: presented as in place (flip model, tearing, b
    CHECK(status.color_space == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
    CHECK_FALSE(status.game_color_space);
    // The output is the real size: what upscaling targets
-   Frame::Resolutions resolutions = Frame::Get(Real(device));
+   FrameState::Resolutions resolutions = FrameState::Get(Real(device));
    CHECK(resolutions.output.x == 320);
    CHECK(resolutions.swapchain.y == 180);
 
@@ -1318,9 +1318,9 @@ TEST_CASE("Swapchain D3D11 Native: presented as in place (flip model, tearing, b
    if (SupportsColorSpace(swapchain3.Get(), DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709))
    {
       REQUIRE(SUCCEEDED(swapchain3->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709)));
-      CHECK(Handlers::GetColorSpace(swapchain.Get()) == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+      CHECK(Display::Swapchain::DXGI::GetColorSpace(swapchain.Get()) == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
       REQUIRE(SUCCEEDED(swapchain->Present(0, 0)));
-      CHECK(Swapchain::DXGI::GetStatus().game_color_space == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
+      CHECK(Display::Swapchain::DXGI::GetStatus().game_color_space == DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709);
    }
    else
    {
@@ -1337,14 +1337,14 @@ TEST_CASE("Swapchain D3D11 Native: presented as in place (flip model, tearing, b
    CHECK(resized.BufferCount == 2);
    CHECK(resized.Flags == UINT(DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING));
    REQUIRE(SUCCEEDED(swapchain->Present(0, 0)));
-   status = Swapchain::DXGI::GetStatus();
+   status = Display::Swapchain::DXGI::GetStatus();
    CHECK_FALSE(status.composed);
    CHECK(status.real_width == 400);
    CHECK(status.real_format == DXGI_FORMAT_R10G10B10A2_UNORM);
    // The float format's color space no longer describes the buffers
    CHECK_FALSE(status.game_color_space);
    CHECK(status.output_mode == "SDR");
-   resolutions = Frame::Get(Real(device));
+   resolutions = FrameState::Get(Real(device));
    CHECK(resolutions.output.x == 400);
    CHECK(resolutions.swapchain.y == 200);
 
@@ -1352,7 +1352,7 @@ TEST_CASE("Swapchain D3D11 Native: presented as in place (flip model, tearing, b
    {
       REQUIRE(SUCCEEDED(swapchain3->SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020)));
       REQUIRE(SUCCEEDED(swapchain->Present(0, 0)));
-      status = Swapchain::DXGI::GetStatus();
+      status = Display::Swapchain::DXGI::GetStatus();
       CHECK(status.output_mode == "HDR10");
       CHECK(status.color_space == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
    }
@@ -1399,7 +1399,7 @@ TEST_CASE("Swapchain D3D11 Native: an sRGB format, which the flip model can't pr
    CHECK(real.BufferDesc.Width == 320);
 
    REQUIRE(SUCCEEDED(swapchain->Present(0, 0)));
-   const Swapchain::DXGI::Status status = Swapchain::DXGI::GetStatus();
+   const Display::Swapchain::DXGI::Status status = Display::Swapchain::DXGI::GetStatus();
    CHECK(status.mode == "Native");
    CHECK_FALSE(status.flip_model);
    CHECK_FALSE(status.tearing);
@@ -1520,7 +1520,7 @@ struct WrappedSwapchains
    WrappedSwapchains()
    {
       if (!Settings::Find(Settings::Core::SWAPCHAIN_WRAP.key))
-         Swapchain::Register();
+         Display::Swapchain::Register();
       Settings::Set(Settings::Core::SWAPCHAIN_WRAP, true);
    }
 
@@ -1932,7 +1932,7 @@ TEST_CASE("ReShade D3D11 Mirror: ReShade's runtime reads the real buffer and Lum
 
    // The game, through ReShade's wrapper and on the proxy: its mirror
    ComPtr<ID3D11Texture2D> mirror;
-   REQUIRE(SUCCEEDED(Swapchain::DXGI::GetGameBuffer(real).As(&mirror)));
+   REQUIRE(SUCCEEDED(Display::Swapchain::DXGI::GetGameBuffer(real).As(&mirror)));
    CHECK(mirror.Get() != real_buffer.Get());
    ComPtr<ID3D11Texture2D> through_reshade;
    REQUIRE(SUCCEEDED(reshade->GetBuffer(0, IID_PPV_ARGS(&through_reshade))));
@@ -1990,7 +1990,7 @@ TEST_CASE("ReShade D3D11 Mirror: an init window no init_effect_runtime closes st
 
    // The game's call through the wrapper inside it: ReShade's module, but the game's code called it
    ComPtr<ID3D11Texture2D> mirror;
-   REQUIRE(SUCCEEDED(Swapchain::DXGI::GetGameBuffer(real).As(&mirror)));
+   REQUIRE(SUCCEEDED(Display::Swapchain::DXGI::GetGameBuffer(real).As(&mirror)));
    ComPtr<ID3D11Texture2D> through_reshade;
    REQUIRE(SUCCEEDED(reshade->GetBuffer(0, IID_PPV_ARGS(&through_reshade))));
    CHECK(through_reshade.Get() == mirror.Get());
@@ -2018,7 +2018,7 @@ TEST_CASE("ReShade D3D11 Mirror: Luma's resize goes through ReShade's wrapper, w
    ComPtr<IDXGISwapChain> reshade = WrapInFakeReShade(swapchain.Get(), false);
    REQUIRE(GetHeldBuffer(reshade.Get(), 0) != nullptr);
    ComPtr<ID3D11Texture2D> mirror;
-   REQUIRE(SUCCEEDED(Swapchain::DXGI::GetGameBuffer(real).As(&mirror)));
+   REQUIRE(SUCCEEDED(Display::Swapchain::DXGI::GetGameBuffer(real).As(&mirror)));
    const DXGI_SWAP_CHAIN_DESC before = GetRealDesc(real);
    const Hooks::SwapchainProxy::ResizeArguments game_arguments = {2, 320, 180, DXGI_FORMAT_R8G8B8A8_UNORM, 0};
    const auto real_arguments = [&](DXGI_FORMAT format) {
@@ -2046,12 +2046,12 @@ TEST_CASE("ReShade D3D11 Mirror: Luma's resize goes through ReShade's wrapper, w
    CHECK(ReadFake("FakeReShadeGetResizeFormat", reshade.Get()) == uint32_t(DXGI_FORMAT_R8G8B8A8_UNORM));
    CHECK(GetHeldBuffer(reshade.Get(), 0) == GetRealBuffer<ID3D11Texture2D>(real, 0).Get());
    CHECK(ReadFake("FakeReShadeGetColorSpace", reshade.Get()) == uint32_t(DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020));
-   CHECK(ProbeRead(reshade.Get()) == static_cast<IUnknown*>(Swapchain::DXGI::GetGameBuffer(real).Get()));
+   CHECK(ProbeRead(reshade.Get()) == static_cast<IUnknown*>(Display::Swapchain::DXGI::GetGameBuffer(real).Get()));
    // The game's view didn't move
    DXGI_SWAP_CHAIN_DESC game_desc = {};
    REQUIRE(SUCCEEDED(swapchain->GetDesc(&game_desc)));
    CHECK(game_desc.BufferDesc.Format == DXGI_FORMAT_R8G8B8A8_UNORM);
-   CHECK(Swapchain::DXGI::GetGameBuffer(real).Get() == static_cast<IUnknown*>(mirror.Get()));
+   CHECK(Display::Swapchain::DXGI::GetGameBuffer(real).Get() == static_cast<IUnknown*>(mirror.Get()));
 
    // And back, so the swapchain is as Luma set it
    {

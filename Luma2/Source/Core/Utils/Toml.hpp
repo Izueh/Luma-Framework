@@ -1,5 +1,6 @@
 #pragma once
 
+#include <expected>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -13,8 +14,8 @@ using Value = glz::generic_i64;
 // Keys in insertion order. A document is its root table.
 using Table = Value::object_t;
 
-// Returns false (and the error in `error`, if given) on malformed TOML
-bool Read(std::string_view text, Table& document, std::string* error = nullptr);
+// Returns an error string on malformed TOML
+std::expected<Table, std::string> Read(std::string_view text);
 std::string Write(const Table& document);
 
 // A missing file loads as an empty document

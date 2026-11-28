@@ -52,7 +52,7 @@ bool IsNeeded();
 // the next present's job
 void TrackShader(Store& store, const Database::Shader& shader);
 // Presenting thread: queues each device's patch job for the shaders it created since, or for all of them after a change
-void OnPresent();
+void PublishCompleted();
 // Presenting thread: the recipes read again from disk (a new file needs a restart: its settings are registered at boot), and
 // every device's shaders patched again
 void Reload();

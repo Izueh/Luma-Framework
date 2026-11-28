@@ -81,7 +81,7 @@ void MarkCopied();
 // Presenting thread: the result of the armed readback
 void Finish(Result result);
 // Presenting thread, after the API part read its copies: a pass not reached in a few frames is reported missing
-void OnPresent();
+void CompletePending();
 
 // The view kind's name as luma_read_resource takes it ("rtv", "srv", "uav", "depth", "stencil", "swapchain")
 std::string_view GetName(ViewKind view);

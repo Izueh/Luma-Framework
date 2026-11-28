@@ -7,7 +7,7 @@
 #include <wrl/client.h>
 
 #include "Effects/SR/SuperResolution.hpp"
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Resources/ResourceDatabase.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -57,22 +57,22 @@ TEST_CASE("Frame camera and pass markers reset on Present")
    ComPtr<ID3D11Device> device;
    const HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr, nullptr);
    REQUIRE(SUCCEEDED(hr));
-   Frame::CreateDeviceState(device.Get());
+   FrameState::CreateDeviceState(device.Get());
 
-   Frame::Camera cam = {.jitter_pixels = {0.25f, -0.125f}, .vert_fov = 1.0f, .near_plane = 0.2f, .far_plane = 500.f, .camera_cut = true};
-   Frame::SetCamera(device.Get(), cam);
-   Frame::MarkPass(device.Get(), Frame::PassMarker::Taa);
-   Frame::MarkPass(device.Get(), Frame::PassMarker::Sr);
-   CHECK(Frame::HasPass(device.Get(), Frame::PassMarker::Taa));
-   CHECK(Frame::HasPass(device.Get(), Frame::PassMarker::Sr));
-   CHECK(Frame::GetCamera(device.Get()).camera_cut);
+   FrameState::Camera cam = {.jitter_pixels = {0.25f, -0.125f}, .vert_fov = 1.0f, .near_plane = 0.2f, .far_plane = 500.f, .camera_cut = true};
+   FrameState::SetCamera(device.Get(), cam);
+   FrameState::MarkPass(device.Get(), FrameState::PassMarker::Taa);
+   FrameState::MarkPass(device.Get(), FrameState::PassMarker::Sr);
+   CHECK(FrameState::HasPass(device.Get(), FrameState::PassMarker::Taa));
+   CHECK(FrameState::HasPass(device.Get(), FrameState::PassMarker::Sr));
+   CHECK(FrameState::GetCamera(device.Get()).camera_cut);
 
-   Frame::OnPresent(device.Get());
-   CHECK_FALSE(Frame::HasPass(device.Get(), Frame::PassMarker::Taa));
-   CHECK_FALSE(Frame::HasPass(device.Get(), Frame::PassMarker::Sr));
-   CHECK_FALSE(Frame::GetCamera(device.Get()).camera_cut);
-   CHECK(Frame::GetCamera(device.Get()).vert_fov == doctest::Approx(1.0f));
-   CHECK(Frame::GetTiming(device.Get()).frame_index == 1);
+   FrameState::AdvanceFrame(device.Get());
+   CHECK_FALSE(FrameState::HasPass(device.Get(), FrameState::PassMarker::Taa));
+   CHECK_FALSE(FrameState::HasPass(device.Get(), FrameState::PassMarker::Sr));
+   CHECK_FALSE(FrameState::GetCamera(device.Get()).camera_cut);
+   CHECK(FrameState::GetCamera(device.Get()).vert_fov == doctest::Approx(1.0f));
+   CHECK(FrameState::GetTiming(device.Get()).frame_index == 1);
 }
 
 TEST_CASE("ResourceDatabase registers SR runtime texture defaults")

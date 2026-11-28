@@ -270,8 +270,8 @@ bool Evaluate([[maybe_unused]] State& state, [[maybe_unused]] ID3D11DeviceContex
    }};
    for (const auto& [slot, res] : slots)
    {
-      if (!D3D12Interop::UpdateSharedTextureFrom(*state.interop, state.interop->textures[size_t(slot)], res, slot == Slot::Depth,
-             slot == Slot::Depth || slot == Slot::Output))
+      if (!D3D12Interop::UpdateSharedTextureFrom(*state.interop, state.interop->textures[size_t(slot)], res,
+             {.is_depth = slot == Slot::Depth, .unordered_access = slot == Slot::Depth || slot == Slot::Output}))
          return false;
    }
    if (!D3D12Interop::CopyDepth(*state.interop, state.interop->textures[size_t(Slot::Depth)], context, inputs.depth_buffer))

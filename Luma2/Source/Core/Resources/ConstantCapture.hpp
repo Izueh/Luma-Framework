@@ -26,7 +26,7 @@ void DispatchWrite(Device device, uint32_t byte_size, std::span<const std::byte>
 // Stops further cbuffer write dispatches until the next Present (once a mod found its cbuffer for the frame).
 void PauseForFrame();
 bool IsPausedForFrame();
-void OnPresent();
+void AdvanceFrame();
 
 bool IsNeeded();
 Hooks::D3D11::Functions GetD3D11Functions();

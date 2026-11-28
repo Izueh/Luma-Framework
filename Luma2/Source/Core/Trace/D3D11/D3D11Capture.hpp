@@ -51,8 +51,8 @@ void TrackCall(ID3D11DeviceContext* context, Shaders::StageSet stages);
 // The trace's action on a shader bound to one of `stages` (a call's) skips the call
 bool IsSkipped(ID3D11DeviceContext* context, Shaders::StageSet stages);
 // While Track is active: a deferred context's copy belongs to the command list it ended in, and is read once that list was executed
-void OnFinishCommandList(const ID3D11DeviceContext* context, const ID3D11CommandList* list);
-void OnExecuteCommandList(ID3D11DeviceContext* context, const ID3D11CommandList* list);
+void FinishCommandList(const ID3D11DeviceContext* context, const ID3D11CommandList* list);
+void MergeCommandList(ID3D11DeviceContext* context, const ID3D11CommandList* list);
 // Presenting thread: the newest copy of the tracked slot whose contents are there read back into Track (none: the reading is stale)
 void ReadBackTracked();
 } // namespace D3D11

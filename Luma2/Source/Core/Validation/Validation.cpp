@@ -74,10 +74,10 @@ bool IsGpuValidationOn()
    return active_gpu_validation.load(std::memory_order_relaxed);
 }
 
-void SetActiveLayers(bool debug_layer, bool gpu_validation)
+void SetActiveLayers(ActiveLayers layers)
 {
-   active_debug_layer = debug_layer;
-   active_gpu_validation = gpu_validation;
+   active_debug_layer = layers.debug_layer;
+   active_gpu_validation = layers.gpu_validation;
 }
 
 namespace {

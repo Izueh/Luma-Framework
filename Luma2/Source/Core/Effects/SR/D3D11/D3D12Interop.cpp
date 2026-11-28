@@ -210,7 +210,7 @@ bool UpdateSharedTexture(Context& context, SharedTexture& texture, UINT width, U
    return CreateSharedTexture(context, texture, width, height, format, unordered_access);
 }
 
-bool UpdateSharedTextureFrom(Context& context, SharedTexture& texture, ID3D11Resource* source, bool is_depth, bool unordered_access)
+bool UpdateSharedTextureFrom(Context& context, SharedTexture& texture, ID3D11Resource* source, SharedTextureOptions options)
 {
    ComPtr<ID3D11Texture2D> source_texture;
    if (FAILED(source->QueryInterface(IID_PPV_ARGS(&source_texture))))
@@ -221,14 +221,13 @@ bool UpdateSharedTextureFrom(Context& context, SharedTexture& texture, ID3D11Res
    D3D11_TEXTURE2D_DESC source_desc = {};
    source_texture->GetDesc(&source_desc);
    const bool is_srgb = Utils::Format::DXGI::GetEncoding(source_desc.Format) == Utils::Format::DXGI::Encoding::UnormSrgb;
-   if (!is_depth && (source_desc.MipLevels != 1 || source_desc.ArraySize != 1 || source_desc.SampleDesc.Count != 1 || is_srgb))
+   if (!options.is_depth && (source_desc.MipLevels != 1 || source_desc.ArraySize != 1 || source_desc.SampleDesc.Count != 1 || is_srgb))
    {
-      LogError(context, std::format("Unsupported texture (mips {}, array {}, samples {}, format {})", source_desc.MipLevels, source_desc.ArraySize,
-         source_desc.SampleDesc.Count, int(source_desc.Format)));
+      LogError(context, std::format("Unsupported texture (mips {}, array {}, samples {}, format {})", source_desc.MipLevels, source_desc.ArraySize, source_desc.SampleDesc.Count, int(source_desc.Format)));
       return false;
    }
-   const DXGI_FORMAT format = is_depth ? DXGI_FORMAT_R32_FLOAT : ToDefaultTyped(source_desc.Format);
-   return UpdateSharedTexture(context, texture, source_desc.Width, source_desc.Height, format, unordered_access);
+   const DXGI_FORMAT format = options.is_depth ? DXGI_FORMAT_R32_FLOAT : ToDefaultTyped(source_desc.Format);
+   return UpdateSharedTexture(context, texture, source_desc.Width, source_desc.Height, format, options.unordered_access);
 }
 
 bool CopyDepth(Context& context, SharedTexture& texture, ID3D11DeviceContext* device_context, ID3D11Resource* source)

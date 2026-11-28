@@ -11,7 +11,7 @@
 #include "Effects/SR/D3D12/D3D12Dlss.hpp"
 #include "Effects/SR/D3D12/D3D12FfxFsr.hpp"
 #include "Effects/SR/D3D12/D3D12XeSS.hpp"
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Hooks/D3D12/D3D12Lifetime.hpp"
 #include "Hooks/HookScope.hpp"
 #include "Hooks/ObjectLifetime.hpp"
@@ -151,7 +151,7 @@ void ReleaseDeviceObjects(ID3D12Device* device)
    XeSS::Deinit(state->backends.xess);
 }
 
-void OnPresent(ID3D12Device* device)
+void UpdateAtPresent(ID3D12Device* device)
 {
    DeviceState* state = Hooks::Lifetime::GetState<DeviceState>(device);
    if (!state)
@@ -253,7 +253,7 @@ bool Draw(ID3D12GraphicsCommandList* list, const DrawOverrides& overrides)
    }
    if (Trace::Capture::IsCapturing())
    {
-      Trace::Capture::D3D12::AddSrPass(list, DescribeDraw(record, *prepared, ok, needs_copy_back), inputs.source_color, inputs.depth_buffer,
+      Trace::Capture::D3D12::AddSrPass(list, DescribeDraw(record, *prepared, {.succeeded = ok, .copy_back = needs_copy_back}), inputs.source_color, inputs.depth_buffer,
          inputs.motion_vectors, inputs.exposure, inputs.bias_mask, inputs.transparency_alpha, final_output);
    }
 #endif

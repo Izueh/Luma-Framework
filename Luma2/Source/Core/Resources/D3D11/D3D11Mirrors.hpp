@@ -84,8 +84,8 @@ void SwapViews(ID3D11DeviceContext* context, ShaderStage stage, UINT start, ID3D
 void SwapView(ID3D11DepthStencilView*& view);
 
 // Viewport/scissor hooks for scaling (resets scaled flags and applies ViewportsOnly expansion when active)
-void OnBindViewports(ID3D11DeviceContext* context, UINT count, const D3D11_VIEWPORT* viewports);
-void OnBindScissorRects(ID3D11DeviceContext* context, UINT count, const D3D11_RECT* rects);
+void BindViewports(ID3D11DeviceContext* context, UINT count, const D3D11_VIEWPORT* viewports);
+void BindScissorRects(ID3D11DeviceContext* context, UINT count, const D3D11_RECT* rects);
 
 // Draw/dispatch hooks for chains (seeds + DirectAndIndirect) and scaling (proportional & ViewportsOnly viewport/scissor rescaling)
 void PrepareDrawOrDispatch(ID3D11DeviceContext* context, bool is_dispatch);
@@ -93,7 +93,7 @@ void FinishDrawOrDispatch(ID3D11DeviceContext* context, bool is_dispatch);
 
 // Context and device lifecycle
 void ForgetContextState(ID3D11DeviceContext* context);
-void OnPresent(ID3D11Device* device);
+void FlushFrame(ID3D11Device* device);
 void InvalidateScaledMirrors(ID3D11Device* device);
 void ReleaseDeviceObjects(ID3D11Device* device);
 
@@ -134,9 +134,9 @@ std::optional<ContextScalingSnapshot> GetContextScalingSnapshot(ID3D11DeviceCont
 
 // Copies, resolves and clears of a mirrored texture or view, issued on the mirrors while swapping. True: Luma issued the call, the
 // game's doesn't run.
-bool RedirectCopy(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source, bool* out_scaled = nullptr);
+bool RedirectCopy(ID3D11DeviceContext* context, ID3D11Resource* destination, ID3D11Resource* source);
 bool RedirectCopyRegion(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, UINT x, UINT y, UINT z, ID3D11Resource* source,
-   UINT source_subresource, const D3D11_BOX* box, UINT copy_flags, bool* out_scaled = nullptr, std::optional<D3D11_BOX>* out_rescaled_box = nullptr);
+   UINT source_subresource, const D3D11_BOX* box, UINT copy_flags);
 bool RedirectResolve(ID3D11DeviceContext* context, ID3D11Resource* destination, UINT destination_subresource, ID3D11Resource* source, UINT source_subresource,
    DXGI_FORMAT format);
 bool RedirectClear(ID3D11DeviceContext* context, ID3D11RenderTargetView* view, const FLOAT color[4]);

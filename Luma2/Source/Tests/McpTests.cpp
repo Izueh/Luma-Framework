@@ -5,26 +5,27 @@
 
 #include <Windows.h>
 
-#include "Trace/McpServer.hpp"
+#include "Mcp/McpServer.hpp"
 #include "Utils/Json.hpp"
 
 using namespace Luma;
 
 TEST_CASE("Mcp: requests are the tool name line, then key=value lines")
 {
-   const Trace::Mcp::Request request = Trace::Mcp::ParseRequest("read_resource\r\nindex=3\nslot=t0=x\nno value\n");
+   const Mcp::Request request = Mcp::ParseRequest("read_resource\r\nindex=3\nslot=t0=x\nno value\n");
    CHECK(request.tool == "read_resource");
    CHECK(request.args.size() == 2);
    CHECK(request.args.at("index") == "3");
    CHECK(request.args.at("slot") == "t0=x");
-   CHECK(Trace::Mcp::ParseRequest("status").args.empty());
-   CHECK(Trace::Mcp::ParseRequest("").tool.empty());
+   CHECK(Mcp::ParseRequest("status").args.empty());
+   CHECK(Mcp::ParseRequest("").tool.empty());
 }
 
 TEST_CASE("Mcp: status reports the process, and unknown tools and arguments are errors")
 {
-   Utils::Json::Value status;
-   REQUIRE(Utils::Json::Read(Trace::Mcp::Answer(Trace::Mcp::ParseRequest("status\ntimeout_ms=100\nbogus=1")), status));
+   auto status_result = Utils::Json::Read<Utils::Json::Value>(Mcp::Answer(Mcp::ParseRequest("status\ntimeout_ms=100\nbogus=1")));
+   REQUIRE(status_result.has_value());
+   Utils::Json::Value& status = *status_result;
    CHECK(status["ok"].get<bool>());
    CHECK(status["pid"].get<int64_t>() == int64_t(GetCurrentProcessId()));
    CHECK(status["luma"].get<int64_t>() == 2);
@@ -34,31 +35,34 @@ TEST_CASE("Mcp: status reports the process, and unknown tools and arguments are 
    REQUIRE(status["ignored_args"].is_array());
    CHECK(status["ignored_args"].get_array().size() == 1);
 
-   Utils::Json::Value sr_state;
-   REQUIRE(Utils::Json::Read(Trace::Mcp::Answer(Trace::Mcp::ParseRequest("sr_state")), sr_state));
+   auto sr_state_result = Utils::Json::Read<Utils::Json::Value>(Mcp::Answer(Mcp::ParseRequest("sr_state")));
+   REQUIRE(sr_state_result.has_value());
+   Utils::Json::Value& sr_state = *sr_state_result;
    CHECK(sr_state["ok"].get<bool>());
    CHECK(sr_state.contains("backends"));
 
-   Utils::Json::Value dev_values;
-   REQUIRE(Utils::Json::Read(Trace::Mcp::Answer(Trace::Mcp::ParseRequest("dev_values")), dev_values));
+   auto dev_values_result = Utils::Json::Read<Utils::Json::Value>(Mcp::Answer(Mcp::ParseRequest("dev_values")));
+   REQUIRE(dev_values_result.has_value());
+   Utils::Json::Value& dev_values = *dev_values_result;
    CHECK(dev_values["ok"].get<bool>());
    CHECK(dev_values.contains("values"));
 
-   Utils::Json::Value error;
-   REQUIRE(Utils::Json::Read(Trace::Mcp::Answer(Trace::Mcp::ParseRequest("unknown_tool")), error));
+   auto error_result = Utils::Json::Read<Utils::Json::Value>(Mcp::Answer(Mcp::ParseRequest("unknown_tool")));
+   REQUIRE(error_result.has_value());
+   Utils::Json::Value& error = *error_result;
    CHECK_FALSE(error["ok"].get<bool>());
    CHECK(error["error"].get<std::string>().find("unknown_tool") != std::string::npos);
 }
 
 TEST_CASE("Mcp: the pipe answers framed requests like Scripts/luma_mcp.py sends them, from several clients")
 {
-   Trace::Mcp::Start();
+   Mcp::Start();
    const auto open = [] {
       HANDLE pipe = INVALID_HANDLE_VALUE;
       // The server thread may not be listening yet
       for (int i = 0; i < 100 && pipe == INVALID_HANDLE_VALUE; i++)
       {
-         pipe = CreateFileW(Trace::Mcp::GetPipeName().c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+         pipe = CreateFileW(Mcp::GetPipeName().c_str(), GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
          if (pipe == INVALID_HANDLE_VALUE)
             Sleep(20);
       }
@@ -78,9 +82,9 @@ TEST_CASE("Mcp: the pipe answers framed requests like Scripts/luma_mcp.py sends 
          REQUIRE(ReadFile(pipe, reply.data() + total, reply_size - total, &bytes, nullptr));
          total += bytes;
       }
-      Utils::Json::Value json;
-      REQUIRE(Utils::Json::Read(reply, json));
-      return json;
+      auto json = Utils::Json::Read<Utils::Json::Value>(reply);
+      REQUIRE(json.has_value());
+      return std::move(*json);
    };
 
    HANDLE first = open();
@@ -95,5 +99,5 @@ TEST_CASE("Mcp: the pipe answers framed requests like Scripts/luma_mcp.py sends 
    CloseHandle(first);
    CloseHandle(second);
 
-   Trace::Mcp::Stop();
+   Mcp::Stop();
 }

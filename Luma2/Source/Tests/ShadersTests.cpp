@@ -388,11 +388,14 @@ TEST_CASE("Shaders: an extended D3D12 root signature has Luma's cbuffers, then i
 TEST_CASE("Shaders: an extended D3D12 root signature has Luma's static samplers after the game's, at every version, when the mod asks")
 {
    REQUIRE(LoadLibraryW(L"d3d12.dll"));
+
    struct StaticSamplers
    {
       StaticSamplers() { Resources::Bindings::SetOptions({.static_samplers = true}); }
+
       ~StaticSamplers() { Resources::Bindings::SetOptions({}); }
    } static_samplers;
+
    const auto serialize = reinterpret_cast<PFN_D3D12_SERIALIZE_VERSIONED_ROOT_SIGNATURE>(
       GetProcAddress(GetModuleHandleW(L"d3d12.dll"), "D3D12SerializeVersionedRootSignature"));
    const auto deserializer = reinterpret_cast<PFN_D3D12_CREATE_VERSIONED_ROOT_SIGNATURE_DESERIALIZER>(
@@ -653,7 +656,7 @@ struct Luma::Game::GameDeviceData
 };
 
 namespace {
-void UpdateTestInstanceData(CB::LumaInstanceData& data, const Game::GameDeviceData& game_device_data, const Frame::Resolutions& resolutions)
+void UpdateTestInstanceData(CB::LumaInstanceData& data, const Game::GameDeviceData& game_device_data, const FrameState::Resolutions& resolutions)
 {
    data.GameData.Value = game_device_data.value;
    data.GameData.RenderWidth = resolutions.render.x;

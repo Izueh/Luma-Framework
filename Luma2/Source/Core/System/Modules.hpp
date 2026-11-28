@@ -20,11 +20,18 @@ std::filesystem::path GetSystemPath(std::wstring_view name);
 // If it's loaded. Never a dll of the same name elsewhere, like Luma's own proxy.
 HMODULE FindSystemModule(std::wstring_view name);
 
+struct ExportLookup
+{
+   void* address = nullptr;
+   bool waits_for_dll = false;
+};
+
 // An export's address from the module's export table, forwarders followed. Not GetProcAddress: tools that hook it
 // (RenderDoc) would hand back their hook, which forwards to the first "dxgi.dll", Luma's proxy, in a loop.
 // `name` is an export name or an ordinal (MAKEINTRESOURCEA). Never loads a dll (runs under the loader lock): a forwarder to one not
-// loaded yet gives null, with `waits_for_dll` set.
-void* FindExport(HMODULE module, const char* name, bool* waits_for_dll = nullptr);
+// loaded yet gives null with `waits_for_dll` set.
+ExportLookup LookupExport(HMODULE module, const char* name);
+void* FindExport(HMODULE module, const char* name);
 
 // File name of the module containing an address, "?" if none. Takes the loader lock.
 std::string GetName(const void* address);

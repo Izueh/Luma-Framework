@@ -36,15 +36,16 @@ Dependencies point down. A module never includes one above it.
 ```
 Games            mod code: declarations in Init(), callbacks, game hooks       (includes Luma.hpp only)
 ──────────────────────────────────────────────────────────────────────────────
+Mcp              named-pipe MCP server and tool handlers                       Development only
 UI               overlay window, style, widgets, panels
 Effects          SR (DLSS, FSR, XeSS), SMAA, RCAS, Bloom, GTAO                 optional, built on the features below
-Features         Shaders · Resources · Swapchain · Display · Draw · Frame · Trace
+Features         Shaders · Resources · Display · Draw · FrameState · Trace
 Settings         the one registry, its sources and storage
 ──────────────────────────────────────────────────────────────────────────────
 Handlers         per native function: runs the game callback and the features, in a fixed order
 Hooks            install, vtables, lifetime, scope, device proxy, detours
 ──────────────────────────────────────────────────────────────────────────────
-System           loader, dll exports, memory scan and CPU hooks, monitor display, window policy, jobs
+System           dll exports, memory scan and CPU hooks, monitor display, window policy, jobs
 Utils / Common   hash, strings, json, toml, formats, math, Api, Device, Enabled
 Log              process-wide log sink; Notifications (toasts, asserts)
 ```
@@ -59,20 +60,20 @@ A folder is a namespace. Something is found by asking "which feature owns it".
 | `Luma::Log` | `Log/Log.{hpp,cpp}`: process-wide log sink (`Info`, `Warn`, `Error`, `Debug`), reachable from every layer |
 | `Luma::Notifications` | `Notifications/Notifications.{hpp,cpp}`: what Luma tells the user, from every layer and the game. `Post` queues a toast (warnings and errors are logged too), the overlay only draws the queue; `Assert` delivers the assert macros (`Utils/Debug.hpp`) as 1.0 did, a message box or, with silent asserts, a toast |
 | `Luma::Utils::{Debug, Hash, Strings, Json, Toml, Format, Math}` | stateless leaf helpers: no knowledge of the process, its modules or the hooks |
-| `Luma::System::{Loader, Modules, Paths, Memory, MonitorDisplay, WindowPolicy, Jobs}` | process level: bootstrap, loaded modules and exports, Luma's folders, pattern scan and mid-function hooks, monitor HDR state/luminance/SDR white level (`MonitorDisplay`), borderless and focus-loss window policy (`WindowPolicy`), and the Win32 threadpool + lock-free completion queue (`JobQueue`). No graphics API objects |
+| `Luma::System::{Modules, Paths, Memory, MonitorDisplay, WindowPolicy, Jobs}` | process level: loaded modules and exports, Luma's folders, pattern scan and mid-function hooks, monitor HDR state/luminance/SDR white level (`MonitorDisplay`), borderless and focus-loss window policy (`WindowPolicy`), and the Win32 threadpool + lock-free completion queue (`JobQueue`). No graphics API objects |
 | `Luma::Hooks` (+ `::Input`, `::DeviceProxy`, `::Lifetime`, `::Scope`, `::ThirdPartyModules`, `DepthGuard`) | interception plumbing, nested call tracking included, chains with other hookers and the unhook |
 | `Luma::Handlers` | `Pre<Function>` / `Post<Function>` / `On<Object>Destroyed`, one per hooked native function |
-| `Luma` (`Startup`) | `Luma.hpp`, the one header a game includes; `Luma::Startup::{Initialize, IsInitialized, Unload}`, what `System::Loader` and `Hooks::EntryPoints` call; `Luma::DllMain` |
+| `Luma` (`Startup`, `Loader`) | `Luma.hpp`, the one header a game includes; `DllLoader.{hpp,cpp}` (`Luma::Loader`), `Startup.{hpp,cpp}` (`Luma::Startup::{Initialize, IsInitialized, Unload}`), and `Luma::DllMain` |
 | `CB` | the cbuffer structs shared with the shaders, compiled by FXC and by C++ (`Resources/LumaCBuffers.hpp` gives them HLSL's types, a game's file holds only its structs): Luma's `LumaGlobalSettings` (including `DisplayCompositionSettings`), `LumaInstanceData` (`Includes/Core/CBuffers.hlsl`), and the game's `LumaGameSettings` / `LumaGameData` (`Game/GameCBuffers.hlsl`) |
 | `Luma::Settings` | registry, sources (`Define`, `Recipe`, `Binding`), kinds, typed ids (`Settings/Keys.hpp`, the only place Core's keys are written), TOML storage (including `[Luma.Overlay.Layout]`) |
 | `Luma::Shaders::{Database, Variants, Files, Compiler, Cache, Defines, Patching, Decompiler}` | everything about shader and pipeline objects, DXC/FXC compilation, reflection, disassembly, async decompilation (`cmd_Decompiler.exe` / RenoDX `decomp.exe`), and patching |
 | `Luma::Resources::{Database, LumaCBuffers, Mirrors, Upgrade, Chains, Scaling, Samplers, Geometry, Loading}` | Luma's named resources (its shaders, cbuffers, textures) and everything about the game's textures, buffers, samplers |
-| `Luma::Swapchain` | the real swapchain, the game's back buffers, fullscreen policy, output mode, what presents it (`DXGI::Presenter`: the D3D11 device or D3D12 queue a DXGI swapchain was created with) |
-| `Luma::Display` | `DisplayMode`, `DisplayComposition`, `DisplayLevels`, UI separation, capability spoofing (`DXGISpoofing`) |
+| `Luma::Display` (`::Swapchain`, `::DisplayMode`, `::Composition`, `::Spoofing`) | the real swapchain, the game's back buffers, fullscreen policy, output mode, presenter (`Display::Swapchain::DXGI::Presenter`), composition, UI separation, capability spoofing (`DXGISpoofing`) |
 | `Luma::Draw` | state save and restore, the bound-state cache, fullscreen passes, copy and scale helpers |
-| `Luma::Frame` | `Frame/FrameState`: per-frame model (each device's render/output/swapchain/display resolutions now; jitter, camera, pass markers later) |
+| `Luma::FrameState` | `FrameState/FrameState`: per-frame model (each device's render/output/swapchain/display resolutions, camera, timing, pass markers) |
 | `Luma::Effects::{SR, SMAA, RCAS, Bloom, GTAO}` | reusable passes |
-| `Luma::Trace::{Capture, RuntimeStatus, DebugDraw, Mcp}` | frame capture, lightweight overlay summary + full runtime status, GPU debug draw overlay, and the MCP server |
+| `Luma::Trace::{Capture, RuntimeStatus, DebugDraw, Readback}` | frame capture, lightweight overlay summary + full runtime status, GPU debug draw overlay, and resource readback |
+| `Luma::Mcp` | named-pipe MCP server and tool handlers (Development only) |
 | `Luma::UI::{Overlay, OverlayWindow, Style, Widgets, Icons, Panels}` | section 13 (`UI/Panels/*Panel.{hpp,cpp}`) |
 | `Luma::Game` | the mod surface (section 8), declared in `Luma.hpp`; `Luma::Game::Registry` is Core's read side of what the game registered |
 | `Luma::ReShade` | section 14 |
@@ -93,7 +94,7 @@ The nouns shared across modules. Each has one owner and one definition.
 | Rule, Seed | `Resources::Upgrade`, `Resources::Chains` | what gets a mirror and how |
 | Entry | `Resources::Database` | a named resource any module or shader can resolve |
 | Setting | `Settings` | one typed, persisted, UI-visible value |
-| FrameInfo, PassMarker | `Frame` (`FrameState`) | what happened this frame |
+| FrameInfo, PassMarker | `FrameState` | what happened this frame |
 | DisplayInfo | `System::MonitorDisplay` | the monitor's HDR state and luminance |
 | Event | `Trace::Capture` | one recorded call of a captured frame |
 
@@ -120,7 +121,7 @@ The nouns shared across modules. Each has one owner and one definition.
   * API-agnostic files include no `d3d*.h` or `dxgi*.h`.
   * Files for one API are named `<Api><Module>`.
   * `Api` and bytecode kind (`DXBC`, `DXIL`) are enums with room to grow, and shader hashes are plain integers.
-  * DXGI types appear only in a feature's `DXGI` folder (`Hooks/DXGI`, `Handlers/DXGI`, `Swapchain/DXGI`, `Display/DXGI`, `UI/DXGI`) and in `System::MonitorDisplay`. DXGI's hooked functions are their own set (`Hooks::DXGI::Functions`), apart from D3D11's.
+  * DXGI types appear only in a feature's `DXGI` folder (`Hooks/DXGI`, `Handlers/DXGI`, `Display/DXGI`, `UI/DXGI`) and in `System::MonitorDisplay`. DXGI's hooked functions are their own set (`Hooks::DXGI::Functions`), apart from D3D11's.
   * `Common/Api.hpp` names no API type.
   * Settings, UI, Trace and `Game::Options` never name an API type. Game callbacks do, per API. A declaration that is about an API's own values (texture upgrade rules name `DXGI_FORMAT`, as 1.0's did) is its own call typed by that format family, shared by every API of the family (DXGI: D3D11 and D3D12), and overloaded for another family when one exists; never an `Options` member, never a `std::variant`.
 

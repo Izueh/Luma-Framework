@@ -90,7 +90,7 @@ void Finish(Result finished)
       result = std::move(finished);
 }
 
-void OnPresent()
+void CompletePending()
 {
    calls = 0;
    std::scoped_lock lock(mutex);

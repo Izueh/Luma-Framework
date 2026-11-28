@@ -52,19 +52,14 @@ void WriteTable(std::string& text, const std::string& path, const Table& table)
 }
 } // namespace
 
-bool Read(std::string_view text, Table& document, std::string* error)
+std::expected<Table, std::string> Read(std::string_view text)
 {
    // As a map: glaze 9.1's schema-less root rejects documents that start with a "[table]" header
    Table result;
    const glz::error_ctx read_error = glz::read_toml(result, text);
    if (read_error)
-   {
-      if (error)
-         *error = glz::format_error(read_error, text);
-      return false;
-   }
-   document = std::move(result);
-   return true;
+      return std::unexpected(glz::format_error(read_error, text));
+   return result;
 }
 
 std::string Write(const Table& document)
@@ -90,12 +85,13 @@ bool Load(const std::filesystem::path& path, Table& document)
    }
    std::stringstream text;
    text << file.rdbuf();
-   std::string error;
-   if (!Read(text.str(), document, &error))
+   std::expected<Table, std::string> parsed = Read(text.str());
+   if (!parsed)
    {
-      Log::Error("Toml: failed to parse {}:\n{}", Strings::ToUtf8(path), error);
+      Log::Error("Toml: failed to parse {}:\n{}", Strings::ToUtf8(path), parsed.error());
       return false;
    }
+   document = std::move(*parsed);
    return true;
 }
 

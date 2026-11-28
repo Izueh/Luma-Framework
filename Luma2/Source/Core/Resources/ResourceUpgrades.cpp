@@ -282,7 +282,24 @@ std::optional<UpgradeInfo> GetUpgradeInfo(const TextureInfo& game, const FrameSt
    if (!format_upgrade && !info.resized)
       return std::nullopt;
    if (format_upgrade)
-      info.upgraded.format = GetBestFormat(info.upgraded);
+   {
+      if (info.upgraded.depth_stencil)
+      {
+         // A stencil is kept
+         switch (info.upgraded.format)
+         {
+         case DXGI_FORMAT_R24G8_TYPELESS:
+         case DXGI_FORMAT_D24_UNORM_S8_UINT:
+         case DXGI_FORMAT_R32G8X24_TYPELESS: info.upgraded.format = DXGI_FORMAT_R32G8X24_TYPELESS; break;
+         // Typeless at the deepest depth, so it can be read as a shader resource too
+         default: info.upgraded.format = DXGI_FORMAT_R32_TYPELESS; break;
+         }
+      }
+      else
+      {
+         info.upgraded.format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+      }
+   }
    if (!info.resized && info.upgraded.format == info.game.format)
       return std::nullopt;
    if (rules.method == Method::InPlace && !options.mirror)
@@ -294,23 +311,6 @@ std::optional<UpgradeInfo> GetUpgradeInfo(const TextureInfo& game, const FrameSt
          return std::nullopt;
    }
    return info;
-}
-
-DXGI_FORMAT GetBestFormat(const TextureInfo& desc)
-{
-   if (desc.depth_stencil)
-   {
-      // A stencil is kept
-      switch (desc.format)
-      {
-      case DXGI_FORMAT_R24G8_TYPELESS:
-      case DXGI_FORMAT_D24_UNORM_S8_UINT:
-      case DXGI_FORMAT_R32G8X24_TYPELESS: return DXGI_FORMAT_R32G8X24_TYPELESS;
-      // Typeless at the deepest depth, so it can be read as a shader resource too
-      default: return DXGI_FORMAT_R32_TYPELESS;
-      }
-   }
-   return DXGI_FORMAT_R16G16B16A16_FLOAT;
 }
 
 uint32_t GetMipSize(uint32_t size, uint32_t level)

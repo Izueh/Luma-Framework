@@ -80,8 +80,13 @@ bool Init(Context& context, ID3D11Device* device, IDXGIAdapter* adapter = nullpt
 bool WaitForIdle(Context& context);
 void Deinit(Context& context);
 
-bool UpdateSharedTexture(Context& context, SharedTexture& texture, UINT width, UINT height, DXGI_FORMAT format, bool unordered_access);
-bool UpdateSharedTextureFrom(Context& context, SharedTexture& texture, ID3D11Resource* source, bool is_depth, bool unordered_access);
+struct SharedTextureOptions
+{
+   bool is_depth = false;
+   bool unordered_access = false;
+};
+
+bool UpdateSharedTextureFrom(Context& context, SharedTexture& texture, ID3D11Resource* source, SharedTextureOptions options);
 bool CopyDepth(Context& context, SharedTexture& texture, ID3D11DeviceContext* device_context, ID3D11Resource* source);
 
 ID3D12GraphicsCommandList* BeginCommandList(Context& context, ID3D11DeviceContext* device_context);

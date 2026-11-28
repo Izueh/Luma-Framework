@@ -31,10 +31,10 @@
 #include "Resources/ResourceMirrors.hpp"
 #include "Resources/SamplerMirrors.hpp"
 #include "Resources/LumaCBuffers.hpp"
-#include "Swapchain/DXGI/DXGISwapchain.hpp"
+#include "Display/DXGI/DXGISwapchain.hpp"
 #include "Display/DisplayMode.hpp"
 #include "Display/DXGI/DXGISpoofing.hpp"
-#include "Frame/FrameState.hpp"
+#include "FrameState/FrameState.hpp"
 #include "Shaders/ShaderPatching.hpp"
 #include "Shaders/D3D11/D3D11Variants.hpp"
 #include "Shaders/ShaderDatabase.hpp"
@@ -52,7 +52,7 @@
 #include "Trace/D3D12/D3D12Stats.hpp"
 #endif
 #include "Trace/RuntimeStatus.hpp"
-#include "Trace/McpServer.hpp"
+#include "Mcp/McpServer.hpp"
 #include "UI/DXGI/DXGIOverlay.hpp"
 #include "Log/Log.hpp"
 #include "Utils/Strings.hpp"
@@ -64,8 +64,8 @@ using Microsoft::WRL::ComPtr;
 namespace Luma {
 namespace Handlers {
 namespace {
-using Swapchain::DXGI::GetApi;
-using Swapchain::DXGI::Presenter;
+using Display::Swapchain::DXGI::GetApi;
+using Display::Swapchain::DXGI::Presenter;
 
 struct KnownSwapchain
 {
@@ -141,23 +141,6 @@ DXGI_SWAP_CHAIN_DESC Describe(IDXGISwapChain* swapchain, const Presenter& presen
    return desc;
 }
 
-// Where ReShade and Special K keep a swapchain's color space, so they agree on it
-constexpr GUID COLOR_SPACE_GUID = {0x18b57e4, 0x1493, 0x4953, {0xad, 0xf2, 0xde, 0x6d, 0x99, 0xcc, 0x5, 0xe5}};
-// Luma's own: the format the color space was set for, which a resize to another format ends
-constexpr GUID COLOR_SPACE_FORMAT_GUID = {0x6f1c2a7e, 0x3d4b, 0x4c8a, {0x9b, 0x52, 0x1e, 0x7a, 0x60, 0x2d, 0x84, 0x31}};
-
-std::string_view GetColorSpaceName(DXGI_COLOR_SPACE_TYPE color_space)
-{
-   switch (color_space)
-   {
-   case DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709: return "sRGB (G22 P709)";
-   case DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709: return "scRGB (G10 P709)";
-   case DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020: return "HDR10 (G2084 P2020)";
-   case DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P2020: return "G22 P2020";
-   default: return "other";
-   }
-}
-
 // Empty for a creator that isn't a device or queue of an API the game uses: its swapchain is left alone
 std::optional<Api> GetCreatorApi(IUnknown* creator)
 {
@@ -228,7 +211,7 @@ void PreCreateSwapChain(IUnknown* creator, DXGI_SWAP_CHAIN_DESC& desc, std::opti
       desc.SampleDesc.Count = reported.sample_count;
       desc.Windowed = reported.windowed;
    }
-   Swapchain::DXGI::PrepareCreation(desc);
+   Display::Swapchain::DXGI::PrepareCreation(desc);
 }
 
 void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND hwnd)
@@ -247,7 +230,7 @@ void PreCreateSwapChainForHwnd(IUnknown* creator, DXGI_SWAP_CHAIN_DESC1& desc, D
       desc.SampleDesc.Count = reported.sample_count;
       fullscreen_desc.Windowed = reported.windowed;
    }
-   Swapchain::DXGI::PrepareCreation(desc, fullscreen_desc, hwnd);
+   Display::Swapchain::DXGI::PrepareCreation(desc, fullscreen_desc, hwnd);
 }
 
 void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
@@ -277,26 +260,26 @@ void PostCreateSwapChain(IDXGISwapChain* swapchain, IUnknown* creator)
    }
    const DXGI_SWAP_CHAIN_DESC desc = Describe(swapchain, *presenter, "created");
    // Before the game's callbacks, which read it
-   Frame::SetOutputResolution(static_cast<IUnknown*>(const_cast<void*>(device)), {desc.BufferDesc.Width, desc.BufferDesc.Height});
+   FrameState::SetOutputResolution(static_cast<IUnknown*>(const_cast<void*>(device)), {desc.BufferDesc.Width, desc.BufferDesc.Height});
    // Its state and the game's buffers (whose upgrade rules match the output resolution), before anything asks for them
-   Swapchain::DXGI::OnCreated(swapchain, *presenter);
+   Display::Swapchain::DXGI::TrackCreated(swapchain, *presenter);
    LogOverlays();
    ReportInitSwapchain(swapchain, *presenter, false);
 }
 
 void OnOverlayBufferRequest(IDXGISwapChain* swapchain)
 {
-   Swapchain::DXGI::ComposeForOverlay(swapchain);
+   Display::Swapchain::DXGI::ComposeForOverlay(swapchain);
 }
 
 bool ShouldWrapSwapChain(IDXGISwapChain* swapchain)
 {
-   return Swapchain::DXGI::Wraps(swapchain);
+   return Display::Swapchain::DXGI::Wraps(swapchain);
 }
 
 Hooks::SwapchainProxy::ReShadeSwapchainView GetReShadeSwapchainView(IDXGISwapChain* swapchain)
 {
-   return Swapchain::DXGI::GetReShadeSwapchainView(swapchain);
+   return Display::Swapchain::DXGI::GetReShadeSwapchainView(swapchain);
 }
 
 void OnSwapChainDestroyed(const IDXGISwapChain* swapchain)
@@ -330,7 +313,7 @@ void PreResizeBuffers(IDXGISwapChain* swapchain, UINT& count, UINT& width, UINT&
       flags = reported.flags;
    }
    // After the game's event: what it asked for becomes its buffers, the real ones Luma's
-   Swapchain::DXGI::PrepareResize(swapchain, count, width, height, format, flags);
+   Display::Swapchain::DXGI::PrepareResize(swapchain, count, width, height, format, flags);
 }
 
 void PostResizeBuffers(IDXGISwapChain* swapchain, UINT, UINT, UINT, DXGI_FORMAT, UINT, bool succeeded)
@@ -340,21 +323,13 @@ void PostResizeBuffers(IDXGISwapChain* swapchain, UINT, UINT, UINT, DXGI_FORMAT,
       return;
    if (!succeeded)
    {
-      Swapchain::DXGI::OnResized(swapchain, false);
+      Display::Swapchain::DXGI::TrackResized(swapchain, false);
       return;
    }
    const DXGI_SWAP_CHAIN_DESC desc = Describe(swapchain, *presenter, "resized");
-   // A color space set for another format no longer describes the buffers: forgotten until the game sets one again
-   DXGI_FORMAT color_space_format = DXGI_FORMAT_UNKNOWN;
-   UINT size = sizeof(color_space_format);
-   if (SUCCEEDED(swapchain->GetPrivateData(COLOR_SPACE_FORMAT_GUID, &size, &color_space_format)) && color_space_format != desc.BufferDesc.Format)
-   {
-      swapchain->SetPrivateData(COLOR_SPACE_GUID, 0, nullptr);
-      swapchain->SetPrivateData(COLOR_SPACE_FORMAT_GUID, 0, nullptr);
-      Log::Info("DXGI: swapchain {} color space forgotten, its format changed", static_cast<void*>(swapchain));
-   }
+   Display::Swapchain::DXGI::ClearColorSpaceOnFormatChange(swapchain, desc.BufferDesc.Format);
    IUnknown* const device = FindDevice(swapchain);
-   Frame::SetOutputResolution(device, {desc.BufferDesc.Width, desc.BufferDesc.Height});
+   FrameState::SetOutputResolution(device, {desc.BufferDesc.Width, desc.BufferDesc.Height});
    std::visit(
       Overloaded{
          [](ID3D11Device* d3d11) { Resources::Database::D3D11::Invalidate(d3d11, Resources::Database::Invalidation::SwapchainResize); },
@@ -365,7 +340,7 @@ void PostResizeBuffers(IDXGISwapChain* swapchain, UINT, UINT, UINT, DXGI_FORMAT,
       },
       *presenter);
    // The game's buffers again, and the real color space (Luma's, set after the check above)
-   Swapchain::DXGI::OnResized(swapchain, true);
+   Display::Swapchain::DXGI::TrackResized(swapchain, true);
    LogOverlays();
    ReportInitSwapchain(swapchain, *presenter, true);
 }
@@ -373,66 +348,49 @@ void PostResizeBuffers(IDXGISwapChain* swapchain, UINT, UINT, UINT, DXGI_FORMAT,
 bool PreSetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen, IDXGIOutput* output)
 {
    (void)output;
-   const bool borderless = Swapchain::DXGI::SetFullscreenState(swapchain, fullscreen);
+   const bool borderless = Display::Swapchain::DXGI::SetFullscreenState(swapchain, fullscreen);
    Log::Info("DXGI: swapchain {} {} fullscreen{}", static_cast<void*>(swapchain), fullscreen ? "enters" : "leaves", borderless ? " (borderless)" : "");
    return borderless;
 }
 
 std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer, bool third_party)
 {
-   return Swapchain::DXGI::GetBuffer(swapchain, index, riid, buffer, third_party);
+   return Display::Swapchain::DXGI::GetBuffer(swapchain, index, riid, buffer, third_party);
 }
 
 std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain, bool third_party)
 {
-   return Swapchain::DXGI::GetCurrentBackBufferIndex(swapchain, third_party);
+   return Display::Swapchain::DXGI::GetCurrentBackBufferIndex(swapchain, third_party);
 }
 
 std::optional<BOOL> GetFullscreenState(IDXGISwapChain* swapchain)
 {
-   return Swapchain::DXGI::GetFullscreenState(swapchain);
+   return Display::Swapchain::DXGI::GetFullscreenState(swapchain);
 }
 
 bool PreSetColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
 {
-   return Swapchain::DXGI::SetColorSpace(swapchain, color_space);
+   return Display::Swapchain::DXGI::SetColorSpace(swapchain, color_space);
 }
 
 void PostCheckColorSpaceSupport(IDXGISwapChain*, DXGI_COLOR_SPACE_TYPE color_space, UINT& support)
 {
-   Display::Spoofing::DXGI::OnColorSpaceSupport(color_space, support);
+   Display::Spoofing::DXGI::SpoofColorSpaceSupport(color_space, support);
 }
 
 void PostGetOutputDesc1(IDXGIOutput6*, DXGI_OUTPUT_DESC1& desc)
 {
-   Display::Spoofing::DXGI::OnOutputDesc(desc);
+   Display::Spoofing::DXGI::SpoofOutputDesc(desc);
 }
 
 bool PreSetHdrMetadata(IDXGISwapChain* swapchain, DXGI_HDR_METADATA_TYPE type, UINT size, const void* metadata)
 {
-   return Swapchain::DXGI::SetHdrMetadata(swapchain, type, size, metadata);
+   return Display::Swapchain::DXGI::SetHdrMetadata(swapchain, type, size, metadata);
 }
 
 void PostSetColorSpace(IDXGISwapChain3* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
 {
-   // Logged when it changes: games set it again after every resize
-   if (GetColorSpace(swapchain) == color_space)
-      return;
-   swapchain->SetPrivateData(COLOR_SPACE_GUID, sizeof(color_space), &color_space);
-   DXGI_SWAP_CHAIN_DESC desc = {};
-   swapchain->GetDesc(&desc);
-   swapchain->SetPrivateData(COLOR_SPACE_FORMAT_GUID, sizeof(desc.BufferDesc.Format), &desc.BufferDesc.Format);
-   Log::Info("DXGI: swapchain {} color space {} ({}), format {}", static_cast<void*>(swapchain), GetColorSpaceName(color_space), uint32_t(color_space),
-      uint32_t(desc.BufferDesc.Format));
-}
-
-std::optional<DXGI_COLOR_SPACE_TYPE> GetColorSpace(IDXGISwapChain* swapchain)
-{
-   DXGI_COLOR_SPACE_TYPE color_space = DXGI_COLOR_SPACE_RESERVED;
-   UINT size = sizeof(color_space);
-   if (FAILED(swapchain->GetPrivateData(COLOR_SPACE_GUID, &size, &color_space)) || size != sizeof(color_space))
-      return std::nullopt;
-   return color_space;
+   Display::Swapchain::DXGI::RecordColorSpace(swapchain, color_space);
 }
 
 void PrePresentWork(IDXGISwapChain* swapchain)
@@ -457,18 +415,18 @@ void PrePresentWork(IDXGISwapChain* swapchain)
          },
       },
       *presenter);
-   Trace::Readback::OnPresent();
+   Trace::Readback::CompletePending();
 #endif
    Settings::ApplyQueued();
 #if DEVELOPMENT
-   Trace::Mcp::RunPendingJobs();
+   Mcp::RunPendingJobs();
 #endif
    System::Jobs::RunFinished();
 #if DEVELOPMENT || TEST
    if (Shaders::IsNeeded())
       Shaders::Database::QueueDumps();
 #endif
-   Shaders::Patching::OnPresent();
+   Shaders::Patching::PublishCompleted();
    Shaders::CountFrame(FindDevice(swapchain));
    std::visit(
       Overloaded{
@@ -488,7 +446,7 @@ void PrePresentWork(IDXGISwapChain* swapchain)
    // A switch of the game's own HDR option this frame, then the game's image into the real buffer, once the game's frame is done (its
    // on_present included)
    Display::DisplayMode::Update();
-   Swapchain::DXGI::Compose(swapchain);
+   Display::Swapchain::DXGI::Compose(swapchain);
 }
 
 void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags, bool present_work_done)
@@ -496,7 +454,7 @@ void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags, bool
    const std::optional<Presenter> presenter = FindPresenter(swapchain);
    if (!presenter)
       return;
-   flags = Swapchain::DXGI::GetPresentFlags(swapchain, sync_interval, flags);
+   flags = Display::Swapchain::DXGI::GetPresentFlags(swapchain, sync_interval, flags);
    if (!present_work_done)
       PrePresentWork(swapchain);
    ReShade::RecordWherePresentWorkRan(present_work_done);
@@ -517,7 +475,7 @@ void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags, bool
 #if DEVELOPMENT
    // Start any capture requested by the UI or MCP now, so the next frame starts cleanly at its first draw
    Trace::Capture::StartRequestedFrame();
-   Trace::DebugDraw::OnPresent();
+   Trace::DebugDraw::ResetFrame();
 #endif
    // After the game's on_present and the overlay: what they changed (its settings object, the dev sliders) uploads from
    // the next draw
@@ -528,13 +486,13 @@ void PrePresent(IDXGISwapChain* swapchain, UINT sync_interval, UINT& flags, bool
 
 bool ComposesWholeBuffer(IDXGISwapChain* swapchain)
 {
-   return Swapchain::DXGI::ComposesWholeBuffer(swapchain);
+   return Display::Swapchain::DXGI::ComposesWholeBuffer(swapchain);
 }
 
 // The game's part of a present is on_present, inside Core's handling
 void PostPresent(IDXGISwapChain* swapchain)
 {
-   Swapchain::DXGI::OnPresented(swapchain);
+   Display::Swapchain::DXGI::AdvanceBuffer(swapchain);
 }
 
 void ForgetSwapchains(const void* device)

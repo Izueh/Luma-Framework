@@ -28,7 +28,7 @@ void EnableDebugLayer()
    const bool gpu_validation = WantsGpuValidation();
    // GPU-based validation is part of the debug layer
    const bool debug_layer = WantsDebugLayer() || gpu_validation;
-   SetActiveLayers(false, false);
+   SetActiveLayers({.debug_layer = false, .gpu_validation = false});
    if (!debug_layer)
       return;
    // Inside the game's D3D12CreateDevice, so d3d12.dll is loaded
@@ -52,7 +52,7 @@ void EnableDebugLayer()
       else
          Log::Warning("D3D12: GPU-based validation isn't available");
    }
-   SetActiveLayers(true, gpu_validated);
+   SetActiveLayers({.debug_layer = true, .gpu_validation = gpu_validated});
    Log::Info("D3D12: debug layer turned on{}", gpu_validated ? ", with GPU-based validation" : "");
 }
 

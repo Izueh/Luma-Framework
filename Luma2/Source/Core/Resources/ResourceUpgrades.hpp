@@ -170,7 +170,6 @@ struct UpgradeInfo
 
 // None: the rules leave the texture as the game asked
 std::optional<UpgradeInfo> GetUpgradeInfo(const TextureInfo& game, const FrameState& state, const UpgradeOptions& options = {});
-DXGI_FORMAT GetBestFormat(const TextureInfo& info);
 uint32_t GetMipSize(uint32_t size, uint32_t level);
 enum class ViewKind : uint8_t
 {

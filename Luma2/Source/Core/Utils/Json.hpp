@@ -1,5 +1,6 @@
 #pragma once
 
+#include <expected>
 #include <string>
 #include <string_view>
 
@@ -21,14 +22,13 @@ std::string Write(const T& value)
 }
 
 template <typename T>
-bool Read(std::string_view text, T& value, std::string* error = nullptr)
+std::expected<T, std::string> Read(std::string_view text)
 {
+   T value{};
    const glz::error_ctx result = glz::read_json(value, text);
    if (!result)
-      return true;
-   if (error)
-      *error = glz::format_error(result, text);
-   return false;
+      return value;
+   return std::unexpected(glz::format_error(result, text));
 }
 } // namespace Json
 } // namespace Utils

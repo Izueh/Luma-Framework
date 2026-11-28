@@ -23,7 +23,7 @@ inline constexpr Id<float> OVERLAY_FONT_SIZE = {"Luma.Overlay.FontSize"};
 inline constexpr Id<float> OVERLAY_OPACITY = {"Luma.Overlay.Opacity"};
 // The overlay's white on an HDR swapchain, in nits
 inline constexpr Id<float> OVERLAY_HDR_PAPER_WHITE = {"Luma.Overlay.HdrPaperWhite"};
-// What the real swapchain presents (Swapchain::OutputMode, Auto first): applied at the next present
+// What the real swapchain presents (Display::Swapchain::OutputMode, Auto first): applied at the next present
 inline constexpr Id<Settings::EnumIndex> OUTPUT_MODE = {"Luma.Display.OutputMode"};
 // Shader-driven HDR vs SDR mode on an HDR swapchain (0 HDR, 1 SDR): live, without resizing the swapchain
 inline constexpr Id<Settings::EnumIndex> DISPLAY_MODE = {"Luma.Display.Mode"};
@@ -57,7 +57,7 @@ inline constexpr Id<bool> SPOOF_SDR_DISPLAY = {"Luma.Display.SpoofSdrDisplay"};
 inline constexpr Id<bool> HDR_METADATA = {"Luma.Display.HdrMetadata"};
 // Focus-loss messages hidden from the game's window so Alt-Tab doesn't pause it (on by default in Development)
 inline constexpr Id<bool> SUPPRESS_FOCUS_LOSS = {"Luma.Display.SuppressFocusLoss"};
-// Test builds: Swapchain::Mode (the game's choice first), from the game's next swapchain
+// Test builds: Display::Swapchain::Mode (the game's choice first), from the game's next swapchain
 inline constexpr Id<Settings::EnumIndex> SWAPCHAIN_MODE = {"Luma.Swapchain.Mode"};
 // Test builds: the real swapchain uses the flip model (HDR needs it), from the game's next swapchain
 inline constexpr Id<bool> SWAPCHAIN_FLIP_MODEL = {"Luma.Swapchain.FlipModel"};

@@ -100,15 +100,14 @@ bool IsVersionSupported(const Hook& hook)
 }
 
 // Takes the loader lock for exports, so never with the state locked
-void* FindTarget(const Hook& hook, bool& waits_for_dll)
+System::Modules::ExportLookup FindTarget(const Hook& hook)
 {
-   waits_for_dll = false;
    if (const auto* target = std::get_if<ExportTarget>(&hook.target))
-      return System::Modules::FindExport(System::Modules::FindSystemModule(target->module), target->name, &waits_for_dll);
+      return System::Modules::LookupExport(System::Modules::FindSystemModule(target->module), target->name);
    if (const auto* target = std::get_if<AddressTarget>(&hook.target))
-      return target->address;
+      return {.address = target->address};
    const auto& target = std::get<VtableTarget>(hook.target);
-   return Vtables::GetMethod(target.vtable, target.slot);
+   return {.address = Vtables::GetMethod(target.vtable, target.slot)};
 }
 
 bool IsReadable(const void* address, size_t size)
@@ -471,7 +470,11 @@ void InstallPending()
       candidate.target_available = IsTargetAvailable(candidate.hook);
       candidate.version_supported = candidate.target_available && IsVersionSupported(candidate.hook);
       if (candidate.version_supported)
-         candidate.target = FindTarget(candidate.hook, candidate.waits_for_dll);
+      {
+         const System::Modules::ExportLookup lookup = FindTarget(candidate.hook);
+         candidate.target = lookup.address;
+         candidate.waits_for_dll = lookup.waits_for_dll;
+      }
       if (candidate.target)
          candidate.detoured_to = FindHooker(candidate.target);
    }

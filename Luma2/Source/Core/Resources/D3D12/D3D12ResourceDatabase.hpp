@@ -48,10 +48,7 @@ struct BoundCBuffer
    uint32_t size = 0; // 0 if root CBV (unknown size)
 };
 
-// Bound-resource queries using the list's tracked root signature, root arguments, descriptors, and mirrors
-ID3D12Resource* FindBoundSRV(ID3D12GraphicsCommandList* list, ShaderStage stage, UINT slot);
-ID3D12Resource* FindBoundRTV(ID3D12GraphicsCommandList* list, UINT slot);
-ID3D12Resource* FindBoundDSV(ID3D12GraphicsCommandList* list);
+// Bound-resource query using the list's tracked root signature, root arguments, descriptors, and mirrors
 std::optional<BoundCBuffer> FindBoundCBuffer(ID3D12GraphicsCommandList* list, ShaderStage stage, UINT slot);
 
 // RuntimeTexture entries: zero-copy per-frame tags (cleared at OnPresent) and persistent managed textures
@@ -68,7 +65,7 @@ D3D12_CPU_DESCRIPTOR_HANDLE GetSRV(ID3D12Device* device, uint64_t name_hash);
 D3D12_CPU_DESCRIPTOR_HANDLE GetUAV(ID3D12Device* device, uint64_t name_hash);
 D3D12_RESOURCE_STATES GetManagedState(ID3D12Device* device, uint64_t name_hash);
 void SetManagedState(ID3D12Device* device, uint64_t name_hash, D3D12_RESOURCE_STATES state);
-void OnPresent(ID3D12Device* device);
+void ClearFrameTags(ID3D12Device* device);
 void Invalidate(ID3D12Device* device, Invalidation reason);
 
 struct TableView

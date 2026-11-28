@@ -47,7 +47,7 @@ void Register()
    Settings::Register(SETTINGS, Settings::Kind::Luma);
 }
 
-void OnOutputDesc(DXGI_OUTPUT_DESC1& desc)
+void SpoofOutputDesc(DXGI_OUTPUT_DESC1& desc)
 {
    if (!Settings::Get(Settings::Core::SPOOF_SDR_DISPLAY) || !IsHdrColorSpace(desc.ColorSpace))
       return;
@@ -57,7 +57,7 @@ void OnOutputDesc(DXGI_OUTPUT_DESC1& desc)
    desc.MaxFullFrameLuminance = std::min(desc.MaxFullFrameLuminance, System::Display::SRGB_WHITE_NITS);
 }
 
-void OnColorSpaceSupport(DXGI_COLOR_SPACE_TYPE color_space, UINT& support)
+void SpoofColorSpaceSupport(DXGI_COLOR_SPACE_TYPE color_space, UINT& support)
 {
    if (Settings::Get(Settings::Core::SPOOF_SDR_DISPLAY) && IsHdrColorSpace(color_space))
       support = 0;

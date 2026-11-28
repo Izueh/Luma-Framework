@@ -39,7 +39,7 @@
 #include "Shaders/ShaderStore.hpp"
 #include "System/JobQueue.hpp"
 #include "Shaders/Shaders.hpp"
-#include "Swapchain/DXGI/DXGISwapchain.hpp"
+#include "Display/DXGI/DXGISwapchain.hpp"
 #include "Shaders/ShaderVariants.hpp"
 #include "System/Paths.hpp"
 #include "UI/Overlay.hpp"
@@ -235,14 +235,14 @@ Status GetStatus()
       if (sr_info.backends[i].supported)
          status.sr.supported_backends.emplace_back(Effects::SR::GetTypeName(Effects::SR::Type(i)));
    }
-   if (const Swapchain::DXGI::Status output = Swapchain::DXGI::GetStatus(); output.known)
+   if (const Display::Swapchain::DXGI::Status output = Display::Swapchain::DXGI::GetStatus(); output.known)
    {
       const CB::LumaGlobalSettings& settings = Resources::LumaCBuffers::cb_luma_global_settings;
       status.output = OutputInfo{
          .mode = output.mode,
          .output_mode = output.output_mode,
-         .color_space = std::string(Swapchain::DXGI::GetName(output.color_space)),
-         .game_color_space = output.game_color_space ? std::string(Swapchain::DXGI::GetName(*output.game_color_space)) : std::string(),
+         .color_space = std::string(Display::Swapchain::DXGI::GetName(output.color_space)),
+         .game_color_space = output.game_color_space ? std::string(Display::Swapchain::DXGI::GetName(*output.game_color_space)) : std::string(),
          .game_format = uint32_t(output.game_format),
          .real_format = uint32_t(output.real_format),
          .game_width = output.game_width,

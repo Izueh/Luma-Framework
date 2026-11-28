@@ -48,8 +48,15 @@ bool WantsGpuValidation();
 // Whether the debug layer, and its GPU-based validation, are active for this run's devices
 bool IsDebugLayerOn();
 bool IsGpuValidationOn();
+
+struct ActiveLayers
+{
+   bool debug_layer = false;
+   bool gpu_validation = false;
+};
+
 // Records what this run actually activated on device creation
-void SetActiveLayers(bool debug_layer, bool gpu_validation);
+void SetActiveLayers(ActiveLayers layers);
 
 // Each message id is logged a few times, then only counted
 void Report(Api api, Severity severity, int32_t id, std::string_view text);

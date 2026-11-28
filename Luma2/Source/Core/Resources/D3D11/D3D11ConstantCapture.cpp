@@ -31,7 +31,7 @@ bool QueryBufferDesc(ID3D11Resource* resource, ComPtr<ID3D11Buffer>& buffer, D3D
 }
 } // namespace
 
-void OnMap(ID3D11DeviceContext* context, ID3D11Resource* resource, D3D11_MAP map_type, const void* mapped_data)
+void TrackMap(ID3D11DeviceContext* context, ID3D11Resource* resource, D3D11_MAP map_type, const void* mapped_data)
 {
    if (!HasWriteCallbacks() || IsPausedForFrame() || !context || !mapped_data)
       return;
@@ -49,7 +49,7 @@ void OnMap(ID3D11DeviceContext* context, ID3D11Resource* resource, D3D11_MAP map
    }
 }
 
-void OnUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource)
+void CaptureUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource)
 {
    if (!HasWriteCallbacks() || !context || !resource)
       return;
@@ -81,7 +81,7 @@ void DiscardMapped(ID3D11DeviceContext* context, ID3D11Resource* resource)
    state->byte_width = 0;
 }
 
-void OnUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource, const void* source_data)
+void CaptureUpdate(ID3D11DeviceContext* context, ID3D11Resource* resource, const void* source_data)
 {
    if (!HasWriteCallbacks() || IsPausedForFrame() || !context || !resource || !source_data)
       return;

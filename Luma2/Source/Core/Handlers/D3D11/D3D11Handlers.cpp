@@ -148,7 +148,7 @@ void PreCreateDevice(UINT& flags, const D3D_FEATURE_LEVEL*& feature_levels, UINT
 {
    flags = Validation::D3D11::GetCreateFlags(flags);
    if (Effects::SR::IsNeeded())
-      Effects::SR::D3D11::PreCreateDevice(feature_levels, feature_level_count);
+      Effects::SR::D3D11::UpgradeFeatureLevels(feature_levels, feature_level_count);
 }
 
 void PostCreateDevice(ID3D11Device* device)
@@ -496,7 +496,7 @@ void PostRSSetViewports(ID3D11DeviceContext* context, UINT count, const D3D11_VI
    if (Draw::GetRecorded().viewports)
       Draw::D3D11::RecordViewports(context, count, viewports);
    if (Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D11::OnBindViewports(context, count, viewports);
+      Resources::Mirrors::D3D11::BindViewports(context, count, viewports);
    Game::Registry::Call(GameEvents().on_bind_viewports, context, count, viewports);
 }
 
@@ -505,7 +505,7 @@ void PostRSSetScissorRects(ID3D11DeviceContext* context, UINT count, const D3D11
    if (Draw::GetRecorded().viewports)
       Draw::D3D11::RecordScissorRects(context, count, rects);
    if (Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D11::OnBindScissorRects(context, count, rects);
+      Resources::Mirrors::D3D11::BindScissorRects(context, count, rects);
    Game::Registry::Call(GameEvents().on_bind_scissor_rects, context, count, rects);
 }
 
@@ -568,7 +568,7 @@ void PostMap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subres
 #endif
    if (Resources::Mirrors::IsNeeded())
       Resources::Mirrors::D3D11::TrackMappedMirror(context, resource, subresource, type, mapped);
-   Resources::ConstantCapture::D3D11::OnMap(context, resource, type, mapped.pData);
+   Resources::ConstantCapture::D3D11::TrackMap(context, resource, type, mapped.pData);
    Game::Registry::Call(GameEvents().on_map, context, resource, subresource, type, flags, mapped);
 }
 
@@ -584,7 +584,7 @@ bool PreUnmap(ID3D11DeviceContext* context, ID3D11Resource* resource, UINT subre
          Resources::Mirrors::D3D11::DiscardMappedMirror(context, resource, subresource);
       return true;
    }
-   Resources::ConstantCapture::D3D11::OnUnmap(context, resource);
+   Resources::ConstantCapture::D3D11::CaptureUnmap(context, resource);
    if (Resources::Mirrors::IsNeeded())
       Resources::Mirrors::D3D11::CommitMappedMirror(context, resource, subresource);
    return false;
@@ -614,7 +614,7 @@ bool PreUpdateSubresource(ID3D11DeviceContext* context, ID3D11Resource* resource
       Trace::Capture::D3D11::AddWrite(context, "UpdateSubresource", resource, access, Trace::Capture::EventType::CpuWrite);
    }
 #endif
-   Resources::ConstantCapture::D3D11::OnUpdateSubresource(context, resource, data);
+   Resources::ConstantCapture::D3D11::CaptureUpdate(context, resource, data);
    if (!Resources::Mirrors::IsNeeded())
       return false;
    return Resources::Mirrors::D3D11::WriteSubresource(context, resource, subresource, box, data, row_pitch, depth_pitch);
@@ -832,7 +832,7 @@ void PostFinishCommandList(ID3D11DeviceContext* context, BOOL restore, ID3D11Com
       Resources::Database::D3D11::ForgetUploads(context);
 #if DEVELOPMENT
    if (Trace::Track::IsActive())
-      Trace::Capture::D3D11::OnFinishCommandList(context, list);
+      Trace::Capture::D3D11::FinishCommandList(context, list);
 #endif
    Game::Registry::Call(GameEvents().on_finish_command_list, context, restore, list);
 }
@@ -847,7 +847,7 @@ bool PreExecuteCommandList(ID3D11DeviceContext* context, ID3D11CommandList* list
 #if DEVELOPMENT
    // Executed right after this, before the present reads the copy back
    if (Trace::Track::IsActive())
-      Trace::Capture::D3D11::OnExecuteCommandList(context, list);
+      Trace::Capture::D3D11::MergeCommandList(context, list);
 #endif
    // Without restoring, the execution leaves the context's state at the defaults
    if (!restore)
@@ -869,12 +869,12 @@ void PresentD3D11(ID3D11Device* device)
    if (Resources::Samplers::IsNeeded())
       Resources::Samplers::D3D11::RefreshMirrors(device);
    if (Resources::Mirrors::IsNeeded())
-      Resources::Mirrors::D3D11::OnPresent(device);
+      Resources::Mirrors::D3D11::FlushFrame(device);
    if (Effects::SR::IsNeeded())
-      Effects::SR::D3D11::OnPresent(device);
-   Resources::Database::D3D11::OnPresent(device);
-   Resources::ConstantCapture::OnPresent();
-   Frame::OnPresent(device);
+      Effects::SR::D3D11::UpdateAtPresent(device);
+   Resources::Database::D3D11::ClearFrameTags(device);
+   Resources::ConstantCapture::AdvanceFrame();
+   FrameState::AdvanceFrame(device);
    Resources::Database::D3D11::UpdateShaderObjects(device);
 }
 } // namespace Handlers

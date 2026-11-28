@@ -69,22 +69,20 @@ HMODULE FindSystemModule(std::wstring_view name)
    return GetModuleHandleW(GetSystemPath(name).c_str());
 }
 
-void* FindExport(HMODULE module, const char* name, bool* waits_for_dll)
+ExportLookup LookupExport(HMODULE module, const char* name)
 {
-   if (waits_for_dll)
-      *waits_for_dll = false;
    if (!module || !name)
-      return nullptr;
+      return {};
    const auto* base = reinterpret_cast<const uint8_t*>(module);
    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
    if (dos->e_magic != IMAGE_DOS_SIGNATURE)
-      return nullptr;
+      return {};
    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
    if (nt->Signature != IMAGE_NT_SIGNATURE)
-      return nullptr;
+      return {};
    const IMAGE_DATA_DIRECTORY& directory = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
    if (!directory.VirtualAddress || !directory.Size)
-      return nullptr;
+      return {};
    const auto* exports = reinterpret_cast<const IMAGE_EXPORT_DIRECTORY*>(base + directory.VirtualAddress);
    const auto* functions = reinterpret_cast<const DWORD*>(base + exports->AddressOfFunctions);
 
@@ -113,7 +111,7 @@ void* FindExport(HMODULE module, const char* name, bool* waits_for_dll)
       }
    }
    if (index >= exports->NumberOfFunctions || !functions[index])
-      return nullptr;
+      return {};
 
    const DWORD rva = functions[index];
    // A forwarder: the address is a "Dll.Export" (or "Dll.#Ordinal") string inside the export directory
@@ -122,22 +120,23 @@ void* FindExport(HMODULE module, const char* name, bool* waits_for_dll)
       const std::string_view forwarder = reinterpret_cast<const char*>(base + rva);
       const size_t dot = forwarder.rfind('.');
       if (dot == std::string_view::npos)
-         return nullptr;
+         return {};
       const std::string dll = std::string(forwarder.substr(0, dot)) + ".dll";
       const std::string target = std::string(forwarder.substr(dot + 1));
       // Loading it here could deadlock under the loader lock: the hook waits for the dll's own load
       HMODULE forwarded = GetModuleHandleA(dll.c_str());
       if (!forwarded)
-      {
-         if (waits_for_dll)
-            *waits_for_dll = true;
-         return nullptr;
-      }
+         return {.address = nullptr, .waits_for_dll = true};
       if (target.starts_with('#'))
-         return FindExport(forwarded, MAKEINTRESOURCEA(std::stoi(target.substr(1))), waits_for_dll);
-      return FindExport(forwarded, target.c_str(), waits_for_dll);
+         return LookupExport(forwarded, MAKEINTRESOURCEA(std::stoi(target.substr(1))));
+      return LookupExport(forwarded, target.c_str());
    }
-   return const_cast<uint8_t*>(base + rva);
+   return {.address = const_cast<uint8_t*>(base + rva), .waits_for_dll = false};
+}
+
+void* FindExport(HMODULE module, const char* name)
+{
+   return LookupExport(module, name).address;
 }
 
 std::string GetName(const void* address)

@@ -6,7 +6,7 @@
 #include <dxgi.h>
 #include <imgui.h>
 
-#include "Handlers/DXGI/DXGIHandlers.hpp"
+#include "Display/DXGI/DXGISwapchain.hpp"
 #include "Hooks/HookScope.hpp"
 #include "Settings/SettingKeys.hpp"
 #include "Settings/SettingsRegistry.hpp"
@@ -30,7 +30,7 @@ constexpr ULONGLONG HANDOFF_MS = 1000;
 struct Attachment
 {
    IDXGISwapChain* swapchain = nullptr;
-   Swapchain::DXGI::Presenter presenter;
+   Display::Swapchain::DXGI::Presenter presenter;
    const void* device = nullptr;
    ULONGLONG last_present = 0;
 };
@@ -44,7 +44,7 @@ bool IsEligible(const DXGI_SWAP_CHAIN_DESC& desc)
 }
 
 // With the lock held
-bool Attach(IDXGISwapChain* swapchain, Swapchain::DXGI::Presenter presenter, const void* device)
+bool Attach(IDXGISwapChain* swapchain, Display::Swapchain::DXGI::Presenter presenter, const void* device)
 {
    DXGI_SWAP_CHAIN_DESC desc = {};
    if (FAILED(swapchain->GetDesc(&desc)) || !AttachWindow(desc.OutputWindow))
@@ -90,7 +90,7 @@ struct Renderer<ID3D12CommandQueue>
 // How the overlay is written to the swapchain's buffer
 Encoding::Output GetOutput(IDXGISwapChain* swapchain, const DXGI_SWAP_CHAIN_DESC& desc)
 {
-   return {Encoding::GetKind(desc.BufferDesc.Format, Handlers::GetColorSpace(swapchain)), Settings::Get(Settings::Core::OVERLAY_HDR_PAPER_WHITE)};
+   return {Encoding::GetKind(desc.BufferDesc.Format, Display::Swapchain::DXGI::GetColorSpace(swapchain)), Settings::Get(Settings::Core::OVERLAY_HDR_PAPER_WHITE)};
 }
 
 // Whether a frame was drawn
@@ -114,7 +114,7 @@ bool Draw(IDXGISwapChain* swapchain, T* presenter, const DXGI_SWAP_CHAIN_DESC& d
 }
 } // namespace
 
-void AttachOverlay(IDXGISwapChain* swapchain, const Swapchain::DXGI::Presenter& presenter, const void* device)
+void AttachOverlay(IDXGISwapChain* swapchain, const Display::Swapchain::DXGI::Presenter& presenter, const void* device)
 {
    Hooks::Scope::Guard scope;
    const auto lock = Lock();
@@ -144,7 +144,7 @@ void DrawOverlay(IDXGISwapChain* swapchain)
    if (FAILED(swapchain->GetDesc(&desc)))
       return;
    // A copy: drawing may attach again
-   if (std::visit([&](auto* presenter) { return Draw(swapchain, presenter, desc); }, Swapchain::DXGI::Presenter(attached->presenter)))
+   if (std::visit([&](auto* presenter) { return Draw(swapchain, presenter, desc); }, Display::Swapchain::DXGI::Presenter(attached->presenter)))
       EndFrame();
 }
 
