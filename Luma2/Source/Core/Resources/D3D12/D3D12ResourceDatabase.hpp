@@ -13,29 +13,29 @@ namespace Luma {
 namespace Resources {
 namespace Database {
 namespace D3D12 {
+// Lifecycle and table registration
 using TableLayout = std::array<uint32_t, Bindings::D3D12_TEXTURE_REGISTERS>;
 inline constexpr uint32_t NO_TABLE = UINT32_MAX;
 // Any thread; returns NO_TABLE when no fixed tail slot remains
 uint32_t RegisterTable(const TableLayout& layout);
-
 void CreateDeviceObjects(ID3D12Device* device);
 void ReleaseDeviceObjects(ID3D12Device* device);
+void Invalidate(ID3D12Device* device, Invalidation reason);
 
+// Command-list tracking and restore
 void SetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12RootSignature* root_signature);
 void SetPipelineState(ID3D12GraphicsCommandList* list, ID3D12PipelineState* pipeline);
 void SetRootTable(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_DESCRIPTOR_HANDLE table);
 void SetRootDescriptor(ID3D12GraphicsCommandList* list, bool compute, UINT index, D3D12_GPU_VIRTUAL_ADDRESS address);
 void SetRenderTargets(ID3D12GraphicsCommandList* list, UINT count, const D3D12_CPU_DESCRIPTOR_HANDLE* render_targets, BOOL single_range,
    const D3D12_CPU_DESCRIPTOR_HANDLE* depth_stencil);
-void ForgetList(ID3D12GraphicsCommandList* list);
 void SetDescriptorHeaps(ID3D12GraphicsCommandList* list, UINT count, ID3D12DescriptorHeap* const* heaps);
+void ForgetList(ID3D12GraphicsCommandList* list);
 // Restores the game's tracked heaps, root signatures, root arguments, pipeline state, and render targets after an SR/custom pass
 void RestoreListState(ID3D12GraphicsCommandList* list);
-// Returns false when the texture table can't be bound (caller falls back to game's shaders)
-bool BindRequested(ID3D12GraphicsCommandList* list, bool compute, std::span<const uint32_t> entries, const CustomData& custom = {}, uint32_t table = NO_TABLE);
-void BindForBundle(ID3D12GraphicsCommandList* list);
 ID3D12DescriptorHeap* GetBoundHeap(ID3D12GraphicsCommandList* list);
 
+// Bound-resource queries and runtime tags (cleared at ClearFrameTags)
 struct TextureCopyOptions
 {
    DXGI_FORMAT format_override = DXGI_FORMAT_UNKNOWN;
@@ -50,12 +50,13 @@ struct BoundCBuffer
 
 // Bound-resource query using the list's tracked root signature, root arguments, descriptors, and mirrors
 std::optional<BoundCBuffer> FindBoundCBuffer(ID3D12GraphicsCommandList* list, ShaderStage stage, UINT slot);
-
-// RuntimeTexture entries: zero-copy per-frame tags (cleared at OnPresent) and persistent managed textures
 void TagResource(ID3D12Device* device, uint64_t name_hash, ID3D12Resource* resource);
 ID3D12Resource* TagBoundSRV(ID3D12GraphicsCommandList* list, ShaderStage stage, UINT slot, uint64_t name_hash);
 ID3D12Resource* TagBoundRTV(ID3D12GraphicsCommandList* list, UINT slot, uint64_t name_hash);
 ID3D12Resource* TagBoundDSV(ID3D12GraphicsCommandList* list, uint64_t name_hash);
+void ClearFrameTags(ID3D12Device* device);
+
+// Managed textures and views
 ID3D12Resource* EnsureTexture(ID3D12Device* device, uint64_t name_hash, UINT width, UINT height, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags,
    D3D12_RESOURCE_STATES initial_state = D3D12_RESOURCE_STATE_COMMON);
 ID3D12Resource* GetResource(ID3D12Device* device, uint64_t name_hash);
@@ -65,9 +66,8 @@ D3D12_CPU_DESCRIPTOR_HANDLE GetSRV(ID3D12Device* device, uint64_t name_hash);
 D3D12_CPU_DESCRIPTOR_HANDLE GetUAV(ID3D12Device* device, uint64_t name_hash);
 D3D12_RESOURCE_STATES GetManagedState(ID3D12Device* device, uint64_t name_hash);
 void SetManagedState(ID3D12Device* device, uint64_t name_hash, D3D12_RESOURCE_STATES state);
-void ClearFrameTags(ID3D12Device* device);
-void Invalidate(ID3D12Device* device, Invalidation reason);
 
+// Luma bindings and table views
 struct TableView
 {
    ID3D12Resource* resource = nullptr;
@@ -75,9 +75,13 @@ struct TableView
 };
 
 using TableViews = std::array<TableView, Bindings::D3D12_TEXTURE_REGISTERS>;
+// Returns false when the texture table can't be bound (caller falls back to game's shaders)
+bool BindRequested(ID3D12GraphicsCommandList* list, bool compute, std::span<const uint32_t> entries, const CustomData& custom = {}, uint32_t table = NO_TABLE);
+void BindForBundle(ID3D12GraphicsCommandList* list);
 // Caller keeps resources alive until the list has executed
 bool BindTableViews(ID3D12GraphicsCommandList* list, bool compute, uint32_t table, const TableViews& views);
 
+// Stats
 struct Stats
 {
    uint64_t ring_bytes = 0;

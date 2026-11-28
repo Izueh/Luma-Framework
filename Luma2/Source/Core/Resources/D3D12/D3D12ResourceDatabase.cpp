@@ -432,6 +432,7 @@ bool BindTable(ID3D12GraphicsCommandList* list, List& state, bool compute, uint3
 }
 } // namespace
 
+// Lifecycle and table registration
 uint32_t RegisterTable(const TableLayout& layout)
 {
    std::scoped_lock lock(tables_mutex);
@@ -499,6 +500,24 @@ void ReleaseDeviceObjects(ID3D12Device* device)
    }
 }
 
+void Invalidate(ID3D12Device* device, Invalidation reason)
+{
+   Store* store = Hooks::Lifetime::GetState<Store>(device);
+   if (!store || reason == Invalidation::None)
+      return;
+   std::scoped_lock lock(store->mutex);
+   for (uint32_t index = 0; index < store->runtime.size(); index++)
+   {
+      if (Get(index).kind == Kind::RuntimeTexture && HasInvalidation(Get(index).invalidation, reason))
+      {
+         store->runtime[index].tagged.Reset();
+         Hooks::Lifetime::D3D12::Replace(store->runtime[index].managed, nullptr);
+         store->runtime[index].managed_desc = {};
+      }
+   }
+}
+
+// Command-list tracking and restore
 void SetRootSignature(ID3D12GraphicsCommandList* list, bool compute, ID3D12RootSignature* root_signature)
 {
    List* state = GetList(list);
@@ -701,6 +720,13 @@ ID3D12Resource* ResolveActiveResource(ID3D12Resource* resource)
 }
 } // namespace
 
+ID3D12DescriptorHeap* GetBoundHeap(ID3D12GraphicsCommandList* list)
+{
+   const List* state = GetList(list);
+   return state ? state->heap : nullptr;
+}
+
+// Bound-resource queries and runtime tags
 ID3D12Resource* FindBoundSRV(ID3D12GraphicsCommandList* list, ShaderStage stage, UINT slot)
 {
    const List* state = GetList(list);
@@ -839,6 +865,7 @@ ID3D12Resource* TagBoundDSV(ID3D12GraphicsCommandList* list, uint64_t name_hash)
    return resource;
 }
 
+// Managed textures and views
 ID3D12Resource* EnsureTexture(ID3D12Device* device, uint64_t name_hash, UINT width, UINT height, DXGI_FORMAT format, D3D12_RESOURCE_FLAGS flags,
    D3D12_RESOURCE_STATES initial_state)
 {
@@ -980,29 +1007,7 @@ void ClearFrameTags(ID3D12Device* device)
       slot.tagged.Reset();
 }
 
-void Invalidate(ID3D12Device* device, Invalidation reason)
-{
-   Store* store = Hooks::Lifetime::GetState<Store>(device);
-   if (!store || reason == Invalidation::None)
-      return;
-   std::scoped_lock lock(store->mutex);
-   for (uint32_t index = 0; index < store->runtime.size(); index++)
-   {
-      if (Get(index).kind == Kind::RuntimeTexture && HasInvalidation(Get(index).invalidation, reason))
-      {
-         store->runtime[index].tagged.Reset();
-         Hooks::Lifetime::D3D12::Replace(store->runtime[index].managed, nullptr);
-         store->runtime[index].managed_desc = {};
-      }
-   }
-}
-
-ID3D12DescriptorHeap* GetBoundHeap(ID3D12GraphicsCommandList* list)
-{
-   const List* state = GetList(list);
-   return state ? state->heap : nullptr;
-}
-
+// Luma bindings and table views
 bool BindRequested(ID3D12GraphicsCommandList* list, bool compute, std::span<const uint32_t> entries, const CustomData& custom, uint32_t table)
 {
    if (entries.empty() || !Settings::IsEnabled())
@@ -1070,6 +1075,7 @@ bool BindTableViews(ID3D12GraphicsCommandList* list, bool compute, uint32_t tabl
    return true;
 }
 
+// Stats
 Stats GetStats()
 {
    return {ring_bytes.load(), chunks.load(), texture_count.load(), table_count.load(), view_tables.load()};

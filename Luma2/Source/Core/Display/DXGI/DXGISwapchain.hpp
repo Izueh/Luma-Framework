@@ -32,8 +32,9 @@ struct BufferDesc
    UINT flags = 0; // The game's swapchain flags (DXGI_SWAP_CHAIN_FLAG_GDI_COMPATIBLE)
 };
 
-// Creation: the game's request rewritten for Luma (flip model, the output mode's format, tearing, windowed), remembered on this thread
-// for OnCreated (Native keeps the game's format). The game's on_create_swapchain already ran.
+// Creation and resize
+// The game's request rewritten for Luma (flip model, the output mode's format, tearing, windowed), remembered on this thread for
+// TrackCreated (Native keeps the game's format). The game's on_create_swapchain already ran.
 void PrepareCreation(DXGI_SWAP_CHAIN_DESC& desc);
 void PrepareCreation(DXGI_SWAP_CHAIN_DESC1& desc, DXGI_SWAP_CHAIN_FULLSCREEN_DESC& fullscreen_desc, HWND window);
 // After the creation succeeded: its state, the game's buffers, color space and HDR metadata
@@ -42,21 +43,22 @@ void TrackCreated(IDXGISwapChain* swapchain, const Presenter& presenter);
 void PrepareResize(IDXGISwapChain* swapchain, UINT& count, UINT& width, UINT& height, DXGI_FORMAT& format, UINT& flags);
 void TrackResized(IDXGISwapChain* swapchain, bool succeeded);
 
-// Answers to the game (outside Luma's scope). Empty or false: the call goes to DXGI.
-// `third_party`: an overlay's code asks (Hooks::ThirdPartyModules). Overlays always see the real buffers and index: one that caches the
-// buffers and picks one by the index each frame needs both from the same swapchain.
-std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer, bool third_party);
-std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain, bool third_party);
+// Proxy, buffers and overlay routing (outside Luma's scope; empty lets the call go to DXGI)
 // An overlay's code asked for a buffer or the index on the presenting thread (from the proxy: one that hooked the swapchain the game holds,
 // as Steam does; without it, one whose Present runs before Luma's): it's about to draw, so Luma composes now (once a frame) and the overlay
-// draws on the final image, in the real color space. The present after doesn't compose again. (Binds and submissions aren't a sign: an
-// overlay hooking them above Luma makes the game's look like its own.)
+// draws on the final image, in the real color space. The present after doesn't compose again.
 void ComposeForOverlay(IDXGISwapChain* swapchain);
-// After creation: the game gets a proxy of this swapchain (Luma owns it, Swapchain::Wraps). Overlays then present after Luma by
-// construction, and the early composition above is never needed.
+// `third_party`: an overlay's code asks (Hooks::ThirdPartyModules). Overlays always see the real buffers and index.
+std::optional<HRESULT> GetBuffer(IDXGISwapChain* swapchain, UINT index, REFIID riid, void** buffer, bool third_party);
+std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain, bool third_party);
+// The game's current back buffer (Mirror), null for a swapchain whose buffers are the real ones
+Microsoft::WRL::ComPtr<IUnknown> GetGameBuffer(IDXGISwapChain* swapchain);
+// After creation: the game gets a proxy of this swapchain (Luma owns it, Swapchain::Wraps)
 bool Wraps(IDXGISwapChain* swapchain);
 // What ReShade's calls on the game's proxy of it get (Hooks::SwapchainProxy::ReShadeSwapchainView)
 Hooks::SwapchainProxy::ReShadeSwapchainView GetReShadeSwapchainView(IDXGISwapChain* swapchain);
+
+// Color space, HDR and fullscreen
 // The game's color space is what its image is in: kept, not applied (Luma sets the real one). Native: recorded, and applied.
 bool SetColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space);
 // Records the color space actually set on the real swapchain (in its private data, shared with ReShade/Special K)
@@ -70,7 +72,8 @@ bool SetHdrMetadata(IDXGISwapChain* swapchain, DXGI_HDR_METADATA_TYPE type, UINT
 bool SetFullscreenState(IDXGISwapChain* swapchain, BOOL fullscreen);
 std::optional<BOOL> GetFullscreenState(IDXGISwapChain* swapchain);
 
-// Present: tearing where the real swapchain allows it and the game doesn't wait for V-Sync
+// Present and composition
+// Tearing where the real swapchain allows it and the game doesn't wait for V-Sync
 UINT GetPresentFlags(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags);
 // Mirror: composition writes the whole buffer, so the game's dirty rects and scrolling don't apply
 bool ComposesWholeBuffer(IDXGISwapChain* swapchain);
@@ -79,9 +82,7 @@ void Compose(IDXGISwapChain* swapchain);
 // After the real present: the game's next buffer
 void AdvanceBuffer(IDXGISwapChain* swapchain);
 
-// The game's current back buffer (Mirror), null for a swapchain whose buffers are the real ones
-Microsoft::WRL::ComPtr<IUnknown> GetGameBuffer(IDXGISwapChain* swapchain);
-
+// Status and formatting
 // What luma_status and the Info tab show, of the swapchain presented last
 struct Status
 {

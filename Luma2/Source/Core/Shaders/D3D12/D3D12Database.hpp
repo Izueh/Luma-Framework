@@ -119,17 +119,11 @@ struct SubobjectLayout
    size_t size = 0;
 };
 
+// Pipeline description, deep copy and graphics state
 std::optional<SubobjectLayout> GetSubobjectLayout(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type);
-
 PipelineDesc DescribePipeline(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc);
 PipelineDesc DescribePipeline(const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc);
 PipelineDesc DescribePipeline(const D3D12_PIPELINE_STATE_STREAM_DESC& desc);
-
-// Any thread; `luma_parameter` is UINT32_MAX when unextended
-const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table,
-   bool luma_samplers = false);
-const RootLayout* FindRootLayout(ID3D12RootSignature* root_signature);
-
 // Any thread: a deep copy of a native desc of `kind` (D3D12_GRAPHICS_PIPELINE_STATE_DESC, D3D12_COMPUTE_PIPELINE_STATE_DESC or
 // D3D12_PIPELINE_STATE_STREAM_DESC). Null for a stream with a subobject this build doesn't know.
 std::shared_ptr<const DescCopy> CopyDesc(PipelineKind kind, const void* desc);
@@ -150,9 +144,16 @@ struct GraphicsState
 // None for a compute pipeline
 std::optional<GraphicsState> GetGraphicsState(const DescCopy& desc);
 
+// Root signature and pipeline tracking
+// Any thread; `luma_parameter` is UINT32_MAX when unextended
+const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table,
+   bool luma_samplers = false);
+const RootLayout* FindRootLayout(ID3D12RootSignature* root_signature);
 // Any thread: the game created (or loaded) `pipeline` from `desc`, `copy` (null when not copied) its deep copy
 const Pipeline* TrackPipeline(ID3D12Device* device, const PipelineDesc& desc, std::shared_ptr<const DescCopy> copy, bool from_library, ID3D12PipelineState* pipeline);
 const Pipeline* FindPipeline(ID3D12PipelineState* pipeline);
+
+// Stats
 
 struct Stats
 {

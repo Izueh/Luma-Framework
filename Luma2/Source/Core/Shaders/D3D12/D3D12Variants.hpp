@@ -38,11 +38,14 @@ struct Built
    IUnknown* object = nullptr; // The variant pipeline, to compare only
 };
 
+// Pipeline creation and variant attachment
 // Whether a pipeline's desc is copied at its creation: always in Development (files can be added while the game runs), otherwise
 // when a stage has a replacement file
 bool NeedsDescCopy(const Database::D3D12::PipelineDesc& desc);
 // After Database::D3D12::TrackPipeline: the pipeline gets its variant when one is chosen
 void AttachVariants(ID3D12PipelineState* pipeline, const Database::D3D12::Pipeline& tracked);
+
+// Command-list bind, restore and format variants
 // The game binds `pipeline` (null unbinds): its variant goes in its place while Luma is enabled and the variants are loaded, and
 // the list's record follows
 void SwapInVariant(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline);
@@ -64,11 +67,12 @@ BoundPipeline GetBoundPipeline(ID3D12GraphicsCommandList* list);
 void UseOriginal(ID3D12GraphicsCommandList* list);
 // Restores the game's bound pipeline after an internal Luma pass on the same list
 void RestorePipeline(ID3D12GraphicsCommandList* list);
-// Presenting thread
-void UpdateVariants();
-
 void SetTargetFormats(ID3D12GraphicsCommandList* list, const Database::D3D12::TargetFormats& formats);
 void BindFormatVariant(ID3D12GraphicsCommandList* list);
+
+// Frame update and stats
+// Presenting thread
+void UpdateVariants();
 
 struct Stats
 {

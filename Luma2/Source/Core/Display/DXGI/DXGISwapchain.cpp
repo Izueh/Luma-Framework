@@ -496,6 +496,7 @@ void UpdateStatus(IDXGISwapChain* swapchain, const State& state)
 }
 } // namespace
 
+// Creation and resize
 void PrepareCreation(DXGI_SWAP_CHAIN_DESC& desc)
 {
    const BufferDesc game = {desc.BufferDesc.Width, desc.BufferDesc.Height, desc.BufferDesc.Format, desc.BufferCount, desc.SampleDesc.Count, desc.BufferUsage, desc.Flags};
@@ -650,6 +651,7 @@ void TrackResized(IDXGISwapChain* swapchain, bool succeeded)
    UpdateStatus(swapchain, *state);
 }
 
+// Proxy, buffers and overlay routing
 void ComposeForOverlay(IDXGISwapChain* swapchain)
 {
    State* state = Find(swapchain);
@@ -696,6 +698,34 @@ std::optional<UINT> GetCurrentBackBufferIndex(IDXGISwapChain* swapchain, bool th
    return state->index;
 }
 
+ComPtr<IUnknown> GetGameBuffer(IDXGISwapChain* swapchain)
+{
+   State* state = Find(swapchain);
+   if (!state || state->mode != Mode::Mirror)
+      return nullptr;
+   std::scoped_lock lock(state->mutex);
+   if (state->buffers.empty())
+      return nullptr;
+   return state->buffers[IsD3D11(*state) ? 0 : state->index % state->buffers.size()];
+}
+
+bool Wraps(IDXGISwapChain* swapchain)
+{
+   State* state = Find(swapchain);
+   if (!state || !Swapchain::Wraps())
+      return false;
+   state->wrapped = true;
+   Log::Info("Swapchain: the game gets a proxy of {}", static_cast<void*>(swapchain));
+   return true;
+}
+
+Hooks::SwapchainProxy::ReShadeSwapchainView GetReShadeSwapchainView(IDXGISwapChain* swapchain)
+{
+   const State* state = Find(swapchain);
+   return state ? GetReShadeSwapchainViewOfState(*state) : Hooks::SwapchainProxy::ReShadeSwapchainView::SameAsOverlay;
+}
+
+// Color space, HDR and fullscreen
 bool SetColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
 {
    State* state = Find(swapchain);
@@ -715,6 +745,48 @@ bool SetColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
    state->game_color_space = color_space;
    state->reapply_color_space = true;
    return true;
+}
+
+namespace {
+// Where ReShade and Special K keep a swapchain's color space, so they agree on it
+constexpr GUID COLOR_SPACE_GUID = {0x18b57e4, 0x1493, 0x4953, {0xad, 0xf2, 0xde, 0x6d, 0x99, 0xcc, 0x5, 0xe5}};
+// Luma's own: the format the color space was set for, which a resize to another format ends
+constexpr GUID COLOR_SPACE_FORMAT_GUID = {0x6f1c2a7e, 0x3d4b, 0x4c8a, {0x9b, 0x52, 0x1e, 0x7a, 0x60, 0x2d, 0x84, 0x31}};
+} // namespace
+
+void RecordColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
+{
+   // Logged when it changes: games set it again after every resize
+   if (GetColorSpace(swapchain) == color_space)
+      return;
+   swapchain->SetPrivateData(COLOR_SPACE_GUID, sizeof(color_space), &color_space);
+   DXGI_SWAP_CHAIN_DESC desc = {};
+   swapchain->GetDesc(&desc);
+   swapchain->SetPrivateData(COLOR_SPACE_FORMAT_GUID, sizeof(desc.BufferDesc.Format), &desc.BufferDesc.Format);
+   Log::Info("DXGI: swapchain {} color space {} ({}), format {}", static_cast<void*>(swapchain), GetName(color_space), uint32_t(color_space),
+      uint32_t(desc.BufferDesc.Format));
+}
+
+void ClearColorSpaceOnFormatChange(IDXGISwapChain* swapchain, DXGI_FORMAT format)
+{
+   // A color space set for another format no longer describes the buffers: forgotten until the game sets one again
+   DXGI_FORMAT color_space_format = DXGI_FORMAT_UNKNOWN;
+   UINT size = sizeof(color_space_format);
+   if (SUCCEEDED(swapchain->GetPrivateData(COLOR_SPACE_FORMAT_GUID, &size, &color_space_format)) && color_space_format != format)
+   {
+      swapchain->SetPrivateData(COLOR_SPACE_GUID, 0, nullptr);
+      swapchain->SetPrivateData(COLOR_SPACE_FORMAT_GUID, 0, nullptr);
+      Log::Info("DXGI: swapchain {} color space forgotten, its format changed", static_cast<void*>(swapchain));
+   }
+}
+
+std::optional<DXGI_COLOR_SPACE_TYPE> GetColorSpace(IDXGISwapChain* swapchain)
+{
+   DXGI_COLOR_SPACE_TYPE color_space = DXGI_COLOR_SPACE_RESERVED;
+   UINT size = sizeof(color_space);
+   if (FAILED(swapchain->GetPrivateData(COLOR_SPACE_GUID, &size, &color_space)) || size != sizeof(color_space))
+      return std::nullopt;
+   return color_space;
 }
 
 bool SetHdrMetadata(IDXGISwapChain* swapchain, DXGI_HDR_METADATA_TYPE, UINT, const void*)
@@ -747,6 +819,7 @@ std::optional<BOOL> GetFullscreenState(IDXGISwapChain* swapchain)
    return BOOL(state->game_fullscreen);
 }
 
+// Present and composition
 UINT GetPresentFlags(IDXGISwapChain* swapchain, UINT sync_interval, UINT flags)
 {
    if (sync_interval != 0 || (flags & DXGI_PRESENT_ALLOW_TEARING))
@@ -834,79 +907,11 @@ void AdvanceBuffer(IDXGISwapChain* swapchain)
       state->index = (state->index + 1) % UINT(state->buffers.size());
 }
 
-ComPtr<IUnknown> GetGameBuffer(IDXGISwapChain* swapchain)
-{
-   State* state = Find(swapchain);
-   if (!state || state->mode != Mode::Mirror)
-      return nullptr;
-   std::scoped_lock lock(state->mutex);
-   if (state->buffers.empty())
-      return nullptr;
-   return state->buffers[IsD3D11(*state) ? 0 : state->index % state->buffers.size()];
-}
-
-bool Wraps(IDXGISwapChain* swapchain)
-{
-   State* state = Find(swapchain);
-   if (!state || !Swapchain::Wraps())
-      return false;
-   state->wrapped = true;
-   Log::Info("Swapchain: the game gets a proxy of {}", static_cast<void*>(swapchain));
-   return true;
-}
-
-Hooks::SwapchainProxy::ReShadeSwapchainView GetReShadeSwapchainView(IDXGISwapChain* swapchain)
-{
-   const State* state = Find(swapchain);
-   return state ? GetReShadeSwapchainViewOfState(*state) : Hooks::SwapchainProxy::ReShadeSwapchainView::SameAsOverlay;
-}
-
+// Status and formatting
 Status GetStatus()
 {
    std::scoped_lock lock(status_mutex);
    return status;
-}
-
-namespace {
-// Where ReShade and Special K keep a swapchain's color space, so they agree on it
-constexpr GUID COLOR_SPACE_GUID = {0x18b57e4, 0x1493, 0x4953, {0xad, 0xf2, 0xde, 0x6d, 0x99, 0xcc, 0x5, 0xe5}};
-// Luma's own: the format the color space was set for, which a resize to another format ends
-constexpr GUID COLOR_SPACE_FORMAT_GUID = {0x6f1c2a7e, 0x3d4b, 0x4c8a, {0x9b, 0x52, 0x1e, 0x7a, 0x60, 0x2d, 0x84, 0x31}};
-} // namespace
-
-void RecordColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE color_space)
-{
-   // Logged when it changes: games set it again after every resize
-   if (GetColorSpace(swapchain) == color_space)
-      return;
-   swapchain->SetPrivateData(COLOR_SPACE_GUID, sizeof(color_space), &color_space);
-   DXGI_SWAP_CHAIN_DESC desc = {};
-   swapchain->GetDesc(&desc);
-   swapchain->SetPrivateData(COLOR_SPACE_FORMAT_GUID, sizeof(desc.BufferDesc.Format), &desc.BufferDesc.Format);
-   Log::Info("DXGI: swapchain {} color space {} ({}), format {}", static_cast<void*>(swapchain), GetName(color_space), uint32_t(color_space),
-      uint32_t(desc.BufferDesc.Format));
-}
-
-void ClearColorSpaceOnFormatChange(IDXGISwapChain* swapchain, DXGI_FORMAT format)
-{
-   // A color space set for another format no longer describes the buffers: forgotten until the game sets one again
-   DXGI_FORMAT color_space_format = DXGI_FORMAT_UNKNOWN;
-   UINT size = sizeof(color_space_format);
-   if (SUCCEEDED(swapchain->GetPrivateData(COLOR_SPACE_FORMAT_GUID, &size, &color_space_format)) && color_space_format != format)
-   {
-      swapchain->SetPrivateData(COLOR_SPACE_GUID, 0, nullptr);
-      swapchain->SetPrivateData(COLOR_SPACE_FORMAT_GUID, 0, nullptr);
-      Log::Info("DXGI: swapchain {} color space forgotten, its format changed", static_cast<void*>(swapchain));
-   }
-}
-
-std::optional<DXGI_COLOR_SPACE_TYPE> GetColorSpace(IDXGISwapChain* swapchain)
-{
-   DXGI_COLOR_SPACE_TYPE color_space = DXGI_COLOR_SPACE_RESERVED;
-   UINT size = sizeof(color_space);
-   if (FAILED(swapchain->GetPrivateData(COLOR_SPACE_GUID, &size, &color_space)) || size != sizeof(color_space))
-      return std::nullopt;
-   return color_space;
 }
 
 std::string_view GetName(DXGI_COLOR_SPACE_TYPE color_space)

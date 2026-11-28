@@ -454,6 +454,7 @@ void CopyBytes(DescCopy& copy, const Desc& desc)
 }
 } // namespace
 
+// Pipeline description, deep copy and graphics state
 std::optional<SubobjectLayout> GetSubobjectLayout(D3D12_PIPELINE_STATE_SUBOBJECT_TYPE type)
 {
    switch (type)
@@ -734,6 +735,7 @@ bool TargetFormats::Any() const
    return depth != DXGI_FORMAT_UNKNOWN || std::ranges::any_of(render_targets, [](DXGI_FORMAT format) { return format != DXGI_FORMAT_UNKNOWN; });
 }
 
+// Root signature and pipeline tracking
 const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSignature* root_signature, uint32_t luma_parameter, bool luma_table,
    bool luma_samplers)
 {
@@ -771,14 +773,6 @@ const RootLayout* TrackRootSignature(std::span<const uint8_t> blob, ID3D12RootSi
    return layout;
 }
 
-Stats GetStats()
-{
-   Stats stats = {live_pipelines.load(), extended_signatures.load(), game_signatures.load(), largest_extended.load()};
-   std::scoped_lock lock(unextended_mutex);
-   stats.unextended_dwords = unextended_dwords;
-   return stats;
-}
-
 const RootLayout* FindRootLayout(ID3D12RootSignature* root_signature)
 {
    return root_signature ? Hooks::Lifetime::GetState<RootLayout>(root_signature) : nullptr;
@@ -803,6 +797,15 @@ const Pipeline* FindPipeline(ID3D12PipelineState* pipeline)
 {
    const PipelineState* state = pipeline ? Hooks::Lifetime::GetState<PipelineState>(pipeline) : nullptr;
    return state ? &state->pipeline : nullptr;
+}
+
+// Stats
+Stats GetStats()
+{
+   Stats stats = {live_pipelines.load(), extended_signatures.load(), game_signatures.load(), largest_extended.load()};
+   std::scoped_lock lock(unextended_mutex);
+   stats.unextended_dwords = unextended_dwords;
+   return stats;
 }
 } // namespace D3D12
 } // namespace Database

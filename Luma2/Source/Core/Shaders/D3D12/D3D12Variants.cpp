@@ -600,6 +600,7 @@ ListRecord* GetRecord(ID3D12GraphicsCommandList* list)
 }
 } // namespace
 
+// Pipeline creation and variant attachment
 bool NeedsDescCopy([[maybe_unused]] const Database::D3D12::PipelineDesc& desc)
 {
 #if DEVELOPMENT || TEST
@@ -646,6 +647,7 @@ void AttachVariants(ID3D12PipelineState* pipeline, const Database::D3D12::Pipeli
       WarmFormatVariants(core);
 }
 
+// Command-list bind, restore and format variants
 void SwapInVariant(ID3D12GraphicsCommandList* list, ID3D12PipelineState*& pipeline)
 {
    ListRecord* record = GetRecord(list);
@@ -770,6 +772,7 @@ void BindFormatVariant(ID3D12GraphicsCommandList* list)
    }
 }
 
+// Frame update and stats
 void UpdateVariants()
 {
    const uint64_t any_generation = GetAnyGeneration();
