@@ -105,13 +105,16 @@ void frag_main()
     float _461 = dp3_f32(_459, float3(-0.086308002471923828125f, 1.104712009429931640625f, -0.018403999507427215576171875f));
     float _462 = dp3_f32(_459, float3(-0.02810700051486492156982421875f, -0.100798003375530242919921875f, 1.1289050579071044921875f));
     // The game is forced to its SDR path (display capability spoofing, cb0_m16 is always 0), so there's no BT.2020 output branch.
-    // We stay in BT.709 in HDR too, as the UI blends over this and it expects SDR BT.709.
+    // We stay in BT.709 (scRGB) in HDR too, as the UI blends over this and it expects SDR BT.709.
     float _488 = _462;
     float _489 = _461;
     float _490 = _460;
-    float _491 = max(_490, 0.0f);
-    float _492 = max(_489, 0.0f);
-    float _493 = max(_488, 0.0f);
+    // The per channel tone curve and the chroma grading (both in wider spaces) push colors beyond BT.709 (negative channels), the scene itself has none.
+    // SDR clips them as the vanilla UNORM target did. HDR keeps them, like the game's own HDR branch, which only clipped them at the BT.2020 edge
+    // (the display composition gamut maps whatever goes beyond BT.2020).
+    float _491 = hdr ? _490 : max(_490, 0.0f);
+    float _492 = hdr ? _489 : max(_489, 0.0f);
+    float _493 = hdr ? _488 : max(_488, 0.0f);
     if (hdr)
     {
         float3 color = ApplyTonemapAndGrading(float3(_491, _492, _493), false);
@@ -141,6 +144,15 @@ void frag_main()
     }
     // The game is forced to its SDR path, so it encodes its output to gamma space (the rest of the game post processing expects it, and core linearizes it later), HDR included
     bool _517 = cb0_m17.x != 0u;
+    // HDR encodes mirrored, to match the mirrored decode in the output shaders (the vanilla formula only has its linear segment below 0, which wouldn't round trip)
+    if (hdr && _517)
+    {
+        float3 encoded = linear_to_sRGB_gamma(float3(_491, _492, _493), GCT_MIRROR);
+        _491 = encoded.x;
+        _492 = encoded.y;
+        _493 = encoded.z;
+        _517 = false;
+    }
     SV_TARGET.x = _517 ? ((_491 <= 0.003130800090730190277099609375f) ? (_491 * 12.9200000762939453125f) : mad(exp2(log2(_491) * 0.4166666567325592041015625f), 1.05499994754791259765625f, -0.054999999701976776123046875f)) : _491;
     SV_TARGET.y = _517 ? ((_492 <= 0.003130800090730190277099609375f) ? (_492 * 12.9200000762939453125f) : mad(exp2(log2(_492) * 0.4166666567325592041015625f), 1.05499994754791259765625f, -0.054999999701976776123046875f)) : _492;
     SV_TARGET.z = _517 ? ((_493 <= 0.003130800090730190277099609375f) ? (_493 * 12.9200000762939453125f) : mad(exp2(log2(_493) * 0.4166666567325592041015625f), 1.05499994754791259765625f, -0.054999999701976776123046875f)) : _493;

@@ -408,6 +408,7 @@ public:
       GetShaderDefineData(VANILLA_ENCODING_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(GAMMA_CORRECTION_TYPE_HASH).SetDefaultValue('0');
       GetShaderDefineData(UI_DRAW_TYPE_HASH).SetDefaultValue('2');
+      GetShaderDefineData(GAMUT_MAPPING_TYPE_HASH).SetDefaultValue('1'); // HDR keeps the colors beyond BT.709 the tonemapper's grading generates, gamut map the few beyond BT.2020
       GetShaderDefineData(TEST_SDR_HDR_SPLIT_VIEW_MODE_NATIVE_IMPL_HASH).SetDefaultValue('1'); // The tonemappers run their vanilla SDR path on the SDR part of the split view
 
       // Quality level of the per-pixel extended tonemap pivot computation (see "Includes/Tonemap.hlsli")

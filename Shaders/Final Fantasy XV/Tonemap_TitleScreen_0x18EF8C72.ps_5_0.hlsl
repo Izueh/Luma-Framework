@@ -141,6 +141,15 @@ void frag_main()
 
     // The game is forced to its SDR path, so it encodes its output to gamma space (the rest of the game post processing expects it, and core linearizes it later), HDR included
     bool _493 = cb0_m16.x != 0u;
+    // HDR keeps the colors beyond BT.709 the grading generates (see the main tonemap), so it encodes mirrored, to match the mirrored decode in the output shaders
+    if (hdr && _493)
+    {
+        float3 encoded = linear_to_sRGB_gamma(float3(_467, _468, _469), GCT_MIRROR);
+        _467 = encoded.x;
+        _468 = encoded.y;
+        _469 = encoded.z;
+        _493 = false;
+    }
     SV_TARGET.x = _493 ? ((_467 <= 0.003130800090730190277099609375f) ? (_467 * 12.9200000762939453125f) : mad(exp2(log2(_467) * 0.4166666567325592041015625f), 1.05499994754791259765625f, -0.054999999701976776123046875f)) : _467;
     SV_TARGET.y = _493 ? ((_468 <= 0.003130800090730190277099609375f) ? (_468 * 12.9200000762939453125f) : mad(exp2(log2(_468) * 0.4166666567325592041015625f), 1.05499994754791259765625f, -0.054999999701976776123046875f)) : _468;
     SV_TARGET.z = _493 ? ((_469 <= 0.003130800090730190277099609375f) ? (_469 * 12.9200000762939453125f) : mad(exp2(log2(_469) * 0.4166666567325592041015625f), 1.05499994754791259765625f, -0.054999999701976776123046875f)) : _469;
